@@ -5,7 +5,7 @@ from typing import Any
 
 from actingweb.db import get_property_list
 from actingweb.handlers import base_handler
-from actingweb.property_list import ListCorruptionError
+from actingweb.property_list import ListCorruptionError, ListMetadataContentionError
 
 from ..permission_evaluator import PermissionResult, get_permission_evaluator
 
@@ -66,6 +66,34 @@ def _write_list_corrupted_response(response: Any, name: str, error: Exception) -
                     "list": name,
                     "detail": str(error),
                     "remedy": "compact",
+                }
+            )
+        )
+
+
+_LIST_METADATA_CONTENTION_RETRY_AFTER_SECONDS = "1"
+
+
+def _write_list_metadata_contention_response(response: Any, error: Exception) -> None:
+    """Write the structured 503 response for a ListMetadataContentionError.
+
+    A contended metadata row is a retryable condition, not a server fault
+    -- a bare 500 behind an API gateway sends consumers hunting a bug that
+    is not there. ``Retry-After`` names the same bound the CAS retry loop
+    itself already applied, so a well-behaved client's next attempt lands
+    after the contention this response is reporting has had a chance to
+    clear.
+    """
+    logger.warning(f"List metadata contention: {error}")
+    if response:
+        response.set_status(503, "List metadata contended")
+        response.headers["Content-Type"] = "application/json"
+        response.headers["Retry-After"] = _LIST_METADATA_CONTENTION_RETRY_AFTER_SECONDS
+        response.write(
+            json.dumps(
+                {
+                    "error": "list_metadata_contended",
+                    "detail": str(error),
                 }
             )
         )
@@ -150,6 +178,10 @@ class PropertiesHandler(base_handler.BaseHandler):
     def _respond_list_corrupted(self, name: str, error: Exception) -> None:
         """Write the structured 409 response for a ListCorruptionError."""
         _write_list_corrupted_response(self.response, name, error)
+
+    def _respond_list_metadata_contended(self, error: Exception) -> None:
+        """Write the structured 503 response for a ListMetadataContentionError."""
+        _write_list_metadata_contention_response(self.response, error)
 
     def get(self, actor_id, name):
         if self.request.get("_method") == "PUT":
@@ -701,6 +733,15 @@ class PropertiesHandler(base_handler.BaseHandler):
                     self.response.set_status(204)
                 return
 
+            except ListMetadataContentionError as e:
+                # append()/__setitem__ can raise this on a v1 list -- v1's
+                # length write is semantic (advisory=False), so an
+                # exhausted CAS retry surfaces here rather than being
+                # swallowed. A v2 list's metadata touch is advisory and
+                # never raises this. Map to 503 rather than letting it
+                # fall through as an unhandled 500.
+                self._respond_list_metadata_contended(e)
+                return
             except (ValueError, IndexError) as e:
                 logger.error(f"Error setting list item at index {index_param}: {e}")
                 if self.response:
@@ -1204,6 +1245,9 @@ class PropertiesHandler(base_handler.BaseHandler):
                         except ListCorruptionError as e:
                             self._respond_list_corrupted(key, e)
                             return
+                        except ListMetadataContentionError as e:
+                            self._respond_list_metadata_contended(e)
+                            return
                         except Exception as e:
                             logger.error(
                                 f"Error in bulk update for list property '{key}': {e}"
@@ -1561,10 +1605,14 @@ class PropertyMetadataHandler(base_handler.BaseHandler):
         # Update metadata
         list_prop = getattr(myself.property_lists, name)
 
-        if "description" in params:
-            list_prop.set_description(str(params["description"]))
-        if "explanation" in params:
-            list_prop.set_explanation(str(params["explanation"]))
+        try:
+            if "description" in params:
+                list_prop.set_description(str(params["description"]))
+            if "explanation" in params:
+                list_prop.set_explanation(str(params["explanation"]))
+        except ListMetadataContentionError as e:
+            self._respond_list_metadata_contended(e)
+            return
 
         # Register diff for metadata changes
         myself.register_diffs(
@@ -1575,6 +1623,10 @@ class PropertyMetadataHandler(base_handler.BaseHandler):
 
         if self.response:
             self.response.set_status(204)
+
+    def _respond_list_metadata_contended(self, error: Exception) -> None:
+        """Write the structured 503 response for a ListMetadataContentionError."""
+        _write_list_metadata_contention_response(self.response, error)
 
 
 class PropertyListItemsHandler(base_handler.BaseHandler):
@@ -1646,6 +1698,10 @@ class PropertyListItemsHandler(base_handler.BaseHandler):
     def _respond_list_corrupted(self, name: str, error: Exception) -> None:
         """Write the structured 409 response for a ListCorruptionError."""
         _write_list_corrupted_response(self.response, name, error)
+
+    def _respond_list_metadata_contended(self, error: Exception) -> None:
+        """Write the structured 503 response for a ListMetadataContentionError."""
+        _write_list_metadata_contention_response(self.response, error)
 
     def get(self, actor_id: str, name: str):
         """Get all items from a list property.
@@ -1877,6 +1933,9 @@ class PropertyListItemsHandler(base_handler.BaseHandler):
             # bare 500. No action above currently reads item rows, so this
             # is a contract guarantee rather than a reachable branch today.
             self._respond_list_corrupted(name, e)
+            return
+        except ListMetadataContentionError as e:
+            self._respond_list_metadata_contended(e)
             return
         except Exception as e:
             logger.error(f"Error in list item operation '{action}' for '{name}': {e}")

@@ -95,6 +95,14 @@ class FakePropertyDb:
         del self.store[(actor_id, name)]
         return True
 
+    def set_if_value_equals(self, actor_id=None, name=None, expected=None, value=None):
+        if name in self.fail_set_on:
+            return False
+        if self.store.get((actor_id, name)) != expected:
+            return False
+        self.store[(actor_id, name)] = value
+        return True
+
 
 class CrashInjectingPropertyDb(FakePropertyDb):
     """Simulates a hard interruption (process death, timeout) after a fixed
@@ -281,15 +289,18 @@ class TestCrashInjectionResidue:
 
         call_counter = [0]
         # Call sequence for del prop_list[0]:
-        #   1. meta get (len())
-        #   2. delete item at index 0
-        #   3. get item at index 1 ("b")
-        #   4. move: set item at index 0 <- "b"
-        #   5. delete item at index 1   <-- crashes here
+        #   1. meta get (_dispatch_and_stash()'s fresh dispatch read -- added
+        #      by Phase 9's row-9c fix; deliberately NOT cached into
+        #      self._meta_cache, so len() below still does its own read)
+        #   2. meta get (len())
+        #   3. delete item at index 0
+        #   4. get item at index 1 ("b")
+        #   5. move: set item at index 0 <- "b"
+        #   6. delete item at index 1   <-- crashes here
         _patch_get_property(
             monkeypatch,
             lambda config: CrashInjectingPropertyDb(
-                fake_store, calls_before_crash=4, call_counter=call_counter
+                fake_store, calls_before_crash=5, call_counter=call_counter
             ),
         )
 
@@ -1610,6 +1621,23 @@ class TestStaleMetadataIsNeverWrittenBack:
     cache only clears on an explicit invalidation.
 
     See thoughts/plans/2026-08-15-property-list-metadata-integrity.md Phase 1.
+
+    Phase 9 (2026-08-20-v2-positional-access-cost.md) closed a second,
+    related gap: dispatch itself (``_dispatch_and_stash()``) now does a
+    FRESH read of the meta row on every mutation instead of trusting
+    ``self._is_v2()``'s cache-backed belief. Under the OLD dispatch, a stale
+    instance's mutation landed in whichever storage space the instance
+    itself believed in -- invisible until that same instance's NEXT
+    operation self-corrected. Under the fixed dispatch, a stale instance's
+    mutation lands in the CURRENT storage space on its very first
+    post-migration call: correct immediately, not merely
+    correct-by-the-next-call. The tests below that exercise a stale
+    instance's ``append()`` after a concurrent migration were written
+    against the old (delayed) self-correction and have been updated to
+    assert the new (immediate) one -- the WARNING that flags a stale-cache
+    dispatch still fires (see
+    ``test_a_retained_instance_does_not_resurrect_its_cached_format``), it
+    just no longer means the write was lost.
     """
 
     @staticmethod
@@ -1641,10 +1669,13 @@ class TestStaleMetadataIsNeverWrittenBack:
 
         retained.append("d")
 
-        # The flip survives, and so does every migrated item.
+        # The flip survives, every migrated item survives, AND the stale
+        # instance's own append() -- dispatched fresh, not off its cached
+        # v1 belief -- lands as a real v2 item rather than being lost in
+        # dead v1 space.
         assert self._stored_meta(fake_store, actor_id, name)["format"] == 2
         fresh = ListProperty(actor_id=actor_id, name=name, config=object())
-        assert fresh.to_list() == items
+        assert fresh.to_list() == [*items, "d"]
 
     def test_v2_metadata_row_never_acquires_a_length(self, monkeypatch, fake_store):
         """`length` is authoritative for v1 and absent for v2.
@@ -1668,12 +1699,16 @@ class TestStaleMetadataIsNeverWrittenBack:
         assert "length" not in self._stored_meta(fake_store, actor_id, name)
 
     def test_concurrent_clear_is_not_undone(self, monkeypatch, fake_store):
-        """A cleared list stays cleared.
+        """A cleared list's format and metadata shape stay clean, and a
+        stale instance's own write after the clear lands correctly.
 
-        clear() resets a v2 list's metadata wholesale; a stale v1 instance
-        writing its cached dict back put ``format: 1`` and a pre-clear
-        ``length`` over that, so the list came back reading as a v1 list
-        with items that were no longer there.
+        clear() resets a v2 list's metadata wholesale. Under Phase 9's fresh
+        dispatch, a stale v1 instance's append() AFTER the clear no longer
+        writes its cached ``format: 1``/pre-clear ``length`` back over that
+        reset -- it reads the CURRENT (post-clear) v2 row and dispatches
+        into v2 space, so the append becomes the list's first real item
+        rather than either reverting the clear or vanishing into dead v1
+        rows.
         """
         actor_id = "actor-writeback-clear"
         name = "notes"
@@ -1694,15 +1729,27 @@ class TestStaleMetadataIsNeverWrittenBack:
         assert meta["format"] == 2
         assert "length" not in meta
         fresh = ListProperty(actor_id=actor_id, name=name, config=object())
-        assert fresh.to_list() == []
+        assert fresh.to_list() == ["d"]
 
     def test_concurrent_delete_is_not_undone(self, monkeypatch, fake_store):
-        """A deleted list must not resurrect from a stale writer's metadata.
+        """A deleted list's absent row is not resurrected as a CORRUPT one.
 
-        ``exists()``/``list_all()`` key off the meta row, so recreating it
-        from a cached dict brings the list back -- with a length describing
-        rows that were deleted, i.e. as a corrupt list rather than an
-        absent one.
+        Before Phase 9, dispatch on an absent row went through
+        ``self._is_v2()``'s CACHED belief, so a retained instance holding a
+        stale v1 cache took the v1 append path, whose ``create_if_absent
+        =False`` declined to write metadata back -- but v1 ``append()``
+        writes its item row FIRST, so the write this test used to assert
+        "doesn't happen" actually left an invisible orphan v1 item row with
+        no meta row pointing at it (worse: the next list created under this
+        name silently adopts it).
+
+        Phase 9's fresh dispatch treats an absent row uniformly as "create
+        as v2" -- the same choice ``_v2_touch_metadata()`` already makes
+        deliberately for a v2 instance racing a delete() ("a delete() racing
+        an append() leaves a one-item list rather than nothing"). This test
+        now pins that the resurrected list is COHERENT: format v2, no
+        `length` key, and the one item actually readable -- not a v1-shaped
+        row over a v2 item, and not an invisible orphan.
         """
         actor_id = "actor-writeback-delete"
         name = "notes"
@@ -1717,24 +1764,27 @@ class TestStaleMetadataIsNeverWrittenBack:
 
         retained.append("d")
 
-        assert (actor_id, f"list:{name}-meta") not in fake_store, (
-            "an absent meta row means a concurrent delete() won -- recreating "
-            "it from a stale cache resurrects the list"
-        )
+        meta = self._stored_meta(fake_store, actor_id, name)
+        assert meta["format"] == 2
+        assert "length" not in meta
+        fresh = ListProperty(actor_id=actor_id, name=name, config=object())
+        assert fresh.to_list() == ["d"]
 
     def test_a_retained_instance_does_not_resurrect_its_cached_format(
         self, monkeypatch, fake_store
     ):
         """Not one operation: the cache survives until something invalidates
         it, so EVERY later operation on a retained instance is a chance to
-        write the stale format back.
+        write the stale format back -- and, since Phase 9, a chance for the
+        WARNING to fire, without a chance for the write itself to be lost.
 
-        The instance also heals as a side effect. Each metadata write now
-        re-reads the row and caches what it read, so the operation AFTER the
-        first one dispatches on the true format -- the second append below
-        lands as a real v2 item rather than as inert v1 residue. That is a
-        consequence of the fix, not a separate mechanism, and it bounds how
-        long a retained instance stays wrong to a single mutation.
+        ``_dispatch_and_stash()`` reads the meta row fresh on every
+        mutation, so ``retained``'s belief (cached at construction, v1)
+        never governs where a write lands -- only the WARNING comparison
+        uses it. Both appends below dispatch into the CURRENT v2 space and
+        both survive; the cache only affects whether the WARNING logs, not
+        correctness. The cache still never gets written back: ``format``
+        stays 2 throughout.
         """
         actor_id = "actor-writeback-retained"
         name = "notes"
@@ -1746,13 +1796,13 @@ class TestStaleMetadataIsNeverWrittenBack:
         assert retained.to_list() == items
         self._migrate_underneath(fake_store, actor_id, name, items)
 
-        retained.append("d")  # stale: lands in v1 space, inert
+        retained.append("d")  # dispatched fresh: a real v2 item despite the stale cache
         retained.set_description("written while this instance thought it was v1")
-        retained.append("e")  # cache refreshed by now: a real v2 item
+        retained.append("e")  # cache refreshed by now too: still a real v2 item
 
         assert self._stored_meta(fake_store, actor_id, name)["format"] == 2
         fresh = ListProperty(actor_id=actor_id, name=name, config=object())
-        assert fresh.to_list() == [*items, "e"]
+        assert fresh.to_list() == [*items, "d", "e"]
         assert (
             fresh.get_description() == "written while this instance thought it was v1"
         )

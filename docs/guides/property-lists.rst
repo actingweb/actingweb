@@ -563,13 +563,29 @@ Be precise about what that buys, because the difference matters
 operationally. The old window was **unbounded in time**: a ``ListProperty``
 instance an application held on to kept its cached metadata until something
 explicitly invalidated it, so a write minutes or hours after a migration could
-still revert it. The remaining window is **two adjacent operations** — the
-read of the metadata row and the write that follows it. A migration that
-completes inside that gap can still be reverted, because neither backend's
-property layer offers a compare-and-set to condition the write on. That
-residue is accepted and deferred rather than closed; see
+still revert it. As of 3.14, that window is closed rather than merely
+narrowed: every metadata write conditions on the exact bytes it read, via a
+bounded compare-and-swap retry loop built on a per-row compare-and-set
+primitive (added in 3.14 for exactly this). A migration that completes in
+the gap between another writer's read and its write no longer gets
+overwritten — the write's condition fails, the loop re-reads the row the
+migration just produced, and merges onto *that* instead. Sustained
+contention (the row keeps changing across every retry) raises
+``ListMetadataContentionError`` rather than corrupting the row or retrying
+forever; ``PropertiesHandler``, ``PropertyMetadataHandler`` and
+``PropertyListItemsHandler`` all map it to **503 with a ``Retry-After``
+header**, since a contended row is a retryable condition, not a server
+fault. Dispatch (which storage format a mutation writes into) is decided
+from the same fresh read, closing the companion gap where a retained
+instance wrote into the format a migrated list no longer has — see
+``verify()``'s ``foreign_format_rows`` field.
+
+This closes the metadata read-modify-write window specifically. It does
+**not** make ``compact()``/``migrate_to_v2()``'s bulk item-row copying
+crash-atomic — an interruption mid-rewrite can still leave duplicate or
+reordered item rows, tracked separately in
 ``thoughts/todo/whole-list-rewrite-atomicity.md``. Quiescing writes during a
-migration is what actually closes it.
+migration remains the operational recommendation for that part.
 
 *Two concurrent migrations resolve to last-writer-wins at whole-list
 granularity, and this is accepted rather than prevented.* Each migration

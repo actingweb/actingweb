@@ -8,7 +8,9 @@ properties in DynamoDB, bypassing the 400KB limit while maintaining API compatib
 import json
 import logging
 import os
+import random
 import re
+import time
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime
@@ -19,6 +21,27 @@ import fractional_indexing as fi
 from actingweb.db import get_property, get_property_list
 
 logger = logging.getLogger(__name__)
+
+# Bounded compare-and-swap retry on the metadata row (Phase 9 of
+# thoughts/plans/2026-08-20-v2-positional-access-cost.md). Single digits,
+# full-jitter exponential backoff -- in a lambda-like fleet the contending
+# writers are separate containers, so no in-process lock can dampen the
+# race; the bound and the jitter are the whole mechanism.
+#
+# The advisory bound (a v2 metadata TOUCH -- updated_at/count_hint on an
+# already-committed mutation) is deliberately smaller than the semantic
+# bound (a write that creates the row or carries format/length): the
+# advisory path spends its retries only to then SWALLOW exhaustion and
+# succeed anyway, so there is no correctness reason to let it burn as much
+# wall-clock as a write the caller is actually waiting on.
+_METADATA_CAS_MAX_ATTEMPTS = 6
+_METADATA_CAS_ADVISORY_MAX_ATTEMPTS = 3
+_METADATA_CAS_BACKOFF_BASE_SECONDS = 0.05
+
+# Distinguishes "no stashed read" from "stashed a read that found the row
+# absent" (a valid, meaningful (None, None) tuple) -- see
+# ListProperty._dispatch_and_stash().
+_NO_STASH = object()
 
 # v2 storage format (fractional rank keys) -- see "Phase 4" of
 # thoughts/plans/2026-08-08-property-list-index-integrity.md.
@@ -163,6 +186,37 @@ class ListCorruptionError(IndexError):
         )
 
 
+class ListMetadataContentionError(RuntimeError):
+    """A list's metadata row stayed under contention through every
+    compare-and-swap retry this mutation was willing to make.
+
+    This means OTHER writers, not this one: in a lambda-like fleet the
+    contending writers are separate containers, so no in-process lock can
+    dampen the race -- the bounded retry count and jittered backoff are
+    the whole mechanism. A retryable condition, not a server fault:
+    ``handlers/`` maps this to **503 with ``Retry-After``**, not a bare
+    500, so an API-gateway consumer sees "retry" rather than "there is a
+    bug".
+
+    Raised only for a metadata write that CREATES the row or carries a
+    semantic field (a ``format`` flip, v1's ``length``) -- there the
+    metadata write IS the operation. An advisory touch (``updated_at``
+    plus v2's ``count_hint`` on an already-existing row) swallows the
+    same exhaustion with one WARNING instead: the item row it is
+    recording is already committed, and failing the whole mutation over
+    a missed count-hint update would manufacture retries (and duplicate
+    writes) a caller cannot guard against in-process on lambda.
+    """
+
+    def __init__(self, list_name: str, actor_id: str) -> None:
+        self.list_name = list_name
+        self.actor_id = actor_id
+        super().__init__(
+            f"List '{list_name}' (actor {actor_id}) metadata is under "
+            f"sustained contention -- retry the request"
+        )
+
+
 class ListPropertyIterator:
     """
     Lazy-loading iterator for ListProperty.
@@ -279,6 +333,16 @@ class ListProperty:
         # "list:{name}-#" prefix), lazily loaded. None means "not loaded
         # yet"; [] is a valid loaded-and-empty state.
         self._v2_rank_cache: list[str] | None = None
+        # A fresh (parsed, raw) meta-row read a mutation's dispatch just
+        # took, for _save_metadata()'s FIRST compare-and-swap attempt to
+        # consume instead of reading again -- see _dispatch_and_stash().
+        # _NO_STASH (not None -- (None, None) is a valid stashed "row is
+        # absent" reading) until a mutator sets it; every mutator sets it
+        # fresh at its own top, so a stash left behind by an exception in a
+        # PRIOR call can never be read without having just been overwritten.
+        self._pending_meta_read: tuple[dict[str, Any] | None, str | None] | object = (
+            _NO_STASH
+        )
 
     def _get_meta_property_name(self) -> str:
         """Get the metadata property name."""
@@ -312,6 +376,54 @@ class ListProperty:
         actor's whole property partition to check integrity as well.
         """
         return self._format()
+
+    def _dispatch_and_stash(self) -> int:
+        """Fresh-read the meta row for a mutation about to dispatch on
+        storage format, and stash ``(parsed, raw)`` for
+        ``_save_metadata()``'s first compare-and-swap attempt to consume.
+
+        Every public mutator (``append``/``insert``/``__setitem__``/
+        ``__delitem__``/``pop``/``remove``) calls this INSTEAD OF
+        ``self._is_v2()`` to decide which storage format to write into.
+        Dispatching on the cache is row 9c: a ``ListProperty`` instance
+        retained across a migration keeps believing v1 (or v2) long after
+        the list's format changed, writes an item into the format the list
+        no longer has, and that row becomes unreachable -- invisible to
+        every reader of the CURRENT format, reported only as
+        ``foreign_format_rows`` while ``verify()`` calls the list healthy.
+
+        Stashing the read (rather than letting ``_save_metadata()`` read
+        again after the item write) does two things a second, later read
+        would not: it lets the metadata write's compare-and-swap condition
+        on the SAME bytes the dispatch decision saw, so a format flip
+        landing anywhere in the window between dispatch and the metadata
+        touch is caught by the CAS (condition fails against the now-changed
+        row -> retry -> re-read -> see the new format) instead of only
+        a flip that happens to still be visible after the fact; and it
+        keeps ``self._meta_cache`` untouched here, which matters because
+        ``_save_metadata()``'s stale-cache WARNING compares
+        ``self._meta_cache`` (what this instance believed) against a fresh
+        read -- refreshing the cache at dispatch time would make the two
+        always agree and silence that warning for exactly the scenario it
+        exists to catch.
+
+        Every mutator sets this stash fresh at its own top (overwriting
+        whatever was there), so a stash left behind by an exception in a
+        PRIOR, unrelated call can never be read without having just been
+        replaced.
+
+        Returns:
+            1 or 2. A brand-new list (no stored row yet) dispatches as 2 --
+            Phase 4's default for every list with no existing v1 rows.
+        """
+        parsed, raw = self._read_meta_row()
+        self._pending_meta_read = (parsed, raw)
+        if parsed is None:
+            return 2
+        try:
+            return int(parsed.get("format", 1) or 1)
+        except (TypeError, ValueError):
+            return 1
 
     def _decode_item(self, item_str: str) -> Any:
         try:
@@ -491,12 +603,21 @@ class ListProperty:
             "explanation": "",
         }
 
-    def _read_meta_row(self) -> dict[str, Any] | None:
-        """The meta row as stored RIGHT NOW, bypassing the cache entirely.
+    def _read_meta_row(self) -> tuple[dict[str, Any] | None, str | None]:
+        """The meta row as stored RIGHT NOW, bypassing the cache entirely --
+        returns ``(parsed, raw)``, the decoded dict AND the exact raw stored
+        string it came from.
 
-        ``None`` means the row is absent -- the list was never created, or
-        another writer deleted it. Unparsable content raises, matching
-        ``_load_metadata()``: self-healing over it orphans every item row.
+        ``raw`` is what a compare-and-swap write conditions on: a
+        conditional write's ``expected`` must be the RAW STORED STRING the
+        caller read, not a re-serialization of the decoded value (see
+        ``DbPropertyProtocol.set_if_value_equals``) -- round-tripping
+        through decode/encode is not guaranteed byte-identical.
+
+        ``(None, None)`` means the row is absent -- the list was never
+        created, or another writer deleted it. Unparsable content raises,
+        matching ``_load_metadata()``: self-healing over it orphans every
+        item row.
 
         This is deliberately NOT ``_load_metadata()``. That method conflates
         "absent" with "a brand-new v2 list", which is the right default for
@@ -504,13 +625,13 @@ class ListProperty:
         allowed to recreate a row somebody else just deleted.
         """
         if not self._db:
-            return None
+            return None, None
         meta_db = get_property(self.config)
         meta_str = meta_db.get(
             actor_id=self.actor_id, name=self._get_meta_property_name()
         )
         if meta_str is None:
-            return None
+            return None, None
         try:
             parsed = json.loads(meta_str)
         except (json.JSONDecodeError, TypeError) as e:
@@ -520,7 +641,7 @@ class ListProperty:
                 f"Metadata for list '{self.name}' is not a JSON object "
                 f"(got {type(parsed).__name__})"
             )
-        return parsed
+        return parsed, meta_str
 
     def _save_metadata(
         self,
@@ -529,9 +650,11 @@ class ListProperty:
         remove: tuple[str, ...] = (),
         create_if_absent: bool = True,
         count_delta: int = 0,
+        length_delta: int = 0,
+        advisory: bool = False,
     ) -> None:
         """Merge ``updates`` into a FRESH read of the meta row and write it
-        back.
+        back, via a bounded compare-and-swap retry loop.
 
         **Never round-trip a cached metadata dict through here.** That is
         what this signature exists to prevent. A ``ListProperty`` instance
@@ -545,6 +668,13 @@ class ListProperty:
         impossible, because ``format`` is never among them unless you meant
         it.
 
+        The row this writes against is either the stash a mutator's
+        ``_dispatch_and_stash()`` just took (consumed on this call's FIRST
+        attempt only) or a fresh read (every retry, and any caller that
+        skipped dispatch staging entirely -- ``set_description()``/
+        ``set_explanation()``/``clear()``'s v1 length writers). Either way
+        the row is fresh, never the cache.
+
         Args:
             updates: only the fields this caller is changing. ``length`` is
                 dropped when the stored row is v2 -- v2 has no authoritative
@@ -555,96 +685,238 @@ class ListProperty:
             create_if_absent: what to do when the meta row is gone. ``True``
                 (list creation, and the v2 metadata touch whose whole purpose
                 is to make the row exist) recreates it from this instance's
-                view. ``False`` skips the write entirely: for the v1 length
+                view, with an UNCONDITIONAL write -- there is no prior row to
+                condition on, and no CAS retry applies to this branch.
+                ``False`` skips the write entirely: for the v1 length
                 writers, an absent row means a concurrent ``delete()`` won,
                 and merging a stale length would resurrect the list.
-            count_delta: merged onto the FRESHLY-READ stored ``count_hint``
-                (not a cached one), under this same read -- for a v2
-                mutation that does not know the list's true count (append()/
-                insert(), which reuse a possibly-stale rank cache). Ignored
-                under v1, and ignored when ``count_hint`` isn't present in
-                ``updates`` and isn't an int in the stored row (a pre-3.14
-                list with no hint yet -- the next rank-counting mutation
-                establishes one instead of guessing at a delta).
+            count_delta: merged onto the freshly-read stored ``count_hint``
+                under the SAME read the compare-and-swap conditions on --
+                for a v2 mutation that does not know the list's true count
+                (append()/insert(), which reuse a possibly-stale rank
+                cache). Ignored under v1, and ignored when ``count_hint``
+                isn't present in ``updates`` and isn't an int in the stored
+                row (a pre-3.14 list with no hint yet -- the next
+                rank-counting mutation establishes one instead of guessing
+                at a delta).
+            length_delta: the v1 counterpart of ``count_delta`` -- merged
+                onto the freshly-read stored ``length`` under the same
+                read, instead of v1 ``append()``/``insert()`` computing an
+                ABSOLUTE new length from ``len(self)`` (which reads
+                ``_meta_cache``, a value a retained instance can hold
+                stale across a concurrent writer's mutation). Ignored
+                under v2 (v2 has no stored ``length``), and ignored when
+                ``length`` isn't present in ``updates`` and isn't an int
+                in the stored row.
+            advisory: ``True`` ONLY for the v2 metadata touch
+                (``updated_at``/``count_hint`` on an ALREADY-EXISTING row,
+                after the item row it is recording has already been
+                committed). Exhausting the (smaller) advisory retry bound
+                logs one WARNING and returns instead of raising -- the
+                caller's mutation already succeeded; the missed count-hint
+                update is Phase 5's documented drift bound's third term,
+                repaired by the next rank-counting mutation or
+                ``compact()``. Does NOT apply to the row-creation branch
+                above (an unconditional write either succeeds or raises on
+                a genuine backend fault, which is not a condition to
+                swallow either way) or to any write carrying a semantic
+                field (``format``, v1's ``length``) -- there the metadata
+                write IS the operation, so those callers must pass
+                ``advisory=False`` (the default).
+
+        Raises:
+            ListMetadataContentionError: the retry bound was exhausted on a
+                non-advisory write -- the row stayed under contention
+                through every attempt this call was willing to make.
         """
-        stored = self._read_meta_row()
-        if stored is None:
-            if not create_if_absent:
-                logger.info(
-                    f"List '{self.name}' (actor {self.actor_id}): metadata "
-                    f"row is gone (deleted concurrently) -- skipping the "
-                    f"metadata update rather than recreating the list"
-                )
-                # Drop BOTH caches, not just the metadata one: whatever this
-                # instance believes about the list is describing something
-                # that no longer exists.
+        max_attempts = (
+            _METADATA_CAS_ADVISORY_MAX_ATTEMPTS if advisory else _METADATA_CAS_MAX_ATTEMPTS
+        )
+        warned_stale_cache = False
+
+        for attempt in range(max_attempts):
+            if attempt == 0 and self._pending_meta_read is not _NO_STASH:
+                stored, expected_raw = self._pending_meta_read  # type: ignore[misc]
+                self._pending_meta_read = _NO_STASH
+            else:
+                stored, expected_raw = self._read_meta_row()
+
+            if stored is None:
+                if not create_if_absent:
+                    logger.info(
+                        f"List '{self.name}' (actor {self.actor_id}): metadata "
+                        f"row is gone (deleted concurrently) -- skipping the "
+                        f"metadata update rather than recreating the list"
+                    )
+                    # Drop BOTH caches, not just the metadata one: whatever
+                    # this instance believes about the list is describing
+                    # something that no longer exists.
+                    self._invalidate_cache()
+                    return
+                # No stored state to preserve, so nothing can be reverted by
+                # falling back to what this instance knows -- and if this
+                # instance is holding a cache from BEFORE the row vanished
+                # (its own earlier read, or a stale v1 belief), that cache
+                # describes a list that no longer exists and must not seed
+                # the one replacing it: a cached v1 dict would recreate the
+                # row with a stale `length` and no `format` key while the
+                # item this call is recording just landed in a v2-shaped
+                # row, producing a row that claims v1 with a v2 item under
+                # it -- corruption, not resurrection. Drop the cache first
+                # so _load_metadata() takes its own absent-row path and
+                # returns a clean v2 default. It also applies the '#'-name
+                # ban and the property-name collision check that creating a
+                # list must go through. UNCONDITIONAL write: there is no
+                # prior row to CAS against.
                 self._invalidate_cache()
-                return
-            # No stored state to preserve, so nothing can be reverted by
-            # falling back to what this instance knows. _load_metadata()
-            # also applies the '#'-name ban and the property-name collision
-            # check that creating a list must go through.
-            stored = dict(self._load_metadata())
-
-        stored_format = int(stored.get("format", 1) or 1)
-
-        # Did this instance dispatch the mutation it is now recording against
-        # a format the list no longer has?
-        #
-        # The write itself is already done by the time we get here -- append()
-        # stores the item row, then calls this -- so an item written by a
-        # stale v1 instance into a list that is now v2 is sitting in a
-        # v1-shaped row that no v2 reader will ever return. It is not lost
-        # data, it is unreachable data, and until this warning existed the
-        # only trace was a DEBUG line and a `foreign_format_rows` count that
-        # verify() reports while calling the list HEALTHY.
-        #
-        # Self-limiting: _replace_metadata() below caches the merged row, so
-        # this instance's NEXT mutation dispatches correctly. One write per
-        # retained instance, which is why this warns rather than raises --
-        # the caller's operation succeeded, it just landed somewhere nothing
-        # reads. Found by consumer verification against 3.13.0 GA.
-        if self._meta_cache is not None:
-            believed_format = int(self._meta_cache.get("format", 1) or 1)
-            if believed_format != stored_format:
-                logger.warning(
-                    "List '%s' (actor %s): this instance believed the storage "
-                    "format was v%d but the stored row says v%d -- it was "
-                    "migrated by someone else while this instance was held. "
-                    "Any item this operation wrote went into a v%d-shaped row "
-                    "that v%d readers do not see; verify() will still report "
-                    "the list healthy, and the row shows up only as "
-                    "foreign_format_rows. Re-issue the write. This instance "
-                    "self-corrects from here.",
-                    self.name,
-                    self.actor_id,
-                    believed_format,
-                    stored_format,
-                    believed_format,
-                    stored_format,
+                meta = dict(self._load_metadata())
+                new_format = int(meta.get("format", 1) or 1)
+                call_updates = (
+                    {k: v for k, v in updates.items() if k != "length"}
+                    if new_format == 2
+                    else updates
                 )
+                meta.update(call_updates)
+                # A list's first-ever mutation goes through here too (a
+                # brand-new row has nothing to be absent-because-deleted
+                # about) -- append()/insert()'s count_delta must land on
+                # the freshly-created default (count_hint: 0) the same way
+                # it lands on an existing row below, or the count silently
+                # drops on every list's very first append().
+                if count_delta and new_format == 2 and "count_hint" not in call_updates:
+                    current_hint = meta.get("count_hint")
+                    if isinstance(current_hint, int):
+                        meta["count_hint"] = max(0, current_hint + count_delta)
+                if length_delta and new_format == 1 and "length" not in call_updates:
+                    current_length = meta.get("length")
+                    if isinstance(current_length, int):
+                        meta["length"] = max(0, current_length + length_delta)
+                for field in remove:
+                    meta.pop(field, None)
+                self._replace_metadata(meta, expected_raw=None)
+                return
 
-        meta = dict(stored)
-        if stored_format == 2:
-            updates = {k: v for k, v in updates.items() if k != "length"}
-        meta.update(updates)
-        if count_delta and stored_format == 2 and "count_hint" not in updates:
-            current_hint = meta.get("count_hint")
-            if isinstance(current_hint, int):
-                meta["count_hint"] = max(0, current_hint + count_delta)
-        for field in remove:
-            meta.pop(field, None)
-        self._replace_metadata(meta)
+            stored_format = int(stored.get("format", 1) or 1)
 
-    def _replace_metadata(self, meta: dict[str, Any]) -> None:
+            # Did this instance dispatch the mutation it is now recording
+            # against a format the list no longer has?
+            #
+            # The write itself is already done by the time we get here --
+            # append() stores the item row, then calls this -- so an item
+            # written by a stale v1 instance into a list that is now v2 is
+            # sitting in a v1-shaped row that no v2 reader will ever return.
+            # It is not lost data, it is unreachable data, and until this
+            # warning existed the only trace was a DEBUG line and a
+            # `foreign_format_rows` count that verify() reports while
+            # calling the list HEALTHY.
+            #
+            # Self-limiting: the write below caches the merged row on
+            # success, so this instance's NEXT mutation dispatches
+            # correctly. One warning per retained instance's stale write,
+            # which is why this warns rather than raises -- the caller's
+            # operation succeeded, it just landed somewhere nothing reads.
+            # Found by consumer verification against 3.13.0 GA. Emitted at
+            # most once per _save_metadata() call (attempt 0's read only) --
+            # self._meta_cache does not change between retries, so
+            # re-comparing it against each retry's newer read would just
+            # repeat the same finding.
+            if not warned_stale_cache and self._meta_cache is not None:
+                believed_format = int(self._meta_cache.get("format", 1) or 1)
+                if believed_format != stored_format:
+                    warned_stale_cache = True
+                    logger.warning(
+                        "List '%s' (actor %s): this instance believed the "
+                        "storage format was v%d but the stored row says v%d "
+                        "-- it was migrated by someone else while this "
+                        "instance was held. Any item this operation wrote "
+                        "went into a v%d-shaped row that v%d readers do not "
+                        "see; verify() will still report the list healthy, "
+                        "and the row shows up only as foreign_format_rows. "
+                        "Re-issue the write. This instance self-corrects "
+                        "from here.",
+                        self.name,
+                        self.actor_id,
+                        believed_format,
+                        stored_format,
+                        believed_format,
+                        stored_format,
+                    )
+
+            meta = dict(stored)
+            call_updates = updates
+            if stored_format == 2:
+                call_updates = {k: v for k, v in updates.items() if k != "length"}
+            meta.update(call_updates)
+            if count_delta and stored_format == 2 and "count_hint" not in call_updates:
+                current_hint = meta.get("count_hint")
+                if isinstance(current_hint, int):
+                    meta["count_hint"] = max(0, current_hint + count_delta)
+            if length_delta and stored_format == 1 and "length" not in call_updates:
+                current_length = meta.get("length")
+                if isinstance(current_length, int):
+                    meta["length"] = max(0, current_length + length_delta)
+            for field in remove:
+                meta.pop(field, None)
+
+            if self._replace_metadata(meta, expected_raw=expected_raw):
+                return
+
+            # Lost the compare-and-swap: another writer changed the row
+            # between our read and this write. Re-resolve on the next
+            # attempt rather than blindly retrying the same stale merge.
+            if attempt < max_attempts - 1:
+                backoff = random.uniform(
+                    0, _METADATA_CAS_BACKOFF_BASE_SECONDS * (2**attempt)
+                )
+                if backoff:
+                    time.sleep(backoff)
+
+        if advisory:
+            logger.warning(
+                "List '%s' (actor %s): advisory metadata touch (updated_at/"
+                "count_hint) exhausted %d compare-and-swap attempts under "
+                "sustained contention -- the mutation this touch was "
+                "recording already succeeded. The missed update self-"
+                "corrects at the next rank-counting mutation or compact().",
+                self.name,
+                self.actor_id,
+                max_attempts,
+            )
+            return
+        raise ListMetadataContentionError(self.name, self.actor_id)
+
+    def _replace_metadata(
+        self, meta: dict[str, Any], *, expected_raw: str | None = None
+    ) -> bool:
         """Write ``meta`` wholesale and cache it.
 
-        Only two kinds of caller may use this: a deliberate reset
-        (``clear()``, which resets description/explanation by design) and
-        one that derived ``meta`` from a read it just performed itself
-        (migration's format flip). Everything else goes through
-        ``_save_metadata()`` -- see its docstring for what writing a cached
-        dict back costs.
+        Two kinds of caller use this: a deliberate reset (``clear()``,
+        which resets description/explanation by design) or migration's
+        format flip -- both pass ``expected_raw=None`` (unconditional
+        write, the same last-writer-wins behaviour this method has always
+        had) -- and ``_save_metadata()``'s compare-and-swap retry loop,
+        which passes the raw bytes its current attempt read. Everything
+        else goes through ``_save_metadata()`` -- see its docstring for
+        what writing a cached dict back costs.
+
+        Args:
+            meta: the full metadata dict to write (derived from a read the
+                caller already performed itself, never from the cache).
+            expected_raw: ``None`` writes unconditionally. A raw JSON
+                string conditions the write via
+                ``set_if_value_equals(expected=expected_raw)`` -- succeeds
+                only if the row still holds exactly those bytes.
+
+        Returns:
+            ``True`` if the write landed and ``self._meta_cache`` was
+            updated. ``False`` only when ``expected_raw`` was given and the
+            row no longer holds those bytes -- nothing was written, the
+            cache is untouched, and the caller (``_save_metadata()``) is
+            expected to re-read and retry, not to treat this as failure.
+
+        Raises:
+            RuntimeError: a genuine backend fault on an unconditional
+                write.
         """
         meta["updated_at"] = datetime.now().isoformat()
 
@@ -653,12 +925,22 @@ class ListProperty:
             meta_json = json.dumps(meta)
             # Use fresh DB instance to avoid handle conflicts
             meta_db = get_property(self.config)
-            if not meta_db.set(
-                actor_id=self.actor_id, name=meta_property_name, value=meta_json
-            ):
-                raise RuntimeError(f"list metadata write failed for '{self.name}'")
+            if expected_raw is None:
+                if not meta_db.set(
+                    actor_id=self.actor_id, name=meta_property_name, value=meta_json
+                ):
+                    raise RuntimeError(f"list metadata write failed for '{self.name}'")
+            else:
+                if not meta_db.set_if_value_equals(
+                    actor_id=self.actor_id,
+                    name=meta_property_name,
+                    expected=expected_raw,
+                    value=meta_json,
+                ):
+                    return False
 
         self._meta_cache = meta
+        return True
 
     def _invalidate_cache(self) -> None:
         """Invalidate the metadata cache AND the v2 rank cache.
@@ -966,12 +1248,26 @@ class ListProperty:
         rather than nothing -- which is the same answer appending to a
         never-created list gives, and the alternative is an item row no
         ``exists()`` or ``list_all()`` can see.
+
+        Always passes ``advisory=True`` to ``_save_metadata()``: every
+        caller of this method is a v2 mutator that has ALREADY written (or
+        deleted) the item row it is now recording -- that write is
+        committed regardless of what happens to this touch. Contention
+        that exhausts the (smaller) advisory retry bound is swallowed with
+        one WARNING rather than raised, so the mutation the caller invoked
+        still returns success. (The row-creation branch inside
+        ``_save_metadata()`` -- this list's first-ever mutation, meta row
+        absent -- is unconditional and never reaches CAS exhaustion at
+        all, so ``advisory`` has no effect on it either way; see that
+        method's docstring.)
         """
         updates: dict[str, Any] = {}
         if count is not None:
             updates["count_hint"] = count
         self._save_metadata(
-            updates, count_delta=0 if count is not None else count_delta
+            updates,
+            count_delta=0 if count is not None else count_delta,
+            advisory=True,
         )
 
     def _v2_setitem(self, index: int, value: Any) -> None:
@@ -1003,7 +1299,7 @@ class ListProperty:
     def __setitem__(self, index: int, value: Any) -> None:
         """Set item at index."""
         self._maybe_lazy_migrate()
-        if self._is_v2():
+        if self._dispatch_and_stash() == 2:
             self._v2_setitem(index, value)
             return
 
@@ -1064,7 +1360,7 @@ class ListProperty:
     def __delitem__(self, index: int) -> None:
         """Delete item at index and shift remaining items."""
         self._maybe_lazy_migrate()
-        if self._is_v2():
+        if self._dispatch_and_stash() == 2:
             self._v2_delitem(index)
             return
 
@@ -1165,7 +1461,7 @@ class ListProperty:
             raise RuntimeError("No database connection available")
 
         self._maybe_lazy_migrate()
-        if self._is_v2():
+        if self._dispatch_and_stash() == 2:
             self._v2_append(item)
             return
 
@@ -1188,11 +1484,15 @@ class ListProperty:
             f"append(): Stored item at '{item_property_name}' with value: {item_str}"
         )
 
-        # Update metadata. `length` here is derived from len(self), which
-        # reads the metadata cache -- see the class docstring's note on the
-        # residual this leaves. What _save_metadata() guarantees is only
-        # that nothing ELSE about the stored row is reverted by this write.
-        self._save_metadata({"length": length + 1}, create_if_absent=False)
+        # Update metadata with a DELTA under the compare-and-swap, not an
+        # absolute `length + 1` computed from the cache -- `length` above
+        # (used for the item's storage POSITION) is still cache-derived,
+        # which is the KNOWN RESIDUAL the class docstring documents and
+        # this does not fix. What this closes is the metadata VALUE: a
+        # length_delta merges onto whatever count is freshly read under
+        # the CAS, so a retained instance's stale `length` no longer
+        # overwrites a concurrent writer's more-current one.
+        self._save_metadata({}, length_delta=1, create_if_absent=False)
 
     def extend(self, items: list[Any]) -> None:
         """Add multiple items to end of list."""
@@ -1272,7 +1572,7 @@ class ListProperty:
         list. When there is no meta row at all -- the list is gone, and
         both namespaces are residue by definition -- both are swept.
         """
-        stored = self._read_meta_row()
+        stored, _ = self._read_meta_row()
         if stored is None:
             names = self._v1_item_names_in_range() + self._v2_item_names_in_range()
         elif int(stored.get("format", 1) or 1) == 2:
@@ -1544,24 +1844,24 @@ class ListProperty:
 
     def pop(self, index: int = -1) -> Any:
         """Remove and return item at index (default last)."""
-        # v2 dispatch comes FIRST: `len(self)` is served from the rank cache,
-        # which an instance that has seen an empty list keeps until something
-        # forces a reload. Checking it here would raise "pop from empty list"
-        # against a list another writer has since appended to. _v2_pop()
-        # forces the refresh and makes its own empty check against that.
-        if self._is_v2():
-            return self._v2_pop(index)
-
-        if len(self) == 0:
-            raise IndexError("pop from empty list")
-
+        # v2 dispatch comes FIRST, and via a FRESH read (_dispatch_and_stash(),
+        # not the cache -- row 9c): `len(self)` below is served from the
+        # rank cache, which an instance that has seen an empty list keeps
+        # until something forces a reload, and checking it before dispatch
+        # would raise "pop from empty list" against a list another writer
+        # has since appended to. _v2_pop() forces its own refresh and makes
+        # its own empty check against that.
+        #
         # Deliberately NOT calling _maybe_lazy_migrate() here: migration
         # closes holes in flight, so triggering it from pop() would make a
         # corrupted v1 list silently self-repair instead of raising, which
         # is the Phase 2/3 contract. The v1 branch below reaches
         # __delitem__, which triggers migration exactly as it always has.
-        if self._is_v2():
+        if self._dispatch_and_stash() == 2:
             return self._v2_pop(index)
+
+        if len(self) == 0:
+            raise IndexError("pop from empty list")
 
         if index == -1:
             index = len(self) - 1
@@ -1610,7 +1910,7 @@ class ListProperty:
             raise RuntimeError("No database connection available")
 
         self._maybe_lazy_migrate()
-        if self._is_v2():
+        if self._dispatch_and_stash() == 2:
             self._v2_insert(index, item)
             return
 
@@ -1657,8 +1957,9 @@ class ListProperty:
         ):
             raise RuntimeError(f"list item write failed for '{self.name}'[{index}]")
 
-        # Update metadata
-        self._save_metadata({"length": length + 1}, create_if_absent=False)
+        # DELTA under the compare-and-swap, not an absolute `length + 1`
+        # computed from the cache -- see append()'s identical comment.
+        self._save_metadata({}, length_delta=1, create_if_absent=False)
 
     def _v2_remove(self, value: Any) -> None:
         """Delete the first item equal to ``value``, by RANK.
@@ -1714,7 +2015,7 @@ class ListProperty:
         # scan would make a corrupted list silently self-repair instead of
         # raising. The v1 scan below reaches __delitem__, which migrates
         # exactly as it always has.
-        if self._is_v2():
+        if self._dispatch_and_stash() == 2:
             self._v2_remove(value)
             return
 
@@ -1948,7 +2249,8 @@ class ListProperty:
             if pairs[i][1] == pairs[i + 1][1]:
                 adjacent_duplicates.append((i, i + 1))
 
-        stored = self._read_meta_row() or {}
+        stored, _ = self._read_meta_row()
+        stored = stored or {}
         count_hint = stored.get("count_hint")
         count_hint = count_hint if isinstance(count_hint, int) else None
 
@@ -2566,7 +2868,7 @@ class ListProperty:
         # everything else, and the v2 rows are invisible to exists() and
         # list_all() (which key off the meta row) but WOULD be read as items
         # by the next list created under this name.
-        stored_meta = self._read_meta_row()
+        stored_meta, _ = self._read_meta_row()
         if stored_meta is None:
             logger.warning(
                 f"List '{self.name}' (actor {self.actor_id}) was deleted "

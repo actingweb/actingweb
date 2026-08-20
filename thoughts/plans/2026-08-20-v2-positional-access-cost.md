@@ -1376,14 +1376,142 @@ That is row 9b's main subject and stays open — see "What We're NOT Doing".
 
 ### Verification
 
-- [ ] `poetry run pytest tests/test_property_list_integrity.py -v` passes
-- [ ] `make test-all-parallel` passes on DynamoDB
-- [ ] `DATABASE_BACKEND=postgresql … make test-integration` passes
-- [ ] `poetry run pyright actingweb tests` passes
-- [ ] Manual: `docs/guides/property-lists.rst` and the migration guide no
+- [x] `poetry run pytest tests/test_property_list_integrity.py -v` passes
+      (90 passed — 4 tests rewritten, see Notes)
+- [x] `make test-all-parallel` passes on DynamoDB (2944 passed, 31 skipped)
+- [x] `DATABASE_BACKEND=postgresql … make test-integration` passes
+      (852 passed, 16 skipped)
+- [x] `poetry run pyright actingweb tests` passes (0 errors)
+- [x] Manual: `docs/guides/property-lists.rst` and the migration guide no
       longer describe the read-modify-write window as an accepted trade
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+### Notes
+
+**The row-creation branch needed the same delta-merge logic as the
+CAS-retry branch, and the same cache-drop discipline.** Two bugs surfaced
+during implementation that the plan's prose didn't anticipate, both caught
+by tests before landing (an advisor review flagged the first from the
+`test_concurrent_delete_is_not_undone` failure's own fake-store dump; the
+second was found by simply running `test_v2_count_hint.py` after the CAS
+rewrite):
+
+1. `_save_metadata()`'s row-ABSENT branch (list creation, or a `delete()`
+   racing an `append()`) originally seeded the new row from
+   `dict(self._load_metadata())` without first invalidating the cache. For
+   a v1-cached instance appending after a concurrent `delete()`, this
+   recreated the row from the STALE v1 dict (`format` absent, stale
+   `length`) while the item just written landed in a v2-shaped row —
+   `format`-less metadata over a v2 item, worse than either "resurrect
+   cleanly" or "decline to resurrect". Fixed by calling
+   `self._invalidate_cache()` immediately before the seed read, so
+   `_load_metadata()` takes its own absent-row path and returns a clean
+   `_create_default_metadata_v2()` regardless of what the calling instance
+   used to believe.
+2. That same row-creation branch never applied `count_delta`/`length_delta`
+   at all — only the "row already exists" branch did. Every list's FIRST
+   append (which always goes through row creation, since nothing has
+   written the meta row yet) silently dropped its `count_delta=1`, so
+   `count_hint` read one low until the SECOND mutation happened to pass an
+   absolute `count=`. Fixed by duplicating the same two `if count_delta
+   and stored_format == 2 ...` / `if length_delta and stored_format == 1
+   ...` blocks into the creation branch, applied after `meta.update(...)`
+   and before `_replace_metadata()`.
+
+**A stale-cached instance's mutation now self-corrects immediately, not on
+its NEXT call — this is a real, deliberate behavior improvement, and it
+broke 4 pre-existing tests that pinned the OLD (delayed) self-correction.**
+`_dispatch_and_stash()` reads the meta row fresh at the top of every
+mutator, so a retained instance's own write during the SAME call that
+discovers the stale cache already lands in the current format — the
+WARNING still fires (comparing `self._meta_cache` against the fresh read),
+it just no longer means the write was lost. Rewrote
+`test_concurrent_append_does_not_revert_the_format_flip`,
+`test_concurrent_clear_is_not_undone`, `test_concurrent_delete_is_not_undone`,
+and `test_a_retained_instance_does_not_resurrect_its_cached_format` in
+`tests/test_property_list_integrity.py` (plus their real-backend
+counterparts in `tests/integration/test_property_list_migration.py`'s
+`TestConcurrentWriteDuringMigration`) to assert the new immediate
+self-correction. This makes the plan's "Regression: the existing
+metadata-integrity suite passes unmodified" New Test unachievable as
+literally written — the plan's own row-9c fix necessarily changes what
+those specific tests were pinning. Recorded here rather than silently
+edited; see the class docstring for the same explanation left in the test
+file. The one test that plausibly IS a strict resurrection-vs-corruption
+call (`test_concurrent_delete_is_not_undone`) was checked against the
+pre-existing `_v2_touch_metadata()` design note ("a delete() racing an
+append() leaves a one-item list rather than nothing") and updated to match
+that already-accepted philosophy — CHANGED behavior for 3.14's changelog,
+not a silent test edit: a v1 list deleted underneath a stale-cached
+instance's `append()` now resurrects as a coherent one-item v2 list instead
+of (pre-3.14) leaving an invisible orphan v1 item row with no meta row
+pointing at it.
+
+**`TestCrashInjectionResidue::test_crash_between_move_and_delete_leaves_duplicate`
+needed its crash point moved by exactly one call, not "raised until
+green".** `_dispatch_and_stash()` adds one `get()` at the top of every
+mutator, so the absolute call index the test's `calls_before_crash`
+targets shifted by exactly one. Worked out the new call sequence by hand
+(dispatch's fresh read is now call 1, `len()`'s own read is call 2, the
+delete-move-delete triplet becomes calls 3-6) and moved
+`calls_before_crash` from 4 to 5 — verified the test still asserts the
+SAME residue shape (duplicate "b" at both slot 0 and 1, length stuck one
+too high) at the new crash point, not just that it passes.
+
+**Query-count regression check (per an advisor review's second loose
+end):** `_dispatch_and_stash()`'s extra point read per mutation could have
+tripped the Phase 5/7 query-count tests (`test_v2_count_hint.py`,
+`test_v2_value_addressed_reads.py`). Confirmed by inspection that every one
+of those assertions spies on `get_range` specifically (`range_call_count`),
+never on `get`, so the added point read is invisible to them — reran both
+files to confirm.
+
+**Handler coverage gap found and closed:** `PropertiesHandler.put()`'s
+index-parameter branch (`handlers/properties.py`, the single-item PUT
+path) had no `ListMetadataContentionError` handler at all — a v1 list's
+`append()`/`insert()` under sustained contention (a semantic write, not
+advisory) would have surfaced as a bare 500 instead of the 503+Retry-After
+every other list-mutating path gets. Added the missing `except
+ListMetadataContentionError` clause alongside the existing
+`(ValueError, IndexError)` one.
+
+**New tests** landed in a new file, `tests/test_v2_metadata_cas.py`
+(following the Phase 5/6/7 convention of one dedicated file per phase
+rather than growing `test_property_list_integrity.py` further), covering
+the plan's New Tests not already pinned by the (rewritten)
+`TestStaleMetadataIsNeverWrittenBack`: a metadata write whose row changed
+underneath it retries and merges onto the new value; a stale-cache
+dispatch leaves `foreign_format_rows` at zero; the CAS retry is bounded
+(asserted by counting attempts, not just "eventually raises") and the
+properties handler maps the exception to 503+`Retry-After` (unit-tested
+directly against `_respond_list_metadata_contended()` with a fake response
+object, rather than standing up full auth/actor test infrastructure that
+doesn't otherwise exist in this codebase for `PropertiesHandler`); the
+advisory carve-out's boundary from both sides (a v2 append whose touch
+exhausts CAS still returns success, logs one WARNING, and stores the item
+exactly once; a v1 append's semantic length write still raises on the
+same exhaustion); and v1 `append()`/`insert()` merging a delta onto the
+fresh stored length rather than computing an absolute from a stale cached
+one. The reverted-migration scenario itself (PR #127's P1) is pinned by
+the updated `TestStaleMetadataIsNeverWrittenBack` test, not duplicated
+here.
+
+**Docs updated, not the historical v3.13 migration guide rewritten:**
+`docs/guides/property-lists.rst`'s "Concurrency during a whole-list
+rewrite" section now states the metadata read-modify-write window is
+closed (with the mechanism and the `ListMetadataContentionError` mapping),
+while being explicit that this does NOT make `compact()`/`migrate_to_v2()`
+crash-atomic — that's row 9b, still open, still tracked in
+`thoughts/todo/whole-list-rewrite-atomicity.md`. `docs/migration/v3.13.rst`
+is a dated historical record of what 3.13 shipped; rather than rewrite its
+claims, added an "Update (3.14):" addendum pointing at the closed window,
+leaving the 3.13-era description intact. The full 3.14 migration guide is
+Phase 14's job.
+
+**Deviation:** the plan's "Verification" checklist item for the migration
+guide originally implied editing `docs/migration/v3.13.rst`'s body text
+directly; did an addendum instead for the historical-accuracy reason above.
 
 ---
 

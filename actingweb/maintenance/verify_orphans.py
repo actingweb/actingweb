@@ -46,7 +46,11 @@ consumer-side integrity sweep.
 
 Exit codes: 0 = clean (no orphans, nothing errored); 1 = orphans found
 and/or a table's sweep errored; 2 = the actor-id read itself failed or came
-back empty -- refused to sweep at all, not a report of zero orphans.
+back empty -- refused to sweep at all, not a report of zero orphans;
+3 = nothing was scanned because every table was already complete in the
+checkpoint file -- the printed report is a REPLAY of the earlier scan, not
+the database's current state. Delete the checkpoint file and re-run for a
+fresh scan (in particular after removing reported rows).
 """
 
 import argparse
@@ -375,6 +379,7 @@ def main() -> int:
     limiter = RateLimiter(args.rps)
 
     had_error = False
+    tables_swept_this_run = 0
     for table in ROW_TYPES:
         if checkpoint.is_table_done(table):
             logger.info(f"{table}: already swept (checkpoint) -- skipping")
@@ -387,6 +392,7 @@ def main() -> int:
             logger.error(f"{table}: sweep failed: {e}")
             had_error = True
             continue
+        tables_swept_this_run += 1
         checkpoint.mark_table_done(table, result)
         logger.info(
             f"{table}: {result['counts'].get(table, 0)} row(s) scanned, "
@@ -397,6 +403,24 @@ def main() -> int:
     report = checkpoint.merged()
     total_orphans = sum(len(v) for v in report["orphans"].values())
     total_reserved = sum(len(v) for v in report["reserved"].values())
+
+    # Every table was already marked complete in the checkpoint file, so
+    # this run scanned NOTHING -- everything below is a replay of the
+    # earlier scan's findings, not the database's current state. Without
+    # this guard, an operator who deleted the reported rows and re-ran
+    # would get the ORIGINAL counts and orphan list reprinted, exit 1, and
+    # no way to tell it from a fresh scan -- the same trust failure shape
+    # as case 1 in the module docstring.
+    pure_replay = tables_swept_this_run == 0 and not had_error
+    if pure_replay:
+        logger.warning(
+            f"REPLAYED FROM CHECKPOINT -- no rows were scanned in this run: "
+            f"every table is already marked complete in "
+            f"{args.checkpoint_file}. The report below repeats that earlier "
+            f"scan's findings and says nothing about the database's current "
+            f"state. If you have removed the reported rows since, delete "
+            f"the checkpoint file and re-run for a fresh scan."
+        )
 
     if total_orphans:
         logger.warning(f"ORPHANED ROWS FOUND: {total_orphans}")
@@ -421,9 +445,11 @@ def main() -> int:
         "above, then remove reviewed rows with your own tooling."
     )
 
-    if not had_error and total_orphans == 0:
+    if not had_error and total_orphans == 0 and not pure_replay:
         checkpoint.clear()
 
+    if pure_replay:
+        return 3
     if had_error:
         return 1
     return 1 if total_orphans else 0

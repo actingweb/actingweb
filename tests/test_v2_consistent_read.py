@@ -151,7 +151,9 @@ class TestHandlersNeverSpendTheGuarantee:
             pathlib.Path(__file__).resolve().parent.parent / "actingweb" / "handlers"
         )
         offenders = []
-        for path in sorted(handlers_dir.glob("*.py")):
+        # rglob, not glob: a future handlers/ subpackage must not slip out
+        # of this guard's reach.
+        for path in sorted(handlers_dir.rglob("*.py")):
             tree = ast.parse(path.read_text(), filename=str(path))
             for node in ast.walk(tree):
                 if not isinstance(node, ast.Call):
@@ -159,11 +161,21 @@ class TestHandlersNeverSpendTheGuarantee:
                 for kw in node.keywords:
                     if kw.arg not in ("consistent", "consistent_read"):
                         continue
-                    if isinstance(kw.value, ast.Constant) and kw.value.value is False:
+                    # Anything other than a literal True is an offender:
+                    # consistent=False is the obvious spend, but
+                    # consistent=some_flag is the QUIET one -- a variable
+                    # here means a handler decided staleness on a REST
+                    # caller's behalf, which is exactly what this guard
+                    # forbids. (Not passing the kwarg at all is the way
+                    # to say "the strong default".)
+                    if not (
+                        isinstance(kw.value, ast.Constant) and kw.value.value is True
+                    ):
                         offenders.append(f"{path.name}:{node.lineno}")
         assert offenders == [], (
             f"handlers must never spend the read-your-writes guarantee on "
-            f"a REST caller's behalf: {offenders}"
+            f"a REST caller's behalf (pass a literal True or omit the "
+            f"kwarg): {offenders}"
         )
 
 

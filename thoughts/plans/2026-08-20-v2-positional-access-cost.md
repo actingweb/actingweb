@@ -1,5 +1,6 @@
 ---
 status: done
+verified: thoughts/verifications/2026-08-21-v2-positional-access-cost.md
 ---
 
 # Implementation Plan: v2 list read cost — the 3.14.0 release

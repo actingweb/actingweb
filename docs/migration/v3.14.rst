@@ -155,10 +155,15 @@ Updates now try to match by value, not just position
 
 When you update an item using the new ``update_where``/``update_by_handle``
 methods, the notification sent to peers now includes the item's *old*
-value, so an up-to-date peer can find the right row even if its position
-changed. Peers still on an older version of ActingWeb simply ignore this
-extra information and keep working exactly as before — no upgrade is
-required on their side.
+value instead of a position, so an up-to-date peer can find the right row
+even if its position changed. One caveat for mixed-version fleets: a peer
+still on an older version of ActingWeb has nothing to match such a diff
+against — it requires a position, which these diffs deliberately do not
+carry — so it skips the update without applying it (all other operations,
+including ``remove()`` and positional updates, keep working exactly as
+before on old peers). If an older peer you do not control replicates a
+list you mutate with these two methods, that peer needs 3.14 to see the
+updates; until then, a resync brings it back in line.
 
 Retrying a failed list update is safer, in one specific case
 ================================================================
@@ -170,6 +175,19 @@ raises a specific, catchable error (``ListMetadataContentionError``, which
 the library also turns into an HTTP 503 "please retry" response on its own
 endpoints) instead of a generic failure. If your app already retries
 failed requests, this mostly just makes those retries more reliable.
+
+One guarantee and one caveat about what a retry can duplicate:
+
+- On the current (v2) list format, this specific 503 is **never** sent
+  after your item was already stored -- the library deliberately
+  swallows a bookkeeping failure that late (it self-corrects on the next
+  change), precisely so that retrying the 503 cannot append your item
+  twice.
+- A *generic* failure (a network drop, a different 5xx, or this error on
+  an old-format list) can still land after the item was committed. If a
+  duplicate append would matter to you, make the retry check first --
+  ``find()`` by your item's identity field before appending again --
+  rather than resubmitting blindly.
 
 New, opt-in: faster reads that can be a moment out of date
 ================================================================
@@ -196,8 +214,13 @@ database for leftover data tied to actors that no longer exist — for
 example, if an actor deletion was interrupted partway through. It only
 reports what it finds; it never deletes anything automatically, so you
 stay in control of cleanup. This is an operator tool for occasional
-maintenance, not something your application calls itself. See
-:doc:`../reference/actor-deletion` for how to run it.
+maintenance, not something your application calls itself: run it from a
+persistent shell (never a lambda-like runtime) under a separate
+**operator credential** with ``Scan``/``Query`` read access to the actor,
+property, attribute and trust tables -- your application's locked-down
+runtime role deliberately lacks that access, and should keep lacking it.
+See :doc:`../reference/actor-deletion` for how to run it and how its
+checkpointing behaves across re-runs.
 
 Faster out of the box
 ========================
@@ -214,4 +237,10 @@ faster:
   operations instead of one step per item.
 
 None of these change what your code sees — only how quickly the library
-serves it.
+serves it. Like 3.13's read-path fixes, these are invisible to a green
+test suite (they change what a request *costs*, not what it returns): to
+confirm them against your own hot paths, reuse the operation-profile
+recipe in "Proving the fixes actually landed" at the end of the
+:doc:`3.13 migration guide <v3.13>` — the same counter shape shows
+``append`` dropping to a constant per-call cost and positional deletes
+replaced by ``remove_where()``'s single read.

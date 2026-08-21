@@ -2435,17 +2435,21 @@ class ListProperty:
                             break
             return removed
 
-        indices = [
-            i
+        # Capture the values during the SAME scan that finds the indices
+        # -- a second `self[i]` read here could return a different value
+        # than the one that matched (and gets deleted) if a concurrent
+        # writer lands between the two reads, which is exactly the drift
+        # class this method's return value exists to preclude.
+        matched = [
+            (i, item)
             for i, item in enumerate(self)
             if isinstance(item, dict) and identity_key in item and item[identity_key] == value
         ]
-        if first_only and indices:
-            indices = indices[:1]
-        removed_items = [self[i] for i in indices]
-        for i in sorted(indices, reverse=True):
+        if first_only and matched:
+            matched = matched[:1]
+        for i, _ in sorted(matched, reverse=True):
             del self[i]
-        return removed_items
+        return [item for _, item in matched]
 
     def update_where(
         self, identity_key: str, value: Any, item: Any, *, first_only: bool = False
@@ -2481,19 +2485,21 @@ class ListProperty:
                             break
             return updated
 
-        indices = [
-            i
+        # Same capture-during-scan rationale as remove_where()'s v1 branch:
+        # the returned pre-update values must be the ones the match saw,
+        # not whatever a second positional read happens to find.
+        matched = [
+            (i, existing)
             for i, existing in enumerate(self)
             if isinstance(existing, dict)
             and identity_key in existing
             and existing[identity_key] == value
         ]
-        if first_only and indices:
-            indices = indices[:1]
-        old_items = [self[i] for i in indices]
-        for i in indices:
+        if first_only and matched:
+            matched = matched[:1]
+        for i, _ in matched:
             self[i] = item
-        return old_items
+        return [existing for _, existing in matched]
 
     def _identity_of(self, raw_value: str, identity_key: str) -> Any:
         """This row's value for ``identity_key``, or ``None`` if it has none.

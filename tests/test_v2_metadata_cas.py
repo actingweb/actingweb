@@ -238,6 +238,61 @@ class TestAdvisoryCarveOutBoundary:
             "advisory metadata touch" in r.getMessage() for r in caplog.records
         )
 
+    def test_failed_advisory_touch_leaves_bounded_drift_that_the_next_count_repairs(
+        self, monkeypatch, fake_store, caplog
+    ):
+        """The drift bound's THIRD documented term (docs/guides/
+        property-lists.rst "the drift bound is a documented contract"): a
+        mutation whose advisory metadata touch exhausted its CAS attempts
+        leaves ``count_hint`` off by exactly that mutation, ``verify()``
+        reports the drift without going unhealthy, and the next
+        rank-counting mutation restores exactness. A consumer enforces
+        quota against this contract, so each clause gets its own pin."""
+        actor_id = "actor-cas-drift-term3"
+        name = "notes"
+        _seed_v2_list(fake_store, actor_id, name, ["a"])
+        meta_name = f"list:{name}-meta"
+
+        # _seed_v2_list writes minimal metadata with no count_hint; a list
+        # that has lived under 3.14 carries one. Seed it at counted truth
+        # so the failed touch below leaves a measurable stale value rather
+        # than an absent key (absent falls back to counting -- a different,
+        # already-tested path).
+        seeded_meta = _stored_meta(fake_store, actor_id, name)
+        seeded_meta["count_hint"] = 1
+        fake_store[(actor_id, meta_name)] = json.dumps(seeded_meta)
+
+        fake_db = _AlwaysFailsCASPropertyDb(fake_store, meta_name)
+        _patch_get_property(monkeypatch, lambda config: fake_db)
+
+        lst = ListProperty(actor_id=actor_id, name=name, config=object())
+        with caplog.at_level(logging.WARNING, logger="actingweb.property_list"):
+            lst.append("b")  # item lands; the advisory touch loses every CAS
+
+        # Term 3's drift: the stored hint still says 1, the list holds 2.
+        assert _stored_meta(fake_store, actor_id, name)["count_hint"] == 1
+        assert lst.to_list() == ["a", "b"]
+        assert lst.get_metadata()["length"] == 1  # advisory, off by one
+
+        # verify() names the drift, and drift alone is not unhealthy.
+        report = lst.verify()
+        assert report["count_hint"] == 1
+        assert report["count_hint_drift"] == -1
+        assert report["healthy"] is True
+
+        # Self-correction: the next rank-counting mutation writes counted
+        # truth. Contention is over now, so hand the repair a normally
+        # behaving store -- and a FRESH instance, the way a later request
+        # would see the list.
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
+        repaired = ListProperty(actor_id=actor_id, name=name, config=object())
+        repaired.pop()  # removes "b"; writes count=len(ranks)
+
+        assert _stored_meta(fake_store, actor_id, name)["count_hint"] == 1
+        assert repaired.to_list() == ["a"]
+        assert repaired.get_metadata()["length"] == 1  # exact again
+        assert repaired.verify()["count_hint_drift"] == 0
+
     def test_v1_semantic_length_write_still_raises_on_exhaustion(
         self, monkeypatch, fake_store
     ):

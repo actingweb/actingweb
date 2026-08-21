@@ -144,6 +144,15 @@ class TestColdStartDescribeTableBudget:
         from actingweb.db.verify_tables import required_models
 
         models = required_models()
+        # The AGGREGATE cold-start budget, pinned deliberately: the
+        # per-model <= 1 assertion below absorbs a new Model subclass
+        # silently, but each new class is one more DescribeTable on every
+        # container cold start -- the exact cost class 3.13 removed (see
+        # the plan's "No new PynamoDB Model subclasses" decision). Adding
+        # a model is sometimes right; doing it without noticing is not.
+        # If this fails because you added one, update the count AND
+        # confirm the addition against that decision.
+        assert len(models) == 9, sorted(m.__name__ for m in models)
         with _spy_control_plane(models) as spies:
             _exercise_all_paths(config, actor_id)
             # Exercise a second time -- the guard must not re-check on a

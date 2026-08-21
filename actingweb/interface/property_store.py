@@ -17,6 +17,13 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Distinguishes "argument not passed" from "value is None" in
+# _register_diff below: None is a legal list item, and a diff for a
+# None-valued item must still carry its item/old_item field (as JSON
+# null) or the receiver classifies the diff as an unknown operation and
+# silently drops it.
+_UNSET: Any = object()
+
 
 class PropertyStore:
     """
@@ -237,10 +244,10 @@ class NotifyingListProperty:
     def _register_diff(
         self,
         operation: str = "",
-        item: Any = None,
+        item: Any = _UNSET,
         index: int | None = None,
         items: list[Any] | None = None,
-        old_item: Any = None,
+        old_item: Any = _UNSET,
     ) -> None:
         """Register a diff for the list property change.
 
@@ -284,14 +291,16 @@ class NotifyingListProperty:
             }
 
             # Include item data for operations that add/modify items
-            # This allows subscribers to receive the data directly without fetching
-            if item is not None:
+            # This allows subscribers to receive the data directly without fetching.
+            # item/old_item are gated on the _UNSET sentinel, not None: None is
+            # a legal list item, and the receiver dispatches on key presence.
+            if item is not _UNSET:
                 diff_info["item"] = item
             if index is not None:
                 diff_info["index"] = index
             if items is not None:
                 diff_info["items"] = items
-            if old_item is not None:
+            if old_item is not _UNSET:
                 diff_info["old_item"] = old_item
 
             # Note: diff_info already contains "list": self._list_name to identify

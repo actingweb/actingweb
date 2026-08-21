@@ -494,3 +494,180 @@ class TestWwwActionEndpointDetectsRaces:
         assert webobj.response.status_code == 503
         assert webobj.response.headers.get("Retry-After")
         assert myself.property_lists.wwwitems_raced.to_list()[0] == {"n": "raced"}
+
+
+class TestSameBatchDuplicateIndices:
+    """Regression pins for the post-PR-#134 fix (plan's Post-Verification
+    item 3): the v2 branch resolves ONE final value per targeted index
+    before writing anything, so duplicate indices in one batch cannot
+    double-append, a same-batch create-then-delete is a net no-op, and a
+    second update at a pre-existing index does not fail against the handle
+    the first update just invalidated. Each expected result below is the
+    v1 branch's live-length semantics, hand-traced -- the contract is
+    "same accepted batch, same final list, regardless of storage format".
+    """
+
+    def test_two_updates_at_the_same_append_index_produce_one_row_later_wins(
+        self, myself, config, caplog
+    ):
+        lst = myself.property_lists.dup_append
+        for i in range(3):
+            lst.append({"n": i})
+
+        with caplog.at_level("WARNING"):
+            _post_bulk(
+                myself,
+                config,
+                "dup_append",
+                [{"index": 3, "n": "first"}, {"index": 3, "n": "second"}],
+            )
+
+        assert "concurrently modified" not in caplog.text
+        result = lst.to_list()
+        assert len(result) == 4  # ONE appended row, not two
+        assert result[3] == {"n": "second"}  # later duplicate wins
+
+    def test_two_updates_at_the_same_pre_existing_index_apply_later_wins(
+        self, myself, config, caplog
+    ):
+        """The incidental half of the fix: before it, the second update
+        hit a handle the first update's own write had just invalidated
+        and was misreported as 'concurrently modified' -- not a real
+        concurrent writer, just this batch's earlier entry."""
+        lst = myself.property_lists.dup_existing
+        for i in range(3):
+            lst.append({"n": i})
+
+        with caplog.at_level("WARNING"):
+            _post_bulk(
+                myself,
+                config,
+                "dup_existing",
+                [{"index": 1, "n": "first"}, {"index": 1, "n": "second"}],
+            )
+
+        assert "concurrently modified" not in caplog.text
+        result = lst.to_list()
+        assert len(result) == 3
+        assert result[1] == {"n": "second"}
+
+    def test_create_then_delete_at_the_append_index_is_a_net_noop(
+        self, myself, config, caplog
+    ):
+        lst = myself.property_lists.create_del
+        for i in range(3):
+            lst.append({"n": i})
+
+        with caplog.at_level("WARNING"):
+            _post_bulk(
+                myself,
+                config,
+                "create_del",
+                [{"index": 3, "n": "ephemeral"}, {"index": 3}],
+            )
+
+        assert "out of range" not in caplog.text
+        result = lst.to_list()
+        assert result == [{"n": 0}, {"n": 1}, {"n": 2}]  # nothing appended
+
+    def test_update_then_delete_at_an_interior_new_index_keeps_the_survivor(
+        self, myself, config
+    ):
+        """[append at 3, append at 4, delete 3] -- v1 appends both then
+        deletes index 3, ending [0..2, appended-at-4]. The v2 branch's
+        net-effect resolution must land in the same place."""
+        lst = myself.property_lists.interior_del
+        for i in range(3):
+            lst.append({"n": i})
+
+        _post_bulk(
+            myself,
+            config,
+            "interior_del",
+            [{"index": 3, "n": "a"}, {"index": 4, "n": "b"}, {"index": 3}],
+        )
+
+        result = lst.to_list()
+        assert result == [{"n": 0}, {"n": 1}, {"n": 2}, {"n": "b"}]
+
+    def test_duplicate_delete_of_the_same_pre_existing_index_deletes_one_row(
+        self, myself, config, caplog
+    ):
+        """Deliberate v2 divergence from v1, pinned: v1's live-length
+        delete pass shifts positions between the two deletes, so the
+        second `del lst[2]` removes the NEXT row too (two rows gone) --
+        the positional-skew class this release exists to kill. Under v2
+        the second delete presents a handle the first delete already
+        consumed, is reported as a conflict, and exactly one row is gone.
+        """
+        lst = myself.property_lists.dup_delete
+        for i in range(6):
+            lst.append({"n": i})
+
+        with caplog.at_level("WARNING"):
+            _post_bulk(myself, config, "dup_delete", [{"index": 2}, {"index": 2}])
+
+        assert "concurrently modified" in caplog.text  # the second delete
+        result = lst.to_list()
+        assert result == [{"n": 0}, {"n": 1}, {"n": 3}, {"n": 4}, {"n": 5}]
+
+
+class TestItemsActionEndpointContract:
+    """Two Phase 3 verification gaps: the de-bounds-checked action
+    endpoint must map an out-of-range index to 400 (same message the old
+    pre-read produced), and the "add" action's 201 body must carry the
+    new item's index."""
+
+    def test_action_update_out_of_range_returns_400(self, myself, config):
+        lst = myself.property_lists.action_oob
+        lst.append({"n": 0})
+
+        webobj = _run_handler(
+            PropertyListItemsHandler,
+            myself,
+            config,
+            "post",
+            "action_oob",
+            body=json.dumps(
+                {"action": "update", "item_index": 7, "item_value": {"n": "x"}}
+            ),
+        )
+
+        assert webobj.response.status_code == 400
+        assert myself.property_lists.action_oob.to_list() == [{"n": 0}]
+
+    def test_action_delete_out_of_range_returns_400(self, myself, config):
+        lst = myself.property_lists.action_oob_del
+        lst.append({"n": 0})
+
+        webobj = _run_handler(
+            PropertyListItemsHandler,
+            myself,
+            config,
+            "post",
+            "action_oob_del",
+            body=json.dumps({"action": "delete", "item_index": 7}),
+        )
+
+        assert webobj.response.status_code == 400
+        assert len(myself.property_lists.action_oob_del.to_list()) == 1
+
+    def test_action_add_201_body_carries_the_new_index(self, myself, config):
+        lst = myself.property_lists.action_add
+        for i in range(2):
+            lst.append({"n": i})
+
+        webobj = _run_handler(
+            PropertyListItemsHandler,
+            myself,
+            config,
+            "post",
+            "action_add",
+            body=json.dumps({"action": "add", "item_value": {"n": "new"}}),
+        )
+
+        assert webobj.response.status_code == 201
+        body = json.loads(webobj.response.body)
+        assert body["success"] is True
+        assert body["index"] == 2
+        assert myself.property_lists.action_add.to_list()[2] == {"n": "new"}

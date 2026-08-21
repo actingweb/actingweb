@@ -62,7 +62,12 @@ CHANGED
 - Updates made with the new value-based methods now notify subscribed
   peers using the item's value, so a peer can still find the right item
   even if its position changed. Peers on an older ActingWeb version keep
-  working exactly as before -- no upgrade is required on their side.
+  working exactly as before for every operation that existed before this
+  release; the one exception is these new value-based *update* diffs,
+  which carry no position for an old peer to fall back on, so a pre-3.14
+  peer does not apply them (it skips them without error). If peers you
+  do not control replicate a list you mutate with ``update_where()`` or
+  ``update_by_handle()``, they need 3.14 to see those updates.
 - A previously-documented race window, where a list format upgrade could
   be silently undone by a change happening at the same moment, is now
   closed rather than merely bounded. See ``ListMetadataContentionError``
@@ -120,6 +125,25 @@ FIXED
 - ``actor.property_lists.<name>.get_metadata()`` was silently unreachable
   through the normal way apps access lists, despite being a documented,
   public method. It now works as documented.
+- A list item whose value is ``None`` now replicates to subscribed peers
+  like any other value. Previously a diff for such an item omitted its
+  ``item``/``old_item`` field entirely, and the receiving side dropped
+  the whole notification as unrecognized -- silently, the same failure
+  mode as the ``remove()`` bug below.
+- When a peer receives a value-based update it cannot apply (the value
+  matches no row, or more than one), it now logs a WARNING naming the
+  list and suggesting a resync. The update was already (correctly) not
+  applied in that case; what was missing was any operator-visible signal
+  that the replica had just diverged.
+- ``remove_where()``/``update_where()`` on the core ``ListProperty``
+  layer now capture the values they return during the same scan that
+  matches them (v1 format) -- previously a second positional read could
+  return a different value than the one actually removed or replaced if
+  a concurrent writer landed in between.
+- ``actingweb-verify-orphans`` re-run against a checkpoint in which every
+  table is already complete now says so (``REPLAYED FROM CHECKPOINT``)
+  and exits with a distinct status (3) instead of reprinting the earlier
+  scan's findings as if they were current.
 - **Removing an item from a list wasn't reaching subscribed peers.** A
   bug meant ``remove()`` never actually notified peers, for as long as
   the feature has existed -- the notification was silently dropped every

@@ -719,7 +719,10 @@ call out explicitly:
   cleanup Lambda pattern above, this is meant for a persistent shell session
   against a large table, with ``--rps`` throttling and a
   ``--checkpoint-file`` for resuming an interrupted run. Do not invoke it
-  from a lambda-like runtime.
+  from a lambda-like runtime. The checkpoint is kept when orphans are
+  found; a re-run against a fully-complete checkpoint scans nothing and
+  exits 3 with a ``REPLAYED FROM CHECKPOINT`` warning — delete the
+  checkpoint file after cleaning up, then re-run for a fresh scan.
 - **Classifies; does not replace anything above.** It reports orphaned rows
   for manual review — there is no delete flag. It answers a different
   question than the TTL cleanup in this guide (expired-but-still-referenced

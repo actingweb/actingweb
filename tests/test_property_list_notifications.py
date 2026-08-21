@@ -213,6 +213,46 @@ class TestPropertyListNotifications:
         assert blob["item"] == 2
         assert blob["length"] == 2
 
+    def test_remove_of_a_none_item_still_carries_the_item_field(self):
+        """None is a legal list item (the v1 bulk path even writes it as
+        gap padding). A remove(None) diff must carry ``"item": null`` --
+        an ``is not None`` gate in _register_diff would omit the key and
+        the receiver would drop the diff as an unknown operation, the
+        exact failure mode the Phase 10 fix above closed for other
+        values."""
+        notifying_list, mock_actor, mock_list_prop = self._create_notifying_list(
+            [1, None, 3]
+        )
+        mock_list_prop.__len__ = Mock(return_value=2)
+        mock_list_prop.remove = Mock()
+
+        notifying_list.remove(None)
+
+        mock_actor.register_diffs.assert_called_once()
+        blob = json.loads(mock_actor.register_diffs.call_args[1]["blob"])
+        assert blob["operation"] == "remove"
+        assert "item" in blob
+        assert blob["item"] is None
+
+    def test_update_where_diff_carries_a_none_old_item(self):
+        """A pre-update value of None must survive into the diff as
+        ``"old_item": null`` so the receiver can still value-match it."""
+        notifying_list, mock_actor, mock_list_prop = self._create_notifying_list(
+            [None, 2]
+        )
+        mock_list_prop.__len__ = Mock(return_value=2)
+        mock_list_prop.update_where = Mock(return_value=[None])
+
+        result = notifying_list.update_where("tag", "x", {"id": 1})
+
+        assert result == 1
+        mock_actor.register_diffs.assert_called_once()
+        blob = json.loads(mock_actor.register_diffs.call_args[1]["blob"])
+        assert blob["operation"] == "update"
+        assert "old_item" in blob
+        assert blob["old_item"] is None
+        assert blob["item"] == {"id": 1}
+
     def test_no_diff_registered_without_actor(self):
         """Test that no diff is registered when actor is None."""
         mock_list_prop = Mock()

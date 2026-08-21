@@ -283,6 +283,15 @@ gotten wrong:
    deletes a row. Run it deliberately, review the output, then delete
    reviewed rows with your own tooling.
 
+One consequence of checkpointing to know about: when orphans are found,
+the checkpoint file is **kept** (so an interrupted review can resume), and
+a re-run against a checkpoint in which every table is already complete
+scans nothing — it would just replay the earlier findings. The tool
+detects this, warns ``REPLAYED FROM CHECKPOINT``, and exits with status 3
+(distinct from 0/1/2) instead of passing the stale report off as current.
+After you have removed the reported rows, **delete the checkpoint file**,
+then re-run for a fresh scan.
+
 See also
 ========
 

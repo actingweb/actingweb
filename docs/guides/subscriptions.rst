@@ -406,6 +406,15 @@ ActingWeb version keeps understanding every diff it receives. Instead:
   ``old_item`` simply ignores the field; without ``index`` present
   either, it has nothing to match the diff against.
 
+One positional field became advisory in 3.14: the ``index`` an
+``append`` diff carries (and the ``length`` field every list diff
+carries) derives from the list's advisory count rather than a fresh
+count of the rows, so under concurrent mutation it can be momentarily
+off by the documented drift bound (see "Storage Format" in the
+property-lists guide). Apply an append by appending ``item``; treat
+``index`` and ``length`` as ordering hints, never as addresses. The
+library's own receiver has always done exactly this.
+
 Because ``remove_where()``/``update_where()`` can match many items in one
 call, they can also emit many diffs in one call -- see the fan-out note
 below for what that means for delivery time.

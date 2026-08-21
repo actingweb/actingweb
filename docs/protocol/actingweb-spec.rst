@@ -2632,13 +2632,20 @@ data MUST include the following fields:
 |                |             | ``delete``, ``pop``, ``extend``, ``clear``, ``remove``,        |
 |                |             | ``delete_all``, or ``metadata``                                |
 +----------------+-------------+----------------------------------------------------------------+
-| ``length``     | REQUIRED    | The current length of the list after the operation             |
+| ``length``     | REQUIRED    | The current length of the list after the operation. Advisory:  |
+|                |             | it MAY derive from the sender's tracked count rather than a    |
+|                |             | fresh count of the rows, so under concurrent mutation it can   |
+|                |             | be momentarily off by a bounded amount. Receivers MUST NOT     |
+|                |             | use it to address rows                                         |
 +----------------+-------------+----------------------------------------------------------------+
 | ``item``       | OPTIONAL    | The item data for ``append``, ``insert``, and ``update``       |
 |                |             | operations                                                     |
 +----------------+-------------+----------------------------------------------------------------+
 | ``index``      | OPTIONAL    | The index affected for ``append``, ``insert``, ``update``,     |
-|                |             | ``delete``, and ``pop`` operations                             |
+|                |             | ``delete``, and ``pop`` operations. For ``append`` diffs the   |
+|                |             | value is advisory in the same way ``length`` is (it is derived |
+|                |             | from it): a receiver SHOULD apply an append by appending       |
+|                |             | ``item``, never by writing at ``index``                        |
 +----------------+-------------+----------------------------------------------------------------+
 | ``items``      | OPTIONAL    | Array of items for ``extend`` operations                       |
 +----------------+-------------+----------------------------------------------------------------+

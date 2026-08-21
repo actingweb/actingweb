@@ -493,3 +493,129 @@ class TestAuthenticatedPropertyListStore:
         assert public_surface(_PermissionEnforcingListView) == public_surface(
             NotifyingListProperty
         )
+
+
+# Every mutator on _PermissionEnforcingListView, with the permission it
+# must enforce and a canonical invocation. TestPermissionProxyEnforcement
+# below proves each one both denies (without touching storage) and
+# delegates when granted -- and its completeness test forces this table to
+# stay in sync with the proxy, so a method added to the proxy without a
+# classification here fails the suite rather than shipping ungated.
+_PROXY_MUTATORS = {
+    "__setitem__": ("write", lambda v: v.__setitem__(0, "x")),
+    "__delitem__": ("delete", lambda v: v.__delitem__(0)),
+    "set_description": ("write", lambda v: v.set_description("d")),
+    "set_explanation": ("write", lambda v: v.set_explanation("e")),
+    "append": ("write", lambda v: v.append("x")),
+    "extend": ("write", lambda v: v.extend(["x"])),
+    "clear": ("delete", lambda v: v.clear()),
+    "delete": ("delete", lambda v: v.delete()),
+    "pop": ("write", lambda v: v.pop()),
+    "insert": ("write", lambda v: v.insert(0, "x")),
+    "remove": ("write", lambda v: v.remove("x")),
+    "delete_by_handle": ("write", lambda v: v.delete_by_handle(Mock())),
+    "update_by_handle": ("write", lambda v: v.update_by_handle(Mock(), "x")),
+    "remove_where": ("delete", lambda v: v.remove_where("k", "v")),
+    "update_where": ("write", lambda v: v.update_where("k", "v", "x")),
+    "compact": ("write", lambda v: v.compact()),
+    "migrate_to_v2": ("write", lambda v: v.migrate_to_v2()),
+}
+
+# The proxy methods that deliberately carry no check: `read` was already
+# enforced by AuthenticatedPropertyListStore.__getattr__ before the view
+# was constructed.
+_PROXY_READS = {
+    "__len__",
+    "__getitem__",
+    "__iter__",
+    "get_description",
+    "get_explanation",
+    "get_metadata",
+    "to_list",
+    "to_indexed_list",
+    "prime_from_rows",
+    "to_list_from_rows",
+    "slice",
+    "index",
+    "count",
+    "find",
+    "find_all",
+    "items_with_handles",
+    "verify",
+}
+
+
+class TestPermissionProxyEnforcement:
+    """The surface test above proves name parity; these prove the thing
+    Phase 2 actually exists for -- that every mutator on the proxy calls
+    _check with the right permission before delegating. A proxy method
+    that delegates without checking passes the surface test and fails
+    here."""
+
+    def _make_view(self, mock_get_evaluator, permission_by_op):
+        mock_list_prop = MagicMock()
+        mock_store = Mock()
+        mock_store.notes = mock_list_prop
+        _list_store_evaluator(mock_get_evaluator, permission_by_op)
+        auth_context = AuthContext(peer_id="peer123")
+        auth_store = AuthenticatedPropertyListStore(
+            mock_store, auth_context, "actor123", Mock()
+        )
+        return auth_store.notes, mock_list_prop
+
+    def test_every_proxy_method_is_classified(self):
+        """Forces the two tables above to track the proxy exactly: a new
+        method must be declared a read or a mutator to land."""
+        proxy_methods = {
+            name
+            for name, member in vars(_PermissionEnforcingListView).items()
+            if callable(member) and name not in {"__init__", "_check"}
+        }
+        assert proxy_methods == _PROXY_READS | set(_PROXY_MUTATORS)
+        assert not (_PROXY_READS & set(_PROXY_MUTATORS))
+
+    @pytest.mark.parametrize(
+        "method,required,invoke",
+        [(m, req, inv) for m, (req, inv) in sorted(_PROXY_MUTATORS.items())],
+        ids=sorted(_PROXY_MUTATORS),
+    )
+    def test_mutator_denied_without_its_permission_and_storage_untouched(
+        self, method, required, invoke
+    ):
+        """Grant everything EXCEPT the permission the mutator requires --
+        so a mutator gated on the wrong (granted) permission fails this
+        test, not just an all-denied one."""
+        granted = ({"read", "write", "delete"} - {required}) | {"read"}
+        with patch(
+            "actingweb.interface.authenticated_views.get_permission_evaluator"
+        ) as mock_get_evaluator:
+            view, mock_list_prop = self._make_view(
+                mock_get_evaluator,
+                dict.fromkeys(granted, PermissionResult.ALLOWED),
+            )
+            with pytest.raises(PermissionError):
+                invoke(view)
+
+        getattr(mock_list_prop, method).assert_not_called()
+
+    @pytest.mark.parametrize(
+        "method,required,invoke",
+        [(m, req, inv) for m, (req, inv) in sorted(_PROXY_MUTATORS.items())],
+        ids=sorted(_PROXY_MUTATORS),
+    )
+    def test_mutator_delegates_exactly_once_when_granted(
+        self, method, required, invoke
+    ):
+        with patch(
+            "actingweb.interface.authenticated_views.get_permission_evaluator"
+        ) as mock_get_evaluator:
+            view, mock_list_prop = self._make_view(
+                mock_get_evaluator,
+                {
+                    "read": PermissionResult.ALLOWED,
+                    required: PermissionResult.ALLOWED,
+                },
+            )
+            invoke(view)
+
+        assert getattr(mock_list_prop, method).call_count == 1

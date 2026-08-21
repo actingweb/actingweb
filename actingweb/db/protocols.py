@@ -415,8 +415,10 @@ class DbPropertyProtocol(Protocol):
         DynamoDB: chunks into groups of 25 (the ``BatchWriteItem`` limit)
         and retries unprocessed items with backoff -- both provided by
         PynamoDB's ``Model.batch_write()`` context manager, not
-        hand-rolled here. PostgreSQL: a single ``DELETE ... WHERE id = %s
-        AND name = ANY(%s)``.
+        hand-rolled here. Note that batching saves round trips, not
+        capacity: ``BatchWriteItem`` consumes the same number of write
+        capacity units as the equivalent individual deletes. PostgreSQL:
+        a single ``DELETE ... WHERE id = %s AND name = ANY(%s)``.
 
         No lookup-table maintenance is performed -- same exclusion
         ``create_if_not_exists``/``delete_if_value_equals``/

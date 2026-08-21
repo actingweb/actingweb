@@ -434,7 +434,12 @@ and ``update_where()`` wrap the scan-and-mutate loop above, and work on
     # stop after the first match instead of every match
     tasks.remove_where("id", "task-42", first_only=True)
 
-Both return the number of items actually affected. Under v2 they are
+Through ``actor.property_lists.<name>`` (as above), both return the
+number of items actually affected; on the core ``ListProperty`` layer
+they instead return the affected items themselves (the removed values /
+the pre-update values), which is what the notifying wrapper builds its
+per-item subscription diffs from -- ``len()`` of that list is the same
+count. Under v2 they are
 built on ``items_with_handles()`` plus the handle mutators above -- one
 whole-list read, then one conditional write per match, same single-shot
 semantics per match (a match lost to a concurrent mutation between the
@@ -553,12 +558,22 @@ relying on batch semantics:
   read is not applied and is not counted -- the other items in the batch
   still are. Retry the batch (or just that item) to see the current
   content and decide again.
-- **Same-index update + delete, in one batch, is now well-defined**:
-  the update applies, and the delete is reported as skipped ("concurrently
-  modified") rather than deleting the row the update just wrote. Before
-  3.14 this raced against whatever the positional delete pass found by
-  then, most often deleting the updated row -- if your integration relied
-  on that, address the same index only once per batch.
+- **Same-index update + delete, in one batch, is now well-defined**: for
+  an index that existed before the batch, the update applies and the
+  delete is reported as skipped ("concurrently modified") rather than
+  deleting the row the update just wrote; for an index the batch itself
+  creates (index >= the pre-batch length), the pair is a net no-op --
+  nothing is appended and nothing is reported skipped. Before 3.14 this
+  raced against whatever the positional delete pass found by then, most
+  often deleting the updated row -- if your integration relied on that,
+  address the same index only once per batch.
+- **Duplicate indices in one batch resolve to one write, later entry
+  wins**: two updates addressing the same index -- pre-existing or
+  batch-created -- store the second value in a single row (the response
+  still counts each request entry). Two *deletes* at the same
+  pre-existing index remove one row, with the second reported as skipped
+  -- unlike pre-3.14, where position shift between the two deletes could
+  take a neighbouring row with it.
 
 **PUT item at index**::
 

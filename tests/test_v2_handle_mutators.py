@@ -209,6 +209,10 @@ class TestRemoveWhereAndUpdateWhereBehavior:
         assert len(removed) == 1
         remaining_ids = [item["id"] for item in lst.to_list()]
         assert remaining_ids in ([2, 3], [1, 3])
+        # The returned value is the removed item itself, not a separately
+        # (re-)read snapshot entry.
+        assert removed[0]["tag"] == "a"
+        assert removed[0]["id"] not in remaining_ids
 
     def test_remove_where_no_match_returns_zero(self, monkeypatch, fake_store):
         actor_id = "actor-removewhere-none"
@@ -257,9 +261,63 @@ class TestRemoveWhereAndUpdateWhereBehavior:
 
         updated = lst.update_where("tag", "a", {"tag": "z"})
 
-        assert len(updated) == 2
+        # The PRE-update values, in match order -- returning the
+        # post-update value would satisfy a bare length check, so pin the
+        # contents.
+        assert updated == [{"id": 1, "tag": "a"}, {"id": 2, "tag": "a"}]
         tags = sorted(item["tag"] for item in lst.to_list())
         assert tags == ["b", "z", "z"]
+
+
+class TestWhereMutatorsDispatchFreshOverAStaleCachedFormat:
+    """The scenario `_v2_items_with_handles()` exists for (post-PR-#134
+    fix): an instance that cached v1 metadata before another process
+    migrated the list must still succeed -- `remove_where()`/
+    `update_where()` dispatch fresh via `_dispatch_and_stash()`, and the
+    items read that follows must NOT re-derive the format from the stale
+    `_meta_cache` (the public `items_with_handles()` guard would raise
+    "still v1" here)."""
+
+    def _stale_v1_instance_then_migrate(self, monkeypatch, fake_store, actor_id, items):
+        name = "items"
+        _seed_list(fake_store, actor_id, name, items)
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
+        stale = ListProperty(actor_id=actor_id, name=name, config=object())
+        assert stale.storage_format() == 1  # warms this instance's cache
+
+        # Another process migrates the list: swap the stored rows to v2
+        # under the same name, the same way the stale-cache migration
+        # regression in test_property_list_integrity.py simulates it.
+        for i in range(len(items)):
+            fake_store.pop((actor_id, f"list:{name}-{i}"), None)
+        _seed_v2_list(fake_store, actor_id, name, items)
+        return stale
+
+    def test_remove_where_succeeds_on_a_stale_v1_cached_instance(
+        self, monkeypatch, fake_store
+    ):
+        items = [{"id": 1, "tag": "x"}, {"id": 2, "tag": "y"}]
+        stale = self._stale_v1_instance_then_migrate(
+            monkeypatch, fake_store, "actor-stale-cache-rw", items
+        )
+
+        removed = stale.remove_where("tag", "x")  # must not raise ValueError
+
+        assert removed == [{"id": 1, "tag": "x"}]
+        assert stale.to_list() == [{"id": 2, "tag": "y"}]
+
+    def test_update_where_succeeds_on_a_stale_v1_cached_instance(
+        self, monkeypatch, fake_store
+    ):
+        items = [{"id": 1, "tag": "x"}, {"id": 2, "tag": "y"}]
+        stale = self._stale_v1_instance_then_migrate(
+            monkeypatch, fake_store, "actor-stale-cache-uw", items
+        )
+
+        updated = stale.update_where("tag", "x", {"id": 1, "tag": "z"})
+
+        assert updated == [{"id": 1, "tag": "x"}]
+        assert stale.to_list() == [{"id": 1, "tag": "z"}, {"id": 2, "tag": "y"}]
 
 
 class TestRemoveWhereV1DescendingOrder:
@@ -283,7 +341,8 @@ class TestRemoveWhereV1DescendingOrder:
 
         removed = lst.remove_where("tag", "x")
 
-        assert len(removed) == 3
+        # The removed values themselves, in match (ascending index) order.
+        assert removed == [items[0], items[2], items[4]]
         assert [item["id"] for item in lst.to_list()] == [1, 3]
 
     def test_v1_update_where_updates_all_matches_correctly(self, monkeypatch, fake_store):
@@ -300,7 +359,9 @@ class TestRemoveWhereV1DescendingOrder:
 
         updated = lst.update_where("tag", "x", {"id": -1, "tag": "z"})
 
-        assert len(updated) == 2
+        # The PRE-update values, captured during the same scan that
+        # matched them -- not a second positional read.
+        assert updated == [items[0], items[2]]
         assert [item["tag"] for item in lst.to_list()] == ["z", "y", "z"]
 
 

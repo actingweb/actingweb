@@ -167,6 +167,13 @@ kind of operation as ``update_by_handle()``. ``remove_where()`` requires
 ``delete`` because it can remove every matching item in the list in one
 call -- closer in effect to ``clear()`` than to a single-item change.
 
+The same single-item logic applies to the two positional removers that
+predate 3.14: ``pop()`` and ``remove(value)`` require ``write``, not
+``delete`` -- each takes out exactly one item. The ``delete`` permission
+gates the operations whose blast radius is a position you did not
+inspect (``__delitem__``), many items at once (``remove_where()``), or
+the whole list (``clear()``, ``delete()``).
+
 Every method ``actor.property_lists.<name>`` exposes -- ``to_list()``,
 ``append()``, ``pop()``, ``slice()``, ``compact()``, ``migrate_to_v2()``, and
 so on -- is reachable through the authenticated view with the matching

@@ -199,6 +199,53 @@ class TestCheckpointResume:
         assert cp2.is_table_done("property")
         assert cp2.merged()["orphans"]["property"] == [("ghost", "n")]
 
+    def test_a_run_that_scans_nothing_is_labelled_a_replay_and_exits_3(
+        self, monkeypatch, tmp_path, caplog
+    ):
+        """An operator who removed the reported rows and re-ran used to get
+        the ORIGINAL orphan report reprinted -- same counts, exit 1, zero
+        rows scanned -- indistinguishable from a fresh scan. A run where
+        every table is already checkpoint-complete must say so loudly and
+        exit distinctly (3), and must not clear or re-scan anything."""
+        import logging
+
+        monkeypatch.setattr(vo, "_read_actor_ids", lambda backend: {"live1"})
+        scan_attempts = []
+
+        def _rows(backend, table, limiter):
+            scan_attempts.append(table)
+            if table == "property":
+                return iter([("property", "ghost", "n")])
+            return iter([])
+
+        monkeypatch.setattr(vo, "_rows_for", _rows)
+        checkpoint_file = tmp_path / "ckpt.json"
+        monkeypatch.setattr(
+            "sys.argv",
+            ["verify_orphans", "--checkpoint-file", str(checkpoint_file)],
+        )
+
+        # First run: a real scan, orphan found, checkpoint kept.
+        assert vo.main() == 1
+        assert checkpoint_file.exists()
+        assert len(scan_attempts) == 3
+
+        # Second run: every table already complete -- nothing is scanned.
+        scan_attempts.clear()
+        with caplog.at_level(
+            logging.WARNING, logger="actingweb.maintenance.verify_orphans"
+        ):
+            rc = vo.main()
+
+        assert rc == 3  # distinct from 0 (clean), 1 (orphans), 2 (refused)
+        assert scan_attempts == []  # nothing re-swept
+        assert checkpoint_file.exists()  # replay never clears the file
+        replay_warnings = [
+            r for r in caplog.records if "REPLAYED FROM CHECKPOINT" in r.getMessage()
+        ]
+        assert len(replay_warnings) == 1
+        assert "delete" in replay_warnings[0].getMessage()  # names the remedy
+
 
 class TestRateLimiter:
     def test_zero_rps_never_sleeps(self):
@@ -219,6 +266,17 @@ class TestNoDeleteCodePath:
         "delete_item",
         "remove",
         "clear_actor",
+        # Write primitives too, not just delete-named ones: this
+        # codebase's own idiom for removing a property row is
+        # db.set(..., value=None), which the delete-named set above would
+        # wave through. A report-only tool has no business calling ANY
+        # of these.
+        "set",
+        "put",
+        "put_item",
+        "batch_write",
+        "save",
+        "set_if_value_equals",
     }
 
     def _tree(self):

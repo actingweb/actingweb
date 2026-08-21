@@ -195,17 +195,19 @@ class TestGetMetadataIssuesNoRangeQuery:
 
 
 class TestNotifiedAppendRegistersDiffWithNoExtraQuery:
-    def test_register_diff_adds_no_get_range_call_beyond_appends_own(
+    def test_register_diff_adds_no_range_query_beyond_appends_own(
         self, monkeypatch, fake_store
     ):
         """One fresh ListProperty per append(), matching real usage --
         property.py mints a new instance per attribute access, so a
         retained warm rank cache across separate calls is NOT the
-        mechanism this pins (see TestGetMetadataIssuesNoRangeQuery and
-        the class docstring's Phase 9B forward-reference: once append()
-        stops holding a rank cache at all, _register_diff() reading
-        get_metadata() instead of len() is what keeps this at one call
-        instead of two)."""
+        mechanism this pins (see TestGetMetadataIssuesNoRangeQuery).
+
+        Phase 9B: append() no longer issues a whole-list get_range() at
+        all -- it reads the last rank via one get_last_in_range() instead.
+        _register_diff() reading get_metadata() instead of len() (Phase 5)
+        is what keeps this at exactly that one read, rather than a second
+        get_range() for the diff's length."""
         from actingweb.interface.property_store import NotifyingListProperty
 
         actor_id = "actor-hint-notified"
@@ -226,8 +228,10 @@ class TestNotifiedAppendRegistersDiffWithNoExtraQuery:
             core = ListProperty(actor_id=actor_id, name=name, config=object())
             wrapped = NotifyingListProperty(core, name, fake_actor)  # type: ignore[arg-type]
             fake_db.range_call_count = 0
+            fake_db.last_in_range_call_count = 0
             wrapped.append(item)
-            assert fake_db.range_call_count == 1
+            assert fake_db.range_call_count == 0
+            assert fake_db.last_in_range_call_count == 1
 
             diff = json.loads(fake_actor.diffs[-1]["blob"])
             assert diff["operation"] == "append"

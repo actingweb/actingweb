@@ -103,6 +103,14 @@ class FakePropertyDb:
         self.store[(actor_id, name)] = value
         return True
 
+    def get_last_in_range(self, actor_id=None, lower=None, upper=None):
+        names = [
+            name
+            for (aid, name) in self.store
+            if aid == actor_id and lower <= name <= upper
+        ]
+        return max(names) if names else None
+
 
 class CrashInjectingPropertyDb(FakePropertyDb):
     """Simulates a hard interruption (process death, timeout) after a fixed
@@ -459,11 +467,18 @@ class TestFailFastReads:
 
 
 class CountingPropertyDb(FakePropertyDb):
-    """Counts get_range() calls -- the query-count guard's instrument."""
+    """Counts get_range()/get_last_in_range() calls -- the query-count
+    guard's instrument. The latter is Phase 9B's addition: append()/
+    extend() use it instead of a whole-list get_range()."""
 
     def __init__(self, store):
         super().__init__(store)
         self.range_call_count = 0
+        self.last_in_range_call_count = 0
+
+    def get_last_in_range(self, actor_id=None, lower=None, upper=None):
+        self.last_in_range_call_count += 1
+        return super().get_last_in_range(actor_id=actor_id, lower=lower, upper=upper)
 
     def get_range(
         self,
@@ -513,6 +528,27 @@ class StaleReadPropertyDb(FakePropertyDb):
         if self.get_range_calls == 1:
             result.pop(self.stale_missing_name, None)
         return result
+
+
+class StaleLastRankPropertyDb(FakePropertyDb):
+    """The ``get_last_in_range()`` counterpart of ``StaleReadPropertyDb``:
+    simulates a genuine last-rank race for append()/extend() (Phase 9B),
+    which read the last rank via ``get_last_in_range()`` rather than a
+    whole-list ``get_range()``. Reports an EMPTY range (``None``) on its
+    FIRST call only, regardless of the real store contents;
+    ``create_if_not_exists()`` always sees the real, already-written
+    store -- modeling two writers whose read happened before the other's
+    write landed."""
+
+    def __init__(self, store):
+        super().__init__(store)
+        self.last_in_range_calls = 0
+
+    def get_last_in_range(self, actor_id=None, lower=None, upper=None):
+        self.last_in_range_calls += 1
+        if self.last_in_range_calls == 1:
+            return None
+        return super().get_last_in_range(actor_id=actor_id, lower=lower, upper=upper)
 
 
 class TestV2NewListDefaultsAndValidation:
@@ -583,15 +619,20 @@ class TestV2ConditionalWriteCollision:
         # would naturally generate.
         fake_store[(actor_id, "list:mylist-#a0")] = json.dumps("existing-item")
 
-        fake_db = StaleReadPropertyDb(fake_store, stale_missing_name="list:mylist-#a0")
+        # Phase 9B: append() reads the last rank via get_last_in_range(),
+        # not get_range() -- StaleReadPropertyDb (which stales get_range())
+        # no longer models this race for append(); StaleLastRankPropertyDb
+        # is its get_last_in_range() counterpart.
+        fake_db = StaleLastRankPropertyDb(fake_store)
         _patch_get_property(monkeypatch, lambda config: fake_db)
         prop_list = ListProperty(actor_id=actor_id, name=name, config=object())
 
         prop_list.append("new-item")
 
-        # The stale first read didn't see "a0", so the first candidate
-        # collided; a fresh reread on retry found it and generated past it.
-        assert fake_db.get_range_calls >= 2
+        # The stale first read reported an empty list, so the first
+        # candidate collided with "a0"; a fresh reread on retry found it
+        # and generated past it.
+        assert fake_db.last_in_range_calls >= 2
         assert prop_list.to_list() == ["existing-item", "new-item"]
         assert fake_store[(actor_id, "list:mylist-#a0")] == json.dumps("existing-item")
 
@@ -1926,7 +1967,18 @@ class TestInvalidateCacheClearsBothCaches:
     def test_v2_mutations_keep_their_rank_cache(self, monkeypatch, fake_store):
         """The metadata touch after every v2 mutation re-reads the meta row
         but must NOT discard the rank cache it just updated in place --
-        that would cost a full range query per mutation."""
+        that would cost a full range query per mutation.
+
+        Phase 9B changed HOW ``append()`` finds its own rank (one
+        ``get_last_in_range()`` read instead of the full rank cache), but
+        it still keeps an ALREADY-WARM ``self._v2_rank_cache`` in sync by
+        appending to it on success -- it just never LOADS a cold one. See
+        ``test_v2_append_last_rank.py``'s ``TestAppendKeepsAWarmRankCacheInSync``
+        for why that's a correctness requirement, not an optimization: a
+        caller (``handlers/properties.py``'s bulk-update pass) that warms
+        the cache via ``len()`` and then loops ``append()``/``len()`` on
+        the SAME instance depends on exactly this.
+        """
         actor_id = "actor-cache-kept"
         name = "notes"
         _seed_v2_list(fake_store, actor_id, name, ["a", "b"])

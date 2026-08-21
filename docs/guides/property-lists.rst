@@ -97,9 +97,6 @@ Migration Example
    # New: scalable list
    notes = actor.property_lists.user_notes
    for n in ["Note 1", "Note 2"]:
-       # Under v2, append() re-reads the list's key ordering (a whole-list
-       # range query) before writing -- see "Storage Format" below. It is
-       # not a fixed-cost primitive.
        notes.append(n)
 
 Storage Format (v1 / v2)
@@ -123,9 +120,16 @@ one point read per item. On a 2026-08-19 production incident this made a
 ``to_indexed_list()`` or plain iteration instead -- each is a **single**
 query for the whole list regardless of length, in both formats, and
 ``to_indexed_list()`` returns the ``(index, item)`` pairs such a loop is
-usually after. ``append()`` has the same shape under v2: it re-reads the
-list's key ordering before writing, so it is also a whole-list read, not
-a fixed-cost primitive (see the migration example above).
+usually after.
+
+``append()``/``extend()`` do **not** share that shape: as of 3.14, each
+reads only the list's current LAST rank (one item's read capacity, via
+``get_last_in_range``) rather than the whole ordering -- a fixed cost
+regardless of list length. Before 3.14, append() *did* re-read the whole
+key ordering before writing, matching the positional-read cost above;
+this is the one exception the "positional access costs the whole list"
+rule used to have no exception for. ``extend()`` of *n* items pays that
+one read ONCE for the whole batch, not once per item.
 
 - **v1** (dense integers): items stored as ``list:{name}-{index}``, with
   an authoritative ``length`` in metadata. Every list created before this

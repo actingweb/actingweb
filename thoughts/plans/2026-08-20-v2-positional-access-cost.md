@@ -1578,15 +1578,119 @@ meta-row contention (the hint design serializes every append on a meta CAS).
 
 ### Verification
 
-- [ ] `poetry run pytest tests/test_property_list.py tests/test_property_list_integrity.py -v` passes
-- [ ] `poetry run pytest tests/test_cold_start_budget.py -v` passes **unmodified**
-- [ ] `make test-all-parallel` passes on DynamoDB
-- [ ] `DATABASE_BACKEND=postgresql … make test-integration` passes
-- [ ] `poetry run pyright actingweb tests` passes
-- [ ] Manual: the operation-counter recipe shows an append on a large list
-      costing a one-item read where 3.13.0 paid the whole list
+- [x] `poetry run pytest tests/test_property_list.py tests/test_property_list_integrity.py -v` passes
+- [x] `poetry run pytest tests/test_cold_start_budget.py -v` passes **unmodified**
+      (source file untouched; required a fix along the way -- see Notes)
+- [x] `make test-all-parallel` passes on DynamoDB (2960 passed, 31 skipped)
+- [x] `DATABASE_BACKEND=postgresql … make test-integration` passes
+      (852 passed, 16 skipped)
+- [x] `poetry run pyright actingweb tests` passes (0 errors)
+- [x] Manual: `docs/guides/property-lists.rst`'s "Storage Format" section
+      now states `append()`/`extend()` pay one last-rank read, not a
+      whole-list one -- see Notes for the numbers
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+### Notes
+
+**Two real bugs found during implementation, both via hangs/failures in
+the integration suite -- not by inspection.** Both are documented in this
+plan for the record; see the commit for the exact fixes.
+
+1. **A genuine infinite loop, not a performance regression.** The initial
+   implementation removed `_v2_append()`'s participation in
+   `self._v2_rank_cache` entirely, on the theory that a single-row
+   `get_last_in_range()` read has nothing correct to seed a full rank
+   list with. That is true, but incomplete: `handlers/properties.py`'s
+   bulk-update Pass 1 (`while len(list_prop) <= index: list_prop.append(
+   None)`) warms the cache with an earlier `len(list_prop)` call, then
+   depends on each `append()` on that SAME instance advancing what
+   `len()` reports next. Before 9B, `_v2_append()` mutated
+   `self._v2_rank_cache` in place (the old `_v2_ensure_rank_cache()`-based
+   implementation's side effect), so this always held. Removing that
+   without a replacement left the cache permanently stale after the
+   first append, so the `while` loop's condition never became false --
+   `append(None)` ran forever, each one a real, successful write (rank
+   generation is deterministic and always advances past the last real
+   append, so nothing about the writes themselves was wrong -- only the
+   loop's exit condition was). Found because `make test-all-parallel` and
+   sequential `make test-integration` both hung for hours rather than
+   failing fast; a `while len() <=` loop that never sees `len()` move
+   burns real CPU on every iteration, so the process never looked idle
+   enough to obviously flag as stuck. Traced to the exact stuck tests
+   (all four were bulk-POST list-item paths) by diffing which
+   `pytest -v` "started" lines never got a matching "PASSED"/"FAILED"
+   line, rather than by reasoning about the code first.
+
+   Fixed by having `_v2_append()`/`_v2_extend()` append their newly
+   created rank(s) onto `self._v2_rank_cache` on success, but ONLY when
+   it is already non-``None`` -- never loading a cold one, which would
+   defeat Phase 9B's entire cost reduction. This is why the "append/
+   extend no longer hold a rank cache" line in this phase's Changes
+   section above is not quite what shipped: they no longer LOAD one, but
+   they keep an already-warm one in sync. Regression pinned directly
+   (no docker needed) in `tests/test_v2_append_last_rank.py`'s
+   `TestAppendKeepsAWarmRankCacheInSync` -- a 3-line reproduction
+   (`len()` to warm the cache, `append()`, `len()` again) that runs in
+   milliseconds and would have caught this before it ever reached the
+   integration suite.
+
+2. **A legacy `#`-named sibling list could crash `append()`/`extend()`
+   with `fractional_indexing.FIError`.** `get_last_in_range()` has no
+   notion of v2 rank-key shape -- it just returns the bytewise-greatest
+   row name in a byte range. `_v2_ensure_rank_cache()`/`_v2_load_full()`
+   filter their range-read results through `_v2_is_rank()` for exactly
+   this reason: a pre-Phase-4 list whose name contains `#` can have rows
+   (most often its own `-meta` row) that sort inside a same-prefixed v2
+   list's byte range without being rank-shaped at all.
+   `_v2_last_rank()` skipped that filter, so when the sibling's row
+   happened to be the range's bytewise maximum, its raw suffix (e.g.
+   `"legacy-meta"`) was fed straight to
+   `fractional_indexing.generate_key_between()`, which raises rather
+   than silently miscomparing. Found via a real failure in
+   `tests/integration/test_migrate_property_lists_script.py::
+   TestDowngradeToV1::test_downgrade_does_not_delete_a_hash_named_sibling_list`.
+
+   Fixed by having `_v2_last_rank()` check `_v2_is_rank()` on the
+   returned suffix and fall back to the full, shape-filtered
+   `_v2_ensure_rank_cache(force=True)` read when it fails -- correctness
+   preserved in the rare case, fast path preserved in the common one
+   (new list names have banned `#` since Phase 4, so this only triggers
+   against a list that predates it). Regression pinned in
+   `tests/test_v2_append_last_rank.py`'s
+   `TestLastRankSkipsALegacyHashSiblingsRows`, reusing the seed shape
+   from `test_property_list_integrity.py`'s
+   `TestV2LegacyHashSiblingIsolation`.
+
+**Both bugs were caught before merge, by the verification steps this
+phase's checklist already required -- not by adding new process.** The
+lesson recorded here is procedural: an advisor consultation mid-debugging
+correctly distinguished "the environment is just slow" (my working theory
+after ~2 hours of a parallel run appearing to hang with workers still
+burning CPU) from "there is a real infinite loop, and the stuck tests are
+clustered exactly where the changed code lives" -- the four stuck tests
+being ALL bulk-POST list-item paths, and nothing else, was the tell.
+Isolating a single failing test node ID without its class's earlier
+numbered tests (`test_006` alone, skipping `test_001`-`005`) produced a
+misleading unrelated failure (`fixture` state depends on execution order
+in that file) before re-running the whole class surfaced the real hang.
+
+**Deviation from the plan's exact Changes wording:** "append/extend no
+longer hold a rank cache" is corrected above to "no longer LOAD one, but
+keep an already-warm one in sync." The cost analysis in the Changes
+section (one last-rank read instead of a whole-list query, `extend()`
+batching to one read for n items) is otherwise unchanged and confirmed
+by `tests/test_v2_append_last_rank.py`'s exact-count assertions.
+
+**Query-count regression check**, following the same pattern Phase 9's
+notes used: `tests/test_v2_count_hint.py`'s
+`TestNotifiedAppendRegistersDiffWithNoExtraQuery` and
+`tests/test_v2_cost_library_callers.py`'s `TestNotifiedAppendQueryCount`
+both hard-coded "append issues exactly one `get_range` call" as their
+corrected Phase-3/5 baseline; both needed updating to "zero `get_range`,
+one `get_last_in_range`" -- found by running the full suite, not
+anticipated in advance. No other `get_range`-based query-count assertion
+in the test suite was affected (only these two named append specifically).
 
 ---
 

@@ -299,7 +299,7 @@ class TestBulkItemsEndpointCost:
 
 
 class TestNotifiedAppendQueryCount:
-    def test_append_with_diff_registration_issues_one_get_range(
+    def test_append_with_diff_registration_issues_zero_get_range(
         self, config, actor_id
     ):
         """Confirms the corrected baseline (see phase notes): a notified
@@ -307,8 +307,14 @@ class TestNotifiedAppendQueryCount:
         phase's cleanup, because _v2_append's first attempt reuses an
         already-warm rank cache (force=False) -- the "duplicate len()"
         this phase removes was already a cache hit, not a second query.
-        Phase 9B changes this: append() stops holding a rank cache at
-        all, so this count becomes load-bearing again there."""
+
+        Phase 9B (thoughts/plans/2026-08-20-v2-positional-access-cost.md)
+        changes the baseline itself: append() stops using the rank cache
+        (and its whole-list get_range()) to find its own insertion point
+        at all, replacing it with one get_last_in_range() call -- a
+        single-row read. get_range() calls drop from 1 to 0; the new cost
+        is one get_last_in_range() instead.
+        """
         from actingweb.interface.property_store import NotifyingListProperty
         from actingweb.property_list import ListProperty
 
@@ -324,8 +330,17 @@ class TestNotifiedAppendQueryCount:
         fake_actor = FakeActor()
         wrapped = NotifyingListProperty(core, "notes2", fake_actor)  # type: ignore[arg-type]
 
-        _, calls = _count_get_range(lambda: wrapped.append("hello"))
-        assert len(calls) == 1
+        orig_last_in_range = DbProperty.get_last_in_range
+        last_in_range_calls = []
+
+        def spy_last_in_range(self, *a, **kw):
+            last_in_range_calls.append(kw)
+            return orig_last_in_range(self, *a, **kw)
+
+        with mock.patch.object(DbProperty, "get_last_in_range", spy_last_in_range):
+            _, calls = _count_get_range(lambda: wrapped.append("hello"))
+        assert len(calls) == 0
+        assert len(last_in_range_calls) == 1
 
         diff = json.loads(fake_actor.diffs[0]["blob"])
         assert diff["operation"] == "append"

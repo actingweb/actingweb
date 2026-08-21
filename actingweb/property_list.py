@@ -471,6 +471,50 @@ class ListProperty:
         )
         return self._v2_rank_cache
 
+    def _v2_last_rank(self) -> str | None:
+        """The current highest rank key, via one bytewise-greatest-row read
+        (``get_last_in_range``) instead of a whole-list range query.
+
+        Phase 9B: this is what ``append()``/``extend()`` use instead of
+        ``_v2_ensure_rank_cache()`` -- an append only ever needs the LAST
+        rank, and paying for the whole list to get it is the cost this
+        release exists to remove. Always strongly consistent, same
+        reasoning as ``_v2_ensure_rank_cache()``: a stale last rank here is
+        a mid-list append by another route.
+
+        This method itself deliberately does not read or write
+        ``self._v2_rank_cache`` -- a cache built from a single-row read
+        would be wrong to reuse for anything that needs the FULL rank list
+        (``__setitem__``, ``insert()``, etc., which still call
+        ``_v2_ensure_rank_cache()`` directly), and populating it here
+        would just be a stale entry those callers would have to
+        force-reread past anyway. Its callers (``_v2_append()``/
+        ``_v2_extend()``) DO append their newly-created rank(s) onto
+        ``self._v2_rank_cache`` afterwards, but only when it is already
+        warm -- see those methods' docstrings.
+        """
+        lower, upper = self._v2_bounds()
+        db = get_property(self.config)
+        last_name = db.get_last_in_range(actor_id=self.actor_id, lower=lower, upper=upper)
+        if last_name is None:
+            return None
+        prefix_len = len(self._v2_item_prefix())
+        candidate_rank = last_name[prefix_len:]
+        if _v2_is_rank(candidate_rank):
+            return candidate_rank
+        # The bytewise-greatest row in our byte range is not rank-shaped
+        # -- a legacy '#'-named sibling list's row (its own item/meta
+        # suffix, e.g. '-meta' or '-3', sorts inside OUR range because its
+        # name starts with our list's name plus '#'). get_last_in_range()
+        # has no notion of rank shape, so it happily returns that row.
+        # Feeding it to fi.generate_key_between() raises FIError. Rare in
+        # practice -- new list names have banned '#' since Phase 4, this
+        # only triggers when a pre-Phase-4 sibling still exists -- so fall
+        # back to the full, shape-filtered read rather than optimizing
+        # for a case that no longer occurs on new lists.
+        ranks = self._v2_ensure_rank_cache(force=True)
+        return ranks[-1] if ranks else None
+
     def _v2_load_full(self, consistent: bool = True) -> list[tuple[str, str]]:
         """One full range query -> sorted (rank, raw_value) pairs. Also
         refreshes the rank-key cache as a side effect (the invariant that
@@ -1429,10 +1473,33 @@ class ListProperty:
         return ListPropertyIterator(self)
 
     def _v2_append(self, item: Any) -> None:
+        """Phase 9B: one ``get_last_in_range`` read (a single item's read
+        capacity) instead of ``_v2_ensure_rank_cache()``'s whole-list range
+        query -- append only ever needs the last rank. The collision loop
+        is UNCHANGED, which is what keeps the race behaviour byte-for-byte
+        identical to the rank-cache version: rank generation is
+        deterministic, so two appenders that read the same last rank
+        produce the same candidate, ``create_if_not_exists`` rejects the
+        loser, and the retry re-reads the (now current) last rank.
+
+        On success, appends the new rank to ``self._v2_rank_cache`` IF that
+        cache is already warm (not ``None``) -- never loads a cold one,
+        which would defeat the whole point of using
+        ``get_last_in_range()`` here. This is not optional bookkeeping: a
+        caller that reuses the SAME instance across several operations
+        (``handlers/properties.py``'s bulk-update pass, which calls
+        ``len(list_prop)`` then loops ``list_prop.append(None)`` while
+        re-checking ``len()``) depends on ``len()`` reflecting each
+        append immediately. Before this, `append()` maintained the cache
+        via ``_v2_ensure_rank_cache()``'s in-place mutation; dropping that
+        without a replacement left ``len()`` reading a cache that never
+        advanced, so ``while len(list_prop) <= index: list_prop.append(
+        None)`` never terminated -- found via a hang in
+        ``tests/integration/test_post_properties.py``.
+        """
         value_str = self._encode_item(item)
+        last = self._v2_last_rank()
         for attempt in range(_V2_MAX_RANK_RETRIES):
-            ranks = self._v2_ensure_rank_cache(force=(attempt > 0))
-            last = ranks[-1] if ranks else None
             candidate = fi.generate_key_between(last, None)
             if len(candidate) > _V2_RANK_MAX_LEN:
                 raise RuntimeError(
@@ -1445,12 +1512,16 @@ class ListProperty:
                 name=self._v2_item_name(candidate),
                 value=value_str,
             ):
-                ranks.append(candidate)
+                if self._v2_rank_cache is not None:
+                    self._v2_rank_cache.append(candidate)
                 self._v2_touch_metadata(count_delta=1)
                 return
-            # Collision: another writer took this rank between our cache
-            # load and the write. Force-reread on the next attempt so the
-            # regenerated key is based on the current actual last rank.
+            # Collision: another writer took this rank between our read
+            # and the write. Re-read the last rank for the next attempt --
+            # NOT `candidate` itself, since the collision means someone
+            # else's row is now there, not necessarily the new last one.
+            if attempt < _V2_MAX_RANK_RETRIES - 1:
+                last = self._v2_last_rank()
         raise RuntimeError(
             f"list '{self.name}' append: too many rank collisions, retry later"
         )
@@ -1494,8 +1565,81 @@ class ListProperty:
         # overwrites a concurrent writer's more-current one.
         self._save_metadata({}, length_delta=1, create_if_absent=False)
 
+    def _v2_extend(self, items: list[Any]) -> None:
+        """Phase 9B: one last-rank read for the WHOLE batch, then n
+        conditional creates and a single metadata touch -- not n calls to
+        ``append()``, which would each pay their own last-rank read.
+
+        Collision handling generalizes ``_v2_append()``'s per-item retry:
+        on a collision at item i, the items from i onward are re-keyed
+        against a freshly re-read last rank and retried; items before i
+        already landed and are not retried. ``count_delta`` covers exactly
+        the items that landed, even on the raise path (a partial batch is
+        possible on exhausted retries, same as a partial ``extend()`` via
+        the old per-item loop would have left).
+
+        Same cache discipline as ``_v2_append()``: created ranks are
+        appended to ``self._v2_rank_cache`` IF it is already warm, never
+        loading a cold one.
+        """
+        last = self._v2_last_rank()
+        remaining = items
+        created = 0
+        created_ranks: list[str] = []
+        for attempt in range(_V2_MAX_RANK_RETRIES):
+            if not remaining:
+                break
+            candidates = fi.generate_n_keys_between(last, None, len(remaining))
+            collided_at = None
+            for i, (candidate, item) in enumerate(zip(candidates, remaining, strict=True)):
+                if len(candidate) > _V2_RANK_MAX_LEN:
+                    raise RuntimeError(
+                        f"list '{self.name}' rank key exceeded {_V2_RANK_MAX_LEN} "
+                        f"chars -- run compact() to rebalance"
+                    )
+                item_db = get_property(self.config)
+                if not item_db.create_if_not_exists(
+                    actor_id=self.actor_id,
+                    name=self._v2_item_name(candidate),
+                    value=self._encode_item(item),
+                ):
+                    # Collision: another writer took this rank. The items
+                    # before it already landed; re-key from here.
+                    collided_at = i
+                    break
+                created += 1
+                created_ranks.append(candidate)
+                last = candidate
+            if collided_at is None:
+                remaining = []
+                break
+            remaining = remaining[collided_at:]
+            if attempt < _V2_MAX_RANK_RETRIES - 1:
+                last = self._v2_last_rank()
+        if created_ranks and self._v2_rank_cache is not None:
+            self._v2_rank_cache.extend(created_ranks)
+        if created:
+            self._v2_touch_metadata(count_delta=created)
+        if remaining:
+            raise RuntimeError(
+                f"list '{self.name}' extend: too many rank collisions, retry later"
+            )
+
     def extend(self, items: list[Any]) -> None:
-        """Add multiple items to end of list."""
+        """Add multiple items to end of list.
+
+        v2: one last-rank read for the whole batch (see ``_v2_extend()``),
+        not one per item. v1: unchanged, a loop over ``append()`` --
+        Phase 9B does not touch the v1 path.
+        """
+        if not items:
+            return
+
+        self._maybe_lazy_migrate()
+        if self._dispatch_and_stash() == 2:
+            self._v2_extend(items)
+            return
+
         for item in items:
             self.append(item)
 

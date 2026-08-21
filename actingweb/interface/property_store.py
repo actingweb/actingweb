@@ -453,44 +453,34 @@ class NotifyingListProperty:
         multi-match remove_where() looks to subscribers like several
         individual remove() calls.
 
-        Matches are captured from a snapshot taken BEFORE the removal --
-        one extra read, at this notifying layer only. ListProperty's own
-        remove_where() stays at its documented query cost; it only
-        returns a count, not the removed values, so this is the only way
-        to give subscribers the item data other diffs already carry."""
-        candidates = [
-            item
-            for _, item in self._list_prop.to_indexed_list()
-            if isinstance(item, dict) and identity_key in item and item[identity_key] == value
-        ]
-        if first_only and candidates:
-            candidates = candidates[:1]
-        removed = self._list_prop.remove_where(identity_key, value, first_only=first_only)
-        for item in candidates[:removed]:
+        ListProperty.remove_where() returns the removed items themselves
+        (not just a count), so the diffs raised here name exactly the rows
+        this call removed -- no separate before-mutation snapshot, so
+        nothing to drift out of sync with a concurrent mutation between
+        two reads."""
+        removed_items = self._list_prop.remove_where(identity_key, value, first_only=first_only)
+        for item in removed_items:
             self._register_diff("remove", item=item)
-        return removed
+        return len(removed_items)
 
     def update_where(
         self, identity_key: str, value: Any, item: Any, *, first_only: bool = False
     ) -> int:
         """See ListProperty.update_where(). Registers one "update" diff per
-        item actually updated, carrying the new value, ``old_item`` (the
-        pre-update value), and its index in the pre-update snapshot --
-        same snapshot-before-mutation approach as remove_where() above,
-        for the same reason."""
-        candidates = [
-            (idx, existing)
-            for idx, existing in self._list_prop.to_indexed_list()
-            if isinstance(existing, dict)
-            and identity_key in existing
-            and existing[identity_key] == value
-        ]
-        if first_only and candidates:
-            candidates = candidates[:1]
-        updated = self._list_prop.update_where(identity_key, value, item, first_only=first_only)
-        for idx, old_item in candidates[:updated]:
-            self._register_diff("update", item=item, index=idx, old_item=old_item)
-        return updated
+        item actually updated, carrying the new value and ``old_item``
+        (the pre-update value) -- no index; a value-addressed update
+        under v1 or v2 alike is not positional, and
+        ``_apply_list_operation`` on the receiving side resolves an
+        "update" diff by ``old_item`` when present regardless.
+
+        ListProperty.update_where() returns the pre-update values of the
+        rows it actually updated, so this raises diffs from that directly
+        instead of a separately-taken before-mutation snapshot -- same
+        rationale as remove_where() above."""
+        old_items = self._list_prop.update_where(identity_key, value, item, first_only=first_only)
+        for old_item in old_items:
+            self._register_diff("update", item=item, old_item=old_item)
+        return len(old_items)
 
     def compact(self) -> dict[str, Any]:
         """Repair holes/orphans -- see ListProperty.compact(). Registers a

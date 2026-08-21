@@ -341,14 +341,9 @@ class TestPhase10HandleAndWhereNotifications:
     def test_remove_where_registers_one_remove_diff_per_removed_item(self):
         notifying_list, mock_actor, mock_list_prop = self._create_notifying_list([1, 2])
         mock_list_prop.__len__ = Mock(return_value=1)
-        mock_list_prop.to_indexed_list = Mock(
-            return_value=[
-                (0, {"id": 1, "tag": "x"}),
-                (1, {"id": 2, "tag": "y"}),
-                (2, {"id": 3, "tag": "x"}),
-            ]
+        mock_list_prop.remove_where = Mock(
+            return_value=[{"id": 1, "tag": "x"}, {"id": 3, "tag": "x"}]
         )
-        mock_list_prop.remove_where = Mock(return_value=2)
 
         result = notifying_list.remove_where("tag", "x")
 
@@ -362,8 +357,7 @@ class TestPhase10HandleAndWhereNotifications:
 
     def test_remove_where_registers_nothing_on_zero_matches(self):
         notifying_list, mock_actor, mock_list_prop = self._create_notifying_list([1])
-        mock_list_prop.to_indexed_list = Mock(return_value=[(0, {"id": 1, "tag": "y"})])
-        mock_list_prop.remove_where = Mock(return_value=0)
+        mock_list_prop.remove_where = Mock(return_value=[])
 
         result = notifying_list.remove_where("tag", "x")
 
@@ -373,31 +367,19 @@ class TestPhase10HandleAndWhereNotifications:
     def test_remove_where_first_only_registers_a_single_diff(self):
         notifying_list, mock_actor, mock_list_prop = self._create_notifying_list([1])
         mock_list_prop.__len__ = Mock(return_value=1)
-        mock_list_prop.to_indexed_list = Mock(
-            return_value=[
-                (0, {"id": 1, "tag": "x"}),
-                (1, {"id": 2, "tag": "x"}),
-            ]
-        )
-        mock_list_prop.remove_where = Mock(return_value=1)
+        mock_list_prop.remove_where = Mock(return_value=[{"id": 1, "tag": "x"}])
 
         result = notifying_list.remove_where("tag", "x", first_only=True)
 
         assert result == 1
         mock_actor.register_diffs.assert_called_once()
 
-    def test_update_where_registers_one_update_diff_per_updated_item_with_old_item_and_index(
+    def test_update_where_registers_one_update_diff_per_updated_item_with_old_item(
         self,
     ):
         notifying_list, mock_actor, mock_list_prop = self._create_notifying_list([1, 2])
         mock_list_prop.__len__ = Mock(return_value=2)
-        mock_list_prop.to_indexed_list = Mock(
-            return_value=[
-                (0, {"id": 1, "tag": "x"}),
-                (1, {"id": 2, "tag": "y"}),
-            ]
-        )
-        mock_list_prop.update_where = Mock(return_value=1)
+        mock_list_prop.update_where = Mock(return_value=[{"id": 1, "tag": "x"}])
 
         result = notifying_list.update_where("tag", "x", {"id": 1, "tag": "z"})
 
@@ -407,12 +389,11 @@ class TestPhase10HandleAndWhereNotifications:
         assert blob["operation"] == "update"
         assert blob["item"] == {"id": 1, "tag": "z"}
         assert blob["old_item"] == {"id": 1, "tag": "x"}
-        assert blob["index"] == 0
+        assert "index" not in blob
 
     def test_update_where_registers_nothing_on_zero_matches(self):
         notifying_list, mock_actor, mock_list_prop = self._create_notifying_list([1])
-        mock_list_prop.to_indexed_list = Mock(return_value=[(0, {"id": 1, "tag": "y"})])
-        mock_list_prop.update_where = Mock(return_value=0)
+        mock_list_prop.update_where = Mock(return_value=[])
 
         result = notifying_list.update_where("tag", "x", {"id": 9})
 

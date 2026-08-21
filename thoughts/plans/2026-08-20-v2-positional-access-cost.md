@@ -2970,6 +2970,186 @@ retired-claims grep in its verification.
 
 ---
 
+## Post-Verification Changes (2026-08-21)
+
+After 3.14.0's implementation was complete and PR #134 was opened, an
+automated Codex review (independently re-confirmed by a Claude-based PR
+review) found four real correctness bugs in the value-addressed mutators
+this plan added, and a separate architecture review of the `old_item`
+wire-protocol field (requested directly, not from the automated reviews)
+found a duplicate-match ambiguity and a spec-writing issue. All six are
+fixed below. The plan stays `status: done` — these are post-open-PR fixes
+on the same branch, not a reopened phase.
+
+### 1. `update_by_handle()` diffs were silently dropped by peers (P1)
+
+**Category**: Bug fix
+
+**What changed**: `NotifyingListProperty.update_by_handle()` registers an
+"update" diff with `old_item` but no `index` — a handle is not
+positional. `RemotePeerStore._apply_list_operation()`'s `update` branch
+required `"index" in data` to even recognize the operation, so every
+`update_by_handle()` diff fell through to `{"error": "unknown
+operation"}` and was never applied on the receiving side. The CHANGELOG's
+claim that value-based updates "notify subscribed peers using the item's
+value" was false for this specific mutator.
+
+**Files affected**:
+- `actingweb/remote_storage.py` — `_apply_list_operation()`'s `update`
+  branch now accepts a diff with `old_item` and no `index`, resolving by
+  value.
+- `tests/test_remote_storage.py` — added
+  `test_apply_list_update_with_old_item_and_no_index_applies_by_value`.
+
+**Rationale**: The fix is receiver-side only. Synthesizing an `index` at
+the sender would require an extra read to derive one, reintroducing the
+whole-list cost Phase 7 removed — exactly the cost this plan exists to
+eliminate.
+
+### 2. Duplicate `old_item` value matched the wrong row silently
+
+**Category**: Bug fix (found during architecture review of the `old_item`
+field, not by the automated reviews)
+
+**What changed**: `_apply_list_operation()`'s value-match path took the
+*first* row equal to `old_item`, with no check that the match was unique.
+Two rows sharing a value meant the update could land on the wrong one.
+Now: unique value match applies directly; an ambiguous match (2+ rows)
+falls back to `index` if present, or returns an explicit "item not found
+or ambiguous" error if not (the `update_by_handle()` case — no index to
+fall back to).
+
+**Files affected**:
+- `actingweb/remote_storage.py` — same branch as item 1 above.
+- `tests/test_remote_storage.py` — added
+  `test_apply_list_update_with_ambiguous_old_item_falls_back_to_index` and
+  `test_apply_list_update_with_ambiguous_old_item_and_no_index_errors`.
+
+**Rationale**: A silent wrong-row update is worse than an explicit
+failure. This tightens `update_where()`'s notification diff too (see item
+6) since it no longer sends `index` at all — an ambiguous match on a
+`update_where()`-sourced diff now fails explicitly rather than risking
+the wrong row.
+
+### 3. Bulk list-items endpoint double-appended on a same-batch duplicate index (P2)
+
+**Category**: Bug fix
+
+**What changed**: The v2 branch of the bulk `POST /{actor}/properties`
+handler froze `snapshot_length` once per batch but only incremented
+`projected_length` on the *first* occurrence of a new index; a second
+update targeting that same not-yet-existing index passed validation
+without incrementing further, and both entries then hit the "append"
+path in Pass 1 — producing two rows instead of one overwrite. A
+same-batch delete targeting that index was also wrongly rejected as "out
+of range" against the frozen `snapshot_length`. Fixed by resolving a
+single final value per targeted index before writing anything (later
+duplicate wins, matching the v1 branch's live-length overwrite
+semantics), writing each distinct index at most once, and treating a
+same-batch create-then-delete as a net no-op. This incidentally also
+fixes a related, previously-undiscovered gap: two updates at the same
+*pre-existing* index in one batch used to make the second
+`update_by_handle()` call fail as "concurrently modified" against a
+handle the first call's own write had just invalidated — not a real
+concurrent writer, just this batch's earlier entry.
+
+**Files affected**:
+- `actingweb/handlers/properties.py` — v2 branch of the bulk list-items
+  update path.
+
+**Rationale**: `items_updated`/`items_deleted` counts are still reported
+per request entry (matching the v1 branch's accounting) even though a
+duplicate index now produces exactly one write, so a client sending
+duplicate indices in one batch sees the same counts as before — only the
+final stored state is now correct.
+
+### 4. `remove_where()`/`update_where()` notifications assumed an unsound snapshot prefix (P2)
+
+**Category**: Bug fix
+
+**What changed**: `NotifyingListProperty.remove_where()`/`update_where()`
+took a snapshot via `to_indexed_list()` *before* calling the underlying
+`ListProperty` mutator, then assumed `candidates[:removed]` /
+`candidates[:updated]` were exactly the rows that succeeded. Under a
+concurrent mutation between the two reads, that prefix assumption could
+name the wrong rows in the notification diff. Fixed at the core:
+`ListProperty.remove_where()`/`update_where()` now return the actual
+items removed / pre-update values actually replaced (`list[Any]`
+instead of `int`; `len(result)` is the count), so the notifying wrapper
+raises diffs from exactly what happened, with no separate
+before-mutation read.
+
+**Files affected**:
+- `actingweb/property_list.py` — `remove_where()`/`update_where()` return
+  type changed from `int` to `list[Any]`.
+- `actingweb/interface/property_store.py` —
+  `NotifyingListProperty.remove_where()`/`update_where()` consume the
+  list directly; public return type stays `int` (`len(result)`) so
+  `authenticated_views.py` and external callers are unaffected.
+- `tests/test_v2_handle_mutators.py` — updated assertions from `== N` to
+  `len(...) == N` / `== []` for the new return type (core-layer calls
+  only; callers through `NotifyingListProperty` are unaffected).
+- `tests/test_property_list_notifications.py` — updated mocks to return
+  item lists instead of counts; dropped the now-unnecessary
+  `to_indexed_list` mocking.
+
+**Rationale**: `authenticated_views.py`'s `remove_where()`/`update_where()`
+delegate to `NotifyingListProperty`, not the core `ListProperty`, directly
+— so this is not a public API break for the fluent interface, only for
+direct `ListProperty` use (test-only in this codebase).
+
+### 5. `items_with_handles()` re-checked a possibly-stale format cache inside an already-dispatched call
+
+**Category**: Bug fix
+
+**What changed**: `remove_where()`/`update_where()`'s v2 branch dispatched
+fresh via `_dispatch_and_stash()` (the "row 9c" discipline every mutator
+follows) but then called the public `items_with_handles()`, which
+re-checked format via the cache-consulting `_is_v2()` — undoing the point
+of dispatching fresh. Added a private `_v2_items_with_handles()` that
+skips that recheck, for callers that already know the list is v2; the
+public `items_with_handles()` now delegates to it after its own guard.
+
+**Files affected**:
+- `actingweb/property_list.py` — new `_v2_items_with_handles()`;
+  `items_with_handles()`, `remove_where()`, `update_where()` updated to
+  use it appropriately.
+
+**Rationale**: `_dispatch_and_stash()`'s docstring explains why it
+deliberately does not refresh `_meta_cache` (preserves a staleness
+warning in `_save_metadata()`); a caller re-deriving the cached belief
+right after a fresh dispatch defeats that discipline silently.
+
+### 6. `old_item` spec wording coupled the wire protocol to specific SDK method names
+
+**Category**: Verification fix (architecture review, requested directly)
+
+**What changed**: `docs/protocol/actingweb-spec.rst`'s `old_item` table
+row named `update_where()`/`update_by_handle()` by name and grounded the
+field's justification in v2-specific internals. The wire protocol should
+not name SDK methods that could be renamed independent of the protocol.
+Reworded to describe the field and matching behavior in
+implementation-agnostic terms, rooted in diff delivery between
+independent peers not being guaranteed reliable or ordered (true
+regardless of v1/v2), and updated the matching guidance to reflect the
+uniqueness requirement from item 2 above: match by value only when
+unique, use `index` when the match is ambiguous or absent.
+
+**Files affected**:
+- `docs/protocol/actingweb-spec.rst` — `old_item` table row and the
+  matching `update` diff example.
+- `docs/guides/subscriptions.rst` — same `old_item`/`index` claim,
+  brought in line with the fix (no `index` alongside `old_item`,
+  uniqueness-gated matching).
+- `CHANGELOG.rst`, `docs/migration/v3.14.rst` — checked, not edited: the
+  existing value-based-notification claim is now accurate end-to-end
+  thanks to item 1's fix, so no wording change was needed.
+
+**Rationale**: A REST protocol spec should stay stable independent of a
+particular SDK's internal method names.
+
+---
+
 ## Implementation Summary
 
 **Completed:** 2026-08-21

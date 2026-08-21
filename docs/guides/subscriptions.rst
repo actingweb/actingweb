@@ -393,16 +393,18 @@ ActingWeb version keeps understanding every diff it receives. Instead:
   one ``remove`` diff per item actually removed, carrying that item's
   full value.
 - ``update_by_handle()`` and ``update_where()`` each emit one ``update``
-  diff per item actually updated. In addition to the existing ``item``
-  and ``index`` fields, this diff carries an OPTIONAL ``old_item`` field
-  -- the pre-update value, as read in the same snapshot the update was
-  resolved from. A peer receiving ``old_item`` should locate the row by
-  matching its current value against ``old_item`` first, falling back to
-  ``index`` only if no row currently holds that value -- the position a
-  sender saw is not guaranteed to still be current for a peer that has
-  applied other diffs since, or whose own list uses v2's advisory
-  positions. A peer that predates ``old_item`` simply ignores the field
-  and matches by ``index``, as it always has.
+  diff per item actually updated, carrying the new ``item`` value and an
+  OPTIONAL ``old_item`` field -- the pre-update value. Neither emits
+  ``index``: a value-addressed update does not have a reliable position
+  to send, since diff delivery between peers isn't guaranteed reliable
+  or ordered and a peer's list may already have drifted from the
+  sender's by the time the diff arrives. A peer receiving ``old_item``
+  locates the row by matching its current value against it, but only
+  when that match is unique -- if two or more rows currently hold that
+  value, which one the sender meant is ambiguous, and the update is not
+  applied rather than risking the wrong row. A peer that predates
+  ``old_item`` simply ignores the field; without ``index`` present
+  either, it has nothing to match the diff against.
 
 Because ``remove_where()``/``update_where()`` can match many items in one
 call, they can also emit many diffs in one call -- see the fan-out note

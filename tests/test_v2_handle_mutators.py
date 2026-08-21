@@ -189,7 +189,7 @@ class TestRemoveWhereQueryCost:
         removed = lst.remove_where("grp", "x")
 
         expected_matches = sum(1 for i in range(50) if i % 5 == 0)
-        assert removed == expected_matches
+        assert len(removed) == expected_matches
         assert fake_db.range_call_count == 1
         assert delete_calls["n"] == expected_matches
         assert len(lst.to_list()) == 50 - expected_matches
@@ -206,7 +206,7 @@ class TestRemoveWhereAndUpdateWhereBehavior:
 
         removed = lst.remove_where("tag", "a", first_only=True)
 
-        assert removed == 1
+        assert len(removed) == 1
         remaining_ids = [item["id"] for item in lst.to_list()]
         assert remaining_ids in ([2, 3], [1, 3])
 
@@ -218,7 +218,7 @@ class TestRemoveWhereAndUpdateWhereBehavior:
         _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
         lst = ListProperty(actor_id=actor_id, name=name, config=object())
 
-        assert lst.remove_where("tag", "does-not-exist") == 0
+        assert lst.remove_where("tag", "does-not-exist") == []
         assert lst.to_list() == items
 
     def test_update_where_first_only_updates_exactly_one(self, monkeypatch, fake_store):
@@ -231,7 +231,7 @@ class TestRemoveWhereAndUpdateWhereBehavior:
 
         updated = lst.update_where("tag", "a", {"id": 99, "tag": "z"}, first_only=True)
 
-        assert updated == 1
+        assert len(updated) == 1
         tags = [item["tag"] for item in lst.to_list()]
         assert tags.count("z") == 1
         assert tags.count("a") == 1
@@ -244,7 +244,7 @@ class TestRemoveWhereAndUpdateWhereBehavior:
         _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
         lst = ListProperty(actor_id=actor_id, name=name, config=object())
 
-        assert lst.update_where("tag", "nope", {"id": 2}) == 0
+        assert lst.update_where("tag", "nope", {"id": 2}) == []
         assert lst.to_list() == items
 
     def test_update_where_updates_all_matches_by_default(self, monkeypatch, fake_store):
@@ -257,7 +257,7 @@ class TestRemoveWhereAndUpdateWhereBehavior:
 
         updated = lst.update_where("tag", "a", {"tag": "z"})
 
-        assert updated == 2
+        assert len(updated) == 2
         tags = sorted(item["tag"] for item in lst.to_list())
         assert tags == ["b", "z", "z"]
 
@@ -283,7 +283,7 @@ class TestRemoveWhereV1DescendingOrder:
 
         removed = lst.remove_where("tag", "x")
 
-        assert removed == 3
+        assert len(removed) == 3
         assert [item["id"] for item in lst.to_list()] == [1, 3]
 
     def test_v1_update_where_updates_all_matches_correctly(self, monkeypatch, fake_store):
@@ -300,7 +300,7 @@ class TestRemoveWhereV1DescendingOrder:
 
         updated = lst.update_where("tag", "x", {"id": -1, "tag": "z"})
 
-        assert updated == 2
+        assert len(updated) == 2
         assert [item["tag"] for item in lst.to_list()] == ["z", "y", "z"]
 
 
@@ -342,6 +342,6 @@ class TestRemoveWhereKeepsRankCacheInSyncOnTheSameInstance:
 
         removed = lst.remove_where("tag", "x")
 
-        assert removed == 5
+        assert len(removed) == 5
         assert len(lst) == len(lst.to_list()) == 5
         assert all(item["tag"] == "y" for item in lst.to_list())

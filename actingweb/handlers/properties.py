@@ -1221,7 +1221,46 @@ class PropertiesHandler(base_handler.BaseHandler):
                                         }
                                         pending_updates_v2.append((index, item_data))
 
-                                # Pass 1: updates, in the given order. An
+                                # Resolve the final value for each targeted
+                                # index before writing anything, and write
+                                # each distinct index at most once. This
+                                # mirrors what the v1 branch achieves for
+                                # free via successive __setitem__ calls
+                                # against a live, growing length: a later
+                                # update in this batch always supersedes an
+                                # earlier one at the same index. Without
+                                # this, two updates at the same
+                                # newly-created index would append two rows
+                                # instead of one overwriting the other, and
+                                # two updates at the same pre-existing
+                                # index would have the second fail as
+                                # "concurrently modified" against a handle
+                                # the first one's own write had just
+                                # invalidated -- not a real concurrent
+                                # writer, just this batch's own earlier
+                                # entry. See CHANGELOG/migration notes for
+                                # 3.14.
+                                final_value_by_index: dict[int, dict[str, Any]] = {}
+                                for index, item_data in pending_updates_v2:
+                                    final_value_by_index[index] = item_data
+
+                                # An index this batch both creates (>=
+                                # snapshot_length, via an update above) and
+                                # deletes nets to "never existed" -- the
+                                # same final state a create-then-delete
+                                # produces in the v1 branch. Skip writing
+                                # it at all rather than appending it just
+                                # to immediately delete it again.
+                                skip_new_indices = {
+                                    index
+                                    for index in pending_deletes_v2
+                                    if index >= snapshot_length and index in final_value_by_index
+                                }
+
+                                # Pass 1: updates, ascending index order --
+                                # required for the append case, where each
+                                # new index must land in the same order it
+                                # was assigned in validation above. An
                                 # index within the pre-batch snapshot
                                 # resolves to that row's handle; an index
                                 # at or beyond the snapshot length is the
@@ -1231,19 +1270,37 @@ class PropertiesHandler(base_handler.BaseHandler):
                                 # whole-list query) rather than a handle,
                                 # since there is no pre-existing row to
                                 # address.
-                                for index, item_data in pending_updates_v2:
+                                index_succeeded: dict[int, bool] = {}
+                                for index in sorted(final_value_by_index):
+                                    if index in skip_new_indices:
+                                        index_succeeded[index] = True
+                                        continue
                                     if index < snapshot_length:
                                         handle = pairs[index][0]
-                                        if list_prop.update_by_handle(handle, item_data):
-                                            items_updated += 1
+                                        if list_prop.update_by_handle(
+                                            handle, final_value_by_index[index]
+                                        ):
+                                            index_succeeded[index] = True
                                         else:
                                             logger.warning(
                                                 f"Cannot update item at index {index}: concurrently modified since the batch snapshot was read"
                                             )
+                                            index_succeeded[index] = False
                                             # Don't fail the entire operation -- report per item, matching Pass 2's existing style below.
                                     else:
-                                        list_prop.append(item_data)
-                                        items_updated += 1
+                                        list_prop.append(final_value_by_index[index])
+                                        index_succeeded[index] = True
+
+                                # Reported per request entry, matching the
+                                # v1 branch's accounting, even though a
+                                # duplicate index only ever produces one
+                                # actual write -- see final_value_by_index
+                                # above.
+                                items_updated = sum(
+                                    1
+                                    for index, _ in pending_updates_v2
+                                    if index_succeeded.get(index)
+                                )
 
                                 # Pass 2: deletes, highest index first --
                                 # kept even though a v2 handle's validity
@@ -1251,7 +1308,9 @@ class PropertiesHandler(base_handler.BaseHandler):
                                 # two branches produce identical output for
                                 # identical input.
                                 for index in sorted(pending_deletes_v2, reverse=True):
-                                    if index < snapshot_length:
+                                    if index in skip_new_indices:
+                                        items_deleted += 1
+                                    elif index < snapshot_length:
                                         handle = pairs[index][0]
                                         if list_prop.delete_by_handle(handle):
                                             items_deleted += 1

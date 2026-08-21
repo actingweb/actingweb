@@ -462,6 +462,79 @@ class TestRemotePeerStoreCallbackData:
         assert results["items"]["index"] == 0
         assert list_data["items"][0] == {"id": 100}
 
+    def test_apply_list_update_with_old_item_and_no_index_applies_by_value(
+        self, mock_actor, mock_storage
+    ):
+        """update_by_handle() diffs carry ``old_item`` but never an
+        ``index`` -- a handle is not positional. A unique value match must
+        still be enough to apply the update."""
+        _, list_data = mock_storage
+        list_data["items"] = [{"id": 1}, {"id": 2}]
+
+        store = RemotePeerStore(mock_actor, "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6")
+        results = store.apply_callback_data(
+            {
+                "list:items": {
+                    "operation": "update",
+                    "old_item": {"id": 2},
+                    "item": {"id": 99},
+                }
+            }
+        )
+
+        assert results["items"]["operation"] == "update"
+        assert results["items"].get("success") is True
+        assert results["items"]["index"] == 1
+        assert list_data["items"] == [{"id": 1}, {"id": 99}]
+
+    def test_apply_list_update_with_ambiguous_old_item_falls_back_to_index(
+        self, mock_actor, mock_storage
+    ):
+        """Two rows share the same value as ``old_item`` -- which one the
+        sender meant is genuinely ambiguous, so the match-by-value path
+        must not guess. With an index present, fall back to it."""
+        _, list_data = mock_storage
+        list_data["items"] = [{"id": 1}, {"id": 1}, {"id": 1}]
+
+        store = RemotePeerStore(mock_actor, "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6")
+        results = store.apply_callback_data(
+            {
+                "list:items": {
+                    "operation": "update",
+                    "index": 2,
+                    "old_item": {"id": 1},
+                    "item": {"id": 99},
+                }
+            }
+        )
+
+        assert results["items"]["operation"] == "update"
+        assert results["items"]["index"] == 2
+        assert list_data["items"] == [{"id": 1}, {"id": 1}, {"id": 99}]
+
+    def test_apply_list_update_with_ambiguous_old_item_and_no_index_errors(
+        self, mock_actor, mock_storage
+    ):
+        """Same ambiguity as above, but from an update_by_handle() diff --
+        no index to fall back to. Report an explicit error rather than
+        applying to an arbitrary one of the matching rows."""
+        _, list_data = mock_storage
+        list_data["items"] = [{"id": 1}, {"id": 1}]
+
+        store = RemotePeerStore(mock_actor, "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6")
+        results = store.apply_callback_data(
+            {
+                "list:items": {
+                    "operation": "update",
+                    "old_item": {"id": 1},
+                    "item": {"id": 99},
+                }
+            }
+        )
+
+        assert "error" in results["items"]
+        assert list_data["items"] == [{"id": 1}, {"id": 1}]
+
     def test_apply_list_update_with_old_item_prefers_value_match_over_drifted_index(
         self, mock_actor, mock_storage
     ):

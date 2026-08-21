@@ -2296,6 +2296,20 @@ class ListProperty:
                 f"items_with_handles() is v2-only -- list '{self.name}' is "
                 f"still v1. Call migrate_to_v2() first."
             )
+        return self._v2_items_with_handles()
+
+    def _v2_items_with_handles(self) -> list[tuple[ListItemHandle, Any]]:
+        """Same read as ``items_with_handles()``, without the ``_is_v2()``
+        format check.
+
+        For callers that already dispatched fresh via
+        ``_dispatch_and_stash() == 2`` themselves (``remove_where()``,
+        ``update_where()``): re-checking via ``_is_v2()`` here would
+        consult ``_load_metadata()``'s cache-consulting path again,
+        undoing the whole point of dispatching fresh in the first place --
+        see ``_dispatch_and_stash()``'s docstring. Not for direct use;
+        callers must already know the list is v2.
+        """
         pairs = self._v2_load_full()  # default consistent=True, no override
         return [
             (ListItemHandle(rank=rank, raw_value=raw_value), self._decode_item(raw_value))
@@ -2373,28 +2387,42 @@ class ListProperty:
         self._v2_touch_metadata()
         return True
 
-    def remove_where(self, identity_key: str, value: Any, *, first_only: bool = False) -> int:
+    def remove_where(
+        self, identity_key: str, value: Any, *, first_only: bool = False
+    ) -> list[Any]:
         """Remove every item whose ``identity_key`` field equals ``value``,
-        returning the number removed. Pass ``first_only=True`` to stop
+        returning the removed items' decoded values, in removal order.
+        ``len(result)`` is the count; pass ``first_only=True`` to stop
         after the first match (0 or 1 removed).
+
+        Returning the actual values (not just a count) lets a caller that
+        needs to know exactly what was removed -- notably
+        ``NotifyingListProperty.remove_where()``, which raises one diff
+        per removed item -- read it off this call instead of taking a
+        separate snapshot and assuming a prefix of it lines up with the
+        count. That prefix assumption breaks under a concurrent mutation
+        between the two reads; this return value can't drift, because it
+        names exactly the rows this call itself removed.
 
         Universal across v1 and v2, dispatched fresh (``_dispatch_and_stash()``,
         not the cached format belief -- same row-9c rationale as every
         other mutator):
 
-        - v2: locates matches via ``items_with_handles()`` (one range
-          read), then deletes each with ``delete_by_handle()``. A match
-          lost to a concurrent mutation between the read and its delete is
-          simply not counted -- no retry, no rescan; see
-          ``delete_by_handle()``.
+        - v2: locates matches via ``_v2_items_with_handles()`` (one range
+          read, already known-v2 from the dispatch above -- see that
+          method's docstring for why this isn't the public
+          ``items_with_handles()``), then deletes each with
+          ``delete_by_handle()``. A match lost to a concurrent mutation
+          between the read and its delete is simply not counted -- no
+          retry, no rescan; see ``delete_by_handle()``.
         - v1: locates matches by positional scan, then deletes them via
           ``__delitem__`` in **descending index order**. Ascending order
           would shift every later match onto the wrong index as each
           earlier delete closes a hole.
         """
         if self._dispatch_and_stash() == 2:
-            matches = self.items_with_handles()
-            removed = 0
+            matches = self._v2_items_with_handles()
+            removed: list[Any] = []
             for handle, item in matches:
                 if (
                     isinstance(item, dict)
@@ -2402,7 +2430,7 @@ class ListProperty:
                     and item[identity_key] == value
                 ):
                     if self.delete_by_handle(handle):
-                        removed += 1
+                        removed.append(item)
                         if first_only:
                             break
             return removed
@@ -2414,16 +2442,24 @@ class ListProperty:
         ]
         if first_only and indices:
             indices = indices[:1]
+        removed_items = [self[i] for i in indices]
         for i in sorted(indices, reverse=True):
             del self[i]
-        return len(indices)
+        return removed_items
 
     def update_where(
         self, identity_key: str, value: Any, item: Any, *, first_only: bool = False
-    ) -> int:
+    ) -> list[Any]:
         """Replace every item whose ``identity_key`` field equals ``value``
-        with ``item``, returning the number updated. Pass
-        ``first_only=True`` to stop after the first match.
+        with ``item``, returning the **pre-update** values of the items
+        actually updated, in update order. ``len(result)`` is the count;
+        pass ``first_only=True`` to stop after the first match.
+
+        Same rationale as ``remove_where()`` for returning values instead
+        of a count -- ``NotifyingListProperty.update_where()`` needs the
+        exact pre-update value of each row it updated to raise an accurate
+        ``old_item`` diff, not a value assumed from a separately-taken
+        snapshot.
 
         Same v1/v2 split as ``remove_where()``, using ``update_by_handle()``
         under v2 and positional ``self[i] = item`` under v1 -- index order
@@ -2431,8 +2467,8 @@ class ListProperty:
         shifts a later index the way a delete does.
         """
         if self._dispatch_and_stash() == 2:
-            matches = self.items_with_handles()
-            updated = 0
+            matches = self._v2_items_with_handles()
+            updated: list[Any] = []
             for handle, existing in matches:
                 if (
                     isinstance(existing, dict)
@@ -2440,7 +2476,7 @@ class ListProperty:
                     and existing[identity_key] == value
                 ):
                     if self.update_by_handle(handle, item):
-                        updated += 1
+                        updated.append(existing)
                         if first_only:
                             break
             return updated
@@ -2454,9 +2490,10 @@ class ListProperty:
         ]
         if first_only and indices:
             indices = indices[:1]
+        old_items = [self[i] for i in indices]
         for i in indices:
             self[i] = item
-        return len(indices)
+        return old_items
 
     def _identity_of(self, raw_value: str, identity_key: str) -> Any:
         """This row's value for ``identity_key``, or ``None`` if it has none.

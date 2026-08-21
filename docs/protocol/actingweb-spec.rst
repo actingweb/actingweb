@@ -2642,23 +2642,30 @@ data MUST include the following fields:
 +----------------+-------------+----------------------------------------------------------------+
 | ``items``      | OPTIONAL    | Array of items for ``extend`` operations                       |
 +----------------+-------------+----------------------------------------------------------------+
-| ``old_item``   | OPTIONAL    | For ``update`` diffs raised by a value-addressed update        |
-|                |             | (``update_where()``/``update_by_handle()``): the item's value  |
-|                |             | before the update, as read in the same snapshot the update was |
-|                |             | resolved from. A receiver that understands ``old_item`` SHOULD |
-|                |             | locate the row by matching its current value against           |
-|                |             | ``old_item`` first, falling back to ``index`` only if no row   |
-|                |             | currently holds that value -- the sender's index is not        |
-|                |             | guaranteed to still be current on the receiving side. A        |
+| ``old_item``   | OPTIONAL    | For an ``update`` diff whose mutation was addressed by the     |
+|                |             | item's value rather than its position: the item's value before |
+|                |             | the update. ``index`` MAY be absent from such a diff entirely  |
+|                |             | -- a value-addressed update does not require a position. A     |
+|                |             | receiver that understands ``old_item`` SHOULD locate the row   |
+|                |             | by matching its current value against ``old_item``, but only   |
+|                |             | when that match is unique: diff delivery between independent   |
+|                |             | peers is not guaranteed reliable or ordered, so a peer's list  |
+|                |             | can already have drifted from the sender's by the time a diff  |
+|                |             | arrives, and if two or more rows currently hold that value     |
+|                |             | which one the sender meant is genuinely ambiguous. The         |
+|                |             | receiver MUST fall back to ``index`` when the value match is   |
+|                |             | ambiguous or absent, and if no ``index`` is present either,    |
+|                |             | MUST treat the diff as inapplicable rather than guess. A       |
 |                |             | receiver that does not recognize ``old_item`` MAY ignore it    |
-|                |             | and match by ``index`` alone, as it always has.                |
+|                |             | and match by ``index`` alone, as it always has --              |
+|                |             | understanding that an ``update`` diff with no ``index`` then   |
+|                |             | has nothing to match on.                                       |
 +----------------+-------------+----------------------------------------------------------------+
 
-A ``remove`` diff whose mutation matched by value rather than by index
-(``delete_by_handle()``, or a match from ``remove_where()``) carries the
-removed item's full value in ``item`` rather than an ``index`` -- the
-same field the ``append``/``insert``/``update`` operations already use
-for item data, not a new field.
+A ``remove`` diff whose mutation was addressed by the item's value rather
+than its position carries the removed item's full value in ``item``
+rather than an ``index`` -- the same field the ``append``/``insert``/
+``update`` operations already use for item data, not a new field.
 
 Example diff for appending an item to the ``notes`` list property::
 
@@ -2695,8 +2702,8 @@ Example diff for updating an item at a specific index::
     }
   }
 
-Example diff for a value-addressed update (``update_where()``/
-``update_by_handle()``), carrying ``old_item``::
+Example diff for a value-addressed update -- the item's value identifies
+the row, not its position, so ``index`` is absent::
 
   {
     "notes": {
@@ -2704,8 +2711,7 @@ Example diff for a value-addressed update (``update_where()``/
       "operation": "update",
       "length": 5,
       "item": {"id": "1", "content": "Updated content", "status": "done"},
-      "old_item": {"id": "1", "content": "Updated content", "status": "open"},
-      "index": 0
+      "old_item": {"id": "1", "content": "Updated content", "status": "open"}
     }
   }
 

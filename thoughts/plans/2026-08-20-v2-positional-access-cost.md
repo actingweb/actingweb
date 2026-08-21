@@ -1,5 +1,5 @@
 ---
-status: active
+status: done
 ---
 
 # Implementation Plan: v2 list read cost — the 3.14.0 release
@@ -2967,3 +2967,92 @@ vocabulary and the suspend-during-bulk pattern, `actingweb-spec.rst` the
 endpoint, and `authenticated-views.rst` has no list-store section at all
 today — and Phase 14 gained the release docs checklist plus a
 retired-claims grep in its verification.
+
+---
+
+## Implementation Summary
+
+**Completed:** 2026-08-21
+**All phases:** Complete (1 through 14)
+**Test status:** All passing — `make test-all-parallel` (3031 passed, 31
+skipped, 0 failed) and `DATABASE_BACKEND=postgresql make test-integration`
+(860 passed, 16 skipped) both clean on the final run; `poetry run ruff
+check`/`ruff format --check` and `poetry run pyright actingweb tests` at
+0 errors; docs build clean with 0 warnings; `poetry build` succeeds.
+
+### What shipped
+
+The v2 (fractional-rank) list storage format, introduced in 3.13 to fix a
+corruption class, made *positional* list access expensive in a way v1
+never was — deriving an index requires reading the whole list. This
+release:
+
+- Ships the replacement: identity- and value-addressed list access
+  (`find()`, `items_with_handles()`, `delete_by_handle()`,
+  `update_by_handle()`, `remove_where()`, `update_where()`) — Phases 7, 10.
+- Removes every whole-list-read N+1 the library's own code had
+  accumulated on the positional path — `www.py`, `trust.py`, `actor.py`'s
+  subscription fallback, the bulk `{"items": [...]}` endpoint, and
+  `append()`/`extend()` — Phases 3, 9B, 11.
+- Closes a metadata read-modify-write race that 3.13 had documented as an
+  accepted trade rather than fixed — Phases 8, 9.
+- Fixes two independent, unrelated defects found along the way: a
+  read-only-permission bypass on `AuthenticatedPropertyListStore` (Phase
+  2, SECURITY) and a silently-dropped `remove()` peer notification that
+  had never worked (Phase 10).
+- Adds `consistent=False` as an opt-in, never-default read-cost tradeoff
+  (Phase 6); batches whole-list teardown instead of a serial per-item
+  delete loop (Phase 12); ships `actingweb-verify-orphans`, a report-only
+  maintenance CLI for finding data orphaned by an interrupted actor
+  deletion (Phase 13).
+- Makes `get_metadata()["length"]` and the REST `count` field advisory
+  under v2, with a documented, bounded drift — the one place this release
+  trades exactness for not paying a whole-list read on every mutation
+  (Phase 5).
+
+### Deviations from Plan
+
+- **Phase 13's checkpointing granularity differs from the plan's implied
+  per-actor `Checkpoint` mirror.** `verify_property_lists.py`'s Checkpoint
+  tracks actors already swept; `verify_orphans.py` sweeps whole *tables*
+  (property/attribute/trust), not per-actor, so its Checkpoint tracks
+  whole-table completion instead. Decided after consulting the advisor;
+  documented in Phase 13's Notes.
+- **`DbActorList.fetch()` was deliberately NOT reused** for Phase 13's
+  actor-id enumeration, despite the plan's note calling its reuse
+  "acceptable here" — that note was about a different limitation
+  (unpaginated full-table Scan cost) than the consistency requirement
+  Phase 13's own case 3 demands. `verify_orphans.py` scans `Actor`
+  directly with `consistent_read=True` instead.
+- **Two rounds of user feedback reshaped the `thoughts/todo/` and docs
+  work mid-Phase-14**, both applied: (1) `INDEX.md`/`todo/` should not be
+  a historic record — a first draft with a full "0b. 3.14.0 shipped"
+  narrative section was cut back to terse pointers at this plan document;
+  (2) consumer-facing docs (the migration guide, CHANGELOG) were rewritten
+  from an internals-first voice to a plain, consumer-first one.
+- **`ruff format` reports 18 pre-existing files (from Phases 9-11) would
+  reformat differently than what's committed** — confirmed via `git
+  status` to predate Phase 14 entirely (an environment `ruff` version
+  difference, not a regression). Left untouched rather than bundling an
+  unrelated reformat into the release commit.
+
+### Learnings
+
+- **The plan's own `dynamodb-known-next.md` register turned out to be a
+  reliable predictor of scope**: rows 14, 15, 16, 5, 9, 9c and 17 — every
+  row the 2026-08-16 post-GA review flagged as live work — were exactly
+  what this plan closed, in the order the register's own "impact ÷ effort"
+  ranking suggested.
+- **A CAS primitive built for one reason (Phase 8/9's metadata race) closed
+  a second, unrelated-looking defect for free** (former row 9c, mutations
+  dispatching on cached format) — flagged in the plan's own "Evaluation
+  Notes" as "the single most valuable thing the scope review found," and
+  it held up through implementation.
+- **Incremental CHANGELOG discipline broke down across a 14-phase,
+  single-session implementation.** `CLAUDE.md`'s process assumes each
+  phase lands as its own PR with its own CHANGELOG entry; a single
+  long-running session implementing all 14 phases sequentially without
+  intermediate PRs meant nothing was added until Phase 14, requiring a
+  full reconstruction from per-phase Notes at the end. Future multi-phase
+  plans implemented in one continuous session should add the CHANGELOG
+  entry at the end of *each* phase, not defer it to the release phase.

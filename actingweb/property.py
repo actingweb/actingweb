@@ -51,6 +51,44 @@ class PropertyListStore:
             logger.error(f"Error in list_all(): {e}")
         return list_names
 
+    def list_all_with_rows(self) -> tuple[list[str], dict[str, str]]:
+        """List all existing list property names, alongside the raw rows
+        the names were derived from.
+
+        `list_all()` already pays for `fetch_all_including_lists()` -- the
+        actor's WHOLE partition, item rows included -- and discards it.
+        This returns that dump too, so a caller who needs both the names
+        and each list's contents can prime every list from rows already in
+        hand (`ListProperty.prime_from_rows()` /
+        `to_list_from_rows()`) instead of paying a second whole-list Query
+        per list.
+
+        The rows are a point-in-time snapshot, stale the moment a mutation
+        lands, and OPAQUE: feed them to `prime_from_rows()` /
+        `to_list_from_rows()` and never inspect or parse a row name -- the
+        encoding (`list:{name}-meta`, `list:{name}-{index}` or
+        `list:{name}-#{rank}`) is a storage detail the next major
+        version's key-prefix scheme will change.
+        """
+        list_names: list[str] = []
+        rows: dict[str, str] = {}
+        try:
+            if self._config:
+                db_list = get_property_list(self._config)
+                rows = (
+                    db_list.fetch_all_including_lists(actor_id=self._actor_id) or {}
+                )
+                for prop_name in rows.keys():
+                    if prop_name.startswith("list:") and prop_name.endswith("-meta"):
+                        list_names.append(prop_name[5:-5])
+        except Exception as e:
+            import logging
+
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error in list_all_with_rows(): {e}")
+            return [], {}
+        return list_names, rows
+
     def __getattr__(self, k: str) -> ListProperty:
         """Return a ListProperty for the requested list name."""
         if k.startswith("_"):

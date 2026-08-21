@@ -119,6 +119,66 @@ The ``AuthenticatedPropertyStore`` wraps property access with permission checks:
     # to_dict - returns only accessible properties
     visible_props = peer_view.properties.to_dict()
 
+Property List Access
+---------------------
+
+The ``AuthenticatedPropertyListStore`` wraps ``actor.property_lists`` with
+per-operation permission checks, mirroring ``AuthenticatedPropertyStore``:
+
+.. code-block:: python
+
+    # Reading a list - checks "read" on the list name
+    notes = peer_view.property_lists.notes
+    items = notes.to_list()
+
+    # Mutating - each call re-checks "write" (or "delete" for
+    # __delitem__/clear()/delete()) before delegating, even though the
+    # object above was already obtained under a "read" check
+    notes.append("a new note")        # requires "write"
+    del notes[0]                      # requires "delete"
+    notes.clear()                     # requires "delete"
+
+    # Deleting an entire named list
+    peer_view.property_lists.delete("notes")   # requires "delete"
+
+    # Existence check - requires "read"; returns False rather than raising
+    # when denied
+    peer_view.property_lists.exists("notes")
+
+There is no ``create()``: lists are created lazily on first write, so a
+separate creation step has no meaning. (An earlier ``create()`` existed but
+had never worked -- it resolved through ``PropertyListStore.__getattr__`` to
+a ``NotifyingListProperty`` named ``"create"`` and then called it, raising
+``TypeError``.)
+
+The 3.14 identity/handle mutators are gated the same way, and one of them
+is easy to guess wrong from its name:
+
+.. code-block:: python
+
+    notes.delete_by_handle(handle)         # requires "write", not "delete"
+    notes.update_by_handle(handle, item)   # requires "write"
+    notes.update_where("status", "open", item)   # requires "write"
+    notes.remove_where("status", "archived")     # requires "delete"
+
+``delete_by_handle()`` requires ``write`` rather than ``delete`` because
+it targets exactly one item you already have a reference to, the same
+kind of operation as ``update_by_handle()``. ``remove_where()`` requires
+``delete`` because it can remove every matching item in the list in one
+call -- closer in effect to ``clear()`` than to a single-item change.
+
+The same single-item logic applies to the two positional removers that
+predate 3.14: ``pop()`` and ``remove(value)`` require ``write``, not
+``delete`` -- each takes out exactly one item. The ``delete`` permission
+gates the operations whose blast radius is a position you did not
+inspect (``__delitem__``), many items at once (``remove_where()``), or
+the whole list (``clear()``, ``delete()``).
+
+Every method ``actor.property_lists.<name>`` exposes -- ``to_list()``,
+``append()``, ``pop()``, ``slice()``, ``compact()``, ``migrate_to_v2()``, and
+so on -- is reachable through the authenticated view with the matching
+permission check applied per call, not once when the list was obtained.
+
 Permission Errors
 -----------------
 

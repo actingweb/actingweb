@@ -67,6 +67,11 @@ The ``ActorInterface`` exposes several useful properties:
     actor.subscriptions   # SubscriptionManager instance
     actor.services        # ServiceRegistry (third-party OAuth2 services)
 
+``actor.property_lists`` is only summarized here -- see
+:doc:`../guides/property-lists` for the full API (``to_list()``,
+``find()``, ``items_with_handles()``, the identity-addressed mutators, and
+REST usage).
+
 PropertyStore
 =============
 

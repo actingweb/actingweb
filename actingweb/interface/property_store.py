@@ -8,6 +8,7 @@ from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any, Optional
 
 from ..property import PropertyStore as CorePropertyStore
+from ..property_list import ListItemHandle
 
 if TYPE_CHECKING:
     from ..actor import Actor as CoreActor
@@ -15,6 +16,13 @@ if TYPE_CHECKING:
     from .hooks import HookRegistry
 
 logger = logging.getLogger(__name__)
+
+# Distinguishes "argument not passed" from "value is None" in
+# _register_diff below: None is a legal list item, and a diff for a
+# None-valued item must still carry its item/old_item field (as JSON
+# null) or the receiver classifies the diff as an unknown operation and
+# silently drops it.
+_UNSET: Any = object()
 
 
 class PropertyStore:
@@ -236,9 +244,10 @@ class NotifyingListProperty:
     def _register_diff(
         self,
         operation: str = "",
-        item: Any = None,
+        item: Any = _UNSET,
         index: int | None = None,
         items: list[Any] | None = None,
+        old_item: Any = _UNSET,
     ) -> None:
         """Register a diff for the list property change.
 
@@ -247,6 +256,11 @@ class NotifyingListProperty:
             item: Single item data for append/update/insert operations
             index: Index for update/delete/insert operations
             items: Multiple items for extend operation
+            old_item: pre-update value, for "update" diffs raised by
+                ``update_where()``/``update_by_handle()`` -- lets a v2 peer
+                match the diff to its own row by value (via
+                ``old_item``) instead of by ``index``, which is only
+                reliable under v1. See ``remote_storage._apply_list_operation``.
         """
         if not self._actor:
             return
@@ -257,7 +271,18 @@ class NotifyingListProperty:
             if operation == "delete_all":
                 length = 0
             else:
-                length = len(self._list_prop)
+                # get_metadata()["length"] rather than len(self._list_prop):
+                # under v2 the latter is a whole-list range Query, doubled
+                # on every notified append (once inside append() itself,
+                # once here). The metadata length is exact under v1 and
+                # advisory-but-bounded under v2 -- see ListProperty's class
+                # docstring for the drift bound.
+                length = self._list_prop.get_metadata()["length"]
+
+            if operation == "append" and index is None:
+                # Derived from the length just computed above, instead of
+                # a second len(self._list_prop) call in append() below.
+                index = length - 1
 
             diff_info: dict[str, Any] = {
                 "list": self._list_name,
@@ -266,13 +291,17 @@ class NotifyingListProperty:
             }
 
             # Include item data for operations that add/modify items
-            # This allows subscribers to receive the data directly without fetching
-            if item is not None:
+            # This allows subscribers to receive the data directly without fetching.
+            # item/old_item are gated on the _UNSET sentinel, not None: None is
+            # a legal list item, and the receiver dispatches on key presence.
+            if item is not _UNSET:
                 diff_info["item"] = item
             if index is not None:
                 diff_info["index"] = index
             if items is not None:
                 diff_info["items"] = items
+            if old_item is not _UNSET:
+                diff_info["old_item"] = old_item
 
             # Note: diff_info already contains "list": self._list_name to identify
             # this as a list operation. We use clean subtarget without "list:" prefix
@@ -302,11 +331,16 @@ class NotifyingListProperty:
     def get_explanation(self) -> str:
         return self._list_prop.get_explanation()
 
-    def to_list(self) -> list[Any]:
-        return self._list_prop.to_list()
+    def get_metadata(self) -> dict[str, Any]:
+        """List metadata -- see ListProperty.get_metadata(). Under v2,
+        ``length`` is the advisory ``count_hint``, not a counted value."""
+        return self._list_prop.get_metadata()
 
-    def to_indexed_list(self) -> list[tuple[int, Any]]:
-        return self._list_prop.to_indexed_list()
+    def to_list(self, consistent: bool = True) -> list[Any]:
+        return self._list_prop.to_list(consistent=consistent)
+
+    def to_indexed_list(self, consistent: bool = True) -> list[tuple[int, Any]]:
+        return self._list_prop.to_indexed_list(consistent=consistent)
 
     def prime_from_rows(self, rows: dict[str, Any]) -> None:
         self._list_prop.prime_from_rows(rows)
@@ -314,14 +348,28 @@ class NotifyingListProperty:
     def to_list_from_rows(self, rows: dict[str, Any]) -> list[Any]:
         return self._list_prop.to_list_from_rows(rows)
 
-    def slice(self, start: int, end: int) -> list[Any]:
-        return self._list_prop.slice(start, end)
+    def slice(self, start: int, end: int, consistent: bool = True) -> list[Any]:
+        return self._list_prop.slice(start, end, consistent=consistent)
 
     def index(self, value: Any, start: int = 0, stop: int | None = None) -> int:
         return self._list_prop.index(value, start, stop)
 
     def count(self, value: Any) -> int:
         return self._list_prop.count(value)
+
+    def find(self, identity_key: str, value: Any, consistent: bool = True) -> Any:
+        """Read-only -- see ListProperty.find()."""
+        return self._list_prop.find(identity_key, value, consistent=consistent)
+
+    def find_all(
+        self, identity_key: str, value: Any, consistent: bool = True
+    ) -> list[Any]:
+        """Read-only -- see ListProperty.find_all()."""
+        return self._list_prop.find_all(identity_key, value, consistent=consistent)
+
+    def items_with_handles(self) -> list[tuple[ListItemHandle, Any]]:
+        """Read-only -- see ListProperty.items_with_handles(). v2 only."""
+        return self._list_prop.items_with_handles()
 
     def verify(self, identity_key: str | None = None) -> dict[str, Any]:
         """Read-only integrity check -- see ListProperty.verify(). No diff
@@ -351,9 +399,11 @@ class NotifyingListProperty:
 
     def append(self, item: Any) -> None:
         self._list_prop.append(item)
-        # Include the item in the callback so subscribers can use it directly
-        # Index is length - 1 since append adds to the end
-        self._register_diff("append", item=item, index=len(self._list_prop) - 1)
+        # Include the item in the callback so subscribers can use it
+        # directly. Index is length - 1 since append adds to the end --
+        # left to _register_diff to derive from the length it already
+        # computes, rather than a second len(self._list_prop) call here.
+        self._register_diff("append", item=item)
 
     def extend(self, items: list[Any]) -> None:
         self._list_prop.extend(items)
@@ -379,7 +429,67 @@ class NotifyingListProperty:
 
     def remove(self, value: Any) -> None:
         self._list_prop.remove(value)
-        self._register_diff("remove")
+        self._register_diff("remove", item=value)
+
+    def delete_by_handle(self, handle: ListItemHandle) -> bool:
+        """Single-shot value-addressed delete -- see
+        ListProperty.delete_by_handle(). Registers a "remove" diff (the
+        closed operation vocabulary has no dedicated handle-delete entry)
+        carrying the removed item's decoded value, only when the delete
+        actually succeeded -- a ``False`` return means nothing changed."""
+        item = self._list_prop._decode_item(handle.raw_value)
+        removed = self._list_prop.delete_by_handle(handle)
+        if removed:
+            self._register_diff("remove", item=item)
+        return removed
+
+    def update_by_handle(self, handle: ListItemHandle, item: Any) -> bool:
+        """Single-shot value-addressed update -- see
+        ListProperty.update_by_handle(). Registers an "update" diff
+        carrying both the new item and ``old_item`` (decoded from the
+        handle), only when the update actually succeeded. No index --
+        a handle is not positional."""
+        old_item = self._list_prop._decode_item(handle.raw_value)
+        updated = self._list_prop.update_by_handle(handle, item)
+        if updated:
+            self._register_diff("update", item=item, old_item=old_item)
+        return updated
+
+    def remove_where(self, identity_key: str, value: Any, *, first_only: bool = False) -> int:
+        """See ListProperty.remove_where(). Registers one "remove" diff per
+        item actually removed, carrying its decoded value -- the closed
+        operation vocabulary has no dedicated bulk-remove entry, so a
+        multi-match remove_where() looks to subscribers like several
+        individual remove() calls.
+
+        ListProperty.remove_where() returns the removed items themselves
+        (not just a count), so the diffs raised here name exactly the rows
+        this call removed -- no separate before-mutation snapshot, so
+        nothing to drift out of sync with a concurrent mutation between
+        two reads."""
+        removed_items = self._list_prop.remove_where(identity_key, value, first_only=first_only)
+        for item in removed_items:
+            self._register_diff("remove", item=item)
+        return len(removed_items)
+
+    def update_where(
+        self, identity_key: str, value: Any, item: Any, *, first_only: bool = False
+    ) -> int:
+        """See ListProperty.update_where(). Registers one "update" diff per
+        item actually updated, carrying the new value and ``old_item``
+        (the pre-update value) -- no index; a value-addressed update
+        under v1 or v2 alike is not positional, and
+        ``_apply_list_operation`` on the receiving side resolves an
+        "update" diff by ``old_item`` when present regardless.
+
+        ListProperty.update_where() returns the pre-update values of the
+        rows it actually updated, so this raises diffs from that directly
+        instead of a separately-taken before-mutation snapshot -- same
+        rationale as remove_where() above."""
+        old_items = self._list_prop.update_where(identity_key, value, item, first_only=first_only)
+        for old_item in old_items:
+            self._register_diff("update", item=item, old_item=old_item)
+        return len(old_items)
 
     def compact(self) -> dict[str, Any]:
         """Repair holes/orphans -- see ListProperty.compact(). Registers a
@@ -423,6 +533,17 @@ class PropertyListStore:
     def list_all(self) -> list[str]:
         """List all existing list property names."""
         return self._core_store.list_all()
+
+    def list_all_with_rows(self) -> tuple[list[str], dict[str, str]]:
+        """List all existing list property names, alongside the raw rows
+        the names were derived from -- see
+        `property.PropertyListStore.list_all_with_rows()`.
+
+        The rows are an opaque, point-in-time snapshot of the actor's
+        whole partition: feed them to a list's `prime_from_rows()` /
+        `to_list_from_rows()`, never inspect or parse a row name.
+        """
+        return self._core_store.list_all_with_rows()
 
     def __getattr__(self, name: str) -> NotifyingListProperty:
         """Return a NotifyingListProperty for the requested list name."""

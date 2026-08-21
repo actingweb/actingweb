@@ -1,4 +1,4 @@
-# Whole-list rewrites are not crash-atomic (3.14)
+# Whole-list rewrites are not crash-atomic
 
 `compact()` in both storage formats rewrites a list's rows in place: survivors
 are written to their new positions before the old rows are retired, so an
@@ -64,23 +64,18 @@ second of which is the most valuable constraint any of this produced.
 
 ## Constraints any third design must satisfy
 
-- **No CAS exists on `DbProperty`.** Only `create_if_not_exists` and
-  `delete_if_value_equals` (`db/protocols.py:229`, `:256`). Read-modify-write on
-  the metadata row is therefore not atomic against a concurrent writer, which is
-  what broke stage-and-flip's commit under concurrency. Precedent for the missing
-  primitive is one protocol over: `DbAttributeProtocol.conditional_update_attr`
-  (`db/protocols.py:925-950`).
-
-  **This is also the residual left by the 2026-08-15 metadata fix, raised as a
-  P1 by Codex review on PR #127 and accepted as a known trade rather than a
-  defect.** `_save_metadata()` reads the metadata row and writes it back; a
-  migration that completes inside that gap is still reverted. What the fix
-  removed was the *unbounded* variant — a retained `ListProperty` reverting a
-  migration that finished arbitrarily long ago — leaving a window of two
-  adjacent operations. Closing it needs exactly the CAS above, conditioned on
-  `format` or a metadata version. Documented as accepted in
-  `docs/guides/property-lists.rst` ("Concurrency during a whole-list rewrite")
-  and in the migration guide, so whoever adds the primitive should update both.
+- **A CAS now exists on `DbProperty`** (`set_if_value_equals`, backed by
+  `_v2_touch_metadata()`'s bounded retry loop — see
+  `thoughts/plans/2026-08-20-v2-positional-access-cost.md` Phases 8-9;
+  `docs/guides/property-lists.rst` "Concurrency during a whole-list
+  rewrite" has the current state). The primitive a stage-and-flip-style
+  design needs to commit its metadata flip atomically against a
+  concurrent writer exists now. **It does not by itself make `compact()`
+  crash-atomic** — the two designs below died on *data*-shape findings (a
+  lease journal that destroys survivors on replay, a scratch-namespace
+  marker a documented `--repair` → `--migrate` sequence permutes), not on
+  the missing CAS. Re-read both post-mortems before assuming the CAS
+  closes either hole.
 - **DynamoDB transactions cap at 100 actions**, below the list sizes that need
   rebalancing — the same reason `thoughts/plans/2026-08-08-property-list-index-integrity.md`
   ruled them out for the original shift-loop fix.
@@ -108,38 +103,9 @@ second of which is the most valuable constraint any of this produced.
   cut designs violated, and it is why the current duplicate residue, for all its
   awkwardness, was kept in the first place.
 
-## Adjacent residual: mutations dispatch on a cached format (found 2026-08-16)
-
-**This section is NOT deferred** — it is INDEX row 9c, in "Do next", while the
-rest of the file is row 9b. Reachable only during a migration, which is what GA
-triggers fleet-wide, so it is live now and quiet later.
-
-Consumer verification of 3.13.0 GA reproduced a second, smaller consequence of
-the same missing primitive. A `ListProperty` retained across a migration
-dispatches its next mutation on its **cached** `format`, so a v1-shaped item
-row is written into a list that is now v2. The item is unreachable, `verify()`
-reports the list **healthy** (the row surfaces only as `foreign_format_rows`,
-documented as inert residue), and the instance self-corrects afterwards because
-the metadata write refreshes its cache — so it is exactly one write per
-retained instance.
-
-GA ships a WARNING at the mismatch, which makes it visible but does not save
-the write. **The fix is to dispatch on a fresh metadata read rather than the
-cache**, and it may be close to free: a mutation already pays one fresh read in
-`_save_metadata()`, so moving that read to *before* the dispatch and merging
-into the dict it returned trades one gap for another rather than adding a round
-trip. It was not attempted at the 3.13.0 tag point because it changes the hot
-write path.
-
-Note the interaction with this file's main subject: reading before dispatch
-does not close the read-modify-write gap, it just stops the *format decision*
-being made from arbitrarily stale state. Closing the gap still needs the CAS.
-
 ## Related
 
 - `thoughts/plans/2026-08-15-property-list-metadata-integrity.md` — the GA plan
   that deferred this; its "Designs cut" section is the long form of the above.
 - `thoughts/todo/attribute-list-shift-design.md` — INDEX row 4, decided to
   sequence after this work, and it inherits this gap if done first.
-- `thoughts/todo/property-fetch-reads-whole-partition.md` — the same
-  whole-partition read that makes constraint 2 bite.

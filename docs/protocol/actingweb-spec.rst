@@ -2632,16 +2632,47 @@ data MUST include the following fields:
 |                |             | ``delete``, ``pop``, ``extend``, ``clear``, ``remove``,        |
 |                |             | ``delete_all``, or ``metadata``                                |
 +----------------+-------------+----------------------------------------------------------------+
-| ``length``     | REQUIRED    | The current length of the list after the operation             |
+| ``length``     | REQUIRED    | The current length of the list after the operation. Advisory:  |
+|                |             | it MAY derive from the sender's tracked count rather than a    |
+|                |             | fresh count of the rows, so under concurrent mutation it can   |
+|                |             | be momentarily off by a bounded amount. Receivers MUST NOT     |
+|                |             | use it to address rows                                         |
 +----------------+-------------+----------------------------------------------------------------+
 | ``item``       | OPTIONAL    | The item data for ``append``, ``insert``, and ``update``       |
 |                |             | operations                                                     |
 +----------------+-------------+----------------------------------------------------------------+
 | ``index``      | OPTIONAL    | The index affected for ``append``, ``insert``, ``update``,     |
-|                |             | ``delete``, and ``pop`` operations                             |
+|                |             | ``delete``, and ``pop`` operations. For ``append`` diffs the   |
+|                |             | value is advisory in the same way ``length`` is (it is derived |
+|                |             | from it): a receiver SHOULD apply an append by appending       |
+|                |             | ``item``, never by writing at ``index``                        |
 +----------------+-------------+----------------------------------------------------------------+
 | ``items``      | OPTIONAL    | Array of items for ``extend`` operations                       |
 +----------------+-------------+----------------------------------------------------------------+
+| ``old_item``   | OPTIONAL    | For an ``update`` diff whose mutation was addressed by the     |
+|                |             | item's value rather than its position: the item's value before |
+|                |             | the update. ``index`` MAY be absent from such a diff entirely  |
+|                |             | -- a value-addressed update does not require a position. A     |
+|                |             | receiver that understands ``old_item`` SHOULD locate the row   |
+|                |             | by matching its current value against ``old_item``, but only   |
+|                |             | when that match is unique: diff delivery between independent   |
+|                |             | peers is not guaranteed reliable or ordered, so a peer's list  |
+|                |             | can already have drifted from the sender's by the time a diff  |
+|                |             | arrives, and if two or more rows currently hold that value     |
+|                |             | which one the sender meant is genuinely ambiguous. The         |
+|                |             | receiver MUST fall back to ``index`` when the value match is   |
+|                |             | ambiguous or absent, and if no ``index`` is present either,    |
+|                |             | MUST treat the diff as inapplicable rather than guess. A       |
+|                |             | receiver that does not recognize ``old_item`` MAY ignore it    |
+|                |             | and match by ``index`` alone, as it always has --              |
+|                |             | understanding that an ``update`` diff with no ``index`` then   |
+|                |             | has nothing to match on.                                       |
++----------------+-------------+----------------------------------------------------------------+
+
+A ``remove`` diff whose mutation was addressed by the item's value rather
+than its position carries the removed item's full value in ``item``
+rather than an ``index`` -- the same field the ``append``/``insert``/
+``update`` operations already use for item data, not a new field.
 
 Example diff for appending an item to the ``notes`` list property::
 
@@ -2675,6 +2706,19 @@ Example diff for updating an item at a specific index::
       "length": 5,
       "item": {"id": "1", "content": "Updated content"},
       "index": 0
+    }
+  }
+
+Example diff for a value-addressed update -- the item's value identifies
+the row, not its position, so ``index`` is absent::
+
+  {
+    "notes": {
+      "list": "notes",
+      "operation": "update",
+      "length": 5,
+      "item": {"id": "1", "content": "Updated content", "status": "done"},
+      "old_item": {"id": "1", "content": "Updated content", "status": "open"}
     }
   }
 

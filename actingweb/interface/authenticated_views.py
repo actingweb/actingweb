@@ -9,6 +9,7 @@ from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any, Optional
 
 from ..permission_evaluator import PermissionResult, get_permission_evaluator
+from ..property_list import ListItemHandle
 
 if TYPE_CHECKING:
     from ..config import Config
@@ -182,6 +183,160 @@ class AuthenticatedPropertyStore:
         return dict(self.items())
 
 
+class _PermissionEnforcingListView:
+    """Per-operation permission gate around a single list's
+    ``NotifyingListProperty``.
+
+    ``AuthenticatedPropertyListStore.__getattr__`` only checks ``read``
+    before handing out a list -- returning the raw ``NotifyingListProperty``
+    there let a read-only accessor mutate through it (append,
+    ``__setitem__``, ``__delitem__``, ...) once past that one check. This
+    view re-checks permission on every mutating call instead, and delegates
+    reads unconditionally: the ``read`` check already ran before this view
+    was constructed.
+
+    Its public surface mirrors ``NotifyingListProperty`` method for method
+    (see ``TestPermissionProxySurface`` in the test suite, which asserts
+    the two stay in sync) -- a method added to ``NotifyingListProperty``
+    without a matching entry here would otherwise be unreachable through
+    ``actor.property_lists.<name>``, the only path the fluent API offers.
+    """
+
+    def __init__(self, list_prop: Any, list_name: str, parent: "AuthenticatedPropertyListStore"):
+        self._list_prop = list_prop
+        self._list_name = list_name
+        self._parent = parent
+
+    def _check(self, operation: str) -> None:
+        self._parent._check_permission(self._list_name, operation)
+
+    # Reads -- `read` was already checked before this view was constructed.
+    def __len__(self) -> int:
+        return len(self._list_prop)
+
+    def __getitem__(self, index: int) -> Any:
+        return self._list_prop[index]
+
+    def __iter__(self) -> Iterator[Any]:
+        return iter(self._list_prop)
+
+    def get_description(self) -> str:
+        return self._list_prop.get_description()
+
+    def get_explanation(self) -> str:
+        return self._list_prop.get_explanation()
+
+    def get_metadata(self) -> dict[str, Any]:
+        return self._list_prop.get_metadata()
+
+    def to_list(self, consistent: bool = True) -> list[Any]:
+        return self._list_prop.to_list(consistent=consistent)
+
+    def to_indexed_list(self, consistent: bool = True) -> list[tuple[int, Any]]:
+        return self._list_prop.to_indexed_list(consistent=consistent)
+
+    def prime_from_rows(self, rows: dict[str, Any]) -> None:
+        self._list_prop.prime_from_rows(rows)
+
+    def to_list_from_rows(self, rows: dict[str, Any]) -> list[Any]:
+        return self._list_prop.to_list_from_rows(rows)
+
+    def slice(self, start: int, end: int, consistent: bool = True) -> list[Any]:
+        return self._list_prop.slice(start, end, consistent=consistent)
+
+    def index(self, value: Any, start: int = 0, stop: int | None = None) -> int:
+        return self._list_prop.index(value, start, stop)
+
+    def count(self, value: Any) -> int:
+        return self._list_prop.count(value)
+
+    def find(self, identity_key: str, value: Any, consistent: bool = True) -> Any:
+        return self._list_prop.find(identity_key, value, consistent=consistent)
+
+    def find_all(
+        self, identity_key: str, value: Any, consistent: bool = True
+    ) -> list[Any]:
+        return self._list_prop.find_all(identity_key, value, consistent=consistent)
+
+    def items_with_handles(self) -> list[tuple[ListItemHandle, Any]]:
+        return self._list_prop.items_with_handles()
+
+    def verify(self, identity_key: str | None = None) -> dict[str, Any]:
+        return self._list_prop.verify(identity_key=identity_key)
+
+    # Mutations -- `write` by default; `delete` for __delitem__/clear/delete,
+    # matching AuthenticatedPropertyStore's per-operation split.
+    def __setitem__(self, index: int, value: Any) -> None:
+        self._check("write")
+        self._list_prop[index] = value
+
+    def __delitem__(self, index: int) -> None:
+        self._check("delete")
+        del self._list_prop[index]
+
+    def set_description(self, description: str) -> None:
+        self._check("write")
+        self._list_prop.set_description(description)
+
+    def set_explanation(self, explanation: str) -> None:
+        self._check("write")
+        self._list_prop.set_explanation(explanation)
+
+    def append(self, item: Any) -> None:
+        self._check("write")
+        self._list_prop.append(item)
+
+    def extend(self, items: list[Any]) -> None:
+        self._check("write")
+        self._list_prop.extend(items)
+
+    def clear(self) -> None:
+        self._check("delete")
+        self._list_prop.clear()
+
+    def delete(self) -> None:
+        self._check("delete")
+        self._list_prop.delete()
+
+    def pop(self, index: int = -1) -> Any:
+        self._check("write")
+        return self._list_prop.pop(index)
+
+    def insert(self, index: int, item: Any) -> None:
+        self._check("write")
+        self._list_prop.insert(index, item)
+
+    def remove(self, value: Any) -> None:
+        self._check("write")
+        self._list_prop.remove(value)
+
+    def delete_by_handle(self, handle: ListItemHandle) -> bool:
+        self._check("write")
+        return self._list_prop.delete_by_handle(handle)
+
+    def update_by_handle(self, handle: ListItemHandle, item: Any) -> bool:
+        self._check("write")
+        return self._list_prop.update_by_handle(handle, item)
+
+    def remove_where(self, identity_key: str, value: Any, *, first_only: bool = False) -> int:
+        self._check("delete")
+        return self._list_prop.remove_where(identity_key, value, first_only=first_only)
+
+    def update_where(
+        self, identity_key: str, value: Any, item: Any, *, first_only: bool = False
+    ) -> int:
+        self._check("write")
+        return self._list_prop.update_where(identity_key, value, item, first_only=first_only)
+
+    def compact(self) -> dict[str, Any]:
+        self._check("write")
+        return self._list_prop.compact()
+
+    def migrate_to_v2(self, allow_damaged: bool = False) -> dict[str, Any]:
+        self._check("write")
+        return self._list_prop.migrate_to_v2(allow_damaged=allow_damaged)
+
+
 class AuthenticatedPropertyListStore:
     """Property list store wrapper that enforces permission checks."""
 
@@ -234,12 +389,18 @@ class AuthenticatedPropertyListStore:
             ) from e
 
     def __getattr__(self, name: str) -> Any:
-        """Get list property with permission check."""
+        """Get a permission-enforcing view of the named list.
+
+        Only `read` is checked here; the returned view re-checks `write`/
+        `delete` on each mutating call so a read-only accessor cannot
+        mutate through the object this returns (see
+        `_PermissionEnforcingListView`).
+        """
         if name.startswith("_"):
             return super().__getattribute__(name)
 
         self._check_permission(name, "read")
-        return getattr(self._store, name)
+        return _PermissionEnforcingListView(getattr(self._store, name), name, self)
 
     def exists(self, name: str) -> bool:
         """Check if list exists (requires read permission)."""
@@ -249,15 +410,23 @@ class AuthenticatedPropertyListStore:
         except PermissionError:
             return False
 
-    def create(self, name: str, **kwargs: Any) -> Any:
-        """Create a new list (requires write permission)."""
-        self._check_permission(name, "write")
-        return self._store.create(name, **kwargs)
-
     def delete(self, name: str) -> bool:
-        """Delete a list (requires delete permission)."""
+        """Delete a list (requires delete permission).
+
+        Lists are created lazily on first write, so there is no matching
+        `create()` -- one existed here previously but its arguments passed
+        straight through to `PropertyListStore.__getattr__`, which resolves
+        any name to a `NotifyingListProperty` and returned it uncalled;
+        calling that result raised `TypeError` after the permission check
+        already passed. This method had the identical bug: `self._store` is
+        a `PropertyListStore`, so `self._store.delete(name)` resolved
+        `delete` as a LIST NAME through `__getattr__`, not a method, and
+        called `NotifyingListProperty.delete()` -- which takes no
+        arguments -- with `name` as an extra positional argument.
+        """
         self._check_permission(name, "delete")
-        return self._store.delete(name)
+        getattr(self._store, name).delete()
+        return True
 
 
 class AuthenticatedSubscriptionManager:

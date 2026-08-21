@@ -20,6 +20,14 @@ ActorInterface
    :undoc-members:
    :show-inheritance:
 
+Property Lists
+--------------
+
+.. automodule:: actingweb.interface.property_store
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 Hooks Registry
 --------------
 

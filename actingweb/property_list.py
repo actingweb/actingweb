@@ -8,8 +8,11 @@ properties in DynamoDB, bypassing the 400KB limit while maintaining API compatib
 import json
 import logging
 import os
+import random
 import re
+import time
 from collections.abc import Iterator
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
@@ -18,6 +21,27 @@ import fractional_indexing as fi
 from actingweb.db import get_property, get_property_list
 
 logger = logging.getLogger(__name__)
+
+# Bounded compare-and-swap retry on the metadata row (Phase 9 of
+# thoughts/plans/2026-08-20-v2-positional-access-cost.md). Single digits,
+# full-jitter exponential backoff -- in a lambda-like fleet the contending
+# writers are separate containers, so no in-process lock can dampen the
+# race; the bound and the jitter are the whole mechanism.
+#
+# The advisory bound (a v2 metadata TOUCH -- updated_at/count_hint on an
+# already-committed mutation) is deliberately smaller than the semantic
+# bound (a write that creates the row or carries format/length): the
+# advisory path spends its retries only to then SWALLOW exhaustion and
+# succeed anyway, so there is no correctness reason to let it burn as much
+# wall-clock as a write the caller is actually waiting on.
+_METADATA_CAS_MAX_ATTEMPTS = 6
+_METADATA_CAS_ADVISORY_MAX_ATTEMPTS = 3
+_METADATA_CAS_BACKOFF_BASE_SECONDS = 0.05
+
+# Distinguishes "no stashed read" from "stashed a read that found the row
+# absent" (a valid, meaningful (None, None) tuple) -- see
+# ListProperty._dispatch_and_stash().
+_NO_STASH = object()
 
 # v2 storage format (fractional rank keys) -- see "Phase 4" of
 # thoughts/plans/2026-08-08-property-list-index-integrity.md.
@@ -162,6 +186,37 @@ class ListCorruptionError(IndexError):
         )
 
 
+class ListMetadataContentionError(RuntimeError):
+    """A list's metadata row stayed under contention through every
+    compare-and-swap retry this mutation was willing to make.
+
+    This means OTHER writers, not this one: in a lambda-like fleet the
+    contending writers are separate containers, so no in-process lock can
+    dampen the race -- the bounded retry count and jittered backoff are
+    the whole mechanism. A retryable condition, not a server fault:
+    ``handlers/`` maps this to **503 with ``Retry-After``**, not a bare
+    500, so an API-gateway consumer sees "retry" rather than "there is a
+    bug".
+
+    Raised only for a metadata write that CREATES the row or carries a
+    semantic field (a ``format`` flip, v1's ``length``) -- there the
+    metadata write IS the operation. An advisory touch (``updated_at``
+    plus v2's ``count_hint`` on an already-existing row) swallows the
+    same exhaustion with one WARNING instead: the item row it is
+    recording is already committed, and failing the whole mutation over
+    a missed count-hint update would manufacture retries (and duplicate
+    writes) a caller cannot guard against in-process on lambda.
+    """
+
+    def __init__(self, list_name: str, actor_id: str) -> None:
+        self.list_name = list_name
+        self.actor_id = actor_id
+        super().__init__(
+            f"List '{list_name}' (actor {actor_id}) metadata is under "
+            f"sustained contention -- retry the request"
+        )
+
+
 class ListPropertyIterator:
     """
     Lazy-loading iterator for ListProperty.
@@ -183,6 +238,37 @@ class ListPropertyIterator:
         item = self.list_prop[self.current_index]
         self.current_index += 1
         return item
+
+
+@dataclass(frozen=True)
+class ListItemHandle:
+    """Opaque handle to one v2 list item, as it existed at read time.
+
+    Carries the item's rank key and the EXACT raw stored string the read
+    returned -- both are required for Phase 10's conditional writes
+    (``set_if_value_equals()``/``delete_if_value_equals()`` require the
+    raw stored string, not a re-serialization of the decoded value; see
+    ``DbPropertyProtocol.delete_if_value_equals``).
+
+    **Not wire-stable.** A rank is unique only within a list's current
+    "generation": ``delete()`` followed by ``append()`` starts a brand new
+    rank sequence, and ``fractional_indexing.generate_n_keys_between(None,
+    None, n)`` is deterministic, so a fresh list's first rank is also
+    ``a0`` -- identical to the deleted list's first rank. A handle from
+    before the delete would silently address the wrong (new) item after
+    one. Use a handle only within the request/process that read it,
+    against the same list instance, and never persist or transmit one.
+
+    ``__repr__`` deliberately omits the raw value -- printing it would
+    invite treating this as a serializable snapshot rather than the
+    single-use read receipt it is.
+    """
+
+    rank: str
+    raw_value: str
+
+    def __repr__(self) -> str:
+        return f"ListItemHandle(rank={self.rank!r})"
 
 
 class ListProperty:
@@ -213,6 +299,28 @@ class ListProperty:
     migration and repair docs already advise; a fix that makes ``length``
     relative is tracked in
     ``thoughts/todo/whole-list-rewrite-atomicity.md``.
+
+    v2's ``get_metadata()["length"]`` is served from ``count_hint``, an
+    ADVISORY count metadata mutations maintain as a side effect -- see
+    ``_v2_touch_metadata()``. **The drift bound is a documented contract,
+    not an implementation detail**: at any moment,
+    ``|count_hint - len(list_prop)|`` is at most the number of mutations
+    currently in flight against the list, plus -- during a rolling
+    deploy only -- mutations applied by pre-3.14 writers since the last
+    rank-counting 3.14 mutation (``_save_metadata()`` preserves fields it
+    doesn't recognise, so an old writer carries the hint forward without
+    maintaining it), plus one per mutation whose advisory metadata touch
+    failed (tolerated CAS exhaustion, or a backend fault after the item
+    write) since the last rank-counting mutation. Drift never accumulates
+    beyond those three terms, and it self-corrects: the next
+    rank-counting mutation (``insert()``/``pop()``/``remove()``/
+    ``__delitem__()``/``compact()``, all of which hold a freshly-read
+    rank map when they touch metadata) overwrites the hint with the
+    counted truth. ``len(list_prop)`` always counts the rank-key range and
+    is always exact; only ``get_metadata()["length"]`` is advisory. A quota
+    check that must never over-admit should trust the hint while strictly
+    below its limit and confirm with ``len()`` once it reaches the limit --
+    the exact read is then paid only at the boundary, not on every save.
     """
 
     def __init__(self, actor_id: str, name: str, config: Any) -> None:
@@ -225,6 +333,16 @@ class ListProperty:
         # "list:{name}-#" prefix), lazily loaded. None means "not loaded
         # yet"; [] is a valid loaded-and-empty state.
         self._v2_rank_cache: list[str] | None = None
+        # A fresh (parsed, raw) meta-row read a mutation's dispatch just
+        # took, for _save_metadata()'s FIRST compare-and-swap attempt to
+        # consume instead of reading again -- see _dispatch_and_stash().
+        # _NO_STASH (not None -- (None, None) is a valid stashed "row is
+        # absent" reading) until a mutator sets it; every mutator sets it
+        # fresh at its own top, so a stash left behind by an exception in a
+        # PRIOR call can never be read without having just been overwritten.
+        self._pending_meta_read: tuple[dict[str, Any] | None, str | None] | object = (
+            _NO_STASH
+        )
 
     def _get_meta_property_name(self) -> str:
         """Get the metadata property name."""
@@ -259,6 +377,54 @@ class ListProperty:
         """
         return self._format()
 
+    def _dispatch_and_stash(self) -> int:
+        """Fresh-read the meta row for a mutation about to dispatch on
+        storage format, and stash ``(parsed, raw)`` for
+        ``_save_metadata()``'s first compare-and-swap attempt to consume.
+
+        Every public mutator (``append``/``insert``/``__setitem__``/
+        ``__delitem__``/``pop``/``remove``) calls this INSTEAD OF
+        ``self._is_v2()`` to decide which storage format to write into.
+        Dispatching on the cache is row 9c: a ``ListProperty`` instance
+        retained across a migration keeps believing v1 (or v2) long after
+        the list's format changed, writes an item into the format the list
+        no longer has, and that row becomes unreachable -- invisible to
+        every reader of the CURRENT format, reported only as
+        ``foreign_format_rows`` while ``verify()`` calls the list healthy.
+
+        Stashing the read (rather than letting ``_save_metadata()`` read
+        again after the item write) does two things a second, later read
+        would not: it lets the metadata write's compare-and-swap condition
+        on the SAME bytes the dispatch decision saw, so a format flip
+        landing anywhere in the window between dispatch and the metadata
+        touch is caught by the CAS (condition fails against the now-changed
+        row -> retry -> re-read -> see the new format) instead of only
+        a flip that happens to still be visible after the fact; and it
+        keeps ``self._meta_cache`` untouched here, which matters because
+        ``_save_metadata()``'s stale-cache WARNING compares
+        ``self._meta_cache`` (what this instance believed) against a fresh
+        read -- refreshing the cache at dispatch time would make the two
+        always agree and silence that warning for exactly the scenario it
+        exists to catch.
+
+        Every mutator sets this stash fresh at its own top (overwriting
+        whatever was there), so a stash left behind by an exception in a
+        PRIOR, unrelated call can never be read without having just been
+        replaced.
+
+        Returns:
+            1 or 2. A brand-new list (no stored row yet) dispatches as 2 --
+            Phase 4's default for every list with no existing v1 rows.
+        """
+        parsed, raw = self._read_meta_row()
+        self._pending_meta_read = (parsed, raw)
+        if parsed is None:
+            return 2
+        try:
+            return int(parsed.get("format", 1) or 1)
+        except (TypeError, ValueError):
+            return 1
+
     def _decode_item(self, item_str: str) -> Any:
         try:
             return json.loads(item_str)
@@ -286,10 +452,12 @@ class ListProperty:
         return (self._v2_item_prefix(), f"list:{self.name}-$")
 
     def _v2_ensure_rank_cache(self, force: bool = False) -> list[str]:
-        """Return the sorted rank-key cache, loading it (one keys-only
-        range query) if absent or `force`d. The returned list is the SAME
-        object held in `self._v2_rank_cache` -- callers that insert/delete
-        a single entry may mutate it in place instead of forcing a reload."""
+        """Return the sorted rank-key cache, loading it (one whole-list
+        range query -- `keys_only` saves bytes on PostgreSQL but no
+        capacity on DynamoDB, see `DbPropertyProtocol.get_range`) if
+        absent or `force`d. The returned list is the SAME object held in
+        `self._v2_rank_cache` -- callers that insert/delete a single entry
+        may mutate it in place instead of forcing a reload."""
         if self._v2_rank_cache is not None and not force:
             return self._v2_rank_cache
         lower, upper = self._v2_bounds()
@@ -303,14 +471,72 @@ class ListProperty:
         )
         return self._v2_rank_cache
 
-    def _v2_load_full(self) -> list[tuple[str, str]]:
+    def _v2_last_rank(self) -> str | None:
+        """The current highest rank key, via one bytewise-greatest-row read
+        (``get_last_in_range``) instead of a whole-list range query.
+
+        Phase 9B: this is what ``append()``/``extend()`` use instead of
+        ``_v2_ensure_rank_cache()`` -- an append only ever needs the LAST
+        rank, and paying for the whole list to get it is the cost this
+        release exists to remove. Always strongly consistent, same
+        reasoning as ``_v2_ensure_rank_cache()``: a stale last rank here is
+        a mid-list append by another route.
+
+        This method itself deliberately does not read or write
+        ``self._v2_rank_cache`` -- a cache built from a single-row read
+        would be wrong to reuse for anything that needs the FULL rank list
+        (``__setitem__``, ``insert()``, etc., which still call
+        ``_v2_ensure_rank_cache()`` directly), and populating it here
+        would just be a stale entry those callers would have to
+        force-reread past anyway. Its callers (``_v2_append()``/
+        ``_v2_extend()``) DO append their newly-created rank(s) onto
+        ``self._v2_rank_cache`` afterwards, but only when it is already
+        warm -- see those methods' docstrings.
+        """
+        lower, upper = self._v2_bounds()
+        db = get_property(self.config)
+        last_name = db.get_last_in_range(actor_id=self.actor_id, lower=lower, upper=upper)
+        if last_name is None:
+            return None
+        prefix_len = len(self._v2_item_prefix())
+        candidate_rank = last_name[prefix_len:]
+        if _v2_is_rank(candidate_rank):
+            return candidate_rank
+        # The bytewise-greatest row in our byte range is not rank-shaped
+        # -- a legacy '#'-named sibling list's row (its own item/meta
+        # suffix, e.g. '-meta' or '-3', sorts inside OUR range because its
+        # name starts with our list's name plus '#'). get_last_in_range()
+        # has no notion of rank shape, so it happily returns that row.
+        # Feeding it to fi.generate_key_between() raises FIError. Rare in
+        # practice -- new list names have banned '#' since Phase 4, this
+        # only triggers when a pre-Phase-4 sibling still exists -- so fall
+        # back to the full, shape-filtered read rather than optimizing
+        # for a case that no longer occurs on new lists.
+        ranks = self._v2_ensure_rank_cache(force=True)
+        return ranks[-1] if ranks else None
+
+    def _v2_load_full(self, consistent: bool = True) -> list[tuple[str, str]]:
         """One full range query -> sorted (rank, raw_value) pairs. Also
         refreshes the rank-key cache as a side effect (the invariant that
         to_list()/__iter__/slice() cost exactly one query, and warm the
-        cache for any __getitem__ calls that follow)."""
+        cache for any __getitem__ calls that follow).
+
+        ``consistent=False`` halves DynamoDB read capacity (see
+        ``get_range``'s ``consistent_read`` docstring) at the cost of
+        possibly not seeing a just-landed write -- including this
+        instance's OWN. Callers that mutate and then immediately read back
+        their own write (``_v2_remove()``, ``_v2_verify()``,
+        ``_v2_compact()``) must not pass ``False`` here; only the public
+        read methods that take an explicit ``consistent`` parameter do.
+        """
         lower, upper = self._v2_bounds()
         db = get_property(self.config)
-        rows = db.get_range(actor_id=self.actor_id, lower=lower, upper=upper)
+        rows = db.get_range(
+            actor_id=self.actor_id,
+            lower=lower,
+            upper=upper,
+            consistent_read=consistent,
+        )
         prefix_len = len(self._v2_item_prefix())
         pairs = sorted(
             (rank, value)
@@ -320,13 +546,20 @@ class ListProperty:
         self._v2_rank_cache = [rank for rank, _ in pairs]
         return pairs
 
-    def _v2_to_list(self) -> list[Any]:
-        return [self._decode_item(value) for _, value in self._v2_load_full()]
+    def _v2_to_list(self, consistent: bool = True) -> list[Any]:
+        return [
+            self._decode_item(value)
+            for _, value in self._v2_load_full(consistent=consistent)
+        ]
 
     def _create_default_metadata_v2(self) -> dict[str, Any]:
         """Default metadata for a brand-new (v2) list. No `length` key --
-        v2 has no authoritative stored length, it's always counted from the
-        rank-key range."""
+        v2 has no authoritative stored length. `count_hint` is an ADVISORY
+        item count -- deliberately not named `length`, so it can never be
+        mistaken for v1's authoritative field -- maintained by mutations
+        as a side effect so a count doesn't have to pay for a whole-list
+        range query. See `get_metadata()` and `_v2_touch_metadata()` for
+        the drift bound this carries."""
         now = datetime.now().isoformat()
         return {
             "format": 2,
@@ -335,8 +568,10 @@ class ListProperty:
             "item_type": "json",
             "chunk_size": 1,
             "version": "1.0",
+            "count_hint": 0,
             "description": "",
             "explanation": "",
+            "format_ever_changed": False,
         }
 
     def _load_metadata(self) -> dict[str, Any]:
@@ -411,14 +646,24 @@ class ListProperty:
             "version": "1.0",
             "description": "",
             "explanation": "",
+            "format_ever_changed": False,
         }
 
-    def _read_meta_row(self) -> dict[str, Any] | None:
-        """The meta row as stored RIGHT NOW, bypassing the cache entirely.
+    def _read_meta_row(self) -> tuple[dict[str, Any] | None, str | None]:
+        """The meta row as stored RIGHT NOW, bypassing the cache entirely --
+        returns ``(parsed, raw)``, the decoded dict AND the exact raw stored
+        string it came from.
 
-        ``None`` means the row is absent -- the list was never created, or
-        another writer deleted it. Unparsable content raises, matching
-        ``_load_metadata()``: self-healing over it orphans every item row.
+        ``raw`` is what a compare-and-swap write conditions on: a
+        conditional write's ``expected`` must be the RAW STORED STRING the
+        caller read, not a re-serialization of the decoded value (see
+        ``DbPropertyProtocol.set_if_value_equals``) -- round-tripping
+        through decode/encode is not guaranteed byte-identical.
+
+        ``(None, None)`` means the row is absent -- the list was never
+        created, or another writer deleted it. Unparsable content raises,
+        matching ``_load_metadata()``: self-healing over it orphans every
+        item row.
 
         This is deliberately NOT ``_load_metadata()``. That method conflates
         "absent" with "a brand-new v2 list", which is the right default for
@@ -426,13 +671,13 @@ class ListProperty:
         allowed to recreate a row somebody else just deleted.
         """
         if not self._db:
-            return None
+            return None, None
         meta_db = get_property(self.config)
         meta_str = meta_db.get(
             actor_id=self.actor_id, name=self._get_meta_property_name()
         )
         if meta_str is None:
-            return None
+            return None, None
         try:
             parsed = json.loads(meta_str)
         except (json.JSONDecodeError, TypeError) as e:
@@ -442,7 +687,7 @@ class ListProperty:
                 f"Metadata for list '{self.name}' is not a JSON object "
                 f"(got {type(parsed).__name__})"
             )
-        return parsed
+        return parsed, meta_str
 
     def _save_metadata(
         self,
@@ -450,9 +695,12 @@ class ListProperty:
         *,
         remove: tuple[str, ...] = (),
         create_if_absent: bool = True,
+        count_delta: int = 0,
+        length_delta: int = 0,
+        advisory: bool = False,
     ) -> None:
         """Merge ``updates`` into a FRESH read of the meta row and write it
-        back.
+        back, via a bounded compare-and-swap retry loop.
 
         **Never round-trip a cached metadata dict through here.** That is
         what this signature exists to prevent. A ``ListProperty`` instance
@@ -466,6 +714,13 @@ class ListProperty:
         impossible, because ``format`` is never among them unless you meant
         it.
 
+        The row this writes against is either the stash a mutator's
+        ``_dispatch_and_stash()`` just took (consumed on this call's FIRST
+        attempt only) or a fresh read (every retry, and any caller that
+        skipped dispatch staging entirely -- ``set_description()``/
+        ``set_explanation()``/``clear()``'s v1 length writers). Either way
+        the row is fresh, never the cache.
+
         Args:
             updates: only the fields this caller is changing. ``length`` is
                 dropped when the stored row is v2 -- v2 has no authoritative
@@ -476,84 +731,238 @@ class ListProperty:
             create_if_absent: what to do when the meta row is gone. ``True``
                 (list creation, and the v2 metadata touch whose whole purpose
                 is to make the row exist) recreates it from this instance's
-                view. ``False`` skips the write entirely: for the v1 length
+                view, with an UNCONDITIONAL write -- there is no prior row to
+                condition on, and no CAS retry applies to this branch.
+                ``False`` skips the write entirely: for the v1 length
                 writers, an absent row means a concurrent ``delete()`` won,
                 and merging a stale length would resurrect the list.
+            count_delta: merged onto the freshly-read stored ``count_hint``
+                under the SAME read the compare-and-swap conditions on --
+                for a v2 mutation that does not know the list's true count
+                (append()/insert(), which reuse a possibly-stale rank
+                cache). Ignored under v1, and ignored when ``count_hint``
+                isn't present in ``updates`` and isn't an int in the stored
+                row (a pre-3.14 list with no hint yet -- the next
+                rank-counting mutation establishes one instead of guessing
+                at a delta).
+            length_delta: the v1 counterpart of ``count_delta`` -- merged
+                onto the freshly-read stored ``length`` under the same
+                read, instead of v1 ``append()``/``insert()`` computing an
+                ABSOLUTE new length from ``len(self)`` (which reads
+                ``_meta_cache``, a value a retained instance can hold
+                stale across a concurrent writer's mutation). Ignored
+                under v2 (v2 has no stored ``length``), and ignored when
+                ``length`` isn't present in ``updates`` and isn't an int
+                in the stored row.
+            advisory: ``True`` ONLY for the v2 metadata touch
+                (``updated_at``/``count_hint`` on an ALREADY-EXISTING row,
+                after the item row it is recording has already been
+                committed). Exhausting the (smaller) advisory retry bound
+                logs one WARNING and returns instead of raising -- the
+                caller's mutation already succeeded; the missed count-hint
+                update is Phase 5's documented drift bound's third term,
+                repaired by the next rank-counting mutation or
+                ``compact()``. Does NOT apply to the row-creation branch
+                above (an unconditional write either succeeds or raises on
+                a genuine backend fault, which is not a condition to
+                swallow either way) or to any write carrying a semantic
+                field (``format``, v1's ``length``) -- there the metadata
+                write IS the operation, so those callers must pass
+                ``advisory=False`` (the default).
+
+        Raises:
+            ListMetadataContentionError: the retry bound was exhausted on a
+                non-advisory write -- the row stayed under contention
+                through every attempt this call was willing to make.
         """
-        stored = self._read_meta_row()
-        if stored is None:
-            if not create_if_absent:
-                logger.info(
-                    f"List '{self.name}' (actor {self.actor_id}): metadata "
-                    f"row is gone (deleted concurrently) -- skipping the "
-                    f"metadata update rather than recreating the list"
-                )
-                # Drop BOTH caches, not just the metadata one: whatever this
-                # instance believes about the list is describing something
-                # that no longer exists.
+        max_attempts = (
+            _METADATA_CAS_ADVISORY_MAX_ATTEMPTS if advisory else _METADATA_CAS_MAX_ATTEMPTS
+        )
+        warned_stale_cache = False
+
+        for attempt in range(max_attempts):
+            if attempt == 0 and self._pending_meta_read is not _NO_STASH:
+                stored, expected_raw = self._pending_meta_read  # type: ignore[misc]
+                self._pending_meta_read = _NO_STASH
+            else:
+                stored, expected_raw = self._read_meta_row()
+
+            if stored is None:
+                if not create_if_absent:
+                    logger.info(
+                        f"List '{self.name}' (actor {self.actor_id}): metadata "
+                        f"row is gone (deleted concurrently) -- skipping the "
+                        f"metadata update rather than recreating the list"
+                    )
+                    # Drop BOTH caches, not just the metadata one: whatever
+                    # this instance believes about the list is describing
+                    # something that no longer exists.
+                    self._invalidate_cache()
+                    return
+                # No stored state to preserve, so nothing can be reverted by
+                # falling back to what this instance knows -- and if this
+                # instance is holding a cache from BEFORE the row vanished
+                # (its own earlier read, or a stale v1 belief), that cache
+                # describes a list that no longer exists and must not seed
+                # the one replacing it: a cached v1 dict would recreate the
+                # row with a stale `length` and no `format` key while the
+                # item this call is recording just landed in a v2-shaped
+                # row, producing a row that claims v1 with a v2 item under
+                # it -- corruption, not resurrection. Drop the cache first
+                # so _load_metadata() takes its own absent-row path and
+                # returns a clean v2 default. It also applies the '#'-name
+                # ban and the property-name collision check that creating a
+                # list must go through. UNCONDITIONAL write: there is no
+                # prior row to CAS against.
                 self._invalidate_cache()
-                return
-            # No stored state to preserve, so nothing can be reverted by
-            # falling back to what this instance knows. _load_metadata()
-            # also applies the '#'-name ban and the property-name collision
-            # check that creating a list must go through.
-            stored = dict(self._load_metadata())
-
-        stored_format = int(stored.get("format", 1) or 1)
-
-        # Did this instance dispatch the mutation it is now recording against
-        # a format the list no longer has?
-        #
-        # The write itself is already done by the time we get here -- append()
-        # stores the item row, then calls this -- so an item written by a
-        # stale v1 instance into a list that is now v2 is sitting in a
-        # v1-shaped row that no v2 reader will ever return. It is not lost
-        # data, it is unreachable data, and until this warning existed the
-        # only trace was a DEBUG line and a `foreign_format_rows` count that
-        # verify() reports while calling the list HEALTHY.
-        #
-        # Self-limiting: _replace_metadata() below caches the merged row, so
-        # this instance's NEXT mutation dispatches correctly. One write per
-        # retained instance, which is why this warns rather than raises --
-        # the caller's operation succeeded, it just landed somewhere nothing
-        # reads. Found by consumer verification against 3.13.0 GA.
-        if self._meta_cache is not None:
-            believed_format = int(self._meta_cache.get("format", 1) or 1)
-            if believed_format != stored_format:
-                logger.warning(
-                    "List '%s' (actor %s): this instance believed the storage "
-                    "format was v%d but the stored row says v%d -- it was "
-                    "migrated by someone else while this instance was held. "
-                    "Any item this operation wrote went into a v%d-shaped row "
-                    "that v%d readers do not see; verify() will still report "
-                    "the list healthy, and the row shows up only as "
-                    "foreign_format_rows. Re-issue the write. This instance "
-                    "self-corrects from here.",
-                    self.name,
-                    self.actor_id,
-                    believed_format,
-                    stored_format,
-                    believed_format,
-                    stored_format,
+                meta = dict(self._load_metadata())
+                new_format = int(meta.get("format", 1) or 1)
+                call_updates = (
+                    {k: v for k, v in updates.items() if k != "length"}
+                    if new_format == 2
+                    else updates
                 )
+                meta.update(call_updates)
+                # A list's first-ever mutation goes through here too (a
+                # brand-new row has nothing to be absent-because-deleted
+                # about) -- append()/insert()'s count_delta must land on
+                # the freshly-created default (count_hint: 0) the same way
+                # it lands on an existing row below, or the count silently
+                # drops on every list's very first append().
+                if count_delta and new_format == 2 and "count_hint" not in call_updates:
+                    current_hint = meta.get("count_hint")
+                    if isinstance(current_hint, int):
+                        meta["count_hint"] = max(0, current_hint + count_delta)
+                if length_delta and new_format == 1 and "length" not in call_updates:
+                    current_length = meta.get("length")
+                    if isinstance(current_length, int):
+                        meta["length"] = max(0, current_length + length_delta)
+                for field in remove:
+                    meta.pop(field, None)
+                self._replace_metadata(meta, expected_raw=None)
+                return
 
-        meta = dict(stored)
-        if stored_format == 2:
-            updates = {k: v for k, v in updates.items() if k != "length"}
-        meta.update(updates)
-        for field in remove:
-            meta.pop(field, None)
-        self._replace_metadata(meta)
+            stored_format = int(stored.get("format", 1) or 1)
 
-    def _replace_metadata(self, meta: dict[str, Any]) -> None:
+            # Did this instance dispatch the mutation it is now recording
+            # against a format the list no longer has?
+            #
+            # The write itself is already done by the time we get here --
+            # append() stores the item row, then calls this -- so an item
+            # written by a stale v1 instance into a list that is now v2 is
+            # sitting in a v1-shaped row that no v2 reader will ever return.
+            # It is not lost data, it is unreachable data, and until this
+            # warning existed the only trace was a DEBUG line and a
+            # `foreign_format_rows` count that verify() reports while
+            # calling the list HEALTHY.
+            #
+            # Self-limiting: the write below caches the merged row on
+            # success, so this instance's NEXT mutation dispatches
+            # correctly. One warning per retained instance's stale write,
+            # which is why this warns rather than raises -- the caller's
+            # operation succeeded, it just landed somewhere nothing reads.
+            # Found by consumer verification against 3.13.0 GA. Emitted at
+            # most once per _save_metadata() call (attempt 0's read only) --
+            # self._meta_cache does not change between retries, so
+            # re-comparing it against each retry's newer read would just
+            # repeat the same finding.
+            if not warned_stale_cache and self._meta_cache is not None:
+                believed_format = int(self._meta_cache.get("format", 1) or 1)
+                if believed_format != stored_format:
+                    warned_stale_cache = True
+                    logger.warning(
+                        "List '%s' (actor %s): this instance believed the "
+                        "storage format was v%d but the stored row says v%d "
+                        "-- it was migrated by someone else while this "
+                        "instance was held. Any item this operation wrote "
+                        "went into a v%d-shaped row that v%d readers do not "
+                        "see; verify() will still report the list healthy, "
+                        "and the row shows up only as foreign_format_rows. "
+                        "Re-issue the write. This instance self-corrects "
+                        "from here.",
+                        self.name,
+                        self.actor_id,
+                        believed_format,
+                        stored_format,
+                        believed_format,
+                        stored_format,
+                    )
+
+            meta = dict(stored)
+            call_updates = updates
+            if stored_format == 2:
+                call_updates = {k: v for k, v in updates.items() if k != "length"}
+            meta.update(call_updates)
+            if count_delta and stored_format == 2 and "count_hint" not in call_updates:
+                current_hint = meta.get("count_hint")
+                if isinstance(current_hint, int):
+                    meta["count_hint"] = max(0, current_hint + count_delta)
+            if length_delta and stored_format == 1 and "length" not in call_updates:
+                current_length = meta.get("length")
+                if isinstance(current_length, int):
+                    meta["length"] = max(0, current_length + length_delta)
+            for field in remove:
+                meta.pop(field, None)
+
+            if self._replace_metadata(meta, expected_raw=expected_raw):
+                return
+
+            # Lost the compare-and-swap: another writer changed the row
+            # between our read and this write. Re-resolve on the next
+            # attempt rather than blindly retrying the same stale merge.
+            if attempt < max_attempts - 1:
+                backoff = random.uniform(
+                    0, _METADATA_CAS_BACKOFF_BASE_SECONDS * (2**attempt)
+                )
+                if backoff:
+                    time.sleep(backoff)
+
+        if advisory:
+            logger.warning(
+                "List '%s' (actor %s): advisory metadata touch (updated_at/"
+                "count_hint) exhausted %d compare-and-swap attempts under "
+                "sustained contention -- the mutation this touch was "
+                "recording already succeeded. The missed update self-"
+                "corrects at the next rank-counting mutation or compact().",
+                self.name,
+                self.actor_id,
+                max_attempts,
+            )
+            return
+        raise ListMetadataContentionError(self.name, self.actor_id)
+
+    def _replace_metadata(
+        self, meta: dict[str, Any], *, expected_raw: str | None = None
+    ) -> bool:
         """Write ``meta`` wholesale and cache it.
 
-        Only two kinds of caller may use this: a deliberate reset
-        (``clear()``, which resets description/explanation by design) and
-        one that derived ``meta`` from a read it just performed itself
-        (migration's format flip). Everything else goes through
-        ``_save_metadata()`` -- see its docstring for what writing a cached
-        dict back costs.
+        Two kinds of caller use this: a deliberate reset (``clear()``,
+        which resets description/explanation by design) or migration's
+        format flip -- both pass ``expected_raw=None`` (unconditional
+        write, the same last-writer-wins behaviour this method has always
+        had) -- and ``_save_metadata()``'s compare-and-swap retry loop,
+        which passes the raw bytes its current attempt read. Everything
+        else goes through ``_save_metadata()`` -- see its docstring for
+        what writing a cached dict back costs.
+
+        Args:
+            meta: the full metadata dict to write (derived from a read the
+                caller already performed itself, never from the cache).
+            expected_raw: ``None`` writes unconditionally. A raw JSON
+                string conditions the write via
+                ``set_if_value_equals(expected=expected_raw)`` -- succeeds
+                only if the row still holds exactly those bytes.
+
+        Returns:
+            ``True`` if the write landed and ``self._meta_cache`` was
+            updated. ``False`` only when ``expected_raw`` was given and the
+            row no longer holds those bytes -- nothing was written, the
+            cache is untouched, and the caller (``_save_metadata()``) is
+            expected to re-read and retry, not to treat this as failure.
+
+        Raises:
+            RuntimeError: a genuine backend fault on an unconditional
+                write.
         """
         meta["updated_at"] = datetime.now().isoformat()
 
@@ -562,12 +971,22 @@ class ListProperty:
             meta_json = json.dumps(meta)
             # Use fresh DB instance to avoid handle conflicts
             meta_db = get_property(self.config)
-            if not meta_db.set(
-                actor_id=self.actor_id, name=meta_property_name, value=meta_json
-            ):
-                raise RuntimeError(f"list metadata write failed for '{self.name}'")
+            if expected_raw is None:
+                if not meta_db.set(
+                    actor_id=self.actor_id, name=meta_property_name, value=meta_json
+                ):
+                    raise RuntimeError(f"list metadata write failed for '{self.name}'")
+            else:
+                if not meta_db.set_if_value_equals(
+                    actor_id=self.actor_id,
+                    name=meta_property_name,
+                    expected=expected_raw,
+                    value=meta_json,
+                ):
+                    return False
 
         self._meta_cache = meta
+        return True
 
     def _invalidate_cache(self) -> None:
         """Invalidate the metadata cache AND the v2 rank cache.
@@ -598,9 +1017,10 @@ class ListProperty:
         `remove()` re-read the rank keys before acting, deliberately: a
         primed snapshot can be arbitrarily old by the time one of them
         runs, and resolving a position against a stale map means reading —
-        or destroying — the wrong item. So a `for i in range(len(lst))`
-        loop over `lst[i]` costs two queries per item under v2 even after
-        priming.
+        or destroying — the wrong item. That re-read is a whole-list range
+        query, so a `for i in range(len(lst))` loop over `lst[i]` costs
+        one whole-list query PER ITEM under v2 -- O(n) total, not a fixed
+        two-query factor -- even after priming.
 
         Use `to_list()`, `to_indexed_list()` or iteration for that: all
         three are a single range query regardless of length, and
@@ -706,16 +1126,29 @@ class ListProperty:
             - version: Metadata schema version
             - item_type: Type of items stored (currently always "json")
             - chunk_size: Internal chunk size (currently always 1)
-            - length: Number of items in the list
+            - length: Number of items in the list. **v1: exact. v2:
+              ADVISORY** -- served from `count_hint`, a value mutations
+              maintain as a side effect rather than count() every time.
+              Drift is bounded (see the class docstring / property-lists
+              guide) and self-correcting: it never resolves which rows
+              exist, only how many. `to_list()`, `__getitem__` and
+              iteration always return the true items regardless of what
+              this says. Call `len(list_prop)` for an exact count -- it
+              always counts the rank-key range, at the cost of the
+              whole-list range query this field exists to avoid.
 
         Note: This returns a copy; modifications won't affect the stored metadata.
         Use set_description() and set_explanation() to update user-facing fields.
         """
         meta = self._load_metadata()
-        # v2 has no stored length -- meta.get("length", 0) would silently
-        # report 0 for every non-empty v2 list. len(self) counts it (and
-        # is cheap after the first call, via the cached rank-key range).
-        length = len(self) if self._is_v2() else meta.get("length", 0)
+        if self._is_v2():
+            hint = meta.get("count_hint")
+            # A v2 list whose metadata predates this release has no hint
+            # yet -- count once (the first rank-counting mutation then
+            # establishes one) rather than silently reporting 0.
+            length = hint if isinstance(hint, int) else len(self)
+        else:
+            length = meta.get("length", 0)
         return {
             "created_at": meta.get("created_at", ""),
             "updated_at": meta.get("updated_at", ""),
@@ -811,7 +1244,9 @@ class ListProperty:
             logger.error(f"Failed to parse list item at index {index}: {e}")
             return item_str  # Return raw string if JSON parsing fails
 
-    def _v2_touch_metadata(self) -> None:
+    def _v2_touch_metadata(
+        self, count: int | None = None, count_delta: int = 0
+    ) -> None:
         """Persist the metadata row after a v2 item mutation.
 
         v2 doesn't store an authoritative length, so unlike v1 (where every
@@ -825,11 +1260,30 @@ class ListProperty:
         metadata (matching v1's per-mutation write, just without a
         `length` field to update).
 
-        Writes no fields of its own: the stored row is re-read and only its
-        ``updated_at`` moves. That is what keeps a v2 mutation from carrying
-        a cached ``format`` back to storage -- including the reverse of the
-        migration case, a stale format-2 cache over storage another process
-        has downgraded to v1.
+        Besides ``updated_at`` (always moved), this also maintains the
+        advisory ``count_hint``:
+
+        - ``count``: this mutation holds a rank cache it knows is CURRENT
+          (it forced a fresh read before mutating, and mutated the same
+          list object in place) -- write it as the counted truth.
+          ``__setitem__`` passes this too, even though it doesn't change
+          the count: writing the true count is strictly better than
+          leaving a possibly-stale one, and it's what makes the
+          "``__setitem__`` leaves the hint unchanged" contract hold in the
+          normal case (no concurrent writer) without a special case here.
+        - ``count_delta``: this mutation does NOT know the list's true
+          count (it may have reused a stale rank cache) -- merge the delta
+          onto whatever is currently stored, under the same fresh read
+          ``_save_metadata()`` already performs. This is append()/
+          insert()'s path, deliberately, so the mechanism does not have to
+          change when Phase 9B removes their rank cache entirely.
+        - neither: the stored hint is preserved as-is (not included in
+          ``updates``, so ``_save_metadata()``'s merge leaves it alone).
+
+        That is what keeps a v2 mutation from carrying a cached ``format``
+        back to storage -- including the reverse of the migration case, a
+        stale format-2 cache over storage another process has downgraded
+        to v1.
 
         It DOES create the row when absent, unlike the v1 length writers,
         which skip the write on the grounds that a vanished row means a
@@ -840,8 +1294,27 @@ class ListProperty:
         rather than nothing -- which is the same answer appending to a
         never-created list gives, and the alternative is an item row no
         ``exists()`` or ``list_all()`` can see.
+
+        Always passes ``advisory=True`` to ``_save_metadata()``: every
+        caller of this method is a v2 mutator that has ALREADY written (or
+        deleted) the item row it is now recording -- that write is
+        committed regardless of what happens to this touch. Contention
+        that exhausts the (smaller) advisory retry bound is swallowed with
+        one WARNING rather than raised, so the mutation the caller invoked
+        still returns success. (The row-creation branch inside
+        ``_save_metadata()`` -- this list's first-ever mutation, meta row
+        absent -- is unconditional and never reaches CAS exhaustion at
+        all, so ``advisory`` has no effect on it either way; see that
+        method's docstring.)
         """
-        self._save_metadata({})
+        updates: dict[str, Any] = {}
+        if count is not None:
+            updates["count_hint"] = count
+        self._save_metadata(
+            updates,
+            count_delta=0 if count is not None else count_delta,
+            advisory=True,
+        )
 
     def _v2_setitem(self, index: int, value: Any) -> None:
         # Force a fresh rank read: this is a DESTRUCTIVE positional write,
@@ -867,12 +1340,12 @@ class ListProperty:
             actor_id=self.actor_id, name=self._v2_item_name(rank), value=value_str
         ):
             raise RuntimeError(f"list item write failed for '{self.name}'[{index}]")
-        self._v2_touch_metadata()
+        self._v2_touch_metadata(count=len(ranks))
 
     def __setitem__(self, index: int, value: Any) -> None:
         """Set item at index."""
         self._maybe_lazy_migrate()
-        if self._is_v2():
+        if self._dispatch_and_stash() == 2:
             self._v2_setitem(index, value)
             return
 
@@ -928,12 +1401,12 @@ class ListProperty:
         # loop. Keep the cache consistent with the write we just made
         # (mutating the same list object _v2_ensure_rank_cache() returned).
         del ranks[index]
-        self._v2_touch_metadata()
+        self._v2_touch_metadata(count=len(ranks))
 
     def __delitem__(self, index: int) -> None:
         """Delete item at index and shift remaining items."""
         self._maybe_lazy_migrate()
-        if self._is_v2():
+        if self._dispatch_and_stash() == 2:
             self._v2_delitem(index)
             return
 
@@ -1002,10 +1475,33 @@ class ListProperty:
         return ListPropertyIterator(self)
 
     def _v2_append(self, item: Any) -> None:
+        """Phase 9B: one ``get_last_in_range`` read (a single item's read
+        capacity) instead of ``_v2_ensure_rank_cache()``'s whole-list range
+        query -- append only ever needs the last rank. The collision loop
+        is UNCHANGED, which is what keeps the race behaviour byte-for-byte
+        identical to the rank-cache version: rank generation is
+        deterministic, so two appenders that read the same last rank
+        produce the same candidate, ``create_if_not_exists`` rejects the
+        loser, and the retry re-reads the (now current) last rank.
+
+        On success, appends the new rank to ``self._v2_rank_cache`` IF that
+        cache is already warm (not ``None``) -- never loads a cold one,
+        which would defeat the whole point of using
+        ``get_last_in_range()`` here. This is not optional bookkeeping: a
+        caller that reuses the SAME instance across several operations
+        (``handlers/properties.py``'s bulk-update pass, which calls
+        ``len(list_prop)`` then loops ``list_prop.append(None)`` while
+        re-checking ``len()``) depends on ``len()`` reflecting each
+        append immediately. Before this, `append()` maintained the cache
+        via ``_v2_ensure_rank_cache()``'s in-place mutation; dropping that
+        without a replacement left ``len()`` reading a cache that never
+        advanced, so ``while len(list_prop) <= index: list_prop.append(
+        None)`` never terminated -- found via a hang in
+        ``tests/integration/test_post_properties.py``.
+        """
         value_str = self._encode_item(item)
+        last = self._v2_last_rank()
         for attempt in range(_V2_MAX_RANK_RETRIES):
-            ranks = self._v2_ensure_rank_cache(force=(attempt > 0))
-            last = ranks[-1] if ranks else None
             candidate = fi.generate_key_between(last, None)
             if len(candidate) > _V2_RANK_MAX_LEN:
                 raise RuntimeError(
@@ -1018,12 +1514,16 @@ class ListProperty:
                 name=self._v2_item_name(candidate),
                 value=value_str,
             ):
-                ranks.append(candidate)
-                self._v2_touch_metadata()
+                if self._v2_rank_cache is not None:
+                    self._v2_rank_cache.append(candidate)
+                self._v2_touch_metadata(count_delta=1)
                 return
-            # Collision: another writer took this rank between our cache
-            # load and the write. Force-reread on the next attempt so the
-            # regenerated key is based on the current actual last rank.
+            # Collision: another writer took this rank between our read
+            # and the write. Re-read the last rank for the next attempt --
+            # NOT `candidate` itself, since the collision means someone
+            # else's row is now there, not necessarily the new last one.
+            if attempt < _V2_MAX_RANK_RETRIES - 1:
+                last = self._v2_last_rank()
         raise RuntimeError(
             f"list '{self.name}' append: too many rank collisions, retry later"
         )
@@ -1034,7 +1534,7 @@ class ListProperty:
             raise RuntimeError("No database connection available")
 
         self._maybe_lazy_migrate()
-        if self._is_v2():
+        if self._dispatch_and_stash() == 2:
             self._v2_append(item)
             return
 
@@ -1057,14 +1557,91 @@ class ListProperty:
             f"append(): Stored item at '{item_property_name}' with value: {item_str}"
         )
 
-        # Update metadata. `length` here is derived from len(self), which
-        # reads the metadata cache -- see the class docstring's note on the
-        # residual this leaves. What _save_metadata() guarantees is only
-        # that nothing ELSE about the stored row is reverted by this write.
-        self._save_metadata({"length": length + 1}, create_if_absent=False)
+        # Update metadata with a DELTA under the compare-and-swap, not an
+        # absolute `length + 1` computed from the cache -- `length` above
+        # (used for the item's storage POSITION) is still cache-derived,
+        # which is the KNOWN RESIDUAL the class docstring documents and
+        # this does not fix. What this closes is the metadata VALUE: a
+        # length_delta merges onto whatever count is freshly read under
+        # the CAS, so a retained instance's stale `length` no longer
+        # overwrites a concurrent writer's more-current one.
+        self._save_metadata({}, length_delta=1, create_if_absent=False)
+
+    def _v2_extend(self, items: list[Any]) -> None:
+        """Phase 9B: one last-rank read for the WHOLE batch, then n
+        conditional creates and a single metadata touch -- not n calls to
+        ``append()``, which would each pay their own last-rank read.
+
+        Collision handling generalizes ``_v2_append()``'s per-item retry:
+        on a collision at item i, the items from i onward are re-keyed
+        against a freshly re-read last rank and retried; items before i
+        already landed and are not retried. ``count_delta`` covers exactly
+        the items that landed, even on the raise path (a partial batch is
+        possible on exhausted retries, same as a partial ``extend()`` via
+        the old per-item loop would have left).
+
+        Same cache discipline as ``_v2_append()``: created ranks are
+        appended to ``self._v2_rank_cache`` IF it is already warm, never
+        loading a cold one.
+        """
+        last = self._v2_last_rank()
+        remaining = items
+        created = 0
+        created_ranks: list[str] = []
+        for attempt in range(_V2_MAX_RANK_RETRIES):
+            if not remaining:
+                break
+            candidates = fi.generate_n_keys_between(last, None, len(remaining))
+            collided_at = None
+            for i, (candidate, item) in enumerate(zip(candidates, remaining, strict=True)):
+                if len(candidate) > _V2_RANK_MAX_LEN:
+                    raise RuntimeError(
+                        f"list '{self.name}' rank key exceeded {_V2_RANK_MAX_LEN} "
+                        f"chars -- run compact() to rebalance"
+                    )
+                item_db = get_property(self.config)
+                if not item_db.create_if_not_exists(
+                    actor_id=self.actor_id,
+                    name=self._v2_item_name(candidate),
+                    value=self._encode_item(item),
+                ):
+                    # Collision: another writer took this rank. The items
+                    # before it already landed; re-key from here.
+                    collided_at = i
+                    break
+                created += 1
+                created_ranks.append(candidate)
+                last = candidate
+            if collided_at is None:
+                remaining = []
+                break
+            remaining = remaining[collided_at:]
+            if attempt < _V2_MAX_RANK_RETRIES - 1:
+                last = self._v2_last_rank()
+        if created_ranks and self._v2_rank_cache is not None:
+            self._v2_rank_cache.extend(created_ranks)
+        if created:
+            self._v2_touch_metadata(count_delta=created)
+        if remaining:
+            raise RuntimeError(
+                f"list '{self.name}' extend: too many rank collisions, retry later"
+            )
 
     def extend(self, items: list[Any]) -> None:
-        """Add multiple items to end of list."""
+        """Add multiple items to end of list.
+
+        v2: one last-rank read for the whole batch (see ``_v2_extend()``),
+        not one per item. v1: unchanged, a loop over ``append()`` --
+        Phase 9B does not touch the v1 path.
+        """
+        if not items:
+            return
+
+        self._maybe_lazy_migrate()
+        if self._dispatch_and_stash() == 2:
+            self._v2_extend(items)
+            return
+
         for item in items:
             self.append(item)
 
@@ -1140,8 +1717,23 @@ class ListProperty:
         cache here would classify the LIVE rows as foreign and delete the
         list. When there is no meta row at all -- the list is gone, and
         both namespaces are residue by definition -- both are swept.
+
+        Skips its range query (Phase 12: thoughts/plans/2026-08-20-v2-
+        positional-access-cost.md) when the list's own metadata carries
+        ``format_ever_changed: False`` -- set on every freshly created
+        list, and the ONLY way residue can exist in the other namespace is
+        a format-changing rewrite (``migrate_to_v2()``/the downgrade
+        script), both of which set the flag ``True`` in the SAME metadata
+        write as the format flip. A list that has never crossed formats
+        therefore cannot have residue to find, and on an all-v2 fleet this
+        is the common case: the range query this skips would always come
+        back empty. Metadata that predates this flag (absent key) cannot
+        rule anything out and always gets the full sweep -- same as every
+        list did before this optimisation existed.
         """
-        stored = self._read_meta_row()
+        stored, _ = self._read_meta_row()
+        if stored is not None and stored.get("format_ever_changed") is False:
+            return 0
         if stored is None:
             names = self._v1_item_names_in_range() + self._v2_item_names_in_range()
         elif int(stored.get("format", 1) or 1) == 2:
@@ -1149,14 +1741,9 @@ class ListProperty:
         else:
             names = self._v2_item_names_in_range()
 
-        for name in names:
-            del_db = get_property(self.config)
-            if not del_db.set(actor_id=self.actor_id, name=name, value=None):
-                raise RuntimeError(
-                    f"list item write failed for '{self.name}' during "
-                    f"sweep_foreign_format_rows()"
-                )
         if names:
+            db = get_property(self.config)
+            db.batch_delete(actor_id=self.actor_id, names=names)
             logger.info(
                 f"List '{self.name}' (actor {self.actor_id}): swept "
                 f"{len(names)} row(s) left by an interrupted format change"
@@ -1184,25 +1771,25 @@ class ListProperty:
         self.sweep_foreign_format_rows()
 
         if self._is_v2():
-            for item_name in self._v2_item_names_in_range():
-                item_db = get_property(self.config)
-                if not item_db.set(actor_id=self.actor_id, name=item_name, value=None):
-                    raise RuntimeError(
-                        f"list item write failed for '{self.name}' during clear()"
-                    )
+            item_names = self._v2_item_names_in_range()
+            if item_names:
+                get_property(self.config).batch_delete(
+                    actor_id=self.actor_id, names=item_names
+                )
             self._replace_metadata(self._create_default_metadata_v2())
             self._v2_rank_cache = []
             return
 
         length = len(self)
 
-        # Delete all item properties
-        for i in range(length):
-            item_db = get_property(self.config)
-            if not item_db.set(
-                actor_id=self.actor_id, name=self._get_item_property_name(i), value=None
-            ):
-                raise RuntimeError(f"list item write failed for '{self.name}'[{i}]")
+        # Delete all item properties -- one batched operation (Phase 12:
+        # thoughts/plans/2026-08-20-v2-positional-access-cost.md) instead
+        # of `length` serial round trips.
+        item_names = [self._get_item_property_name(i) for i in range(length)]
+        if item_names:
+            get_property(self.config).batch_delete(
+                actor_id=self.actor_id, names=item_names
+            )
 
         # Reset metadata
         self._replace_metadata(self._create_default_metadata())
@@ -1227,12 +1814,11 @@ class ListProperty:
         self.sweep_foreign_format_rows()
 
         if self._is_v2():
-            for item_name in self._v2_item_names_in_range():
-                item_db = get_property(self.config)
-                if not item_db.set(actor_id=self.actor_id, name=item_name, value=None):
-                    raise RuntimeError(
-                        f"list item write failed for '{self.name}' during delete()"
-                    )
+            item_names = self._v2_item_names_in_range()
+            if item_names:
+                get_property(self.config).batch_delete(
+                    actor_id=self.actor_id, names=item_names
+                )
             meta_db = get_property(self.config)
             if not meta_db.set(
                 actor_id=self.actor_id, name=self._get_meta_property_name(), value=None
@@ -1244,13 +1830,13 @@ class ListProperty:
 
         length = len(self)
 
-        # Delete all item properties
-        for i in range(length):
-            item_db = get_property(self.config)
-            if not item_db.set(
-                actor_id=self.actor_id, name=self._get_item_property_name(i), value=None
-            ):
-                raise RuntimeError(f"list item write failed for '{self.name}'[{i}]")
+        # Delete all item properties -- one batched operation instead of
+        # `length` serial round trips (Phase 12).
+        item_names = [self._get_item_property_name(i) for i in range(length)]
+        if item_names:
+            get_property(self.config).batch_delete(
+                actor_id=self.actor_id, names=item_names
+            )
 
         # Delete metadata
         meta_db = get_property(self.config)
@@ -1262,10 +1848,18 @@ class ListProperty:
         # Clear cache
         self._meta_cache = None
 
-    def to_list(self) -> list[Any]:
+    def to_list(self, consistent: bool = True) -> list[Any]:
         """Load entire list into memory.
 
         v2: exactly one range query, regardless of length.
+
+        Args:
+            consistent: v2 only, ignored under v1 (which never issues a
+                range read here). ``False`` halves DynamoDB read capacity
+                (see ``get_range``'s ``consistent_read`` docstring) at the
+                cost of possibly not seeing a just-landed write, including
+                this instance's own. No default change -- whether a stale
+                read is acceptable is an application decision.
 
         Raises:
             ListCorruptionError: v1 only -- a row within ``[0, len(self))``
@@ -1275,7 +1869,7 @@ class ListProperty:
                 could disagree with.
         """
         if self._is_v2():
-            return self._v2_to_list()
+            return self._v2_to_list(consistent=consistent)
 
         length = len(self)
         result = []
@@ -1285,18 +1879,21 @@ class ListProperty:
 
         return result
 
-    def slice(self, start: int, end: int) -> list[Any]:
+    def slice(self, start: int, end: int, consistent: bool = True) -> list[Any]:
         """Load a range of items efficiently.
 
         v2: exactly one range query (the full list), sliced in memory --
         still one query, not one per requested item.
+
+        Args:
+            consistent: see ``to_list()``.
 
         Raises:
             ListCorruptionError: v1 only -- a row within the requested
                 range is missing from storage.
         """
         if self._is_v2():
-            values = self._v2_to_list()
+            values = self._v2_to_list(consistent=consistent)
             length = len(values)
             if start < 0:
                 start = max(0, length + start)
@@ -1324,7 +1921,7 @@ class ListProperty:
 
         return result
 
-    def to_indexed_list(self) -> list[tuple[int, Any]]:
+    def to_indexed_list(self, consistent: bool = True) -> list[tuple[int, Any]]:
         """Load the list as ``(index, item)`` pairs.
 
         This is the contract the ``/items`` REST accessor documents:
@@ -1341,10 +1938,13 @@ class ListProperty:
         rank internally. This is exactly the divergence this method's
         contract was written to keep correct.
 
+        Args:
+            consistent: see ``to_list()``.
+
         Raises:
             ListCorruptionError: v1 only -- see ``to_list()``.
         """
-        return list(enumerate(self.to_list()))
+        return list(enumerate(self.to_list(consistent=consistent)))
 
     def _v2_pop(self, index: int) -> Any:
         """Read and remove the item at ``index``.
@@ -1390,7 +1990,7 @@ class ListProperty:
                 actor_id=self.actor_id, name=name, value=item_str
             ):
                 del ranks[resolved]
-                self._v2_touch_metadata()
+                self._v2_touch_metadata(count=len(ranks))
                 return item
             # Value changed or row already gone -- re-resolve and retry.
         raise RuntimeError(
@@ -1399,24 +1999,24 @@ class ListProperty:
 
     def pop(self, index: int = -1) -> Any:
         """Remove and return item at index (default last)."""
-        # v2 dispatch comes FIRST: `len(self)` is served from the rank cache,
-        # which an instance that has seen an empty list keeps until something
-        # forces a reload. Checking it here would raise "pop from empty list"
-        # against a list another writer has since appended to. _v2_pop()
-        # forces the refresh and makes its own empty check against that.
-        if self._is_v2():
-            return self._v2_pop(index)
-
-        if len(self) == 0:
-            raise IndexError("pop from empty list")
-
+        # v2 dispatch comes FIRST, and via a FRESH read (_dispatch_and_stash(),
+        # not the cache -- row 9c): `len(self)` below is served from the
+        # rank cache, which an instance that has seen an empty list keeps
+        # until something forces a reload, and checking it before dispatch
+        # would raise "pop from empty list" against a list another writer
+        # has since appended to. _v2_pop() forces its own refresh and makes
+        # its own empty check against that.
+        #
         # Deliberately NOT calling _maybe_lazy_migrate() here: migration
         # closes holes in flight, so triggering it from pop() would make a
         # corrupted v1 list silently self-repair instead of raising, which
         # is the Phase 2/3 contract. The v1 branch below reaches
         # __delitem__, which triggers migration exactly as it always has.
-        if self._is_v2():
+        if self._dispatch_and_stash() == 2:
             return self._v2_pop(index)
+
+        if len(self) == 0:
+            raise IndexError("pop from empty list")
 
         if index == -1:
             index = len(self) - 1
@@ -1451,7 +2051,7 @@ class ListProperty:
                 value=value_str,
             ):
                 ranks.insert(pos, candidate)
-                self._v2_touch_metadata()
+                self._v2_touch_metadata(count_delta=1)
                 return
             # Collision: force a fresh read (recomputing neighbours at this
             # position) on the next attempt.
@@ -1465,7 +2065,7 @@ class ListProperty:
             raise RuntimeError("No database connection available")
 
         self._maybe_lazy_migrate()
-        if self._is_v2():
+        if self._dispatch_and_stash() == 2:
             self._v2_insert(index, item)
             return
 
@@ -1512,8 +2112,9 @@ class ListProperty:
         ):
             raise RuntimeError(f"list item write failed for '{self.name}'[{index}]")
 
-        # Update metadata
-        self._save_metadata({"length": length + 1}, create_if_absent=False)
+        # DELTA under the compare-and-swap, not an absolute `length + 1`
+        # computed from the cache -- see append()'s identical comment.
+        self._save_metadata({}, length_delta=1, create_if_absent=False)
 
     def _v2_remove(self, value: Any) -> None:
         """Delete the first item equal to ``value``, by RANK.
@@ -1547,7 +2148,11 @@ class ListProperty:
                     del ranks[i]
                 else:  # pragma: no cover -- defensive
                     self._v2_rank_cache = None
-                self._v2_touch_metadata()
+                # len(pairs) - 1, not len(ranks): the defensive branch
+                # above can leave the cache None, but `pairs` (this
+                # attempt's fresh _v2_load_full() read) always reflects
+                # exactly one fewer item than what was just deleted.
+                self._v2_touch_metadata(count=len(pairs) - 1)
                 return
             else:
                 # Scanned every item without a match: the value genuinely
@@ -1565,7 +2170,7 @@ class ListProperty:
         # scan would make a corrupted list silently self-repair instead of
         # raising. The v1 scan below reaches __delitem__, which migrates
         # exactly as it always has.
-        if self._is_v2():
+        if self._dispatch_and_stash() == 2:
             self._v2_remove(value)
             return
 
@@ -1606,9 +2211,10 @@ class ListProperty:
         """
         if self._is_v2():
             # One range query for the whole list, then scan in memory. Going
-            # through self[i] would cost two queries PER ITEM now that
-            # positional reads refresh the rank map, and it would compare
-            # against a list that can shift under the loop.
+            # through self[i] would cost a whole-list range query PER ITEM
+            # (O(n) total) now that positional reads refresh the rank map,
+            # and it would compare against a list that can shift under the
+            # loop.
             values = self._v2_to_list()
             begin, end = self._normalize_search_bounds(start, stop, len(values))
             for i in range(begin, end):
@@ -1632,6 +2238,268 @@ class ListProperty:
             if item == value:
                 count += 1
         return count
+
+    def find(self, identity_key: str, value: Any, consistent: bool = True) -> Any | None:
+        """Return the first item whose ``identity_key`` field equals
+        ``value``, or ``None`` if there is no match.
+
+        One whole-list read (``to_list()``), matched in memory -- the same
+        query cost as any other full scan, just without every caller
+        writing the scan loop by hand. Universal across v1 and v2.
+
+        Items that are not a dict, or that lack ``identity_key`` entirely,
+        never match (a missing field is not the same as the field being
+        present with value ``None``) and never raise.
+
+        Args:
+            identity_key: field name to match on -- same parameter name as
+                ``verify()``'s duplicate-identity check.
+            value: value to match.
+            consistent: see ``to_list()``. Ignored under v1.
+        """
+        for item in self.to_list(consistent=consistent):
+            if isinstance(item, dict) and identity_key in item and item[identity_key] == value:
+                return item
+        return None
+
+    def find_all(self, identity_key: str, value: Any, consistent: bool = True) -> list[Any]:
+        """Return every item whose ``identity_key`` field equals ``value``
+        -- see ``find()``. A list a caller with duplicate identities (see
+        ``verify()``'s ``duplicate_identities``) needs to see all of, not
+        just the first."""
+        return [
+            item
+            for item in self.to_list(consistent=consistent)
+            if isinstance(item, dict) and identity_key in item and item[identity_key] == value
+        ]
+
+    def items_with_handles(self) -> list[tuple[ListItemHandle, Any]]:
+        """One range read -> ``[(handle, decoded_item), ...]``, in list
+        order.
+
+        **v2 only.** v1 has no rank identity to hand out a handle for --
+        only positional identity, which ``to_indexed_list()`` already
+        serves. Raises on a v1 list, naming ``migrate_to_v2()``.
+
+        **Always strongly consistent**, regardless of Phase 6's
+        ``consistent`` parameter or any application-level default: a
+        handle carries the raw stored bytes, and a conditional write
+        (``set_if_value_equals()``/``delete_if_value_equals()``) checks
+        exactly those bytes. A handle read from a stale replica would fail
+        its condition against a row nobody has actually touched -- the
+        bulk endpoint would then report every item as "concurrently
+        modified" and apply nothing. Same rationale
+        ``_v2_ensure_rank_cache()`` already carries, for the same reason.
+        """
+        if not self._is_v2():
+            raise ValueError(
+                f"items_with_handles() is v2-only -- list '{self.name}' is "
+                f"still v1. Call migrate_to_v2() first."
+            )
+        return self._v2_items_with_handles()
+
+    def _v2_items_with_handles(self) -> list[tuple[ListItemHandle, Any]]:
+        """Same read as ``items_with_handles()``, without the ``_is_v2()``
+        format check.
+
+        For callers that already dispatched fresh via
+        ``_dispatch_and_stash() == 2`` themselves (``remove_where()``,
+        ``update_where()``): re-checking via ``_is_v2()`` here would
+        consult ``_load_metadata()``'s cache-consulting path again,
+        undoing the whole point of dispatching fresh in the first place --
+        see ``_dispatch_and_stash()``'s docstring. Not for direct use;
+        callers must already know the list is v2.
+        """
+        pairs = self._v2_load_full()  # default consistent=True, no override
+        return [
+            (ListItemHandle(rank=rank, raw_value=raw_value), self._decode_item(raw_value))
+            for rank, raw_value in pairs
+        ]
+
+    def delete_by_handle(self, handle: ListItemHandle) -> bool:
+        """Delete exactly the item ``handle`` addresses, single-shot.
+
+        **v2 only** -- raises ``ValueError`` naming ``migrate_to_v2()`` on a
+        v1 list. Uses ``delete_if_value_equals()`` against the handle's raw
+        stored bytes: no re-scan, no retry. If the row has since changed or
+        vanished, the condition fails and this returns ``False`` -- a
+        failed condition IS the answer, not something to retry. A handle
+        pins the exact bytes it read; retrying would mean "delete whatever
+        is there now", which is exactly the bug class handles exist to
+        rule out.
+
+        Dispatches on a fresh meta-row read (``_dispatch_and_stash()``),
+        not the cached format belief -- this is a mutator, and a stale
+        cache here would either wrongly refuse a v2 list or, worse,
+        silently no-op against storage the list has moved away from.
+        """
+        if self._dispatch_and_stash() != 2:
+            raise ValueError(
+                f"delete_by_handle() is v2-only -- list '{self.name}' is "
+                f"still v1. Call migrate_to_v2() first."
+            )
+        db = get_property(self.config)
+        if not db.delete_if_value_equals(
+            actor_id=self.actor_id,
+            name=self._v2_item_name(handle.rank),
+            value=handle.raw_value,
+        ):
+            return False
+        # Only drop the rank from an already-warm cache -- never load a
+        # cold one, matching _v2_append()/_v2_extend()'s discipline.
+        if self._v2_rank_cache is not None:
+            try:
+                self._v2_rank_cache.remove(handle.rank)
+            except ValueError:  # pragma: no cover -- defensive
+                pass
+        # count_delta, not an absolute count: this call never read the
+        # whole list, so it has no counted truth to write, only a
+        # relative change to merge onto whatever is currently stored.
+        self._v2_touch_metadata(count_delta=-1)
+        return True
+
+    def update_by_handle(self, handle: ListItemHandle, item: Any) -> bool:
+        """Replace exactly the item ``handle`` addresses with ``item``,
+        single-shot.
+
+        **v2 only** -- raises ``ValueError`` naming ``migrate_to_v2()`` on a
+        v1 list. Uses ``set_if_value_equals()`` against the handle's raw
+        stored bytes: no re-scan, no retry, same rationale as
+        ``delete_by_handle()``. Returns ``False`` if the row has since
+        changed or vanished.
+
+        The item count is unaffected, so unlike ``delete_by_handle()`` this
+        does not touch ``count_hint`` at all -- only ``updated_at`` moves.
+        """
+        if self._dispatch_and_stash() != 2:
+            raise ValueError(
+                f"update_by_handle() is v2-only -- list '{self.name}' is "
+                f"still v1. Call migrate_to_v2() first."
+            )
+        db = get_property(self.config)
+        if not db.set_if_value_equals(
+            actor_id=self.actor_id,
+            name=self._v2_item_name(handle.rank),
+            expected=handle.raw_value,
+            value=self._encode_item(item),
+        ):
+            return False
+        self._v2_touch_metadata()
+        return True
+
+    def remove_where(
+        self, identity_key: str, value: Any, *, first_only: bool = False
+    ) -> list[Any]:
+        """Remove every item whose ``identity_key`` field equals ``value``,
+        returning the removed items' decoded values, in removal order.
+        ``len(result)`` is the count; pass ``first_only=True`` to stop
+        after the first match (0 or 1 removed).
+
+        Returning the actual values (not just a count) lets a caller that
+        needs to know exactly what was removed -- notably
+        ``NotifyingListProperty.remove_where()``, which raises one diff
+        per removed item -- read it off this call instead of taking a
+        separate snapshot and assuming a prefix of it lines up with the
+        count. That prefix assumption breaks under a concurrent mutation
+        between the two reads; this return value can't drift, because it
+        names exactly the rows this call itself removed.
+
+        Universal across v1 and v2, dispatched fresh (``_dispatch_and_stash()``,
+        not the cached format belief -- same row-9c rationale as every
+        other mutator):
+
+        - v2: locates matches via ``_v2_items_with_handles()`` (one range
+          read, already known-v2 from the dispatch above -- see that
+          method's docstring for why this isn't the public
+          ``items_with_handles()``), then deletes each with
+          ``delete_by_handle()``. A match lost to a concurrent mutation
+          between the read and its delete is simply not counted -- no
+          retry, no rescan; see ``delete_by_handle()``.
+        - v1: locates matches by positional scan, then deletes them via
+          ``__delitem__`` in **descending index order**. Ascending order
+          would shift every later match onto the wrong index as each
+          earlier delete closes a hole.
+        """
+        if self._dispatch_and_stash() == 2:
+            matches = self._v2_items_with_handles()
+            removed: list[Any] = []
+            for handle, item in matches:
+                if (
+                    isinstance(item, dict)
+                    and identity_key in item
+                    and item[identity_key] == value
+                ):
+                    if self.delete_by_handle(handle):
+                        removed.append(item)
+                        if first_only:
+                            break
+            return removed
+
+        # Capture the values during the SAME scan that finds the indices
+        # -- a second `self[i]` read here could return a different value
+        # than the one that matched (and gets deleted) if a concurrent
+        # writer lands between the two reads, which is exactly the drift
+        # class this method's return value exists to preclude.
+        matched = [
+            (i, item)
+            for i, item in enumerate(self)
+            if isinstance(item, dict) and identity_key in item and item[identity_key] == value
+        ]
+        if first_only and matched:
+            matched = matched[:1]
+        for i, _ in sorted(matched, reverse=True):
+            del self[i]
+        return [item for _, item in matched]
+
+    def update_where(
+        self, identity_key: str, value: Any, item: Any, *, first_only: bool = False
+    ) -> list[Any]:
+        """Replace every item whose ``identity_key`` field equals ``value``
+        with ``item``, returning the **pre-update** values of the items
+        actually updated, in update order. ``len(result)`` is the count;
+        pass ``first_only=True`` to stop after the first match.
+
+        Same rationale as ``remove_where()`` for returning values instead
+        of a count -- ``NotifyingListProperty.update_where()`` needs the
+        exact pre-update value of each row it updated to raise an accurate
+        ``old_item`` diff, not a value assumed from a separately-taken
+        snapshot.
+
+        Same v1/v2 split as ``remove_where()``, using ``update_by_handle()``
+        under v2 and positional ``self[i] = item`` under v1 -- index order
+        does not matter here, unlike ``remove_where()``: an update never
+        shifts a later index the way a delete does.
+        """
+        if self._dispatch_and_stash() == 2:
+            matches = self._v2_items_with_handles()
+            updated: list[Any] = []
+            for handle, existing in matches:
+                if (
+                    isinstance(existing, dict)
+                    and identity_key in existing
+                    and existing[identity_key] == value
+                ):
+                    if self.update_by_handle(handle, item):
+                        updated.append(existing)
+                        if first_only:
+                            break
+            return updated
+
+        # Same capture-during-scan rationale as remove_where()'s v1 branch:
+        # the returned pre-update values must be the ones the match saw,
+        # not whatever a second positional read happens to find.
+        matched = [
+            (i, existing)
+            for i, existing in enumerate(self)
+            if isinstance(existing, dict)
+            and identity_key in existing
+            and existing[identity_key] == value
+        ]
+        if first_only and matched:
+            matched = matched[:1]
+        for i, _ in matched:
+            self[i] = item
+        return [existing for _, existing in matched]
 
     def _identity_of(self, raw_value: str, identity_key: str) -> Any:
         """This row's value for ``identity_key``, or ``None`` if it has none.
@@ -1716,24 +2584,41 @@ class ListProperty:
               tooling should gate on this, not on ``healthy``, which also
               goes false for duplicate identities that ``compact()`` will
               not touch
+            - count_hint: the stored advisory count (``None`` if this
+              list's metadata predates ``count_hint`` entirely)
+            - count_hint_drift: ``count_hint - length`` (``None`` when
+              ``count_hint`` is ``None``). Informational, NOT part of
+              ``healthy`` -- see the class docstring for the documented
+              drift bound; nonzero here is expected under concurrent
+              mutation, not corruption
             - healthy: True iff no rank key is within the rebalance
               warning zone of the cap and no identity is repeated
         """
         pairs = self._v2_load_full()
         max_rank_length = max((len(rank) for rank, _ in pairs), default=0)
+        length = len(pairs)
 
         adjacent_duplicates: list[tuple[int, int]] = []
         for i in range(len(pairs) - 1):
             if pairs[i][1] == pairs[i + 1][1]:
                 adjacent_duplicates.append((i, i + 1))
 
+        stored, _ = self._read_meta_row()
+        stored = stored or {}
+        count_hint = stored.get("count_hint")
+        count_hint = count_hint if isinstance(count_hint, int) else None
+
         report: dict[str, Any] = {
             "format": 2,
-            "length": len(pairs),
+            "length": length,
             "max_rank_length": max_rank_length,
             "adjacent_duplicates": adjacent_duplicates,
             "foreign_format_rows": len(self._v1_item_names_in_range()),
             "needs_rebalance": max_rank_length >= _V2_RANK_WARNING_LENGTH,
+            "count_hint": count_hint,
+            "count_hint_drift": (
+                count_hint - length if count_hint is not None else None
+            ),
             "healthy": max_rank_length < _V2_RANK_WARNING_LENGTH,
         }
         duplicates: dict[Any, list[int]] | None = None
@@ -1996,6 +2881,10 @@ class ListProperty:
                     )
 
         self._v2_rank_cache = sorted(written_ranks)
+        # compact() just counted every row it rewrote -- write the exact
+        # truth back to count_hint rather than leaving whatever drift
+        # accumulated before this repair ran.
+        self._save_metadata({"count_hint": n})
         return report
 
     def compact(self, allow_reverted: bool = False) -> dict[str, Any]:
@@ -2333,7 +3222,7 @@ class ListProperty:
         # everything else, and the v2 rows are invisible to exists() and
         # list_all() (which key off the meta row) but WOULD be read as items
         # by the next list created under this name.
-        stored_meta = self._read_meta_row()
+        stored_meta, _ = self._read_meta_row()
         if stored_meta is None:
             logger.warning(
                 f"List '{self.name}' (actor {self.actor_id}) was deleted "
@@ -2373,6 +3262,12 @@ class ListProperty:
         meta = dict(stored_meta)
         meta.pop("length", None)
         meta["format"] = 2
+        # Phase 12 (thoughts/plans/2026-08-20-v2-positional-access-cost.md):
+        # this list has now crossed formats, so sweep_foreign_format_rows()
+        # can no longer skip its range query on the strength of this
+        # metadata -- an interrupted step 6 below would leave v1 residue a
+        # skipped sweep would never find.
+        meta["format_ever_changed"] = True
         self._replace_metadata(meta)
         self._v2_rank_cache = list(ranks)
 

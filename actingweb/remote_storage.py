@@ -394,8 +394,46 @@ class RemotePeerStore:
             list_attr.insert(data["index"], data["item"])
             return {"operation": "insert", "index": data["index"], "success": True}
 
-        elif operation == "update" and "item" in data and "index" in data:
-            idx = data["index"]
+        elif operation == "update" and "item" in data and ("index" in data or "old_item" in data):
+            idx = data.get("index")
+            old_item = data.get("old_item")
+            matches: list[int] = []
+            # Key presence, not `is not None`: JSON null is a legal
+            # pre-update value, and a diff carrying "old_item": null is
+            # still value-addressed.
+            if "old_item" in data:
+                # Locate by value first when the sender told us what the
+                # pre-update value was (update_where()/a value-addressed
+                # single-item update always do). This side's list may have
+                # drifted from the index the sender's snapshot saw -- other
+                # diffs applied since, or a v2 peer whose positions are
+                # advisory -- so a value match is the more reliable
+                # identity than a bare index. Only trust it when it's
+                # unique: if two or more rows currently hold that value,
+                # which one the sender meant is genuinely ambiguous, so
+                # fall through to the index instead of guessing.
+                matches = [i for i, existing in enumerate(list_attr) if existing == old_item]
+                if len(matches) == 1:
+                    i = matches[0]
+                    list_attr[i] = data["item"]
+                    return {"operation": "update", "index": i, "success": True}
+            # A value-addressed update (no index in the diff at all) that
+            # found no unique match has nothing left to fall back to.
+            # That is a deliberate no-write (better than guessing a row),
+            # but it means this replica just diverged from the source --
+            # callers discard the result dict, so the WARNING is the only
+            # signal an operator gets that a resync is needed.
+            if idx is None:
+                logger.warning(
+                    "Dropping value-addressed update for list '%s': "
+                    "old_item matched %d local rows (need exactly 1) and the "
+                    "diff carries no index to fall back on. This replica is "
+                    "now out of sync with the source list; a resync of the "
+                    "subscription will bring it back in line.",
+                    list_name,
+                    len(matches),
+                )
+                return {"operation": "update", "error": "item not found or ambiguous"}
             if 0 <= idx < len(list_attr):
                 list_attr[idx] = data["item"]
                 return {"operation": "update", "index": idx, "success": True}

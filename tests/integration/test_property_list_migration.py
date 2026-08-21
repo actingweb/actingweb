@@ -510,6 +510,13 @@ class TestConcurrentWriteDuringMigration:
     item lived in v2 rows nothing read, and migration's step 6 deletes the
     v1 rows -- the list came back EMPTY, with no error. Against real storage
     on both backends, because the failure is a storage-level one.
+
+    Phase 9 of thoughts/plans/2026-08-20-v2-positional-access-cost.md closed
+    a second, related gap on top of this: dispatch itself now does a FRESH
+    read of the meta row on every mutation instead of trusting a cached
+    belief, so the retained instance's OWN write below lands in the CURRENT
+    (v2) storage immediately rather than being lost in dead v1 space until
+    some later operation self-corrects.
     """
 
     def test_concurrent_append_does_not_revert_the_migration(self, test_actor):
@@ -529,13 +536,17 @@ class TestConcurrentWriteDuringMigration:
         migrator = ListProperty(test_actor.id, "concurrent_append", test_actor.config)
         assert migrator.migrate_to_v2()["migrated"] is True
 
-        # ...and the retained instance writes, still believing it is v1.
+        # ...and the retained instance writes, still believing it is v1 --
+        # but dispatch reads the row fresh, so this lands as a real v2 item.
         retained.append("d")
 
         fresh = ListProperty(test_actor.id, "concurrent_append", test_actor.config)
         assert fresh.storage_format() == 2, "the format flip must survive the write"
-        assert fresh.to_list() == ["a", "b", "c"], "no migrated item may be lost"
+        assert fresh.to_list() == ["a", "b", "c", "d"], (
+            "every migrated item AND the stale instance's own write must survive"
+        )
         assert fresh.get_description() == "kept across the migration"
+        assert fresh.verify()["foreign_format_rows"] == 0
 
     def test_a_v2_metadata_row_never_acquires_a_length(self, test_actor):
         """`length` is authoritative for v1 and absent for v2. A stale v1
@@ -560,9 +571,24 @@ class TestConcurrentWriteDuringMigration:
         assert "length" not in meta
 
     def test_concurrent_delete_is_not_undone(self, test_actor):
-        """An absent metadata row means a concurrent delete() won.
-        Recreating it from a stale cache resurrects the list -- and
-        ``exists()``/``list_all()`` key off exactly that row."""
+        """A deleted list's absent row is not resurrected as a CORRUPT one.
+
+        Before Phase 9, dispatch on an absent row went through the
+        instance's CACHED belief, so a retained v1-cached instance took the
+        v1 append path, whose ``create_if_absent=False`` declined to write
+        metadata back -- but v1 ``append()`` writes its item row FIRST, so
+        this used to leave an invisible orphan v1 item row with no meta row
+        pointing at it (worse than either alternative: the next list
+        created under this name would silently adopt it).
+
+        Phase 9's fresh dispatch treats an absent row uniformly as "create
+        as v2" -- the same choice the v2 metadata touch already makes
+        deliberately for a v2 instance racing a delete() ("a delete()
+        racing an append() leaves a one-item list rather than nothing").
+        This pins that the resurrected list is COHERENT: format v2, no
+        `length` key, and the one item actually readable -- not a v1-shaped
+        row over a v2 item, and not an invisible orphan.
+        """
         _seed_v1_list(
             test_actor.config, test_actor.id, "concurrent_delete", ["a", "b", "c"]
         )
@@ -573,13 +599,16 @@ class TestConcurrentWriteDuringMigration:
 
         retained.append("d")
 
-        assert (
-            get_property(test_actor.config).get(
-                actor_id=test_actor.id, name="list:concurrent_delete-meta"
-            )
-            is None
+        raw_meta = get_property(test_actor.config).get(
+            actor_id=test_actor.id, name="list:concurrent_delete-meta"
         )
-        assert "concurrent_delete" not in test_actor.property_lists.list_all()
+        assert raw_meta is not None
+        meta = json.loads(raw_meta)
+        assert meta["format"] == 2
+        assert "length" not in meta
+        fresh = ListProperty(test_actor.id, "concurrent_delete", test_actor.config)
+        assert fresh.to_list() == ["d"]
+        assert "concurrent_delete" in test_actor.property_lists.list_all()
 
 
 class TestInterruptedMigrationConverges:
@@ -602,8 +631,8 @@ class TestInterruptedMigrationConverges:
 
         real = ListProperty._replace_metadata  # noqa: SLF001
 
-        def _flip_then_die(self, meta):
-            real(self, meta)
+        def _flip_then_die(self, meta, *, expected_raw=None):
+            real(self, meta, expected_raw=expected_raw)
             raise _Interrupt
 
         ListProperty._replace_metadata = _flip_then_die  # noqa: SLF001

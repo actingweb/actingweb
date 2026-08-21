@@ -5,7 +5,7 @@ from typing import Any
 
 from pynamodb.attributes import UnicodeAttribute
 from pynamodb.constants import PAY_PER_REQUEST_BILLING_MODE
-from pynamodb.exceptions import DeleteError, DoesNotExist, PutError
+from pynamodb.exceptions import DeleteError, DoesNotExist, PutError, UpdateError
 from pynamodb.indexes import AllProjection, GlobalSecondaryIndex
 from pynamodb.models import Model
 
@@ -53,7 +53,15 @@ class Property(Model):
         # Optional PynamoDB configuration attributes
         connect_timeout_seconds: int | None = None
         read_timeout_seconds: int | None = None
-        max_retry_attempts: int | None = None
+        # NOT None, unlike its siblings above: Connection.__init__ treats a
+        # None max_retry_attempts as "use pynamodb.settings' default" (3),
+        # but BatchWrite.commit()'s unprocessed-item retry loop -- used by
+        # batch_delete() (Phase 12: thoughts/plans/2026-08-20-v2-
+        # positional-access-cost.md) -- reads Meta.max_retry_attempts
+        # directly with no such fallback, and `retries >= None` raises
+        # TypeError. An explicit int here is required for that retry loop
+        # to work at all, not merely a style preference.
+        max_retry_attempts: int = 3
         max_pool_connections: int | None = None
         extra_headers: dict[str, str] | None = None
         aws_access_key_id: str | None = None
@@ -486,6 +494,7 @@ class DbProperty:
         lower: str | None = None,
         upper: str | None = None,
         keys_only: bool = False,
+        consistent_read: bool = True,
     ) -> dict[str, str]:
         """Range-read rows whose name is in ``[lower, upper]``.
 
@@ -510,7 +519,7 @@ class DbProperty:
             for item in Property.query(
                 actor_id,
                 range_key_condition=condition,
-                consistent_read=True,
+                consistent_read=consistent_read,
                 attributes_to_get=attributes_to_get,
             ):
                 results[str(item.name)] = "" if keys_only else str(item.value or "")
@@ -564,6 +573,85 @@ class DbProperty:
             raise DbError("property conditional delete", actor_id) from e
         return True
 
+    def set_if_value_equals(
+        self,
+        actor_id: str | None = None,
+        name: str | None = None,
+        expected: Any = None,
+        value: Any = None,
+    ) -> bool:
+        """Conditionally set — see ``DbPropertyProtocol.set_if_value_equals``.
+
+        Same condition-failure-vs-fault distinction as
+        ``delete_if_value_equals``: a differing stored value and a vanished
+        row both fail the equality condition on ``value`` the same way.
+        """
+        if not actor_id or not name or expected is None or value is None:
+            return False
+
+        item = Property(id=actor_id, name=name)
+        try:
+            item.update(
+                actions=[Property.value.set(value)],
+                condition=Property.value == expected,
+            )
+        except UpdateError as e:
+            if e.cause_response_code == "ConditionalCheckFailedException":
+                return False
+            raise DbError("property conditional set", actor_id) from e
+        except Exception as e:
+            raise DbError("property conditional set", actor_id) from e
+        return True
+
+    def get_last_in_range(
+        self, actor_id: str | None = None, lower: str | None = None, upper: str | None = None
+    ) -> str | None:
+        """Bytewise-greatest row name in ``[lower, upper]`` — see
+        ``DbPropertyProtocol.get_last_in_range``.
+
+        ``scan_index_forward=False, limit=1`` reads DynamoDB's natural
+        range-key sort order backwards and stops at the first item — one
+        item's read capacity, not the whole range's.
+        """
+        if not actor_id or lower is None or upper is None:
+            return None
+
+        condition = Property.name.between(lower, upper)
+        try:
+            for item in Property.query(
+                actor_id,
+                range_key_condition=condition,
+                consistent_read=True,
+                scan_index_forward=False,
+                limit=1,
+                attributes_to_get=["name"],
+            ):
+                return str(item.name)
+            return None
+        except Exception as e:
+            raise DbError("property last-in-range read", actor_id) from e
+
+    def batch_delete(
+        self, actor_id: str | None = None, names: list[str] | None = None
+    ) -> None:
+        """Unconditional bulk delete — see ``DbPropertyProtocol.batch_delete``.
+
+        ``Property.batch_write()`` is PynamoDB's ``BatchWrite`` context
+        manager: it chunks at 25 items (``BATCH_WRITE_PAGE_LIMIT``) and
+        retries any items DynamoDB reports as unprocessed, raising
+        ``PutError`` if ``Meta.max_retry_attempts`` is exhausted -- both
+        behaviours come from the pinned PynamoDB version, not hand-rolled
+        here.
+        """
+        if not actor_id or not names:
+            return
+        try:
+            with Property.batch_write() as batch:
+                for name in names:
+                    batch.delete(Property(id=actor_id, name=name))
+        except Exception as e:
+            raise DbError("property batch delete", actor_id) from e
+
 
 class DbPropertyList:
     """
@@ -607,20 +695,38 @@ class DbPropertyList:
         ensure_table(Property if self._use_lookup_table else PropertyLegacy)
 
     def fetch(self, actor_id: str | None = None) -> dict[str, str] | None:
-        """Retrieves the properties of an actor_id from the database"""
+        """Retrieves the PLAIN (non-list) properties of an actor_id from
+        the database.
+
+        Two range-constrained Queries rather than a whole-partition Query
+        with client-side filtering: DynamoDB cannot ``OR`` on a sort key,
+        so excluding the ``list:``-prefixed rows takes a pair of Queries
+        covering everything below and everything above that namespace,
+        instead of paying for (and discarding) every list item row on
+        every plain-property read.
+
+        The upper sentinel is ``"list;"`` (``;`` is 0x3B, the byte right
+        after ``:``), NOT ``"list:~"``: ``~`` is 0x7E, so any list whose
+        NAME starts with a byte above ``~`` -- every non-ASCII list name --
+        would sort after ``"list:~"`` and leak back into this result.
+        ``name < "list:"`` and ``name >= "list;"`` is exact: a plain
+        property named ``"list"`` sorts in the first range, one named
+        ``"listen"`` in the second, and every ``list:*`` row in neither.
+        """
         if not actor_id:
             return None
         self.actor_id = actor_id
-        self.handle = Property.query(actor_id)
-        if self.handle:
-            self.props = {}
+        self.props = {}
+        # Property.query() returns a truthy iterator regardless of match
+        # count, so fetch() has always returned {} (not None) for an actor
+        # whose partition holds no plain properties -- preserved here by
+        # unconditionally returning self.props rather than reintroducing a
+        # falsy-handle check against either query's result.
+        for condition in (Property.name < "list:", Property.name >= "list;"):
+            self.handle = Property.query(actor_id, range_key_condition=condition)
             for d in self.handle:
-                # Filter out list properties (they have "list:" prefix)
-                if not d.name.startswith("list:"):
-                    self.props[d.name] = d.value
-            return self.props
-        else:
-            return None
+                self.props[d.name] = d.value
+        return self.props
 
     def fetch_all_including_lists(
         self, actor_id: str | None = None
@@ -644,13 +750,24 @@ class DbPropertyList:
             return False
 
         # Single partition read: collect indexed properties (for lookup-row
-        # cleanup) and delete in the same pass.
+        # cleanup) and item names, then delete everything in one batched
+        # operation (Phase 12: thoughts/plans/2026-08-20-v2-positional-
+        # access-cost.md) instead of one DeleteItem round trip per row.
         indexed_props: list[tuple[str, str]] = []
+        names: list[str] = []
         self.handle = Property.query(self.actor_id)
         for p in self.handle:
             if self._use_lookup_table and str(p.name) in self._indexed_properties:
                 indexed_props.append((str(p.name), str(p.value)))
-            p.delete()
+            names.append(str(p.name))
+
+        if names:
+            try:
+                with Property.batch_write() as batch:
+                    for name in names:
+                        batch.delete(Property(id=self.actor_id, name=name))
+            except Exception as e:
+                raise DbError("property batch delete", self.actor_id) from e
 
         # Delete lookup entries
         if indexed_props:

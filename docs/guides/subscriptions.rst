@@ -384,6 +384,41 @@ The subscription processing system automatically applies list operations from ca
    * - ``remove``
      - Remove first occurrence of item
 
+``delete_by_handle()``, ``update_by_handle()``, ``remove_where()``, and
+``update_where()`` (added in 3.14) do not add new operations to this table
+-- the diff vocabulary above is closed, so a peer running an older
+ActingWeb version keeps understanding every diff it receives. Instead:
+
+- ``delete_by_handle()`` and a multi-match ``remove_where()`` each emit
+  one ``remove`` diff per item actually removed, carrying that item's
+  full value.
+- ``update_by_handle()`` and ``update_where()`` each emit one ``update``
+  diff per item actually updated, carrying the new ``item`` value and an
+  OPTIONAL ``old_item`` field -- the pre-update value. Neither emits
+  ``index``: a value-addressed update does not have a reliable position
+  to send, since diff delivery between peers isn't guaranteed reliable
+  or ordered and a peer's list may already have drifted from the
+  sender's by the time the diff arrives. A peer receiving ``old_item``
+  locates the row by matching its current value against it, but only
+  when that match is unique -- if two or more rows currently hold that
+  value, which one the sender meant is ambiguous, and the update is not
+  applied rather than risking the wrong row. A peer that predates
+  ``old_item`` simply ignores the field; without ``index`` present
+  either, it has nothing to match the diff against.
+
+One positional field became advisory in 3.14: the ``index`` an
+``append`` diff carries (and the ``length`` field every list diff
+carries) derives from the list's advisory count rather than a fresh
+count of the rows, so under concurrent mutation it can be momentarily
+off by the documented drift bound (see "Storage Format" in the
+property-lists guide). Apply an append by appending ``item``; treat
+``index`` and ``length`` as ordering hints, never as addresses. The
+library's own receiver has always done exactly this.
+
+Because ``remove_where()``/``update_where()`` can match many items in one
+call, they can also emit many diffs in one call -- see the fan-out note
+below for what that means for delivery time.
+
 Subscription Suspension
 -----------------------
 
@@ -411,6 +446,18 @@ The ``resume()`` operation uses **cached peer capabilities** to determine whethe
 - Background refresh updates the cache for next time (async mode only)
 
 This ensures ``resume()`` returns immediately without blocking, even when suspending/resuming many subscriptions.
+
+**Fan-out arithmetic for ``remove_where()``/``update_where()``:** a single
+call that matches *k* items registers *k* diffs, and a synchronous HTTP
+handler delivering those diffs to subscribers is still bound by the
+platform's request timeout (for example API Gateway's ~29 second ceiling
+on Lambda deployments). If *k* is large and the list has callback
+subscribers, that per-request delivery cost is *k* callback deliveries,
+not one -- the same shape as calling ``remove()``/``update_by_handle()``
+in a loop, just issued from a single call. For a bulk change against a
+list with subscribers, prefer suspending the ``properties`` target first
+(``suspend()`` above), performing the ``_where`` call, then ``resume()``
+-- one resync callback instead of *k* individual diff deliveries.
 
 Fan-Out Manager
 ---------------

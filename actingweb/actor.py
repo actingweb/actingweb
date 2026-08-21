@@ -2553,7 +2553,15 @@ class Actor:
                 logger.warning(f"Subtarget '{subtarget}' not found as list or property")
                 return {}
             else:
-                # All properties - get both scalars and lists
+                # All properties - get both scalars and lists.
+                # list_all_with_rows() pays for one whole-partition dump
+                # and returns it alongside the names, so every list's
+                # contents below are served from that dump
+                # (to_list_from_rows()) instead of a second whole-list
+                # Query per list -- this is the fallback path for peers
+                # that don't support incremental resync, so it is lower
+                # frequency than the web UI's equivalent fix but still one
+                # headless consumers actually reach.
                 result = {}
                 # Get scalar properties
                 all_props = self.get_properties()
@@ -2561,10 +2569,12 @@ class Actor:
                     result.update(all_props)
                 # Get property lists
                 if hasattr(self, "property_lists") and self.property_lists:
-                    for list_name in self.property_lists.list_all():
+                    list_names, list_rows = self.property_lists.list_all_with_rows()
+                    for list_name in list_names:
                         list_attr = getattr(self.property_lists, list_name)
+                        list_attr.prime_from_rows(list_rows)
                         try:
-                            items = list(list_attr)
+                            items = list_attr.to_list_from_rows(list_rows)
                         except ListCorruptionError as e:
                             logger.error(
                                 f"List '{list_name}' is corrupted, skipping it "

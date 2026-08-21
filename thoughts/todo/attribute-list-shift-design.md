@@ -50,6 +50,38 @@ shape all now exist and are proven on `ListProperty`. Note the port inherits
 `thoughts/todo/whole-list-rewrite-atomicity.md`'s open commit-protocol gap, so
 sequence it after that work rather than reproducing the gap in a second class.
 
+**Updated 2026-08-21, after `thoughts/plans/2026-08-20-v2-positional-access-cost.md`
+(v3.14.0) landed.** Two things for whoever picks this up next:
+
+- **A second sequencing dependency, alongside the existing one.**
+  `remote_storage.py`'s subscription diff vocabulary is closed on both
+  sides — an unrecognised operation makes a peer replica silently diverge
+  — and 3.14 Phase 10 changed it (`remove`/`update` diffs gained
+  value-addressed semantics, `update` gained an optional `old_item`
+  field), specifically for `ListProperty`. A v2 port for `ListAttribute`
+  will want the equivalent diff support if `ListAttribute` mutations are
+  ever notified/subscribed to the same way — check whether they are before
+  assuming the vocabulary is already settled for this class, and if diffs
+  are in scope, sequence behind that work having actually shipped and
+  stabilized (it just landed in 3.14.0; give it real-world exposure before
+  building a second consumer of the same wire format).
+- **Adopt the handle API rather than reinvent an identity-addressed
+  primitive.** 3.14 Phase 7 added `ListItemHandle` /
+  `items_with_handles()` / `find()` and Phase 10 added the handle-based
+  mutators (`delete_by_handle`, `update_by_handle`, `remove_where`,
+  `update_where`) precisely because deriving a position from a fractional
+  rank list requires a whole-list read — the same cost problem a
+  `ListAttribute` v2 port would otherwise reproduce from scratch if it
+  designed its own position-vs-identity access pattern. Port the handle
+  shape (frozen `rank` + `raw_value` dataclass, single-shot
+  compare-and-swap mutators, no built-in retry) rather than re-deriving
+  it independently — see `property_list.py`'s handle mutators and
+  `thoughts/plans/2026-08-20-v2-positional-access-cost.md` Phases 7 and 10
+  for the design and the constraints it settled (handles are not
+  wire-stable across a list generation; `BatchWriteItem` cannot express
+  conditions, so bulk handle mutation is still *k* point writes, not one
+  batch call).
+
 Whoever scopes this should re-read both research docs above for the
 measured corruption mechanics (they were reproduced against real
 dynamodb-local, not just reasoned about) before designing a fix — several

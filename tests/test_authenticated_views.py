@@ -2,15 +2,17 @@
 Unit tests for authenticated views and permission enforcement.
 """
 
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
 from actingweb.interface.authenticated_views import (
     AuthContext,
     AuthenticatedActorView,
+    AuthenticatedPropertyListStore,
     AuthenticatedPropertyStore,
     PermissionError,
+    _PermissionEnforcingListView,
 )
 from actingweb.permission_evaluator import PermissionResult
 
@@ -342,3 +344,278 @@ class TestAuthenticatedPropertyStore:
             assert "public_key" in accessible_keys
             assert "config" in accessible_keys
             assert "private_key" not in accessible_keys
+
+
+def _list_store_evaluator(mock_get_evaluator, permission_by_op):
+    """Configure the patched get_permission_evaluator() to resolve
+    permission per-operation via `permission_by_op` (a dict or a callable
+    op -> PermissionResult)."""
+    mock_evaluator = Mock()
+    if callable(permission_by_op):
+        resolver = permission_by_op
+    else:
+
+        def resolver(actor_id, accessor_id, name, operation):
+            return permission_by_op.get(operation, PermissionResult.DENIED)
+
+    mock_evaluator.evaluate_property_access = Mock(side_effect=resolver)
+    mock_get_evaluator.return_value = mock_evaluator
+    return mock_evaluator
+
+
+class TestAuthenticatedPropertyListStore:
+    """Test AuthenticatedPropertyListStore / _PermissionEnforcingListView
+    permission enforcement (Phase 2 of the v2 list read cost release:
+    __getattr__ previously checked only `read` and then returned the raw,
+    fully-mutable NotifyingListProperty)."""
+
+    def _make_store(self, mock_get_evaluator, permission_by_op):
+        mock_list_prop = MagicMock()
+        mock_list_prop.to_list = Mock(return_value=["a", "b"])
+        mock_store = Mock()
+        mock_store.notes = mock_list_prop
+
+        _list_store_evaluator(mock_get_evaluator, permission_by_op)
+
+        auth_context = AuthContext(peer_id="peer123")
+        auth_store = AuthenticatedPropertyListStore(
+            mock_store, auth_context, "actor123", Mock()
+        )
+        return auth_store, mock_list_prop
+
+    def test_read_only_context_can_read_but_not_mutate(self):
+        with patch(
+            "actingweb.interface.authenticated_views.get_permission_evaluator"
+        ) as mock_get_evaluator:
+            auth_store, mock_list_prop = self._make_store(
+                mock_get_evaluator, {"read": PermissionResult.ALLOWED}
+            )
+            notes = auth_store.notes  # "read" check passes here
+
+            assert notes.to_list() == ["a", "b"]
+
+            with pytest.raises(PermissionError):
+                notes.append("x")
+            with pytest.raises(PermissionError):
+                notes[0] = "y"
+            with pytest.raises(PermissionError):
+                del notes[0]
+            with pytest.raises(PermissionError):
+                notes.clear()
+            with pytest.raises(PermissionError):
+                notes.delete()
+
+        mock_list_prop.append.assert_not_called()
+        mock_list_prop.__setitem__.assert_not_called()
+        mock_list_prop.__delitem__.assert_not_called()
+        mock_list_prop.clear.assert_not_called()
+        mock_list_prop.delete.assert_not_called()
+
+    def test_write_permitted_context_succeeds(self):
+        with patch(
+            "actingweb.interface.authenticated_views.get_permission_evaluator"
+        ) as mock_get_evaluator:
+            auth_store, mock_list_prop = self._make_store(
+                mock_get_evaluator,
+                {
+                    "read": PermissionResult.ALLOWED,
+                    "write": PermissionResult.ALLOWED,
+                    "delete": PermissionResult.ALLOWED,
+                },
+            )
+            notes = auth_store.notes
+
+            notes.append("x")
+            notes[0] = "y"
+            del notes[0]
+            notes.clear()
+            notes.delete()
+
+        mock_list_prop.append.assert_called_once_with("x")
+        mock_list_prop.__setitem__.assert_called_once_with(0, "y")
+        mock_list_prop.__delitem__.assert_called_once_with(0)
+        mock_list_prop.clear.assert_called_once_with()
+        mock_list_prop.delete.assert_called_once_with()
+
+    def test_delete_by_name_deletes_and_returns_true(self):
+        with patch(
+            "actingweb.interface.authenticated_views.get_permission_evaluator"
+        ) as mock_get_evaluator:
+            _list_store_evaluator(
+                mock_get_evaluator, {"delete": PermissionResult.ALLOWED}
+            )
+            mock_list_prop = MagicMock()
+            mock_store = Mock()
+            mock_store.notes = mock_list_prop
+            auth_store = AuthenticatedPropertyListStore(
+                mock_store, AuthContext(peer_id="peer123"), "actor123", Mock()
+            )
+
+            result = auth_store.delete("notes")
+
+        assert result is True
+        mock_list_prop.delete.assert_called_once_with()
+
+    def test_delete_by_name_denied(self):
+        with patch(
+            "actingweb.interface.authenticated_views.get_permission_evaluator"
+        ) as mock_get_evaluator:
+            _list_store_evaluator(mock_get_evaluator, {})  # everything denied
+            mock_store = Mock()
+            auth_store = AuthenticatedPropertyListStore(
+                mock_store, AuthContext(peer_id="peer123"), "actor123", Mock()
+            )
+
+            with pytest.raises(PermissionError):
+                auth_store.delete("notes")
+
+    def test_create_method_no_longer_exists(self):
+        """`create()` never worked -- it resolved through
+        PropertyListStore.__getattr__ to a NotifyingListProperty and called
+        it, raising TypeError after the permission check passed. Removed
+        rather than fixed: lists are created lazily on first write."""
+        assert not hasattr(AuthenticatedPropertyListStore, "create")
+
+    def test_proxy_surface_matches_notifying_list_property(self):
+        """A method added to NotifyingListProperty without a matching entry
+        on the proxy is unreachable through actor.property_lists.<name>."""
+        from actingweb.interface.property_store import NotifyingListProperty
+
+        dunders = {"__len__", "__getitem__", "__iter__", "__setitem__", "__delitem__"}
+
+        def public_surface(cls):
+            return {
+                name
+                for name in vars(cls)
+                if not name.startswith("_") or name in dunders
+            }
+
+        assert public_surface(_PermissionEnforcingListView) == public_surface(
+            NotifyingListProperty
+        )
+
+
+# Every mutator on _PermissionEnforcingListView, with the permission it
+# must enforce and a canonical invocation. TestPermissionProxyEnforcement
+# below proves each one both denies (without touching storage) and
+# delegates when granted -- and its completeness test forces this table to
+# stay in sync with the proxy, so a method added to the proxy without a
+# classification here fails the suite rather than shipping ungated.
+_PROXY_MUTATORS = {
+    "__setitem__": ("write", lambda v: v.__setitem__(0, "x")),
+    "__delitem__": ("delete", lambda v: v.__delitem__(0)),
+    "set_description": ("write", lambda v: v.set_description("d")),
+    "set_explanation": ("write", lambda v: v.set_explanation("e")),
+    "append": ("write", lambda v: v.append("x")),
+    "extend": ("write", lambda v: v.extend(["x"])),
+    "clear": ("delete", lambda v: v.clear()),
+    "delete": ("delete", lambda v: v.delete()),
+    "pop": ("write", lambda v: v.pop()),
+    "insert": ("write", lambda v: v.insert(0, "x")),
+    "remove": ("write", lambda v: v.remove("x")),
+    "delete_by_handle": ("write", lambda v: v.delete_by_handle(Mock())),
+    "update_by_handle": ("write", lambda v: v.update_by_handle(Mock(), "x")),
+    "remove_where": ("delete", lambda v: v.remove_where("k", "v")),
+    "update_where": ("write", lambda v: v.update_where("k", "v", "x")),
+    "compact": ("write", lambda v: v.compact()),
+    "migrate_to_v2": ("write", lambda v: v.migrate_to_v2()),
+}
+
+# The proxy methods that deliberately carry no check: `read` was already
+# enforced by AuthenticatedPropertyListStore.__getattr__ before the view
+# was constructed.
+_PROXY_READS = {
+    "__len__",
+    "__getitem__",
+    "__iter__",
+    "get_description",
+    "get_explanation",
+    "get_metadata",
+    "to_list",
+    "to_indexed_list",
+    "prime_from_rows",
+    "to_list_from_rows",
+    "slice",
+    "index",
+    "count",
+    "find",
+    "find_all",
+    "items_with_handles",
+    "verify",
+}
+
+
+class TestPermissionProxyEnforcement:
+    """The surface test above proves name parity; these prove the thing
+    Phase 2 actually exists for -- that every mutator on the proxy calls
+    _check with the right permission before delegating. A proxy method
+    that delegates without checking passes the surface test and fails
+    here."""
+
+    def _make_view(self, mock_get_evaluator, permission_by_op):
+        mock_list_prop = MagicMock()
+        mock_store = Mock()
+        mock_store.notes = mock_list_prop
+        _list_store_evaluator(mock_get_evaluator, permission_by_op)
+        auth_context = AuthContext(peer_id="peer123")
+        auth_store = AuthenticatedPropertyListStore(
+            mock_store, auth_context, "actor123", Mock()
+        )
+        return auth_store.notes, mock_list_prop
+
+    def test_every_proxy_method_is_classified(self):
+        """Forces the two tables above to track the proxy exactly: a new
+        method must be declared a read or a mutator to land."""
+        proxy_methods = {
+            name
+            for name, member in vars(_PermissionEnforcingListView).items()
+            if callable(member) and name not in {"__init__", "_check"}
+        }
+        assert proxy_methods == _PROXY_READS | set(_PROXY_MUTATORS)
+        assert not (_PROXY_READS & set(_PROXY_MUTATORS))
+
+    @pytest.mark.parametrize(
+        "method,required,invoke",
+        [(m, req, inv) for m, (req, inv) in sorted(_PROXY_MUTATORS.items())],
+        ids=sorted(_PROXY_MUTATORS),
+    )
+    def test_mutator_denied_without_its_permission_and_storage_untouched(
+        self, method, required, invoke
+    ):
+        """Grant everything EXCEPT the permission the mutator requires --
+        so a mutator gated on the wrong (granted) permission fails this
+        test, not just an all-denied one."""
+        granted = ({"read", "write", "delete"} - {required}) | {"read"}
+        with patch(
+            "actingweb.interface.authenticated_views.get_permission_evaluator"
+        ) as mock_get_evaluator:
+            view, mock_list_prop = self._make_view(
+                mock_get_evaluator,
+                dict.fromkeys(granted, PermissionResult.ALLOWED),
+            )
+            with pytest.raises(PermissionError):
+                invoke(view)
+
+        getattr(mock_list_prop, method).assert_not_called()
+
+    @pytest.mark.parametrize(
+        "method,required,invoke",
+        [(m, req, inv) for m, (req, inv) in sorted(_PROXY_MUTATORS.items())],
+        ids=sorted(_PROXY_MUTATORS),
+    )
+    def test_mutator_delegates_exactly_once_when_granted(
+        self, method, required, invoke
+    ):
+        with patch(
+            "actingweb.interface.authenticated_views.get_permission_evaluator"
+        ) as mock_get_evaluator:
+            view, mock_list_prop = self._make_view(
+                mock_get_evaluator,
+                {
+                    "read": PermissionResult.ALLOWED,
+                    required: PermissionResult.ALLOWED,
+                },
+            )
+            invoke(view)
+
+        assert getattr(mock_list_prop, method).call_count == 1

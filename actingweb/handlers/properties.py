@@ -5,7 +5,7 @@ from typing import Any
 
 from actingweb.db import get_property_list
 from actingweb.handlers import base_handler
-from actingweb.property_list import ListCorruptionError
+from actingweb.property_list import ListCorruptionError, ListMetadataContentionError
 
 from ..permission_evaluator import PermissionResult, get_permission_evaluator
 
@@ -66,6 +66,34 @@ def _write_list_corrupted_response(response: Any, name: str, error: Exception) -
                     "list": name,
                     "detail": str(error),
                     "remedy": "compact",
+                }
+            )
+        )
+
+
+_LIST_METADATA_CONTENTION_RETRY_AFTER_SECONDS = "1"
+
+
+def _write_list_metadata_contention_response(response: Any, error: Exception) -> None:
+    """Write the structured 503 response for a ListMetadataContentionError.
+
+    A contended metadata row is a retryable condition, not a server fault
+    -- a bare 500 behind an API gateway sends consumers hunting a bug that
+    is not there. ``Retry-After`` names the same bound the CAS retry loop
+    itself already applied, so a well-behaved client's next attempt lands
+    after the contention this response is reporting has had a chance to
+    clear.
+    """
+    logger.warning(f"List metadata contention: {error}")
+    if response:
+        response.set_status(503, "List metadata contended")
+        response.headers["Content-Type"] = "application/json"
+        response.headers["Retry-After"] = _LIST_METADATA_CONTENTION_RETRY_AFTER_SECONDS
+        response.write(
+            json.dumps(
+                {
+                    "error": "list_metadata_contended",
+                    "detail": str(error),
                 }
             )
         )
@@ -150,6 +178,54 @@ class PropertiesHandler(base_handler.BaseHandler):
     def _respond_list_corrupted(self, name: str, error: Exception) -> None:
         """Write the structured 409 response for a ListCorruptionError."""
         _write_list_corrupted_response(self.response, name, error)
+
+    def _respond_list_metadata_contended(self, error: Exception) -> None:
+        """Write the structured 503 response for a ListMetadataContentionError."""
+        _write_list_metadata_contention_response(self.response, error)
+
+    def _finish_bulk_list_update(
+        self,
+        myself,
+        key: str,
+        list_prop,
+        check,
+        pair: dict[str, Any],
+        items_updated: int,
+        items_deleted: int,
+    ) -> bool:
+        """Shared tail of the bulk list-item update path (POST with an
+        ``items`` array): runs the property post hook, if any, against the
+        full post-batch list, then sets the per-key response summary.
+
+        Shared by both the v1 (positional) and v2 (handle-based) branches
+        of the bulk update -- identical hook/response logic either way,
+        only how the batch itself was applied differs between them.
+
+        Returns ``False`` (having already set a 403 response) if a hook
+        rejected the update -- the caller must ``return`` immediately
+        without setting ``pair[key]``, matching the pre-Phase-11 behaviour
+        where a hook rejection short-circuited before the summary was
+        recorded.
+        """
+        if self.hooks:
+            actor_interface = self._get_actor_interface(myself)
+            if actor_interface:
+                # Pass the entire list for hook validation
+                current_items = list_prop.to_list()
+                auth_context = self._create_auth_context(check, "write")
+                transformed = self.hooks.execute_property_hooks(
+                    key, "post", actor_interface, current_items, [key], auth_context
+                )
+                if transformed is None:
+                    # Hook rejected the update - need to revert changes
+                    if self.response:
+                        self.response.set_status(403, "Bulk update rejected by hooks")
+                    return False
+
+        pair[key] = (
+            f"[Bulk update: {items_updated} items updated, {items_deleted} items deleted]"
+        )
+        return True
 
     def get(self, actor_id, name):
         if self.request.get("_method") == "PUT":
@@ -261,7 +337,11 @@ class PropertiesHandler(base_handler.BaseHandler):
                         # This matches the format used in GET /properties?metadata=true
                         metadata = {
                             "_list": True,
-                            "count": len(list_prop),
+                            # Advisory under v2 (count_hint) -- avoids a
+                            # whole-list range query for a count-only
+                            # request. See ListProperty's class docstring
+                            # for the drift bound.
+                            "count": list_prop.get_metadata()["length"],
                             "description": list_prop.get_description(),
                             "explanation": list_prop.get_explanation(),
                         }
@@ -633,12 +713,23 @@ class PropertiesHandler(base_handler.BaseHandler):
                     return
 
                 list_prop = getattr(myself.property_lists, name)
-                length = len(list_prop)
+                # Phase 11 (thoughts/plans/2026-08-20-v2-positional-access-
+                # cost.md): under v2, one items_with_handles() read serves
+                # BOTH the length this branch needs (spec: index == length
+                # MAY create, index > length MUST 404 -- unbounded
+                # append(None) padding was both a DoS vector and a spec
+                # violation) AND the handle the replace case below writes
+                # through, instead of a length-only read here followed by
+                # __setitem__'s own forced reload. Under v1 there is no
+                # handle to resolve, so this stays the length-only read it
+                # always was.
+                v2_pairs = None
+                if list_prop.storage_format() == 2:
+                    v2_pairs = list_prop.items_with_handles()
+                    length = len(v2_pairs)
+                else:
+                    length = len(list_prop)
 
-                # Spec (docs/protocol/actingweb-spec.rst "List Property PUT"):
-                # index == length MAY create (append); index > length MUST
-                # 404. Unbounded append(None) padding was both a DoS vector
-                # and a spec violation.
                 if index > length:
                     if self.response:
                         self.response.set_status(
@@ -670,6 +761,24 @@ class PropertiesHandler(base_handler.BaseHandler):
                 # current length; otherwise it's a bounds-checked replace)
                 if index == length:
                     list_prop.append(item_value)
+                elif v2_pairs is not None:
+                    # v2 replace: a conditional write against the handle
+                    # resolved above, not the old unconditional
+                    # list_prop[index] = ... (which forced its own fresh
+                    # reload and always overwrote whatever it found,
+                    # silently clobbering a concurrent writer). A failed
+                    # condition now surfaces as the SAME retryable 503 a
+                    # metadata CAS exhaustion does -- the client's correct
+                    # response is the same either way: re-read and retry.
+                    handle = v2_pairs[index][0]
+                    if not list_prop.update_by_handle(handle, item_value):
+                        self._respond_list_metadata_contended(
+                            RuntimeError(
+                                f"list '{name}' item at index {index} was "
+                                f"concurrently modified"
+                            )
+                        )
+                        return
                 else:
                     list_prop[index] = item_value
 
@@ -684,6 +793,15 @@ class PropertiesHandler(base_handler.BaseHandler):
                     self.response.set_status(204)
                 return
 
+            except ListMetadataContentionError as e:
+                # append()/__setitem__ can raise this on a v1 list -- v1's
+                # length write is semantic (advisory=False), so an
+                # exhausted CAS retry surfaces here rather than being
+                # swallowed. A v2 list's metadata touch is advisory and
+                # never raises this. Map to 503 rather than letting it
+                # fall through as an unhandled 500.
+                self._respond_list_metadata_contended(e)
+                return
             except (ValueError, IndexError) as e:
                 logger.error(f"Error setting list item at index {index_param}: {e}")
                 if self.response:
@@ -1000,6 +1118,230 @@ class PropertiesHandler(base_handler.BaseHandler):
                             list_prop = getattr(myself.property_lists, key)
                             items_updated = 0
                             items_deleted = 0
+
+                            if list_prop.storage_format() == 2:
+                                # v2: resolve the whole batch against ONE
+                                # strongly-consistent snapshot (one range
+                                # read via items_with_handles()) instead of
+                                # positional access -- each positional read/
+                                # write below cost its own whole-list query
+                                # under v2 before Phases 7-10. Ordering
+                                # semantics (updates first in given order,
+                                # deletes last in descending index order)
+                                # are unchanged from the v1 branch below and
+                                # are preserved here even though a v2
+                                # handle's validity doesn't depend on other
+                                # handles -- so the two branches produce
+                                # identical output for identical input, and
+                                # a same-index update+delete now applies the
+                                # update and reports the delete as
+                                # concurrently modified (its handle's raw
+                                # bytes were pinned before the update
+                                # changed them) -- see CHANGELOG/migration
+                                # notes for 3.14: 3.13.0 deleted the updated
+                                # row instead.
+                                pairs = list_prop.items_with_handles()
+                                snapshot_length = len(pairs)
+                                pending_updates_v2: list[tuple[int, dict[str, Any]]] = []
+                                pending_deletes_v2: list[int] = []
+                                projected_length = snapshot_length
+
+                                for i, item_spec in enumerate(val["items"]):
+                                    if not isinstance(item_spec, dict):
+                                        logger.error(
+                                            f"Invalid item at position {i}: must be a dictionary, got {type(item_spec).__name__}"
+                                        )
+                                        if self.response:
+                                            self.response.set_status(
+                                                400,
+                                                f"Invalid item at position {i}: must be a dictionary, got {type(item_spec).__name__}",
+                                            )
+                                        return
+
+                                    if "index" not in item_spec:
+                                        logger.error(
+                                            f"Missing 'index' field in item at position {i}: {item_spec}"
+                                        )
+                                        if self.response:
+                                            self.response.set_status(
+                                                400,
+                                                f"Missing 'index' field in item at position {i}",
+                                            )
+                                        return
+
+                                    index = item_spec["index"]
+
+                                    if not isinstance(index, int):
+                                        logger.error(
+                                            f"Invalid index type in item at position {i}: expected integer, got {type(index).__name__}"
+                                        )
+                                        if self.response:
+                                            self.response.set_status(
+                                                400,
+                                                f"Invalid index type in item at position {i}: expected integer, got {type(index).__name__}",
+                                            )
+                                        return
+
+                                    if index < 0:
+                                        logger.error(
+                                            f"Invalid index value in item at position {i}: {index} (must be >= 0)"
+                                        )
+                                        if self.response:
+                                            self.response.set_status(
+                                                400,
+                                                f"Invalid index value in item at position {i}: {index} (must be >= 0)",
+                                            )
+                                        return
+
+                                    if len(item_spec) == 1:  # Only "index" -- delete
+                                        pending_deletes_v2.append(index)
+                                    else:
+                                        # Same bound as the v1 branch, and
+                                        # the same DoS rationale: reject an
+                                        # out-of-bounds index during
+                                        # validation, before anything is
+                                        # written.
+                                        if index > projected_length:
+                                            logger.error(
+                                                f"Index {index} in item at position {i} is beyond list length {projected_length}"
+                                            )
+                                            if self.response:
+                                                self.response.set_status(
+                                                    400,
+                                                    f"Index {index} in item at position {i} is beyond list length {projected_length}",
+                                                )
+                                            return
+                                        if index == projected_length:
+                                            projected_length += 1
+
+                                        item_data = {
+                                            k: v
+                                            for k, v in item_spec.items()
+                                            if k != "index"
+                                        }
+                                        pending_updates_v2.append((index, item_data))
+
+                                # Resolve the final value for each targeted
+                                # index before writing anything, and write
+                                # each distinct index at most once. This
+                                # mirrors what the v1 branch achieves for
+                                # free via successive __setitem__ calls
+                                # against a live, growing length: a later
+                                # update in this batch always supersedes an
+                                # earlier one at the same index. Without
+                                # this, two updates at the same
+                                # newly-created index would append two rows
+                                # instead of one overwriting the other, and
+                                # two updates at the same pre-existing
+                                # index would have the second fail as
+                                # "concurrently modified" against a handle
+                                # the first one's own write had just
+                                # invalidated -- not a real concurrent
+                                # writer, just this batch's own earlier
+                                # entry. See CHANGELOG/migration notes for
+                                # 3.14.
+                                final_value_by_index: dict[int, dict[str, Any]] = {}
+                                for index, item_data in pending_updates_v2:
+                                    final_value_by_index[index] = item_data
+
+                                # An index this batch both creates (>=
+                                # snapshot_length, via an update above) and
+                                # deletes nets to "never existed" -- the
+                                # same final state a create-then-delete
+                                # produces in the v1 branch. Skip writing
+                                # it at all rather than appending it just
+                                # to immediately delete it again.
+                                skip_new_indices = {
+                                    index
+                                    for index in pending_deletes_v2
+                                    if index >= snapshot_length and index in final_value_by_index
+                                }
+
+                                # Pass 1: updates, ascending index order --
+                                # required for the append case, where each
+                                # new index must land in the same order it
+                                # was assigned in validation above. An
+                                # index within the pre-batch snapshot
+                                # resolves to that row's handle; an index
+                                # at or beyond the snapshot length is the
+                                # append-at-length case and still goes
+                                # through append() (Phase 9B: one
+                                # get_last_in_range read, not a second
+                                # whole-list query) rather than a handle,
+                                # since there is no pre-existing row to
+                                # address.
+                                index_succeeded: dict[int, bool] = {}
+                                for index in sorted(final_value_by_index):
+                                    if index in skip_new_indices:
+                                        index_succeeded[index] = True
+                                        continue
+                                    if index < snapshot_length:
+                                        handle = pairs[index][0]
+                                        if list_prop.update_by_handle(
+                                            handle, final_value_by_index[index]
+                                        ):
+                                            index_succeeded[index] = True
+                                        else:
+                                            logger.warning(
+                                                f"Cannot update item at index {index}: concurrently modified since the batch snapshot was read"
+                                            )
+                                            index_succeeded[index] = False
+                                            # Don't fail the entire operation -- report per item, matching Pass 2's existing style below.
+                                    else:
+                                        list_prop.append(final_value_by_index[index])
+                                        index_succeeded[index] = True
+
+                                # Reported per request entry, matching the
+                                # v1 branch's accounting, even though a
+                                # duplicate index only ever produces one
+                                # actual write -- see final_value_by_index
+                                # above.
+                                items_updated = sum(
+                                    1
+                                    for index, _ in pending_updates_v2
+                                    if index_succeeded.get(index)
+                                )
+
+                                # Pass 2: deletes, highest index first --
+                                # kept even though a v2 handle's validity
+                                # doesn't depend on other handles, so the
+                                # two branches produce identical output for
+                                # identical input.
+                                for index in sorted(pending_deletes_v2, reverse=True):
+                                    if index in skip_new_indices:
+                                        items_deleted += 1
+                                    elif index < snapshot_length:
+                                        handle = pairs[index][0]
+                                        if list_prop.delete_by_handle(handle):
+                                            items_deleted += 1
+                                        else:
+                                            logger.warning(
+                                                f"Cannot delete item at index {index}: concurrently modified since the batch snapshot was read"
+                                            )
+                                            # Don't fail the entire operation, just log warning
+                                    else:
+                                        logger.warning(
+                                            f"Cannot delete item at index {index}: index out of range (list length: {snapshot_length})"
+                                        )
+                                        # Don't fail the entire operation, just log warning
+
+                                if not self._finish_bulk_list_update(
+                                    myself,
+                                    key,
+                                    list_prop,
+                                    check,
+                                    pair,
+                                    items_updated,
+                                    items_deleted,
+                                ):
+                                    return
+                                continue
+
+                            # v1: unchanged from before Phase 11 -- dense
+                            # integer indices don't have the whole-list-read
+                            # cost this phase exists to remove, and this
+                            # release scopes every cost fix to v2.
+                            #
                             # Batch semantics: every "index" in this batch is
                             # interpreted against the list as it stood BEFORE
                             # the batch. Updates (__setitem__) don't shift
@@ -1155,37 +1497,16 @@ class PropertiesHandler(base_handler.BaseHandler):
                                     )
                                     # Don't fail the entire operation for delete errors
 
-                            # Execute property post hook if available
-                            if self.hooks:
-                                actor_interface = self._get_actor_interface(myself)
-                                if actor_interface:
-                                    # Pass the entire list for hook validation
-                                    current_items = list_prop.to_list()
-                                    auth_context = self._create_auth_context(
-                                        check, "write"
-                                    )
-                                    transformed = self.hooks.execute_property_hooks(
-                                        key,
-                                        "post",
-                                        actor_interface,
-                                        current_items,
-                                        [key],
-                                        auth_context,
-                                    )
-                                    if transformed is None:
-                                        # Hook rejected the update - need to revert changes
-                                        if self.response:
-                                            self.response.set_status(
-                                                403, "Bulk update rejected by hooks"
-                                            )
-                                        return
-
-                            pair[key] = (
-                                f"[Bulk update: {items_updated} items updated, {items_deleted} items deleted]"
-                            )
+                            if not self._finish_bulk_list_update(
+                                myself, key, list_prop, check, pair, items_updated, items_deleted
+                            ):
+                                return
 
                         except ListCorruptionError as e:
                             self._respond_list_corrupted(key, e)
+                            return
+                        except ListMetadataContentionError as e:
+                            self._respond_list_metadata_contended(e)
                             return
                         except Exception as e:
                             logger.error(
@@ -1483,7 +1804,9 @@ class PropertyMetadataHandler(base_handler.BaseHandler):
         metadata = {
             "name": name,
             "_list": True,
-            "count": len(list_prop),
+            # Advisory under v2 (count_hint) -- see ListProperty's class
+            # docstring for the drift bound.
+            "count": list_prop.get_metadata()["length"],
             "description": list_prop.get_description(),
             "explanation": list_prop.get_explanation(),
         }
@@ -1542,10 +1865,14 @@ class PropertyMetadataHandler(base_handler.BaseHandler):
         # Update metadata
         list_prop = getattr(myself.property_lists, name)
 
-        if "description" in params:
-            list_prop.set_description(str(params["description"]))
-        if "explanation" in params:
-            list_prop.set_explanation(str(params["explanation"]))
+        try:
+            if "description" in params:
+                list_prop.set_description(str(params["description"]))
+            if "explanation" in params:
+                list_prop.set_explanation(str(params["explanation"]))
+        except ListMetadataContentionError as e:
+            self._respond_list_metadata_contended(e)
+            return
 
         # Register diff for metadata changes
         myself.register_diffs(
@@ -1556,6 +1883,10 @@ class PropertyMetadataHandler(base_handler.BaseHandler):
 
         if self.response:
             self.response.set_status(204)
+
+    def _respond_list_metadata_contended(self, error: Exception) -> None:
+        """Write the structured 503 response for a ListMetadataContentionError."""
+        _write_list_metadata_contention_response(self.response, error)
 
 
 class PropertyListItemsHandler(base_handler.BaseHandler):
@@ -1627,6 +1958,10 @@ class PropertyListItemsHandler(base_handler.BaseHandler):
     def _respond_list_corrupted(self, name: str, error: Exception) -> None:
         """Write the structured 409 response for a ListCorruptionError."""
         _write_list_corrupted_response(self.response, name, error)
+
+    def _respond_list_metadata_contended(self, error: Exception) -> None:
+        """Write the structured 503 response for a ListMetadataContentionError."""
+        _write_list_metadata_contention_response(self.response, error)
 
     def get(self, actor_id: str, name: str):
         """Get all items from a list property.
@@ -1745,6 +2080,9 @@ class PropertyListItemsHandler(base_handler.BaseHandler):
                     return
 
                 list_prop.append(item_value)
+                # Computed once and reused below, rather than two separate
+                # len(list_prop) - 1 calls for the diff and the response.
+                new_index = len(list_prop) - 1
 
                 # Register diff for subscription notifications
                 myself.register_diffs(
@@ -1753,7 +2091,7 @@ class PropertyListItemsHandler(base_handler.BaseHandler):
                     blob=json.dumps(
                         {
                             "action": "add",
-                            "index": len(list_prop) - 1,
+                            "index": new_index,
                             "value": item_value,
                         }
                     ),
@@ -1761,7 +2099,7 @@ class PropertyListItemsHandler(base_handler.BaseHandler):
 
                 if self.response:
                     self.response.write(
-                        json.dumps({"success": True, "index": len(list_prop) - 1})
+                        json.dumps({"success": True, "index": new_index})
                     )
                     self.response.headers["Content-Type"] = "application/json"
                     self.response.set_status(201)
@@ -1787,12 +2125,40 @@ class PropertyListItemsHandler(base_handler.BaseHandler):
                         self.response.set_status(400, "Invalid 'item_index' value")
                     return
 
-                if index < 0 or index >= len(list_prop):
+                # Phase 11 (thoughts/plans/2026-08-20-v2-positional-access-
+                # cost.md): under v2, items_with_handles() below IS the
+                # bounds check -- the same one read __setitem__'s forced
+                # reload used to cost, just surfaced here so this branch
+                # can also resolve a handle to write through instead of an
+                # unconditional overwrite that silently clobbered a
+                # concurrent writer. Under v1, __setitem__ still raises
+                # IndexError on an out-of-range index at no extra query
+                # cost, so that branch is unchanged.
+                try:
+                    if list_prop.storage_format() == 2:
+                        pairs = list_prop.items_with_handles()
+                        if index < 0 or index >= len(pairs):
+                            if self.response:
+                                self.response.set_status(
+                                    400, f"Index {index} out of range"
+                                )
+                            return
+                        if not list_prop.update_by_handle(
+                            pairs[index][0], item_value
+                        ):
+                            self._respond_list_metadata_contended(
+                                RuntimeError(
+                                    f"list '{name}' item at index {index} was "
+                                    f"concurrently modified"
+                                )
+                            )
+                            return
+                    else:
+                        list_prop[index] = item_value
+                except IndexError:
                     if self.response:
                         self.response.set_status(400, f"Index {index} out of range")
                     return
-
-                list_prop[index] = item_value
 
                 # Register diff for subscription notifications
                 myself.register_diffs(
@@ -1822,12 +2188,31 @@ class PropertyListItemsHandler(base_handler.BaseHandler):
                         self.response.set_status(400, "Invalid 'item_index' value")
                     return
 
-                if index < 0 or index >= len(list_prop):
+                # v1/v2 split -- see the "update" branch above for the
+                # rationale.
+                try:
+                    if list_prop.storage_format() == 2:
+                        pairs = list_prop.items_with_handles()
+                        if index < 0 or index >= len(pairs):
+                            if self.response:
+                                self.response.set_status(
+                                    400, f"Index {index} out of range"
+                                )
+                            return
+                        if not list_prop.delete_by_handle(pairs[index][0]):
+                            self._respond_list_metadata_contended(
+                                RuntimeError(
+                                    f"list '{name}' item at index {index} was "
+                                    f"concurrently modified"
+                                )
+                            )
+                            return
+                    else:
+                        del list_prop[index]
+                except IndexError:
                     if self.response:
                         self.response.set_status(400, f"Index {index} out of range")
                     return
-
-                del list_prop[index]
 
                 # Register diff for subscription notifications
                 myself.register_diffs(
@@ -1850,6 +2235,9 @@ class PropertyListItemsHandler(base_handler.BaseHandler):
             # bare 500. No action above currently reads item rows, so this
             # is a contract guarantee rather than a reachable branch today.
             self._respond_list_corrupted(name, e)
+            return
+        except ListMetadataContentionError as e:
+            self._respond_list_metadata_contended(e)
             return
         except Exception as e:
             logger.error(f"Error in list item operation '{action}' for '{name}': {e}")

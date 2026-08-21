@@ -16,7 +16,7 @@ Basics
    notes.append("First note")
    notes.append({"title": "Meeting", "content": "Team sync"})
    first = notes[0]
-   count = len(notes)
+   count = len(notes)  # see "Storage Format" below -- not free under v2
    for item in notes:
        print(item)
    all_items = notes.to_list()
@@ -107,14 +107,29 @@ supported, and which one a given list uses does not change any REST
 response or any value the API returns.
 
 It is not entirely invisible in one respect: **reading items one at a time
-by index costs more under v2**. ``lst[i]`` re-reads the list's key ordering
-before resolving the position, because a cached ordering can be stale and
-resolving against a stale one returns the wrong item. So a
-``for i in range(len(lst)): lst[i]`` loop is two queries per item under v2,
-where v1 was one. Use ``to_list()``, ``to_indexed_list()`` or plain
-iteration instead -- each is a single query for the whole list regardless
-of length, in both formats, and ``to_indexed_list()`` returns the
-``(index, item)`` pairs such a loop is usually after.
+by index costs more under v2, and the cost is per item, not a fixed
+factor**. ``lst[i]`` re-derives the position from the list's key ordering
+before resolving it, because a cached ordering can be stale and resolving
+against a stale one returns the wrong item, and that re-derivation is a
+**whole-list range query** -- the same query ``to_list()`` issues to read
+every item. So a ``for i in range(len(lst)): lst[i]`` loop over an
+*n*-item v2 list issues *n* whole-list queries -- O(n) total capacity for
+the loop, not "two queries per item" -- where the same loop under v1 costs
+one point read per item. On a 2026-08-19 production incident this made a
+10-item delete cost roughly 1.19M RCU. Use ``to_list()``,
+``to_indexed_list()`` or plain iteration instead -- each is a **single**
+query for the whole list regardless of length, in both formats, and
+``to_indexed_list()`` returns the ``(index, item)`` pairs such a loop is
+usually after.
+
+``append()``/``extend()`` do **not** share that shape: as of 3.14, each
+reads only the list's current LAST rank (one item's read capacity, via
+``get_last_in_range``) rather than the whole ordering -- a fixed cost
+regardless of list length. Before 3.14, append() *did* re-read the whole
+key ordering before writing, matching the positional-read cost above;
+this is the one exception the "positional access costs the whole list"
+rule used to have no exception for. ``extend()`` of *n* items pays that
+one read ONCE for the whole batch, not once per item.
 
 - **v1** (dense integers): items stored as ``list:{name}-{index}``, with
   an authoritative ``length`` in metadata. Every list created before this
@@ -128,6 +143,74 @@ of length, in both formats, and ``to_indexed_list()`` returns the
 
 New list names may not contain ``#`` (reserved for internal storage
 keys); creating one raises ``ValueError`` immediately.
+
+**Counting items without paying for the whole list**
+
+``len(lst)`` is always exact, on both formats -- under v2 it counts the
+rank-key range, which is the same whole-list query ``to_list()`` issues.
+When you only need an approximate count -- a UI badge, a rough quota
+check -- ``lst.get_metadata()["length"]`` avoids that query entirely
+under v2, where it is served from ``count_hint``: an item count list
+mutations maintain as a side effect, not counted fresh on every call.
+(Under v1 the two are identical -- ``length`` has always been an
+authoritative stored field there.)
+
+``count_hint`` is **advisory, and the drift bound is a documented
+contract**: at any moment, ``|count_hint - len(lst)|`` is at most the
+number of mutations currently in flight against the list, plus -- during
+a rolling deploy only -- mutations applied by pre-3.14 writers since the
+last rank-counting 3.14 mutation, plus one per mutation whose advisory
+metadata touch failed since the last rank-counting mutation. It never
+accumulates beyond those three terms, and it self-corrects: the next
+``insert()``/``pop()``/``remove()``/``del lst[i]``/``compact()`` call
+overwrites the hint with the counted truth (``append()``/``extend()``
+merge stored-plus-delta and never re-count on their own). A quiesced list
+whose mutations all landed cleanly reports an exact hint.
+
+A quota check that must never over-admit should trust the hint while
+strictly below its limit, and confirm with the exact ``len()`` only once
+the hint reaches the limit -- the whole-list read is then paid at the
+quota boundary, not on every save::
+
+    def within_quota(lst, limit: int) -> bool:
+        hint = lst.get_metadata()["length"]
+        if hint < limit:
+            return True          # trust the advisory count
+        return len(lst) < limit  # at the boundary: pay for the exact count
+
+``verify()`` reports drift beyond what a healthy list should show as
+``count_hint_drift`` (informational, not part of ``healthy`` -- expected
+drift under concurrent mutation is not corruption), and ``compact()``
+always rewrites the hint to the counted truth as part of its rebalance.
+
+**Reading with `consistent=False`**
+
+``to_list()``, ``slice()`` and ``to_indexed_list()`` accept a
+``consistent`` keyword, default ``True`` -- the default does not change,
+so nothing about an existing call changes on upgrade. On DynamoDB, an
+eventually consistent range read costs **half** the read capacity of a
+strongly consistent one (measured on an 81-row list: 241 RCU -> 120.5
+RCU). PostgreSQL accepts and ignores the parameter -- its reads are
+consistent by construction.
+
+Whether a stale read is acceptable is an application question, not a
+library one, which is why the library does not second-guess the choice:
+``consistent=False`` on an instance that just wrote to this list may not
+see that write. It is only correct where the caller cannot have just
+written the rows it is about to read -- a background report, a
+read-mostly cache refresh, a different actor's read of data it did not
+just produce::
+
+    recent_notes = actor.property_lists.notes.to_list(consistent=False)
+
+Positional access (``lst[i]``, ``__setitem__``, ``__delitem__``,
+``insert()``, ``pop()``, ``remove()``) always reads strongly consistent
+and takes no such parameter -- a stale rank feeding a positional write
+touches the wrong row, which is a correctness bug, not a cost trade.
+``__iter__`` (plain ``for item in lst``) also takes no parameter for the
+same reason iteration exists as a convenience over ``to_list()``; use
+``to_list(consistent=False)`` directly when the saving matters for a full
+scan.
 
 .. note::
 
@@ -281,6 +364,123 @@ gradual, never required for a list to keep functioning:
    still has v2 support (the tool itself needs the v2 code to read the
    list it's converting) -- never the other way around.
 
+Finding Items by Value
+-----------------------
+
+Most lists are addressed by position (``lst[i]``), but items are often
+looked up by an identifying field instead -- the same ``identity_key``
+``verify()`` already checks for duplicates::
+
+    task = tasks.find("id", "task-42")           # first match, or None
+    matches = tasks.find_all("id", "task-42")     # every match
+
+Both are a single whole-list read (``to_list()``), matched in memory --
+the same cost as any hand-written scan loop, just without every consumer
+writing one. An item that is not a dict, or that lacks ``identity_key``
+entirely, never matches and never raises. Both accept the same
+``consistent`` keyword ``to_list()`` does (see above).
+
+**Handles: reading for a later write**
+
+``items_with_handles()`` (v2 lists only -- raises on a v1 list, naming
+``migrate_to_v2()``) returns ``[(handle, item), ...]`` for the whole list
+in one read::
+
+    for handle, item in tasks.items_with_handles():
+        if item.get("status") == "done":
+            ...  # a later phase's update_by_handle()/delete_by_handle()
+                 # write conditioned on this exact handle
+
+A handle is an opaque, **single-use read receipt** -- not a durable
+identifier. It carries the item's rank key and the exact raw stored
+string the read returned, and is only valid against the SAME list
+instance, within the same request or process that read it. Two things
+make it unsafe to persist or transmit:
+
+- **It is not wire-stable across a list "generation".** A rank is unique
+  only until the list is emptied: ``delete()`` followed by ``append()``
+  starts a brand new rank sequence from the same deterministic starting
+  point, so a fresh list's first item gets the identical rank the
+  original list's first item had. A handle read before the delete would
+  silently address the wrong (new) item after one.
+- **It is always read strongly consistent**, regardless of any
+  ``consistent=False`` used elsewhere against the same list -- a stale
+  handle's conditional write would fail against a row nobody actually
+  touched.
+
+**Writing by handle, or by value**
+
+``delete_by_handle(handle)`` and ``update_by_handle(handle, item)`` (v2
+lists only) condition a single write on the exact bytes a handle read::
+
+    for handle, item in tasks.items_with_handles():
+        if item.get("status") == "done":
+            tasks.delete_by_handle(handle)
+
+Both are **single-shot** -- there is no retry loop. A handle pins the
+exact stored bytes, so a failed condition (the row changed or vanished
+since the read) simply returns ``False``; there is nothing to re-resolve,
+and retrying would mean "delete/overwrite whatever is there now" rather
+than the item the handle addressed. Check the return value if the answer
+matters to the caller.
+
+For the common case of "every item matching a field", ``remove_where()``
+and ``update_where()`` wrap the scan-and-mutate loop above, and work on
+**both** storage formats::
+
+    removed = tasks.remove_where("status", "archived")
+    updated = tasks.update_where("status", "open", {"status": "in_progress"})
+
+    # stop after the first match instead of every match
+    tasks.remove_where("id", "task-42", first_only=True)
+
+Through ``actor.property_lists.<name>`` (as above), both return the
+number of items actually affected; on the core ``ListProperty`` layer
+they instead return the affected items themselves (the removed values /
+the pre-update values), which is what the notifying wrapper builds its
+per-item subscription diffs from -- ``len()`` of that list is the same
+count. Under v2 they are
+built on ``items_with_handles()`` plus the handle mutators above -- one
+whole-list read, then one conditional write per match, same single-shot
+semantics per match (a match lost to a concurrent mutation between the
+read and its write is simply not counted, never retried). Under v1 they
+fall back to positional access; ``remove_where()`` applies multi-match
+deletes in **descending index order** specifically, since deleting
+ascending would shift every later match onto the wrong row as each
+earlier delete closes a hole.
+
+A multi-match ``remove_where()``/``update_where()`` call against a list
+with subscribers registers one diff per affected item -- see
+:doc:`subscriptions` for what that means for callback fan-out, and for
+the ``old_item`` field ``update_where()``/``update_by_handle()`` diffs
+carry.
+
+Reading Many Lists Cheaply
+---------------------------
+
+If your code needs the *contents* of several of an actor's lists at once
+-- rendering a dashboard, say -- fetching each list separately means one
+database read per list. ``list_all_with_rows()`` fetches everything the
+actor has in one read instead, so you can fill in each list from data you
+already have:
+
+.. code-block:: python
+
+   names, rows = actor.property_lists.list_all_with_rows()
+   for name in names:
+       lst = getattr(actor.property_lists, name)
+       lst.prime_from_rows(rows)          # uses `rows`, no extra read
+       items = lst.to_list_from_rows(rows)
+
+Treat ``rows`` as a snapshot from the moment you fetched it -- it won't
+reflect a change made a moment later -- and pass it straight into
+``prime_from_rows()``/``to_list_from_rows()`` rather than inspecting it
+yourself; its internal shape isn't part of the public API and may change
+in a future release. This also doesn't change the cost of position-based
+access covered above (``lst[i]``, ``pop()``, ``remove()``) -- those still
+check the list's current state directly, on purpose, so they can't return
+or destroy the wrong item using data that might already be out of date.
+
 REST API
 --------
 
@@ -330,6 +530,50 @@ spec -- the spec addresses items by path index,
   {"action": "add", "item_value": {...}}          # append to end
   {"action": "update", "item_index": N, "item_value": {...}}
   {"action": "delete", "item_index": N}
+  # "update"/"delete" on a row that changed since the request read it:
+  # 503 with Retry-After, same as PUT ?index=N below -- as of 3.14 these
+  # are conditional writes, not unconditional overwrites.
+
+**Bulk update items** (an implementation extension, like ``/items`` above)::
+
+  POST /{actor_id}/properties
+  Content-Type: application/json
+  {"{list_name}": {"items": [
+    {"index": 0, ...item data...},   # update -- any keys besides "index"
+    {"index": 3},                    # delete -- ONLY the "index" key
+    {"index": 5, ...item data...}    # append -- index == current length
+  ]}}
+  # Every "index" is interpreted against the list as it stood BEFORE the
+  # batch. Updates apply first, in the given order; deletes apply last,
+  # in descending index order.
+
+As of 3.14, a batch that concurrently races another writer no longer
+silently overwrites or misapplies what it finds -- **each item is
+reported individually** rather than failing the whole request: the
+response summary counts only the items that actually applied, and a
+skipped item is logged, not raised. Two consequences worth knowing before
+relying on batch semantics:
+
+- A ``{"index": N, ...}`` update whose row changed since the batch's own
+  read is not applied and is not counted -- the other items in the batch
+  still are. Retry the batch (or just that item) to see the current
+  content and decide again.
+- **Same-index update + delete, in one batch, is now well-defined**: for
+  an index that existed before the batch, the update applies and the
+  delete is reported as skipped ("concurrently modified") rather than
+  deleting the row the update just wrote; for an index the batch itself
+  creates (index >= the pre-batch length), the pair is a net no-op --
+  nothing is appended and nothing is reported skipped. Before 3.14 this
+  raced against whatever the positional delete pass found by then, most
+  often deleting the updated row -- if your integration relied on that,
+  address the same index only once per batch.
+- **Duplicate indices in one batch resolve to one write, later entry
+  wins**: two updates addressing the same index -- pre-existing or
+  batch-created -- store the second value in a single row (the response
+  still counts each request entry). Two *deletes* at the same
+  pre-existing index remove one row, with the second reported as skipped
+  -- unlike pre-3.14, where position shift between the two deletes could
+  take a neighbouring row with it.
 
 **PUT item at index**::
 
@@ -339,6 +583,10 @@ spec -- the spec addresses items by path index,
 
   # index == current list length: creates (appends) the item.
   # index > current list length: 404 Not Found (no padding is created).
+  # index within range but the row changed since this request read it:
+  # 503 with Retry-After (same signal a contended list metadata write
+  # already used) -- as of 3.14 this replace is a conditional write, not
+  # an unconditional overwrite of whatever it finds.
 
 **DELETE entire list**::
 
@@ -440,13 +688,29 @@ Be precise about what that buys, because the difference matters
 operationally. The old window was **unbounded in time**: a ``ListProperty``
 instance an application held on to kept its cached metadata until something
 explicitly invalidated it, so a write minutes or hours after a migration could
-still revert it. The remaining window is **two adjacent operations** — the
-read of the metadata row and the write that follows it. A migration that
-completes inside that gap can still be reverted, because neither backend's
-property layer offers a compare-and-set to condition the write on. That
-residue is accepted and deferred rather than closed; see
+still revert it. As of 3.14, that window is closed rather than merely
+narrowed: every metadata write conditions on the exact bytes it read, via a
+bounded compare-and-swap retry loop built on a per-row compare-and-set
+primitive (added in 3.14 for exactly this). A migration that completes in
+the gap between another writer's read and its write no longer gets
+overwritten — the write's condition fails, the loop re-reads the row the
+migration just produced, and merges onto *that* instead. Sustained
+contention (the row keeps changing across every retry) raises
+``ListMetadataContentionError`` rather than corrupting the row or retrying
+forever; ``PropertiesHandler``, ``PropertyMetadataHandler`` and
+``PropertyListItemsHandler`` all map it to **503 with a ``Retry-After``
+header**, since a contended row is a retryable condition, not a server
+fault. Dispatch (which storage format a mutation writes into) is decided
+from the same fresh read, closing the companion gap where a retained
+instance wrote into the format a migrated list no longer has — see
+``verify()``'s ``foreign_format_rows`` field.
+
+This closes the metadata read-modify-write window specifically. It does
+**not** make ``compact()``/``migrate_to_v2()``'s bulk item-row copying
+crash-atomic — an interruption mid-rewrite can still leave duplicate or
+reordered item rows, tracked separately in
 ``thoughts/todo/whole-list-rewrite-atomicity.md``. Quiescing writes during a
-migration is what actually closes it.
+migration remains the operational recommendation for that part.
 
 *Two concurrent migrations resolve to last-writer-wins at whole-list
 granularity, and this is accepted rather than prevented.* Each migration

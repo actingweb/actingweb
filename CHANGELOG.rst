@@ -5,6 +5,156 @@ CHANGELOG
 Unreleased
 ----------
 
+v3.14.0: August 21, 2026
+-------------------------
+
+.. note::
+
+   **This release makes property lists faster and cheaper to use,**
+   especially for code that looks up list items by position in a loop
+   (``for i in range(len(lst)): lst[i]``) — that pattern can be
+   surprisingly slow on larger lists. The fix is a new way to find and
+   change items by value instead of position: ``find()``,
+   ``items_with_handles()``, ``remove_where()``, ``update_where()`` and
+   friends. See ``docs/migration/v3.14.rst`` for the full guide, including
+   three small breaking changes.
+
+SECURITY
+~~~~~~~~
+
+- **A peer with only read access to a property list could still write to
+  it.** ``AuthenticatedPropertyListStore`` — the permission-checked way
+  apps expose property lists to peers — only checked read permission
+  before handing back a list object, and that object was fully editable.
+  So a peer granted read-only access could add, change, or remove items
+  anyway. Plain properties (not lists) were never affected; this was
+  specific to lists, and has been present since the feature was
+  introduced. It's now fixed: list writes require write (or delete)
+  permission, matching how plain properties already worked. If any peer's
+  trust type is meant to be read-only on a property list, it's worth
+  checking that peer's recent activity for writes it shouldn't have been
+  able to make.
+
+CHANGED
+~~~~~~~
+
+- **Breaking:** ``get_metadata()["length"]``, and the ``count`` field the
+  REST API returns for a single list, are now a close estimate rather
+  than a guaranteed-exact count. In practice the estimate can only be off
+  by a handful, and it self-corrects. ``len(actor.property_lists.<name>)``
+  and actually iterating a list remain exact, always, on every list
+  format — this only affects that one metadata field and that one REST
+  field. See ``docs/guides/property-lists.rst`` for a recipe if you rely
+  on an exact count near a hard limit.
+- **Breaking:** ``AuthenticatedPropertyListStore.create()`` is removed. It
+  never worked in any released version — every call raised an error — so
+  there is no working code for this to break. Lists are created
+  automatically on first write; there was never a separate creation step.
+- **Breaking (narrow):** in a bulk request that both updates and deletes
+  the same list item in one call, the delete used to win and silently
+  discard the update. Now the delete is recognized as stale and reported
+  back as a conflict instead. If you relied on the old "delete wins"
+  behavior, send the update and delete as two separate requests.
+- Bulk list updates now report a conflict for an individual item instead
+  of silently overwriting it, when something else changed that item at
+  the same time. See ``docs/guides/property-lists.rst`` "Bulk update
+  items".
+- Updates made with the new value-based methods now notify subscribed
+  peers using the item's value, so a peer can still find the right item
+  even if its position changed. Peers on an older ActingWeb version keep
+  working exactly as before for every operation that existed before this
+  release; the one exception is these new value-based *update* diffs,
+  which carry no position for an old peer to fall back on, so a pre-3.14
+  peer does not apply them (it skips them without error). If peers you
+  do not control replicate a list you mutate with ``update_where()`` or
+  ``update_by_handle()``, they need 3.14 to see those updates.
+- A previously-documented race window, where a list format upgrade could
+  be silently undone by a change happening at the same moment, is now
+  closed rather than merely bounded. See ``ListMetadataContentionError``
+  below.
+
+ADDED
+~~~~~
+
+- **Look up and change list items by value, not position** -- the
+  headline feature of this release:
+
+  - ``find(key, value)`` / ``find_all(key, value)`` -- find the item(s)
+    whose field matches a value, in one read.
+  - ``items_with_handles()`` -- fetch every item in a list along with a
+    short-lived reference ("handle") you can use to update or delete that
+    exact item afterward. Handles are meant to be used right away, not
+    saved for later -- see the migration guide for why.
+  - ``delete_by_handle(handle)`` / ``update_by_handle(handle, item)`` --
+    change or remove one item by its handle. If something else already
+    changed that item, the call safely does nothing and reports that
+    instead of overwriting it.
+  - ``remove_where(key, value)`` / ``update_where(key, value, item)`` --
+    remove or update every item matching a value, in one call.
+
+  All of the above are available directly on
+  ``actor.property_lists.<name>`` and go through the same permission
+  checks as the library's existing list methods. See
+  ``docs/guides/property-lists.rst`` for full examples.
+
+- ``consistent=False``, an opt-in parameter on list-reading methods
+  (``to_list()``, ``slice()``, ``find()``, and similar) for reads that can
+  tolerate being a moment out of date, in exchange for lower cost and
+  better performance. Off by default everywhere, including inside the
+  library itself.
+- ``ListMetadataContentionError`` (importable from ``actingweb``): a new,
+  specific, catchable error for the rare case where a list update can't
+  complete because of a conflicting change happening at the same moment.
+  The library's own request handlers turn this into an HTTP 503
+  "please retry" response automatically.
+- ``PropertyListStore.list_all_with_rows()`` -- for apps that read several
+  of an actor's lists at once, this fetches everything in a single read
+  instead of one read per list.
+- ``actingweb-verify-orphans``, a new command-line tool that scans your
+  database for leftover data belonging to actors that no longer exist
+  (for example, from an interrupted deletion). It only reports what it
+  finds and never deletes anything on its own. See
+  ``docs/reference/actor-deletion.rst`` "Finding orphaned rows".
+- Clearing or deleting a whole list now happens in a small number of
+  batched operations instead of one step per item -- much faster on
+  large lists, with no code changes needed.
+
+FIXED
+~~~~~
+
+- ``actor.property_lists.<name>.get_metadata()`` was silently unreachable
+  through the normal way apps access lists, despite being a documented,
+  public method. It now works as documented.
+- A list item whose value is ``None`` now replicates to subscribed peers
+  like any other value. Previously a diff for such an item omitted its
+  ``item``/``old_item`` field entirely, and the receiving side dropped
+  the whole notification as unrecognized -- silently, the same failure
+  mode as the ``remove()`` bug below.
+- When a peer receives a value-based update it cannot apply (the value
+  matches no row, or more than one), it now logs a WARNING naming the
+  list and suggesting a resync. The update was already (correctly) not
+  applied in that case; what was missing was any operator-visible signal
+  that the replica had just diverged.
+- ``remove_where()``/``update_where()`` on the core ``ListProperty``
+  layer now capture the values they return during the same scan that
+  matches them (v1 format) -- previously a second positional read could
+  return a different value than the one actually removed or replaced if
+  a concurrent writer landed in between.
+- ``actingweb-verify-orphans`` re-run against a checkpoint in which every
+  table is already complete now says so (``REPLAYED FROM CHECKPOINT``)
+  and exits with a distinct status (3) instead of reprinting the earlier
+  scan's findings as if they were current.
+- **Removing an item from a list wasn't reaching subscribed peers.** A
+  bug meant ``remove()`` never actually notified peers, for as long as
+  the feature has existed -- the notification was silently dropped every
+  time. This is now fixed. If you have peers subscribed to a list that
+  uses ``remove()``, they may be out of sync with removals made before
+  this upgrade; a manual resync is the safest way to catch them up if you
+  suspect this affected you.
+- On PostgreSQL, reading properties for an actor with no data at all
+  returned an empty result differently than on DynamoDB. Both backends
+  now behave the same way; unlikely to have been noticeable in practice.
+
 v3.13.0: August 15, 2026
 ------------------------
 

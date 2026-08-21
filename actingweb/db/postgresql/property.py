@@ -477,11 +477,17 @@ class DbProperty:
         lower: str | None = None,
         upper: str | None = None,
         keys_only: bool = False,
+        consistent_read: bool = True,
     ) -> dict[str, str]:
         """Range-read rows whose name is in ``[lower, upper]`` (inclusive).
 
         See ``DbPropertyProtocol.get_range`` for the contract. Uses a range
         comparison (``>=``/``<=``), never ``LIKE`` — no escaping surface.
+
+        ``consistent_read`` is accepted and ignored: PostgreSQL reads are
+        consistent by construction, there is no eventually-consistent read
+        mode to opt into. It's part of the protocol (DynamoDB's callers
+        pass it uniformly) rather than a DynamoDB detail leaking upward.
         """
         if not actor_id or lower is None or upper is None:
             return {}
@@ -585,6 +591,103 @@ class DbProperty:
             )
             raise DbError("property conditional delete", actor_id) from e
 
+    def set_if_value_equals(
+        self,
+        actor_id: str | None = None,
+        name: str | None = None,
+        expected: Any = None,
+        value: Any = None,
+    ) -> bool:
+        """Conditionally set — see ``DbPropertyProtocol.set_if_value_equals``.
+
+        A single atomic ``UPDATE ... WHERE value = %s``, mirroring
+        ``delete_if_value_equals`` above: a zero rowcount covers both "the
+        value changed" and "the row is gone" the same way.
+        """
+        if not actor_id or not name or expected is None or value is None:
+            return False
+
+        try:
+            with get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE properties
+                        SET value = %s
+                        WHERE id = %s AND name = %s AND value = %s
+                        """,
+                        (value, actor_id, name, expected),
+                    )
+                    updated = cur.rowcount == 1
+                conn.commit()
+            if updated:
+                self.handle = {"id": actor_id, "name": name, "value": value}
+            return updated
+        except Exception as e:
+            logger.error(f"Error conditionally setting property {actor_id}/{name}: {e}")
+            raise DbError("property conditional set", actor_id) from e
+
+    def get_last_in_range(
+        self, actor_id: str | None = None, lower: str | None = None, upper: str | None = None
+    ) -> str | None:
+        """Bytewise-greatest row name in ``[lower, upper]`` — see
+        ``DbPropertyProtocol.get_last_in_range``.
+
+        ``COLLATE "C"`` is load-bearing, not stylistic: rank keys mix
+        upper- and lower-case, and a locale collation disagrees with byte
+        order on exactly that (``max("Z", "a")`` is ``"a"`` bytewise, but
+        ``"Z"`` under en_US) — a wrong maximum here becomes a mid-list
+        append. Same caution family as ``fetch()``'s ``NOT LIKE``.
+        """
+        if not actor_id or lower is None or upper is None:
+            return None
+
+        try:
+            with get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT name
+                        FROM properties
+                        WHERE id = %s
+                          AND name COLLATE "C" >= %s
+                          AND name COLLATE "C" <= %s
+                        ORDER BY name COLLATE "C" DESC
+                        LIMIT 1
+                        """,
+                        (actor_id, lower, upper),
+                    )
+                    row = cur.fetchone()
+                    return row[0] if row else None
+        except Exception as e:
+            logger.error(f"Error reading last-in-range for actor {actor_id}: {e}")
+            raise DbError("property last-in-range read", actor_id) from e
+
+    def batch_delete(
+        self, actor_id: str | None = None, names: list[str] | None = None
+    ) -> None:
+        """Unconditional bulk delete — see ``DbPropertyProtocol.batch_delete``.
+
+        A single ``DELETE ... WHERE id = %s AND name = ANY(%s)`` -- no
+        25-item chunking needed, PostgreSQL has no such limit.
+        """
+        if not actor_id or not names:
+            return
+        try:
+            with get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        DELETE FROM properties
+                        WHERE id = %s AND name = ANY(%s)
+                        """,
+                        (actor_id, names),
+                    )
+                conn.commit()
+        except Exception as e:
+            logger.error(f"Error batch-deleting properties for actor {actor_id}: {e}")
+            raise DbError("property batch delete", actor_id) from e
+
 
 class DbPropertyList:
     """
@@ -629,7 +732,19 @@ class DbPropertyList:
 
     def fetch(self, actor_id: str | None = None) -> dict[str, str] | None:
         """
-        Retrieve all properties for an actor (excluding list: properties).
+        Retrieve the PLAIN (non-list) properties for an actor.
+
+        Filters ``list:``-prefixed rows in the query itself via
+        ``NOT LIKE 'list:%%'`` rather than fetching the whole partition and
+        discarding list item rows client-side. Deliberately not a range
+        comparison (unlike the DynamoDB backend, which cannot ``OR`` on a
+        sort key and so needs one): PostgreSQL text ordering is
+        collation-dependent, and a non-``C`` collation does not agree with
+        byte order on punctuation, so a ``name < 'list:'`` condition would
+        not reliably exclude every ``list:*`` row. ``NOT LIKE`` has no such
+        dependency. (The ``%%`` is not a client-side-filter leftover: a
+        literal, unparameterised ``%`` in the query text is misread by
+        psycopg as an incomplete placeholder.)
 
         Args:
             actor_id: The actor ID
@@ -650,22 +765,24 @@ class DbPropertyList:
                         SELECT name, value
                         FROM properties
                         WHERE id = %s
+                          AND name NOT LIKE 'list:%%'
                         ORDER BY name
                         """,
                         (actor_id,),
                     )
                     rows = cur.fetchall()
 
-                    if rows:
-                        self.props = {}
-                        for row in rows:
-                            name, value = row
-                            # Filter out list properties (they have "list:" prefix)
-                            if not name.startswith("list:"):
-                                self.props[name] = value
-                        return self.props
-                    else:
-                        return None
+                    # Always {}, never None, once actor_id is valid --
+                    # matching the DynamoDB backend, whose query iterator
+                    # is truthy regardless of match count. Filtering
+                    # list:-prefixed rows in SQL now (rather than
+                    # client-side over the whole partition) means an actor
+                    # with ONLY list: rows returns zero rows here same as
+                    # one with none at all; both must still answer {},
+                    # not None -- a caller distinguishing "no properties"
+                    # from "an error" depends on it.
+                    self.props = dict(rows)
+                    return self.props
         except Exception as e:
             logger.error(f"Error fetching properties for actor {actor_id}: {e}")
             return None

@@ -12,6 +12,7 @@ Contents
 .. toctree::
    :maxdepth: 2
 
+   v3.14
    v3.13
    v3.11
    v3.10
@@ -21,6 +22,15 @@ Contents
 
 Version Migrations
 ==================
+
+**v3.14 Migration**
+   Guide for upgrading to ActingWeb 3.14. Property lists are faster and
+   cheaper to work with, especially for code that looks up items by
+   position in a loop — the guide shows the new, faster way (``find()``,
+   ``remove_where()``, ``update_where()``). Three small breaking changes,
+   a fix for a permission gap that let read-only peers write to property
+   lists, and a new command-line tool for finding leftover data from
+   deleted actors (``actingweb-verify-orphans``).
 
 **v3.13 Migration**
    Guide for upgrading to ActingWeb 3.13. It covers four largely independent

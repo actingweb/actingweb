@@ -446,6 +446,219 @@ class TestRemotePeerStoreCallbackData:
         assert results["items"]["index"] == 1
         assert list_data["items"][1] == {"id": 99}
 
+    def test_apply_list_update_without_old_item_is_unchanged(self, mock_actor, mock_storage):
+        """A pre-3.14 sender (or a diff from __setitem__/insert()) never
+        sends ``old_item`` -- the update must still resolve purely by
+        index, exactly as it always has."""
+        _, list_data = mock_storage
+        list_data["items"] = [{"id": 1}, {"id": 2}]
+
+        store = RemotePeerStore(mock_actor, "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6")
+        results = store.apply_callback_data(
+            {"list:items": {"operation": "update", "index": 0, "item": {"id": 100}}}
+        )
+
+        assert results["items"]["operation"] == "update"
+        assert results["items"]["index"] == 0
+        assert list_data["items"][0] == {"id": 100}
+
+    def test_apply_list_update_with_old_item_and_no_index_applies_by_value(
+        self, mock_actor, mock_storage
+    ):
+        """update_by_handle() diffs carry ``old_item`` but never an
+        ``index`` -- a handle is not positional. A unique value match must
+        still be enough to apply the update."""
+        _, list_data = mock_storage
+        list_data["items"] = [{"id": 1}, {"id": 2}]
+
+        store = RemotePeerStore(mock_actor, "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6")
+        results = store.apply_callback_data(
+            {
+                "list:items": {
+                    "operation": "update",
+                    "old_item": {"id": 2},
+                    "item": {"id": 99},
+                }
+            }
+        )
+
+        assert results["items"]["operation"] == "update"
+        assert results["items"].get("success") is True
+        assert results["items"]["index"] == 1
+        assert list_data["items"] == [{"id": 1}, {"id": 99}]
+
+    def test_apply_list_update_with_ambiguous_old_item_falls_back_to_index(
+        self, mock_actor, mock_storage
+    ):
+        """Two rows share the same value as ``old_item`` -- which one the
+        sender meant is genuinely ambiguous, so the match-by-value path
+        must not guess. With an index present, fall back to it."""
+        _, list_data = mock_storage
+        list_data["items"] = [{"id": 1}, {"id": 1}, {"id": 1}]
+
+        store = RemotePeerStore(mock_actor, "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6")
+        results = store.apply_callback_data(
+            {
+                "list:items": {
+                    "operation": "update",
+                    "index": 2,
+                    "old_item": {"id": 1},
+                    "item": {"id": 99},
+                }
+            }
+        )
+
+        assert results["items"]["operation"] == "update"
+        assert results["items"]["index"] == 2
+        assert list_data["items"] == [{"id": 1}, {"id": 1}, {"id": 99}]
+
+    def test_apply_list_update_with_ambiguous_old_item_and_no_index_errors(
+        self, mock_actor, mock_storage
+    ):
+        """Same ambiguity as above, but from an update_by_handle() diff --
+        no index to fall back to. Report an explicit error rather than
+        applying to an arbitrary one of the matching rows."""
+        _, list_data = mock_storage
+        list_data["items"] = [{"id": 1}, {"id": 1}]
+
+        store = RemotePeerStore(mock_actor, "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6")
+        results = store.apply_callback_data(
+            {
+                "list:items": {
+                    "operation": "update",
+                    "old_item": {"id": 1},
+                    "item": {"id": 99},
+                }
+            }
+        )
+
+        assert "error" in results["items"]
+        assert list_data["items"] == [{"id": 1}, {"id": 1}]
+
+    def test_apply_list_update_with_ambiguous_old_item_and_no_index_logs_a_warning(
+        self, mock_actor, mock_storage, caplog
+    ):
+        """The deliberate no-write on an ambiguous value match leaves this
+        replica out of sync, and every caller discards the result dict --
+        so the WARNING is the only operator-visible signal. Pin it."""
+        import logging
+
+        _, list_data = mock_storage
+        list_data["items"] = [{"id": 1}, {"id": 1}]
+
+        store = RemotePeerStore(mock_actor, "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6")
+        with caplog.at_level(logging.WARNING, logger="actingweb.remote_storage"):
+            results = store.apply_callback_data(
+                {
+                    "list:items": {
+                        "operation": "update",
+                        "old_item": {"id": 1},
+                        "item": {"id": 99},
+                    }
+                }
+            )
+
+        assert "error" in results["items"]
+        dropped = [r for r in caplog.records if "value-addressed update" in r.getMessage()]
+        assert len(dropped) == 1
+        assert "items" in dropped[0].getMessage()  # names the list
+        assert "resync" in dropped[0].getMessage()  # names the remedy
+
+    def test_apply_list_update_with_null_old_item_applies_by_value(
+        self, mock_actor, mock_storage
+    ):
+        """JSON null is a legal pre-update value. A diff carrying
+        ``"old_item": null`` with no index must still resolve by value
+        (key presence, not ``is not None``)."""
+        _, list_data = mock_storage
+        list_data["items"] = [{"id": 1}, None, {"id": 3}]
+
+        store = RemotePeerStore(mock_actor, "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6")
+        results = store.apply_callback_data(
+            {
+                "list:items": {
+                    "operation": "update",
+                    "old_item": None,
+                    "item": {"id": 2},
+                }
+            }
+        )
+
+        assert results["items"].get("success") is True
+        assert results["items"]["index"] == 1
+        assert list_data["items"] == [{"id": 1}, {"id": 2}, {"id": 3}]
+
+    def test_apply_list_remove_of_a_none_item_applies(self, mock_actor, mock_storage):
+        """``remove`` diffs for a None-valued item carry ``"item": null``;
+        the receiver's membership gate must accept it and delete the row."""
+        _, list_data = mock_storage
+        list_data["items"] = [{"id": 1}, None, {"id": 3}]
+
+        store = RemotePeerStore(mock_actor, "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6")
+        results = store.apply_callback_data(
+            {"list:items": {"operation": "remove", "item": None}}
+        )
+
+        assert results["items"].get("success") is True
+        assert results["items"]["index"] == 1
+        assert list_data["items"] == [{"id": 1}, {"id": 3}]
+
+    def test_apply_list_update_with_old_item_prefers_value_match_over_drifted_index(
+        self, mock_actor, mock_storage
+    ):
+        """Phase 10: update_where()/update_by_handle() diffs carry
+        ``old_item``, the pre-update value from the SENDER's snapshot.
+        This side's list has drifted since (an earlier diff already
+        applied and shifted positions), so the index the sender saw
+        ("1") no longer names the same row here -- the value match
+        must win."""
+        _, list_data = mock_storage
+        # Sender's snapshot was [{"id": 1}, {"id": 2}] with old_item
+        # {"id": 2} at index 1. This side already has an extra row up
+        # front, so {"id": 2} now actually sits at index 2.
+        list_data["items"] = [{"id": 0}, {"id": 1}, {"id": 2}]
+
+        store = RemotePeerStore(mock_actor, "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6")
+        results = store.apply_callback_data(
+            {
+                "list:items": {
+                    "operation": "update",
+                    "index": 1,
+                    "old_item": {"id": 2},
+                    "item": {"id": 99},
+                }
+            }
+        )
+
+        assert results["items"]["operation"] == "update"
+        assert results["items"]["index"] == 2  # matched by value, not the stale index
+        assert list_data["items"] == [{"id": 0}, {"id": 1}, {"id": 99}]
+
+    def test_apply_list_update_with_old_item_falls_back_to_index_if_value_not_found(
+        self, mock_actor, mock_storage
+    ):
+        """If no row currently holds ``old_item`` (already updated by
+        another diff, say), fall back to the index rather than doing
+        nothing."""
+        _, list_data = mock_storage
+        list_data["items"] = [{"id": 1}, {"id": 2}]
+
+        store = RemotePeerStore(mock_actor, "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6")
+        results = store.apply_callback_data(
+            {
+                "list:items": {
+                    "operation": "update",
+                    "index": 1,
+                    "old_item": {"id": "not-present-anywhere"},
+                    "item": {"id": 99},
+                }
+            }
+        )
+
+        assert results["items"]["operation"] == "update"
+        assert results["items"]["index"] == 1
+        assert list_data["items"][1] == {"id": 99}
+
     def test_apply_list_delete(self, mock_actor, mock_storage):
         """Test applying list delete operation."""
         _, list_data = mock_storage

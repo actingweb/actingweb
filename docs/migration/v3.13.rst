@@ -274,6 +274,14 @@ gone.
    there is no compare-and-set to condition that write on. Quiescing writes is
    what closes the rest.
 
+   **Update (3.14):** this remaining gap is closed. Metadata writes now
+   condition on the exact bytes they read via a bounded compare-and-swap
+   retry loop, so a migration that completes inside the old window is
+   merged onto rather than overwritten. See the 3.14 migration guide and
+   the property-lists guide's "Concurrency during a whole-list rewrite"
+   section for the current behavior; this page is left as written for
+   3.13.
+
 Step 3: expect these breaking changes after upgrading
 -----------------------------------------------------
 

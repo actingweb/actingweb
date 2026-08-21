@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "actingweb"
-version = "3.13.0"
+version = "3.14.0"
 description = "The official ActingWeb library"
 authors = ["Greger Wedel <support@actingweb.io>"]
 maintainers = ["Greger Wedel <support@actingweb.io>"]
@@ -29,6 +29,7 @@ include = [
 [tool.poetry.scripts]
 actingweb-verify-property-lists = "actingweb.maintenance.verify_property_lists:main"
 actingweb-migrate-property-lists = "actingweb.maintenance.migrate_property_lists:main"
+actingweb-verify-orphans = "actingweb.maintenance.verify_orphans:main"
 
 [tool.poetry.dependencies]
 python = "^3.11"

@@ -1186,9 +1186,7 @@ class TrustSharedPropertiesHandler(base_handler.BaseHandler):
                 item_count = 0
                 if prop_name in list_name_set and actor_interface is not None:
                     try:
-                        prop_list = getattr(
-                            actor_interface.property_lists, prop_name
-                        )
+                        prop_list = getattr(actor_interface.property_lists, prop_name)
                         prop_list.prime_from_rows(list_rows)
                         item_count = len(prop_list)
                     except Exception as e:

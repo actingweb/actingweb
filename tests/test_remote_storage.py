@@ -446,7 +446,9 @@ class TestRemotePeerStoreCallbackData:
         assert results["items"]["index"] == 1
         assert list_data["items"][1] == {"id": 99}
 
-    def test_apply_list_update_without_old_item_is_unchanged(self, mock_actor, mock_storage):
+    def test_apply_list_update_without_old_item_is_unchanged(
+        self, mock_actor, mock_storage
+    ):
         """A pre-3.14 sender (or a diff from __setitem__/insert()) never
         sends ``old_item`` -- the update must still resolve purely by
         index, exactly as it always has."""
@@ -559,7 +561,9 @@ class TestRemotePeerStoreCallbackData:
             )
 
         assert "error" in results["items"]
-        dropped = [r for r in caplog.records if "value-addressed update" in r.getMessage()]
+        dropped = [
+            r for r in caplog.records if "value-addressed update" in r.getMessage()
+        ]
         assert len(dropped) == 1
         assert "items" in dropped[0].getMessage()  # names the list
         assert "resync" in dropped[0].getMessage()  # names the remedy

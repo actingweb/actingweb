@@ -265,7 +265,9 @@ class TestOrderingSemanticsMatchV1:
         assert v1_result == v2_result
 
 
-def _run_handler(handler_cls, myself, config, method, path_name, params=None, body=None):
+def _run_handler(
+    handler_cls, myself, config, method, path_name, params=None, body=None
+):
     webobj = AWWebObj(params=params or {}, body=body)
     handler = handler_cls(webobj, config)
 

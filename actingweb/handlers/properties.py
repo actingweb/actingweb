@@ -1142,7 +1142,9 @@ class PropertiesHandler(base_handler.BaseHandler):
                                 # row instead.
                                 pairs = list_prop.items_with_handles()
                                 snapshot_length = len(pairs)
-                                pending_updates_v2: list[tuple[int, dict[str, Any]]] = []
+                                pending_updates_v2: list[
+                                    tuple[int, dict[str, Any]]
+                                ] = []
                                 pending_deletes_v2: list[int] = []
                                 projected_length = snapshot_length
 
@@ -1254,7 +1256,8 @@ class PropertiesHandler(base_handler.BaseHandler):
                                 skip_new_indices = {
                                     index
                                     for index in pending_deletes_v2
-                                    if index >= snapshot_length and index in final_value_by_index
+                                    if index >= snapshot_length
+                                    and index in final_value_by_index
                                 }
 
                                 # Pass 1: updates, ascending index order --
@@ -1498,7 +1501,13 @@ class PropertiesHandler(base_handler.BaseHandler):
                                     # Don't fail the entire operation for delete errors
 
                             if not self._finish_bulk_list_update(
-                                myself, key, list_prop, check, pair, items_updated, items_deleted
+                                myself,
+                                key,
+                                list_prop,
+                                check,
+                                pair,
+                                items_updated,
+                                items_deleted,
                             ):
                                 return
 
@@ -2143,9 +2152,7 @@ class PropertyListItemsHandler(base_handler.BaseHandler):
                                     400, f"Index {index} out of range"
                                 )
                             return
-                        if not list_prop.update_by_handle(
-                            pairs[index][0], item_value
-                        ):
+                        if not list_prop.update_by_handle(pairs[index][0], item_value):
                             self._respond_list_metadata_contended(
                                 RuntimeError(
                                     f"list '{name}' item at index {index} was "

@@ -26,7 +26,9 @@ def fake_store():
 
 
 class TestHandleMutatorsAreV2Only:
-    def test_delete_by_handle_raises_on_v1_naming_migrate_to_v2(self, monkeypatch, fake_store):
+    def test_delete_by_handle_raises_on_v1_naming_migrate_to_v2(
+        self, monkeypatch, fake_store
+    ):
         actor_id = "actor-handle-v1"
         name = "items"
         _seed_list(fake_store, actor_id, name, ["a", "b"])
@@ -37,7 +39,9 @@ class TestHandleMutatorsAreV2Only:
         with pytest.raises(ValueError, match="migrate_to_v2"):
             lst.delete_by_handle(handle)
 
-    def test_update_by_handle_raises_on_v1_naming_migrate_to_v2(self, monkeypatch, fake_store):
+    def test_update_by_handle_raises_on_v1_naming_migrate_to_v2(
+        self, monkeypatch, fake_store
+    ):
         actor_id = "actor-handle-v1b"
         name = "items"
         _seed_list(fake_store, actor_id, name, ["a", "b"])
@@ -79,7 +83,9 @@ class TestHandleMutatorsAreSingleShotNoRetry:
     and confirming there is exactly ONE attempt (no retry loop consuming
     extra calls)."""
 
-    def test_delete_by_handle_returns_false_once_no_retry(self, monkeypatch, fake_store):
+    def test_delete_by_handle_returns_false_once_no_retry(
+        self, monkeypatch, fake_store
+    ):
         actor_id = "actor-handle-race"
         name = "items"
         _seed_v2_list(fake_store, actor_id, name, ["a", "b"])
@@ -110,7 +116,9 @@ class TestHandleMutatorsAreSingleShotNoRetry:
         assert call_count["n"] == 1
         assert lst.to_list() == ["changed", "b"]
 
-    def test_update_by_handle_returns_false_once_no_retry(self, monkeypatch, fake_store):
+    def test_update_by_handle_returns_false_once_no_retry(
+        self, monkeypatch, fake_store
+    ):
         actor_id = "actor-handle-race2"
         name = "items"
         _seed_v2_list(fake_store, actor_id, name, ["a", "b"])
@@ -146,7 +154,9 @@ class TestHandleGenerationBoundary:
     list's first rank. A stale handle must fail, never silently address
     the wrong (new) item."""
 
-    def test_stale_handle_fails_after_delete_and_recreate(self, monkeypatch, fake_store):
+    def test_stale_handle_fails_after_delete_and_recreate(
+        self, monkeypatch, fake_store
+    ):
         actor_id = "actor-handle-gen"
         name = "items"
         _seed_v2_list(fake_store, actor_id, name, ["a", "b"])
@@ -169,7 +179,9 @@ class TestHandleGenerationBoundary:
 
 
 class TestRemoveWhereQueryCost:
-    def test_remove_where_issues_one_get_range_and_k_point_deletes(self, monkeypatch, fake_store):
+    def test_remove_where_issues_one_get_range_and_k_point_deletes(
+        self, monkeypatch, fake_store
+    ):
         actor_id = "actor-removewhere-cost"
         name = "items"
         items = [{"id": i, "grp": "x" if i % 5 == 0 else "y"} for i in range(50)]
@@ -325,7 +337,9 @@ class TestRemoveWhereV1DescendingOrder:
     row as each earlier delete closes a hole -- descending order is the
     only correct choice for a multi-match v1 delete."""
 
-    def test_v1_remove_where_removes_all_matches_correctly(self, monkeypatch, fake_store):
+    def test_v1_remove_where_removes_all_matches_correctly(
+        self, monkeypatch, fake_store
+    ):
         actor_id = "actor-removewhere-v1"
         name = "items"
         items = [
@@ -345,7 +359,9 @@ class TestRemoveWhereV1DescendingOrder:
         assert removed == [items[0], items[2], items[4]]
         assert [item["id"] for item in lst.to_list()] == [1, 3]
 
-    def test_v1_update_where_updates_all_matches_correctly(self, monkeypatch, fake_store):
+    def test_v1_update_where_updates_all_matches_correctly(
+        self, monkeypatch, fake_store
+    ):
         actor_id = "actor-updatewhere-v1"
         name = "items"
         items = [

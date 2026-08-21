@@ -628,7 +628,10 @@ class DbProperty:
             raise DbError("property conditional set", actor_id) from e
 
     def get_last_in_range(
-        self, actor_id: str | None = None, lower: str | None = None, upper: str | None = None
+        self,
+        actor_id: str | None = None,
+        lower: str | None = None,
+        upper: str | None = None,
     ) -> str | None:
         """Bytewise-greatest row name in ``[lower, upper]`` — see
         ``DbPropertyProtocol.get_last_in_range``.

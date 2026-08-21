@@ -394,7 +394,11 @@ class RemotePeerStore:
             list_attr.insert(data["index"], data["item"])
             return {"operation": "insert", "index": data["index"], "success": True}
 
-        elif operation == "update" and "item" in data and ("index" in data or "old_item" in data):
+        elif (
+            operation == "update"
+            and "item" in data
+            and ("index" in data or "old_item" in data)
+        ):
             idx = data.get("index")
             old_item = data.get("old_item")
             matches: list[int] = []
@@ -412,7 +416,9 @@ class RemotePeerStore:
                 # unique: if two or more rows currently hold that value,
                 # which one the sender meant is genuinely ambiguous, so
                 # fall through to the index instead of guessing.
-                matches = [i for i, existing in enumerate(list_attr) if existing == old_item]
+                matches = [
+                    i for i, existing in enumerate(list_attr) if existing == old_item
+                ]
                 if len(matches) == 1:
                     i = matches[0]
                     list_attr[i] = data["item"]

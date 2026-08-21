@@ -110,9 +110,7 @@ class TestDynamoDBPlainPropertyFetch:
 
         db_list.delete()
 
-    def test_only_list_rows_still_returns_empty_dict_not_none(
-        self, config, actor_id
-    ):
+    def test_only_list_rows_still_returns_empty_dict_not_none(self, config, actor_id):
         from actingweb.db.dynamodb.property import DbPropertyList
         from actingweb.property_list import ListProperty
 
@@ -126,9 +124,7 @@ class TestDynamoDBPlainPropertyFetch:
 
         db_list.delete()
 
-    def test_fetch_all_including_lists_still_returns_list_rows(
-        self, config, actor_id
-    ):
+    def test_fetch_all_including_lists_still_returns_list_rows(self, config, actor_id):
         from actingweb.db.dynamodb.property import DbProperty, DbPropertyList
         from actingweb.property_list import ListProperty
 
@@ -183,9 +179,7 @@ class TestPostgreSQLPlainPropertyFetch:
 
         db_list.delete()
 
-    def test_only_list_rows_still_returns_empty_dict_not_none(
-        self, config, actor_id
-    ):
+    def test_only_list_rows_still_returns_empty_dict_not_none(self, config, actor_id):
         from actingweb.db.postgresql.property import DbPropertyList
         from actingweb.property_list import ListProperty
 
@@ -199,9 +193,7 @@ class TestPostgreSQLPlainPropertyFetch:
 
         db_list.delete()
 
-    def test_fetch_all_including_lists_still_returns_list_rows(
-        self, config, actor_id
-    ):
+    def test_fetch_all_including_lists_still_returns_list_rows(self, config, actor_id):
         from actingweb.db.postgresql.property import DbProperty, DbPropertyList
         from actingweb.property_list import ListProperty
 

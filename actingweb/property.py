@@ -75,9 +75,7 @@ class PropertyListStore:
         try:
             if self._config:
                 db_list = get_property_list(self._config)
-                rows = (
-                    db_list.fetch_all_including_lists(actor_id=self._actor_id) or {}
-                )
+                rows = db_list.fetch_all_including_lists(actor_id=self._actor_id) or {}
                 for prop_name in rows.keys():
                     if prop_name.startswith("list:") and prop_name.endswith("-meta"):
                         list_names.append(prop_name[5:-5])

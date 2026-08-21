@@ -202,7 +202,9 @@ class _PermissionEnforcingListView:
     ``actor.property_lists.<name>``, the only path the fluent API offers.
     """
 
-    def __init__(self, list_prop: Any, list_name: str, parent: "AuthenticatedPropertyListStore"):
+    def __init__(
+        self, list_prop: Any, list_name: str, parent: "AuthenticatedPropertyListStore"
+    ):
         self._list_prop = list_prop
         self._list_name = list_name
         self._parent = parent
@@ -318,7 +320,9 @@ class _PermissionEnforcingListView:
         self._check("write")
         return self._list_prop.update_by_handle(handle, item)
 
-    def remove_where(self, identity_key: str, value: Any, *, first_only: bool = False) -> int:
+    def remove_where(
+        self, identity_key: str, value: Any, *, first_only: bool = False
+    ) -> int:
         self._check("delete")
         return self._list_prop.remove_where(identity_key, value, first_only=first_only)
 
@@ -326,7 +330,9 @@ class _PermissionEnforcingListView:
         self, identity_key: str, value: Any, item: Any, *, first_only: bool = False
     ) -> int:
         self._check("write")
-        return self._list_prop.update_where(identity_key, value, item, first_only=first_only)
+        return self._list_prop.update_where(
+            identity_key, value, item, first_only=first_only
+        )
 
     def compact(self) -> dict[str, Any]:
         self._check("write")

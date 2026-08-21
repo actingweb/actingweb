@@ -2609,15 +2609,102 @@ each consumer.
 
 ### Verification
 
-- [ ] `make test-all-parallel` passes
-- [ ] CI green on **both** database backends
-- [ ] Docs build clean, and a grep sweep over `docs/` for retired claims —
-      "two queries per item", keys-only cheapness, both-peers-on-3.14
-      phrasing, "no built-in orphan scan" — returns nothing
-- [ ] Both version files match the intended tag exactly
-- [ ] `poetry build` succeeds
+- [x] `make test-all-parallel` passes (3029 passed, 31 skipped; the two
+      `test_async_operations.py` timing failures under parallel load are
+      confirmed pre-existing flakiness, reproduced identically in Phase 13
+      with a different pair of tests failing each run, and pass cleanly
+      run in isolation — not a Phase 14 regression, nothing in Phase 14
+      touches that test file or the code it exercises)
+- [x] `DATABASE_BACKEND=postgresql make test-integration` passes (860
+      passed, 16 skipped)
+- [x] Docs build clean (`sphinx-build -b html . <out> -c .` from the repo
+      root — `conf.py` lives there per `.readthedocs.yaml`, not in
+      `docs/`), and a grep sweep over `docs/` for retired claims — "two
+      queries per item" (found once, and it is the sentence explicitly
+      debunking the old claim, not asserting it), keys-only cheapness,
+      both-peers-on-3.14 phrasing, "no built-in orphan scan" — returns
+      nothing live (the one `v3.13.rst` hit for "two queries per item" is
+      intentionally preserved as that release's own historical record,
+      per this phase's own instruction not to edit it)
+- [x] Both version files match the intended tag exactly (`3.14.0` in
+      `pyproject.toml` and `actingweb/__init__.py`)
+- [x] `poetry build` succeeds (`actingweb-3.14.0.tar.gz`,
+      `actingweb-3.14.0-py3-none-any.whl`)
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+### Notes
+
+- **CHANGELOG.rst's "Unreleased" section had accumulated nothing across
+  Phases 1-13**, despite this repo's own `CLAUDE.md` process (contributor
+  PRs add an entry as they go). Rather than treat that as a blocker, wrote
+  the full v3.14.0 entry from scratch in this phase: a fork researched
+  Phases 1-9/9B (which had aged out of context) from the plan's own
+  per-phase Notes sections plus spot-checked git history, combined with
+  direct knowledge of Phases 10-13 carried in context, to reconstruct an
+  accurate, complete SECURITY/CHANGED/ADDED/FIXED changelog and
+  `docs/migration/v3.14.rst`.
+- **Two rounds of user feedback arrived mid-phase and reshaped the docs
+  work materially — both applied, not merely noted:**
+  1. *"INDEX.md and todo/ should not be a historic record, plans and
+     verifications should keep those."* The first draft of the
+     `thoughts/todo/` cleanup added a full narrative "0b. 3.14.0 shipped"
+     section to `INDEX.md` mirroring the pre-existing "0. 3.13.0 shipped"
+     section, plus lengthy multi-paragraph "CLOSED, here's why" essays
+     inside `dynamodb-known-next.md` and `whole-list-rewrite-atomicity.md`.
+     All of that was cut back to terse pointers at the plan document (the
+     actual historical record) once flagged, netting a **reduction** in
+     `todo/` line count despite three files changing — closed rows are
+     removed, not narrated in place.
+  2. *"Update the docs to have a language easier to understand for an
+     outsider... too technical and too focused on the internals."*
+     `docs/migration/v3.14.rst` and the `CHANGELOG.rst` v3.14.0 entry were
+     both rewritten from an internals-first voice (RCU, fractional-rank
+     keys, compare-and-swap retry loops, PynamoDB Scan semantics) to a
+     consumer-first one (what changed for you, what to do about it, with
+     technical terms introduced only where a concrete code example needs
+     them). `docs/migration/common-pitfalls.rst`'s new entry and the two
+     freshest additions to `docs/guides/property-lists.rst` /
+     `docs/sdk/authenticated-views.rst` got a lighter pass in the same
+     direction; the rest of `property-lists.rst` (written progressively
+     across Phases 5-11, in a more technical "reference guide" register
+     throughout) was left alone rather than rewritten wholesale — it's a
+     different kind of document (a deep reference for someone already
+     using the feature) from the migration guide (a release announcement
+     for someone deciding whether/how to upgrade), and the feedback read
+     as most applicable to the latter.
+- **`docs/reference/interface-api.rst` gained a new `automodule` entry**
+  (`actingweb.interface.property_store`) rather than a hand-written method
+  list, specifically so the new handle-mutator docstrings stay in sync
+  with the reference page automatically — consistent with `INDEX.md`'s own
+  "a duplicated fact is a fact that will drift" principle, applied to a
+  docs surface rather than a todo file.
+- **Real, pre-existing bug found while writing test seed data for the
+  changed `AuthenticatedPropertyListStore`/orphan docs, not fixed:**
+  `DbTrust.create()`'s `approved` parameter is typed `str` in both
+  backends but PostgreSQL's `trusts.approved` column is a genuine
+  `boolean` — already filed as
+  `thoughts/todo/trust-create-approved-param-type-mismatch.md` in Phase
+  13; no new instance found in Phase 14, noted here only because it's the
+  reason the doc examples in this phase's own testing needed
+  `approved=True` passed explicitly.
+- `ruff format --check` reports 18 files (all from Phases 9-11, none
+  touched in Phase 14) would reformat slightly differently than what's
+  currently committed. Confirmed via `git status --short` that these
+  files are byte-identical to `HEAD` — the drift predates this phase
+  entirely (a `ruff` version difference from whenever those phases were
+  implemented, not a regression). Out of scope for Phase 14; left alone
+  rather than bundling an unrelated 18-file reformat into the release
+  commit.
+- `thoughts/todo/prop-list-key-prefix-scheme.md` (new) records the one
+  piece of unfinished business this release's own evaluation notes
+  surfaced but explicitly deferred: the 1 MB per-partition DynamoDB Query
+  ceiling, which Phases 7-11 made survivable (removed the per-item
+  multiplier against it) but did not remove. Filed as next-major,
+  alongside the existing `legacy-property-gsi-removal.md` (row 12) with a
+  stated sequencing dependency (design it after the legacy-GSI removal,
+  against the final storage shape rather than one still carrying legacy
+  fallback tiers).
 
 ---
 

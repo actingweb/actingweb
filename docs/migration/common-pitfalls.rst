@@ -17,6 +17,17 @@ Properties vs Property Lists
 - Regular properties: small key/value data; simple updates.
 - Property lists (``actor.property_lists.<name>``): ordered collections that can grow beyond DynamoDB size limits; use for notes, events, logs.
 
+Looping over list items by index is slow
+--------------------------------------------
+- ``for i in range(len(lst)): lst[i]`` looks harmless but re-checks the
+  whole list on every single iteration -- on a bigger list this can be
+  dramatically slower and more expensive than expected.
+- Use ``find(key, value)``, ``remove_where(key, value)``, or
+  ``update_where(key, value, item)`` instead -- see
+  :doc:`../guides/property-lists`. Plain iteration (``to_list()``,
+  ``for item in lst``) is fine and was never affected; only an *explicit
+  index-based loop* is the trap.
+
 Base paths in templates
 -----------------------
 - Never use relative paths like ``../www``. Use provided variables:

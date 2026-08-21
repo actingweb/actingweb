@@ -147,99 +147,29 @@ addresses:**
    primitive at all.
 
 ## 1. batch_write for delete loops
-`batch_write`/`BatchWriteItem` is used nowhere. Item-by-item serial
-delete loops: `DbPropertyList.delete()`, `DbTrustList.delete()`,
-`attribute.py` `delete_bucket`/`DbAttributeBucketList.delete`/
-`delete_by_chain`, and worst `ListProperty.clear()/delete()` (per item:
-fresh accessor + GetItem + DeleteItem — a 1000-item list delete is 1000
-serial round-trip pairs). `Actor.delete()` cascades through all of them.
-Needs 25-item chunking + unprocessed-item retry; lookup-row cleanup and
-property hooks stay per-item, so batching covers only the raw deletes.
 
-**Got slightly worse on 2026-08-15** (`thoughts/plans/2026-08-15-property-list-metadata-integrity.md`,
-Phase 2): `ListProperty.clear()` and `delete()` now also call
-`sweep_foreign_format_rows()`, which adds one meta-row read plus one
-keys-only range read, and then deletes any rows found serially like
-everything else here. Necessary — a cleared or deleted list has to be
-empty in *both* storage namespaces, or an interrupted migration's residue
-gets adopted by the next list created under the same name — but it is one
-more serial delete loop for a `batch_write` fix to cover, not one fewer.
-Separately, every list *mutation* now costs one extra point read
-(`_save_metadata()` merges into a fresh read of the meta row), which is
-adjacent to item 2's N+1 and belongs in the same measurement.
+**`ListProperty.clear()`/`delete()` CLOSED in 3.14.0** — batched via a new
+`DbPropertyProtocol.batch_delete()` primitive instead of a serial per-item
+loop. See `thoughts/plans/2026-08-20-v2-positional-access-cost.md` Phase
+12 for the design and measurements.
 
-**Adjacent, filed separately:** `DbPropertyList.fetch()` reading the whole
-partition (`list:` rows included) is I0, and lives in
-`thoughts/todo/property-fetch-reads-whole-partition.md`. It is the per-*partition*
-read amplification; item 2 below is the per-*item* N+1. Item 3 touches both.
+**Still open:** `DbTrustList.delete()`, `attribute.py`
+`delete_bucket`/`DbAttributeBucketList.delete`/`delete_by_chain` — Phase
+12 scoped to `ListProperty.clear()/delete()` only, not this item's other
+sites. `Actor.delete()` still cascades through the unbatched ones.
 
 ## 2. General ListProperty item N+1 and __delitem__ O(N) shift
-`ListProperty.__getitem__` does a fresh accessor + GetItem per item
-(iteration = N serial GetItems); `__delitem__` shifts every subsequent
-item down with ~3 round trips each. v3.13 fixed the handler-level cases
-(bulk-read serving) — the general fix needs an instance-level item cache
-with staleness semantics, and `__delitem__` needs a key-layout redesign
-(tombstones or stable item ids instead of positional `list:<name>-<i>`).
 
-**Corrected 2026-08-20 — under v2 this is quadratic, not N+1, and the
-remedy above cannot be reached.** See "Consumer incident" below. Three
-corrections, in order of how much they change the item:
+**CLOSED in 3.14.0** by the identity/handle API —
+`items_with_handles()`/`find()` (Phase 7), `append()`/`extend()` no longer
+paying a whole-list read (Phase 9B), and the handle-based mutators
+(Phase 10). See the plan above for the design and the constraints it
+settled.
 
-1. **`__getitem__` under v2 is not "a GetItem".** `_v2_getitem` calls
-   `_v2_ensure_rank_cache(force=True)` before every read — a **full-range
-   Query over the whole list** — and then the GetItem. So a positional walk
-   of an *n*-row list is *n* whole-list Queries, and its cost scales with the
-   list's **bytes**, not its length. The forced reload is deliberate and
-   correct (a cached rank still exists after another writer inserts earlier,
-   so a stale read returns the item that *used* to be at that position); it is
-   the cost that was not costed. It shipped with the v2 format in rc5 (#121),
-   so it predates the 2026-08-15 re-verification — that pass's "still does a
-   fresh accessor plus a `GetItem` per item, on both formats" was already
-   understating v2 when written.
-2. **An instance-level item cache cannot help a consumer, and caching the
-   instance is worse than it looks.** `PropertyListStore.__getattr__`
-   constructs a **fresh `ListProperty` on every attribute access**, so
-   `_v2_rank_cache` and `_meta_cache` never survive from one
-   `actor.property_lists.foo` to the next.
-
-   **Corrected 2026-08-20 — the obvious remedy is unsafe.** Caching the list
-   objects per store (which `attribute_list_store.py:87-93` does) splits the
-   wrong way: `ActorInterface.property_lists` memoizes the store
-   (`interface/actor_interface.py:304-316`) and `handlers/mcp.py:52` caches the
-   `ActorInterface` under a **5-minute TTL renewed on every access**, so for an
-   active actor the store can outlive many requests. The positional paths force
-   a rank reload regardless and gain nothing; `len()` / `to_list()` / `append()`
-   have no forced refresh and would read a rank cache minutes stale, in a later
-   request. `ListAttribute` is exempt only because it has no rank cache. Full
-   analysis in
-   [`thoughts/research/2026-08-20-v2-positional-access-cost.md`](../research/2026-08-20-v2-positional-access-cost.md)
-   option E. A fix has to live in the key layout, in a bulk primitive, or in a
-   *request-scoped* handle lifetime; not in a long-lived instance.
-3. **The exposure is narrower than "iteration", and that is the useful part.**
-   `__iter__` already dispatches to `_v2_to_list()` under v2 — one range query
-   — and its docstring names this exact hazard: *"per-item `__getitem__` calls
-   in a loop would cost one query per item, which the range-read design exists
-   specifically to avoid."* `to_list()`, `slice()` and `to_indexed_list()` are
-   all one query too. So the defect is reachable **only** through an explicit
-   positional loop (`for i in range(len(lst)): lst[i]`), which is precisely
-   what the reference consumer's accessor did. The library defended the
-   idiomatic path and left the positional one undefended and unmarked.
-
-What follows from 3 is that this may be cheaper to close than the item
-implies: a docstring on `__getitem__` naming the v2 cost, or a debug-level
-warning when a single `ListProperty` instance forces the rank cache more than
-once, would have surfaced it. A `remove_where(key, value)` primitive would
-remove the reason consumers write the loop at all — see the incident note.
-
-**Superseded 2026-08-20 by the general form.** `remove_where` is a special case
-of exposing the rank as an opaque handle: v2 already *has* stable per-item
-identity, and the public API hides it, so every mutation re-derives a fragile
-handle (a position) from a stable one — and re-derivation is the whole-list
-read. See the research above, option A. Two constraints it establishes and this
-item did not know: `BatchWriteItem` cannot express conditions, and a rank is
-unique only within a **list generation** (after `delete()` + `append()` the
-first rank is `a0` again — `property_list.py:2343-2352`), so any handle must be
-mutated conditional on the bytes read.
+**Still open:** positional indexing itself (`lst[i]` in a loop) is still
+one whole-list read per call under v2, by design — the remedy is to use
+the new API instead, not to cache the read. Documented in
+`docs/guides/property-lists.rst`.
 
 ## 3. consistent_read audit (~22 sites)
 Strongly-consistent reads cost 2× RCU and exclude DAX. Candidates for
@@ -281,6 +211,19 @@ cache feeding a *positional write* (`_v2_getitem`/`_v2_setitem`/`_v2_delitem`),
 where a stale rank means touching the wrong row — the very failure the
 `force=True` exists to prevent. The first is a candidate; the second is a CAS
 path in all but name and belongs in this item's "NOT candidates" list.
+
+**`get_range`'s sub-item CLOSED in 3.14.0, exactly along that split.**
+Phase 6 of `thoughts/plans/2026-08-20-v2-positional-access-cost.md` gives
+`get_range` and its read paths (`to_list()`, `slice()`, `__iter__`,
+`to_indexed_list()`, `list_all_with_rows()`) a per-call `consistent=`
+parameter, default unchanged. The rank-cache-feeding-a-write path stays
+strongly consistent, as this item's split always required.
+
+**The other ~26 sites remain untouched** —
+`attribute.py` (8), `property_lookup.py` (4), `subscription_diff.py` (4),
+`property.py`'s remaining strong reads (3 minus `get_range`),
+`subscription.py` (3), `trust.py` (3), `actor.py` (1), `peertrustee.py`
+(1) — this item stands for all of them.
 
 ## 4. SubscriptionDiff seqnr ordering / unbounded backlog read
 `subscription_diff.py` `get()` without seqnr queries the whole

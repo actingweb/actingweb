@@ -151,6 +151,22 @@ had never worked -- it resolved through ``PropertyListStore.__getattr__`` to
 a ``NotifyingListProperty`` named ``"create"`` and then called it, raising
 ``TypeError``.)
 
+The 3.14 identity/handle mutators are gated the same way, and one of them
+is easy to guess wrong from its name:
+
+.. code-block:: python
+
+    notes.delete_by_handle(handle)         # requires "write", not "delete"
+    notes.update_by_handle(handle, item)   # requires "write"
+    notes.update_where("status", "open", item)   # requires "write"
+    notes.remove_where("status", "archived")     # requires "delete"
+
+``delete_by_handle()`` requires ``write`` rather than ``delete`` because
+it targets exactly one item you already have a reference to, the same
+kind of operation as ``update_by_handle()``. ``remove_where()`` requires
+``delete`` because it can remove every matching item in the list in one
+call -- closer in effect to ``clear()`` than to a single-item change.
+
 Every method ``actor.property_lists.<name>`` exposes -- ``to_list()``,
 ``append()``, ``pop()``, ``slice()``, ``compact()``, ``migrate_to_v2()``, and
 so on -- is reachable through the authenticated view with the matching

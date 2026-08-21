@@ -450,6 +450,32 @@ with subscribers registers one diff per affected item -- see
 the ``old_item`` field ``update_where()``/``update_by_handle()`` diffs
 carry.
 
+Reading Many Lists Cheaply
+---------------------------
+
+If your code needs the *contents* of several of an actor's lists at once
+-- rendering a dashboard, say -- fetching each list separately means one
+database read per list. ``list_all_with_rows()`` fetches everything the
+actor has in one read instead, so you can fill in each list from data you
+already have:
+
+.. code-block:: python
+
+   names, rows = actor.property_lists.list_all_with_rows()
+   for name in names:
+       lst = getattr(actor.property_lists, name)
+       lst.prime_from_rows(rows)          # uses `rows`, no extra read
+       items = lst.to_list_from_rows(rows)
+
+Treat ``rows`` as a snapshot from the moment you fetched it -- it won't
+reflect a change made a moment later -- and pass it straight into
+``prime_from_rows()``/``to_list_from_rows()`` rather than inspecting it
+yourself; its internal shape isn't part of the public API and may change
+in a future release. This also doesn't change the cost of position-based
+access covered above (``lst[i]``, ``pop()``, ``remove()``) -- those still
+check the list's current state directly, on purpose, so they can't return
+or destroy the wrong item using data that might already be out of date.
+
 REST API
 --------
 

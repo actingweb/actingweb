@@ -1,0 +1,217 @@
+===========================
+Migrating to ActingWeb 3.14
+===========================
+
+Start here
+==========
+
+3.14's main improvement is faster, cheaper access to property lists — and
+a better way to work with them. If your app doesn't loop over list items
+by index (see the next section), the required reading is short:
+
+1. **Look up items by value, not position** — the main change, and worth
+   adopting even if nothing else here affects you.
+2. **Breaking changes** — three small ones, each with what to check.
+3. Everything after that only matters if you use the specific feature it
+   names.
+
+Look up items by value, not position
+=======================================
+
+If your code walks through a property list by index — something like:
+
+.. code-block:: python
+
+   for i in range(len(notes)):
+       item = notes[i]
+       ...
+
+— that pattern has always worked, but it can be **slow and expensive** on
+larger lists, because each ``notes[i]`` lookup has to re-check the list's
+current order first, in case something else changed it since you last
+looked. That check costs about as much as reading the whole list. A loop
+like the one above ends up reading the entire list once *per item*, so a
+10-item loop over a 300-item list can mean 3,000+ reads instead of one.
+One real app hit this hard enough that a routine cleanup job took 40
+seconds and set off timeout alarms.
+
+**The fix is simple: don't address items by position.** ActingWeb 3.14
+adds ways to find and change items by what's *in* them:
+
+.. code-block:: python
+
+   # Find an item by a field value instead of an index
+   task = tasks.find("id", "task-42")
+
+   # Remove every item matching a value
+   tasks.remove_where("status", "archived")
+
+   # Update every item matching a value
+   tasks.update_where("status", "open", {"status": "in_progress"})
+
+   # Working with several items at once: fetch them all in one go,
+   # then update/delete by reference (a "handle") instead of by index
+   for handle, item in tasks.items_with_handles():
+       if item["status"] == "archived":
+           tasks.delete_by_handle(handle)
+
+These all read the list **once**, no matter how many items you touch
+afterward, and they don't get slower as the list grows. Use them any time
+you'd otherwise write a loop that computes an index and looks the item up.
+
+**None of this matters if you don't already write index-based loops.**
+Everyday code — ``for item in my_list``, ``my_list.to_list()``,
+``my_list.append(x)`` — was never affected and needs no changes. See
+:doc:`../guides/property-lists` for the full set of examples.
+
+.. important::
+
+   A "handle" (from ``items_with_handles()``) is only valid for a short
+   time — get one, use it right away, then throw it away. Don't save a
+   handle and reuse it later, and don't hand one to a different part of
+   your app to use after a delay; ActingWeb will refuse to use it once
+   the list has changed underneath it, and your update or delete will
+   simply not apply (this fails safely — it never silently overwrites the
+   wrong item).
+
+Breaking changes
+=================
+
+There are three, and each is narrow.
+
+List item counts are now approximate (in one specific place)
+-----------------------------------------------------------------
+
+``list.get_metadata()["length"]``, and the ``count`` field the REST API
+returns for a single list, are now a close estimate rather than a
+guaranteed-exact number. The estimate can be off by roughly the number of
+changes happening to the list at that moment — in practice, a handful at
+most, and it self-corrects.
+
+**This does not affect ``len(my_list)``** or actually looping over a
+list's items — those are always exact, exactly as before. It only affects
+that one metadata field and that one REST response field. If you display
+an item count to a user or use it for a rough quota check, nothing needs
+to change. If you use it to make an exact go/no-go decision (e.g. "reject
+this write if the list already has exactly 100 items"), re-check with an
+exact count near that limit — see :doc:`../guides/property-lists` for a
+short recipe.
+
+A never-working method was removed
+---------------------------------------
+
+``AuthenticatedPropertyListStore.create()`` has been removed. It never
+actually worked in any released version of the library — calling it always
+raised an error — so nothing that depended on it could have been running
+successfully. If your code called it and caught the error, that code can
+simply be deleted: lists are created automatically the first time you
+write to them.
+
+Updating and deleting the same item in one batch request behaves differently
+---------------------------------------------------------------------------------
+
+If you send a bulk request to ``/properties`` that both updates and
+deletes the item at the same list position in a single call, the delete
+used to win and remove the item you just updated. Now, the delete is
+recognized as targeting stale data and is reported back as "someone else
+changed this item" instead of silently discarding your update. If your
+code relied on the old behavior, send the update and the delete as two
+separate requests instead.
+
+A permission gap in property lists is fixed
+===============================================
+
+A peer with **read-only** access to a property list could, until now,
+still add, change, or remove items in it — the permission check only ever
+looked at read access, even for write operations. This has been fixed:
+list writes now correctly require write (or delete) permission, matching
+how plain properties already worked. This was not related to the
+performance changes above; it's a long-standing gap that got closed
+alongside this release. See :doc:`../sdk/authenticated-views` for details.
+
+**If any of your peers are only supposed to have read access to a list**,
+it's worth checking their recent activity for writes they shouldn't have
+been able to make.
+
+Two notification (subscription) fixes
+========================================
+
+If you don't use ActingWeb's peer subscriptions/notifications feature,
+skip this section.
+
+Removing an item from a list wasn't reaching subscribers
+--------------------------------------------------------------
+
+A bug meant that calling ``remove()`` on a subscribed list never actually
+notified peers — the notification was silently dropped every time, for as
+long as the feature has existed. This is now fixed. If you have peers
+subscribed to a list that uses ``remove()``, they may be out of sync with
+items removed before this upgrade; a manual resync (suspend, then resume,
+notifications for that list) is the safest way to bring them back in line
+if you suspect this affected you.
+
+Updates now try to match by value, not just position
+------------------------------------------------------------
+
+When you update an item using the new ``update_where``/``update_by_handle``
+methods, the notification sent to peers now includes the item's *old*
+value, so an up-to-date peer can find the right row even if its position
+changed. Peers still on an older version of ActingWeb simply ignore this
+extra information and keep working exactly as before — no upgrade is
+required on their side.
+
+Retrying a failed list update is safer, in one specific case
+================================================================
+
+Under the hood, list updates occasionally needed to retry an internal
+bookkeeping step if two changes happened at the same time. In rare cases
+that retry could run out of attempts. That case is now handled cleanly: it
+raises a specific, catchable error (``ListMetadataContentionError``, which
+the library also turns into an HTTP 503 "please retry" response on its own
+endpoints) instead of a generic failure. If your app already retries
+failed requests, this mostly just makes those retries more reliable.
+
+New, opt-in: faster reads that can be a moment out of date
+================================================================
+
+Reading a list (``to_list()``, ``find()``, and similar) can now optionally
+trade a small amount of freshness for lower cost and better performance,
+by passing ``consistent=False``:
+
+.. code-block:: python
+
+   recent_notes = actor.property_lists.notes.to_list(consistent=False)
+
+This is entirely opt-in — nothing changes unless you ask for it — and it's
+best suited to reads where being a fraction of a second behind doesn't
+matter (a public feed, a background report). Leave it on the default for
+anything where your code needs to see its own most recent write
+immediately.
+
+New: a tool to find orphaned data
+=====================================
+
+A new command-line tool, ``actingweb-verify-orphans``, can scan your
+database for leftover data tied to actors that no longer exist — for
+example, if an actor deletion was interrupted partway through. It only
+reports what it finds; it never deletes anything automatically, so you
+stay in control of cleanup. This is an operator tool for occasional
+maintenance, not something your application calls itself. See
+:doc:`../reference/actor-deletion` for how to run it.
+
+Faster out of the box
+========================
+
+A number of internal inefficiencies were cleaned up in this release that
+you don't need to do anything about — they just make common operations
+faster:
+
+- Adding items to a list (``append``/``extend``) is now a small, constant
+  cost regardless of how big the list already is.
+- Reading a plain property no longer pays a cost related to how many list
+  properties the same actor has.
+- Clearing or deleting a whole list happens in a small number of batched
+  operations instead of one step per item.
+
+None of these change what your code sees — only how quickly the library
+serves it.

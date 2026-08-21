@@ -390,7 +390,8 @@ class TestPhase10HandleAndWhereNotifications:
         assert result == 2
         assert mock_actor.register_diffs.call_count == 2
         blobs = [
-            json.loads(call[1]["blob"]) for call in mock_actor.register_diffs.call_args_list
+            json.loads(call[1]["blob"])
+            for call in mock_actor.register_diffs.call_args_list
         ]
         assert all(b["operation"] == "remove" for b in blobs)
         assert [b["item"]["id"] for b in blobs] == [1, 3]

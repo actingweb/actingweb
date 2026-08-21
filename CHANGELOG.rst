@@ -5,6 +5,25 @@ CHANGELOG
 Unreleased
 ----------
 
+FIXED
+~~~~~
+
+- **``DbTrust.create()`` defaulted ``approved`` to ``""`` on both database
+  backends**, which PostgreSQL rejects outright on its boolean ``approved``
+  column (``invalid input syntax for type boolean``) when a caller omits the
+  argument. DynamoDB silently tolerated the empty string. Both backends now
+  default to ``False``, matching the ``TrustProtocol`` signature. Every
+  in-library caller already passed a bool, so behavior only changes for
+  direct callers relying on the default — which previously crashed on
+  PostgreSQL.
+
+CHANGED
+~~~~~~~
+
+- CI now enforces ``ruff format --check`` alongside ``ruff check``, and the
+  19 files that had drifted from the pinned formatter (0.15.20) were
+  reformatted in a mechanical commit.
+
 v3.14.0: August 21, 2026
 -------------------------
 

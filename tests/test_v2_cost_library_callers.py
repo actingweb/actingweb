@@ -103,14 +103,10 @@ class TestListAllWithRows:
                 lp = getattr(myself.property_lists, name)
                 lp.prime_from_rows(rows)
                 assert lp.to_list_from_rows(rows) == list(
-                    {"notes": ["a", "b", "c"], "todos": ["x", "y"], "tags": ["p"]}[
-                        name
-                    ]
+                    {"notes": ["a", "b", "c"], "todos": ["x", "y"], "tags": ["p"]}[name]
                 )
                 assert len(lp) == len(
-                    {"notes": ["a", "b", "c"], "todos": ["x", "y"], "tags": ["p"]}[
-                        name
-                    ]
+                    {"notes": ["a", "b", "c"], "todos": ["x", "y"], "tags": ["p"]}[name]
                 )
 
         _, calls = _count_get_range(prime_and_read)
@@ -230,9 +226,7 @@ class TestFullStateSubscriptionCost:
 
 
 class TestBulkItemsEndpointCost:
-    def test_k_updates_and_deletes_issue_bounded_get_range_calls(
-        self, myself, config
-    ):
+    def test_k_updates_and_deletes_issue_bounded_get_range_calls(self, myself, config):
         """k=3 updates + 2 deletes against a fresh 10-item list.
 
         Phase 11 (thoughts/plans/2026-08-20-v2-positional-access-cost.md)

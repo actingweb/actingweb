@@ -363,7 +363,10 @@ class DbPropertyProtocol(Protocol):
         ...
 
     def get_last_in_range(
-        self, actor_id: str | None = None, lower: str | None = None, upper: str | None = None
+        self,
+        actor_id: str | None = None,
+        lower: str | None = None,
+        upper: str | None = None,
     ) -> str | None:
         """
         Return the NAME of the bytewise-greatest row in ``[lower, upper]``

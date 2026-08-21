@@ -68,9 +68,7 @@ def _spy_control_plane(models):
     spies = {}
     for model in models:
         p_exists = mock.patch.object(model, "exists", wraps=model.exists)
-        p_create = mock.patch.object(
-            model, "create_table", wraps=model.create_table
-        )
+        p_create = mock.patch.object(model, "create_table", wraps=model.create_table)
         spies[model] = (p_exists.start(), p_create.start())
         patchers.append(p_exists)
         patchers.append(p_create)

@@ -234,9 +234,7 @@ class TestAdvisoryCarveOutBoundary:
         from actingweb.property_list import _METADATA_CAS_ADVISORY_MAX_ATTEMPTS
 
         assert fake_db.attempts == _METADATA_CAS_ADVISORY_MAX_ATTEMPTS
-        assert any(
-            "advisory metadata touch" in r.getMessage() for r in caplog.records
-        )
+        assert any("advisory metadata touch" in r.getMessage() for r in caplog.records)
 
     def test_failed_advisory_touch_leaves_bounded_drift_that_the_next_count_repairs(
         self, monkeypatch, fake_store, caplog

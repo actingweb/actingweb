@@ -305,7 +305,7 @@ class DbTrust:
         peer_type="",
         relationship="",
         secret="",
-        approved="",
+        approved=False,
         verified=False,
         peer_approved=False,
         verification_token="",

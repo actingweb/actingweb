@@ -495,7 +495,9 @@ class ListProperty:
         """
         lower, upper = self._v2_bounds()
         db = get_property(self.config)
-        last_name = db.get_last_in_range(actor_id=self.actor_id, lower=lower, upper=upper)
+        last_name = db.get_last_in_range(
+            actor_id=self.actor_id, lower=lower, upper=upper
+        )
         if last_name is None:
             return None
         prefix_len = len(self._v2_item_prefix())
@@ -776,7 +778,9 @@ class ListProperty:
                 through every attempt this call was willing to make.
         """
         max_attempts = (
-            _METADATA_CAS_ADVISORY_MAX_ATTEMPTS if advisory else _METADATA_CAS_MAX_ATTEMPTS
+            _METADATA_CAS_ADVISORY_MAX_ATTEMPTS
+            if advisory
+            else _METADATA_CAS_MAX_ATTEMPTS
         )
         warned_stale_cache = False
 
@@ -1593,7 +1597,9 @@ class ListProperty:
                 break
             candidates = fi.generate_n_keys_between(last, None, len(remaining))
             collided_at = None
-            for i, (candidate, item) in enumerate(zip(candidates, remaining, strict=True)):
+            for i, (candidate, item) in enumerate(
+                zip(candidates, remaining, strict=True)
+            ):
                 if len(candidate) > _V2_RANK_MAX_LEN:
                     raise RuntimeError(
                         f"list '{self.name}' rank key exceeded {_V2_RANK_MAX_LEN} "
@@ -2239,7 +2245,9 @@ class ListProperty:
                 count += 1
         return count
 
-    def find(self, identity_key: str, value: Any, consistent: bool = True) -> Any | None:
+    def find(
+        self, identity_key: str, value: Any, consistent: bool = True
+    ) -> Any | None:
         """Return the first item whose ``identity_key`` field equals
         ``value``, or ``None`` if there is no match.
 
@@ -2258,11 +2266,17 @@ class ListProperty:
             consistent: see ``to_list()``. Ignored under v1.
         """
         for item in self.to_list(consistent=consistent):
-            if isinstance(item, dict) and identity_key in item and item[identity_key] == value:
+            if (
+                isinstance(item, dict)
+                and identity_key in item
+                and item[identity_key] == value
+            ):
                 return item
         return None
 
-    def find_all(self, identity_key: str, value: Any, consistent: bool = True) -> list[Any]:
+    def find_all(
+        self, identity_key: str, value: Any, consistent: bool = True
+    ) -> list[Any]:
         """Return every item whose ``identity_key`` field equals ``value``
         -- see ``find()``. A list a caller with duplicate identities (see
         ``verify()``'s ``duplicate_identities``) needs to see all of, not
@@ -2270,7 +2284,9 @@ class ListProperty:
         return [
             item
             for item in self.to_list(consistent=consistent)
-            if isinstance(item, dict) and identity_key in item and item[identity_key] == value
+            if isinstance(item, dict)
+            and identity_key in item
+            and item[identity_key] == value
         ]
 
     def items_with_handles(self) -> list[tuple[ListItemHandle, Any]]:
@@ -2312,7 +2328,10 @@ class ListProperty:
         """
         pairs = self._v2_load_full()  # default consistent=True, no override
         return [
-            (ListItemHandle(rank=rank, raw_value=raw_value), self._decode_item(raw_value))
+            (
+                ListItemHandle(rank=rank, raw_value=raw_value),
+                self._decode_item(raw_value),
+            )
             for rank, raw_value in pairs
         ]
 
@@ -2443,7 +2462,9 @@ class ListProperty:
         matched = [
             (i, item)
             for i, item in enumerate(self)
-            if isinstance(item, dict) and identity_key in item and item[identity_key] == value
+            if isinstance(item, dict)
+            and identity_key in item
+            and item[identity_key] == value
         ]
         if first_only and matched:
             matched = matched[:1]

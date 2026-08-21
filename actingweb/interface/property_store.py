@@ -455,7 +455,9 @@ class NotifyingListProperty:
             self._register_diff("update", item=item, old_item=old_item)
         return updated
 
-    def remove_where(self, identity_key: str, value: Any, *, first_only: bool = False) -> int:
+    def remove_where(
+        self, identity_key: str, value: Any, *, first_only: bool = False
+    ) -> int:
         """See ListProperty.remove_where(). Registers one "remove" diff per
         item actually removed, carrying its decoded value -- the closed
         operation vocabulary has no dedicated bulk-remove entry, so a
@@ -467,7 +469,9 @@ class NotifyingListProperty:
         this call removed -- no separate before-mutation snapshot, so
         nothing to drift out of sync with a concurrent mutation between
         two reads."""
-        removed_items = self._list_prop.remove_where(identity_key, value, first_only=first_only)
+        removed_items = self._list_prop.remove_where(
+            identity_key, value, first_only=first_only
+        )
         for item in removed_items:
             self._register_diff("remove", item=item)
         return len(removed_items)
@@ -486,7 +490,9 @@ class NotifyingListProperty:
         rows it actually updated, so this raises diffs from that directly
         instead of a separately-taken before-mutation snapshot -- same
         rationale as remove_where() above."""
-        old_items = self._list_prop.update_where(identity_key, value, item, first_only=first_only)
+        old_items = self._list_prop.update_where(
+            identity_key, value, item, first_only=first_only
+        )
         for old_item in old_items:
             self._register_diff("update", item=item, old_item=old_item)
         return len(old_items)

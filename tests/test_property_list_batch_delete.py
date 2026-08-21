@@ -126,9 +126,7 @@ class TestSweepSkipsItsRangeQueryForANeverMigratedList:
 
         assert len(calls) == 1
 
-    def test_a_brand_new_list_metadata_marks_format_never_changed(
-        self, myself, config
-    ):
+    def test_a_brand_new_list_metadata_marks_format_never_changed(self, myself, config):
         lst = myself.property_lists.freshlist
         lst.append("a")
 
@@ -233,9 +231,7 @@ class TestUnprocessedItemsAreRetried:
                     table_name_arg, held_back, item_key=KEY, pythonic_key=False
                 )
                 return {
-                    UNPROCESSED_ITEMS: {
-                        table_name_arg: [{DELETE_REQUEST: key_map}]
-                    }
+                    UNPROCESSED_ITEMS: {table_name_arg: [{DELETE_REQUEST: key_map}]}
                 }
             return orig(
                 self,

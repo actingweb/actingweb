@@ -29,6 +29,7 @@ include = [
 [tool.poetry.scripts]
 actingweb-verify-property-lists = "actingweb.maintenance.verify_property_lists:main"
 actingweb-migrate-property-lists = "actingweb.maintenance.migrate_property_lists:main"
+actingweb-verify-orphans = "actingweb.maintenance.verify_orphans:main"
 
 [tool.poetry.dependencies]
 python = "^3.11"

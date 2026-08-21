@@ -237,23 +237,51 @@ actors; ids that never existed need your own check.
 Finding orphaned rows
 =====================
 
-There is no built-in orphan scan yet. To write one, four edge cases are not
-obvious and each is a way to delete live data:
+``actingweb-verify-orphans`` (also ``python scripts/verify_orphans.py``,
+:mod:`actingweb.maintenance.verify_orphans`) sweeps property, attribute and
+trust rows across the WHOLE table — not one actor's partition — for rows
+whose ``actor_id`` is absent from the actor table::
 
-#. **An empty actor set must yield zero orphans.** If the actor-table read
-   fails or returns nothing, "every row is orphaned" is the catastrophic
-   reading. Fail closed.
+    poetry run python scripts/verify_orphans.py
+    poetry run python scripts/verify_orphans.py --rps 200 \
+        --checkpoint-file .verify_orphans.checkpoint.json
+
+Run it under the SAME environment as the application (``DATABASE_BACKEND``
+and its connection settings), but under an **operator credential**, not the
+application's runtime role: the full-table scans need ``Scan``/``Query``
+read permission on the actor, property, attribute and trust tables, which a
+locked-down serving-path role deliberately lacks. It is a long-running,
+checkpointed CLI for a persistent shell — do not invoke it from a
+lambda-like runtime. It classifies orphans only; it does not replace
+:doc:`../guides/database-maintenance` (TTL cleanup) or
+``actingweb-verify-property-lists`` (per-actor list index integrity).
+
+Four edge cases drove its design, and each is a way to delete live data if
+gotten wrong:
+
+#. **An empty or failed actor-table read must never be read as "zero
+   orphans."** "Every row is orphaned" is the catastrophic misreading of an
+   actor-table read that failed or came back empty — a clean-looking report
+   from a broken read is worse than an error, because nothing about it looks
+   wrong. The tool fails closed instead: it refuses to sweep and exits with
+   status 2, which is deliberately distinct from "orphans found" (status 1)
+   and "clean" (status 0).
 #. **Exclude reserved ids unconditionally.** Ids prefixed ``_actingweb_`` hold
-   live system data — some are real actors, some (registries, the tombstone
-   store) deliberately are not in the actors table at all. Report them
-   separately; never as deletable.
+   live system data — some are real actors (``ACTINGWEB_SYSTEM_ACTOR``,
+   ``OAUTH2_SYSTEM_ACTOR``), some (``DELETED_ACTORS_STORE``, a consumer's own
+   registries) deliberately are not in the actors table at all. The tool
+   matches on the prefix, not the closed list of known names, and reports
+   them in a separate section — never as orphans.
 #. **Use consistent reads.** An eventually-consistent scan can show a
-   seconds-old actor as absent.
+   seconds-old actor as absent. Every read this tool issues — the actor-id
+   enumeration and all three row sweeps — asks for a consistent read.
 #. **Never automate it.** ``create()`` writes the actor row first and
    ``delete()`` removes it last, so an actor mid-create or mid-delete always
    still has its row — that ordering is what makes classification safe at all.
    It is still a point-in-time judgement about rows another process may be
-   writing. Run it deliberately, review the output, then delete.
+   writing. There is no ``--delete`` flag and no code path in the tool
+   deletes a row. Run it deliberately, review the output, then delete
+   reviewed rows with your own tooling.
 
 See also
 ========
@@ -261,4 +289,5 @@ See also
 - :doc:`hooks-reference` — all lifecycle events
 - :doc:`../guides/hooks` — hook patterns
 - :doc:`database-backends` — required tables and schema
-- :doc:`../guides/database-maintenance` — TTL sweeps on PostgreSQL
+- :doc:`../guides/database-maintenance` — TTL sweeps on PostgreSQL, and the
+  orphan scan's operational envelope

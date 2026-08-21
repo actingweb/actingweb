@@ -694,6 +694,38 @@ For cleanup that requires application logic (OAuth sessions, MCP tokens):
     if __name__ == "__main__":
         main()
 
+Orphaned Row Scan
+------------------
+
+The cleanup above removes rows with a defined *lifetime* (tokens, sessions).
+It does not find rows left behind when ``Actor.delete()`` is interrupted, or
+written by a caller for an actor id that never existed — those rows have no
+TTL to expire on. ``actingweb-verify-orphans``
+(:mod:`actingweb.maintenance.verify_orphans`, also runnable as
+``python scripts/verify_orphans.py``) is a separate tool for that case; see
+:doc:`../reference/actor-deletion` ("Finding orphaned rows") for what it
+does and the edge cases it exists to get right.
+
+Its operational envelope is different enough from the rest of this guide to
+call out explicitly:
+
+- **Needs an operator credential, not the application's runtime role.** The
+  full-table scans it performs require ``Scan``/``Query`` read permission on
+  the actor, property, attribute and trust tables. A serving-path IAM role
+  or PostgreSQL user, locked down to the application's own access patterns,
+  deliberately lacks this — do not widen that role to accommodate the scan.
+  Run it under a separate operator credential instead.
+- **A long-running, checkpointed CLI, not a scheduled job.** Unlike the
+  cleanup Lambda pattern above, this is meant for a persistent shell session
+  against a large table, with ``--rps`` throttling and a
+  ``--checkpoint-file`` for resuming an interrupted run. Do not invoke it
+  from a lambda-like runtime.
+- **Classifies; does not replace anything above.** It reports orphaned rows
+  for manual review — there is no delete flag. It answers a different
+  question than the TTL cleanup in this guide (expired-but-still-referenced
+  rows) and than ``actingweb-verify-property-lists`` (per-actor list index
+  corruption): "does this row's actor still exist at all."
+
 Data Lifecycle Reference
 ------------------------
 
@@ -782,3 +814,5 @@ See Also
 - :doc:`../sdk/attributes-buckets` - Attribute storage system details
 - :doc:`../quickstart/deployment` - General deployment guide
 - :doc:`authentication` - Authentication configuration
+- :doc:`../reference/actor-deletion` - Orphaned row scan and actor deletion
+  guarantees

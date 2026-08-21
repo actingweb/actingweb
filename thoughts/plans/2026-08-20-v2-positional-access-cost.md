@@ -2414,17 +2414,114 @@ each consumer.
 
 ### Verification
 
-- [ ] `poetry run pytest tests/ -k orphan -v` passes
-- [ ] `poetry run pytest tests/test_cold_start_budget.py -v` passes
+- [x] `poetry run pytest tests/ -k orphan -v` passes
+- [x] `poetry run pytest tests/test_cold_start_budget.py -v` passes
       **unmodified** — importing `actingweb.maintenance` still pulls in no
       backend module
-- [ ] `make test-all-parallel` passes on DynamoDB
-- [ ] `DATABASE_BACKEND=postgresql … make test-integration` passes
-- [ ] `poetry run pyright actingweb tests` passes
-- [ ] Manual: run against a scratch deployment with a known orphan and a known
+- [x] `make test-all-parallel` passes on DynamoDB
+- [x] `DATABASE_BACKEND=postgresql … make test-integration` passes
+- [x] `poetry run pyright actingweb tests` passes
+- [x] Manual: run against a scratch deployment with a known orphan and a known
       reserved id, and confirm the two land in different sections
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+### Notes
+
+- **Consulted the advisor before writing code**, given the cross-backend
+  design surface (four tables × two backends × the four correctness cases).
+  Its guidance shaped the final design in three ways that diverged from my
+  first draft:
+  1. **`classify_rows(actor_ids, rows)` is a pure function**, taking
+     `(row_type, actor_id, row_name)` tuples with no backend/config/IO. Six
+     of the plan's New Tests need no fakes at all as a result — including
+     the catastrophic "empty actor set" case, which is a two-line assertion
+     on the function rather than a mocked sweep. Scanning is a thin
+     generator per backend feeding it.
+  2. **`DbActorList.fetch()` is deliberately NOT reused for the actor-id
+     enumeration.** Confirmed by reading it: `Actor.scan()` there has no
+     `consistent_read`, so PynamoDB's default (`None` → eventually
+     consistent) would make the actor set — the one read where staleness
+     causes the catastrophic misclassification case 3 exists to prevent —
+     the only inconsistent read in the tool. `verify_orphans.py` scans
+     `Actor` directly with `consistent_read=True` instead, and the plan's
+     own "acceptable here" note about `fetch()` (in the Phase 13 section
+     above) turned out to be about a *different* limitation (unpaginated
+     full-table Scan cost, `dynamodb-known-next.md` item 5) than the
+     consistency requirement in case 3 — the two are easy to conflate but
+     are not the same concern.
+  3. **Backend branching stays inside the module** rather than growing three
+     new `DbXProtocol` methods whose only consumer is this one CLI. Verified
+     first that `Property`/`PropertyLegacy` share one table and one `(id,
+     name)` key schema, so scanning `Property` alone (with
+     `attributes_to_get=["id", "name"]`) covers every property row
+     including `list:`-prefixed ones regardless of which model wrote it —
+     no need to scan both models.
+- **Checkpointing is at whole-table granularity (property/attribute/trust),
+  not per-row.** The plan's own per-actor `Checkpoint` (mirrored from
+  `verify_property_lists.py`) doesn't fit here: this tool is report-only, so
+  there is no "actor not yet repaired, recheck it" reason to skip a
+  previously-swept unit the way list verification does. The only reason to
+  ever re-scan is a killed process — so a table is marked done once its scan
+  completes without raising, regardless of whether it found orphans, and the
+  accumulated orphan/reserved lists persist across resumes in the same
+  checkpoint file. A resumed run only re-attempts the table that errored,
+  confirmed by `TestCheckpointResume::test_a_completed_table_is_skipped_on_the_next_run`.
+- **The structural "no delete" test is AST-based, not a flag check** (per the
+  advisor): parses the module's own source and asserts no `Call` node
+  targets an attribute in `{delete, batch_delete,
+  delete_if_value_equals, delete_item, remove, clear_actor}`, no string
+  constant is a `DELETE`/`INSERT`/`UPDATE`/`DROP`/`TRUNCATE` statement, and
+  no `add_argument()` call defines a flag containing "delete". A blunter
+  first draft (`"--delete" not in source`) false-failed on the module's own
+  docstring, which legitimately explains *why there is no* `--delete` flag —
+  fixed by checking argparse call sites specifically instead of the whole
+  source text.
+- **Real, pre-existing bug found while writing the PostgreSQL integration
+  test, fixed in the test only (not the library):** `DbTrust.create()`'s
+  `approved` parameter is typed `str = ""` in both backends'
+  `db/*/trust.py`, but PostgreSQL's `trusts.approved` column is a genuine
+  `boolean` — the empty-string default raised `invalid input syntax for
+  type boolean: ""`. DynamoDB's backend tolerates the string silently
+  (schemaless), which is presumably why this has never surfaced before.
+  Out of scope for Phase 13 (unrelated to orphan scanning); worked around by
+  passing `approved=True` explicitly in the integration test's `create()`
+  calls. Worth a `thoughts/todo/` entry for whoever next touches trust
+  creation.
+- **Doc correction while writing `actor-deletion.rst`:** its pre-existing
+  "Finding orphaned rows" section (written when this phase was only
+  planned) said case 1's fail-closed behavior should "yield zero orphans" —
+  but that is exactly the misleading report this whole case exists to
+  prevent (a clean "0 orphans" report is indistinguishable from a healthy
+  sweep). Rewrote to say the tool exits with status 2 and refuses to report
+  at all, distinct from status 0 (clean) and status 1 (orphans found).
+- `pyproject.toml` gained the `actingweb-verify-orphans` console entry point
+  and `scripts/verify_orphans.py` a thin wrapper, matching
+  `verify_property_lists`/`migrate_property_lists` exactly.
+  `actingweb/maintenance/__init__.py` was not touched — confirmed
+  docstring-only via a new structural test
+  (`test_maintenance_package_init_stays_docstring_only`), and
+  `test_cold_start_budget.py` passes unmodified.
+- Manual verification ran against a real (ephemeral) DynamoDB Local
+  container: created a live actor, a ghost actor's property/attribute/trust
+  rows, and a `_actingweb_`-prefixed reserved id's property row, then ran
+  `scripts/verify_orphans.py` exactly as an operator would. Output: the
+  ghost rows in "ORPHANED ROWS FOUND" (3), the reserved id in "Reserved
+  rows" (1), the live actor's rows in neither, exit code 1.
+- Full verification: `poetry run pytest tests/test_verify_orphans.py -v`
+  (17 unit tests) and `tests/integration/test_verify_orphans.py` (1
+  integration test, run against both DynamoDB and PostgreSQL) all pass;
+  `poetry run pytest tests/test_cold_start_budget.py -v` passes unmodified;
+  `make test-all-parallel` — 3029 passed, 31 skipped, 2 failures in
+  `test_async_operations.py` (`test_trust_creation_to_peer_completes_within_timeout`,
+  `test_concurrent_requests_do_not_block`) confirmed pre-existing/flaky
+  under parallel load — both pass cleanly run in isolation, unrelated to
+  this phase; `DATABASE_BACKEND=postgresql make test-integration` — 860
+  passed, 16 skipped, clean; `poetry run ruff check`/`ruff format --check`
+  and `poetry run pyright actingweb tests` — 0 errors on both; full Sphinx
+  docs build (`sphinx-build -b html . <out> -c .` from the repo root, where
+  `conf.py` actually lives per `.readthedocs.yaml` — not `docs/`) — 0
+  warnings, 0 errors.
 
 ---
 

@@ -398,6 +398,44 @@ class DbPropertyProtocol(Protocol):
         """
         ...
 
+    def batch_delete(
+        self, actor_id: str | None = None, names: list[str] | None = None
+    ) -> None:
+        """
+        Unconditionally delete every named row in one batched operation.
+
+        For an UNCONDITIONAL, bulk delete only -- ``clear()``/``delete()``
+        wiping every row of one list, or an actor's whole property
+        partition, where every named row is meant to go regardless of its
+        current content. Never for a delete that depends on what a row
+        currently holds (a single item, or any subset selected by value) --
+        that is what ``delete_if_value_equals`` exists for, and DynamoDB's
+        ``BatchWriteItem`` cannot express a condition per item.
+
+        DynamoDB: chunks into groups of 25 (the ``BatchWriteItem`` limit)
+        and retries unprocessed items with backoff -- both provided by
+        PynamoDB's ``Model.batch_write()`` context manager, not
+        hand-rolled here. PostgreSQL: a single ``DELETE ... WHERE id = %s
+        AND name = ANY(%s)``.
+
+        No lookup-table maintenance is performed -- same exclusion
+        ``create_if_not_exists``/``delete_if_value_equals``/
+        ``set_if_value_equals`` document: callers of this method delete
+        ``list:``-prefixed rows, which are structurally excluded from
+        indexing.
+
+        Args:
+            actor_id: The actor ID
+            names: The exact row names to delete. A name that does not
+                exist is not an error -- deleting nothing is deleting
+                nothing, on both backends.
+
+        Raises:
+            DbError: On a backend fault, including DynamoDB's unprocessed-
+                item retry budget being exhausted.
+        """
+        ...
+
 
 @runtime_checkable
 class DbPropertyListProtocol(Protocol):

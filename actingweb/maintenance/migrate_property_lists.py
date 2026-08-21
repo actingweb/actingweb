@@ -377,6 +377,10 @@ def downgrade_to_v1(actor_id: str, list_name: str, config: Any) -> dict[str, Any
     meta.setdefault("version", "1.0")
     meta.setdefault("description", "")
     meta.setdefault("explanation", "")
+    # Phase 12 (thoughts/plans/2026-08-20-v2-positional-access-cost.md):
+    # this list has now crossed formats, so sweep_foreign_format_rows()
+    # can no longer skip its range query on the strength of this metadata.
+    meta["format_ever_changed"] = True
     save_db = get_property(config)
     if not save_db.set(
         actor_id=actor_id, name=f"list:{list_name}-meta", value=json.dumps(meta)

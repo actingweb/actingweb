@@ -571,6 +571,7 @@ class ListProperty:
             "count_hint": 0,
             "description": "",
             "explanation": "",
+            "format_ever_changed": False,
         }
 
     def _load_metadata(self) -> dict[str, Any]:
@@ -645,6 +646,7 @@ class ListProperty:
             "version": "1.0",
             "description": "",
             "explanation": "",
+            "format_ever_changed": False,
         }
 
     def _read_meta_row(self) -> tuple[dict[str, Any] | None, str | None]:
@@ -1715,8 +1717,23 @@ class ListProperty:
         cache here would classify the LIVE rows as foreign and delete the
         list. When there is no meta row at all -- the list is gone, and
         both namespaces are residue by definition -- both are swept.
+
+        Skips its range query (Phase 12: thoughts/plans/2026-08-20-v2-
+        positional-access-cost.md) when the list's own metadata carries
+        ``format_ever_changed: False`` -- set on every freshly created
+        list, and the ONLY way residue can exist in the other namespace is
+        a format-changing rewrite (``migrate_to_v2()``/the downgrade
+        script), both of which set the flag ``True`` in the SAME metadata
+        write as the format flip. A list that has never crossed formats
+        therefore cannot have residue to find, and on an all-v2 fleet this
+        is the common case: the range query this skips would always come
+        back empty. Metadata that predates this flag (absent key) cannot
+        rule anything out and always gets the full sweep -- same as every
+        list did before this optimisation existed.
         """
         stored, _ = self._read_meta_row()
+        if stored is not None and stored.get("format_ever_changed") is False:
+            return 0
         if stored is None:
             names = self._v1_item_names_in_range() + self._v2_item_names_in_range()
         elif int(stored.get("format", 1) or 1) == 2:
@@ -1724,14 +1741,9 @@ class ListProperty:
         else:
             names = self._v2_item_names_in_range()
 
-        for name in names:
-            del_db = get_property(self.config)
-            if not del_db.set(actor_id=self.actor_id, name=name, value=None):
-                raise RuntimeError(
-                    f"list item write failed for '{self.name}' during "
-                    f"sweep_foreign_format_rows()"
-                )
         if names:
+            db = get_property(self.config)
+            db.batch_delete(actor_id=self.actor_id, names=names)
             logger.info(
                 f"List '{self.name}' (actor {self.actor_id}): swept "
                 f"{len(names)} row(s) left by an interrupted format change"
@@ -1759,25 +1771,25 @@ class ListProperty:
         self.sweep_foreign_format_rows()
 
         if self._is_v2():
-            for item_name in self._v2_item_names_in_range():
-                item_db = get_property(self.config)
-                if not item_db.set(actor_id=self.actor_id, name=item_name, value=None):
-                    raise RuntimeError(
-                        f"list item write failed for '{self.name}' during clear()"
-                    )
+            item_names = self._v2_item_names_in_range()
+            if item_names:
+                get_property(self.config).batch_delete(
+                    actor_id=self.actor_id, names=item_names
+                )
             self._replace_metadata(self._create_default_metadata_v2())
             self._v2_rank_cache = []
             return
 
         length = len(self)
 
-        # Delete all item properties
-        for i in range(length):
-            item_db = get_property(self.config)
-            if not item_db.set(
-                actor_id=self.actor_id, name=self._get_item_property_name(i), value=None
-            ):
-                raise RuntimeError(f"list item write failed for '{self.name}'[{i}]")
+        # Delete all item properties -- one batched operation (Phase 12:
+        # thoughts/plans/2026-08-20-v2-positional-access-cost.md) instead
+        # of `length` serial round trips.
+        item_names = [self._get_item_property_name(i) for i in range(length)]
+        if item_names:
+            get_property(self.config).batch_delete(
+                actor_id=self.actor_id, names=item_names
+            )
 
         # Reset metadata
         self._replace_metadata(self._create_default_metadata())
@@ -1802,12 +1814,11 @@ class ListProperty:
         self.sweep_foreign_format_rows()
 
         if self._is_v2():
-            for item_name in self._v2_item_names_in_range():
-                item_db = get_property(self.config)
-                if not item_db.set(actor_id=self.actor_id, name=item_name, value=None):
-                    raise RuntimeError(
-                        f"list item write failed for '{self.name}' during delete()"
-                    )
+            item_names = self._v2_item_names_in_range()
+            if item_names:
+                get_property(self.config).batch_delete(
+                    actor_id=self.actor_id, names=item_names
+                )
             meta_db = get_property(self.config)
             if not meta_db.set(
                 actor_id=self.actor_id, name=self._get_meta_property_name(), value=None
@@ -1819,13 +1830,13 @@ class ListProperty:
 
         length = len(self)
 
-        # Delete all item properties
-        for i in range(length):
-            item_db = get_property(self.config)
-            if not item_db.set(
-                actor_id=self.actor_id, name=self._get_item_property_name(i), value=None
-            ):
-                raise RuntimeError(f"list item write failed for '{self.name}'[{i}]")
+        # Delete all item properties -- one batched operation instead of
+        # `length` serial round trips (Phase 12).
+        item_names = [self._get_item_property_name(i) for i in range(length)]
+        if item_names:
+            get_property(self.config).batch_delete(
+                actor_id=self.actor_id, names=item_names
+            )
 
         # Delete metadata
         meta_db = get_property(self.config)
@@ -3208,6 +3219,12 @@ class ListProperty:
         meta = dict(stored_meta)
         meta.pop("length", None)
         meta["format"] = 2
+        # Phase 12 (thoughts/plans/2026-08-20-v2-positional-access-cost.md):
+        # this list has now crossed formats, so sweep_foreign_format_rows()
+        # can no longer skip its range query on the strength of this
+        # metadata -- an interrupted step 6 below would leave v1 residue a
+        # skipped sweep would never find.
+        meta["format_ever_changed"] = True
         self._replace_metadata(meta)
         self._v2_rank_cache = list(ranks)
 

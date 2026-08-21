@@ -111,6 +111,12 @@ class FakePropertyDb:
         ]
         return max(names) if names else None
 
+    def batch_delete(self, actor_id=None, names=None):
+        if not actor_id or not names:
+            return
+        for name in names:
+            self.store.pop((actor_id, name), None)
+
 
 class CrashInjectingPropertyDb(FakePropertyDb):
     """Simulates a hard interruption (process death, timeout) after a fixed

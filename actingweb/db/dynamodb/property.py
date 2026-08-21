@@ -53,7 +53,15 @@ class Property(Model):
         # Optional PynamoDB configuration attributes
         connect_timeout_seconds: int | None = None
         read_timeout_seconds: int | None = None
-        max_retry_attempts: int | None = None
+        # NOT None, unlike its siblings above: Connection.__init__ treats a
+        # None max_retry_attempts as "use pynamodb.settings' default" (3),
+        # but BatchWrite.commit()'s unprocessed-item retry loop -- used by
+        # batch_delete() (Phase 12: thoughts/plans/2026-08-20-v2-
+        # positional-access-cost.md) -- reads Meta.max_retry_attempts
+        # directly with no such fallback, and `retries >= None` raises
+        # TypeError. An explicit int here is required for that retry loop
+        # to work at all, not merely a style preference.
+        max_retry_attempts: int = 3
         max_pool_connections: int | None = None
         extra_headers: dict[str, str] | None = None
         aws_access_key_id: str | None = None
@@ -623,6 +631,27 @@ class DbProperty:
         except Exception as e:
             raise DbError("property last-in-range read", actor_id) from e
 
+    def batch_delete(
+        self, actor_id: str | None = None, names: list[str] | None = None
+    ) -> None:
+        """Unconditional bulk delete — see ``DbPropertyProtocol.batch_delete``.
+
+        ``Property.batch_write()`` is PynamoDB's ``BatchWrite`` context
+        manager: it chunks at 25 items (``BATCH_WRITE_PAGE_LIMIT``) and
+        retries any items DynamoDB reports as unprocessed, raising
+        ``PutError`` if ``Meta.max_retry_attempts`` is exhausted -- both
+        behaviours come from the pinned PynamoDB version, not hand-rolled
+        here.
+        """
+        if not actor_id or not names:
+            return
+        try:
+            with Property.batch_write() as batch:
+                for name in names:
+                    batch.delete(Property(id=actor_id, name=name))
+        except Exception as e:
+            raise DbError("property batch delete", actor_id) from e
+
 
 class DbPropertyList:
     """
@@ -721,13 +750,24 @@ class DbPropertyList:
             return False
 
         # Single partition read: collect indexed properties (for lookup-row
-        # cleanup) and delete in the same pass.
+        # cleanup) and item names, then delete everything in one batched
+        # operation (Phase 12: thoughts/plans/2026-08-20-v2-positional-
+        # access-cost.md) instead of one DeleteItem round trip per row.
         indexed_props: list[tuple[str, str]] = []
+        names: list[str] = []
         self.handle = Property.query(self.actor_id)
         for p in self.handle:
             if self._use_lookup_table and str(p.name) in self._indexed_properties:
                 indexed_props.append((str(p.name), str(p.value)))
-            p.delete()
+            names.append(str(p.name))
+
+        if names:
+            try:
+                with Property.batch_write() as batch:
+                    for name in names:
+                        batch.delete(Property(id=self.actor_id, name=name))
+            except Exception as e:
+                raise DbError("property batch delete", self.actor_id) from e
 
         # Delete lookup entries
         if indexed_props:

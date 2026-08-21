@@ -2204,16 +2204,106 @@ does not bite here.
 
 ### Verification
 
-- [ ] `poetry run pytest tests/test_property_list.py tests/test_property_list_integrity.py -v` passes
-- [ ] `poetry run pytest tests/test_cold_start_budget.py -v` passes **unmodified** —
+- [x] `poetry run pytest tests/test_property_list.py tests/test_property_list_integrity.py -v` passes
+- [x] `poetry run pytest tests/test_cold_start_budget.py -v` passes **unmodified** —
       PynamoDB's `batch_write` is a method on the existing model, not a new one
-- [ ] `make test-all-parallel` passes on DynamoDB
-- [ ] `DATABASE_BACKEND=postgresql … make test-integration` passes
-- [ ] `poetry run pyright actingweb tests` passes
-- [ ] Manual: deleting a 1,000-item list completes in a fraction of the
+- [x] `make test-all-parallel` passes on DynamoDB
+- [x] `DATABASE_BACKEND=postgresql … make test-integration` passes
+- [x] `poetry run pyright actingweb tests` passes
+- [x] Manual: deleting a 1,000-item list completes in a fraction of the
       round trips, measured with the operation-counter recipe
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+### Notes
+
+Implemented largely as specified, with one real bug found by the plan's own
+"unprocessed items are retried" test — writing that test is exactly why it
+was caught before release rather than in production.
+
+**`Property.Meta.max_retry_attempts` was `None`, and PynamoDB's
+`BatchWrite.commit()` crashes on that the first time it actually has
+something to retry.** `Property.Meta` declares a block of "optional
+PynamoDB configuration attributes" (`connect_timeout_seconds`,
+`read_timeout_seconds`, `max_retry_attempts`, `max_pool_connections`, ...)
+all typed `int | None = None` — boilerplate present on every model class in
+this codebase. For ordinary single-item operations this is harmless:
+`Connection.__init__` treats `None` as "fall back to
+`pynamodb.settings.get_settings_value('max_retry_attempts')`" (which
+resolves to `3`), and every model in the codebase has relied on exactly
+that fallback since `batch_write()` was never called anywhere before this
+phase. But `BatchWrite.commit()` (in `pynamodb/models.py`) reads
+`self.model.Meta.max_retry_attempts` DIRECTLY, with no such fallback — so
+the comparison `retries >= self.model.Meta.max_retry_attempts` becomes
+`int >= None`, a `TypeError`, the FIRST time DynamoDB ever reports an
+unprocessed item on a `Property` batch write. `PropertyLegacy` (which
+doesn't declare `max_retry_attempts` in its `Meta` at all) resolves
+correctly to `3` through PynamoDB's own metaclass default-filling, proving
+this was a latent misconfiguration specific to `Property`'s explicit `None`
+override, not a pynamodb defect. Fixed by giving `Property.Meta` an
+explicit `max_retry_attempts: int = 3` (PynamoDB's own default value) with
+a comment explaining why this ONE attribute, alone among its `None`
+siblings, cannot be `None`. Scoped to `Property` only — no other model in
+the codebase calls `batch_write()`, so their identical `None` declarations
+remain harmless dead configuration until (if ever) something does; not
+touched, and not filed as a `thoughts/todo/` item, since nothing is broken
+today outside the one class this phase's own code newly exercises.
+
+**The sweep-skip gate**, exactly as specified: a new `format_ever_changed`
+metadata field, `False` on every freshly created list (both
+`_create_default_metadata()` and `_create_default_metadata_v2()`), flipped
+to `True` in the SAME metadata write as the format flip in both
+`migrate_to_v2()` and the emergency `downgrade_to_v1()` script.
+`sweep_foreign_format_rows()` skips its range query entirely (returns `0`,
+no backend call at all) only when the field is present and explicitly
+`False` — metadata that predates this release (the field absent) always
+gets the full sweep, exactly as it always has, so this is purely additive
+for upgraded deployments and never silently trusts a list it cannot vouch
+for. A list that HAS crossed formats keeps paying the full sweep query
+forever afterward (its own migration already cleaned up the residue, but
+the metadata can no longer prove there's nothing left to find) — a
+deliberate asymmetry favoring "prove it's safe to skip" over "assume it
+is."
+
+**`batch_delete()`**, exactly as specified: DynamoDB via
+`Property.batch_write()` (PynamoDB's chunking-and-retry, not hand-rolled);
+PostgreSQL via one `DELETE ... WHERE id = %s AND name = ANY(%s)`. Wired
+into `ListProperty.clear()`/`delete()` (both v1 and v2 branches),
+`sweep_foreign_format_rows()`'s own cleanup pass, and
+`db/dynamodb/property.py`'s `DbPropertyList.delete()` (the whole-actor
+partition teardown named in `dynamodb-known-next.md` item 1) — the last one
+still collects indexed-property names for lookup-row cleanup during its one
+partition read, but no longer calls `.delete()` per item inline; it batches
+the raw deletes after the read completes. The migration/downgrade scripts'
+own per-item delete loops were left untouched -- out of this phase's
+explicit scope (`clear()`/`delete()` and the one named `DbPropertyList`
+loop), and neither script's loop is in a request-latency path the way
+`clear()`/`delete()` are.
+
+**New test files:** `tests/test_property_list_batch_delete.py` (6 tests —
+batch-write call count for a 60-item `clear()`/`delete()` [3 calls,
+`ceil(60/25)`], the sweep-skip optimisation's range-query count, a fresh
+list's metadata carrying `format_ever_changed: False`, a migrated list's
+sweep still running post-migration, and the unprocessed-items retry test
+that found the bug above — built by intercepting
+`Connection.batch_write_item` and returning a real `UnprocessedItems`
+payload shaped via `get_item_attribute_map()`, not a hand-guessed dict) and
+`tests/integration/test_property_list_batch_teardown.py` (3 tests against a
+real backend, including the PostgreSQL `ANY(%s)` pin — run identically
+against both backends via the established `DATABASE_BACKEND` convention,
+covering v1 and v2 list teardown and confirming a v2 `delete()` leaves no
+row a freshly-created list under the same name could adopt).
+
+**Verification numbers:** `tests/test_property_list_batch_delete.py` 6
+passed; `tests/integration/test_property_list_batch_teardown.py` 3 passed
+(DynamoDB); `tests/test_property_list.py`
++`tests/test_property_list_integrity.py` + `tests/test_cold_start_budget.py`
+100 passed (the latter unmodified, confirming `batch_write()` needed no new
+`DescribeTable` call); `make test-all-parallel` 3013 passed / 31 skipped, 0
+failed (300s); PostgreSQL `make test-integration` 859 passed / 16 skipped
+(up from Phase 11's 856 — the +3 is the new integration file); `poetry run
+pyright actingweb tests` 0 errors; `poetry run ruff check actingweb tests`
+clean.
 
 ---
 

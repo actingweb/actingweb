@@ -663,6 +663,31 @@ class DbProperty:
             logger.error(f"Error reading last-in-range for actor {actor_id}: {e}")
             raise DbError("property last-in-range read", actor_id) from e
 
+    def batch_delete(
+        self, actor_id: str | None = None, names: list[str] | None = None
+    ) -> None:
+        """Unconditional bulk delete — see ``DbPropertyProtocol.batch_delete``.
+
+        A single ``DELETE ... WHERE id = %s AND name = ANY(%s)`` -- no
+        25-item chunking needed, PostgreSQL has no such limit.
+        """
+        if not actor_id or not names:
+            return
+        try:
+            with get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        DELETE FROM properties
+                        WHERE id = %s AND name = ANY(%s)
+                        """,
+                        (actor_id, names),
+                    )
+                conn.commit()
+        except Exception as e:
+            logger.error(f"Error batch-deleting properties for actor {actor_id}: {e}")
+            raise DbError("property batch delete", actor_id) from e
+
 
 class DbPropertyList:
     """

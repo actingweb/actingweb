@@ -11,14 +11,10 @@ the orphan-scan replay guard + exit 3 (8), and the low roll-up's code and
 docs items (v1 capture-during-scan, stale-cache `_where` tests, guard
 hardening, migration-guide restorations, doc nits).
 
-What remains, none release-blocking:
+What remains, none release-blocking (the 19-file `ruff format` drift was
+closed post-tag: the files were reformatted and `ruff format --check` was
+added to CI in the same PR, so it cannot drift again):
 
-- **`ruff format` drift, 19 files.** The pinned ruff (0.15.20, matches
-  poetry.lock) would reformat 15 source files from Phases 9–11 plus the
-  four `test_v2_*` files; CI only enforces `ruff check`. Deliberately not
-  bundled into the release branch (the maintainer's earlier call). Fix as
-  a standalone mechanical commit after 3.14.0 tags, or add
-  `ruff format --check` to CI at the same time so it cannot drift again.
 - **End-to-end peer-replica integration test for Phase 10 diffs.** Sender
   and receiver halves are each unit-pinned
   (`test_property_list_notifications.py`, `test_remote_storage.py`), but

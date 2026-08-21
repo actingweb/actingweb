@@ -98,7 +98,7 @@ pip install --index-url https://test.pypi.org/simple/ \
 Comprehensive documentation is in `docs/`. Key references:
 
 | Topic | Location |
-|-------|----------|
+| ------- | ---------- |
 | **Getting Started** | `docs/quickstart/` |
 | **Configuration** | `docs/quickstart/configuration.rst` |
 | **Authentication & OAuth2** | `docs/guides/authentication.rst`, `docs/guides/spa-authentication.rst` |
@@ -251,7 +251,7 @@ See `docs/quickstart/configuration.rst` for all options.
 The `with_web_ui()` setting controls browser redirects:
 
 | Scenario | `with_web_ui()` | Redirect |
-|----------|-----------------|----------|
+| ---------- | ----------------- | ---------- |
 | Unauthenticated browser → `/<actor_id>` | Any | `/login` |
 | Authenticated browser → `/<actor_id>` | `True` | `/<actor_id>/www` |
 | Authenticated browser → `/<actor_id>` | `False` | `/<actor_id>/app` |
@@ -330,6 +330,25 @@ moving it rots the links that verifications and research write to it.
 Find work in flight: `grep -l "^status: active" thoughts/plans/*.md`
 
 Check these before starting significant work to find existing patterns and context.
+
+The three rules that get broken in practice:
+
+- **`todo/` holds only what is NOT done.** When work lands, the todo is
+  *removed* — not annotated with a "CLOSED" section that grows forever. If a
+  closed item is worth citing later (other files reference its number), leave a
+  one-line ledger row pointing at the record, not the body.
+- **The record of finished work lives in `plans/` and `verifications/`**, which
+  are dated and immutable-ish. Put the evidence there — numbers, commands,
+  what was checked — and have the todo point at it. A register that carries its
+  own history stops being a work queue.
+- **Update the plan's `status:` when its last phase lands**, including phases it
+  deliberately deferred. A plan marked `done` while one step is still owed is
+  how a deferral goes missing.
+
+A useful tell, from the README: if you are editing a dated file to keep it
+accurate, it is in the wrong directory.
+
+Durable **product** documentation released publicly goes in `docs/` (see the index below), not in `thoughts/reference/`. Check both before starting significant work.
 
 ## Logging and Request Correlation
 

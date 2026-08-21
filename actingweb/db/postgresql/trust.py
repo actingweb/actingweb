@@ -189,7 +189,7 @@ class DbTrust:
         peer_type: str = "",
         relationship: str = "",
         secret: str = "",
-        approved: str = "",
+        approved: bool = False,
         verified: bool = False,
         peer_approved: bool = False,
         verification_token: str = "",

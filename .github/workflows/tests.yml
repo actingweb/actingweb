@@ -492,6 +492,9 @@ jobs:
       - name: Run ruff linting
         run: poetry run ruff check actingweb tests
 
+      - name: Run ruff format check
+        run: poetry run ruff format --check actingweb tests
+
   docs:
     needs: changes
     if: needs.changes.outputs.docs == 'true'

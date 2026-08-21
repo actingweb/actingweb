@@ -499,6 +499,40 @@ spec -- the spec addresses items by path index,
   {"action": "add", "item_value": {...}}          # append to end
   {"action": "update", "item_index": N, "item_value": {...}}
   {"action": "delete", "item_index": N}
+  # "update"/"delete" on a row that changed since the request read it:
+  # 503 with Retry-After, same as PUT ?index=N below -- as of 3.14 these
+  # are conditional writes, not unconditional overwrites.
+
+**Bulk update items** (an implementation extension, like ``/items`` above)::
+
+  POST /{actor_id}/properties
+  Content-Type: application/json
+  {"{list_name}": {"items": [
+    {"index": 0, ...item data...},   # update -- any keys besides "index"
+    {"index": 3},                    # delete -- ONLY the "index" key
+    {"index": 5, ...item data...}    # append -- index == current length
+  ]}}
+  # Every "index" is interpreted against the list as it stood BEFORE the
+  # batch. Updates apply first, in the given order; deletes apply last,
+  # in descending index order.
+
+As of 3.14, a batch that concurrently races another writer no longer
+silently overwrites or misapplies what it finds -- **each item is
+reported individually** rather than failing the whole request: the
+response summary counts only the items that actually applied, and a
+skipped item is logged, not raised. Two consequences worth knowing before
+relying on batch semantics:
+
+- A ``{"index": N, ...}`` update whose row changed since the batch's own
+  read is not applied and is not counted -- the other items in the batch
+  still are. Retry the batch (or just that item) to see the current
+  content and decide again.
+- **Same-index update + delete, in one batch, is now well-defined**:
+  the update applies, and the delete is reported as skipped ("concurrently
+  modified") rather than deleting the row the update just wrote. Before
+  3.14 this raced against whatever the positional delete pass found by
+  then, most often deleting the updated row -- if your integration relied
+  on that, address the same index only once per batch.
 
 **PUT item at index**::
 
@@ -508,6 +542,10 @@ spec -- the spec addresses items by path index,
 
   # index == current list length: creates (appends) the item.
   # index > current list length: 404 Not Found (no padding is created).
+  # index within range but the row changed since this request read it:
+  # 503 with Retry-After (same signal a contended list metadata write
+  # already used) -- as of 3.14 this replace is a conditional write, not
+  # an unconditional overwrite of whatever it finds.
 
 **DELETE entire list**::
 

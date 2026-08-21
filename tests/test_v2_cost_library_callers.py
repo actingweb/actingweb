@@ -233,15 +233,16 @@ class TestBulkItemsEndpointCost:
     def test_k_updates_and_deletes_issue_bounded_get_range_calls(
         self, myself, config
     ):
-        """k=3 updates + 2 deletes against a fresh 10-item list. The plan's
-        stated baseline ("~2k+2") does not hold against the current code,
-        which already tracks a projected length across the validation
-        pass -- see the phase notes in the plan for the corrected
-        measurement. This pins the CURRENT count (1 initial length read +
-        one forced reload per positional write, no post-hook read since no
-        hooks are registered here) so a regression is caught even though
-        it isn't the literal "k+2" figure the plan describes for the
-        hook-registered case."""
+        """k=3 updates + 2 deletes against a fresh 10-item list.
+
+        Phase 11 (thoughts/plans/2026-08-20-v2-positional-access-cost.md)
+        moves the bulk endpoint's v2 path onto items_with_handles() (one
+        range read for the whole batch) plus update_by_handle()/
+        delete_by_handle() (point conditional writes, no range read each)
+        -- replacing the old "1 initial length read + one forced reload
+        per positional write" shape this test used to pin. This pins the
+        NEW count: exactly 1 get_range call for the whole batch, however
+        many items it contains."""
         from actingweb.handlers.properties import PropertiesHandler
 
         big = myself.property_lists.bulk_list
@@ -282,10 +283,9 @@ class TestBulkItemsEndpointCost:
                 handler.post(myself.id, "")
 
         _, calls = _count_get_range(run)
-        # 1 (projected_length) + 5 (one forced reload per positional
-        # write: 3 updates + 2 deletes) = 6. No post-hook read: self.hooks
-        # is None on this handler.
-        assert len(calls) == 6, f"expected 6 get_range calls, got {len(calls)}"
+        # items_with_handles() reads the whole batch's snapshot once;
+        # every update/delete after that is a point conditional write.
+        assert len(calls) == 1, f"expected 1 get_range call, got {len(calls)}"
 
         remaining = big.to_list()
         # item_spec minus "index" becomes the stored item, per post()'s

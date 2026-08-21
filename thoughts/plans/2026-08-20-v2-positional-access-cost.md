@@ -2002,13 +2002,143 @@ handles **once** and mutates by handle.
 
 ### Verification
 
-- [ ] `poetry run pytest tests/ -k "properties" -v` passes
-- [ ] `make test-all-parallel` passes
-- [ ] `poetry run pyright actingweb tests` passes
-- [ ] Manual: the operation-counter recipe shows a 10-item delete batch costing
+- [x] `poetry run pytest tests/ -k "properties" -v` passes (the 19 pre-existing
+      failures below are unrelated to this phase -- see Notes)
+- [x] `make test-all-parallel` passes
+- [x] `poetry run pyright actingweb tests` passes
+- [x] Manual: the operation-counter recipe shows a 10-item delete batch costing
       one range read, against the pre-release `2k + 2`
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+### Notes
+
+Consulted the advisor before writing code. It narrowed the ambiguity the plan
+left open to two decisions, both followed as given:
+
+1. **v1 keeps its existing loop, byte-for-byte.** `items_with_handles()`
+   raises on v1, and every phase in this release scopes its cost fix to v2
+   while leaving v1 untouched. The v2 branch is a parallel, independently
+   written block (`actingweb/handlers/properties.py`'s bulk `post()`
+   handler) rather than a refactor of the shared validation loop — some
+   duplication, but zero risk of the v1 branch's behaviour drifting while
+   "cleaning it up for symmetry."
+2. **No new HTTP status code for a concurrently-modified single item.**
+   `properties.py`'s `PropertiesHandler.put()` (the `?index=N` path) already
+   had `ListMetadataContentionError` → 503 + `Retry-After` from Phase 9 — the
+   same *class* of transient, retry-me conflict a lost `update_by_handle()`/
+   `delete_by_handle()` race is. Reused `_respond_list_metadata_contended()`
+   (it takes any `Exception`-like object with `str(error)`, so a synthetic
+   `RuntimeError` works fine without constructing a real
+   `ListMetadataContentionError`) rather than inventing 409. `www.py`'s
+   web-UI action endpoint has no such helper, so it sets the same 503 +
+   `Retry-After` pair directly — one signal across REST and web-UI, per the
+   advisor's framing.
+
+**A third single-item path, not named by line number in the plan's own
+prose but covered by its "and www.py:925, :956" callout's sibling in
+`properties.py`:** `PropertyListItemsHandler.post()` — the `{"action":
+"add"/"update"/"delete", "item_index": N, ...}` endpoint at
+`/properties/{list_name}/items` — has the exact same unconditional-write
+shape the plan's named line numbers describe. Moved onto handles the same
+way, mapped to the same 503 + `Retry-After` via
+`_respond_list_metadata_contended()` (this class already had it, unlike
+`www.py`). This appears to be what the plan's `:1790, :1825` line numbers
+actually pointed at (properties.py's line numbers had already drifted from
+Phases 9-10 landing first); the earlier `?index=N` PUT path was fixed too
+since it exhibits the identical race today and the plan's own text says
+"the single-item REST **and web-UI** edit paths move onto the same
+primitives" without carving out an exception for it.
+
+**Bulk endpoint implementation, exactly as specified:** one
+`items_with_handles()` read resolves the whole v2 batch; `update_by_handle()`
+applies updates first in given order (an index at or beyond the pre-batch
+snapshot length is the append-at-length case and still goes through
+`append()`, since there is no pre-existing row for a handle to address);
+`delete_by_handle()` applies deletes last in descending index order — kept
+even though a v2 handle's validity does not depend on other handles, so the
+v1 and v2 branches provably produce identical output for identical input
+(`TestOrderingSemanticsMatchV1`). A conditional write that returns `False`
+is reported per item (logged, not counted, batch continues) rather than
+failing the whole request, matching the endpoint's pre-existing "log and
+continue" style for delete errors. The shared hook-execution + response-
+summary tail (previously duplicated inline at the end of each of the two
+routes this phase adds) was extracted into `_finish_bulk_list_update()` —
+pure code motion, identical logic, called by both branches; this is
+extraction of genuinely shared logic newly duplicated by this phase's own
+change, not a restructuring of the pre-existing v1 path the advisor warned
+against.
+
+**The same-index update+delete CHANGED behaviour happens for free.** Because
+updates resolve their handle from the pre-batch snapshot and apply before
+deletes, an update at index *i* changes that row's stored bytes; a delete
+also addressing index *i* then presents its (now stale) pre-batch handle
+against the changed row, its condition fails, and it is reported as
+concurrently modified rather than deleting the just-updated row. 3.13.0 did
+delete it (the positional delete pass ran against whatever value happened to
+be at that index by the time it got there). Pinned by
+`TestSameIndexUpdateAndDeleteAppliesUpdateReportsDeleteAsRaced` in the new
+`tests/test_bulk_list_update_handles.py`.
+
+**`poetry run pytest tests/ -k "properties" -v` has 19 pre-existing
+failures**, confirmed unrelated to this phase by running the identical
+command with this phase's changes `git stash`ed — byte-for-byte the same 19
+failures either way. All 19 are integration tests needing a running app
+server (`http_client`/similar fixtures resolving to `None/...` URLs when run
+outside `make test-integration`'s environment setup), not a code defect;
+`make test-all-parallel` and `make test-integration` (the commands CLAUDE.md
+and this phase's own Verification actually gate on) both pass clean. Filed
+nowhere further since it is a test-invocation convention issue rather than a
+product bug — running the properties-focused subset via the correct
+`make` targets rather than a bare `pytest -k` avoids it.
+
+**A red herring during testing, worth recording so it isn't rediscovered:**
+`TestOrderingSemanticsMatchV1`'s v1/v2 comparison test initially raised
+`ListCorruptionError` reading the v1 list's final state, reproducing even in
+a from-scratch standalone script with no test framework involved, and even
+across two completely unrelated actors/list names run in the same process.
+Deep-dived this because it looked like a serious process-wide corruption bug
+(and confirmed, worryingly, that it reproduced identically against
+pre-Phase-11 code too — so if real, it would have been a long-standing
+defect, not something this phase introduced). It was neither: `to_list()`
+was called through a `ListProperty` instance captured **before** the bulk
+POST ran, purely to check `storage_format()`, and v1's `__len__()` trusts
+that specific instance's own metadata cache rather than a fresh read — so
+the stale pre-mutation length (6) was used to iterate a list the batch had
+already shrunk to 5 rows. Re-fetching a fresh accessor
+(`other_myself.property_lists.scrambled`, not the earlier `v1_prop` local)
+after the mutation resolved it immediately. Recorded here because the
+symptom (index-out-of-range `ListCorruptionError` after a delete) looks
+exactly like a real production bug and cost real investigation time before
+the actual cause — an ordinary same-instance staleness pattern, not a race
+or a storage defect — was found. **Not** filed as a `thoughts/todo/` item:
+it is a test-authoring pitfall (reuse a fresh accessor after any v1 mutation
+performed through a *different* accessor instance), not a defect in the
+library itself.
+
+**New test files:** `tests/test_bulk_list_update_handles.py` (14 tests —
+no-race-all-apply, mid-batch race reported not fatal, same-index
+update+delete, v1/v2 ordering parity, single-item `PUT ?index=N` race
+detection, `PropertyListItemsHandler` action-endpoint race detection for
+both update and delete, `WwwHandler` web-UI action-endpoint race detection).
+Updated `tests/test_v2_cost_library_callers.py`'s
+`TestBulkItemsEndpointCost` to assert the new 1-`get_range` bound (was 6,
+pinning the pre-Phase-11 "1 length read + 1 forced reload per positional
+write" shape) — the third phase running in a row where this specific test
+needed updating for a new cost model; the advisor's checklist flagged it
+explicitly, which is the only reason it was caught before a full-suite run
+rather than after.
+
+**Verification numbers:** `tests/test_bulk_list_update_handles.py` 10
+passed; `tests/test_v2_cost_library_callers.py` 14 passed;
+`make test-all-parallel` 3004 passed / 31 skipped, 0 failed (297s);
+PostgreSQL `make test-integration` 856 passed / 16 skipped (unchanged from
+Phase 10 — this phase added no new `tests/integration/` files); `poetry run
+pyright actingweb tests` 0 errors; `poetry run ruff check actingweb tests`
+clean; `poetry run sphinx-build -b html . <tmp>` clean (0 warnings) after
+adding the bulk-items endpoint's first-ever documentation (it had none
+before this phase) and the CHANGED-behaviour notes to
+`docs/guides/property-lists.rst`'s REST API section.
 
 ---
 

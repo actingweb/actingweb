@@ -927,15 +927,37 @@ class WwwHandler(base_handler.BaseHandler):
                         except json.JSONDecodeError:
                             parsed_value = item_value
 
-                        # Get the list property and update. No length
-                        # pre-check: __setitem__ already raises IndexError
-                        # on an out-of-range index, and a separate len()
-                        # here would be a second whole-list read under v2
-                        # on top of the write's own reload.
+                        # Get the list property and update. No separate
+                        # length pre-check: under v1, __setitem__ already
+                        # raises IndexError on an out-of-range index at no
+                        # extra query cost. Under v2 (Phase 11:
+                        # thoughts/plans/2026-08-20-v2-positional-access-
+                        # cost.md), items_with_handles() below IS that
+                        # bounds check -- it's the same one read
+                        # __setitem__'s forced reload used to cost, just
+                        # surfaced here so this branch can also resolve a
+                        # handle to write through instead of an
+                        # unconditional overwrite.
                         if myself and hasattr(myself, "property_lists"):
                             list_prop = getattr(myself.property_lists, prop_name)
                             try:
-                                list_prop[index] = parsed_value
+                                if list_prop.storage_format() == 2:
+                                    pairs = list_prop.items_with_handles()
+                                    if index < 0 or index >= len(pairs):
+                                        self.response.set_status(
+                                            400, f"Index {index} out of range"
+                                        )
+                                        return
+                                    if not list_prop.update_by_handle(
+                                        pairs[index][0], parsed_value
+                                    ):
+                                        self.response.set_status(
+                                            503, "List item concurrently modified"
+                                        )
+                                        self.response.headers["Retry-After"] = "1"
+                                        return
+                                else:
+                                    list_prop[index] = parsed_value
                             except IndexError:
                                 self.response.set_status(
                                     400, f"Index {index} out of range"
@@ -963,12 +985,27 @@ class WwwHandler(base_handler.BaseHandler):
                             self.response.set_status(400, "Invalid item_index")
                             return
 
-                        # Get the list property and delete. No length
-                        # pre-check -- see the "update" branch above.
+                        # Get the list property and delete -- see the
+                        # "update" branch above for the v1/v2 split
+                        # rationale.
                         if myself and hasattr(myself, "property_lists"):
                             list_prop = getattr(myself.property_lists, prop_name)
                             try:
-                                del list_prop[index]
+                                if list_prop.storage_format() == 2:
+                                    pairs = list_prop.items_with_handles()
+                                    if index < 0 or index >= len(pairs):
+                                        self.response.set_status(
+                                            400, f"Index {index} out of range"
+                                        )
+                                        return
+                                    if not list_prop.delete_by_handle(pairs[index][0]):
+                                        self.response.set_status(
+                                            503, "List item concurrently modified"
+                                        )
+                                        self.response.headers["Retry-After"] = "1"
+                                        return
+                                else:
+                                    del list_prop[index]
                             except IndexError:
                                 self.response.set_status(
                                     400, f"Index {index} out of range"

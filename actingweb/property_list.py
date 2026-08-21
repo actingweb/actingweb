@@ -2291,6 +2291,162 @@ class ListProperty:
             for rank, raw_value in pairs
         ]
 
+    def delete_by_handle(self, handle: ListItemHandle) -> bool:
+        """Delete exactly the item ``handle`` addresses, single-shot.
+
+        **v2 only** -- raises ``ValueError`` naming ``migrate_to_v2()`` on a
+        v1 list. Uses ``delete_if_value_equals()`` against the handle's raw
+        stored bytes: no re-scan, no retry. If the row has since changed or
+        vanished, the condition fails and this returns ``False`` -- a
+        failed condition IS the answer, not something to retry. A handle
+        pins the exact bytes it read; retrying would mean "delete whatever
+        is there now", which is exactly the bug class handles exist to
+        rule out.
+
+        Dispatches on a fresh meta-row read (``_dispatch_and_stash()``),
+        not the cached format belief -- this is a mutator, and a stale
+        cache here would either wrongly refuse a v2 list or, worse,
+        silently no-op against storage the list has moved away from.
+        """
+        if self._dispatch_and_stash() != 2:
+            raise ValueError(
+                f"delete_by_handle() is v2-only -- list '{self.name}' is "
+                f"still v1. Call migrate_to_v2() first."
+            )
+        db = get_property(self.config)
+        if not db.delete_if_value_equals(
+            actor_id=self.actor_id,
+            name=self._v2_item_name(handle.rank),
+            value=handle.raw_value,
+        ):
+            return False
+        # Only drop the rank from an already-warm cache -- never load a
+        # cold one, matching _v2_append()/_v2_extend()'s discipline.
+        if self._v2_rank_cache is not None:
+            try:
+                self._v2_rank_cache.remove(handle.rank)
+            except ValueError:  # pragma: no cover -- defensive
+                pass
+        # count_delta, not an absolute count: this call never read the
+        # whole list, so it has no counted truth to write, only a
+        # relative change to merge onto whatever is currently stored.
+        self._v2_touch_metadata(count_delta=-1)
+        return True
+
+    def update_by_handle(self, handle: ListItemHandle, item: Any) -> bool:
+        """Replace exactly the item ``handle`` addresses with ``item``,
+        single-shot.
+
+        **v2 only** -- raises ``ValueError`` naming ``migrate_to_v2()`` on a
+        v1 list. Uses ``set_if_value_equals()`` against the handle's raw
+        stored bytes: no re-scan, no retry, same rationale as
+        ``delete_by_handle()``. Returns ``False`` if the row has since
+        changed or vanished.
+
+        The item count is unaffected, so unlike ``delete_by_handle()`` this
+        does not touch ``count_hint`` at all -- only ``updated_at`` moves.
+        """
+        if self._dispatch_and_stash() != 2:
+            raise ValueError(
+                f"update_by_handle() is v2-only -- list '{self.name}' is "
+                f"still v1. Call migrate_to_v2() first."
+            )
+        db = get_property(self.config)
+        if not db.set_if_value_equals(
+            actor_id=self.actor_id,
+            name=self._v2_item_name(handle.rank),
+            expected=handle.raw_value,
+            value=self._encode_item(item),
+        ):
+            return False
+        self._v2_touch_metadata()
+        return True
+
+    def remove_where(self, identity_key: str, value: Any, *, first_only: bool = False) -> int:
+        """Remove every item whose ``identity_key`` field equals ``value``,
+        returning the number removed. Pass ``first_only=True`` to stop
+        after the first match (0 or 1 removed).
+
+        Universal across v1 and v2, dispatched fresh (``_dispatch_and_stash()``,
+        not the cached format belief -- same row-9c rationale as every
+        other mutator):
+
+        - v2: locates matches via ``items_with_handles()`` (one range
+          read), then deletes each with ``delete_by_handle()``. A match
+          lost to a concurrent mutation between the read and its delete is
+          simply not counted -- no retry, no rescan; see
+          ``delete_by_handle()``.
+        - v1: locates matches by positional scan, then deletes them via
+          ``__delitem__`` in **descending index order**. Ascending order
+          would shift every later match onto the wrong index as each
+          earlier delete closes a hole.
+        """
+        if self._dispatch_and_stash() == 2:
+            matches = self.items_with_handles()
+            removed = 0
+            for handle, item in matches:
+                if (
+                    isinstance(item, dict)
+                    and identity_key in item
+                    and item[identity_key] == value
+                ):
+                    if self.delete_by_handle(handle):
+                        removed += 1
+                        if first_only:
+                            break
+            return removed
+
+        indices = [
+            i
+            for i, item in enumerate(self)
+            if isinstance(item, dict) and identity_key in item and item[identity_key] == value
+        ]
+        if first_only and indices:
+            indices = indices[:1]
+        for i in sorted(indices, reverse=True):
+            del self[i]
+        return len(indices)
+
+    def update_where(
+        self, identity_key: str, value: Any, item: Any, *, first_only: bool = False
+    ) -> int:
+        """Replace every item whose ``identity_key`` field equals ``value``
+        with ``item``, returning the number updated. Pass
+        ``first_only=True`` to stop after the first match.
+
+        Same v1/v2 split as ``remove_where()``, using ``update_by_handle()``
+        under v2 and positional ``self[i] = item`` under v1 -- index order
+        does not matter here, unlike ``remove_where()``: an update never
+        shifts a later index the way a delete does.
+        """
+        if self._dispatch_and_stash() == 2:
+            matches = self.items_with_handles()
+            updated = 0
+            for handle, existing in matches:
+                if (
+                    isinstance(existing, dict)
+                    and identity_key in existing
+                    and existing[identity_key] == value
+                ):
+                    if self.update_by_handle(handle, item):
+                        updated += 1
+                        if first_only:
+                            break
+            return updated
+
+        indices = [
+            i
+            for i, existing in enumerate(self)
+            if isinstance(existing, dict)
+            and identity_key in existing
+            and existing[identity_key] == value
+        ]
+        if first_only and indices:
+            indices = indices[:1]
+        for i in indices:
+            self[i] = item
+        return len(indices)
+
     def _identity_of(self, raw_value: str, identity_key: str) -> Any:
         """This row's value for ``identity_key``, or ``None`` if it has none.
 

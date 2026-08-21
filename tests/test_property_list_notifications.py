@@ -9,6 +9,7 @@ import json
 from unittest.mock import Mock
 
 from actingweb.interface.property_store import NotifyingListProperty
+from actingweb.property_list import ListItemHandle
 
 
 class TestPropertyListNotifications:
@@ -189,7 +190,15 @@ class TestPropertyListNotifications:
         assert blob["length"] == 0  # Fixed to 0 for delete_all
 
     def test_remove_calls_register_diffs(self):
-        """Test that remove() calls register_diffs."""
+        """Test that remove() calls register_diffs, carrying the removed
+        value as "item".
+
+        Phase 10 regression pin: prior to the fix, this diff carried NO
+        "item" field at all, so ``remote_storage._apply_list_operation``'s
+        ``operation == "remove" and "item" in data`` gate never matched --
+        every remove() diff silently fell through to "unknown operation"
+        and peer replicas never applied it.
+        """
         notifying_list, mock_actor, mock_list_prop = self._create_notifying_list(
             [1, 2, 3]
         )
@@ -201,6 +210,7 @@ class TestPropertyListNotifications:
         mock_actor.register_diffs.assert_called_once()
         blob = json.loads(mock_actor.register_diffs.call_args[1]["blob"])
         assert blob["operation"] == "remove"
+        assert blob["item"] == 2
         assert blob["length"] == 2
 
     def test_no_diff_registered_without_actor(self):
@@ -252,3 +262,159 @@ class TestPropertyListNotifications:
 
         call_args = mock_actor.register_diffs.call_args
         assert call_args[1]["subtarget"] == "test_list"
+
+
+class TestPhase10HandleAndWhereNotifications:
+    """Phase 10 of thoughts/plans/2026-08-20-v2-positional-access-cost.md:
+    diff registration for delete_by_handle/update_by_handle/remove_where/
+    update_where.
+    """
+
+    def _create_notifying_list(self, list_values=None):
+        mock_list_prop = Mock()
+        mock_list_prop.__len__ = Mock(return_value=len(list_values or []))
+        mock_list_prop.get_metadata = Mock(
+            side_effect=lambda: {"length": len(mock_list_prop)}
+        )
+        mock_actor = Mock()
+        mock_actor.register_diffs = Mock()
+        notifying_list = NotifyingListProperty(
+            list_prop=mock_list_prop,
+            list_name="test_list",
+            actor=mock_actor,
+        )
+        return notifying_list, mock_actor, mock_list_prop
+
+    def test_delete_by_handle_registers_remove_diff_with_decoded_item(self):
+        notifying_list, mock_actor, mock_list_prop = self._create_notifying_list([1, 2])
+        mock_list_prop.__len__ = Mock(return_value=1)
+        mock_list_prop._decode_item = Mock(return_value={"id": 5})
+        mock_list_prop.delete_by_handle = Mock(return_value=True)
+        handle = ListItemHandle(rank="a0", raw_value='{"id": 5}')
+
+        result = notifying_list.delete_by_handle(handle)
+
+        assert result is True
+        mock_actor.register_diffs.assert_called_once()
+        blob = json.loads(mock_actor.register_diffs.call_args[1]["blob"])
+        assert blob["operation"] == "remove"
+        assert blob["item"] == {"id": 5}
+
+    def test_delete_by_handle_registers_nothing_on_false(self):
+        notifying_list, mock_actor, mock_list_prop = self._create_notifying_list([1])
+        mock_list_prop._decode_item = Mock(return_value={"id": 5})
+        mock_list_prop.delete_by_handle = Mock(return_value=False)
+        handle = ListItemHandle(rank="a0", raw_value='{"id": 5}')
+
+        result = notifying_list.delete_by_handle(handle)
+
+        assert result is False
+        mock_actor.register_diffs.assert_not_called()
+
+    def test_update_by_handle_registers_update_diff_with_old_item(self):
+        notifying_list, mock_actor, mock_list_prop = self._create_notifying_list([1])
+        mock_list_prop.__len__ = Mock(return_value=1)
+        mock_list_prop._decode_item = Mock(return_value={"id": 5, "v": "old"})
+        mock_list_prop.update_by_handle = Mock(return_value=True)
+        handle = ListItemHandle(rank="a0", raw_value='{"id": 5, "v": "old"}')
+
+        result = notifying_list.update_by_handle(handle, {"id": 5, "v": "new"})
+
+        assert result is True
+        blob = json.loads(mock_actor.register_diffs.call_args[1]["blob"])
+        assert blob["operation"] == "update"
+        assert blob["item"] == {"id": 5, "v": "new"}
+        assert blob["old_item"] == {"id": 5, "v": "old"}
+        assert "index" not in blob
+
+    def test_update_by_handle_registers_nothing_on_false(self):
+        notifying_list, mock_actor, mock_list_prop = self._create_notifying_list([1])
+        mock_list_prop._decode_item = Mock(return_value={"id": 5})
+        mock_list_prop.update_by_handle = Mock(return_value=False)
+        handle = ListItemHandle(rank="a0", raw_value='{"id": 5}')
+
+        result = notifying_list.update_by_handle(handle, {"id": 5, "v": "new"})
+
+        assert result is False
+        mock_actor.register_diffs.assert_not_called()
+
+    def test_remove_where_registers_one_remove_diff_per_removed_item(self):
+        notifying_list, mock_actor, mock_list_prop = self._create_notifying_list([1, 2])
+        mock_list_prop.__len__ = Mock(return_value=1)
+        mock_list_prop.to_indexed_list = Mock(
+            return_value=[
+                (0, {"id": 1, "tag": "x"}),
+                (1, {"id": 2, "tag": "y"}),
+                (2, {"id": 3, "tag": "x"}),
+            ]
+        )
+        mock_list_prop.remove_where = Mock(return_value=2)
+
+        result = notifying_list.remove_where("tag", "x")
+
+        assert result == 2
+        assert mock_actor.register_diffs.call_count == 2
+        blobs = [
+            json.loads(call[1]["blob"]) for call in mock_actor.register_diffs.call_args_list
+        ]
+        assert all(b["operation"] == "remove" for b in blobs)
+        assert [b["item"]["id"] for b in blobs] == [1, 3]
+
+    def test_remove_where_registers_nothing_on_zero_matches(self):
+        notifying_list, mock_actor, mock_list_prop = self._create_notifying_list([1])
+        mock_list_prop.to_indexed_list = Mock(return_value=[(0, {"id": 1, "tag": "y"})])
+        mock_list_prop.remove_where = Mock(return_value=0)
+
+        result = notifying_list.remove_where("tag", "x")
+
+        assert result == 0
+        mock_actor.register_diffs.assert_not_called()
+
+    def test_remove_where_first_only_registers_a_single_diff(self):
+        notifying_list, mock_actor, mock_list_prop = self._create_notifying_list([1])
+        mock_list_prop.__len__ = Mock(return_value=1)
+        mock_list_prop.to_indexed_list = Mock(
+            return_value=[
+                (0, {"id": 1, "tag": "x"}),
+                (1, {"id": 2, "tag": "x"}),
+            ]
+        )
+        mock_list_prop.remove_where = Mock(return_value=1)
+
+        result = notifying_list.remove_where("tag", "x", first_only=True)
+
+        assert result == 1
+        mock_actor.register_diffs.assert_called_once()
+
+    def test_update_where_registers_one_update_diff_per_updated_item_with_old_item_and_index(
+        self,
+    ):
+        notifying_list, mock_actor, mock_list_prop = self._create_notifying_list([1, 2])
+        mock_list_prop.__len__ = Mock(return_value=2)
+        mock_list_prop.to_indexed_list = Mock(
+            return_value=[
+                (0, {"id": 1, "tag": "x"}),
+                (1, {"id": 2, "tag": "y"}),
+            ]
+        )
+        mock_list_prop.update_where = Mock(return_value=1)
+
+        result = notifying_list.update_where("tag", "x", {"id": 1, "tag": "z"})
+
+        assert result == 1
+        mock_actor.register_diffs.assert_called_once()
+        blob = json.loads(mock_actor.register_diffs.call_args[1]["blob"])
+        assert blob["operation"] == "update"
+        assert blob["item"] == {"id": 1, "tag": "z"}
+        assert blob["old_item"] == {"id": 1, "tag": "x"}
+        assert blob["index"] == 0
+
+    def test_update_where_registers_nothing_on_zero_matches(self):
+        notifying_list, mock_actor, mock_list_prop = self._create_notifying_list([1])
+        mock_list_prop.to_indexed_list = Mock(return_value=[(0, {"id": 1, "tag": "y"})])
+        mock_list_prop.update_where = Mock(return_value=0)
+
+        result = notifying_list.update_where("tag", "x", {"id": 9})
+
+        assert result == 0
+        mock_actor.register_diffs.assert_not_called()

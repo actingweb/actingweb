@@ -198,6 +198,27 @@ class TestReachableThroughTheFluentInterface:
                 f"NotifyingListProperty must delegate {method}()"
             )
 
+    def test_phase_10_handle_and_where_mutators_reach_both_wrapper_layers(self):
+        """Phase 10's delete_by_handle/update_by_handle/remove_where/
+        update_where -- same reachability contract, both wrappers."""
+        from actingweb.interface.authenticated_views import (
+            _PermissionEnforcingListView,
+        )
+        from actingweb.interface.property_store import NotifyingListProperty
+
+        for method in (
+            "delete_by_handle",
+            "update_by_handle",
+            "remove_where",
+            "update_where",
+        ):
+            assert hasattr(NotifyingListProperty, method), (
+                f"NotifyingListProperty must delegate {method}()"
+            )
+            assert hasattr(_PermissionEnforcingListView, method), (
+                f"_PermissionEnforcingListView must delegate {method}()"
+            )
+
     def test_permission_enforcing_view_still_matches_notifying_list_property(self):
         from actingweb.interface.authenticated_views import (
             _PermissionEnforcingListView,

@@ -2642,6 +2642,23 @@ data MUST include the following fields:
 +----------------+-------------+----------------------------------------------------------------+
 | ``items``      | OPTIONAL    | Array of items for ``extend`` operations                       |
 +----------------+-------------+----------------------------------------------------------------+
+| ``old_item``   | OPTIONAL    | For ``update`` diffs raised by a value-addressed update        |
+|                |             | (``update_where()``/``update_by_handle()``): the item's value  |
+|                |             | before the update, as read in the same snapshot the update was |
+|                |             | resolved from. A receiver that understands ``old_item`` SHOULD |
+|                |             | locate the row by matching its current value against           |
+|                |             | ``old_item`` first, falling back to ``index`` only if no row   |
+|                |             | currently holds that value -- the sender's index is not        |
+|                |             | guaranteed to still be current on the receiving side. A        |
+|                |             | receiver that does not recognize ``old_item`` MAY ignore it    |
+|                |             | and match by ``index`` alone, as it always has.                |
++----------------+-------------+----------------------------------------------------------------+
+
+A ``remove`` diff whose mutation matched by value rather than by index
+(``delete_by_handle()``, or a match from ``remove_where()``) carries the
+removed item's full value in ``item`` rather than an ``index`` -- the
+same field the ``append``/``insert``/``update`` operations already use
+for item data, not a new field.
 
 Example diff for appending an item to the ``notes`` list property::
 
@@ -2674,6 +2691,20 @@ Example diff for updating an item at a specific index::
       "operation": "update",
       "length": 5,
       "item": {"id": "1", "content": "Updated content"},
+      "index": 0
+    }
+  }
+
+Example diff for a value-addressed update (``update_where()``/
+``update_by_handle()``), carrying ``old_item``::
+
+  {
+    "notes": {
+      "list": "notes",
+      "operation": "update",
+      "length": 5,
+      "item": {"id": "1", "content": "Updated content", "status": "done"},
+      "old_item": {"id": "1", "content": "Updated content", "status": "open"},
       "index": 0
     }
   }

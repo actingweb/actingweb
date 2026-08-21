@@ -408,6 +408,48 @@ make it unsafe to persist or transmit:
   handle's conditional write would fail against a row nobody actually
   touched.
 
+**Writing by handle, or by value**
+
+``delete_by_handle(handle)`` and ``update_by_handle(handle, item)`` (v2
+lists only) condition a single write on the exact bytes a handle read::
+
+    for handle, item in tasks.items_with_handles():
+        if item.get("status") == "done":
+            tasks.delete_by_handle(handle)
+
+Both are **single-shot** -- there is no retry loop. A handle pins the
+exact stored bytes, so a failed condition (the row changed or vanished
+since the read) simply returns ``False``; there is nothing to re-resolve,
+and retrying would mean "delete/overwrite whatever is there now" rather
+than the item the handle addressed. Check the return value if the answer
+matters to the caller.
+
+For the common case of "every item matching a field", ``remove_where()``
+and ``update_where()`` wrap the scan-and-mutate loop above, and work on
+**both** storage formats::
+
+    removed = tasks.remove_where("status", "archived")
+    updated = tasks.update_where("status", "open", {"status": "in_progress"})
+
+    # stop after the first match instead of every match
+    tasks.remove_where("id", "task-42", first_only=True)
+
+Both return the number of items actually affected. Under v2 they are
+built on ``items_with_handles()`` plus the handle mutators above -- one
+whole-list read, then one conditional write per match, same single-shot
+semantics per match (a match lost to a concurrent mutation between the
+read and its write is simply not counted, never retried). Under v1 they
+fall back to positional access; ``remove_where()`` applies multi-match
+deletes in **descending index order** specifically, since deleting
+ascending would shift every later match onto the wrong row as each
+earlier delete closes a hole.
+
+A multi-match ``remove_where()``/``update_where()`` call against a list
+with subscribers registers one diff per affected item -- see
+:doc:`subscriptions` for what that means for callback fan-out, and for
+the ``old_item`` field ``update_where()``/``update_by_handle()`` diffs
+carry.
+
 REST API
 --------
 

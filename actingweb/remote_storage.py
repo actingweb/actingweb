@@ -396,6 +396,20 @@ class RemotePeerStore:
 
         elif operation == "update" and "item" in data and "index" in data:
             idx = data["index"]
+            old_item = data.get("old_item")
+            if old_item is not None:
+                # Locate by value first when the sender told us what the
+                # pre-update value was (update_where()/update_by_handle()
+                # always do). This side's list may have drifted from the
+                # index the sender's snapshot saw -- other diffs applied
+                # since, or a v2 peer whose positions are advisory -- so a
+                # value match is the more reliable identity than a bare
+                # index. Falls through to the index below only if no row
+                # currently holds that value.
+                for i, existing in enumerate(list_attr):
+                    if existing == old_item:
+                        list_attr[i] = data["item"]
+                        return {"operation": "update", "index": i, "success": True}
             if 0 <= idx < len(list_attr):
                 list_attr[idx] = data["item"]
                 return {"operation": "update", "index": idx, "success": True}

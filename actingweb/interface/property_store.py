@@ -240,6 +240,7 @@ class NotifyingListProperty:
         item: Any = None,
         index: int | None = None,
         items: list[Any] | None = None,
+        old_item: Any = None,
     ) -> None:
         """Register a diff for the list property change.
 
@@ -248,6 +249,11 @@ class NotifyingListProperty:
             item: Single item data for append/update/insert operations
             index: Index for update/delete/insert operations
             items: Multiple items for extend operation
+            old_item: pre-update value, for "update" diffs raised by
+                ``update_where()``/``update_by_handle()`` -- lets a v2 peer
+                match the diff to its own row by value (via
+                ``old_item``) instead of by ``index``, which is only
+                reliable under v1. See ``remote_storage._apply_list_operation``.
         """
         if not self._actor:
             return
@@ -285,6 +291,8 @@ class NotifyingListProperty:
                 diff_info["index"] = index
             if items is not None:
                 diff_info["items"] = items
+            if old_item is not None:
+                diff_info["old_item"] = old_item
 
             # Note: diff_info already contains "list": self._list_name to identify
             # this as a list operation. We use clean subtarget without "list:" prefix
@@ -412,7 +420,77 @@ class NotifyingListProperty:
 
     def remove(self, value: Any) -> None:
         self._list_prop.remove(value)
-        self._register_diff("remove")
+        self._register_diff("remove", item=value)
+
+    def delete_by_handle(self, handle: ListItemHandle) -> bool:
+        """Single-shot value-addressed delete -- see
+        ListProperty.delete_by_handle(). Registers a "remove" diff (the
+        closed operation vocabulary has no dedicated handle-delete entry)
+        carrying the removed item's decoded value, only when the delete
+        actually succeeded -- a ``False`` return means nothing changed."""
+        item = self._list_prop._decode_item(handle.raw_value)
+        removed = self._list_prop.delete_by_handle(handle)
+        if removed:
+            self._register_diff("remove", item=item)
+        return removed
+
+    def update_by_handle(self, handle: ListItemHandle, item: Any) -> bool:
+        """Single-shot value-addressed update -- see
+        ListProperty.update_by_handle(). Registers an "update" diff
+        carrying both the new item and ``old_item`` (decoded from the
+        handle), only when the update actually succeeded. No index --
+        a handle is not positional."""
+        old_item = self._list_prop._decode_item(handle.raw_value)
+        updated = self._list_prop.update_by_handle(handle, item)
+        if updated:
+            self._register_diff("update", item=item, old_item=old_item)
+        return updated
+
+    def remove_where(self, identity_key: str, value: Any, *, first_only: bool = False) -> int:
+        """See ListProperty.remove_where(). Registers one "remove" diff per
+        item actually removed, carrying its decoded value -- the closed
+        operation vocabulary has no dedicated bulk-remove entry, so a
+        multi-match remove_where() looks to subscribers like several
+        individual remove() calls.
+
+        Matches are captured from a snapshot taken BEFORE the removal --
+        one extra read, at this notifying layer only. ListProperty's own
+        remove_where() stays at its documented query cost; it only
+        returns a count, not the removed values, so this is the only way
+        to give subscribers the item data other diffs already carry."""
+        candidates = [
+            item
+            for _, item in self._list_prop.to_indexed_list()
+            if isinstance(item, dict) and identity_key in item and item[identity_key] == value
+        ]
+        if first_only and candidates:
+            candidates = candidates[:1]
+        removed = self._list_prop.remove_where(identity_key, value, first_only=first_only)
+        for item in candidates[:removed]:
+            self._register_diff("remove", item=item)
+        return removed
+
+    def update_where(
+        self, identity_key: str, value: Any, item: Any, *, first_only: bool = False
+    ) -> int:
+        """See ListProperty.update_where(). Registers one "update" diff per
+        item actually updated, carrying the new value, ``old_item`` (the
+        pre-update value), and its index in the pre-update snapshot --
+        same snapshot-before-mutation approach as remove_where() above,
+        for the same reason."""
+        candidates = [
+            (idx, existing)
+            for idx, existing in self._list_prop.to_indexed_list()
+            if isinstance(existing, dict)
+            and identity_key in existing
+            and existing[identity_key] == value
+        ]
+        if first_only and candidates:
+            candidates = candidates[:1]
+        updated = self._list_prop.update_where(identity_key, value, item, first_only=first_only)
+        for idx, old_item in candidates[:updated]:
+            self._register_diff("update", item=item, index=idx, old_item=old_item)
+        return updated
 
     def compact(self) -> dict[str, Any]:
         """Repair holes/orphans -- see ListProperty.compact(). Registers a

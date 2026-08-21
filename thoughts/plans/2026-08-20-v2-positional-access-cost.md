@@ -1822,14 +1822,130 @@ becomes unrepresentable.
 
 ### Verification
 
-- [ ] `poetry run pytest tests/test_property_list.py tests/test_property_list_integrity.py tests/test_property_list_notifications.py -v` passes
-- [ ] `poetry run pytest tests/ -k "remote_storage or subscription" -v` passes
-- [ ] `make test-all-parallel` passes on DynamoDB
-- [ ] `DATABASE_BACKEND=postgresql … make test-integration` passes
-- [ ] `poetry run pyright actingweb tests` passes
-- [ ] `poetry run ruff check actingweb tests` passes
+- [x] `poetry run pytest tests/test_property_list.py tests/test_property_list_integrity.py tests/test_property_list_notifications.py -v` passes
+- [x] `poetry run pytest tests/ -k "remote_storage or subscription" -v` passes
+- [x] `make test-all-parallel` passes on DynamoDB
+- [x] `DATABASE_BACKEND=postgresql … make test-integration` passes
+- [x] `poetry run pyright actingweb tests` passes
+- [x] `poetry run ruff check actingweb tests` passes
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+### Notes
+
+Consulted the advisor before writing code (it sees the full conversation
+transcript, including the completed research read-through). It flagged three
+risks the plan's prose doesn't spell out, all three real and all three
+incorporated:
+
+1. **`remove_where`/`update_where` must not go through `items_with_handles()`
+   naively.** `items_with_handles()` calls `_v2_load_full()`, which sets
+   `self._v2_rank_cache` as a side effect. A loop of `delete_by_handle()`
+   calls on that same instance therefore needs each successful delete to drop
+   its rank from that cache too, or a mutator called afterwards on the SAME
+   instance (`len()`, `__setitem__`, `insert()`, `pop()`) resolves positions
+   against a cache that still contains deleted ranks — precisely the Phase 9B
+   infinite-loop bug class, one level up. Fixed by having `delete_by_handle()`
+   itself drop the rank from an already-warm cache (mirroring `_v2_remove()`'s
+   existing `del ranks[i]` pattern) — not something `remove_where()` has to
+   know about, since it's built on `delete_by_handle()`. Pinned by
+   `TestRemoveWhereKeepsRankCacheInSyncOnTheSameInstance` in
+   `tests/test_v2_handle_mutators.py`.
+2. **`delete_by_handle`/`update_by_handle` must not use `_is_v2()`
+   (cached) for their v1 rejection.** The plan's "Both v2-only" doesn't say
+   how that check dispatches. `items_with_handles()` uses the cache and that's
+   fine for a read, but a *mutator* doing that risks either wrongly refusing a
+   v2 list or silently writing into a format the list has moved away from —
+   row 9c's exact failure mode. Both handle mutators call
+   `_dispatch_and_stash()` first, same as every other mutator since Phase 9,
+   which costs one extra point read beyond the plan's literal "single
+   conditional write" framing — a deliberate cost for correctness, not a
+   retry.
+3. **The `remove` diff repair is a bigger deal than "fix a bug."** Today's
+   malformed `remove` diff falls through to `{"error": "unknown operation"}`,
+   so peer replicas silently drop it. After the fix, a REPLICA THAT HAS BEEN
+   DIVERGING SILENTLY starts applying removes it has been dropping for its
+   entire deployment, and the first correct one deletes by value match
+   against already-drifted content. The fix is still correct — it's the
+   plan's own read of consumer feedback N-3 — but it's a *changed* behavior
+   for the 3.14 migration guide (Phase 14), not a pure bugfix line, and is
+   called out there rather than folded silently into "diff format
+   additions."
+
+Also followed the advisor's sequencing suggestion: implemented and verified
+the `remove` diff repair (with its own regression test) before writing any of
+the new handle mutators, so a break in that narrow, high-blast-radius change
+would be isolated rather than tangled with four new methods landing at once.
+
+**Deviations from the plan's literal wording** (all discovered while
+implementing, none change the plan's intent):
+
+- `remove_where()`/`update_where()` dispatch v1-vs-v2 via their own
+  top-level `_dispatch_and_stash()` call, not by inspecting what
+  `items_with_handles()` raises — the routing decision itself needs to be
+  fresh (row 9c again), and `items_with_handles()`'s v1 rejection is a
+  courtesy for direct callers, not something these two should rely on for
+  their own dispatch.
+- `NotifyingListProperty.remove_where()`/`update_where()` issue **one
+  additional `to_indexed_list()` read beyond what `ListProperty`'s own
+  method costs.** `ListProperty.remove_where()`/`update_where()` return
+  only a count (per the plan's own signature), not the affected items'
+  values — but the notifying wrapper needs those values to emit accurate
+  per-item diffs (an `item` for each `remove`, an `old_item` for each
+  `update`). The extra read happens only at the notification layer, only
+  when the caller goes through `actor.property_lists.<name>` rather than a
+  bare `ListProperty`, and only for these two methods — `remove()`,
+  `append()`, etc. still derive their diff data from what they already
+  have in hand. The "1 `get_range` + *k* point writes" cost claim in New
+  Tests holds exactly as stated for the bare `ListProperty` method; it was
+  asserted against `ListProperty` directly, not the notifying wrapper, in
+  `TestRemoveWhereQueryCost`.
+- `update_by_handle()` calls `_v2_touch_metadata()` with neither `count`
+  nor `count_delta` (an update never changes the count, so there's nothing
+  to merge) — this only bumps `updated_at`, leaving `count_hint` exactly as
+  it was, which is the correct answer given this call never read the whole
+  list and has no counted truth to offer.
+- `delete_by_handle()` uses `count_delta=-1` (not an absolute `count`) when
+  touching metadata, for the same reason Phase 9B's `_v2_append()` does:
+  this is a single-shot call with no whole-list read behind it, so it has
+  no counted truth, only a relative change to merge onto whatever the CAS
+  loop finds currently stored.
+
+**Diff/permission gating, exactly as specified:** `delete_by_handle`,
+`update_by_handle`, and `update_where` are gated `write` in
+`_PermissionEnforcingListView` (matching the existing single-item `remove()`
+precedent, which is also `write` despite deleting); `remove_where` is gated
+`delete`, per the plan's explicit callout.
+
+**New test files:** `tests/test_v2_handle_mutators.py` (17 tests — v1/v2
+dispatch, single-shot-no-retry, the generation-boundary test, query-cost
+assertion, `first_only`/no-match/all-match behavior for both `_where`
+methods, v1 descending-order pin for both delete and update, `count_hint`
+maintenance, same-instance rank-cache sync), additions to
+`tests/test_property_list_notifications.py` (11 new tests plus the
+`remove()` regression fix), additions to `tests/test_remote_storage.py` (3
+new tests for the `old_item` value-match-first / fallback-to-index / no-op
+when absent behavior), an addition to
+`tests/test_v2_value_addressed_reads.py` (reachability pin for all 4 new
+methods through both wrapper layers), and a new integration file
+`tests/integration/test_property_list_handle_mutators.py` (4 tests against a
+real backend). `tests/test_authenticated_views.py`'s pre-existing
+`test_proxy_surface_matches_notifying_list_property` — the exact test the
+advisor warned would fail the moment one wrapper got a method the other
+didn't — passed on the first run because both wrappers were updated in the
+same edit pass.
+
+**Verification numbers:** `tests/test_v2_handle_mutators.py` 17 passed;
+`tests/test_property_list_notifications.py` 23 passed;
+`tests/test_v2_value_addressed_reads.py` 15 passed; `tests/test_remote_storage.py`
+60 passed; `tests/integration/test_property_list_handle_mutators.py` 4 passed
+against real DynamoDB; `make test-all-parallel` 2994 passed / 31 skipped, 0
+failed (305s); PostgreSQL `make test-integration` 856 passed / 16 skipped (up
+from Phase 9B's 852 — the +4 is the new integration file); `poetry run pyright
+actingweb tests` 0 errors; `poetry run ruff check actingweb tests` clean;
+`poetry run sphinx-build -b html . <tmp>` clean (0 warnings) after fixing a
+grid-table column-width mismatch introduced while adding the `old_item` row to
+`docs/protocol/actingweb-spec.rst`'s diff-field table.
 
 ---
 

@@ -384,6 +384,30 @@ The subscription processing system automatically applies list operations from ca
    * - ``remove``
      - Remove first occurrence of item
 
+``delete_by_handle()``, ``update_by_handle()``, ``remove_where()``, and
+``update_where()`` (added in 3.14) do not add new operations to this table
+-- the diff vocabulary above is closed, so a peer running an older
+ActingWeb version keeps understanding every diff it receives. Instead:
+
+- ``delete_by_handle()`` and a multi-match ``remove_where()`` each emit
+  one ``remove`` diff per item actually removed, carrying that item's
+  full value.
+- ``update_by_handle()`` and ``update_where()`` each emit one ``update``
+  diff per item actually updated. In addition to the existing ``item``
+  and ``index`` fields, this diff carries an OPTIONAL ``old_item`` field
+  -- the pre-update value, as read in the same snapshot the update was
+  resolved from. A peer receiving ``old_item`` should locate the row by
+  matching its current value against ``old_item`` first, falling back to
+  ``index`` only if no row currently holds that value -- the position a
+  sender saw is not guaranteed to still be current for a peer that has
+  applied other diffs since, or whose own list uses v2's advisory
+  positions. A peer that predates ``old_item`` simply ignores the field
+  and matches by ``index``, as it always has.
+
+Because ``remove_where()``/``update_where()`` can match many items in one
+call, they can also emit many diffs in one call -- see the fan-out note
+below for what that means for delivery time.
+
 Subscription Suspension
 -----------------------
 
@@ -411,6 +435,18 @@ The ``resume()`` operation uses **cached peer capabilities** to determine whethe
 - Background refresh updates the cache for next time (async mode only)
 
 This ensures ``resume()`` returns immediately without blocking, even when suspending/resuming many subscriptions.
+
+**Fan-out arithmetic for ``remove_where()``/``update_where()``:** a single
+call that matches *k* items registers *k* diffs, and a synchronous HTTP
+handler delivering those diffs to subscribers is still bound by the
+platform's request timeout (for example API Gateway's ~29 second ceiling
+on Lambda deployments). If *k* is large and the list has callback
+subscribers, that per-request delivery cost is *k* callback deliveries,
+not one -- the same shape as calling ``remove()``/``update_by_handle()``
+in a loop, just issued from a single call. For a bulk change against a
+list with subscribers, prefer suspending the ``properties`` target first
+(``suspend()`` above), performing the ``_where`` call, then ``resume()``
+-- one resync callback instead of *k* individual diff deliveries.
 
 Fan-Out Manager
 ---------------

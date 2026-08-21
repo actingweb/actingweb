@@ -310,6 +310,24 @@ class _PermissionEnforcingListView:
         self._check("write")
         self._list_prop.remove(value)
 
+    def delete_by_handle(self, handle: ListItemHandle) -> bool:
+        self._check("write")
+        return self._list_prop.delete_by_handle(handle)
+
+    def update_by_handle(self, handle: ListItemHandle, item: Any) -> bool:
+        self._check("write")
+        return self._list_prop.update_by_handle(handle, item)
+
+    def remove_where(self, identity_key: str, value: Any, *, first_only: bool = False) -> int:
+        self._check("delete")
+        return self._list_prop.remove_where(identity_key, value, first_only=first_only)
+
+    def update_where(
+        self, identity_key: str, value: Any, item: Any, *, first_only: bool = False
+    ) -> int:
+        self._check("write")
+        return self._list_prop.update_where(identity_key, value, item, first_only=first_only)
+
     def compact(self) -> dict[str, Any]:
         self._check("write")
         return self._list_prop.compact()

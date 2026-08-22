@@ -1,15 +1,15 @@
 [tool.poetry]
 name = "actingweb"
 version = "3.14.0"
-description = "The official ActingWeb library"
+description = "Python framework for AI-ready, per-user micro-services — per-actor MCP servers, OAuth2, and peer-to-peer data sharing over the ActingWeb REST protocol."
 authors = ["Greger Wedel <support@actingweb.io>"]
 maintainers = ["Greger Wedel <support@actingweb.io>"]
 license = "BSD"
 readme = "README.rst"
-homepage = "http://actingweb.org"
+homepage = "https://actingweb.org"
 repository = "https://github.com/actingweb/actingweb"
-documentation = "http://actingweb.readthedocs.io"
-keywords = ["actingweb", "distributed", "microservices", "rest", "api"]
+documentation = "https://actingweb.readthedocs.io/en/latest/"
+keywords = ["actingweb", "distributed", "microservices", "rest", "api", "mcp", "ai", "llm", "agent", "model-context-protocol", "actor"]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
@@ -17,14 +17,20 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: System :: Distributed Computing",
     "Topic :: Software Development :: Libraries :: Python Modules",
     "Topic :: Internet :: WWW/HTTP :: HTTP Servers",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 packages = [{ include = "actingweb" }]
 include = [
     { path = "actingweb/templates/**/*", format = ["sdist", "wheel"] },
 ]
+
+[tool.poetry.urls]
+Changelog = "https://github.com/actingweb/actingweb/blob/master/CHANGELOG.rst"
+Issues = "https://github.com/actingweb/actingweb/issues"
 
 [tool.poetry.scripts]
 actingweb-verify-property-lists = "actingweb.maintenance.verify_property_lists:main"

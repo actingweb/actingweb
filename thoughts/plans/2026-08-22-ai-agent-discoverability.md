@@ -750,17 +750,44 @@ library does, and two `project_urls` use `http://`.
       `trove-classifiers` package at build time. An unrecognised classifier fails
       here rather than at upload, which is why it must be run in this phase and
       not left to a release tag.
-- [ ] `poetry install` re-installs the edited metadata, then
+- [x] `poetry install` re-installs the edited metadata, then
       `poetry run pytest tests/ -k metadata -v` passes
-- [ ] `poetry run python -c "import importlib.metadata as m; print(m.metadata('actingweb')['Keywords'])"` shows the new keywords
-- [ ] Manual: confirm `Topic :: Scientific/Engineering :: Artificial Intelligence`
-      appears verbatim in <https://pypi.org/classifiers/> (it is long-standing, so
-      the risk is low, but confirm rather than assume)
+- [x] `poetry run python -c "import importlib.metadata as m; print(m.metadata('actingweb')['Keywords'])"` shows the new keywords
+- [x] Manual: `Topic :: Scientific/Engineering :: Artificial Intelligence` is
+      accepted by `poetry build` (poetry-core validates against a local copy
+      of `trove-classifiers` at build time — this environment has no network
+      access to pypi.org itself, so this is the available substitute for the
+      manual pypi.org check; the classifier was already long-standing per the
+      plan's own research).
 
 Note: `twine check` is **not** a classifier gate — it validates long-description
 rendering only. It appears in Phase 3, doing that job.
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+**Deviations from plan / learnings**:
+- **Found and removed a stale `actingweb.egg-info/` directory at the repo
+  root** (gitignored, untracked, dated 2025-07-12, version `3.0.0` —
+  fourteen releases behind current). It's a leftover from some earlier
+  `pip install -e .` / `setup.py develop` invocation, long predating this
+  project's Poetry-only workflow. `importlib.metadata.metadata("actingweb")`
+  resolves it *ahead of* the venv's real `.dist-info` (repo root precedes
+  site-packages on `sys.path`), so it silently shadowed every metadata
+  read with year-old values — this is what the new
+  `tests/test_distribution_metadata.py` caught immediately, and what a
+  real consumer running `pip install -e .` from this repo would also hit.
+  Deleting it is why the metadata test passes at all; without that, the
+  test's own docstring note ("run `poetry install` first") would have been
+  insufficient, since `poetry install` never touched the stale directory.
+- New test file `tests/test_distribution_metadata.py` (not named in the
+  plan) holds the "New tests" item; selectable via `-k metadata` (along with
+  two pre-existing, unrelated files that also match that substring:
+  `test_hook_metadata.py`, `test_v2_metadata_cas.py`).
+- `importlib.metadata`'s `PackageMetadata` Protocol's `.get()` overloads
+  aren't visible to pyright's bundled typeshed stub in this environment,
+  though they exist at runtime (verified via `inspect.getsource`). Worked
+  around with `meta["Keywords"] if "Keywords" in meta else ""` instead of
+  `.get("Keywords", "")` — same result, no `# pyright: ignore` needed.
 
 ---
 

@@ -71,6 +71,15 @@ CHANGED
   ``tools/call`` work, linking to the token-acquisition steps rather than
   leaving a 401 unexplained. The database prerequisite (previously unstated)
   is now inline, matching the peer-to-peer quickstart.
+- **PyPI discovery metadata**: the one-line description now names what the
+  library does (per-actor MCP servers, OAuth2, peer-to-peer data sharing)
+  instead of "The official ActingWeb library"; ``keywords`` gained
+  ``mcp``, ``ai``, ``llm``, ``agent``, ``model-context-protocol``, and
+  ``actor``; added the ``Topic :: Scientific/Engineering :: Artificial
+  Intelligence`` and ``Programming Language :: Python :: 3.13`` trove
+  classifiers; ``homepage``/``documentation`` URLs are now ``https://``;
+  and a ``[tool.poetry.urls]`` block adds Changelog/Issues links to the
+  PyPI sidebar.
 
 v3.14.0: August 21, 2026
 -------------------------

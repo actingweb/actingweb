@@ -457,20 +457,75 @@ Three requirements, all verified:
 
 ### Verification
 
-- [ ] `poetry run sphinx-build -W --keep-going -D suppress_warnings="ref.doc,misc.highlighting_failure" -b html . _build/html` passes — an untoctree'd new document is a warning and will fail this gate, so the toctree edit is verified by the build itself
-- [ ] `poetry run pytest tests/ -k p2p_quickstart -v` passes
-- [ ] `poetry run pyright actingweb tests examples` — 0 errors
-- [ ] `poetry run ruff check actingweb tests examples` passes
-- [ ] `poetry run ruff format --check actingweb tests examples` passes
-- [ ] `grep -c '"examples"' pyrightconfig.json` returns 1 — without it the
+- [x] `poetry run sphinx-build -W --keep-going -D suppress_warnings="ref.doc,misc.highlighting_failure" -b html . _build/html` passes — an untoctree'd new document is a warning and will fail this gate, so the toctree edit is verified by the build itself
+- [x] `poetry run pytest tests/ -k p2p_quickstart -v` passes
+- [x] `poetry run pyright actingweb tests examples` — 0 errors
+- [x] `poetry run ruff check actingweb tests examples` passes
+- [x] `poetry run ruff format --check actingweb tests examples` passes
+- [x] `grep -c '"examples"' pyrightconfig.json` returns 1 — without it the
       pyright run above reports success while checking nothing
-- [ ] Manual: follow the quickstart start-to-finish against a local DynamoDB
+- [x] Manual: follow the quickstart start-to-finish against a local DynamoDB
       (`docker compose -f docker-compose.test.yml up dynamodb-test`) and confirm a
       property change on actor A reaches actor B's hook
-- [ ] Manual: confirm the stitch count is now one — the quickstart requires no
+- [x] Manual: confirm the stitch count is now one — the quickstart requires no
       other document to reach a working two-actor setup
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+**Deviations from plan / learnings**:
+- **Real bug caught only by the manual end-to-end run**: `ActingWebApp(...)`
+  defaults `proto="https://"` (`app.py:49`), and the example never overrode
+  it. Subscription callbacks are outbound HTTP calls to the URL recorded at
+  trust time; with the default, the library tried an `https://` callback
+  against a plain-`http://` local server and failed with an SSL handshake
+  error, silently (the publish POST still returned 201; only the server log
+  showed `Callback seq=1 failed - peer did not respond`). Fixed by defaulting
+  `proto=os.getenv("APP_HOST_PROTO", "http://")` in
+  `examples/p2p_quickstart.py`, with a comment explaining why and how to
+  override for production. `mcp-quickstart.rst` has the same unset-`proto`
+  pattern but never surfaces this, because MCP has no outbound peer callback
+  to break. Confirmed end-to-end after the fix: actor A's property POST
+  produced `[B_ID] update from A_ID (diff #1): {'name': 'status', 'value':
+  'active'}` and `Callback seq=1 delivered successfully (204)` in the
+  server log.
+- **Incident during manual verification**: the first two verification runs
+  used the default port 5000, which was already bound by the user's own
+  running "Emm AI" service on this machine. `uvicorn.run(..., port=5000)`
+  failed to bind and exited, but this happened in a backgrounded process
+  whose failure wasn't checked before curling — so those curl calls hit the
+  live service instead, creating two real actors and a trust relationship on
+  it. Caught by inspecting `aw_type` in the response (didn't match), both
+  actors were deleted immediately (confirmed via 204 then a 404 GET), and the
+  stray process was killed. Fixed the root cause in the example itself: the
+  script's `__main__` block now derives its bind port from `APP_HOST_FQDN`
+  instead of hardcoding `5000`, and subsequent verification used a
+  confirmed-free port (5051) with a distinct `AWS_DB_PREFIX`.
+- **acl_rules**: verified empirically (not just by reading code) that the
+  built-in `"friend"` trust type does *not* need `acl_rules` for
+  subscriptions/callbacks to work — the existing
+  `TestNormalCallbackFlow` integration test already proved this, and the
+  manual run above confirms it again. Phase 2's "silent hard dependency"
+  warning applies to **custom** trust types only; the quickstart uses
+  `"friend"` throughout and covers the custom-type caveat as a note in the
+  Security section rather than as a required step, keeping the two-actor
+  narrative to one trust type.
+- `examples/p2p_quickstart.py` uses `# start: <name>` / `# end: <name>`
+  marker comments with Sphinx `literalinclude`'s `:start-after:`/`:end-before:`,
+  rather than line-number ranges — survives future edits to the file without
+  the `.rst` silently including the wrong lines.
+- New test file `tests/test_p2p_quickstart.py` (not named in the plan) holds
+  the three Phase 2 "New tests"; selectable via `-k p2p_quickstart`.
+- **`pyrightconfig.json` is gitignored** (`.gitignore:301`) — it is the
+  user's personal local pyright config, not a repository file. Adding
+  `"examples"` to it (done) improves local `poetry run pyright` runs but has
+  **no effect on CI**: `.github/workflows/tests.yml:490` runs
+  `poetry run pyright actingweb` with no config file present in the checkout
+  at all (falling back to pyright's built-in defaults), and does not check
+  `tests/` or `examples/` regardless. This is a pre-existing gap, unrelated
+  to and out of scope for this plan — flagged here rather than silently
+  worked around, since Phase 2's own verification step
+  (`grep -c '"examples"' pyrightconfig.json`) would otherwise read as
+  confirming a CI guarantee it does not provide.
 
 ---
 

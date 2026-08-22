@@ -11,6 +11,11 @@ The ActingWeb subscription system enables real-time data synchronization between
 - **Notify** their subscribers when data changes
 - **Process** incoming callbacks with automatic sequencing and deduplication
 
+.. seealso::
+
+   :doc:`p2p-quickstart` walks through establishing trust and subscribing to
+   a peer end-to-end in one runnable example.
+
 Usage
 -----
 

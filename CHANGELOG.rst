@@ -57,6 +57,15 @@ CHANGED
   19 files that had drifted from the pinned formatter (0.15.20) were
   reformatted in a mechanical commit.
 
+ADDED
+~~~~~
+
+- **New peer-to-peer quickstart** (:doc:`docs/guides/p2p-quickstart`):
+  a runnable two-actor example (``examples/p2p_quickstart.py``, repo-only —
+  not shipped in the wheel) covering trust establishment, subscribing to a
+  peer, and receiving data through ``@app.subscription_data_hook``, in one
+  document with no other guide required to reach a working setup.
+
 v3.14.0: August 21, 2026
 -------------------------
 

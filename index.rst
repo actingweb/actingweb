@@ -86,6 +86,8 @@ Quick Links
 +---------------------------+-----------------------------------------------+
 | MCP Integration           | :doc:`docs/guides/mcp-quickstart`             |
 +---------------------------+-----------------------------------------------+
+| Peer-to-Peer Sharing      | :doc:`docs/guides/p2p-quickstart`             |
++---------------------------+-----------------------------------------------+
 | Hooks Reference           | :doc:`docs/reference/hooks-reference`         |
 +---------------------------+-----------------------------------------------+
 | Developer API             | :doc:`docs/sdk/developer-api`                 |

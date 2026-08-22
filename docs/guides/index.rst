@@ -18,6 +18,7 @@ Contents
    spa-authentication
    access-control-simple
    access-control
+   p2p-quickstart
    trust-relationships
    subscriptions
    property-lists
@@ -45,6 +46,7 @@ Authentication & Authorization
 Trust & Relationships
 =====================
 
+- **P2P Quickstart** - Two actors, one app: establish trust, subscribe, and receive peer data end-to-end
 - **Trust Relationships** - Establishing and managing trust between actors
 - **Subscriptions** - Event notification system for property changes
 

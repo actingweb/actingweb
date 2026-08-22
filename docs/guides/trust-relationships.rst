@@ -7,6 +7,11 @@ Overview
 
 Manage peer relationships between actors and (optionally) customize permissions per relationship.
 
+.. seealso::
+
+   :doc:`p2p-quickstart` walks through establishing trust and subscribing to
+   a peer end-to-end in one runnable example.
+
 Basic Usage
 -----------
 

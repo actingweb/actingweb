@@ -80,6 +80,14 @@ CHANGED
   classifiers; ``homepage``/``documentation`` URLs are now ``https://``;
   and a ``[tool.poetry.urls]`` block adds Changelog/Issues links to the
   PyPI sidebar.
+- **``actingweb/__init__.py`` now has a module docstring**: the two headline
+  capabilities, the modern entry point
+  (``from actingweb.interface import ActingWebApp``), the MCP decorators,
+  links to the MCP and peer-to-peer quickstarts, and a note that every hook
+  boundary is erased to ``Callable[..., Any]`` despite ``py.typed`` shipping
+  — a type checker will not catch a wrong hook signature. ``__all__``
+  (the legacy lazy-load surface) is unchanged; a comment now says so
+  explicitly.
 
 v3.14.0: August 21, 2026
 -------------------------

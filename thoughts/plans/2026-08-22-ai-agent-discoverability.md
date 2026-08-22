@@ -831,18 +831,30 @@ entry carries a `pyright: ignore[reportUnsupportedDunderAll]` for that reason.
 
 ### Verification
 
-- [ ] `poetry run pyright actingweb tests` — 0 errors
-- [ ] `poetry run ruff check actingweb tests` passes
-- [ ] `poetry run ruff format --check actingweb tests` passes
-- [ ] `poetry run pytest tests/ -k init_docstring -v` passes
-- [ ] `poetry run python -c "import actingweb; print(actingweb.__doc__)"` prints
+- [x] `poetry run pyright actingweb tests` — 0 errors
+- [x] `poetry run ruff check actingweb tests` passes
+- [x] `poetry run ruff format --check actingweb tests` passes
+- [x] `poetry run pytest tests/ -k init_docstring -v` passes
+- [x] `poetry run python -c "import actingweb; print(actingweb.__doc__)"` prints
       the docstring, and `import actingweb.actor` still resolves (lazy load intact)
-- [ ] `make test-all-parallel` passes — this phase touches importable code
+- [x] `make test-all-parallel` passes — this phase touches importable code
+      (one unrelated flaky failure under parallel load,
+      `test_bulk_list_update_handles.py`, confirmed passing in isolation —
+      third occurrence of this class of flakiness across phases, always in
+      files this plan never touches)
 
 Note: `pyproject.toml:157` omits `actingweb/__init__.py` from coverage, so this
 change has no coverage effect.
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+**Learnings**: pyright's bundled `Callable`/import-unused checking flagged a
+bare `import actingweb.actor` used only for its side effect (proving the
+lazy-load path resolves) as `reportUnusedImport` — CLAUDE.md's zero-warning
+policy caught this even though `ruff` (with its `# noqa: F401` escape hatch)
+would have let it through. Rewrote as
+`importlib.import_module("actingweb.actor")` with an assertion on the
+result, which satisfies both tools without a suppression comment.
 
 ---
 

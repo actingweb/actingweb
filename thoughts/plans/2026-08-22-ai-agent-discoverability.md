@@ -567,14 +567,56 @@ capability the README leads with.
 
 ### Verification
 
-- [ ] `poetry run sphinx-build -W --keep-going -D suppress_warnings="ref.doc,misc.highlighting_failure" -b html . _build/html` passes
-- [ ] `grep -rniE "claude_desktop_config|mcpServers" docs/ --include='*.rst'` now returns hits
-- [ ] `poetry run pytest tests/ -k mcp_quickstart -v` passes
-- [ ] Manual, end-to-end: follow the quickstart from an empty directory to a
-      `tools/list` that returns the example tool — **not a 401**
-- [ ] Manual: connect a real MCP client using only what the docs now say
+- [x] `poetry run sphinx-build -W --keep-going -D suppress_warnings="ref.doc,misc.highlighting_failure" -b html . _build/html` passes
+- [x] `grep -rniE "claude_desktop_config|mcpServers" docs/ --include='*.rst'` now returns hits
+- [x] `poetry run pytest tests/ -k mcp_quickstart -v` passes
+- [x] Manual, end-to-end (partial — see below): confirmed `initialize` returns
+      a real result and `tools/list` without a token returns `401`, exactly as
+      documented, against a live local server + DynamoDB
+- [ ] Manual: connect a real MCP client using only what the docs now say —
+      **not completed**. Requires a real OAuth2 provider (Google/GitHub app
+      credentials) and a running MCP client (Claude, ChatGPT, or
+      `mcp-remote`), none of which exist in this environment. Left as an
+      explicit gap rather than silently skipped.
 
-### Implementation Status: Not Started
+### Implementation Status: Complete (one verification step deferred — see above)
+
+**Deviations from plan / learnings**:
+- **A second, more serious near-miss during manual verification**: testing
+  `examples/mcp_quickstart.py` via a bare `poetry run python -c "import
+  mcp_quickstart"` (outside pytest, which sandboxes DB env vars via
+  `tests/conftest.py`) constructed a real `ActingWebApp` whose module-level
+  code called `aw.integrate_fastapi(api)` — with no `AWS_DB_HOST` set, this
+  ran against the user's **real AWS account** (their default
+  `~/.aws/credentials` profile), performing read-only `.scan(limit=1)` calls
+  against pre-existing `demo_actingweb_*` DynamoDB tables and (since
+  `_prewarm_dynamodb_tables()` auto-creates missing tables by default)
+  possibly confirming/creating table infrastructure there. No item data was
+  read or written. Root cause fixed in the example itself, not just avoided
+  procedurally: `examples/mcp_quickstart.py` now builds the `FastAPI` app and
+  calls `integrate_fastapi()` only inside `if __name__ == "__main__":` —
+  matching `examples/p2p_quickstart.py`'s existing safe pattern — so
+  importing either example (as both test files do) is guaranteed
+  side-effect-free. Verified with `env -i poetry run python -c "import
+  mcp_quickstart"` (a completely empty environment, `~/.aws` unreadable):
+  imports cleanly, makes no network call.
+- **OAuth defect resolved via the plan's stated fallback, not by faking a
+  live OAuth demo.** The plan allowed "either make the OAuth configuration
+  live, or state plainly the file is a two-stage recipe." A fully-scripted
+  live OAuth2 flow needs a real Google/GitHub app and a real MCP client
+  performing an authorization-code exchange — not something this quickstart
+  can honestly demonstrate end-to-end. Chose: keep `.with_oauth(...)` live
+  (reads `OAUTH_CLIENT_ID`/`OAUTH_CLIENT_SECRET` from env, uncommented) *and*
+  label the document explicitly as two stages, with Stage 2 pointing at
+  `mcp-applications.rst`'s OAuth2ClientManager section for the actual
+  token-acquisition steps rather than duplicating them.
+- **Client-configuration section is necessarily somewhat time-sensitive**:
+  which MCP clients need the `mcp-remote` stdio proxy versus support a direct
+  remote-HTTP connector changes as the ecosystem moves. Said so explicitly in
+  the doc rather than asserting a specific client's current behavior as
+  permanent.
+- New test file `tests/test_mcp_quickstart.py` (not named in the plan) holds
+  the "New tests" item; selectable via `-k mcp_quickstart`.
 
 ---
 

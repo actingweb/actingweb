@@ -65,6 +65,23 @@ ADDED
   not shipped in the wheel) covering trust establishment, subscribing to a
   peer, and receiving data through ``@app.subscription_data_hook``, in one
   document with no other guide required to reach a working setup.
+- **MCP quickstart client-configuration section**
+  (:doc:`docs/guides/mcp-quickstart`): shows how to point a real MCP client
+  (native remote connectors, or the ``mcp-remote`` stdio proxy) at a running
+  ActingWeb MCP server, with a bearer token obtained via OAuth2.
+
+CHANGED
+~~~~~~~
+
+- **MCP quickstart is now explicitly a two-stage recipe.** Previously the
+  pasted example had OAuth2 configuration commented out, so following it
+  produced a server where every MCP method beyond ``initialize`` 401s with
+  no explanation. The example now configures OAuth2 (reading credentials
+  from the environment) and the guide states plainly that Stage 2 (real
+  OAuth2 credentials, a bearer token) is required before ``tools/list`` and
+  ``tools/call`` work, linking to the token-acquisition steps rather than
+  leaving a 401 unexplained. The database prerequisite (previously unstated)
+  is now inline, matching the peer-to-peer quickstart.
 
 v3.14.0: August 21, 2026
 -------------------------

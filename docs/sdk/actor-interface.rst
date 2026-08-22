@@ -88,12 +88,14 @@ Trust relationships and subscriptions are available via:
 .. code-block:: python
 
    # Trust
-   actor.trust.create_relationship(peer_url="https://peer/actor123", relationship="friend")
-   for rel in actor.trust.relationships:
-       print(rel.peer_id, rel.relationship)
+   rel = actor.trust.create_relationship(peer_url="https://peer/actor123", relationship="friend")
+   if rel is None:
+       raise RuntimeError("Failed to create trust relationship")
+   for r in actor.trust.relationships:
+       print(r.peer_id, r.relationship)
 
    # Subscriptions
-   actor.subscriptions.subscribe_to_peer(peer_id="peer123", target="properties")
+   actor.subscriptions.subscribe_to_peer(peer_id=rel.peer_id, target="properties")
    actor.subscriptions.notify_subscribers(target="properties", data={"status": "active"})
 
 Peer Profile Caching

@@ -8,6 +8,39 @@ Unreleased
 FIXED
 ~~~~~
 
+- **``@app.subscription_hook`` never fired.** It registered into
+  ``HookRegistry._subscription_hooks``, but nothing in the callbacks handler
+  ever called ``execute_subscription_hooks()`` — the legacy fallback path
+  (used when ``.with_subscription_processing()`` is not enabled) only invoked
+  ``@app.callback_hook("subscription")``. A hook registered with
+  ``@app.subscription_hook`` was silently never invoked. The legacy fallback
+  branch in ``actingweb/handlers/callbacks.py`` now also calls
+  ``execute_subscription_hooks()``, so both mechanisms work; either can mark
+  the callback as processed. **Behavior change**: on the legacy fallback
+  path, a subscription callback that a registered ``@app.subscription_hook``
+  handles (returns truthy for) now gets ``204`` instead of ``400`` — this is
+  the fix taking effect, since such a hook's return value was previously
+  discarded. The legacy path does not track sequence numbers or clear diffs
+  (that only happens via ``.with_subscription_processing()`` or an explicit
+  PUT acknowledgment), so this does not affect data integrity.
+- **Documentation taught APIs that do not exist or had the wrong contract**:
+  ``@app.trust_hook`` (does not exist; the real mechanism is
+  ``@app.lifecycle_hook("trust_fully_approved_local"/"trust_fully_approved_remote"/"trust_deleted")``),
+  ``@app.mcp_tool_hook`` (does not exist; use ``@app.action_hook(...)`` +
+  ``@mcp_tool(...)``), ``app.config`` (not public; use ``app.get_config()``),
+  ``execute_action_hooks``'s argument order (``action_name`` comes first, not
+  ``actor``), and the ``@resource_hook`` example in
+  ``actingweb/mcp/decorators.py``'s docstring (the real mechanism is
+  ``@app.method_hook(...)`` + ``@mcp_resource(...)``). Also fixed: docs
+  passing a literal ``peer_id="peer123"`` after binding
+  ``create_relationship()``'s real return value, in
+  ``docs/guides/trust-relationships.rst`` and
+  ``docs/quickstart/getting-started.rst``.
+- ``with_sync_callbacks()``'s docstring said its default was ``True``; the
+  underlying setting defaults to ``False`` until the method is called.
+  Clarified that calling the method at all is the opt-in.
+- ``from actingweb.interface import lifecycle_hook`` raised ``ImportError``;
+  every other standalone hook decorator was exported except this one.
 - **``DbTrust.create()`` defaulted ``approved`` to ``""`` on both database
   backends**, which PostgreSQL rejects outright on its boolean ``approved``
   column (``invalid input syntax for type boolean``) when a caller omits the

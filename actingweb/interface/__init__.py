@@ -28,6 +28,7 @@ from .hooks import (
     app_callback_hook,
     callback_hook,
     get_hook_metadata,
+    lifecycle_hook,
     method_hook,
     property_hook,
     subscription_hook,
@@ -57,6 +58,7 @@ __all__ = [
     "subscription_hook",
     "method_hook",
     "action_hook",
+    "lifecycle_hook",
     # Authenticated views
     "AuthContext",
     "AuthenticatedActorView",

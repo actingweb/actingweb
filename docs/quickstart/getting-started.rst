@@ -132,10 +132,12 @@ Creating and managing actors is straightforward:
         peer_url="https://peer.example.com/actor123",
         relationship="friend"
     )
+    if peer is None:
+        raise RuntimeError("Failed to create trust relationship")
 
     # Handle subscriptions
     actor.subscriptions.subscribe_to_peer(
-        peer_id="peer123",
+        peer_id=peer.peer_id,
         target="properties"
     )
 
@@ -269,6 +271,13 @@ Subscription Hooks
 ~~~~~~~~~~~~~~~~~~
 
 Handle subscription callbacks from other actors:
+
+.. note::
+
+   ``@app.subscription_hook`` fires when ``.with_subscription_processing()``
+   has not been called (as in this example). If you enable automatic
+   subscription processing, use ``@app.subscription_data_hook`` instead —
+   see :doc:`../reference/hooks-reference` and :doc:`../guides/subscriptions`.
 
 .. code-block:: python
 

@@ -107,6 +107,26 @@ def create_test_app(
 
         return False
 
+    # Register the legacy @app.subscription_hook decorator so tests can verify
+    # it actually fires on the callbacks handler's legacy fallback path (used
+    # when .with_subscription_processing() is not enabled). Regression guard
+    # for actingweb/handlers/callbacks.py's legacy branch, which previously
+    # accepted registrations here but never invoked them.
+    @aw_app.subscription_hook
+    def handle_raw_subscription_callback(actor, subscription, peer_id, data):
+        actor.properties["subscription_hook_fired"] = {
+            "peer_id": peer_id,
+            "target": subscription.get("target"),
+            "data": data,
+        }
+        # Only claim to have handled callbacks that carry inline data. A
+        # low-granularity callback (URL only, no "data") can't be processed by
+        # this simple probe -- claiming it anyway would make the legacy
+        # fallback branch report success (204) for callbacks other
+        # low-granularity-fetch integration tests expect to see rejected or
+        # handled via the auto-sequencing path instead.
+        return bool(data)
+
     # Create FastAPI app
     fastapi_app = FastAPI(title="ActingWeb Test Harness")
 

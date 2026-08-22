@@ -11,7 +11,6 @@ on:
     # Widen this list if reviewing prose isn't worth the tokens.
     paths-ignore:
       - 'thoughts/**'
-      - 'AGENTS.md'
       - 'CLAUDE.md'
       - 'TODO.md'
 

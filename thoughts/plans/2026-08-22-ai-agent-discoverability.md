@@ -923,14 +923,17 @@ job. Keep the block short and do not present it as the consumer-facing solution.
 
 ### Verification
 
-- [ ] `grep -c "thoughts/shared" AGENTS.md` returns 0
-- [ ] `grep -c "pyproject.toml" AGENTS.md` returns 0 — the contradictory
+- [x] `grep -c "thoughts/shared" AGENTS.md` returns 0
+- [x] `grep -c "pyproject.toml" AGENTS.md` returns 0 — the contradictory
       version-bump instruction is gone, not corrected
-- [ ] Every URL in `AGENTS.md` returns 200 (post-merge for the p2p link)
-- [ ] Manual: read `AGENTS.md` and `CLAUDE.md` side by side and confirm no
-      instruction appears in both
+- [x] Every URL in `AGENTS.md` returns 200, except
+      `docs/guides/p2p-quickstart.html` (404, expected — same as every other
+      phase referencing it, until this branch merges and RTD rebuilds).
+      Verified with a live `curl` against each URL.
+- [x] Manual: read `AGENTS.md` and `CLAUDE.md` side by side — no instruction
+      appears in both; `AGENTS.md` is 40 lines
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
 
 ---
 

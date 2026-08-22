@@ -88,6 +88,16 @@ CHANGED
   — a type checker will not catch a wrong hook signature. ``__all__``
   (the legacy lazy-load surface) is unchanged; a comment now says so
   explicitly.
+- **``AGENTS.md`` rewritten**, replacing 105 lines of contributor guidance
+  that had drifted from ``CLAUDE.md`` (a nonexistent ``thoughts/shared/``
+  path, a structure diagram omitting the PostgreSQL backend, a
+  three-file version-bump instruction contradicting the tag-driven release
+  process, and zero mentions of MCP, trust, or subscriptions) with a ~40-line
+  pointer to ``CLAUDE.md`` plus MCP/peer-to-peer quickstart links for anyone
+  building an application with the library. Also removed ``AGENTS.md`` from
+  ``.github/workflows/claude-code-review.yml``'s ``paths-ignore`` — that
+  exemption is what let it go eight months without automated review while
+  ``CLAUDE.md`` stayed current.
 
 v3.14.0: August 21, 2026
 -------------------------

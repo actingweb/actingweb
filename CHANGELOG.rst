@@ -56,23 +56,12 @@ CHANGED
 - CI now enforces ``ruff format --check`` alongside ``ruff check``, and the
   19 files that had drifted from the pinned formatter (0.15.20) were
   reformatted in a mechanical commit.
-
-ADDED
-~~~~~
-
-- **New peer-to-peer quickstart** (:doc:`docs/guides/p2p-quickstart`):
-  a runnable two-actor example (``examples/p2p_quickstart.py``, repo-only —
-  not shipped in the wheel) covering trust establishment, subscribing to a
-  peer, and receiving data through ``@app.subscription_data_hook``, in one
-  document with no other guide required to reach a working setup.
-- **MCP quickstart client-configuration section**
-  (:doc:`docs/guides/mcp-quickstart`): shows how to point a real MCP client
-  (native remote connectors, or the ``mcp-remote`` stdio proxy) at a running
-  ActingWeb MCP server, with a bearer token obtained via OAuth2.
-
-CHANGED
-~~~~~~~
-
+- **README documentation pointers are now absolute readthedocs.io URLs**
+  instead of bare ``docs/...rst`` paths, which render as broken text on
+  PyPI (a ``:doc:`` role only resolves inside the Sphinx build).
+  Repository-only files (``CONTRIBUTING.rst``, ``CLAUDE.md``,
+  ``CHANGELOG.rst``) are unaffected — those are correctly filesystem paths,
+  not published docs.
 - **MCP quickstart is now explicitly a two-stage recipe.** Previously the
   pasted example had OAuth2 configuration commented out, so following it
   produced a server where every MCP method beyond ``initialize`` 401s with

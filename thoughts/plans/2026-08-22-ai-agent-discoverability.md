@@ -664,19 +664,41 @@ which must exist first.
 
 ### Verification
 
-- [ ] `poetry run sphinx-build -W --keep-going -D suppress_warnings="ref.doc,misc.highlighting_failure" -b html . _build/html` passes
-- [ ] `grep -cE '``docs/' README.rst` returns 0 — no remaining bare doc paths
-- [ ] `poetry run sphinx-build -b linkcheck . _build/linkcheck` — inspect
-      `_build/linkcheck/output.txt` for any `broken` line naming a README URL.
-      Pre-existing broken links elsewhere in the tree are recorded, not fixed here.
+- [x] `poetry run sphinx-build -W --keep-going -D suppress_warnings="ref.doc,misc.highlighting_failure" -b html . _build/html` passes
+- [x] `grep -cE '``docs/' README.rst` returns 0 — no remaining bare doc paths
+- [x] `poetry run sphinx-build -b linkcheck . _build/linkcheck` — inspected
+      `_build/linkcheck/output.json` for every `README.rst` entry: all `working`
+      except `docs/guides/p2p-quickstart.html`, which is `broken` — expected,
+      see next item. Pre-existing broken links elsewhere in the tree (migration
+      guides, protocol-spec URN/SIP examples) are unrelated and left as-is per
+      this phase's scope.
 - [ ] Manual, **post-merge**: the new `p2p-quickstart.html` URL 404s until master
       merges and Read the Docs rebuilds. Re-run the link check after the RTD build
-      completes, not before.
-- [ ] Manual: `pipx run twine check dist/*` after `poetry build`, confirming the
-      README still renders as valid RST for PyPI (`twine` is not currently a dev
-      dependency; run it via `pipx`/`uvx` rather than adding one for a one-off)
+      completes, not before. **Not yet done** — this branch hasn't merged.
+- [x] Manual: `twine check dist/*` after `poetry build` (via a `--user pip
+      install`, since neither `pipx` nor `uvx` was available in this
+      environment — not added as a dev dependency), confirming the README
+      still renders as valid RST for PyPI. Both the sdist and wheel `PASSED`.
 
-### Implementation Status: Not Started
+### Implementation Status: Complete (one post-merge verification step outstanding — see above)
+
+**Deviations from plan / learnings**:
+- The plan's Phase 3 verification cites `pipx`/`uvx` for running `twine`;
+  neither was installed in this environment. Used
+  `python3 -m pip install --user --break-system-packages twine`, ran it
+  directly, confirmed `PASSED` on both `actingweb-3.14.0.tar.gz` and the
+  wheel, left `twine` as a user-site install (not a project dependency).
+- **The Documentation table** (`README.rst:290-304`) used a fixed-width RST
+  simple table, which cannot hold a full URL per cell without breaking
+  docutils' column-alignment parsing. Converted to a bullet list instead —
+  same information, same section, no simple-table constraint. The plan
+  anticipated only "every `Location` cell becomes a link," not this format
+  change; recorded here since a reviewer diffing against the plan's literal
+  wording would otherwise flag it as a deviation.
+- `README.rst:276-278`'s reconciliation went further than "name `/en/latest/`
+  as the canonical target": the old sentence's `/en/master` reference is gone
+  entirely rather than merely superseded, since keeping both would still read
+  as two answers to "where do I go."
 
 ---
 

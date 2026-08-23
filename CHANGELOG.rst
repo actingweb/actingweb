@@ -98,6 +98,13 @@ CHANGED
   ``.github/workflows/claude-code-review.yml``'s ``paths-ignore`` — that
   exemption is what let it go eight months without automated review while
   ``CLAUDE.md`` stayed current.
+- **Superseded-API warnings added to every migration guide**
+  (``docs/migration/v3.1.rst`` through ``v3.14.rst``) and inline markers on
+  illustrative (non-real) signatures in
+  ``docs/contributing/style-guide.rst`` and ``architecture.rst``. Grepping
+  ``docs/`` for trust-creation calls previously returned several hits with
+  no indication of whether the code shown was current, historical, or never
+  real to begin with.
 
 ADDED
 ~~~~~
@@ -128,17 +135,6 @@ ADDED
   situation (``docs/guides/postgresql-migration.md``,
   ``docs/contributing/TESTING.md``) duplicated a larger, current ``.rst``
   twin and were deleted rather than published.
-
-CHANGED
-~~~~~~~
-
-- **Superseded-API warnings added to every migration guide**
-  (``docs/migration/v3.1.rst`` through ``v3.14.rst``) and inline markers on
-  illustrative (non-real) signatures in
-  ``docs/contributing/style-guide.rst`` and ``architecture.rst``. Grepping
-  ``docs/`` for trust-creation calls previously returned several hits with
-  no indication of whether the code shown was current, historical, or never
-  real to begin with.
 
 v3.14.0: August 21, 2026
 -------------------------

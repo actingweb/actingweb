@@ -5,6 +5,12 @@ ActingWeb Caching Implementation Guide
 Overview
 ========
 
+**Audience**: contributors extending ActingWeb's internal caching, not
+application developers. The module-level structures shown below
+(``_token_cache``, ``_actor_cache``, ``_trust_cache``) are library internals
+in ``actingweb/handlers/mcp.py``, not a public API — an application built on
+``pip install actingweb`` cannot import or configure them.
+
 This document provides guidance for implementing intelligent caching in ActingWeb endpoints to improve performance. Based on the successful MCP endpoint optimization that achieved 50x performance improvement (50ms → 1ms), this pattern can be applied to other endpoints and the code can possibly be generalized and reused.
 
 Cache Architecture

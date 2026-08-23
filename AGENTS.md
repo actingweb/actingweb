@@ -31,6 +31,9 @@ pip install 'actingweb[fastapi]'   # or [flask], or [all] for everything incl. M
   fuller worked example (MCP + Web/SPA + OAuth2). It pins a floating lower
   bound on `actingweb`, not an exact version, so treat it as illustrative
   rather than a guarantee of matching the current API.
+- Agent Skill (task recipes for AI coding agents building on ActingWeb):
+  `git clone` this repository and point your agent at
+  `skills/actingweb-app/`, or `npx skills add actingweb/actingweb`.
 
 ## Thoughts directory
 

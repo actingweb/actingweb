@@ -324,6 +324,12 @@ Repository and links
 - **Protocol & project home**: `https://actingweb.org/ <https://actingweb.org/>`_
 - **Example application**: `https://github.com/actingweb/actingwebdemo <https://github.com/actingweb/actingwebdemo>`_ —
   a full reference app (MCP + Web/SPA + OAuth2) to develop against.
+- **Agent Skill for building on ActingWeb**: task recipes (add a property
+  hook, expose an MCP tool, establish trust and subscribe to a peer, and
+  more) for AI coding agents working in a repository that consumes this
+  library. ``git clone`` this repository and point your agent at
+  ``skills/actingweb-app/``, or (if your agent supports the Agent Skills
+  CLI) ``npx skills add actingweb/actingweb``.
 
 Contributing
 ------------

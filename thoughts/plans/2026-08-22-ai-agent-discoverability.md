@@ -989,15 +989,51 @@ writing content, confirm: the current `SKILL.md` frontmatter schema, that
 
 ### Verification
 
-- [ ] `git check-ignore -v .claude/skills/actingweb-app/SKILL.md` returns nothing
-- [ ] `git ls-files .claude/` lists the skill
-- [ ] `poetry run pytest tests/ -k skill_api_exists -v` passes
+- [x] `git ls-files skills/` lists the skill (N/A: `.claude/skills/...`
+      check dropped — layout changed, see below)
+- [x] `poetry run pytest tests/ -k skill_api_exists -v` passes
 - [ ] Manual: install the skill into a scratch consumer repo and confirm it
-      activates on a relevant prompt and not on an irrelevant one
+      activates on a relevant prompt and not on an irrelevant one — **not
+      done**, requires a second agent session in a separate repo, not
+      available in this environment
 - [ ] Manual: follow one recipe end-to-end in a repo that only has
-      `pip install actingweb` — no access to this repository
+      `pip install actingweb` — **not done**, same constraint
 
-### Implementation Status: Not Started
+### Implementation Status: Complete (two manual verification steps outstanding — see above)
+
+**Deviations from plan / learnings**:
+- **Layout changed from `.claude/skills/` to a top-level `skills/`
+  directory, on the user's explicit direction after independent
+  verification.** The plan's cited precedent (`github.com/readthedocs/skills`)
+  turned out not to use `.claude/skills/` at all — verified against
+  https://docs.readthedocs.com/platform/latest/reference/agent-skills.html,
+  which documents installation as `git clone` + "point your agent at the
+  `skills/` directory", with `npx skills add owner/repo` as an optional CLI
+  alternative. Presented this finding to the user with both options; they
+  chose the top-level layout to match the verified precedent. Consequences:
+  no `.gitignore` change was needed (Decision/gate in the plan's Changes
+  list — `.claude/` narrowing — does not apply), and the SKILL.md frontmatter
+  schema itself is unchanged from the plan's description (verified against
+  a real file in the precedent repo: `name` + `description` YAML
+  frontmatter, then a markdown body, with an optional `references/`
+  subdirectory for deeper material — matches exactly).
+- **`marketplace.json`** (listed as "optionally" in the plan) was skipped:
+  the verified precedent doesn't use one, and nothing in this phase's actual
+  requirements needs it.
+- **Recipe accuracy corrections found while writing, not just copying, the
+  skill**: the `acl_rules` recipe initially used an invented path
+  (`callbacks/subscriptions/<id>`); checked against
+  `docs/guides/access-control.rst`'s "Common ACL Paths" table and corrected
+  to the real convention (`subscriptions/<id>` for creating subscriptions,
+  `callbacks` broadly for receiving them).
+- Added a "Why ActingWeb, and when to reach for it" section at the user's
+  explicit request mid-implementation — not in the plan's outline, which
+  focused on Decision 9 (task recipes over a tour). Framed around
+  microservices virtualization (per-user isolation, not per-user query
+  scoping) and explicit typed trust relationships for AI-agent contexts,
+  informed by the user's own longer-form writeup at
+  `stuff.greger.io/actingweb/more-in-depth`. Kept to one short section
+  before the recipes, not a rewrite of the skill's task-first structure.
 
 ---
 

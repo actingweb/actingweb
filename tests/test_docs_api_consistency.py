@@ -61,6 +61,33 @@ def test_doc_api_exists_hook_decorators():
     )
 
 
+def test_skill_api_exists_hook_decorators():
+    """Every `@app.*_hook` decorator named in skills/**/*.md exists on ActingWebApp.
+
+    A skill teaching a nonexistent decorator is Phase 0's defect with wider
+    distribution -- consumers install skills/, not docs/.
+    """
+    from actingweb.interface.app import ActingWebApp
+
+    skills_root = DOCS_ROOT.parent / "skills"
+    names: set[str] = set()
+    for md_file in skills_root.rglob("*.md"):
+        text = md_file.read_text(encoding="utf-8", errors="ignore")
+        names.update(HOOK_DECORATOR_RE.findall(text))
+
+    assert names, (
+        "No hook decorators found in skills/ -- the regex or skills root is wrong"
+    )
+
+    missing = sorted(
+        name for name in names if not callable(getattr(ActingWebApp, name, None))
+    )
+    assert not missing, (
+        f"skills/**/*.md reference hook decorator(s) that do not exist on "
+        f"ActingWebApp: {missing}"
+    )
+
+
 def test_doc_api_exists_lifecycle_hook_importable():
     """`from actingweb.interface import lifecycle_hook` must succeed."""
     from actingweb.interface import lifecycle_hook

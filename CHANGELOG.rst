@@ -99,6 +99,19 @@ CHANGED
   exemption is what let it go eight months without automated review while
   ``CLAUDE.md`` stayed current.
 
+ADDED
+~~~~~
+
+- **Agent Skill for building applications on ActingWeb**
+  (``skills/actingweb-app/``): task recipes — add a property hook, expose an
+  MCP tool, establish trust and subscribe to a peer, configure a custom
+  trust type's ``acl_rules``, look up an actor by property value — for AI
+  coding agents working in a repository that merely ``pip install``s this
+  library, which is the one surface that reaches them (everything else in
+  this release improves what such an agent finds *if it comes looking*).
+  ``git clone`` this repo and point your agent at the directory, or
+  ``npx skills add actingweb/actingweb``.
+
 v3.14.0: August 21, 2026
 -------------------------
 

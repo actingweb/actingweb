@@ -111,6 +111,13 @@ ADDED
   this release improves what such an agent finds *if it comes looking*).
   ``git clone`` this repo and point your agent at the directory, or
   ``npx skills add actingweb/actingweb``.
+- **``llms.txt`` / ``llms-full.txt``** are now generated on every docs build
+  via ``sphinx-llms-txt``, and will be served at
+  ``https://actingweb.readthedocs.io/en/latest/llms.txt`` once this lands.
+  Adopted as a substrate for tools that read it (a human pointing an agent
+  at the docs) and for the Google Lighthouse audit that now checks for it —
+  not on a claim that AI agents fetch it live at request time; the evidence
+  for that is thin.
 
 CHANGED
 ~~~~~~~

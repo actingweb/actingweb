@@ -2230,6 +2230,21 @@ code-style = ["pre-commit (==2.12.1)"]
 rtd = ["ipython", "myst-nb", "sphinx", "sphinx-book-theme", "sphinx-examples"]
 
 [[package]]
+name = "sphinx-llms-txt"
+version = "0.7.1"
+description = "llms-full.txt generator for Sphinx"
+optional = false
+python-versions = "*"
+groups = ["docs"]
+files = [
+    {file = "sphinx_llms_txt-0.7.1-py3-none-any.whl", hash = "sha256:8f1cfcfe5897f5be118792f33f73eeb04cbbf66fc60c4c15982ec59252522263"},
+    {file = "sphinx_llms_txt-0.7.1.tar.gz", hash = "sha256:b5cefec19d3fd56670aa4a28917d17d32b22c61a9feadbab8564ad11e932f5c0"},
+]
+
+[package.dependencies]
+sphinx = "*"
+
+[[package]]
 name = "sphinx-rtd-theme"
 version = "3.1.0"
 description = "Read the Docs theme for Sphinx"
@@ -2607,4 +2622,4 @@ postgresql = ["alembic", "psycopg", "sqlalchemy"]
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.11"
-content-hash = "4ea9b3ed5bb0af09aa23656826a1564c8ea10bb20d881bc60bb70c6ffb6511c7"
+content-hash = "7d7495bd3af80c86f7ef46cef62c10ce168a7044cc7a52b60f7daa75dd44ecf0"

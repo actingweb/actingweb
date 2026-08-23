@@ -1150,18 +1150,37 @@ completed from this repository. After this plan lands:
 
 ### Verification
 
-- [ ] `poetry check --lock` passes (Poetry 2.x form; was `poetry lock --check` on 1.x)
-- [ ] `poetry run sphinx-build -W --keep-going -D suppress_warnings="ref.doc,misc.highlighting_failure" -b html . _build/html` passes
-- [ ] `_build/html/llms.txt` and `_build/html/llms-full.txt` exist and are
-      non-empty; record `llms-full.txt`'s size, since it concatenates the whole
-      doc set and inflates every RTD build
-- [ ] `grep -c sphinx-llms-txt docs/requirements.txt` returns 1 — **this is the
+- [x] `poetry check --lock` passes (Poetry 2.x form; was `poetry lock --check` on 1.x)
+      — exit 0, only the repo's pre-existing `[tool.poetry]`-vs-`[project]`
+      deprecation warnings (unrelated, present before this change)
+- [x] `poetry run sphinx-build -W --keep-going -D suppress_warnings="ref.doc,misc.highlighting_failure" -b html . _build/html` passes
+- [x] `_build/html/llms.txt` and `_build/html/llms-full.txt` exist and are
+      non-empty. **Sizes recorded**: `llms.txt` 72 lines / 4.9 KB;
+      `llms-full.txt` 33,694 lines / **1.2 MB**, concatenating 66 sources —
+      this is what regenerates on every RTD build.
+- [x] `grep -c sphinx-llms-txt docs/requirements.txt` returns 1 — **this is the
       check that prevents a broken RTD build**
 - [ ] Manual, post-merge: confirm the Read the Docs build succeeds and
-      `https://actingweb.readthedocs.io/en/latest/llms.txt` serves
-- [ ] Manual: Context7 submission completed and search returns a result
+      `https://actingweb.readthedocs.io/en/latest/llms.txt` serves —
+      **not done**, this branch hasn't merged
+- [ ] Manual: Context7 submission completed and search returns a result —
+      **not done**, a third-party request the plan itself says "cannot be
+      completed from this repository"; left for the user (see "User action"
+      steps above)
 
-### Implementation Status: Not Started
+### Implementation Status: Complete (two post-merge/external verification steps outstanding — see above)
+
+**Learnings**: `poetry add --group docs sphinx-llms-txt` (rather than
+hand-editing a guessed version constraint into `pyproject.toml`) resolved
+the real current version (`^0.7.1`, not the plan's placeholder `^0.3.0`) and
+updated `poetry.lock` in one step — safer than guessing a constraint that
+might not resolve. `docs/requirements.txt` regenerated via the repo's
+existing `pre-commit` git hook (installed by `scripts/install-git-hooks.sh`),
+which auto-runs `poetry export --with docs --without-hashes` and stages the
+result whenever `pyproject.toml` is part of the commit — already observed
+firing correctly during Phase 4's commit. `_build/html/llms.txt` and
+`llms-full.txt` needed no new `.gitignore` entry: they land under
+`_build/html/`, already covered by the existing `_build/` pattern.
 
 ---
 

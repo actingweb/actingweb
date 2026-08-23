@@ -64,23 +64,41 @@ app = ActingWebApp(
 
 ## The programming model
 
-Every recipe below is a variation on four concepts. Understand these before
+Every recipe below is a variation on five concepts. Understand these before
 writing hooks -- they explain *why* the hooks look the way they do.
 
 - **Actor** (`ActorInterface`): one per user or tenant. Its own id, own URL
   (`https://myapp.example.com/<actor_id>`), own data, own trust
   relationships. Your hooks are always called with the actor they concern --
   there is no cross-actor query surface, by design.
-- **Properties** (`actor.properties`): the actor's key-value data store --
-  the thing every recipe below reads or writes. **Private by default**:
-  nothing under `/properties` is visible to a peer or MCP client until a
-  trust relationship's permissions say otherwise. Sharing is done by
-  *property path* -- the built-in `viewer` trust type, for example, defaults
-  to exposing only `public/*` and `shared/*` paths (see "Configure a custom
-  trust type" below for how a permission config maps paths like `public/*`
-  or `notes/private/*` to what a trust type may read or write). There is no
-  separate "private" storage API to opt into -- privacy is the default state
-  of every property until a permission rule grants an exception.
+- **Properties** (`actor.properties`): the actor's key-value data store for
+  data that is, or might become, shareable. Exposed at `/properties` over
+  REST and readable/writable there by anyone with a trust relationship whose
+  permissions allow it. **Private by default**: nothing is visible to a peer
+  or MCP client until a trust relationship's permissions say otherwise.
+  Sharing is done by *property path* -- the built-in `viewer` trust type,
+  for example, defaults to exposing only `public/*` and `shared/*` paths
+  (see "Configure a custom trust type" below for how a permission config
+  maps a path like `public/*` to what a trust type may read or write).
+- **Attributes** (`from actingweb import attribute`): a second, separate
+  key-value store for data that is never part of the property model at
+  all -- not exposed at `/properties`, not addressable by any trust-type
+  permission pattern, never delivered by a subscription. Use it for secrets,
+  service credentials, feature flags, locks, and other bookkeeping your own
+  code manages and a peer or MCP client should never be able to reach
+  through the actor's public surface, regardless of trust type:
+
+  ```python
+  from actingweb import attribute
+
+  bucket = attribute.Attributes(actor_id=actor.id, bucket="service", config=app.get_config())
+  bucket.set_attr(name="stripe_customer_id", data="cus_abc123")
+  attr = bucket.get_attr(name="stripe_customer_id")  # {"data": "cus_abc123", "timestamp": ...}
+  ```
+
+  Full reference (bucket conventions, atomic `conditional_update_attr()`,
+  cleanup on actor deletion):
+  https://actingweb.readthedocs.io/en/latest/docs/sdk/attributes-buckets.html
 - **Trust relationships** (`actor.trust`): explicit, typed, per-peer
   connections (`friend`, `partner`, `associate`, `admin`, `mcp_client`, or a
   custom type). A relationship is what a permission check is evaluated
@@ -91,13 +109,17 @@ writing hooks -- they explain *why* the hooks look the way they do.
   two actors have a trust relationship, a peer can subscribe to a `target`
   (e.g. `"properties"`); from then on, changes are delivered to that peer as
   sequenced, deduplicated callbacks instead of the peer polling for updates.
+  Only properties are subscribable -- attributes never generate a
+  subscription event.
 
-Put together: an actor's state lives in `properties`; whether a specific
-peer can read, write, or be notified of changes to that state is governed
-entirely by its `trust` relationship's permissions and its `subscriptions`.
-Hooks (below) are where your application logic runs -- they never bypass
-this: a property hook still only fires for accessors permission already let
-through.
+Put together: an actor's *shareable* state lives in `properties`, and
+whether a specific peer can read, write, or be notified of changes to it is
+governed entirely by its `trust` relationship's permissions and its
+`subscriptions`. An actor's *own* bookkeeping -- data no peer or client
+should ever reach, no matter how trust is configured -- lives in
+`attributes` instead. Hooks (below) are where your application logic runs
+-- they never bypass this: a property hook still only fires for accessors
+permission already let through.
 
 ## Add a property hook
 

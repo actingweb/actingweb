@@ -62,6 +62,15 @@ app = ActingWebApp(
 )
 ```
 
+`database` (or the `DATABASE_BACKEND` environment variable, which takes
+precedence) picks the storage backend. **DynamoDB** and **PostgreSQL** are
+the two supported today -- both production-ready, not one favored over the
+other. Every backend implements the same set of `typing.Protocol` interfaces
+(`actingweb/db/protocols.py`), so hooks and application code never branch on
+which one is active. Contributions adding another backend (MySQL, SQLite,
+etc.) behind that same protocol set are welcome. Comparison and setup for
+each: https://actingweb.readthedocs.io/en/latest/docs/reference/database-backends.html
+
 ## The programming model
 
 Every recipe below is a variation on five concepts. Understand these before

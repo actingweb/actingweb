@@ -29,8 +29,15 @@ information about you" is a reasonable thing to be nervous about; ActingWeb
 answers it with **explicit, typed trust relationships** (`friend`,
 `partner`, `associate`, `admin`, or a custom type you define) and
 per-relationship permissions, rather than one shared authorization model an
-agent either has or doesn't. Reach for ActingWeb when your app needs one or
-more of:
+agent either has or doesn't. Actor-to-actor traffic -- establishing trust,
+subscribing, delivering callbacks -- is not a proprietary wire format
+either: it runs entirely over the **ActingWeb protocol**, a standardized
+REST specification written in IETF Internet-Draft format and published
+alongside this library's own docs. Two independently-built ActingWeb apps
+interoperate peer-to-peer because they both implement the same documented
+spec, not because they share code. Full text:
+https://actingweb.readthedocs.io/en/latest/docs/protocol/actingweb-spec.html
+Reach for ActingWeb when your app needs one or more of:
 
 - **A per-user MCP server** -- expose tools/prompts/resources to ChatGPT,
   Claude, and other LLM hosts, where each MCP session is bound to one
@@ -183,7 +190,8 @@ of endpoint on the same running server, both with the same bearer token:
 
 1. **The ActingWeb spec REST API** -- `/<actor_id>/properties`,
    `/<actor_id>/trust`, `/<actor_id>/subscriptions`, etc. Defined by the
-   protocol itself and handled entirely by the library; nothing to register.
+   protocol itself (see "Why ActingWeb" above) and handled entirely by the
+   library; nothing to register.
 2. **Your own private API** -- routes you add directly on the same
    FastAPI/Flask app object ActingWeb integrates into
    (`aw_app.integrate_fastapi(api)`), for anything the spec doesn't cover

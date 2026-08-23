@@ -1,5 +1,5 @@
 ---
-status: active
+status: done
 ---
 
 # Implementation Plan: Discoverability of ActingWeb for AI coding agents
@@ -1424,3 +1424,85 @@ rather than delegated to evaluator sub-agents.
   does not exist on readthedocs until master builds. The verification step says so
   explicitly rather than inviting a pre-merge link check that will fail
   confusingly.
+
+## Implementation Summary
+
+**Completed:** 2026-08-23
+**All phases:** Complete (0, 1, 2, 2b, 3, 4, 5, 6, 6b, 7, 8, 9)
+**Test status:** All passing — `make test-all-parallel`: 3106 passed, 31
+skipped, 0 failed (final clean run); `poetry run pyright actingweb tests
+examples`: 0 errors/warnings; `poetry run ruff check`/`format --check`: pass;
+`poetry run sphinx-build -W`: 0 warnings
+
+Landed as 11 commits on branch `ai-agent-discoverability`
+(`3ac7267`..`4fe9271`), not yet pushed or opened as a PR — the user asked
+for everything in one PR, to be opened when they're ready.
+
+### Deviations from Plan
+
+Full detail is under each phase's "Deviations from plan / learnings" note.
+The material ones:
+
+- **Phase 0's `@app.subscription_hook` open question resolved as a real
+  library bug**, not a docs defect: it registered into a hook registry
+  nothing ever called. Fixed in `actingweb/handlers/callbacks.py` per the
+  user's explicit direction, with a regression test and a CHANGELOG
+  behavior-change note (a previously-swallowed `True` now correctly returns
+  204 instead of 400).
+- **Phase 6b's layout changed from `.claude/skills/` to a top-level
+  `skills/` directory.** The plan's cited precedent, independently
+  re-verified against Read the Docs' own documentation, turned out not to
+  use `.claude/skills/` at all. Presented to the user with both options;
+  they chose the layout matching the verified precedent.
+- **The `peer_id` provenance defect (Phase 1) and the migration-guide
+  banners (Phase 7) both had more instances than the plan enumerated** —
+  five files and one extra illustrative signature respectively, found by
+  running the plan's own verification greps over all of `docs/` rather than
+  just the named lines.
+- **Two incidents during manual end-to-end verification, both caught and
+  disclosed immediately:**
+  - Port 5000 collided with the user's own running service; a background
+    server that failed to bind was curled anyway, creating two real actors
+    on that live service (deleted immediately, confirmed via 404).
+  - A bare `python -c "import mcp_quickstart"` (outside pytest's DB
+    sandboxing) touched the user's real AWS account via the library's
+    default credential chain. Root-caused and fixed in the example itself
+    (FastAPI wiring moved into `__main__`), not just avoided procedurally.
+- **Manual verification actually caught a real bug**: `examples/p2p_quickstart.py`
+  silently failed to deliver subscription callbacks because `ActingWebApp`
+  defaults to `proto="https://"` against a plain-`http://` local server —
+  fixed with an env-overridable default and a comment explaining why.
+
+### Deferred / Not Completed
+
+Recorded in each phase's Verification section, not silently dropped:
+
+- **Phase 2b**: connecting a real MCP client — needs a real OAuth2 provider
+  and a running MCP client, neither available in this environment.
+- **Phase 6b**: installing the skill into a scratch consumer repo and
+  confirming activation — needs a second agent session in a separate repo.
+- **Phase 3 / all phases referencing `p2p-quickstart.html`**: the
+  post-merge Read the Docs build check. Every such URL is currently `200`
+  except this one page, which 404s until this branch merges — expected and
+  called out at each occurrence, not a defect.
+- **Phase 8**: the Context7 submission — a third-party request the plan
+  itself says cannot be completed from this repository; left for the user.
+
+### Learnings (cross-cutting, not tied to one phase)
+
+- `pyrightconfig.json` is gitignored — a personal local file, not a
+  repository one. CI's `poetry run pyright actingweb` (no `tests` or
+  `examples`, and no config file present in the checkout at all) is a
+  pre-existing gap, unrelated to this plan, flagged rather than silently
+  worked around or expanded into.
+- A stale, untracked `actingweb.egg-info/` at the repo root (version
+  `3.0.0`, dated 2025-07-12) shadowed real installed package metadata on
+  `sys.path` ahead of the venv's `.dist-info`. Found only because Phase 4's
+  new metadata test failed locally despite `poetry install` reporting
+  nothing to do; removed.
+- Three distinct test files across three different phases
+  (`test_subscription_suspension_flow.py`, `test_async_operations.py`,
+  `test_bulk_list_update_handles.py`) each failed once under
+  `make test-all-parallel` and passed immediately when re-run in isolation
+  or sequentially — consistent, pre-existing parallel-execution flakiness
+  per `CLAUDE.md`'s own documented caveat, not regressions from this work.

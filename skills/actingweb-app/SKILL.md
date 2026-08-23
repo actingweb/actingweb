@@ -71,6 +71,24 @@ which one is active. Contributions adding another backend (MySQL, SQLite,
 etc.) behind that same protocol set are welcome. Comparison and setup for
 each: https://actingweb.readthedocs.io/en/latest/docs/reference/database-backends.html
 
+## Running locally
+
+```bash
+pip install 'actingweb[fastapi,dynamodb]'   # or [flask,...] / [...,postgresql]
+
+docker run -p 8000:8000 amazon/dynamodb-local
+export AWS_ACCESS_KEY_ID=local AWS_SECRET_ACCESS_KEY=local AWS_DEFAULT_REGION=us-east-1
+export AWS_DB_HOST=http://localhost:8000
+```
+
+`.with_devtest(True)` turns on a `/<actor_id>/devtest` helper endpoint for
+poking at an actor during manual testing -- it still requires
+authentication, it is not an auth bypass, and MCP's OAuth2 requirement in
+particular is unaffected by it (see the MCP tool recipe's Gotcha below).
+**Must be `False` in production.** Full setup for both backends (Docker
+commands, required env vars, PostgreSQL + Alembic migrations):
+https://actingweb.readthedocs.io/en/latest/docs/quickstart/local-dev-setup.html
+
 ## The programming model
 
 Every recipe below is a variation on five concepts. Understand these before
@@ -183,6 +201,33 @@ security hole: the endpoint accepts any request, authenticated or not. Full
 reference:
 https://actingweb.readthedocs.io/en/latest/docs/guides/authentication.html#custom-route-authentication
 
+## Actor lifecycle: create and delete
+
+```python
+actor = ActorInterface.create(
+    creator="user@example.com", config=app.get_config(), hooks=app.hooks
+)
+```
+
+**Gotcha**: pass `hooks=app.hooks` or the `actor_created` lifecycle hook
+never fires -- the actor is still created, just silently without your
+setup logic running. Creating an actor over REST via the factory endpoint
+always runs it; this only matters for programmatic creation.
+
+```python
+actor.delete()
+```
+
+**Gotcha**: `actor.delete()` does **not** run the `actor_deleted` /
+`actor_deleted_complete` lifecycle hooks -- only the HTTP
+`DELETE /<actor_id>` path fires those. Deleting an actor programmatically
+means your own code owns any cleanup those hooks would have done (e.g.
+telling a third-party service to drop its record of this user). What *is*
+automatic either way: all of the actor's properties, attributes, trust
+relationships, and subscriptions are deleted with it -- nothing is left
+behind for you to clean up in `actor.properties` or `attribute.Attributes`
+buckets yourself.
+
 ## Add a property hook
 
 Property hooks fire on every read/write of a named property (or `"*"` for
@@ -259,6 +304,12 @@ def on_change(actor, peer_id, target, data, sequence, callback_type):
 
 **Gotcha**: approving a trust relationship grants the peer whatever the
 trust type permits. Do not auto-approve requests from unverified peers.
+
+**Gotcha (Lambda/serverless)**: subscription callbacks are async
+fire-and-forget by default, so on a platform that freezes the process after
+the response returns, a callback can be silently lost mid-flight. Call
+`app.with_sync_callbacks()` to make callback delivery blocking instead.
+
 Full runnable example:
 https://actingweb.readthedocs.io/en/latest/docs/guides/p2p-quickstart.html
 
@@ -309,3 +360,20 @@ if actor is None:
 lookup tables: `app.with_indexed_properties(["email", "externalUserId"])`.
 See https://actingweb.readthedocs.io/en/latest/docs/quickstart/configuration.html
 for the migration guide from the legacy DynamoDB GSI-based lookup.
+
+## See also
+
+Not covered above as task recipes, but worth knowing exist:
+
+- **Configuration reference** -- every `ActingWebApp` builder method and
+  environment variable in one place:
+  https://actingweb.readthedocs.io/en/latest/docs/quickstart/configuration.html
+- **Third-party service integrations** (`app.add_service(...)`,
+  `actor.services`) -- OAuth2-backed clients (Google, Stripe, etc.) managed
+  per-actor the same way trust relationships are:
+  https://actingweb.readthedocs.io/en/latest/docs/guides/service-integration.html
+- **Logging and request correlation** -- structured logs with a request ID
+  you can grep across an actor-to-actor call chain:
+  https://actingweb.readthedocs.io/en/latest/docs/guides/logging-and-correlation.html
+- **Troubleshooting** -- common errors and their fixes:
+  https://actingweb.readthedocs.io/en/latest/docs/guides/troubleshooting.html

@@ -30,7 +30,16 @@ def test_distribution_metadata_urls_are_https():
         name, _, url = entry.partition(",")
         urls[name.strip()] = url.strip()
 
-    for name in ("Homepage", "Documentation", "Repository"):
+    # Homepage's location is poetry-core-version-dependent: older releases
+    # (e.g. the 1.7.0 pinned in CI) emit it only via the classic single-value
+    # "Home-page" header, newer releases fold it into Project-URL instead.
+    # Check both rather than assuming one.
+    home_page_header = meta["Home-page"] if "Home-page" in meta else None
+    homepage = urls.get("Homepage") or home_page_header
+    assert homepage, f"Homepage missing from both Project-URL and Home-page: {urls}"
+    assert homepage.startswith("https://"), f"Homepage is not https://: {homepage}"
+
+    for name in ("Documentation", "Repository"):
         assert name in urls, f"Project-URL '{name}' missing: {urls}"
         assert urls[name].startswith("https://"), (
             f"{name} is not https://: {urls[name]}"

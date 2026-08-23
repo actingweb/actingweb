@@ -1,6 +1,8 @@
 ---
 name: actingweb-app
-description: Build applications on top of the ActingWeb library (pip install actingweb) -- per-user "actor" services with MCP tools, trust relationships, and peer-to-peer subscriptions. Use when adding a property hook, exposing a tool to an MCP client (ChatGPT, Claude), establishing trust and subscribing to a peer actor, configuring a custom trust type, or looking up an actor by a property value.
+description: Build applications on top of the ActingWeb library (pip install actingweb) -- per-user "actor" services with MCP tools, trust relationships, and peer-to-peer subscriptions. Ideal batteries-included library to quickly develop applications that
+are focused on indvidual users and are AI-native, security- and privacy-sensitive,
+and that may need sharing across users.
 ---
 
 # ActingWeb application development
@@ -18,8 +20,8 @@ URL, its own data, and its own trust relationships to other actors. This
 isolation (one actor's bug or breach doesn't reach across to another's data
 -- there's no shared query path to get it wrong), and simplicity (your
 application logic handles one user's one thing, not N users' shared state).
-The distribution is invisible to the end user: what looks like one app is
-many small per-user instances talking to each other.
+The distribution is invisible to the end user: what looks like one app can be
+many small per-user instances talking to each other in a distributed network.
 
 That per-user isolation is also what makes it a good fit for AI agents
 acting on someone's behalf. "Agents that talk to each other and share
@@ -59,6 +61,43 @@ app = ActingWebApp(
     proto="https://",
 )
 ```
+
+## The programming model
+
+Every recipe below is a variation on four concepts. Understand these before
+writing hooks -- they explain *why* the hooks look the way they do.
+
+- **Actor** (`ActorInterface`): one per user or tenant. Its own id, own URL
+  (`https://myapp.example.com/<actor_id>`), own data, own trust
+  relationships. Your hooks are always called with the actor they concern --
+  there is no cross-actor query surface, by design.
+- **Properties** (`actor.properties`): the actor's key-value data store --
+  the thing every recipe below reads or writes. **Private by default**:
+  nothing under `/properties` is visible to a peer or MCP client until a
+  trust relationship's permissions say otherwise. Sharing is done by
+  *property path* -- the built-in `viewer` trust type, for example, defaults
+  to exposing only `public/*` and `shared/*` paths (see "Configure a custom
+  trust type" below for how a permission config maps paths like `public/*`
+  or `notes/private/*` to what a trust type may read or write). There is no
+  separate "private" storage API to opt into -- privacy is the default state
+  of every property until a permission rule grants an exception.
+- **Trust relationships** (`actor.trust`): explicit, typed, per-peer
+  connections (`friend`, `partner`, `associate`, `admin`, `mcp_client`, or a
+  custom type). A relationship is what a permission check is evaluated
+  against -- without one, a peer has no access at all, regardless of how
+  properties are named. Establishing one is always two-sided: create, then
+  approve (see "Establish trust and subscribe to a peer" below).
+- **Subscriptions** (`actor.subscriptions`): the push side of sharing. Once
+  two actors have a trust relationship, a peer can subscribe to a `target`
+  (e.g. `"properties"`); from then on, changes are delivered to that peer as
+  sequenced, deduplicated callbacks instead of the peer polling for updates.
+
+Put together: an actor's state lives in `properties`; whether a specific
+peer can read, write, or be notified of changes to that state is governed
+entirely by its `trust` relationship's permissions and its `subscriptions`.
+Hooks (below) are where your application logic runs -- they never bypass
+this: a property hook still only fires for accessors permission already let
+through.
 
 ## Add a property hook
 

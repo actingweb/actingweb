@@ -59,6 +59,18 @@ def on_properties_changed(
     print(f"[{actor.id}] update from {peer_id} ({callback_type} #{sequence}): {data}")
 
 
+@app.lifecycle_hook("trust_request_received")
+def on_trust_request_received(actor: ActorInterface, peer_id: str, **kwargs) -> None:
+    # Fires on the actor RECEIVING a trust request -- here, actor A (the
+    # publisher) when actor B (the subscriber) calls create_relationship().
+    # Auto-approving here is what makes subscribe_to_peer() below succeed:
+    # a subscription request is rejected with 403 until both sides of the
+    # relationship are approved, not just the side that initiated it.
+    # Demo-only: never auto-approve an unverified peer in a real
+    # application -- see the Security Note in docs/guides/p2p-quickstart.rst.
+    actor.trust.approve_relationship(peer_id=peer_id)
+
+
 # end: app-setup
 
 
@@ -75,6 +87,12 @@ def publish_status(actor: ActorInterface, status: str) -> None:
 def establish_trust_and_subscribe(subscriber: ActorInterface, publisher_url: str):
     """
     Actor B: establish trust with actor A, approve it, then subscribe.
+
+    create_relationship() implicitly approves the relationship on the
+    *initiating* (subscriber) side only -- the peer's side stays unapproved
+    until the peer approves it too, which is what the on_trust_request_received
+    hook above does. subscribe_to_peer() below would otherwise get a 403:
+    subscription requests require an approved relationship on *both* sides.
 
     Approving a trust relationship grants the peer whatever the trust type
     permits. Do not auto-approve trust with an unverified peer in a real

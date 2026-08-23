@@ -298,6 +298,22 @@ actor.trust.approve_relationship(peer_id=rel.peer_id)
 actor.subscriptions.subscribe_to_peer(peer_id=rel.peer_id, target="properties")
 ```
 
+**Gotcha**: `create_relationship()` only approves the relationship on the
+side that calls it -- the peer's side is created unapproved, and
+`subscribe_to_peer()` gets a `403` until *both* sides are approved. The
+`approve_relationship()` call above only covers your own side. The peer's
+own app has to approve too, typically from a
+`@app.lifecycle_hook("trust_request_received")` handler on *their* app:
+
+```python
+@app.lifecycle_hook("trust_request_received")
+def on_trust_request_received(actor, peer_id, **kwargs):
+    actor.trust.approve_relationship(peer_id=peer_id)  # demo-only auto-approve
+```
+
+Do not auto-approve an unverified peer this way in a real application --
+see the next Gotcha.
+
 To receive the peer's changes, enable subscription processing and register
 a data hook (the six-parameter signature -- data is already sequenced,
 deduplicated, and stored by the time this fires):

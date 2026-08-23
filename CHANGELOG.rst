@@ -49,6 +49,24 @@ FIXED
   in-library caller already passed a bool, so behavior only changes for
   direct callers relying on the default — which previously crashed on
   PostgreSQL.
+- **The new p2p quickstart's subscribe step 403'd as written**:
+  ``create_relationship()`` only approves a relationship on the side that
+  initiates it, so the peer's side stayed unapproved and
+  ``subscribe_to_peer()`` was rejected — the guide's Python narrative never
+  had the peer approve its side (its curl "Verify" walkthrough happened to,
+  independently, which is why manual testing during development didn't
+  catch this). ``examples/p2p_quickstart.py`` now registers an
+  ``on_trust_request_received`` lifecycle hook that auto-approves incoming
+  requests (demo-only — flagged as such in both the code and the guide);
+  ``docs/guides/p2p-quickstart.rst``'s curl walkthrough now also captures
+  each actor's passphrase from its creation response and sends the Basic
+  auth every non-creation request actually requires, rather than omitting
+  it and discarding the passphrase. Verified end-to-end against a running
+  server. Also fixed: ``examples/mcp_quickstart.py`` had the same missing
+  ``proto="http://"`` override as the p2p example did before this release —
+  the OAuth2 redirect URI generated for Stage 2 pointed at
+  ``https://localhost:...``, which nothing on the plain-HTTP uvicorn server
+  it starts answers on.
 
 CHANGED
 ~~~~~~~

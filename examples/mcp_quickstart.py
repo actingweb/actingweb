@@ -23,6 +23,13 @@ aw = (
         aw_type="urn:actingweb:example.com:mcp",
         database="dynamodb",
         fqdn=os.getenv("APP_HOST_FQDN", "localhost:5000"),
+        # Defaults to http:// for local development, matching the uvicorn
+        # server started below (plain HTTP, no TLS). ActingWebApp defaults
+        # to https:// -- left as that default here, the actor URLs and the
+        # OAuth2 redirect_uri generated for Stage 2 would point at
+        # https://localhost:..., which nothing on this server answers on.
+        # Set APP_HOST_PROTO=https:// in production, matching your real proto.
+        proto=os.getenv("APP_HOST_PROTO", "http://"),
     )
     .with_web_ui(True)
     # MCP is on by default. Optionally set the server name announced in

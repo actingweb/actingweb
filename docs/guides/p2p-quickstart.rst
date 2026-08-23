@@ -42,6 +42,14 @@ without it, ``@app.subscription_data_hook`` never fires (only the raw
 ``auto_sequence=True`` is what makes the receiving hook below get already-
 sequenced, deduplicated, stored data instead of raw callback payloads.
 
+The ``trust_request_received`` lifecycle hook auto-approves an incoming
+trust request. It has to: ``create_relationship()`` (below) only approves
+the relationship on the side that initiates it -- the peer's side stays
+unapproved until the peer approves it too, and a subscription request is
+rejected with ``403`` unless *both* sides are approved. This is demo-only
+auto-approval; see the Security Note near the bottom of this page before
+using this pattern for real trust requests.
+
 .. literalinclude:: ../../examples/p2p_quickstart.py
    :language: python
    :start-after: start: app-setup
@@ -113,34 +121,40 @@ Verify
 ------
 
 Create both actors, establish trust, subscribe, and publish -- all over the
-REST API:
+REST API. Actor creation is unauthenticated, but every request after that
+requires HTTP Basic auth (``creator:passphrase``) -- capture each actor's
+``passphrase`` from its creation response rather than discarding it (this
+needs ``jq``):
 
 .. code-block:: bash
 
-   # Create actor A
-   curl -s -X POST http://localhost:5000/ -d '{"creator":"a@example.com"}' \
-     -H 'Content-Type: application/json' -D - -o /dev/null
+   # Create actor A -- capture id and passphrase, both needed below
+   actor_a=$(curl -s -X POST http://localhost:5000/ -d '{"creator":"a@example.com"}' \
+     -H 'Content-Type: application/json')
+   actor_a_id=$(echo "$actor_a" | jq -r .id)
+   actor_a_pass=$(echo "$actor_a" | jq -r .passphrase)
 
    # Create actor B
-   curl -s -X POST http://localhost:5000/ -d '{"creator":"b@example.com"}' \
-     -H 'Content-Type: application/json' -D - -o /dev/null
+   actor_b=$(curl -s -X POST http://localhost:5000/ -d '{"creator":"b@example.com"}' \
+     -H 'Content-Type: application/json')
+   actor_b_id=$(echo "$actor_b" | jq -r .id)
+   actor_b_pass=$(echo "$actor_b" | jq -r .passphrase)
 
-   # Actor B initiates trust with actor A (use the actor IDs from Location headers above)
-   curl -s -X POST http://localhost:5000/<actor-b-id>/trust \
+   # Actor B initiates trust with actor A, authenticated as actor B's owner.
+   # The running server's on_trust_request_received hook (see "Both Sides in
+   # One App" above) auto-approves actor A's side as this request arrives --
+   # no separate approval step needed.
+   curl -s -u "b@example.com:$actor_b_pass" -X POST "http://localhost:5000/$actor_b_id/trust" \
      -H 'Content-Type: application/json' \
-     -d '{"url": "http://localhost:5000/<actor-a-id>", "relationship": "friend"}'
+     -d "{\"url\": \"http://localhost:5000/$actor_a_id\", \"relationship\": \"friend\"}"
 
-   # Actor A approves (use the peerid returned above)
-   curl -s -X PUT http://localhost:5000/<actor-a-id>/trust/friend/<actor-b-id> \
-     -H 'Content-Type: application/json' -d '{"approved": true}'
-
-   # Actor B subscribes to actor A's properties
-   curl -s -X POST http://localhost:5000/<actor-b-id>/subscriptions \
+   # Actor B subscribes to actor A's properties, authenticated as actor B's owner
+   curl -s -u "b@example.com:$actor_b_pass" -X POST "http://localhost:5000/$actor_b_id/subscriptions" \
      -H 'Content-Type: application/json' \
-     -d '{"peerid": "<actor-a-id>", "target": "properties", "granularity": "high"}'
+     -d "{\"peerid\": \"$actor_a_id\", \"target\": \"properties\", \"granularity\": \"high\"}"
 
-   # Actor A publishes a change
-   curl -s -X POST http://localhost:5000/<actor-a-id>/properties \
+   # Actor A publishes a change, authenticated as actor A's owner
+   curl -s -u "a@example.com:$actor_a_pass" -X POST "http://localhost:5000/$actor_a_id/properties" \
      -H 'Content-Type: application/json' -d '{"name": "status", "value": "active"}'
 
 Actor B's server log should show the ``on_properties_changed`` hook firing

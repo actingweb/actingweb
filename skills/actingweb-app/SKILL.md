@@ -121,6 +121,51 @@ should ever reach, no matter how trust is configured -- lives in
 -- they never bypass this: a property hook still only fires for accessors
 permission already let through.
 
+## Two frontend models: templates vs. SPA
+
+`with_web_ui()` picks which one you get; the choice is app-wide, not
+per-route.
+
+- **Server-rendered templates** (`with_web_ui(True)`, the default): the
+  library itself serves `/<actor_id>/www` -- a dashboard, property editor,
+  and trust-relationship manager it renders for you from its own Jinja2
+  templates. Session-cookie authentication and browser redirects
+  (unauthenticated -> `/login`, authenticated -> `/www`) are handled
+  automatically. Fastest way to get a working UI with zero frontend code;
+  you don't control its look beyond CSS overrides.
+- **SPA mode** (`with_web_ui(False)`): the library serves no UI at all --
+  you own the frontend completely. You provide `/login` and
+  `/<actor_id>/app` yourself (an SPA shell your JavaScript drives), and
+  ActingWeb still handles the redirect logic (unauthenticated -> `/login`,
+  authenticated -> `/<actor_id>/app`), pointing at your routes instead of
+  its own. Auth is OAuth2 bearer tokens obtained via `/oauth/spa/authorize`
+  + `/oauth/spa/token`, not cookies. Full guide, including the token
+  refresh flow:
+  https://actingweb.readthedocs.io/en/latest/docs/guides/spa-authentication.html
+
+Whichever mode you pick, an authenticated SPA calls two *different* kinds
+of endpoint on the same running server, both with the same bearer token:
+
+1. **The ActingWeb spec REST API** -- `/<actor_id>/properties`,
+   `/<actor_id>/trust`, `/<actor_id>/subscriptions`, etc. Defined by the
+   protocol itself and handled entirely by the library; nothing to register.
+2. **Your own private API** -- routes you add directly on the same
+   FastAPI/Flask app object ActingWeb integrates into
+   (`aw_app.integrate_fastapi(api)`), for anything the spec doesn't cover
+   (business logic, third-party webhooks, app-specific queries). Namespace
+   them distinctly from the spec paths (e.g. `/<actor_id>/api/...`) so
+   they're never confused with protocol endpoints.
+
+**Gotcha**: ActingWeb only protects the routes *it* registers. A private
+route you add gets no authentication for free -- you must verify the caller
+yourself, in every such route, with `actingweb.auth.check_and_verify_auth()`
+(sync, e.g. Flask) or `check_and_verify_auth_async()` (FastAPI) -- the same
+mechanism the library's own handlers use, checking the identical bearer
+token your SPA already holds. Skipping this on a custom route is a silent
+security hole: the endpoint accepts any request, authenticated or not. Full
+reference:
+https://actingweb.readthedocs.io/en/latest/docs/guides/authentication.html#custom-route-authentication
+
 ## Add a property hook
 
 Property hooks fire on every read/write of a named property (or `"*"` for

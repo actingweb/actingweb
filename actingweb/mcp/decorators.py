@@ -139,9 +139,9 @@ def mcp_resource(
         mime_type: MIME type of the resource content
 
     Example:
-        @resource_hook("config")
+        @app.method_hook("config")
         @mcp_resource(uri_template="config://{path}")
-        def get_config(actor, path):
+        def get_config(actor, method_name, data):
             return {"setting": "value"}
     """
 

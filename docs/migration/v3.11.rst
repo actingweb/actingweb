@@ -2,6 +2,12 @@
 Migrating to ActingWeb 3.11
 ===========================
 
+.. warning::
+
+   This guide shows the API **as it was** during this migration and must
+   not be copied into new code. ActingWeb is now at a later version; see
+   :doc:`../guides/index` for the current API.
+
 Overview
 ========
 

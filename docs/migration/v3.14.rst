@@ -2,6 +2,14 @@
 Migrating to ActingWeb 3.14
 ===========================
 
+.. warning::
+
+   This guide shows the API **as it evolved across this migration** —
+   including pre-3.14 code blocks alongside the current ones. Where a block
+   demonstrates the *previous* pattern, it must not be copied into new
+   code; use the pattern given for the change it precedes, or see
+   :doc:`../guides/index` for the current API.
+
 Start here
 ==========
 

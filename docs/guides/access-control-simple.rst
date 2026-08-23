@@ -25,6 +25,7 @@ Here's a complete example of adding access control to an ActingWeb application:
 .. code-block:: python
 
    from actingweb.interface import ActingWebApp
+   from actingweb.mcp import mcp_tool
    from actingweb.permission_integration import AccessControlConfig
 
    # Create your ActingWeb app as usual
@@ -38,7 +39,7 @@ Here's a complete example of adding access control to an ActingWeb application:
    )
 
    # Configure access control (optional - only if you need custom trust types)
-   access_control = AccessControlConfig(app.config)
+   access_control = AccessControlConfig(app.get_config())
    
    # Add a custom trust type for API clients
    access_control.add_trust_type(
@@ -62,10 +63,11 @@ Here's a complete example of adding access control to an ActingWeb application:
            actor.properties.set("validated_email", value)
        return value
 
-   @app.mcp_tool_hook("search")  
-   def handle_search_tool(actor, params):
+   @app.action_hook("search")
+   @mcp_tool(description="Search this actor's notes")
+   def handle_search_tool(actor, action_name, data):
        # Implement search functionality
-       query = params.get("query", "")
+       query = data.get("query", "")
        return {"results": search_notes(actor, query)}
 
 **That's it!** ActingWeb automatically:

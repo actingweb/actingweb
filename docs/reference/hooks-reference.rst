@@ -97,6 +97,26 @@ Decorator: ``app.subscription_hook``
 Signature: ``func(actor, subscription: dict, peer_id: str, data: dict) -> bool``
 
 - Return ``True`` when the subscription callback was handled
+- Fires only on the **legacy fallback path**: when
+  ``.with_subscription_processing()`` has not been called, or was called with
+  ``auto_sequence=False``. If auto-sequencing is enabled, use
+  ``app.subscription_data_hook`` instead — see below.
+
+Subscription Data Hooks
+========================
+
+Decorator: ``app.subscription_data_hook(target: str = "*")``
+
+Signature: ``func(actor, peer_id: str, target: str, data: dict, sequence: int, callback_type: str) -> None``
+
+- Requires ``.with_subscription_processing()`` (``auto_sequence=True``, the
+  default). The library handles sequencing, gap detection, deduplication and
+  storage before invoking this hook, so ``data`` has already been validated
+  and ordered.
+- ``target``: matches the ``target`` argument, or ``"*"`` to receive every
+  target
+- See :doc:`../guides/subscriptions` for the full auto-processing
+  configuration.
 
 Lifecycle Hooks
 ================

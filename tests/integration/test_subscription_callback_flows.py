@@ -677,3 +677,136 @@ class TestDiffRetention:
         assert "data" in sub_data, f"No data in subscription: {sub_data}"
         diffs = sub_data.get("data", [])
         assert len(diffs) >= 1, f"Expected at least 1 diff, got {len(diffs)}"
+
+
+@pytest.mark.xdist_group(name="subscription_callback_flows")
+class TestLegacySubscriptionHookFires:
+    """
+    Regression test: @app.subscription_hook must fire on the legacy fallback
+    path (no .with_subscription_processing() configured).
+
+    Bug fixed: the decorator registered into HookRegistry._subscription_hooks,
+    but nothing in the callbacks handler ever called execute_subscription_hooks()
+    -- the legacy fallback branch only invoked @app.callback_hook("subscription").
+    Hooks registered via @app.subscription_hook were silently never invoked.
+    See actingweb/handlers/callbacks.py's legacy fallback branch and
+    tests/integration/test_harness.py's handle_raw_subscription_callback, which
+    registers the regression probe used below.
+
+    Uses test_app/peer_app (no subscription processing enabled) rather than
+    subscriber_app, so the callback goes through the legacy fallback branch,
+    not the auto-sequencing path.
+    """
+
+    publisher_url: str | None = None
+    publisher_id: str | None = None
+    publisher_passphrase: str | None = None
+    publisher_creator: str = "legacy_sub_hook_publisher@example.com"
+
+    subscriber_url: str | None = None
+    subscriber_id: str | None = None
+    subscriber_passphrase: str | None = None
+    subscriber_creator: str = "legacy_sub_hook_subscriber@example.com"
+
+    trust_secret: str | None = None
+    subscription_id: str | None = None
+
+    def test_001_create_actors(self, http_client):
+        """Create publisher (test_app) and subscriber (peer_app) actors."""
+        response = http_client.post(
+            f"{http_client.base_url}/",
+            json={"creator": self.publisher_creator},
+        )
+        assert response.status_code == 201
+        TestLegacySubscriptionHookFires.publisher_url = response.headers["Location"]
+        TestLegacySubscriptionHookFires.publisher_id = response.json()["id"]
+        TestLegacySubscriptionHookFires.publisher_passphrase = response.json()[
+            "passphrase"
+        ]
+
+        response = requests.post(
+            f"{http_client.peer_url}/",
+            json={"creator": self.subscriber_creator},
+        )
+        assert response.status_code == 201
+        TestLegacySubscriptionHookFires.subscriber_url = response.headers["Location"]
+        TestLegacySubscriptionHookFires.subscriber_id = response.json()["id"]
+        TestLegacySubscriptionHookFires.subscriber_passphrase = response.json()[
+            "passphrase"
+        ]
+
+    def test_002_establish_trust_and_subscribe(self):
+        """Establish trust and subscribe subscriber to publisher's properties."""
+        assert self.publisher_passphrase is not None
+        assert self.subscriber_passphrase is not None
+
+        response = requests.post(
+            f"{self.publisher_url}/trust",
+            json={"url": self.subscriber_url, "relationship": "friend"},
+            auth=(self.publisher_creator, self.publisher_passphrase),
+        )
+        assert response.status_code == 201
+        TestLegacySubscriptionHookFires.trust_secret = response.json()["secret"]
+        peer_id = response.json()["peerid"]
+
+        response = requests.put(
+            f"{self.subscriber_url}/trust/friend/{self.publisher_id}",
+            json={"approved": True},
+            auth=(self.subscriber_creator, self.subscriber_passphrase),
+        )
+        assert response.status_code == 204
+
+        response = requests.put(
+            f"{self.publisher_url}/trust/friend/{peer_id}",
+            json={"approved": True},
+            auth=(self.publisher_creator, self.publisher_passphrase),
+        )
+        assert response.status_code in [200, 204]
+
+        response = requests.post(
+            f"{self.subscriber_url}/subscriptions",
+            json={
+                "peerid": self.publisher_id,
+                "target": "properties",
+                "granularity": "high",
+            },
+            auth=(self.subscriber_creator, self.subscriber_passphrase),
+        )
+        assert response.status_code in [200, 201, 204]
+
+        response = requests.get(
+            f"{self.publisher_url}/subscriptions/{self.subscriber_id}",
+            headers={"Authorization": f"Bearer {self.trust_secret}"},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        if "data" in data and len(data["data"]) > 0:
+            TestLegacySubscriptionHookFires.subscription_id = data["data"][0][
+                "subscriptionid"
+            ]
+
+    def test_003_callback_invokes_subscription_hook(self, callback_sender):
+        """Sending a subscription callback must invoke @app.subscription_hook."""
+        assert self.subscriber_passphrase is not None
+        response = callback_sender.send(
+            to_actor={"url": self.subscriber_url},
+            from_actor_id=self.publisher_id,
+            subscription_id=self.subscription_id,
+            sequence=1,
+            data={"test_prop": "legacy_value"},
+            trust_secret=self.trust_secret,
+        )
+        assert response.status_code == 204
+
+        response = requests.get(
+            f"{self.subscriber_url}/properties/subscription_hook_fired",
+            auth=(self.subscriber_creator, self.subscriber_passphrase),
+        )
+        assert response.status_code == 200, (
+            "subscription_hook_fired property missing -- "
+            "@app.subscription_hook was not invoked on the legacy fallback path"
+        )
+        fired = response.json()
+        assert fired["peer_id"] == self.publisher_id
+        assert fired["target"] == "properties"
+        assert fired["data"] == {"test_prop": "legacy_value"}

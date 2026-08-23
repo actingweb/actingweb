@@ -6,6 +6,13 @@ Migration Guides
 
 This section provides guides for migrating between ActingWeb versions and avoiding common pitfalls.
 
+.. warning::
+
+   Every guide in this section shows the API **as it was** during that
+   migration, not necessarily the current API. Code blocks here must not be
+   copied into new code without checking against :doc:`../guides/index` or
+   :doc:`../reference/hooks-reference`.
+
 Contents
 ========
 

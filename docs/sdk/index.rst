@@ -2,7 +2,14 @@
 SDK Documentation
 =================
 
-**Audience**: SDK developers who want to extend ActingWeb, integrate with custom frameworks, or understand the internal architecture.
+**Audience**: two groups, not one. **Developer API**, **Actor Interface**,
+**Attributes and Buckets**, and **Authenticated Views** are core reference
+for any application developer using ActingWeb -- the property/attribute/
+trust/subscription APIs your hooks call every day, just documented in more
+depth than the quickstart guides. **Handler Architecture**, **Custom
+Framework Integration**, and **Advanced Topics** are for developers
+extending ActingWeb itself or integrating a framework it doesn't ship
+support for -- skip these unless you're doing that.
 
 This section provides in-depth documentation for advanced users and developers building on top of ActingWeb.
 
@@ -48,7 +55,9 @@ The ActingWeb SDK documentation covers:
    Database operations, migrations, and low-level internals.
 
 **Attributes and Buckets**
-   Understanding ActingWeb's attribute storage and bucket system.
+   A second, app-facing storage API alongside properties -- for data that
+   should never be reachable through a trust relationship (secrets, service
+   credentials, internal state), not an internal-only mechanism.
 
 Learning Path
 =============

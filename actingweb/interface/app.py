@@ -534,8 +534,13 @@ class ActingWebApp:
         handler returns, which is important for Lambda/serverless where async tasks
         may be lost when the function freezes after returning a response.
 
+        Callbacks are async (fire-and-forget) unless this method is called: the
+        underlying setting defaults to False, so calling this method at all is
+        what opts in.
+
         Args:
-            enable: If True, use synchronous callbacks. Default is True.
+            enable: If True, use synchronous callbacks. Default is True, so
+                calling ``with_sync_callbacks()`` with no arguments enables it.
 
         Returns:
             Self for method chaining.

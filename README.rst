@@ -161,8 +161,10 @@ AI / MCP support
 hooks annotated with ``@mcp_tool`` / ``@mcp_prompt`` become per-user MCP **tools**
 and **prompts**, with safety annotations and input schemas surfaced to the client.
 Because each MCP session is bound to an authenticated actor, an LLM only ever sees
-and mutates that one user's data. See ``docs/guides/mcp-applications.rst`` and
-``docs/guides/mcp-quickstart.rst``.
+and mutates that one user's data. See
+`docs/guides/mcp-applications <https://actingweb.readthedocs.io/en/latest/docs/guides/mcp-applications.html>`_
+and
+`docs/guides/mcp-quickstart <https://actingweb.readthedocs.io/en/latest/docs/guides/mcp-quickstart.html>`_.
 
 Authentication: web, SPA, and native mobile
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -181,8 +183,11 @@ server-rendered login, ActingWeb ships a hardened session layer for rich clients
   deep-link ``mobile_ticket`` grants (``with_github()`` and Apple-on-Android) so no
   IdP code or ActingWeb token ever rides a deep link.
 
-See ``docs/guides/authentication.rst``, ``docs/guides/spa-authentication.rst``, and
-``docs/guides/apple-sign-in.rst``.
+See
+`docs/guides/authentication <https://actingweb.readthedocs.io/en/latest/docs/guides/authentication.html>`_,
+`docs/guides/spa-authentication <https://actingweb.readthedocs.io/en/latest/docs/guides/spa-authentication.html>`_,
+and
+`docs/guides/apple-sign-in <https://actingweb.readthedocs.io/en/latest/docs/guides/apple-sign-in.html>`_.
 
 Trust, permissions, and subscriptions
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -191,8 +196,13 @@ Per-user trust relationships carry fine-grained permissions that govern what a p
 (or an AI client) may read, write, or call. Subscriptions let one actor be notified
 of another's changes, with sync or async callback delivery — use
 ``.with_sync_callbacks()`` on Lambda/serverless so callbacks complete before the
-function freezes. See ``docs/guides/trust-relationships.rst``,
-``docs/guides/access-control.rst``, and ``docs/guides/subscriptions.rst``.
+function freezes. Start with the
+`peer-to-peer quickstart <https://actingweb.readthedocs.io/en/latest/docs/guides/p2p-quickstart.html>`_
+for a runnable two-actor example, or see
+`docs/guides/trust-relationships <https://actingweb.readthedocs.io/en/latest/docs/guides/trust-relationships.html>`_,
+`docs/guides/access-control <https://actingweb.readthedocs.io/en/latest/docs/guides/access-control.html>`_,
+and
+`docs/guides/subscriptions <https://actingweb.readthedocs.io/en/latest/docs/guides/subscriptions.html>`_.
 
 Pluggable persistence
 ^^^^^^^^^^^^^^^^^^^^^^
@@ -208,7 +218,7 @@ Select with ``database="postgresql"`` or the ``DATABASE_BACKEND`` environment
 variable. **Property reverse-lookup tables** (on by default; configure names
 with ``with_indexed_properties``) enable find-actor-by-property-value with no
 value-size limits and no plaintext values in the lookup table. See
-``docs/reference/database-backends.rst``.
+`docs/reference/database-backends <https://actingweb.readthedocs.io/en/latest/docs/reference/database-backends.html>`_.
 
 The ActingWeb model
 -------------------
@@ -273,25 +283,37 @@ See `https://actingweb.org/ <https://actingweb.org/>`_ for the model in depth.
 Documentation
 -------------
 
-Comprehensive documentation lives in ``docs/`` and is published at
-`https://actingweb.readthedocs.io/ <https://actingweb.readthedocs.io/>`_
-(``/en/master`` for the latest ``master`` branch).
+Comprehensive documentation is source-tracked in this repository's ``docs``
+directory and published at
+`https://actingweb.readthedocs.io/en/latest/ <https://actingweb.readthedocs.io/en/latest/>`_
+— that's the canonical target below; Read the Docs also serves ``/en/stable/``
+(the latest tagged release) and per-version URLs.
 
-============================================  =========================================
-Topic                                         Location
-============================================  =========================================
-Quickstart & getting started                  ``docs/quickstart/``
-Configuration reference                       ``docs/quickstart/configuration.rst``
-Authentication & OAuth2                        ``docs/guides/authentication.rst``
-SPA authentication                             ``docs/guides/spa-authentication.rst``
-Sign in with Apple                             ``docs/guides/apple-sign-in.rst``
-Building MCP applications                      ``docs/guides/mcp-applications.rst``
-Web UI & routing                               ``docs/guides/web-ui.rst``, ``docs/reference/routing-overview.rst``
-Hooks reference                                ``docs/reference/hooks-reference.rst``
-Trust, access control, subscriptions           ``docs/guides/``
-Database backends                              ``docs/reference/database-backends.rst``
-SDK & developer API                            ``docs/sdk/``
-============================================  =========================================
+- **Quickstart & getting started**:
+  `docs/quickstart/ <https://actingweb.readthedocs.io/en/latest/docs/quickstart/>`_
+- **Peer-to-peer quickstart**:
+  `docs/guides/p2p-quickstart <https://actingweb.readthedocs.io/en/latest/docs/guides/p2p-quickstart.html>`_
+- **Configuration reference**:
+  `docs/quickstart/configuration <https://actingweb.readthedocs.io/en/latest/docs/quickstart/configuration.html>`_
+- **Authentication & OAuth2**:
+  `docs/guides/authentication <https://actingweb.readthedocs.io/en/latest/docs/guides/authentication.html>`_
+- **SPA authentication**:
+  `docs/guides/spa-authentication <https://actingweb.readthedocs.io/en/latest/docs/guides/spa-authentication.html>`_
+- **Sign in with Apple**:
+  `docs/guides/apple-sign-in <https://actingweb.readthedocs.io/en/latest/docs/guides/apple-sign-in.html>`_
+- **Building MCP applications**:
+  `docs/guides/mcp-applications <https://actingweb.readthedocs.io/en/latest/docs/guides/mcp-applications.html>`_
+- **Web UI & routing**:
+  `docs/guides/web-ui <https://actingweb.readthedocs.io/en/latest/docs/guides/web-ui.html>`_,
+  `docs/reference/routing-overview <https://actingweb.readthedocs.io/en/latest/docs/reference/routing-overview.html>`_
+- **Hooks reference**:
+  `docs/reference/hooks-reference <https://actingweb.readthedocs.io/en/latest/docs/reference/hooks-reference.html>`_
+- **Trust, access control, subscriptions**:
+  `docs/guides/ <https://actingweb.readthedocs.io/en/latest/docs/guides/>`_
+- **Database backends**:
+  `docs/reference/database-backends <https://actingweb.readthedocs.io/en/latest/docs/reference/database-backends.html>`_
+- **SDK & developer API**:
+  `docs/sdk/ <https://actingweb.readthedocs.io/en/latest/docs/sdk/>`_
 
 Repository and links
 ---------------------
@@ -302,6 +324,12 @@ Repository and links
 - **Protocol & project home**: `https://actingweb.org/ <https://actingweb.org/>`_
 - **Example application**: `https://github.com/actingweb/actingwebdemo <https://github.com/actingweb/actingwebdemo>`_ —
   a full reference app (MCP + Web/SPA + OAuth2) to develop against.
+- **Agent Skill for building on ActingWeb**: task recipes (add a property
+  hook, expose an MCP tool, establish trust and subscribe to a peer, and
+  more) for AI coding agents working in a repository that consumes this
+  library. ``git clone`` this repository and point your agent at
+  ``skills/actingweb-app/``, or (if your agent supports the Agent Skills
+  CLI) ``npx skills add actingweb/actingweb``.
 
 Contributing
 ------------

@@ -763,15 +763,15 @@ Unit Testing Tools and Prompts
 
             # Execute the registered action hook (tool)
             result = self.app.hooks.execute_action_hooks(
-                self.actor, "search", {"query": "Python"}
+                "search", self.actor, {"query": "Python"}
             )
             self.assertIn("test_note", result)
             self.assertIn("Python", result)
-            
+
         def test_create_note_tool(self):
             result = self.app.hooks.execute_action_hooks(
-                self.actor,
                 "create_note",
+                self.actor,
                 {"title": "Test Title", "content": "Test content"},
             )
 

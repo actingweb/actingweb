@@ -391,6 +391,12 @@ class CallbacksHandler(base_handler.BaseHandler):
                         "subscription", actor_interface, hook_data
                     )
                     result = bool(hook_result) if hook_result is not None else False
+                    # @app.subscription_hook registers here; nothing previously
+                    # invoked it (see hooks.py:execute_subscription_hooks).
+                    subscription_hook_result = self.hooks.execute_subscription_hooks(
+                        actor_interface, sub, peerid, params.get("data", {})
+                    )
+                    result = result or subscription_hook_result
 
                 if result:
                     self.response.set_status(204, "Found")

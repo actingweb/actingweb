@@ -316,8 +316,7 @@ integrations clear it at the end of every request -- including when a handler ra
    is now genuinely per-request: a value set with ``set_custom_context()`` during one
    request is gone by the time the next request runs, even against the same actor. If
    your hooks used custom context as a cross-request cache rather than purely
-   request-scoped data, use ActingWeb's caching guide (``docs/guides/caching.md``)
-   or actor properties instead.
+   request-scoped data, use :doc:`caching` or actor properties instead.
 
 ``MCPContext`` also exposes two per-session fields:
 

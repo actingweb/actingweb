@@ -7,6 +7,11 @@ Overview
 
 Manage peer relationships between actors and (optionally) customize permissions per relationship.
 
+.. seealso::
+
+   :doc:`p2p-quickstart` walks through establishing trust and subscribing to
+   a peer end-to-end in one runnable example.
+
 Basic Usage
 -----------
 
@@ -17,13 +22,15 @@ Basic Usage
        peer_url="https://peer.example.com/actor123",
        relationship="friend",
    )
+   if rel is None:
+       raise RuntimeError("Failed to create trust relationship")
 
    # Inspect relationships
-   for rel in actor.trust.relationships:
-       print(rel.peer_id, rel.relationship)
+   for r in actor.trust.relationships:
+       print(r.peer_id, r.relationship)
 
    # Approve
-   actor.trust.approve_relationship(peer_id="peer123")
+   actor.trust.approve_relationship(peer_id=rel.peer_id)
 
 Permissions (Per Relationship)
 -------------------------------
@@ -74,13 +81,15 @@ Subscriptions require an established trust relationship:
        peer_url="https://peer.example.com/actor123",
        relationship="friend",
    )
+   if rel is None:
+       raise RuntimeError("Failed to create trust relationship")
 
    # 2. Approve the relationship (if needed)
-   actor.trust.approve_relationship(peer_id="peer123")
+   actor.trust.approve_relationship(peer_id=rel.peer_id)
 
    # 3. Now subscriptions work
    actor.subscriptions.subscribe_to_peer(
-       peer_id="peer123", target="properties"
+       peer_id=rel.peer_id, target="properties"
    )
 
 **Trust States and Subscription Behavior**
@@ -118,29 +127,31 @@ When ``auto_cleanup=True`` is enabled (default), deleting a trust relationship t
 
 **Manual Cleanup**
 
-If you need manual control over cleanup, disable auto_cleanup and handle it in your trust hook:
+If you need manual control over cleanup, disable auto_cleanup and handle it in your
+lifecycle hook (see :doc:`../reference/hooks-reference` for the full
+``trust_deleted`` signature):
 
 .. code-block:: python
 
    app.with_subscription_processing(auto_cleanup=False)
 
-   @app.trust_hook("delete")
-   def on_trust_deleted(actor, peerid, relationship, trust_data):
+   @app.lifecycle_hook("trust_deleted")
+   def on_trust_deleted(actor, peer_id, relationship, trust_data):
        # Custom cleanup logic
        from actingweb.remote_storage import RemotePeerStore
        from actingweb.callback_processor import CallbackProcessor
 
        # Clean up peer data
-       store = RemotePeerStore(actor, peerid)
+       store = RemotePeerStore(actor, peer_id)
        store.delete_all()
 
        # Clear callback state
        processor = CallbackProcessor(actor)
        # Note: subscription_id needed - iterate if multiple
-       processor.clear_state(peerid, subscription_id)
+       processor.clear_state(peer_id, subscription_id)
 
        # Application-specific cleanup
-       notify_user(f"Connection with {peerid} ended")
+       notify_user(f"Connection with {peer_id} ended")
 
 **Pending Callbacks When Trust Ends**
 
@@ -157,15 +168,17 @@ When trust is re-established with a previously connected peer:
 .. code-block:: python
 
    # Re-create trust
-   actor.trust.create_relationship(
+   rel = actor.trust.create_relationship(
        peer_url="https://peer.example.com/actor123",
        relationship="friend",
    )
-   actor.trust.approve_relationship(peer_id="peer123")
+   if rel is None:
+       raise RuntimeError("Failed to create trust relationship")
+   actor.trust.approve_relationship(peer_id=rel.peer_id)
 
    # Re-subscribe (state starts fresh)
    actor.subscriptions.subscribe_to_peer(
-       peer_id="peer123", target="properties"
+       peer_id=rel.peer_id, target="properties"
    )
    # Peer sends initial resync with full current state
 
@@ -173,23 +186,31 @@ Important: Sequence numbers start fresh. The first callback after re-subscriptio
 
 **Trust Hooks and Subscription Events**
 
-Use trust hooks to react to lifecycle events:
+Use lifecycle hooks to react to trust events. Mutual approval fires one of two
+events depending on which side completes it — register both if you want to
+auto-subscribe regardless of who approves last:
 
 .. code-block:: python
 
-   @app.trust_hook("create")
-   def on_trust_created(actor, peerid, relationship, approved, trust_data):
-       # Optionally auto-subscribe when trust is established
-       if approved:
-           actor.subscriptions.subscribe_to_peer(
-               peer_id=peerid, target="properties"
-           )
+   @app.lifecycle_hook("trust_fully_approved_local")
+   def on_trust_approved_local(actor, peer_id, relationship, trust_data):
+       # This actor approved last -- trust is now mutual
+       actor.subscriptions.subscribe_to_peer(
+           peer_id=peer_id, target="properties"
+       )
 
-   @app.trust_hook("delete")
-   def on_trust_deleted(actor, peerid, relationship, trust_data):
+   @app.lifecycle_hook("trust_fully_approved_remote")
+   def on_trust_approved_remote(actor, peer_id, relationship, trust_data):
+       # The peer approved last -- trust is now mutual
+       actor.subscriptions.subscribe_to_peer(
+           peer_id=peer_id, target="properties"
+       )
+
+   @app.lifecycle_hook("trust_deleted")
+   def on_trust_deleted(actor, peer_id, relationship, trust_data):
        # Application-specific cleanup (storage cleanup is automatic)
-       notify_websocket_clients(f"Peer {peerid} disconnected")
-       log_audit_event("trust_deleted", peer_id=peerid)
+       notify_websocket_clients(f"Peer {peer_id} disconnected")
+       log_audit_event("trust_deleted", peer_id=peer_id)
 
 Peer Profile Caching
 --------------------

@@ -11,6 +11,11 @@ The ActingWeb subscription system enables real-time data synchronization between
 - **Notify** their subscribers when data changes
 - **Process** incoming callbacks with automatic sequencing and deduplication
 
+.. seealso::
+
+   :doc:`p2p-quickstart` walks through establishing trust and subscribing to
+   a peer end-to-end in one runnable example.
+
 Usage
 -----
 
@@ -552,10 +557,10 @@ If you're using raw ``@callback_hook("subscription")``, migrate to subscription 
 .. code-block:: python
 
    @app.callback_hook("subscription")
-   def handle_subscription(actor, req):
-       peer_id = req.json.get("id")
-       sequence = req.json.get("sequence", 0)
-       data = req.json.get("data", {})
+   def handle_subscription(actor, name, req_data):
+       peer_id = req_data.get("id")
+       sequence = req_data.get("sequence", 0)
+       data = req_data.get("data", {})
 
        # Manual sequencing
        last_seq = get_last_sequence(peer_id)
@@ -591,9 +596,13 @@ Compatibility
 
 Subscription processing is **fully backward compatible**:
 
-- Existing apps using ``@callback_hook("subscription")`` continue to work unchanged
-- New apps can opt-in with ``.with_subscription_processing()``
-- Both approaches can coexist (raw hook takes precedence if registered)
+- Existing apps using ``@callback_hook("subscription")`` or
+  ``@app.subscription_hook`` continue to work unchanged on the legacy
+  fallback path (both fire; either returning truthy marks the callback
+  processed)
+- New apps can opt-in with ``.with_subscription_processing()`` and
+  ``@app.subscription_data_hook``
+- All approaches can coexist
 
 Error Handling Reference
 ------------------------

@@ -181,7 +181,7 @@ Peer Data Not Cleaned Up After Trust Deletion
 
         app.with_subscription_processing(auto_cleanup=True)  # Default
 
-  2. **Custom trust hook overriding**: If you have a ``@trust_hook("delete")``, ensure it doesn't prevent default cleanup.
+  2. **Custom lifecycle hook overriding**: If you have a ``@app.lifecycle_hook("trust_deleted")``, ensure it doesn't prevent default cleanup.
   3. **Manual cleanup needed**: For legacy data, manually clean up:
 
      .. code-block:: python

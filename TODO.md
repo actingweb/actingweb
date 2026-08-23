@@ -4,7 +4,7 @@ A living checklist for near‑term tasks, quality gates, and release prep. Keep 
 
 ## Performance & Caching
 
-- [ ] Review and finalize caching strategy documented in `docs/guides/caching.md`.
+- [ ] Review and finalize caching strategy documented in `docs/guides/caching.rst`.
 - [ ] Implement a shared cache across other high‑volume endpoints; define keys/TTLs and invalidation rules.
 
 ## Code TODOs

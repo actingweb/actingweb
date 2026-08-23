@@ -8,6 +8,39 @@ Unreleased
 FIXED
 ~~~~~
 
+- **``@app.subscription_hook`` never fired.** It registered into
+  ``HookRegistry._subscription_hooks``, but nothing in the callbacks handler
+  ever called ``execute_subscription_hooks()`` — the legacy fallback path
+  (used when ``.with_subscription_processing()`` is not enabled) only invoked
+  ``@app.callback_hook("subscription")``. A hook registered with
+  ``@app.subscription_hook`` was silently never invoked. The legacy fallback
+  branch in ``actingweb/handlers/callbacks.py`` now also calls
+  ``execute_subscription_hooks()``, so both mechanisms work; either can mark
+  the callback as processed. **Behavior change**: on the legacy fallback
+  path, a subscription callback that a registered ``@app.subscription_hook``
+  handles (returns truthy for) now gets ``204`` instead of ``400`` — this is
+  the fix taking effect, since such a hook's return value was previously
+  discarded. The legacy path does not track sequence numbers or clear diffs
+  (that only happens via ``.with_subscription_processing()`` or an explicit
+  PUT acknowledgment), so this does not affect data integrity.
+- **Documentation taught APIs that do not exist or had the wrong contract**:
+  ``@app.trust_hook`` (does not exist; the real mechanism is
+  ``@app.lifecycle_hook("trust_fully_approved_local"/"trust_fully_approved_remote"/"trust_deleted")``),
+  ``@app.mcp_tool_hook`` (does not exist; use ``@app.action_hook(...)`` +
+  ``@mcp_tool(...)``), ``app.config`` (not public; use ``app.get_config()``),
+  ``execute_action_hooks``'s argument order (``action_name`` comes first, not
+  ``actor``), and the ``@resource_hook`` example in
+  ``actingweb/mcp/decorators.py``'s docstring (the real mechanism is
+  ``@app.method_hook(...)`` + ``@mcp_resource(...)``). Also fixed: docs
+  passing a literal ``peer_id="peer123"`` after binding
+  ``create_relationship()``'s real return value, in
+  ``docs/guides/trust-relationships.rst`` and
+  ``docs/quickstart/getting-started.rst``.
+- ``with_sync_callbacks()``'s docstring said its default was ``True``; the
+  underlying setting defaults to ``False`` until the method is called.
+  Clarified that calling the method at all is the opt-in.
+- ``from actingweb.interface import lifecycle_hook`` raised ``ImportError``;
+  every other standalone hook decorator was exported except this one.
 - **``DbTrust.create()`` defaulted ``approved`` to ``""`` on both database
   backends**, which PostgreSQL rejects outright on its boolean ``approved``
   column (``invalid input syntax for type boolean``) when a caller omits the
@@ -16,6 +49,24 @@ FIXED
   in-library caller already passed a bool, so behavior only changes for
   direct callers relying on the default — which previously crashed on
   PostgreSQL.
+- **The new p2p quickstart's subscribe step 403'd as written**:
+  ``create_relationship()`` only approves a relationship on the side that
+  initiates it, so the peer's side stayed unapproved and
+  ``subscribe_to_peer()`` was rejected — the guide's Python narrative never
+  had the peer approve its side (its curl "Verify" walkthrough happened to,
+  independently, which is why manual testing during development didn't
+  catch this). ``examples/p2p_quickstart.py`` now registers an
+  ``on_trust_request_received`` lifecycle hook that auto-approves incoming
+  requests (demo-only — flagged as such in both the code and the guide);
+  ``docs/guides/p2p-quickstart.rst``'s curl walkthrough now also captures
+  each actor's passphrase from its creation response and sends the Basic
+  auth every non-creation request actually requires, rather than omitting
+  it and discarding the passphrase. Verified end-to-end against a running
+  server. Also fixed: ``examples/mcp_quickstart.py`` had the same missing
+  ``proto="http://"`` override as the p2p example did before this release —
+  the OAuth2 redirect URI generated for Stage 2 pointed at
+  ``https://localhost:...``, which nothing on the plain-HTTP uvicorn server
+  it starts answers on.
 
 CHANGED
 ~~~~~~~
@@ -23,6 +74,85 @@ CHANGED
 - CI now enforces ``ruff format --check`` alongside ``ruff check``, and the
   19 files that had drifted from the pinned formatter (0.15.20) were
   reformatted in a mechanical commit.
+- **README documentation pointers are now absolute readthedocs.io URLs**
+  instead of bare ``docs/...rst`` paths, which render as broken text on
+  PyPI (a ``:doc:`` role only resolves inside the Sphinx build).
+  Repository-only files (``CONTRIBUTING.rst``, ``CLAUDE.md``,
+  ``CHANGELOG.rst``) are unaffected — those are correctly filesystem paths,
+  not published docs.
+- **MCP quickstart is now explicitly a two-stage recipe.** Previously the
+  pasted example had OAuth2 configuration commented out, so following it
+  produced a server where every MCP method beyond ``initialize`` 401s with
+  no explanation. The example now configures OAuth2 (reading credentials
+  from the environment) and the guide states plainly that Stage 2 (real
+  OAuth2 credentials, a bearer token) is required before ``tools/list`` and
+  ``tools/call`` work, linking to the token-acquisition steps rather than
+  leaving a 401 unexplained. The database prerequisite (previously unstated)
+  is now inline, matching the peer-to-peer quickstart.
+- **PyPI discovery metadata**: the one-line description now names what the
+  library does (per-actor MCP servers, OAuth2, peer-to-peer data sharing)
+  instead of "The official ActingWeb library"; ``keywords`` gained
+  ``mcp``, ``ai``, ``llm``, ``agent``, ``model-context-protocol``, and
+  ``actor``; added the ``Topic :: Scientific/Engineering :: Artificial
+  Intelligence`` and ``Programming Language :: Python :: 3.13`` trove
+  classifiers; ``homepage``/``documentation`` URLs are now ``https://``;
+  and a ``[tool.poetry.urls]`` block adds Changelog/Issues links to the
+  PyPI sidebar.
+- **``actingweb/__init__.py`` now has a module docstring**: the two headline
+  capabilities, the modern entry point
+  (``from actingweb.interface import ActingWebApp``), the MCP decorators,
+  links to the MCP and peer-to-peer quickstarts, and a note that every hook
+  boundary is erased to ``Callable[..., Any]`` despite ``py.typed`` shipping
+  — a type checker will not catch a wrong hook signature. ``__all__``
+  (the legacy lazy-load surface) is unchanged; a comment now says so
+  explicitly.
+- **``AGENTS.md`` rewritten**, replacing 105 lines of contributor guidance
+  that had drifted from ``CLAUDE.md`` (a nonexistent ``thoughts/shared/``
+  path, a structure diagram omitting the PostgreSQL backend, a
+  three-file version-bump instruction contradicting the tag-driven release
+  process, and zero mentions of MCP, trust, or subscriptions) with a ~40-line
+  pointer to ``CLAUDE.md`` plus MCP/peer-to-peer quickstart links for anyone
+  building an application with the library. Also removed ``AGENTS.md`` from
+  ``.github/workflows/claude-code-review.yml``'s ``paths-ignore`` — that
+  exemption is what let it go eight months without automated review while
+  ``CLAUDE.md`` stayed current.
+- **Superseded-API warnings added to every migration guide**
+  (``docs/migration/v3.1.rst`` through ``v3.14.rst``) and inline markers on
+  illustrative (non-real) signatures in
+  ``docs/contributing/style-guide.rst`` and ``architecture.rst``. Grepping
+  ``docs/`` for trust-creation calls previously returned several hits with
+  no indication of whether the code shown was current, historical, or never
+  real to begin with.
+
+ADDED
+~~~~~
+
+- **Agent Skill for building applications on ActingWeb**
+  (``skills/actingweb-app/``): task recipes — add a property hook, expose an
+  MCP tool, establish trust and subscribe to a peer, configure a custom
+  trust type's ``acl_rules``, look up an actor by property value — for AI
+  coding agents working in a repository that merely ``pip install``s this
+  library, which is the one surface that reaches them (everything else in
+  this release improves what such an agent finds *if it comes looking*).
+  ``git clone`` this repo and point your agent at the directory, or
+  ``npx skills add actingweb/actingweb``.
+- **``llms.txt`` / ``llms-full.txt``** are now generated on every docs build
+  via ``sphinx-llms-txt``, and will be served at
+  ``https://actingweb.readthedocs.io/en/latest/llms.txt`` once this lands.
+  Adopted as a substrate for tools that read it (a human pointing an agent
+  at the docs) and for the Google Lighthouse audit that now checks for it —
+  not on a claim that AI agents fetch it live at request time; the evidence
+  for that is thin.
+- **Two docs guides published to Read the Docs for the first time**:
+  ``docs/guides/caching.rst`` and ``docs/guides/oauth-login-flow.rst`` were
+  previously ``.md`` files — invisible to the Sphinx build
+  (``source_suffix`` is ``.rst`` only) despite being real, substantial
+  content. A reader with the repo checked out could find them; a reader on
+  readthedocs.io, which every other change in this release now points at,
+  could not. The other two ``.md`` files under ``docs/`` in the same
+  situation (``docs/guides/postgresql-migration.md``,
+  ``docs/contributing/TESTING.md``) duplicated a larger, current ``.rst``
+  twin and were deleted rather than published.
 
 v3.14.0: August 21, 2026
 -------------------------

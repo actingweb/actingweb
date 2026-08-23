@@ -166,7 +166,7 @@ Use Google-style docstrings:
 
 .. code-block:: python
 
-    def create_trust(
+    def create_trust(  # Illustrative only -- not a real ActingWeb signature
         self,
         peer_id: str,
         relationship: str,
@@ -246,7 +246,7 @@ Naming Conventions
 .. code-block:: python
 
     def get_properties():
-    def create_trust_relationship():
+    def create_trust_relationship():  # Illustrative only -- not a real ActingWeb signature
 
 **Constants**: UPPER_SNAKE_CASE
 
@@ -266,7 +266,7 @@ Naming Conventions
 
 .. code-block:: python
 
-    async def create_trust_async():
+    async def create_trust_async():  # Illustrative only -- not a real ActingWeb signature
     async def get_peer_info_async():
 
 Code Organization

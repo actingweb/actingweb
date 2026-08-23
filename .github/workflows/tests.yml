@@ -91,9 +91,11 @@ jobs:
                 code=true
                 docs=true
                 ;;
-              # Sphinx sources. source_suffix is .rst only, so .md under docs/
-              # isn't built — but it's still a docs change, and treating it as
-              # one costs a docs build, not a 30-minute matrix.
+              # Sphinx sources. source_suffix is .rst only — docs/ no longer
+              # contains any .md files (the last two were converted or deleted
+              # in the AI-agent-discoverability plan's Phase 9), but a future
+              # stray .md here would still be a docs change worth a docs
+              # build, not a 30-minute matrix.
               docs/*|*.rst|conf.py)
                 docs=true
                 ;;

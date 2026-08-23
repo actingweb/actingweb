@@ -84,6 +84,8 @@ The central class representing a user's instance. Responsibilities:
 
 .. code-block:: python
 
+    # Simplified sketch -- not the real Actor signatures. See
+    # actingweb/actor.py and docs/sdk/developer-api.rst for the real API.
     class Actor:
         id: str              # Unique actor ID
         config: Config       # Configuration

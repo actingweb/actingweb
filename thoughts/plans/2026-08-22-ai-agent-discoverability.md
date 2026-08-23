@@ -1063,14 +1063,42 @@ carries no context about which era it belongs to.
 
 ### Verification
 
-- [ ] `grep -rn "create_trust\|create_verified_trust" docs/ -B2` — every hit is
-      within two lines of a superseded/illustrative marker
-- [ ] `poetry run sphinx-build -W --keep-going -D suppress_warnings="ref.doc,misc.highlighting_failure" -b html . _build/html` passes
-- [ ] Manual: run the research's original query
-      (`grep -rn "create_relationship\|create_trust" docs/`) and confirm each of
-      the ten hits now self-identifies as current, superseded, or illustrative
+- [x] `grep -rn "create_trust\|create_verified_trust" docs/ -B2` — every hit is
+      within two lines of a superseded/illustrative marker, or is real,
+      current API (`create_verified_trust` in `architecture.rst`,
+      `developer-api.rst`, `async-operations.rst` — verified real at
+      `trust_manager.py`, no marker needed)
+- [x] `poetry run sphinx-build -W --keep-going -D suppress_warnings="ref.doc,misc.highlighting_failure" -b html . _build/html` passes
+- [x] Manual: ran `grep -rn "create_relationship\|create_trust" docs/` —
+      every hit now self-identifies: real current API (`create_relationship`/
+      `create_relationship_async`), illustrative (marked inline), or
+      superseded (covered by a per-file or section warning banner)
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+**Deviations from plan / learnings**:
+- **`docs/contributing/architecture.rst:95` (`def create_trust(self, ...)`)**
+  was not in the plan's Changes list (which named only
+  `style-guide.rst:169,249,269`), but matched the same "illustrative, not a
+  real signature" defect on the verification grep — confirmed
+  `Actor.create_trust` does not exist in `actingweb/actor.py`. Marked with a
+  one-line comment for consistency, since the plan's own verification step
+  runs over all of `docs/`, not just the three named lines.
+- **v3.14.rst got a differently-worded banner than the other five migration
+  guides.** It's the *current* release's migration guide, so its "after"
+  code blocks are the current recommended API, not something to blanket-flag
+  as superseded — unlike v3.1/v3.7/v3.10/v3.11/v3.13, which are all fully
+  superseded by now. Worded its banner to flag only the pre-3.14 code
+  blocks it also shows, rather than implying the whole page is stale.
+- **`create_verified_trust`, referenced in `architecture.rst`,
+  `developer-api.rst`, and `async-operations.rst`, is real, current API**
+  (verified against `trust_manager.py` during Phase 0) — left unmarked, since
+  marking accurate documentation as "superseded" would be the opposite defect.
+- **`style-guide.rst:342-343`** (`def test_create_trust_with_valid_peer():`)
+  left unmarked: it's a test-naming-convention example immediately preceded
+  by the literal template `def test_<function>_<scenario>():`, which already
+  signals genericness — judged low-risk enough not to need its own marker,
+  to keep the diff proportionate to the actual defect.
 
 ---
 

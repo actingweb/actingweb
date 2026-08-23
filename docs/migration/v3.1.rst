@@ -1,6 +1,12 @@
 ActingWeb v3.1 Migration Guide
 ==============================
 
+.. warning::
+
+   This guide shows the API **as it was** during this migration and must
+   not be copied into new code. ActingWeb is now at a later version; see
+   :doc:`../guides/index` for the current API.
+
 This guide helps you migrate from the legacy OnAWBase interface (removed in v3.1) to the modern ActingWebApp interface.
 
 Overview of Changes

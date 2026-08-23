@@ -112,6 +112,17 @@ ADDED
   ``git clone`` this repo and point your agent at the directory, or
   ``npx skills add actingweb/actingweb``.
 
+CHANGED
+~~~~~~~
+
+- **Superseded-API warnings added to every migration guide**
+  (``docs/migration/v3.1.rst`` through ``v3.14.rst``) and inline markers on
+  illustrative (non-real) signatures in
+  ``docs/contributing/style-guide.rst`` and ``architecture.rst``. Grepping
+  ``docs/`` for trust-creation calls previously returned several hits with
+  no indication of whether the code shown was current, historical, or never
+  real to begin with.
+
 v3.14.0: August 21, 2026
 -------------------------
 

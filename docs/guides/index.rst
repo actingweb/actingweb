@@ -14,6 +14,7 @@ Contents
 
    authentication
    oauth2-setup
+   oauth-login-flow
    apple-sign-in
    spa-authentication
    access-control-simple
@@ -22,6 +23,7 @@ Contents
    trust-relationships
    subscriptions
    property-lists
+   caching
    hooks
    async-hooks-migration
    mcp-quickstart
@@ -38,6 +40,7 @@ Authentication & Authorization
 
 - **Authentication** - Overview of ActingWeb's authentication system (basic, OAuth, OAuth2)
 - **OAuth2 Setup** - Configure OAuth2 with Google, GitHub, or custom providers
+- **OAuth Login Flow** - "Login with Google/GitHub" with postponed actor creation, including mobile app flows
 - **Sign in with Apple** - Apple Sign-In for web SPA, native iOS, and Android Capacitor apps
 - **SPA Authentication** - Single Page Application authentication patterns, including browser redirect behavior
 - **Access Control (Simple)** - Quick guide to ActingWeb's unified access control
@@ -54,6 +57,7 @@ Data Management
 ===============
 
 - **Property Lists** - Working with list-type properties and metadata
+- **Caching** - Implementation guide for adding request-scoped caching to endpoints
 - **Hooks** - Implementing lifecycle hooks for custom business logic
 - **Async/Await Hooks Migration** - Migrating to async hooks for better performance with FastAPI
 

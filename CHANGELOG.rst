@@ -118,6 +118,16 @@ ADDED
   at the docs) and for the Google Lighthouse audit that now checks for it —
   not on a claim that AI agents fetch it live at request time; the evidence
   for that is thin.
+- **Two docs guides published to Read the Docs for the first time**:
+  ``docs/guides/caching.rst`` and ``docs/guides/oauth-login-flow.rst`` were
+  previously ``.md`` files — invisible to the Sphinx build
+  (``source_suffix`` is ``.rst`` only) despite being real, substantial
+  content. A reader with the repo checked out could find them; a reader on
+  readthedocs.io, which every other change in this release now points at,
+  could not. The other two ``.md`` files under ``docs/`` in the same
+  situation (``docs/guides/postgresql-migration.md``,
+  ``docs/contributing/TESTING.md``) duplicated a larger, current ``.rst``
+  twin and were deleted rather than published.
 
 CHANGED
 ~~~~~~~

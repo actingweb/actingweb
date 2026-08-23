@@ -48,9 +48,9 @@ See `../../CONTRIBUTING.rst` for detailed parallel testing documentation.
 
 ## Documentation
 
-- **[docs/TESTING.md](../../docs/TESTING.md)** - Complete testing guide
+- **[docs/contributing/testing.rst](../../docs/contributing/testing.rst)** - Complete testing guide
 - **[FUTURE_WORK.md](FUTURE_WORK.md)** - OAuth2/MCP testing roadmap
-- **[Plan](../../thoughts/shared/plans/2025-10-02-rest-test-suite-implementation.md)** - Implementation plan
+- **[Plan](../../thoughts/plans/2025-10-02-rest-test-suite-implementation.md)** - Implementation plan
 
 ## Requirements
 

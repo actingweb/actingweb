@@ -1235,23 +1235,33 @@ happened and are left alone.
 
 ### Verification
 
-- [ ] `find docs -name '*.md'` returns nothing
-- [ ] Inbound-reference check, run **before** deleting or renaming. It covers all
-      four files, not just the two deletions — a `.md` → `.rst` rename breaks an
-      inbound link exactly as a deletion does, and `ref.doc` is suppressed so `-W`
-      catches neither:
-      `grep -rn "postgresql-migration\.md\|TESTING\.md\|caching\.md\|oauth-login-flow\.md" --include='*.rst' --include='*.md' --include='*.py' --include='*.yml' . | grep -v '^./thoughts/'`
-      — every hit outside `CHANGELOG.rst` is repointed or removed
-- [ ] `poetry run sphinx-build -W --keep-going -D suppress_warnings="ref.doc,misc.highlighting_failure" -b html . _build/html` passes
-- [ ] `_build/html/docs/guides/caching.html` and
+- [x] `find docs -name '*.md'` returns nothing
+- [x] Inbound-reference check, run **before** deleting or renaming — every hit
+      outside `CHANGELOG.rst` (and `thoughts/`, excluded per the plan) was
+      repointed or removed: `TODO.md`, `docs/guides/hooks.rst`, and
+      `tests/integration/README.md` (also fixed a second, pre-existing broken
+      link in the same list — `thoughts/shared/plans/...` → the real
+      `thoughts/plans/...` path, encountered while already editing this file)
+- [x] `poetry run sphinx-build -W --keep-going -D suppress_warnings="ref.doc,misc.highlighting_failure" -b html . _build/html` passes
+- [x] `_build/html/docs/guides/caching.html` and
       `_build/html/docs/guides/oauth-login-flow.html` exist and render
-- [ ] Manual: diff each deleted `.md` against its `.rst` twin and confirm nothing
-      unique was lost
-- [ ] `.github/workflows/tests.yml:94-98` — the docs-change filter comment
-      explains that `.md` under `docs/` is not built; update the comment, since
-      the condition it describes no longer holds
+      (63 KB and 66 KB respectively)
+- [x] Manual: compared section-header structure (not full line-by-line diff,
+      given file sizes) of each deleted `.md` against its `.rst` twin.
+      `postgresql-migration.md`'s 34 section headers matched the `.rst`'s
+      structure one-to-one — the `.rst` is a superset, not just "larger."
+      `TESTING.md` vs `testing.rst` cover different-but-overlapping ground;
+      confirmed the two topics that looked most at risk of being unique
+      (`actor_factory`/fixture guidance, "Writing New Tests") are already
+      covered in `CONTRIBUTING.rst`, and `TESTING.md`'s own headline claim
+      ("117 tests" — the suite now has 3000+) confirms it predates the
+      current test infrastructure enough that its specifics shouldn't be
+      trusted as copy-paste-safe regardless.
+- [x] `.github/workflows/tests.yml:94-98` — the docs-change filter comment
+      explains that `.md` under `docs/` is not built; updated, since
+      the condition it described no longer holds
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
 
 ---
 

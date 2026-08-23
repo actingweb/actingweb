@@ -127,12 +127,20 @@ permission already let through.
 per-route.
 
 - **Server-rendered templates** (`with_web_ui(True)`, the default): the
-  library itself serves `/<actor_id>/www` -- a dashboard, property editor,
-  and trust-relationship manager it renders for you from its own Jinja2
-  templates. Session-cookie authentication and browser redirects
-  (unauthenticated -> `/login`, authenticated -> `/www`) are handled
-  automatically. Fastest way to get a working UI with zero frontend code;
-  you don't control its look beyond CSS overrides.
+  library serves `/<actor_id>/www` -- a dashboard, property editor, and
+  trust-relationship manager -- rendered from Jinja2 templates it ships
+  with fixed names (`aw-actor-www-root.html`, `aw-actor-www-properties.html`,
+  `aw-actor-www-trust.html`, etc.). Session-cookie authentication and
+  browser redirects (unauthenticated -> `/login`, authenticated -> `/www`)
+  are handled automatically. Works out of the box with zero frontend code,
+  but you are not limited to its default look: pass your own
+  `templates_dir` to `integrate_fastapi(api, templates_dir="templates")`
+  (or the Flask equivalent) and drop a same-named file in it --
+  `templates/aw-actor-www-properties.html` -- to replace that page's
+  markup entirely; your directory is searched before the library's
+  defaults, per template, so you only need to override the pages you want
+  to change. Full customization guide:
+  https://actingweb.readthedocs.io/en/latest/docs/guides/web-ui.html#template-customization
 - **SPA mode** (`with_web_ui(False)`): the library serves no UI at all --
   you own the frontend completely. You provide `/login` and
   `/<actor_id>/app` yourself (an SPA shell your JavaScript drives), and

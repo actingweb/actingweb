@@ -202,6 +202,8 @@ def nuke_all_actors():
 
     Usage: GET /nuke?secret=<NUKE_SECRET>
     """
+    import hmac
+
     import boto3
     from flask import request
 
@@ -213,7 +215,7 @@ def nuke_all_actors():
         return {"error": "NUKE_SECRET not configured"}, 503
 
     provided_secret = request.args.get("secret", "")
-    if not provided_secret or provided_secret != nuke_secret:
+    if not provided_secret or not hmac.compare_digest(provided_secret, nuke_secret):
         return {"error": "Invalid or missing secret"}, 403
 
     # Get config

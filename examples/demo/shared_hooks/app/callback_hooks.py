@@ -24,6 +24,7 @@ Example usage:
     # The service calls your callback when the event occurs
 """
 
+import hmac
 import logging
 from datetime import datetime
 from typing import Any
@@ -78,7 +79,7 @@ def register_callback_hooks(app):
 
         # Demo implementation - just check if token exists
         stored_token = actor.properties.get("email_verification_token", "")
-        if token == stored_token:
+        if stored_token and hmac.compare_digest(token, stored_token):
             if actor.properties is not None:
                 actor.properties.email_verified = True
                 actor.properties.email_verified_at = datetime.now().isoformat()

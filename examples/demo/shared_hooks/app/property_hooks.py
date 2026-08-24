@@ -127,7 +127,10 @@ def register_property_hooks(app):
         if operation in ["put", "post"]:
             if isinstance(value, str):
                 try:
-                    # Try to parse JSON strings into objects
+                    # Try to parse JSON strings into objects. Note this
+                    # silently coerces e.g. "123" -> 123 or "true" -> True --
+                    # a plain string that happens to look like JSON does not
+                    # stay a string.
                     parsed = json.loads(value)
                     return parsed
                 except (json.JSONDecodeError, TypeError):

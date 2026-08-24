@@ -20,6 +20,8 @@ is actually running.
 import sys
 from pathlib import Path
 
+import pytest
+
 DEMO_DIR = Path(__file__).resolve().parent.parent / "examples" / "demo"
 
 
@@ -83,29 +85,65 @@ def test_demo_example_registers_all_shared_hook_categories():
     assert hooks._callback_hooks.get("www"), "ui hook (www callback) not registered"
 
 
+def test_demo_example_nuke_endpoint_rejects_missing_or_wrong_secret():
+    """
+    /nuke deletes every actor in the configured DynamoDB tables -- a
+    destructive endpoint gated behind NUKE_SECRET. This guards the gate
+    itself (missing secret -> 403, wrong secret -> 403) so a future refactor
+    can't accidentally loosen it without a test noticing. Does not exercise
+    the unset-NUKE_SECRET -> 503 path, since tests/conftest.py doesn't set
+    NUKE_SECRET and module caching (see _import_demo_application) means an
+    earlier test in this file may have already imported the module under a
+    different environment.
+    """
+    import os
+
+    os.environ.setdefault("NUKE_SECRET", "test-nuke-secret-not-real")
+    module = _import_demo_application()
+    client = module.app.test_client()
+
+    resp = client.get("/nuke")
+    assert resp.status_code == 403
+
+    resp = client.get("/nuke?secret=wrong")
+    assert resp.status_code == 403
+
+
+@pytest.mark.slow
 def test_demo_example_not_in_built_wheel():
     """
     examples/ is deliberately absent from pyproject.toml's [tool.poetry]
     include -- this guards that decision against a future edit reintroducing
-    it. Builds into a scratch directory rather than the repo's `dist/`,
-    which accumulates wheels from every past release and has no naming
-    convention that sorts newest-last.
+    it. Builds to the repo's own dist/ (CI pins Poetry 1.7.0, whose `build`
+    command has no --output/-o flag -- a scratch-directory build was tried
+    first and fails there) and finds the wheel by its exact, deterministic
+    filename rather than by scanning dist/, which accumulates wheels from
+    every past release with no naming convention that sorts newest-last.
     """
     import subprocess
-    import tempfile
     import zipfile
 
+    import actingweb
+
     repo_root = Path(__file__).resolve().parent.parent
-    with tempfile.TemporaryDirectory() as tmpdir:
+    try:
         subprocess.run(
-            ["poetry", "build", "--format", "wheel", "--output", tmpdir],
+            ["poetry", "build", "--format", "wheel"],
             cwd=repo_root,
             check=True,
             capture_output=True,
+            text=True,
         )
-        wheels = list(Path(tmpdir).glob("*.whl"))
-        assert len(wheels) == 1, f"expected exactly one built wheel, got {wheels}"
+    except subprocess.CalledProcessError as e:
+        raise AssertionError(
+            f"poetry build failed:\nSTDOUT: {e.stdout}\nSTDERR: {e.stderr}"
+        ) from e
 
-        with zipfile.ZipFile(wheels[0]) as wheel:
-            leaked = [n for n in wheel.namelist() if n.startswith("examples/")]
+    wheel_path = (
+        repo_root / "dist" / f"actingweb-{actingweb.__version__}-py3-none-any.whl"
+    )
+    assert wheel_path.exists(), f"expected wheel not found: {wheel_path}"
+
+    with zipfile.ZipFile(wheel_path) as wheel:
+        leaked = [n for n in wheel.namelist() if n.startswith("examples/")]
     assert not leaked, f"examples/ leaked into wheel: {leaked}"

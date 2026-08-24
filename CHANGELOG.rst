@@ -127,6 +127,16 @@ CHANGED
 ADDED
 ~~~~~
 
+- **``examples/demo/``**: the full ActingWeb demo application (OAuth2 login,
+  MCP, the complete hook system, a customized web UI) moved into this
+  repository from the separate ``actingwebdemo`` repository, so the reference
+  application is version-locked to the library and exercised by this
+  repository's own test suite instead of drifting against a floating
+  ``>=`` dependency pin. Deployment (AWS credentials, the OAuth client
+  secret, the ``demo.actingweb.io`` custom domain) stays in
+  ``actingwebdemo``, which remains the deployment pipeline for this code —
+  see ``examples/demo/README.md``. Repo-only: not part of the published
+  wheel.
 - **Agent Skill for building applications on ActingWeb**
   (``skills/actingweb-app/``): task recipes — add a property hook, expose an
   MCP tool, establish trust and subscribe to a peer, configure a custom

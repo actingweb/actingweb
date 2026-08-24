@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="">
+<head>
+    <script>
+        (function(){var t=localStorage.getItem('actingweb-theme');if(t&&t!=='system')document.documentElement.setAttribute('data-theme',t);else document.documentElement.removeAttribute('data-theme');})();
+    </script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ActingWeb Demo - Property</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="icon" href="/static/favicon.ico" type="image/x-icon">
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="page-container">
+        <div class="page-card animate-fade-in">
+            <div class="page-header">
+                <div class="page-icon page-icon-accent">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/>
+                        <line x1="7" y1="7" x2="7.01" y2="7"/>
+                    </svg>
+                </div>
+                <h1>Property Details</h1>
+                <p class="text-muted">Actor: {{ id }}</p>
+            </div>
+
+            <div class="card mb-lg">
+                <div class="card-body">
+                    <div class="mb-md">
+                        <label class="text-sm font-medium text-muted">Property Name</label>
+                        <div class="copy-field mt-xs">
+                            <code>{{ property }}</code>
+                        </div>
+                    </div>
+
+                    <div class="mb-md">
+                        <label class="text-sm font-medium text-muted">Property Type</label>
+                        <div class="mt-xs">
+                            <span class="badge badge-accent">{{ qual }}</span>
+                        </div>
+                    </div>
+
+                    <div>
+                        <label class="text-sm font-medium text-muted">Value</label>
+                        <div class="copy-field mt-xs">
+                            <code>{{ value }}</code>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="flex gap-sm">
+                <a href="{{ url }}/properties" class="btn btn-primary flex-1">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M19 12H5"/>
+                        <polyline points="12 19 5 12 12 5"/>
+                    </svg>
+                    All Properties
+                </a>
+                <a href="{{ url }}" class="btn btn-secondary flex-1">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+                        <polyline points="9 22 9 12 15 12 15 22"/>
+                    </svg>
+                    Dashboard
+                </a>
+            </div>
+
+            <div class="mt-lg text-center text-xs text-muted">
+                Powered by <a href="https://github.com/actingweb/actingweb">ActingWeb</a>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

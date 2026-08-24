@@ -7,7 +7,8 @@ status: active
 **Date:** 2026-08-22
 **Research:** thoughts/research/2026-08-22-ai-agent-discoverability.md
 **Related plan:** thoughts/plans/2026-08-22-ai-agent-discoverability.md
-**Branch:** master
+**Branch:** implemented on `consolidate-demo-app`,
+[PR #137](https://github.com/actingweb/actingweb/pull/137)
 
 ## Overview
 
@@ -377,6 +378,68 @@ discoverability plan has two places that currently make an ambiguous claim.
       example)
 
 ### Implementation Status: Complete
+
+---
+
+## PR #137 review cycle (Phases 1-3, before merge)
+
+Phases 1-3 landed as commits on `consolidate-demo-app`
+([PR #137](https://github.com/actingweb/actingweb/pull/137)). CI's automated
+Codex review flagged three issues in the moved demo code — all pre-existing
+bugs inherited from `actingwebdemo`, not introduced by the move:
+
+1. **`search` (a method hook) had `@mcp_tool` attached, but MCP tools are
+   discovered from action hooks only** (`actingweb/handlers/mcp.py`) — so
+   despite `/health` advertising `"mcp_tools": ["search"]`, no MCP client
+   could ever see or call it. First fix attempt moved `search` to an action
+   hook so MCP discovery would work. **Reverted after clarifying with the
+   user**: `examples/demo/` is meant to be a pure ActingWeb protocol
+   example, not an MCP one (`examples/mcp_quickstart.py` already covers
+   MCP), and methods vs. actions are distinct spec primitives — a read-only
+   search stays a method regardless of MCP wiring. Final fix: dropped
+   `@mcp_tool` entirely, reverted `search` to `@app.method_hook`, and added
+   an explicit `.with_mcp(enable=False)` — `ActingWebApp` enables MCP by
+   default, so merely removing the earlier `.with_mcp(enable=True))` call
+   left it silently still on (confirmed via `aw_app.get_config().mcp`
+   before and after). Also removed the now-purposeless
+   `AccessControlConfig`/`mcp_client` trust-type block and `/health`'s
+   `mcp_enabled`/`mcp_tools` fields, and corrected every doc/README/
+   CHANGELOG claim describing this demo as an MCP example.
+2. **`devtest` was unconditionally enabled** — this is the code behind
+   `demo.actingweb.io`; `CLAUDE.md` states `with_devtest(enable=False)`
+   MUST be False in production. Fixed: gated behind `ENABLE_DEVTEST`
+   (default false).
+3. **The wildcard `"*"` property hook could not actually protect
+   `auth_token`/`created_at`/`actor_type`** — it tried to identify them via
+   `path[0]`, but `HookRegistry.execute_property_hooks` only ever passes
+   the nested-subkey remainder as `path`, never the top-level property
+   name, so the guard silently never fired for ordinary top-level access.
+   Fixed: registered each as an exact-name property hook (the pattern
+   already used for `email`), which doesn't need `path` to know what it's
+   guarding. Removed the now-dead `PROP_HIDE`/`PROP_PROTECT` constants and
+   the wildcard hook's broken protection logic.
+
+Also fixed while addressing review feedback: `hmac.compare_digest` instead
+of `==`/`!=` for the two secret comparisons (`/nuke`'s `NUKE_SECRET`,
+`email_verify`'s token check), a `@pytest.mark.slow` on the wheel-build
+test, and a CI-only failure in that same test — `poetry build --output
+<dir>` fails outright under Poetry 1.7.0 (CI's pinned version), which has
+no `--output`/`-o` flag at all (confirmed by installing 1.7.0 locally and
+reading `poetry build --help`); fixed by building to the repo's own
+`dist/` and locating the wheel by its exact, deterministic filename.
+
+**Safety note**: while investigating the Poetry 1.7.0 issue, an ad hoc
+verification command (`importlib.util.spec_from_file_location` loading
+`application.py` directly) was run without setting `AWS_DB_HOST` and made
+a second live, read-only DynamoDB scan against this machine's real default
+AWS account — the same class of incident recorded under Phase 1, despite
+having flagged it there. No writes occurred. Reinforces: anything that
+constructs this app outside of pytest must set `AWS_DB_HOST` explicitly,
+every time, with no exceptions for "just checking something quickly."
+
+All fixes verified: full test suite green on both DynamoDB and PostgreSQL
+backends in CI, docs build clean, `poetry run pytest tests/ -m "not
+benchmark" ...` green locally (3095 passed, 31 skipped, 0 failed).
 
 ---
 

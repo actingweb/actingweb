@@ -11,12 +11,14 @@ Property hooks are triggered automatically when:
 - DELETE /{actor_id}/properties/{property_name} - Deleting a property
 
 Available Property Hooks:
-- email: Special handling for email property (hidden, validated, protected)
-- *: Wildcard hook for all properties (JSON parsing, protection rules)
-
-Property Protection Levels:
-- PROP_HIDE: Properties hidden from GET requests (email, auth_token)
-- PROP_PROTECT: Properties protected from modification/deletion
+- email: hidden from GET, validated and normalized on PUT/POST, protected
+  from deletion
+- auth_token: hidden from GET, blocked from PUT/POST/DELETE entirely
+- created_at, actor_type: protected from deletion only
+- *: wildcard hook for all other properties (JSON string coercion on
+  PUT/POST only -- see the comment on handle_all_properties for why it
+  cannot also enforce protection: the wildcard hook is never given the
+  top-level property name)
 
 Return Values:
 - Return the (possibly transformed) value to allow the operation
@@ -30,12 +32,6 @@ from typing import Any
 from actingweb.interface.actor_interface import ActorInterface
 
 logger = logging.getLogger(__name__)
-
-# Properties that should be hidden from external access
-PROP_HIDE = ["email", "auth_token"]
-
-# Properties protected from modification and deletion
-PROP_PROTECT = PROP_HIDE + ["created_at", "actor_type"]
 
 
 def register_property_hooks(app):
@@ -82,18 +78,71 @@ def register_property_hooks(app):
             return None
         return value
 
+    @app.property_hook("auth_token")
+    def handle_auth_token_property(
+        actor: ActorInterface, operation: str, value: Any, path: list[str]
+    ) -> Any | None:
+        """
+        Hide and protect auth_token. Registered by exact name rather than
+        relying on the "*" wildcard hook below: the wildcard hook is only
+        ever called with (actor, operation, value, path) -- path is the
+        nested-subkey remainder, never the top-level property name (see
+        HookRegistry.execute_property_hooks in actingweb/interface/hooks.py)
+        -- so a wildcard hook has no way to identify "this is auth_token"
+        for an ordinary top-level access, where path is always []. A prior
+        version of this file tried to check path[0] for that purpose, which
+        only ever matched a nested subkey name, never the property itself,
+        and so silently never fired.
+        """
+        if operation in ("get", "put", "post", "delete"):
+            logger.warning(
+                f"Blocked {operation} on hidden property 'auth_token' for actor {actor.id}"
+            )
+            return None
+        return value
+
+    @app.property_hook("created_at")
+    def handle_created_at_property(
+        actor: ActorInterface, operation: str, value: Any, path: list[str]
+    ) -> Any | None:
+        """Protect created_at from deletion only -- see handle_auth_token_property."""
+        if operation == "delete":
+            logger.warning(
+                f"Blocked deletion of protected property 'created_at' for actor {actor.id}"
+            )
+            return None
+        return value
+
+    @app.property_hook("actor_type")
+    def handle_actor_type_property(
+        actor: ActorInterface, operation: str, value: Any, path: list[str]
+    ) -> Any | None:
+        """Protect actor_type from deletion only -- see handle_auth_token_property."""
+        if operation == "delete":
+            logger.warning(
+                f"Blocked deletion of protected property 'actor_type' for actor {actor.id}"
+            )
+            return None
+        return value
+
     @app.property_hook("*")
     def handle_all_properties(
         actor: ActorInterface, operation: str, value: Any, path: list[str]
     ) -> Any | None:
         """
-        Handle all properties with general validation and protection.
+        Handle all properties with general validation.
 
-        Triggered: On any property operation (after specific hooks like 'email')
+        Triggered: On any property operation (after specific hooks like
+        'email', 'auth_token', 'created_at', 'actor_type' above).
+
+        This hook cannot enforce per-property hiding/protection itself: the
+        wildcard "*" hook is called with (actor, operation, value, path),
+        where `path` is only the nested-subkey remainder, never the
+        top-level property name -- see the comment on
+        handle_auth_token_property above. Protection for specific
+        properties is registered by exact name instead.
 
         Behaviors:
-        - Protects PROP_PROTECT properties from deletion
-        - Blocks PUT/POST on PROP_HIDE properties
         - Parses JSON strings into objects for PUT/POST
 
         Parameters:
@@ -105,24 +154,6 @@ def register_property_hooks(app):
         Returns:
             Transformed value to allow, None to block
         """
-        if not path:
-            return value
-
-        property_name = path[0] if path else ""
-
-        # Apply protection rules
-        if property_name in PROP_PROTECT:
-            if operation == "delete":
-                logger.warning(
-                    f"Blocked deletion of protected property '{property_name}' for actor {actor.id}"
-                )
-                return None
-            elif operation in ["put", "post"] and property_name in PROP_HIDE:
-                logger.warning(
-                    f"Blocked modification of hidden property '{property_name}' for actor {actor.id}"
-                )
-                return None
-
         # Handle JSON string conversion for PUT/POST
         if operation in ["put", "post"]:
             if isinstance(value, str):

@@ -64,7 +64,11 @@ aw_app = (
         redirect_uri=f"{os.getenv('APP_HOST_PROTOCOL', 'https://')}{os.getenv('APP_HOST_FQDN', 'localhost:5000')}/oauth/callback",
     )
     .with_web_ui(enable=True)
-    .with_devtest(enable=True)  # Set to False in production
+    # Defaults to disabled -- this is the code behind demo.actingweb.io, and
+    # devtest exposes mutation/read endpoints plus a passphrase OAuth grant
+    # that must not be reachable in a live deployment. Set ENABLE_DEVTEST=true
+    # for local development only.
+    .with_devtest(enable=os.getenv("ENABLE_DEVTEST", "false").lower() == "true")
     .with_bot(
         token=os.getenv("APP_BOT_TOKEN", ""),
         email=os.getenv("APP_BOT_EMAIL", ""),

@@ -12,8 +12,12 @@ Available Methods:
 - greet: Return a personalized greeting with actor info
 - get_status: Return comprehensive actor status summary
 - echo: Echo back input data (useful for testing)
-- search: Search actor properties by keyword (also exposed as MCP tool)
 - schedule_task: Schedule a task for the robot to execute at a specific time
+
+`search` is registered separately in this module as an *action* hook, not a
+method hook, even though it only reads data: MCP tools are discovered from
+action hooks exclusively (see the comment above its registration below), so
+it is invoked via POST /{actor_id}/actions/search, not /methods/search.
 
 Example usage with curl:
     curl -X POST https://host/{actor_id}/methods/calculate \\
@@ -24,7 +28,7 @@ Example usage with curl:
          -H "Content-Type: application/json" \\
          -d '{"name": "Alice"}'
 
-    curl -X POST https://host/{actor_id}/methods/search \\
+    curl -X POST https://host/{actor_id}/actions/search \\
          -H "Content-Type: application/json" \\
          -d '{"query": "*", "limit": 10}'
 """
@@ -338,9 +342,16 @@ def register_method_hooks(app):
             "timestamp": datetime.now().isoformat(),
         }
 
-    # MCP Tools - exposed to AI language models via Model Context Protocol
+    # MCP Tools - exposed to AI language models via Model Context Protocol.
+    # An MCP *tool* (@mcp_tool) is discovered only from action hooks
+    # (actingweb/handlers/mcp.py's _has_mcp_tools/_handle_tools_list read
+    # HookRegistry._action_hooks exclusively) -- @app.method_hook + @mcp_tool
+    # registers metadata that MCP never looks at, so the tool would be
+    # invisible to MCP clients despite search being read-only. Kept here
+    # rather than moved to action_hooks.py since it's conceptually a query,
+    # not a state-changing action; only the registration mechanism cares.
 
-    @app.method_hook(
+    @app.action_hook(
         "search",
         description=(
             "Search across this actor's properties by keyword. "
@@ -436,13 +447,13 @@ def register_method_hooks(app):
             "openWorldHint": False,
         },
     )
-    def handle_search_method(
-        actor: ActorInterface, method_name: str, data: dict[str, Any]
+    def handle_search_action(
+        actor: ActorInterface, action_name: str, data: dict[str, Any]
     ) -> dict[str, Any]:
         """
         Search across actor properties by keyword.
 
-        Endpoint: POST /{actor_id}/methods/search
+        Endpoint: POST /{actor_id}/actions/search
         MCP Tool: search
 
         Parameters:
@@ -453,7 +464,8 @@ def register_method_hooks(app):
             {query, results: [{property, value, match_type}], count, truncated}
 
         Note: Sensitive properties (email, tokens) are automatically excluded.
-        This method is also exposed as an MCP tool for AI assistants.
+        Registered as an action hook (not a method hook) so MCP can discover
+        it as a tool -- see the comment above its registration.
         """
         query = data.get("query", "").strip().lower()
         limit = data.get("limit", 20)

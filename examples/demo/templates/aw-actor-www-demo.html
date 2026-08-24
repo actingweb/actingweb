@@ -212,11 +212,11 @@
                     <div class="result-box"></div>
                 </div>
 
-                <!-- Search Method (MCP Tool) -->
+                <!-- Search Action (MCP Tool) -->
                 <div class="demo-card">
-                    <h3><span class="badge-method post">POST</span> /methods/search <span class="badge badge-accent">MCP</span></h3>
+                    <h3><span class="badge-method post">POST</span> /actions/search <span class="badge badge-accent">MCP</span></h3>
                     <p>Search actor properties (also available as MCP tool)</p>
-                    <form class="demo-form" onsubmit="callEndpoint(event, '/{{ id }}/methods/search', this)">
+                    <form class="demo-form" onsubmit="callEndpoint(event, '/{{ id }}/actions/search', this)">
                         <div class="form-group">
                             <label>Query (use * for all)</label>
                             <input type="text" name="query" value="*" placeholder="Search term or *">

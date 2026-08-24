@@ -85,6 +85,58 @@ def test_demo_example_registers_all_shared_hook_categories():
     assert hooks._callback_hooks.get("www"), "ui hook (www callback) not registered"
 
 
+def test_demo_example_search_is_discoverable_as_an_mcp_tool():
+    """
+    Regression test for a real bug a review pass caught: `search` was
+    registered via @app.method_hook + @mcp_tool, but MCP tools are
+    discovered exclusively from action hooks (actingweb/handlers/mcp.py's
+    _has_mcp_tools / _handle_tools_list / _handle_tool_call all iterate
+    HookRegistry._action_hooks only) -- so despite /health advertising
+    "mcp_tools": ["search"], no MCP client could ever see or call it.
+    """
+    from actingweb.mcp.decorators import get_mcp_metadata, is_mcp_exposed
+
+    module = _import_demo_application()
+    hooks = module.aw_app.hooks
+
+    assert "search" not in hooks._method_hooks
+    search_hooks = hooks._action_hooks.get("search", [])
+    assert search_hooks, "search not registered as an action hook"
+    assert is_mcp_exposed(search_hooks[0])
+    metadata = get_mcp_metadata(search_hooks[0])
+    assert metadata is not None and metadata.get("type") == "tool"
+
+
+def test_demo_example_protected_properties_are_actually_blocked():
+    """
+    Regression test for a real access-control bug a review pass caught:
+    the wildcard "*" property hook tried to identify protected properties
+    via path[0], but HookRegistry.execute_property_hooks only ever passes
+    the nested-subkey remainder as `path` -- never the top-level property
+    name -- so protection for auth_token/created_at/actor_type silently
+    never fired for ordinary top-level access (path is always [] there).
+    Fixed by registering exact-name hooks instead. Exercises the real
+    hook-execution path (not just that a hook is registered under the
+    name) with auth_context=None, which _check_hook_permission treats as
+    unauthenticated/no-peer-context and allows through unconditionally --
+    so a None result here can only come from the hook itself blocking it.
+    """
+    module = _import_demo_application()
+    hooks = module.aw_app.hooks
+
+    class _FakeActor:
+        id = "test-actor"
+
+    actor = _FakeActor()
+    assert hooks.execute_property_hooks("auth_token", "get", actor, "secret") is None
+    assert hooks.execute_property_hooks("auth_token", "put", actor, "new-value") is None
+    assert (
+        hooks.execute_property_hooks("created_at", "delete", actor, "2024-01-01")
+        is None
+    )
+    assert hooks.execute_property_hooks("actor_type", "delete", actor, "myself") is None
+
+
 def test_demo_example_nuke_endpoint_rejects_missing_or_wrong_secret():
     """
     /nuke deletes every actor in the configured DynamoDB tables -- a

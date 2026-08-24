@@ -128,8 +128,9 @@ ADDED
 ~~~~~
 
 - **``examples/demo/``**: the full ActingWeb demo application (OAuth2 login,
-  MCP, the complete hook system, a customized web UI) moved into this
-  repository from the separate ``actingwebdemo`` repository, so the reference
+  the complete hook system, a customized web UI — a pure ActingWeb protocol
+  example, not MCP; see ``examples/mcp_quickstart.py`` for that) moved into
+  this repository from the separate ``actingwebdemo`` repository, so the reference
   application is version-locked to the library and exercised by this
   repository's own test suite instead of drifting against a floating
   ``>=`` dependency pin. Deployment (AWS credentials, the OAuth client

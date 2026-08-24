@@ -85,28 +85,6 @@ def test_demo_example_registers_all_shared_hook_categories():
     assert hooks._callback_hooks.get("www"), "ui hook (www callback) not registered"
 
 
-def test_demo_example_search_is_discoverable_as_an_mcp_tool():
-    """
-    Regression test for a real bug a review pass caught: `search` was
-    registered via @app.method_hook + @mcp_tool, but MCP tools are
-    discovered exclusively from action hooks (actingweb/handlers/mcp.py's
-    _has_mcp_tools / _handle_tools_list / _handle_tool_call all iterate
-    HookRegistry._action_hooks only) -- so despite /health advertising
-    "mcp_tools": ["search"], no MCP client could ever see or call it.
-    """
-    from actingweb.mcp.decorators import get_mcp_metadata, is_mcp_exposed
-
-    module = _import_demo_application()
-    hooks = module.aw_app.hooks
-
-    assert "search" not in hooks._method_hooks
-    search_hooks = hooks._action_hooks.get("search", [])
-    assert search_hooks, "search not registered as an action hook"
-    assert is_mcp_exposed(search_hooks[0])
-    metadata = get_mcp_metadata(search_hooks[0])
-    assert metadata is not None and metadata.get("type") == "tool"
-
-
 def test_demo_example_protected_properties_are_actually_blocked():
     """
     Regression test for a real access-control bug a review pass caught:

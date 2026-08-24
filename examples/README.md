@@ -8,10 +8,12 @@ in `tests/`).
   prompt. Narrated in `docs/guides/mcp-quickstart.rst`.
 - **`p2p_quickstart.py`** — a two-actor peer-to-peer trust and subscription
   flow. Narrated in `docs/guides/p2p-quickstart.rst`.
-- **`demo/`** — a complete Flask application (OAuth2 login, MCP, the full
-  hook system, a customized web UI). See `demo/README.md`. This is the
-  application code behind the live `demo.actingweb.io` instance; deployment
-  of that instance lives in the separate `actingwebdemo` repository.
+- **`demo/`** — a complete Flask application demonstrating the core
+  ActingWeb protocol (OAuth2 login, the full hook system, a customized web
+  UI) — not an MCP example, see `mcp_quickstart.py` above for that. See
+  `demo/README.md`. This is the application code behind the live
+  `demo.actingweb.io` instance; deployment of that instance lives in the
+  separate `actingwebdemo` repository.
 
 Each quickstart script is also imported directly by a test under `tests/`,
 so the documentation, the example, and the test all exercise the same code

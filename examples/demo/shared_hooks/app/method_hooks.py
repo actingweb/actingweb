@@ -12,12 +12,8 @@ Available Methods:
 - greet: Return a personalized greeting with actor info
 - get_status: Return comprehensive actor status summary
 - echo: Echo back input data (useful for testing)
+- search: Search actor properties by keyword
 - schedule_task: Schedule a task for the robot to execute at a specific time
-
-`search` is registered separately in this module as an *action* hook, not a
-method hook, even though it only reads data: MCP tools are discovered from
-action hooks exclusively (see the comment above its registration below), so
-it is invoked via POST /{actor_id}/actions/search, not /methods/search.
 
 Example usage with curl:
     curl -X POST https://host/{actor_id}/methods/calculate \\
@@ -28,7 +24,7 @@ Example usage with curl:
          -H "Content-Type: application/json" \\
          -d '{"name": "Alice"}'
 
-    curl -X POST https://host/{actor_id}/actions/search \\
+    curl -X POST https://host/{actor_id}/methods/search \\
          -H "Content-Type: application/json" \\
          -d '{"query": "*", "limit": 10}'
 """
@@ -39,12 +35,11 @@ from datetime import datetime
 from typing import Any
 
 from actingweb.interface.actor_interface import ActorInterface
-from actingweb.mcp import mcp_tool
 
 logger = logging.getLogger(__name__)
 
-# Properties to exclude from MCP search results (sensitive data)
-MCP_EXCLUDED_PROPERTIES = [
+# Properties to exclude from search results (sensitive data)
+SEARCH_EXCLUDED_PROPERTIES = [
     "email",
     "auth_token",
     "oauth_token",
@@ -342,16 +337,7 @@ def register_method_hooks(app):
             "timestamp": datetime.now().isoformat(),
         }
 
-    # MCP Tools - exposed to AI language models via Model Context Protocol.
-    # An MCP *tool* (@mcp_tool) is discovered only from action hooks
-    # (actingweb/handlers/mcp.py's _has_mcp_tools/_handle_tools_list read
-    # HookRegistry._action_hooks exclusively) -- @app.method_hook + @mcp_tool
-    # registers metadata that MCP never looks at, so the tool would be
-    # invisible to MCP clients despite search being read-only. Kept here
-    # rather than moved to action_hooks.py since it's conceptually a query,
-    # not a state-changing action; only the registration mechanism cares.
-
-    @app.action_hook(
+    @app.method_hook(
         "search",
         description=(
             "Search across this actor's properties by keyword. "
@@ -418,43 +404,13 @@ def register_method_hooks(app):
             "openWorldHint": False,
         },
     )
-    @mcp_tool(
-        description=(
-            "Search across this actor's properties by keyword. "
-            "Returns matching property names and values. "
-            "Use '*' to list all properties. "
-            "Sensitive properties like tokens and email are excluded from results."
-        ),
-        input_schema={
-            "type": "object",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "Search query - matches against property names and values. Use '*' to list all.",
-                },
-                "limit": {
-                    "type": "integer",
-                    "description": "Maximum number of results to return (default: 20)",
-                    "default": 20,
-                },
-            },
-            "required": ["query"],
-        },
-        annotations={
-            "readOnlyHint": True,
-            "destructiveHint": False,
-            "idempotentHint": True,
-            "openWorldHint": False,
-        },
-    )
-    def handle_search_action(
-        actor: ActorInterface, action_name: str, data: dict[str, Any]
+    def handle_search_method(
+        actor: ActorInterface, method_name: str, data: dict[str, Any]
     ) -> dict[str, Any]:
         """
         Search across actor properties by keyword.
 
-        Endpoint: POST /{actor_id}/actions/search
-        MCP Tool: search
+        Endpoint: POST /{actor_id}/methods/search
 
         Parameters:
             query (str): Search query - use '*' to list all properties
@@ -464,8 +420,6 @@ def register_method_hooks(app):
             {query, results: [{property, value, match_type}], count, truncated}
 
         Note: Sensitive properties (email, tokens) are automatically excluded.
-        Registered as an action hook (not a method hook) so MCP can discover
-        it as a tool -- see the comment above its registration.
         """
         query = data.get("query", "").strip().lower()
         limit = data.get("limit", 20)
@@ -493,7 +447,7 @@ def register_method_hooks(app):
 
             for prop_name, prop_value in all_props.items():
                 # Skip excluded/sensitive properties
-                if prop_name in MCP_EXCLUDED_PROPERTIES:
+                if prop_name in SEARCH_EXCLUDED_PROPERTIES:
                     continue
                 if prop_name.startswith("_"):  # Skip internal properties
                     continue

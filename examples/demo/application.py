@@ -3,9 +3,10 @@
 ActingWeb Demo Application using the modern interface.
 
 This demonstrates the new ActingWeb interface with clean, fluent configuration
-and decorator-based hooks instead of the old OnAWBase system.
-
-Includes MCP (Model Context Protocol) support for AI language model integration.
+and decorator-based hooks instead of the old OnAWBase system. This is a pure
+ActingWeb protocol demo -- OAuth2, methods, actions, callbacks, properties,
+trust, and subscriptions -- not an MCP integration example; see
+examples/mcp_quickstart.py for that.
 """
 
 import logging
@@ -17,7 +18,6 @@ from flask import Flask
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 from actingweb.interface import ActingWebApp
-from actingweb.permission_integration import AccessControlConfig
 
 # Load environment variables from .env file before any config is read
 load_dotenv()
@@ -77,7 +77,10 @@ aw_app = (
     )
     .with_unique_creator(enable=True)  # Each user gets one actor
     .with_email_as_creator(enable=True)  # Use email from OAuth as creator
-    .with_mcp(enable=True)  # Enable MCP server support for AI assistants
+    # ActingWebApp enables MCP by default; explicitly disabled here since
+    # this is a pure ActingWeb protocol demo, not an MCP integration example
+    # (see examples/mcp_quickstart.py for that).
+    .with_mcp(enable=False)
     .add_actor_type(
         name="myself",
         factory=f"{os.getenv('APP_HOST_PROTOCOL', 'https://')}{os.getenv('APP_HOST_FQDN', 'localhost:5000')}/",
@@ -108,7 +111,7 @@ try:
 except Exception as e:
     LOG.error(f"Failed to configure OAuth2/trust settings: {e}")
 
-# Initialize OAuth2 state manager at startup (for MCP OAuth flows)
+# Initialize OAuth2 state manager at startup
 # This ensures the encryption key is created before any OAuth flows begin
 try:
     from actingweb.oauth2_server.state_manager import get_oauth2_state_manager
@@ -117,48 +120,6 @@ try:
     LOG.info("OAuth2 state manager initialized successfully")
 except Exception as e:
     LOG.warning(f"OAuth2 state manager initialization skipped: {e}")
-    # Continue anyway - non-MCP OAuth flows will still work
-
-# Configure unified access control with MCP trust types
-# This controls what AI assistants can access via the MCP protocol
-try:
-    access_control = AccessControlConfig(aw_app.get_config())
-
-    # MCP client trust type: read-only access excluding sensitive properties
-    access_control.add_trust_type(
-        name="mcp_client",
-        display_name="AI Assistant",
-        description="AI assistant with read-only access to search actor properties. Sensitive data like tokens and email are excluded.",
-        permissions={
-            "properties": {
-                "patterns": ["*"],  # Allow access to all properties
-                "operations": ["read"],  # Read-only access
-                "excluded_patterns": [
-                    "email",
-                    "auth_token",
-                    "oauth_token",
-                    "access_token",
-                    "refresh_token",
-                    "_*",  # Internal properties
-                ],
-            },
-            "methods": ["get_*", "list_*", "search_*"],  # Read operations only
-            "tools": ["search"],  # Only the search MCP tool
-            "resources": [],  # No resource access
-            "prompts": ["*"],  # All prompts available
-        },
-        oauth_scope="mcp",
-    )
-
-    # Configure OAuth2 trust type selection for MCP clients
-    access_control.configure_oauth2_trust_types(
-        allowed_trust_types=["mcp_client"],
-        default_trust_type="mcp_client",
-    )
-
-    LOG.info("MCP access control configured with mcp_client trust type")
-except Exception as e:
-    LOG.warning(f"MCP access control configuration skipped: {e}")
 
 # Register all shared hooks
 register_all_shared_hooks(aw_app)
@@ -178,9 +139,6 @@ def health_check():
     return {
         "status": "healthy",
         "integration": "flask",
-        "mcp_enabled": True,
-        "mcp_tools": ["search"],
-        "version": "1.0.0-mcp",
     }
 
 

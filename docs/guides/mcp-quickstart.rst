@@ -243,9 +243,6 @@ Recommendations
 Where to Go Next
 -----------------
 
-- See a complete application: ``examples/demo/`` in this repository wires up
-  OAuth2 login, MCP, and the full hook system in one worked example,
-  version-locked to the release you have checked out.
 - :doc:`mcp-applications` -- the broader guide this quickstart's tool safety
   annotations link into.
 - :doc:`access-control` -- the full permission and trust-type system.

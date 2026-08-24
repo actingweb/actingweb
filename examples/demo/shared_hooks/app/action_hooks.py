@@ -13,10 +13,7 @@ Available Actions:
 - send_notification: Simulate sending a notification (email/sms/push)
 
 Note: For internal state modifications, use the /properties endpoint directly.
-For read-only operations, use /methods instead -- except `search`, which is
-registered as an action hook in method_hooks.py despite being read-only,
-because MCP tools are discovered from action hooks only. See the comment
-above its registration there.
+For read-only operations, use /methods instead.
 
 Example usage with curl:
     curl -X POST https://host/{actor_id}/actions/log_message \\

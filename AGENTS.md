@@ -28,8 +28,10 @@ pip install 'actingweb[fastapi]'   # or [flask], or [all] for everything incl. M
 - Peer-to-peer quickstart: https://actingweb.readthedocs.io/en/latest/docs/guides/p2p-quickstart.html
 - Full documentation: https://actingweb.readthedocs.io/en/latest/
 - Reference application: `examples/demo/` in this repository — a fuller
-  worked example (MCP + Web/SPA + OAuth2), version-locked to the release you
-  have checked out and exercised by this repository's own tests. The
+  worked example covering the core ActingWeb protocol (Web/SPA + OAuth2, not
+  MCP — see `examples/mcp_quickstart.py` for that), version-locked to the
+  release you have checked out and exercised by this repository's own
+  tests. The
   `actingwebdemo` repository is the deployment pipeline for
   `demo.actingweb.io` (AWS credentials, OAuth secret, Serverless config);
   the application code itself lives here, not there.

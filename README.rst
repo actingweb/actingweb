@@ -323,8 +323,9 @@ Repository and links
 - **Docs**: `https://actingweb.readthedocs.io/ <https://actingweb.readthedocs.io/>`_
 - **Protocol & project home**: `https://actingweb.org/ <https://actingweb.org/>`_
 - **Example application**: `examples/demo/ <https://github.com/actingweb/actingweb/tree/master/examples/demo>`_
-  in this repository — a full reference app (MCP + Web/SPA + OAuth2),
-  version-locked to the ActingWeb release you have checked out, tested by
+  in this repository — a full reference app covering the core ActingWeb
+  protocol (Web/SPA + OAuth2, not MCP — see ``examples/mcp_quickstart.py``
+  for that), version-locked to the ActingWeb release you have checked out, tested by
   this repository's own CI. `actingwebdemo
   <https://github.com/actingweb/actingwebdemo>`_ is the deployment pipeline
   for ``demo.actingweb.io`` (AWS credentials, OAuth secret, Serverless

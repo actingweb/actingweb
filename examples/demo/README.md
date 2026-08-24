@@ -1,11 +1,11 @@
 # ActingWeb demo application
 
 A complete Flask application built on this library's modern fluent interface
-(`ActingWebApp`) and decorator-based hooks. It demonstrates:
+(`ActingWebApp`) and decorator-based hooks. It is a pure ActingWeb protocol
+demo — not an MCP integration example; see `examples/mcp_quickstart.py` for
+that. It demonstrates:
 
 - OAuth2 login (Google or GitHub) with one actor per user
-- MCP (Model Context Protocol) support, so an AI assistant can be configured
-  as a trusted client of a user's actor
 - The full hook system: protocol hooks (subscription, trust, lifecycle) in
   `shared_hooks/protocol/`, and app-specific hooks (methods, actions,
   callbacks, property access control, and a web UI) in `shared_hooks/app/`

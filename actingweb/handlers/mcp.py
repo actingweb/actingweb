@@ -513,7 +513,12 @@ class MCPHandler(BaseHandler):
     def __init__(
         self,
         webobj: aw_web_request.AWWebObj = aw_web_request.AWWebObj(),
-        config: config_class.Config = config_class.Config(),
+        # mcp=True: production call sites always pass their real config
+        # (built via ActingWebApp, which defaults MCP on unless
+        # .with_mcp(enable=False) was called); this bare default only
+        # backs ad hoc/test construction of MCPHandler(), and every such
+        # caller is specifically exercising MCP behavior.
+        config: config_class.Config = config_class.Config(mcp=True),
         hooks: HookRegistry | None = None,
     ) -> None:
         super().__init__(webobj, config, hooks)
@@ -557,6 +562,18 @@ class MCPHandler(BaseHandler):
                 f"Cleaned up {len(expired_tokens)} expired tokens and {len(expired_actors)} expired actors from MCP cache"
             )
 
+    def _mcp_disabled_response(self) -> dict[str, Any]:
+        """404 for every /mcp request when the app hasn't called .with_mcp().
+
+        The Flask/FastAPI integrations register the /mcp route
+        unconditionally (so config.mcp can be toggled without restarting
+        route setup), so this handler is the actual gate.
+        """
+        self.response.set_status(404, "Not Found")
+        return self.error_response(
+            404, "MCP support is not enabled for this application"
+        )
+
     def get(self) -> dict[str, Any]:
         """
         Handle GET requests to /mcp endpoint.
@@ -564,6 +581,8 @@ class MCPHandler(BaseHandler):
         For initial discovery, this returns basic information about the MCP server.
         Authentication will be handled during the MCP protocol negotiation.
         """
+        if not self.config.mcp:
+            return self._mcp_disabled_response()
         try:
             # For initial discovery, don't require authentication
             # Return basic server information that MCP clients can use
@@ -598,6 +617,8 @@ class MCPHandler(BaseHandler):
         Handles MCP JSON-RPC protocol. The initialize method doesn't require authentication,
         but all other methods do.
         """
+        if not self.config.mcp:
+            return self._mcp_disabled_response()
         try:
             method = data.get("method")
             params = data.get("params", {})

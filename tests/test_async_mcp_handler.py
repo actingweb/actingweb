@@ -69,6 +69,7 @@ class TestAsyncMCPHandler:
         cfg.proto = "https://"
         cfg.aw_type = "urn:actingweb:test:async_mcp"
         cfg.devtest = True
+        cfg.mcp = True
         return cfg
 
     @pytest.fixture

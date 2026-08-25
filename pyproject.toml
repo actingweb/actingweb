@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "actingweb"
-version = "3.14.0"
+version = "3.14.1"
 description = "Python framework for AI-ready, per-user micro-services — per-actor MCP servers, OAuth2, and peer-to-peer data sharing over the ActingWeb REST protocol."
 authors = ["Greger Wedel <support@actingweb.io>"]
 maintainers = ["Greger Wedel <support@actingweb.io>"]
@@ -79,6 +79,7 @@ ruff = "^0.15.2"
 pyright = "^1.1.406"
 pre-commit = "^4.2.0"
 pytest-asyncio = "^1.3.0"
+python-dotenv = "^1.0"
 
 [tool.poetry.group.docs.dependencies]
 sphinx = "^8.2.3"

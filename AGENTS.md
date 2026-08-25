@@ -27,10 +27,14 @@ pip install 'actingweb[fastapi]'   # or [flask], or [all] for everything incl. M
 - MCP quickstart: https://actingweb.readthedocs.io/en/latest/docs/guides/mcp-quickstart.html
 - Peer-to-peer quickstart: https://actingweb.readthedocs.io/en/latest/docs/guides/p2p-quickstart.html
 - Full documentation: https://actingweb.readthedocs.io/en/latest/
-- Reference application: https://github.com/actingweb/actingwebdemo — a
-  fuller worked example (MCP + Web/SPA + OAuth2). It pins a floating lower
-  bound on `actingweb`, not an exact version, so treat it as illustrative
-  rather than a guarantee of matching the current API.
+- Reference application: `examples/demo/` in this repository — a fuller
+  worked example covering the core ActingWeb protocol (Web/SPA + OAuth2, not
+  MCP — see `examples/mcp_quickstart.py` for that), version-locked to the
+  release you have checked out and exercised by this repository's own
+  tests. The
+  `actingwebdemo` repository is the deployment pipeline for
+  `demo.actingweb.io` (AWS credentials, OAuth secret, Serverless config);
+  the application code itself lives here, not there.
 - Agent Skill (task recipes for AI coding agents building on ActingWeb):
   `git clone` this repository and point your agent at
   `skills/actingweb-app/`, or `npx skills add actingweb/actingweb`.

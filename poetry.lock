@@ -1932,6 +1932,21 @@ docs = ["furo (>=2025.12.19)", "sphinx (>=9.1)", "sphinx-autodoc-typehints (>=3.
 testing = ["covdefaults (>=2.3)", "coverage (>=7.5.4)", "pytest (>=8.3.5)", "pytest-mock (>=3.14)", "setuptools (>=75.1)"]
 
 [[package]]
+name = "python-dotenv"
+version = "1.2.3"
+description = "Read key-value pairs from a .env file and set them as environment variables"
+optional = false
+python-versions = ">=3.10"
+groups = ["dev"]
+files = [
+    {file = "python_dotenv-1.2.3-py3-none-any.whl", hash = "sha256:904552145e8bfed22162c09dab1c2b9b54fefa7b23ba780f4f26ca0316b0f0d9"},
+    {file = "python_dotenv-1.2.3.tar.gz", hash = "sha256:a20a594dabeaa385725aa239d5244871c143ecb356add8a20fcf23773a6c3a35"},
+]
+
+[package.extras]
+cli = ["click (>=5.0)"]
+
+[[package]]
 name = "pyyaml"
 version = "6.0.3"
 description = "YAML parser and emitter for Python"
@@ -2622,4 +2637,4 @@ postgresql = ["alembic", "psycopg", "sqlalchemy"]
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.11"
-content-hash = "7d7495bd3af80c86f7ef46cef62c10ce168a7044cc7a52b60f7daa75dd44ecf0"
+content-hash = "3fb4a2fd68f15f16cac9b4046e8a9e4f3ac7ddc1047c9356f98af04382efb6a8"

@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="">
+<head>
+    <script>
+        (function(){var t=localStorage.getItem('actingweb-theme');if(t&&t!=='system')document.documentElement.setAttribute('data-theme',t);else document.documentElement.removeAttribute('data-theme');})();
+    </script>
+    <title>ActingWeb Demo - Actor Created</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="icon" href="/static/favicon.ico" type="image/x-icon">
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="page-container">
+        <div class="page-card animate-slide-up" style="max-width: 560px;">
+            <div class="page-header">
+                <div class="page-icon page-icon-success">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+                        <polyline points="22 4 12 14.01 9 11.01"/>
+                    </svg>
+                </div>
+                <h1>Actor Created Successfully</h1>
+                <p class="text-muted">Your ActingWeb actor is ready to use</p>
+            </div>
+
+            <div class="card mb-md">
+                <div class="card-body">
+                    <div class="mb-md">
+                        <label class="text-sm font-medium">Actor ID</label>
+                        <div class="copy-field mt-xs">
+                            <code>{{ id }}</code>
+                        </div>
+                    </div>
+
+                    <div class="mb-md">
+                        <label class="text-sm font-medium">Owner</label>
+                        <div class="copy-field mt-xs">
+                            <code>{{ creator }}</code>
+                        </div>
+                    </div>
+
+                    <div>
+                        <label class="text-sm font-medium">Passphrase</label>
+                        <div class="copy-field mt-xs">
+                            <code>{{ passphrase }}</code>
+                        </div>
+                        <p class="text-xs text-muted mt-xs">Use this passphrase for API authentication</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="alert alert-warning mb-md">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display: inline-block; vertical-align: middle; margin-right: 0.5rem;">
+                    <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+                    <line x1="12" y1="9" x2="12" y2="13"/>
+                    <line x1="12" y1="17" x2="12.01" y2="17"/>
+                </svg>
+                <strong>Note:</strong> This demo runs behind AWS API Gateway. Basic auth prompts may not work in browsers. Use a client like Postman for API access.
+            </div>
+
+            <div class="flex gap-sm">
+                <a href="{{ id }}/www/init" class="btn btn-primary flex-1">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M12 20V10"/>
+                        <path d="M18 20V4"/>
+                        <path d="M6 20v-4"/>
+                    </svg>
+                    Initialize
+                </a>
+                <a href="{{ id }}/www/properties" class="btn btn-secondary flex-1">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/>
+                        <polyline points="22,6 12,13 2,6"/>
+                    </svg>
+                    Properties
+                </a>
+            </div>
+
+            <div class="mt-lg text-center text-xs text-muted">
+                Powered by <a href="https://github.com/actingweb/actingweb">ActingWeb</a>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

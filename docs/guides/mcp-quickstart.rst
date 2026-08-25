@@ -239,3 +239,10 @@ Recommendations
 
 - For production, enable OAuth2 with Google/GitHub and ensure `/mcp` returns 401 with a proper `WWW-Authenticate` header for unauthenticated clients.
 - Use :doc:`access-control-simple` (or the full :doc:`access-control` guide) to filter tools/prompts per trust relationship.
+
+Where to Go Next
+-----------------
+
+- :doc:`mcp-applications` -- the broader guide this quickstart's tool safety
+  annotations link into.
+- :doc:`access-control` -- the full permission and trust-type system.

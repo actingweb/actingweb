@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="">
+<head>
+    <script>
+        (function(){var t=localStorage.getItem('actingweb-theme');if(t&&t!=='system')document.documentElement.setAttribute('data-theme',t);else document.documentElement.removeAttribute('data-theme');})();
+    </script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ActingWeb Demo - Properties</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="icon" href="/static/favicon.ico" type="image/x-icon">
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="page-container">
+        <div class="page-card animate-fade-in" style="max-width: 720px;">
+            <div class="page-header">
+                <div class="page-icon page-icon-accent">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                        <polyline points="14 2 14 8 20 8"/>
+                        <line x1="16" y1="13" x2="8" y2="13"/>
+                        <line x1="16" y1="17" x2="8" y2="17"/>
+                    </svg>
+                </div>
+                <h1>Actor Properties</h1>
+                <p class="text-muted">View and manage your actor's properties</p>
+            </div>
+
+            {% if properties and properties|length > 0 %}
+            <div class="card mb-lg">
+                <div class="card-body p-sm" style="overflow-x: auto;">
+                    <table style="min-width: 100%; table-layout: auto;">
+                        <colgroup>
+                            <col style="width: 25%; min-width: 120px;">
+                            <col style="width: 60%; min-width: 200px;">
+                            <col style="width: 15%; min-width: 100px;">
+                        </colgroup>
+                        <thead>
+                            <tr>
+                                <th>Property</th>
+                                <th>Value</th>
+                                <th class="text-right">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for k, v in properties.items() %}
+                            <tr>
+                                <td class="font-medium">{{ k }}</td>
+                                <td class="font-mono text-sm" style="word-break: break-all; max-width: 600px;">{{ v }}</td>
+                                <td class="text-right" style="white-space: nowrap;">
+                                    <button class="btn btn-danger-outline btn-sm delete-property-btn" data-property-name="{{ k }}" data-actor-url="{{ url }}">
+                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                            <polyline points="3 6 5 6 21 6"/>
+                                            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+                                        </svg>
+                                        Delete
+                                    </button>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            {% else %}
+            <div class="alert alert-info mb-lg">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display: inline-block; vertical-align: middle; margin-right: 0.5rem;">
+                    <circle cx="12" cy="12" r="10"/>
+                    <path d="M12 16v-4"/>
+                    <path d="M12 8h.01"/>
+                </svg>
+                No properties defined yet. Add your first property below.
+            </div>
+            {% endif %}
+
+            <div class="flex gap-sm">
+                <a href="{{ url }}/init" class="btn btn-primary flex-1">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="12" y1="5" x2="12" y2="19"/>
+                        <line x1="5" y1="12" x2="19" y2="12"/>
+                    </svg>
+                    Add Property
+                </a>
+                <a href="{{ url }}" class="btn btn-secondary flex-1">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M19 12H5"/>
+                        <polyline points="12 19 5 12 12 5"/>
+                    </svg>
+                    Back to Dashboard
+                </a>
+            </div>
+
+            <div class="mt-lg text-center text-xs text-muted">
+                Powered by <a href="https://github.com/actingweb/actingweb">ActingWeb</a>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Use event delegation to handle delete button clicks
+        document.addEventListener('DOMContentLoaded', function() {
+            document.addEventListener('click', function(event) {
+                const button = event.target.closest('.delete-property-btn');
+                if (!button) return;
+
+                // Prevent double-clicks
+                if (button.disabled) return;
+
+                const propertyName = button.dataset.propertyName;
+                const actorUrl = button.dataset.actorUrl;
+
+                if (!confirm(`Delete property "${propertyName}"?`)) {
+                    return;
+                }
+
+                // Disable button to prevent double-clicks
+                button.disabled = true;
+                const originalText = button.innerHTML;
+                button.innerHTML = '<span style="opacity: 0.6;">Deleting...</span>';
+
+                // Remove /www from the URL to get the actor base URL
+                // actorUrl is like "/actor_id/www" but we need "/actor_id/properties/name"
+                // Add defensive check to ensure URL ends with /www
+                let actorBaseUrl;
+                if (actorUrl.endsWith('/www')) {
+                    actorBaseUrl = actorUrl.slice(0, -4);  // Remove last 4 characters (/www)
+                } else {
+                    // Fallback: assume actorUrl is already the base URL
+                    actorBaseUrl = actorUrl;
+                }
+
+                // Encode property name for URL safety
+                const encodedPropertyName = encodeURIComponent(propertyName);
+
+                // Make DELETE request
+                // The oauth_token cookie will be sent automatically with credentials: 'same-origin'
+                fetch(`${actorBaseUrl}/properties/${encodedPropertyName}`, {
+                    method: 'DELETE',
+                    credentials: 'same-origin'
+                })
+                .then(response => {
+                    if (response.ok) {
+                        // Reload the page to show updated properties list
+                        window.location.reload();
+                    } else {
+                        // Try to read response body for detailed error message
+                        return response.text().then(text => {
+                            let errorMessage = response.statusText;
+                            try {
+                                const json = JSON.parse(text);
+                                if (json.error) errorMessage = json.error;
+                                if (json.message) errorMessage = json.message;
+                            } catch (e) {
+                                // If not JSON, use text if available
+                                if (text && text.length > 0 && text.length < 200) {
+                                    errorMessage = text;
+                                }
+                            }
+                            throw new Error(errorMessage);
+                        });
+                    }
+                })
+                .catch(error => {
+                    alert(`Error deleting property: ${error.message}`);
+                    // Re-enable button and restore original text
+                    button.disabled = false;
+                    button.innerHTML = originalText;
+                });
+            });
+        });
+    </script>
+</body>
+</html>

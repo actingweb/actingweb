@@ -1,0 +1,702 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="">
+
+<head>
+    <script>
+        (function(){var t=localStorage.getItem('actingweb-theme');if(t&&t!=='system')document.documentElement.setAttribute('data-theme',t);else document.documentElement.removeAttribute('data-theme');})();
+    </script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Connect Application | ActingWeb Demo</title>
+
+    <!-- Modern Font Stack -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+
+    <link rel="icon" href="/static/favicon.ico" type="image/x-icon">
+    <link rel="stylesheet" href="/static/style.css">
+
+    <style>
+        /* OAuth-specific styles */
+        .auth-shell {
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 3rem 1.5rem;
+            background: radial-gradient(circle at top, rgba(37, 99, 235, 0.06), transparent 55%), var(--color-bg-secondary);
+        }
+
+        .auth-card {
+            width: 100%;
+            max-width: 1040px;
+            display: grid;
+            grid-template-columns: minmax(340px, 400px) minmax(0, 1fr);
+            background: var(--color-bg-primary);
+            border-radius: var(--radius-xl);
+            border: 1px solid var(--color-border);
+            box-shadow: var(--shadow-lg);
+            overflow: hidden;
+        }
+
+        .auth-form {
+            padding: 3rem 2rem;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .auth-form-inner {
+            max-width: 340px;
+            margin: 0 auto;
+            width: 100%;
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+        }
+
+        .auth-header {
+            text-align: center;
+        }
+
+        .auth-badge {
+            width: 56px;
+            height: 56px;
+            border-radius: var(--radius-lg);
+            margin: 0 auto 1rem;
+            background: linear-gradient(135deg, var(--color-accent), #8b5cf6);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            box-shadow: var(--shadow-md);
+        }
+
+        .auth-header h1 {
+            margin-bottom: 0.5rem;
+            font-size: 1.5rem;
+        }
+
+        .auth-subtitle {
+            color: var(--color-text-muted);
+            font-size: 0.875rem;
+        }
+
+        .client-card {
+            background: var(--color-accent-light);
+            border: 1px solid var(--color-accent);
+            border-left: 4px solid var(--color-accent);
+            border-radius: var(--radius-lg);
+            padding: 1.25rem;
+        }
+
+        .client-card .client-name {
+            font-size: 0.9375rem;
+            font-weight: 600;
+            color: var(--color-text-primary);
+            margin-bottom: 0.25rem;
+        }
+
+        .client-card p {
+            margin: 0;
+            font-size: 0.8125rem;
+            color: var(--color-text-secondary);
+        }
+
+        .info-card {
+            background: var(--color-bg-tertiary);
+            border: 1px solid var(--color-border);
+            border-radius: var(--radius-lg);
+            padding: 1rem 1.25rem;
+            font-size: 0.875rem;
+            color: var(--color-text-secondary);
+        }
+
+        .error-card {
+            background: var(--color-danger-light);
+            border: 1px solid var(--color-danger-border);
+            border-left: 4px solid var(--color-danger);
+            border-radius: var(--radius-lg);
+            padding: 1rem;
+            color: var(--color-danger);
+            font-size: 0.875rem;
+        }
+
+        .error-header {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .error-message {
+            font-family: var(--font-mono);
+            background: rgba(220, 38, 38, 0.1);
+            padding: 0.5rem;
+            border-radius: var(--radius-sm);
+            word-break: break-word;
+            font-size: 0.8125rem;
+        }
+
+        .form-label {
+            display: block;
+            font-weight: 500;
+            color: var(--color-text-secondary);
+            margin-bottom: 0.25rem;
+            font-size: 0.875rem;
+        }
+
+        .form-input {
+            width: 100%;
+            padding: 0.625rem 0.875rem;
+            border: 1px solid var(--color-border);
+            border-radius: var(--radius-md);
+            font-size: 0.875rem;
+            transition: border-color 0.2s ease, box-shadow 0.2s ease;
+            font-family: inherit;
+            background: var(--color-bg-primary);
+            color: var(--color-text-primary);
+        }
+
+        .form-input:focus {
+            outline: none;
+            border-color: var(--color-accent);
+            box-shadow: 0 0 0 3px var(--color-accent-light);
+        }
+
+        .trust-descriptions {
+            margin-top: 0.5rem;
+            font-size: 0.75rem;
+            color: var(--color-text-muted);
+            line-height: 1.4;
+        }
+
+        .trust-description {
+            display: none;
+        }
+
+        .trust-description.is-active {
+            display: block;
+        }
+
+        .auth-actions {
+            display: flex;
+            gap: 0.75rem;
+            margin-top: 0.5rem;
+        }
+
+        .auth-button {
+            flex: 1;
+            border-radius: var(--radius-md);
+            padding: 0.875rem 1.5rem;
+            font-size: 0.9375rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+            text-decoration: none;
+            border: none;
+            color: white;
+            background: linear-gradient(135deg, var(--color-accent), #2563eb);
+            box-shadow: var(--shadow-sm);
+        }
+
+        .auth-button:hover {
+            background: var(--color-accent-hover);
+            transform: translateY(-1px);
+            box-shadow: var(--shadow-md);
+        }
+
+        .auth-button:active {
+            transform: translateY(0);
+        }
+
+        .auth-button.secondary {
+            background: var(--color-bg-tertiary);
+            color: var(--color-text-secondary);
+            border: 1px solid var(--color-border);
+        }
+
+        .auth-button.secondary:hover {
+            background: var(--color-bg-hover);
+            transform: translateY(-1px);
+        }
+
+        .privacy-note {
+            margin-top: 1rem;
+            padding-top: 1rem;
+            border-top: 1px solid var(--color-border);
+            font-size: 0.75rem;
+            color: var(--color-text-muted);
+            text-align: center;
+        }
+
+        .privacy-header {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+            margin-bottom: 0.25rem;
+        }
+
+        .privacy-header strong {
+            color: var(--color-text-secondary);
+        }
+
+        /* Right Column */
+        .auth-details {
+            background: linear-gradient(135deg, var(--color-accent-light), var(--color-bg-primary) 65%);
+            padding: 3rem 2rem;
+            display: flex;
+            align-items: stretch;
+            justify-content: center;
+        }
+
+        .auth-details-inner {
+            width: 100%;
+            max-width: 480px;
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+        }
+
+        .detail-header h2 {
+            font-size: 1.125rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .detail-header p {
+            font-size: 0.9375rem;
+            color: var(--color-text-secondary);
+            margin: 0;
+        }
+
+        .detail-card {
+            background: var(--color-bg-primary);
+            border: 1px solid var(--color-border);
+            border-radius: var(--radius-lg);
+            padding: 1.5rem;
+            box-shadow: var(--shadow-sm);
+        }
+
+        .detail-card h3 {
+            font-size: 1rem;
+            margin-bottom: 1rem;
+        }
+
+        .feature-list {
+            display: grid;
+            gap: 1rem;
+        }
+
+        .feature-item {
+            display: flex;
+            gap: 1rem;
+            align-items: flex-start;
+        }
+
+        .feature-icon {
+            width: 40px;
+            height: 40px;
+            border-radius: var(--radius-md);
+            background: var(--color-accent-light);
+            color: var(--color-accent);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.125rem;
+            flex-shrink: 0;
+        }
+
+        .feature-title {
+            font-size: 0.9375rem;
+            font-weight: 600;
+            color: var(--color-text-primary);
+            margin-bottom: 0.25rem;
+        }
+
+        .feature-item p {
+            font-size: 0.8125rem;
+            color: var(--color-text-muted);
+            margin: 0;
+        }
+
+        .note-card {
+            background: var(--color-bg-tertiary);
+            border: 1px solid var(--color-border);
+            border-radius: var(--radius-lg);
+            padding: 1.5rem;
+            font-size: 0.875rem;
+            color: var(--color-text-secondary);
+        }
+
+        .note-card.accent {
+            background: linear-gradient(135deg, var(--color-accent), #2563eb);
+            border: none;
+            color: white;
+            box-shadow: var(--shadow-md);
+        }
+
+        .note-card.accent h3 {
+            color: white;
+            margin-bottom: 0.5rem;
+            font-size: 1rem;
+        }
+
+        .note-card.accent p {
+            color: rgba(255, 255, 255, 0.9);
+            margin: 0;
+        }
+
+        .footnote {
+            text-align: center;
+            font-size: 0.8125rem;
+            color: var(--color-text-muted);
+            border-top: 1px solid var(--color-border);
+            padding-top: 1rem;
+        }
+
+        .footnote a {
+            color: var(--color-accent);
+            text-decoration: none;
+            font-weight: 500;
+        }
+
+        .footnote a:hover {
+            text-decoration: underline;
+        }
+
+        /* Responsive */
+        @media (max-width: 960px) {
+            .auth-card {
+                grid-template-columns: 1fr;
+            }
+
+            .auth-form {
+                padding: 2rem 1.5rem;
+            }
+
+            .auth-details {
+                padding: 2rem 1.5rem;
+            }
+
+            .auth-actions {
+                flex-direction: column;
+            }
+        }
+
+        @media (max-width: 600px) {
+            .auth-shell {
+                padding: 1.5rem 1rem;
+            }
+
+            .auth-form {
+                padding: 1.5rem 1rem;
+            }
+
+            .auth-details {
+                padding: 1.5rem 1rem;
+            }
+
+            .detail-card, .note-card {
+                padding: 1rem;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="auth-shell">
+        <div class="auth-card">
+            <div class="auth-form">
+                <div class="auth-form-inner">
+                    <div class="auth-header">
+                        <div class="auth-badge">
+                            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z" />
+                            </svg>
+                        </div>
+                        <h1>Connect {{ client_name }}</h1>
+                        <p class="auth-subtitle">Authorize access to your ActingWeb actor</p>
+                    </div>
+
+                    {% if error %}
+                    <div class="error-card">
+                        <div class="error-header">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                                <circle cx="12" cy="12" r="10" />
+                                <line x1="15" y1="9" x2="9" y2="15" />
+                                <line x1="9" y1="9" x2="15" y2="15" />
+                            </svg>
+                            <strong>Error</strong>
+                        </div>
+                        <div class="error-message">{{ error }}</div>
+                    </div>
+                    {% endif %}
+
+                    {% if oauth_enabled %}
+                    <div class="info-card">
+                        Sign in securely with your account to authorize {{ client_name }}. Your email will be automatically verified.
+                    </div>
+
+                    <div class="error-card" style="background: #fef3c7; border-color: #fbbf24; border-left-color: #f59e0b; color: #92400e;" role="alert">
+                        <div class="error-header" style="color: #92400e;">
+                            <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                                <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+                                <line x1="12" y1="9" x2="12" y2="13"/>
+                                <line x1="12" y1="17" x2="12.01" y2="17"/>
+                            </svg>
+                            <strong>Warning</strong>
+                        </div>
+                        <div style="margin-top: 0.5rem;">Only use for exploration and testing! All data will be wiped on a daily basis and without notice.</div>
+                    </div>
+
+                    {% if oauth2_trust_control_enabled and trust_types %}
+                    <div class="form-group">
+                        <label for="trust_type_select" class="form-label">Select Access Level</label>
+                        <select id="trust_type_select" class="form-input" name="trust_type">
+                            {% for tt in trust_types %}
+                            <option value="{{ tt.name }}" {% if tt.name==default_trust_type %}selected{% endif %}>
+                                {{ tt.display_name }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                        <div class="trust-descriptions">
+                            {% for tt in trust_types %}
+                            <div data-trust-desc="{{ tt.name }}" class="trust-description{% if tt.name == default_trust_type %} is-active{% endif %}">
+                                {{ tt.description }}
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                    {% endif %}
+
+                    <div class="auth-actions">
+                        {% for provider in oauth_providers %}
+                        <form action="/oauth/authorize" method="POST" style="display: contents;">
+                            <input type="hidden" name="client_id" value="{{ client_id }}" />
+                            <input type="hidden" name="redirect_uri" value="{{ redirect_uri }}" />
+                            <input type="hidden" name="state" value="{{ state }}" />
+                            <input type="hidden" name="response_type" value="{{ response_type }}" />
+                            <input type="hidden" name="scope" value="{{ scope }}" />
+                            <input type="hidden" name="code_challenge" value="{{ code_challenge }}" />
+                            <input type="hidden" name="code_challenge_method" value="{{ code_challenge_method }}" />
+                            <input type="hidden" name="provider" value="{{ provider.name }}" />
+                            <input type="hidden" name="trust_type" class="trust-type-input" value="{{ default_trust_type }}" />
+                            <button type="submit" class="auth-button">
+                            {% if provider.name == 'google' %}
+                            <svg width="20" height="20" viewBox="0 0 24 24">
+                                <path fill="#fff" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                                <path fill="#fff" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                                <path fill="#fff" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
+                                <path fill="#fff" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+                            </svg>
+                            {% elif provider.name == 'github' %}
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/>
+                            </svg>
+                            {% endif %}
+                            <span>Continue with {{ provider.display_name }}</span>
+                            </button>
+                        </form>
+                        {% endfor %}
+                        <a href="{{ redirect_uri }}?error=access_denied&state={{ state }}" class="auth-button secondary">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <line x1="18" y1="6" x2="6" y2="18" />
+                                <line x1="6" y1="6" x2="18" y2="18" />
+                            </svg>
+                            Cancel
+                        </a>
+                    </div>
+
+                    {% else %}
+                    <div class="info-card">
+                        Authorize using your email address to establish a secure link between the application and your
+                        ActingWeb actor instance.
+                    </div>
+
+                    <div class="error-card" style="background: #fef3c7; border-color: #fbbf24; border-left-color: #f59e0b; color: #92400e;" role="alert">
+                        <div class="error-header" style="color: #92400e;">
+                            <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                                <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+                                <line x1="12" y1="9" x2="12" y2="13"/>
+                                <line x1="12" y1="17" x2="12.01" y2="17"/>
+                            </svg>
+                            <strong>Warning</strong>
+                        </div>
+                        <div style="margin-top: 0.5rem;">Only use for exploration and testing! All data will be wiped on a daily basis and without notice.</div>
+                    </div>
+
+                    <form action="{{ form_action }}" method="{{ form_method }}">
+                        <input type="hidden" name="client_id" value="{{ client_id }}" />
+                        <input type="hidden" name="redirect_uri" value="{{ redirect_uri }}" />
+                        <input type="hidden" name="response_type" value="{{ response_type }}" />
+                        <input type="hidden" name="state" value="{{ state }}" />
+                        <input type="hidden" name="scope" value="{{ scope }}" />
+                        <input type="hidden" name="code_challenge" value="{{ code_challenge }}" />
+                        <input type="hidden" name="code_challenge_method" value="{{ code_challenge_method }}" />
+
+                        <div class="form-group">
+                            <label for="email" class="form-label">Your Email Address</label>
+                            <input type="email" name="email" id="email" class="form-input" maxlength="100" required
+                                placeholder="you@example.com" />
+                        </div>
+
+                        {% if oauth2_trust_control_enabled and trust_types %}
+                        <div class="form-group">
+                            <label for="trust_type" class="form-label">Select Access Level</label>
+                            <select name="trust_type" id="trust_type" class="form-input">
+                                {% for tt in trust_types %}
+                                <option value="{{ tt.name }}" {% if tt.name==default_trust_type %}selected{% endif %}>
+                                    {{ tt.display_name }}
+                                </option>
+                                {% endfor %}
+                            </select>
+                            <div class="trust-descriptions">
+                                {% for tt in trust_types %}
+                                <div data-trust-desc="{{ tt.name }}" class="trust-description{% if tt.name == default_trust_type %} is-active{% endif %}">
+                                    {{ tt.description }}
+                                </div>
+                                {% endfor %}
+                            </div>
+                        </div>
+                        {% else %}
+                        <input type="hidden" name="trust_type" value="{{ default_trust_type or 'friend' }}" />
+                        {% endif %}
+
+                        <div class="auth-actions">
+                            <button type="submit" class="auth-button">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+                                    <circle cx="12" cy="16" r="1" />
+                                    <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+                                </svg>
+                                Authorize Access
+                            </button>
+                            <a href="{{ redirect_uri }}?error=access_denied&state={{ state }}" class="auth-button secondary">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <line x1="18" y1="6" x2="6" y2="18" />
+                                    <line x1="6" y1="6" x2="18" y2="18" />
+                                </svg>
+                                Cancel
+                            </a>
+                        </div>
+                    </form>
+                    {% endif %}
+
+                    <script>
+                        (function () {
+                            function setupTrustTypeDescriptions(selectId) {
+                                var sel = document.getElementById(selectId);
+                                if (!sel) return;
+
+                                function updateDesc() {
+                                    var val = sel.value;
+                                    var nodes = document.querySelectorAll('[data-trust-desc]');
+                                    for (var i = 0; i < nodes.length; i++) {
+                                        var isActive = nodes[i].getAttribute('data-trust-desc') === val;
+                                        nodes[i].classList.toggle('is-active', isActive);
+                                    }
+                                }
+
+                                sel.addEventListener('change', updateDesc);
+                                updateDesc();
+                            }
+
+                            setupTrustTypeDescriptions('trust_type_select');
+                            setupTrustTypeDescriptions('trust_type');
+
+                            var trustTypeSelect = document.getElementById('trust_type_select');
+                            var trustTypeInputs = document.querySelectorAll('.trust-type-input');
+
+                            if (trustTypeSelect && trustTypeInputs.length > 0) {
+                                trustTypeSelect.addEventListener('change', function() {
+                                    var selectedValue = this.value;
+                                    for (var i = 0; i < trustTypeInputs.length; i++) {
+                                        trustTypeInputs[i].value = selectedValue;
+                                    }
+                                });
+                            }
+                        })();
+                    </script>
+
+                    <div class="privacy-note">
+                        <div class="privacy-header">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+                            </svg>
+                            <strong>Secure & Private</strong>
+                        </div>
+                        OAuth2 authentication &bull; No passwords stored &bull; Cancel anytime
+                    </div>
+                </div>
+            </div>
+
+            <div class="auth-details">
+                <div class="auth-details-inner">
+                    <div class="detail-header">
+                        <h2>{{ client_name }}</h2>
+                        <p>Connect <strong>{{ client_name }}</strong> to your ActingWeb actor for secure data sharing and API access.</p>
+                    </div>
+
+                    <div class="detail-card">
+                        <h3>What you get</h3>
+                        <div class="feature-list">
+                            <div class="feature-item">
+                                <div class="feature-icon">
+                                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+                                        <circle cx="12" cy="7" r="4"/>
+                                    </svg>
+                                </div>
+                                <div>
+                                    <div class="feature-title">Personal Actor Instance</div>
+                                    <p>Your own unique actor with a dedicated URL and identity.</p>
+                                </div>
+                            </div>
+                            <div class="feature-item">
+                                <div class="feature-icon">
+                                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+                                    </svg>
+                                </div>
+                                <div>
+                                    <div class="feature-title">Secure API Access</div>
+                                    <p>Access your actor's properties, trust relationships, and subscriptions via REST API.</p>
+                                </div>
+                            </div>
+                            <div class="feature-item">
+                                <div class="feature-icon">
+                                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+                                        <circle cx="9" cy="7" r="4"/>
+                                        <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
+                                        <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+                                    </svg>
+                                </div>
+                                <div>
+                                    <div class="feature-title">Trust Relationships</div>
+                                    <p>Establish secure connections with other actors and services.</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="note-card accent">
+                        <h3>After you authorize</h3>
+                        <p>You'll be redirected back to the application with an authorization code to complete the connection.</p>
+                    </div>
+
+                    <div class="footnote">
+                        Built on the <a href="https://github.com/actingweb/actingweb" target="_blank" rel="noopener noreferrer">ActingWeb framework</a> &bull; You stay in control of your data
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+
+</html>

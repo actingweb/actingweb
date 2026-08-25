@@ -46,6 +46,8 @@ class AsyncMCPHandler(MCPHandler):
 
         Uses async hook execution for optimal performance with FastAPI.
         """
+        if not self.config.mcp:
+            return self._mcp_disabled_response()
         try:
             method = data.get("method")
             params = data.get("params", {})

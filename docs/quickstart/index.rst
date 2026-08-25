@@ -40,3 +40,7 @@ After completing the quickstart:
 - **Explore Features**: See :doc:`../guides/index` for deep dives into specific features like OAuth2, trust relationships, and subscriptions
 - **Developer API**: Learn the high-level interfaces in :doc:`../reference/interface-api`
 - **MCP Integration**: Add AI client access with :doc:`../guides/mcp-quickstart`
+- **Complete Example**: See ``examples/demo/`` in the ActingWeb repository for
+  a full reference app covering the core ActingWeb protocol (Web/SPA +
+  OAuth2, not MCP — see :doc:`../guides/mcp-quickstart` for that),
+  version-locked to the release you have checked out

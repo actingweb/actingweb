@@ -18,6 +18,11 @@ def make_mcp_config(
     cfg.proto = "https://"
     cfg.aw_type = "urn:actingweb:test:mcp"
     cfg.devtest = True
+    # Config() defaults mcp=False (ActingWebApp defaults it True via
+    # with_mcp()'s own default, but these tests build a bare Config,
+    # bypassing that). MCPHandler.get()/post() 404 when config.mcp is
+    # False, so every test using this helper needs it explicitly True.
+    cfg.mcp = True
     if server_name is not None:
         cfg.mcp_server_name = server_name
     cfg.mcp_instructions = instructions

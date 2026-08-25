@@ -3,7 +3,7 @@ Getting Started
 
 This is a longer, step‑by‑step tutorial that builds on the short Quickstart. If you’re new to ActingWeb, do the Quickstart first (minimal Flask/FastAPI app, create an actor), then come back here for deeper patterns, hooks, and integration details.
 
-The easiest way to get started is to use the modern ActingWeb interface that provides a clean, fluent API for building ActingWeb applications. For a complete example, see the actingwebdemo mini-application at `http://acting-web-demo.readthedocs.io/ <http://acting-web-demo.readthedocs.io/>`_.
+The easiest way to get started is to use the modern ActingWeb interface that provides a clean, fluent API for building ActingWeb applications. For a complete example, see ``examples/demo/`` in this repository — a full reference app covering the core ActingWeb protocol (Web/SPA + OAuth2, not MCP — see ``examples/mcp_quickstart.py`` for that), version-locked to the release you have checked out.
 
 Quick Start
 -----------
@@ -462,7 +462,7 @@ Next Steps
 ----------
 
 1. See the :doc:`../sdk/developer-api` guide for detailed API documentation
-2. Check out the actingwebdemo application for a complete working example
+2. Check out ``examples/demo/`` in this repository for a complete working example
 3. Read the ActingWeb specification for protocol details
 4. Join the ActingWeb community for support and discussion
 

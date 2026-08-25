@@ -189,6 +189,10 @@ Production Notes
 Where to Go Next
 -----------------
 
+- See a complete application: ``examples/demo/`` in this repository wires up
+  OAuth2 login and the full hook system -- including trust and subscription
+  hooks -- in one worked example, version-locked to the release you have
+  checked out.
 - :doc:`trust-relationships` -- the full trust lifecycle, including
   per-relationship permission overrides
 - :doc:`subscriptions` -- subscription processing configuration, gap

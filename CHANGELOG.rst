@@ -5,6 +5,9 @@ CHANGELOG
 Unreleased
 ----------
 
+v3.14.1: August 25, 2026
+-------------------------
+
 FIXED
 ~~~~~
 
@@ -23,6 +26,18 @@ FIXED
   discarded. The legacy path does not track sequence numbers or clear diffs
   (that only happens via ``.with_subscription_processing()`` or an explicit
   PUT acknowledgment), so this does not affect data integrity.
+- **``.with_mcp(enable=False)`` didn't actually disable the ``/mcp``
+  endpoint.** The Flask and FastAPI integrations register ``/mcp``
+  unconditionally, and neither ``MCPHandler.get()``/``.post()`` nor
+  ``AsyncMCPHandler.post_async()`` checked ``config.mcp`` before serving a
+  full response — an app that disabled MCP still had a live, responding MCP
+  server. All three now return ``404`` when ``config.mcp`` is ``False``.
+  **Behavior change**: found while consolidating ``examples/demo/`` (which
+  disables MCP) — a consumer relying on the endpoint silently responding
+  regardless of ``with_mcp()`` will now see ``404`` unless it explicitly
+  enables MCP. ``MCPHandler()``'s default (test-only) ``Config`` now
+  defaults ``mcp=True``, since every existing caller of the no-arg
+  constructor was specifically testing MCP behavior.
 - **Documentation taught APIs that do not exist or had the wrong contract**:
   ``@app.trust_hook`` (does not exist; the real mechanism is
   ``@app.lifecycle_hook("trust_fully_approved_local"/"trust_fully_approved_remote"/"trust_deleted")``),
@@ -127,6 +142,17 @@ CHANGED
 ADDED
 ~~~~~
 
+- **``examples/demo/``**: the full ActingWeb demo application (OAuth2 login,
+  the complete hook system, a customized web UI — a pure ActingWeb protocol
+  example, not MCP; see ``examples/mcp_quickstart.py`` for that) moved into
+  this repository from the separate ``actingwebdemo`` repository, so the reference
+  application is version-locked to the library and exercised by this
+  repository's own test suite instead of drifting against a floating
+  ``>=`` dependency pin. Deployment (AWS credentials, the OAuth client
+  secret, the ``demo.actingweb.io`` custom domain) stays in
+  ``actingwebdemo``, which remains the deployment pipeline for this code —
+  see ``examples/demo/README.md``. Repo-only: not part of the published
+  wheel.
 - **Agent Skill for building applications on ActingWeb**
   (``skills/actingweb-app/``): task recipes — add a property hook, expose an
   MCP tool, establish trust and subscribe to a peer, configure a custom

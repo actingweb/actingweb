@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="">
+<head>
+    <script>
+        (function(){var t=localStorage.getItem('actingweb-theme');if(t&&t!=='system')document.documentElement.setAttribute('data-theme',t);else document.documentElement.removeAttribute('data-theme');})();
+    </script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ActingWeb Demo - Trust Relationships</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="icon" href="/static/favicon.ico" type="image/x-icon">
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="page-container">
+        <div class="page-card animate-fade-in" style="max-width: 900px;">
+            <div class="page-header">
+                <div class="page-icon page-icon-accent">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+                        <circle cx="9" cy="7" r="4"/>
+                        <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
+                        <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+                    </svg>
+                </div>
+                <h1>Trust Relationships</h1>
+                <p class="text-muted">Manage connections with other actors</p>
+            </div>
+
+            {% if trusts and trusts|length > 0 %}
+            <div class="card mb-lg">
+                <div class="card-body p-sm" style="overflow-x: auto;">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Peer ID</th>
+                                <th>Relationship</th>
+                                <th>Type</th>
+                                <th>Description</th>
+                                <th>Status</th>
+                                <th class="text-right">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for trust in trusts %}
+                            <tr>
+                                <td class="font-mono text-sm">{{ trust.peerid }}</td>
+                                <td>
+                                    <span class="badge badge-accent">{{ trust.relationship }}</span>
+                                </td>
+                                <td class="text-sm">{{ trust.type }}</td>
+                                <td class="text-sm text-muted">{{ trust.desc }}</td>
+                                <td>
+                                    <div class="flex flex-col gap-xs">
+                                        {% if trust.approved %}
+                                        <span class="badge badge-success">Approved</span>
+                                        {% else %}
+                                        <span class="badge badge-warning">Pending</span>
+                                        {% endif %}
+                                        {% if trust.verified %}
+                                        <span class="badge badge-success">Verified</span>
+                                        {% endif %}
+                                    </div>
+                                </td>
+                                <td class="text-right">
+                                    <div class="flex gap-xs justify-end">
+                                        <a href="{{ trust.baseuri }}" class="btn btn-sm btn-ghost" target="_blank" title="Visit Peer">
+                                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+                                                <polyline points="15 3 21 3 21 9"/>
+                                                <line x1="10" y1="14" x2="21" y2="3"/>
+                                            </svg>
+                                        </a>
+                                        {% if not trust.approved %}
+                                        <a href="{{ trust.approveuri }}?_method=PUT&approved=true" class="btn btn-sm btn-success">
+                                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                <polyline points="20 6 9 17 4 12"/>
+                                            </svg>
+                                            Approve
+                                        </a>
+                                        {% endif %}
+                                    </div>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            {% else %}
+            <div class="alert alert-info mb-lg">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display: inline-block; vertical-align: middle; margin-right: 0.5rem;">
+                    <circle cx="12" cy="12" r="10"/>
+                    <path d="M12 16v-4"/>
+                    <path d="M12 8h.01"/>
+                </svg>
+                No trust relationships established yet. Trust relationships are created when other actors connect to you or when you connect to other actors.
+            </div>
+            {% endif %}
+
+            <div class="card mb-lg">
+                <div class="card-body">
+                    <h3 class="mb-md">About Trust Relationships</h3>
+                    <p class="text-sm text-muted mb-md">
+                        Trust relationships allow actors to securely share data and communicate with each other.
+                        Each relationship has a type and approval status.
+                    </p>
+                    <div class="grid grid-cols-2 gap-md">
+                        <div>
+                            <h4 class="text-sm font-semibold mb-xs">Status Indicators</h4>
+                            <ul class="text-sm text-muted" style="margin-left: 1rem; list-style-type: disc;">
+                                <li><span class="badge badge-success">Approved</span> - You've approved this relationship</li>
+                                <li><span class="badge badge-warning">Pending</span> - Awaiting your approval</li>
+                                <li><span class="badge badge-success">Verified</span> - Cryptographically verified</li>
+                            </ul>
+                        </div>
+                        <div>
+                            <h4 class="text-sm font-semibold mb-xs">Relationship Types</h4>
+                            <ul class="text-sm text-muted" style="margin-left: 1rem; list-style-type: disc;">
+                                <li><strong>friend</strong> - Full access to public data</li>
+                                <li><strong>associate</strong> - Limited access</li>
+                                <li><strong>acquaintance</strong> - Basic access only</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <a href="{{ actor_www }}" class="btn btn-secondary w-full">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M19 12H5"/>
+                    <polyline points="12 19 5 12 12 5"/>
+                </svg>
+                Back to Dashboard
+            </a>
+
+            <div class="mt-lg text-center text-xs text-muted">
+                Powered by <a href="https://github.com/actingweb/actingweb">ActingWeb</a>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

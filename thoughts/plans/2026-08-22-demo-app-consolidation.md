@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: active
 ---
 
 # Implementation Plan: Consolidate the demo app into the library repository
@@ -7,7 +7,8 @@ status: proposed
 **Date:** 2026-08-22
 **Research:** thoughts/research/2026-08-22-ai-agent-discoverability.md
 **Related plan:** thoughts/plans/2026-08-22-ai-agent-discoverability.md
-**Branch:** master
+**Branch:** implemented on `consolidate-demo-app`,
+[PR #137](https://github.com/actingweb/actingweb/pull/137)
 
 ## Overview
 
@@ -123,10 +124,39 @@ boundary.
   `__init__.py`, `protocol/` (`subscription_hooks`, `trust_hooks`,
   `lifecycle_hooks`), `app/` (`method_hooks`, `action_hooks`, `callback_hooks`,
   `property_hooks`, `ui_hooks`).
-- `examples/demo/application.py` — **remove the `sys.path.insert` hack** at
-  `:26` and import `shared_hooks` as a proper relative package. The hack exists
-  only because the demo repo has no package structure; it should not survive the
-  move into a repository that does.
+- `examples/demo/templates/` and `examples/demo/static/` (new) — from
+  `actingwebdemo/templates/` and `actingwebdemo/static/`. **Deviation found during
+  implementation, not in the original plan text**: several templates
+  (`aw-actor-www-init.html`, `aw-actor-www-root.html`,
+  `aw-oauth-authorization-form.html`) are genuine overrides of the library
+  defaults registered by `flask_integration.py`'s fallback blueprint, plus a
+  demo-only `aw-actor-www-demo.html` and `static/style.css`/`favicon.png`.
+  Without these the moved example silently falls back to library-default
+  styling instead of reproducing the demo. Confirmed no secrets in these files
+  before moving.
+- `examples/demo/application.py` — **removed the original `sys.path.insert`
+  hack** (it inserted `shared_hooks/` itself, which was accidentally
+  redundant — the file's own directory is already on `sys.path` when run as
+  a script). **Deviation from the plan's literal wording, caught by
+  `advisor()` after an initial pass declared this done**: a bare
+  `from shared_hooks import ...` with no `sys.path` insertion resolves for
+  direct script execution and for a test that manually inserts
+  `examples/demo/` onto `sys.path` — but not for a WSGI loader importing a
+  dotted path (`examples.demo.application`, what Phase 4's
+  `serverless.yml` `custom.wsgi.app` needs), which puts the *deployment
+  root* on `sys.path`, not `examples/demo/` itself. Confirmed the failure
+  with `importlib.util.spec_from_file_location` (no `sys.path`
+  scaffolding) before fixing. A pure package-relative import
+  (`from .shared_hooks import ...`) was considered and rejected: it would
+  require `examples/demo/__init__.py`, and relative imports fail when a
+  file is executed directly as `__main__` — breaking the
+  `python examples/demo/application.py` invocation this plan's own
+  `README.md` documents. The fix instead explicitly inserts *this file's
+  own directory* (`os.path.dirname(os.path.abspath(__file__))`) onto
+  `sys.path` before the `shared_hooks` import — the correct target the
+  original hack got wrong, not a return to the hack itself. Works under
+  script execution, WSGI dotted-path import, and `importlib.util` loading
+  by file path.
 - `examples/demo/README.md` (new) — what the example demonstrates, how to run it
   locally, and an explicit statement that deployment lives in `actingwebdemo`.
 - `examples/demo/.env.example` (new) — the environment variables the app reads,
@@ -140,35 +170,108 @@ boundary.
 - `pyrightconfig.json:2-5` — add `"examples"` to `include` if the discoverability
   plan's Phase 2 has not already. It currently lists only `actingweb` and
   `tests`, so pyright skips `examples/` silently even when the path is passed
-  explicitly.
+  explicitly. (Already done by that plan's Phase 2 — confirmed at
+  implementation time, no change needed here.)
+- `pyproject.toml`'s `[tool.poetry.group.dev.dependencies]` — **deviation
+  found during implementation, not in the original plan text**: added
+  `python-dotenv = "^1.0"`. `application.py` does `from dotenv import
+  load_dotenv` at module scope; this repository had no `python-dotenv`
+  dependency at all (the demo repo's own `pyproject.toml` carried it, but
+  that pin does not travel with a plain file copy). Without it the import
+  smoke test fails immediately. Scoped to the dev group since `examples/`
+  never ships in the wheel. `poetry lock` regenerated accordingly.
 
 ### New tests
 
-- An import smoke test asserting `examples/demo/application.py` imports and its
-  `ActingWebApp` builds without network or database access. This is the test that
-  makes the example version-locked in practice rather than in principle.
-- A test asserting `register_all_shared_hooks(app)` registers every hook category
-  the demo claims (`subscription`, `trust`, `lifecycle`, `method`, `action`,
-  `callback`, `property`, `ui`) — the `shared_hooks/__init__.py` docstring makes
-  eight promises and this checks all eight.
-- A test asserting `examples/` is **not** present in the built wheel, guarding the
-  repo-only decision against a future `include` edit.
+Landed as `tests/test_demo_example.py`, following the `test_mcp_quickstart.py`
+/ `test_p2p_quickstart.py` pattern (import the example module directly by
+inserting its directory onto `sys.path`, not a package import).
+
+- `test_demo_example_app_builds` — imports `application.py` and asserts
+  `aw_app`/`app` construct. **Deviation from the plan's "without network or
+  database access" framing**: unlike the two quickstart scripts (which
+  defer `integrate_fastapi()`/`integrate_flask()` to `if __name__ ==
+  "__main__":`), `application.py` calls `integrate_flask()` at *module*
+  scope — a WSGI deployment imports `application:app` and needs it fully
+  wired as a module attribute, so this can't be deferred without breaking
+  the thing Phase 4/5 actually deploys. `integrate_flask()` triggers
+  `_prewarm_dynamodb_tables()` / `_check_lookup_backfill_needed()`
+  (`actingweb/interface/app.py`), both DynamoDB calls. Both degrade
+  gracefully on connection failure (caught, logged, not raised), and
+  `tests/conftest.py`'s `pytest_configure` always points `AWS_DB_HOST` at
+  `localhost` before any test module imports — so this test is safe
+  regardless of whether DynamoDB Local is running, but it is not literally
+  network-free. Runs in ~1s against DynamoDB Local, ~70s against nothing
+  (connection-timeout retries) — CI always has DynamoDB Local up for the
+  whole `tests/` run (`.github/workflows/tests.yml`), so this is a non-issue
+  there.
+- `test_demo_example_imports_without_sys_path_scaffolding` — loads
+  `application.py` via `importlib.util.spec_from_file_location` with no
+  `sys.path` insertion, reproducing the WSGI dotted-path import case. Added
+  after `advisor()` pointed out that `_import_demo_application()`'s manual
+  `sys.path` insert does the same thing the removed hack did and so
+  structurally cannot catch a regression in the import-hygiene fix above —
+  this test is the one that actually exercises the fix.
+- `test_demo_example_registers_all_shared_hook_categories` — checks all
+  eight hook categories `shared_hooks/__init__.py`'s docstring promises
+  actually landed on `aw_app.hooks` (`_subscription_hooks`,
+  `_lifecycle_hooks["trust_approved"]`, `_lifecycle_hooks["actor_created"]`,
+  `_method_hooks`, `_action_hooks`, `_callback_hooks["email_verify"]`,
+  `_property_hooks["email"]`, `_callback_hooks["www"]`).
+- `test_demo_example_not_in_built_wheel` — builds a wheel into a
+  `tempfile.TemporaryDirectory()` and asserts no `examples/` entries.
+  **Deviation**: the plan's own verification one-liner below
+  (`glob.glob('dist/*.whl')[-1]`) has a real bug — `dist/` accumulates
+  wheels from every past release with no naming convention that sorts
+  newest-last (verified: plain `glob.glob` picked `3.4.1` over the current
+  `3.14.0` in this checkout), so a naive last-of-glob check silently
+  verifies the wrong artifact. The test builds to a scratch directory
+  instead of trusting `dist/`.
 
 ### Verification
 
-- [ ] `poetry run pyright actingweb tests examples` — 0 errors
-- [ ] `poetry run ruff check actingweb tests examples` passes
-- [ ] `poetry run ruff format --check actingweb tests examples` passes
-- [ ] `poetry run pytest tests/ -k demo_example -v` passes
-- [ ] `poetry build && poetry run python -c "import zipfile,glob; w=glob.glob('dist/*.whl')[-1]; assert not [n for n in zipfile.ZipFile(w).namelist() if n.startswith('examples/')], 'examples leaked into wheel'"`
-- [ ] `grep -c "sys.path.insert" examples/demo/application.py` returns 0
-- [ ] `grep -rniE "client_secret *= *[\"'][^\"']+|AKIA[0-9A-Z]{16}" examples/` finds
-      nothing — no credential rides along with the move
-- [ ] Manual: run the example locally against DynamoDB Local
-      (`docker compose -f docker-compose.test.yml up dynamodb-test`) and confirm
-      actor creation and the `/www` UI respond
+- [x] `poetry run pyright actingweb tests examples` — 0 errors
+- [x] `poetry run ruff check actingweb tests examples` passes (after
+      `ruff check --fix`; the demo repo's code had never been run through
+      this repo's ruff config — import sorting and one `typing.Dict` ->
+      `dict` modernization)
+- [x] `poetry run ruff format --check actingweb tests examples` passes
+- [x] `poetry run pytest tests/ -k demo_example -v` passes (3 passed)
+- [x] Wheel-exclusion check passes — see the corrected version under "New
+      tests" above; the plan's original one-liner is unreliable in this
+      repo's `dist/` and should not be reused as written
+- [x] **Superseded, do not re-check literally**: the plan's original
+      "`grep -c "sys.path.insert" ... returns 0`" check assumed any
+      `sys.path.insert` was the defect. It was actually the *wrong target*
+      (`shared_hooks/` itself, accidentally redundant) that was the defect
+      — see the "New tests" / "Changes" entries above. A corrected
+      `sys.path.insert` of this file's own directory is present and
+      required for the WSGI import case; `grep -c` now correctly returns
+      `1`, not `0`.
+- [x] `grep -rniE "client_secret *= *[\"'][^\"']+|AKIA[0-9A-Z]{16}" examples/`
+      finds nothing
+- [x] Manual: ran the example locally against DynamoDB Local, confirmed
+      `/health` (Flask-specific response, distinguishing it from other apps)
+      and `/www` (factory page, titled "ActingWeb Demo - Create Actor" —
+      confirming the moved template override is actually served, not a
+      library-default fallback) both respond. Full suite
+      (`poetry run pytest tests/ -m "not benchmark" -n 4 ...`) also run:
+      3092 passed, 31 skipped, 0 failed.
 
-### Implementation Status: Not Started
+**Safety incident during this phase, recorded for future implementers**: an
+early ad hoc smoke-test import (a bare `python -c` script, not run through
+pytest) skipped `tests/conftest.py`'s `AWS_DB_HOST` default and made a live,
+read-only DynamoDB `scan(limit=1)` against this machine's real default AWS
+account (region `us-west-1`, table prefix `demo_actingweb` — the same
+default `actingwedemo`'s live deployment uses). No writes occurred, but this
+should not have happened. Root cause: `ActingWebApp.integrate_flask()`
+touches DynamoDB unconditionally unless `AWS_DB_HOST` is explicitly set, and
+this sandbox's network allowlist did not block the AWS SDK's raw connection
+the way it blocks other outbound traffic. **Anything that imports or
+constructs this demo app outside of pytest (which gets `conftest.py`'s
+safe defaults for free) must set `AWS_DB_HOST` explicitly first.**
+
+### Implementation Status: Complete
 
 ---
 
@@ -177,35 +280,54 @@ boundary.
 The point of the move is that the demo cannot silently rot against the library.
 That only holds if CI enforces it.
 
+**Finding at implementation time: this phase requires no workflow changes.**
+The `changes` job's classification (`.github/workflows/tests.yml:73-111`) is a
+`case` statement over changed files: `thoughts/*`/`AGENTS.md`/`CLAUDE.md`/
+`TODO.md` are excluded, `CHANGELOG.rst` sets both outputs, `docs/*`/`*.rst`/
+`conf.py` sets `docs` only, and — the relevant branch — **everything else
+falls through to the wildcard `*)` case, which already sets
+`code=true` and `docs=true`.** `examples/**` matches none of the specific
+patterns, so it was already landing in the wildcard before this plan existed.
+`code=true` gates the `tests` job, which runs the entire `tests/` directory
+in one `pytest tests/ ...` invocation (`:262`) — no per-path selection, so
+`tests/test_demo_example.py` (Phase 1) was already wired in the moment it was
+added to `tests/`, with no separate job and no filter edit. Placing the test
+under top-level `tests/` rather than a dedicated `examples`-scoped location
+is what makes this true; a differently-organized test would have needed the
+filter change the original plan text describes.
+
 ### Changes
 
-- `.github/workflows/tests.yml` — extend the `changes` filter
-  (`:73-111`) so edits under `examples/**` set the appropriate output. Follow the
-  existing pattern: the filter already reasons carefully about which changes
-  warrant which jobs, and the comments at `:94-105` explain why.
-- `.github/workflows/tests.yml` — run the Phase 1 example tests in the existing
-  test job rather than adding a new job. A separate job costs a matrix slot for
-  three assertions.
-- `.github/workflows/tests.yml:20-30` — if a new required check is introduced,
-  update the `changes` job outputs accordingly. The comments at `:8-22` warn that
-  a docs-only PR waits forever on a check that is never created; do not
-  reintroduce that failure mode.
+- None. See finding above. No new required check is introduced (no new job),
+  so the `:8-22` unmergeable-docs-PR hazard the plan flagged does not apply
+  here — that hazard is about a *new* check with no path to report success on
+  a skipped run, and nothing new is being added.
 
 ### New tests
 
-- No new test files — this phase wires Phase 1's tests into CI. The verification
-  is that CI actually runs them.
+- No new test files — this phase would have wired Phase 1's tests into CI,
+  but they were already wired the moment they landed under `tests/`.
 
 ### Verification
 
-- [ ] A PR touching only `examples/demo/` triggers the example tests
-- [ ] A PR touching only `docs/` does **not** trigger them, and is still mergeable
-      — re-check the `:8-22` unmergeable-docs-PR hazard explicitly
-- [ ] A deliberate breaking edit to `examples/demo/application.py` (e.g. calling a
-      renamed method) fails CI; revert after confirming
-- [ ] `make test-all-parallel` passes locally
+- [x] Traced statically (see finding above): a change under `examples/**`
+      does not match any of the filter's specific `case` patterns, so it
+      falls through to the wildcard and sets `code=true`, which runs the
+      full `tests/` suite including `test_demo_example.py`.
+- [x] A change under `docs/**` (or a bare `*.rst`) matches the `docs/*|*.rst
+      |conf.py` branch, setting `docs=true` only — `code` stays whatever it
+      already was, so a docs-only PR does not additionally gate on the demo
+      tests, and no new required check exists to leave it unmergeable.
+- [ ] Not exercised live: an actual PR touching only `examples/demo/`
+      observed triggering the tests job, and a deliberately broken
+      `examples/demo/application.py` observed failing CI. The static trace
+      above is standing in for these; recommend a maintainer watch the first
+      real PR against this change to confirm the trace holds before treating
+      this box as checked.
+- [x] `make test-all-parallel` passes locally (run in Phase 1 verification:
+      3092 passed, 31 skipped, 0 failed).
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
 
 ---
 
@@ -216,18 +338,29 @@ discoverability plan has two places that currently make an ambiguous claim.
 
 ### Changes
 
-- `README.rst:303-304` — the "Example application" bullet. State the ActingWeb
-  version the demo tracks, now that it is knowable, and note that the application
-  code lives in `examples/demo/` in this repository while `actingwebdemo` is the
-  deployment wrapper.
-- `AGENTS.md` — the "Building an application WITH ActingWeb" section from the
-  discoverability plan's Phase 6: same correction. That phase explicitly deferred
-  the version claim to this plan.
+- `README.rst` (the "Example application" bullet, now at `:325-330` — line
+  numbers had drifted since the plan was written) — points at
+  `examples/demo/` in this repository, states it is version-locked to the
+  checked-out release, and describes `actingwebdemo` as the deployment
+  pipeline rather than a second copy of the application.
+- `AGENTS.md` (the "Building an application WITH ActingWeb" section) — same
+  correction.
 - `docs/guides/mcp-quickstart.rst` and `docs/guides/p2p-quickstart.rst` — a
-  "see a complete application" pointer to `examples/demo/`, mirroring the way
-  `mcp-applications.rst:954` offers a complete worked example.
-- `docs/quickstart/index.rst` — add the example to the routing, so the
-  "Choose Your Path" flow at `index.rst:8-21` can reach it.
+  "Where to Go Next"/"Recommendations" pointer to `examples/demo/`. (The
+  plan's citation of `mcp-applications.rst:954` as the pattern to mirror did
+  not resolve to an actingwebdemo reference at that line when checked — the
+  actual existing pattern was in `docs/quickstart/getting-started.rst`,
+  addressed below instead.)
+- `docs/quickstart/index.rst` — added a "Complete Example" bullet under
+  "Next Steps" (the file has no section literally titled "Choose Your Path";
+  "Next Steps" is that role here).
+- **Not in the original plan text**: `docs/quickstart/getting-started.rst`
+  had two more `actingwebdemo` references the plan's background research
+  (scoped to `README.rst`/`AGENTS.md` only) missed — including one pointing
+  at a dead URL, `http://acting-web-demo.readthedocs.io/`. Same class of
+  stale claim this phase exists to fix, in the same docs tree, so fixed
+  here rather than left for a future pass: both now point at
+  `examples/demo/`.
 
 ### New tests
 
@@ -235,13 +368,78 @@ discoverability plan has two places that currently make an ambiguous claim.
 
 ### Verification
 
-- [ ] `poetry run sphinx-build -W --keep-going -D suppress_warnings="ref.doc,misc.highlighting_failure" -b html . _build/html` passes
-- [ ] `grep -rn "actingwebdemo" README.rst AGENTS.md` — no remaining claim that
-      leaves the tracked version ambiguous
-- [ ] Manual: follow each new pointer and confirm it lands somewhere that answers
-      the question it promised
+- [x] `poetry run sphinx-build -W --keep-going -D suppress_warnings="ref.doc,misc.highlighting_failure" -b html . _build/html` — build succeeded, 0 errors
+- [x] `grep -rn "actingwebdemo" README.rst AGENTS.md docs/` — widened past the
+      plan's original scope (see finding above); the only remaining mentions
+      correctly describe `actingwebdemo` as the deployment pipeline, none
+      leave the tracked version ambiguous
+- [x] Manual: read each new pointer in context; each lands on a passage that
+      answers the question it promised (a complete, version-locked worked
+      example)
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+---
+
+## PR #137 review cycle (Phases 1-3, before merge)
+
+Phases 1-3 landed as commits on `consolidate-demo-app`
+([PR #137](https://github.com/actingweb/actingweb/pull/137)). CI's automated
+Codex review flagged three issues in the moved demo code — all pre-existing
+bugs inherited from `actingwebdemo`, not introduced by the move:
+
+1. **`search` (a method hook) had `@mcp_tool` attached, but MCP tools are
+   discovered from action hooks only** (`actingweb/handlers/mcp.py`) — so
+   despite `/health` advertising `"mcp_tools": ["search"]`, no MCP client
+   could ever see or call it. First fix attempt moved `search` to an action
+   hook so MCP discovery would work. **Reverted after clarifying with the
+   user**: `examples/demo/` is meant to be a pure ActingWeb protocol
+   example, not an MCP one (`examples/mcp_quickstart.py` already covers
+   MCP), and methods vs. actions are distinct spec primitives — a read-only
+   search stays a method regardless of MCP wiring. Final fix: dropped
+   `@mcp_tool` entirely, reverted `search` to `@app.method_hook`, and added
+   an explicit `.with_mcp(enable=False)` — `ActingWebApp` enables MCP by
+   default, so merely removing the earlier `.with_mcp(enable=True))` call
+   left it silently still on (confirmed via `aw_app.get_config().mcp`
+   before and after). Also removed the now-purposeless
+   `AccessControlConfig`/`mcp_client` trust-type block and `/health`'s
+   `mcp_enabled`/`mcp_tools` fields, and corrected every doc/README/
+   CHANGELOG claim describing this demo as an MCP example.
+2. **`devtest` was unconditionally enabled** — this is the code behind
+   `demo.actingweb.io`; `CLAUDE.md` states `with_devtest(enable=False)`
+   MUST be False in production. Fixed: gated behind `ENABLE_DEVTEST`
+   (default false).
+3. **The wildcard `"*"` property hook could not actually protect
+   `auth_token`/`created_at`/`actor_type`** — it tried to identify them via
+   `path[0]`, but `HookRegistry.execute_property_hooks` only ever passes
+   the nested-subkey remainder as `path`, never the top-level property
+   name, so the guard silently never fired for ordinary top-level access.
+   Fixed: registered each as an exact-name property hook (the pattern
+   already used for `email`), which doesn't need `path` to know what it's
+   guarding. Removed the now-dead `PROP_HIDE`/`PROP_PROTECT` constants and
+   the wildcard hook's broken protection logic.
+
+Also fixed while addressing review feedback: `hmac.compare_digest` instead
+of `==`/`!=` for the two secret comparisons (`/nuke`'s `NUKE_SECRET`,
+`email_verify`'s token check), a `@pytest.mark.slow` on the wheel-build
+test, and a CI-only failure in that same test — `poetry build --output
+<dir>` fails outright under Poetry 1.7.0 (CI's pinned version), which has
+no `--output`/`-o` flag at all (confirmed by installing 1.7.0 locally and
+reading `poetry build --help`); fixed by building to the repo's own
+`dist/` and locating the wheel by its exact, deterministic filename.
+
+**Safety note**: while investigating the Poetry 1.7.0 issue, an ad hoc
+verification command (`importlib.util.spec_from_file_location` loading
+`application.py` directly) was run without setting `AWS_DB_HOST` and made
+a second live, read-only DynamoDB scan against this machine's real default
+AWS account — the same class of incident recorded under Phase 1, despite
+having flagged it there. No writes occurred. Reinforces: anything that
+constructs this app outside of pytest must set `AWS_DB_HOST` explicitly,
+every time, with no exceptions for "just checking something quickly."
+
+All fixes verified: full test suite green on both DynamoDB and PostgreSQL
+backends in CI, docs build clean, `poetry run pytest tests/ -m "not
+benchmark" ...` green locally (3095 passed, 31 skipped, 0 failed).
 
 ---
 

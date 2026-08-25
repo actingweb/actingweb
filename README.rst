@@ -322,8 +322,14 @@ Repository and links
 - **Source**: `https://github.com/actingweb/actingweb <https://github.com/actingweb/actingweb>`_
 - **Docs**: `https://actingweb.readthedocs.io/ <https://actingweb.readthedocs.io/>`_
 - **Protocol & project home**: `https://actingweb.org/ <https://actingweb.org/>`_
-- **Example application**: `https://github.com/actingweb/actingwebdemo <https://github.com/actingweb/actingwebdemo>`_ —
-  a full reference app (MCP + Web/SPA + OAuth2) to develop against.
+- **Example application**: `examples/demo/ <https://github.com/actingweb/actingweb/tree/master/examples/demo>`_
+  in this repository — a full reference app covering the core ActingWeb
+  protocol (Web/SPA + OAuth2, not MCP — see ``examples/mcp_quickstart.py``
+  for that), version-locked to the ActingWeb release you have checked out, tested by
+  this repository's own CI. `actingwebdemo
+  <https://github.com/actingweb/actingwebdemo>`_ is the deployment pipeline
+  for ``demo.actingweb.io`` (AWS credentials, OAuth secret, Serverless
+  config); the application code itself lives here, not there.
 - **Agent Skill for building on ActingWeb**: task recipes (add a property
   hook, expose an MCP tool, establish trust and subscribe to a peer, and
   more) for AI coding agents working in a repository that consumes this

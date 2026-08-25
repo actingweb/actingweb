@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "actingweb"
-version = "3.14.0"
+version = "3.14.1"
 description = "Python framework for AI-ready, per-user micro-services — per-actor MCP servers, OAuth2, and peer-to-peer data sharing over the ActingWeb REST protocol."
 authors = ["Greger Wedel <support@actingweb.io>"]
 maintainers = ["Greger Wedel <support@actingweb.io>"]

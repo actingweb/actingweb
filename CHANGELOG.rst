@@ -5,6 +5,9 @@ CHANGELOG
 Unreleased
 ----------
 
+v3.14.1: August 25, 2026
+-------------------------
+
 FIXED
 ~~~~~
 

@@ -61,9 +61,23 @@ def test_demo_example_imports_without_sys_path_scaffolding():
     )
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
+    # A real WSGI loader (serverless-wsgi, gunicorn's --pythonpath import)
+    # registers the module it loads into sys.modules; module_from_spec()
+    # alone does not. Skipping this step is exactly what let a real
+    # regression through once: Flask(__name__, ...) resolves its root_path
+    # (and therefore where it looks for templates/) via
+    # sys.modules.get(import_name), so without this line the app below
+    # would silently serve the library's default templates instead of this
+    # demo's overrides -- found in actingwebdemo, not caught here, because
+    # this test only asserted module.app is not None.
+    sys.modules[spec.name] = module
     spec.loader.exec_module(module)
 
     assert module.app is not None
+    assert module.app.root_path == str(DEMO_DIR), (
+        f"Flask root_path resolved to {module.app.root_path!r}, not "
+        f"{str(DEMO_DIR)!r} -- template/static resolution would be broken"
+    )
 
 
 def test_demo_example_registers_all_shared_hook_categories():

@@ -11,6 +11,27 @@ v3.14.2: August 28, 2026
 FIXED
 ~~~~~
 
+- **``GET /mcp`` answered an unauthenticated request with a ``200`` discovery
+  document** instead of the ``401`` challenge — the other half of the same
+  discovery bug as the entry below. The MCP authorization spec has clients
+  find the authorization server by making an unauthenticated request to the
+  MCP endpoint and reading ``WWW-Authenticate``. A conformant client instead
+  parsed this handler's bespoke JSON body as the protected-resource metadata
+  and failed on the missing ``resource`` field, never reaching the real
+  metadata — which was correct all along. Codex reported exactly that:
+  *"Metadata error: Protected resource metadata missing required resource
+  field"*. An unauthenticated ``GET`` — including one carrying
+  ``Accept: text/event-stream``, the spec's stream opener — is now the same
+  ``401`` challenge as every other MCP method.
+  **Behavior change**: a caller that read the discovery document from
+  ``GET /mcp`` without a token now gets ``401``. The document is unchanged and
+  has not moved — an authenticated ``GET /mcp`` still returns it — but there
+  is no unauthenticated copy of it. A client that needs server metadata
+  without a token should read ``/.well-known/oauth-protected-resource/mcp``,
+  which is where the challenge points and which the MCP spec directs it to
+  anyway; ``/mcp/info`` is a separate endpoint with a different shape, not a
+  substitute. The ``.with_mcp(enable=False)`` ``404`` still takes precedence,
+  so a disabled endpoint never advertises an authorization server.
 - **The MCP ``401`` challenge did not point at the protected-resource
   metadata.** ``WWW-Authenticate`` carried only a non-standard
   ``authorization_uri``, omitting the ``resource_metadata`` parameter that

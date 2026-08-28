@@ -56,6 +56,33 @@ class TestMCPAuthentication:
         MCP endpoint without authentication should return 401.
 
         This verifies the authentication requirement is enforced.
+
+        Uses ``tools/list`` rather than ``ping``: ``initialize``,
+        ``notifications/initialized`` and ``ping`` are deliberately
+        unauthenticated (see ``MCPHandler.post``), so asserting on ``ping``
+        cannot show the requirement is enforced at all. That is why this
+        assertion used to be hedged as ``in [200, 401]`` — a hedge broad
+        enough to pass whether or not authentication worked.
+        """
+        import requests
+
+        response = requests.post(
+            f"{test_app}/mcp",
+            json={"jsonrpc": "2.0", "method": "tools/list", "id": 1},
+            headers={"Content-Type": "application/json"},
+        )
+
+        assert response.status_code == 401, (
+            f"Expected 401 for an unauthenticated tools/list, got "
+            f"{response.status_code}: {response.text[:200]}"
+        )
+        assert "resource_metadata=" in response.headers.get("WWW-Authenticate", "")
+
+    def test_ping_is_deliberately_unauthenticated(self, test_app):
+        """``ping`` is a liveness check and answers without a token.
+
+        Pinned because it is the reason the 401 assertion above cannot use it,
+        and because the behaviour is easy to "fix" by mistake.
         """
         import requests
 
@@ -65,9 +92,8 @@ class TestMCPAuthentication:
             headers={"Content-Type": "application/json"},
         )
 
-        # Without auth, might get 401 or might allow ping (depends on implementation)
-        # The key is that we can't access protected methods without auth
-        assert response.status_code in [200, 401]
+        assert response.status_code == 200
+        assert response.json()["result"] == {}
 
     def test_mcp_with_oauth2_bearer_token(self, oauth2_client):
         """

@@ -32,13 +32,14 @@ class AsyncMCPHandler(MCPHandler):
         """
         Handle GET requests to /mcp endpoint asynchronously.
 
-        For initial discovery, this returns basic information about the MCP server.
-        Authentication will be handled during the MCP protocol negotiation.
+        An unauthenticated GET is a 401 challenge, not a document — see
+        ``MCPHandler.get()``. This is the method the FastAPI integration
+        actually serves, so it is the one that has to carry the challenge.
 
         The GET method doesn't involve hook execution, so we can delegate to
         the parent's synchronous implementation.
         """
-        # Reuse parent's get() - it doesn't call hooks, just returns metadata
+        # Reuse parent's get() - it doesn't call hooks
         return self.get()
 
     async def post_async(self, data: dict[str, Any]) -> dict[str, Any]:

@@ -273,8 +273,9 @@ class FlaskIntegration(BaseActingWebIntegration):
         # MCP endpoint
         @self.flask_app.route("/mcp", methods=["GET", "POST"])
         def app_mcp() -> Response | WerkzeugResponse | str:  # pyright: ignore[reportUnusedFunction]
-            # For MCP, allow initial handshake without authentication
-            # Authentication will be handled within the MCP protocol
+            # POST initialize/notifications/initialized are the only
+            # unauthenticated MCP requests; everything else — including a
+            # GET — is answered with the 401 challenge by the handler.
             return self._handle_mcp_request()
 
         # OAuth2 Discovery endpoints using OAuth2EndpointsHandler

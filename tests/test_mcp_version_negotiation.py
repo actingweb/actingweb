@@ -121,6 +121,8 @@ class TestGetDiscovery:
 
     def test_get_reports_supported_versions(self) -> None:
         handler = _make_handler()
+        # The discovery document is behind the 401 challenge now.
+        handler.authenticate_and_get_actor_cached = lambda: object()
         result = handler.get()
         assert result["version"] == LATEST_PROTOCOL_VERSION
         assert result["transport"]["supported_versions"] == list(

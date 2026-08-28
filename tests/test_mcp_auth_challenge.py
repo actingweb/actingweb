@@ -8,7 +8,7 @@ protected-resource metadata as malformed.
 
 from actingweb.aw_web_request import AWResponse
 from actingweb.config import Config
-from actingweb.handlers.mcp import mcp_www_authenticate
+from actingweb.handlers.mcp import MCPHandler, mcp_www_authenticate
 from actingweb.handlers.oauth2_endpoints import OAuth2EndpointsHandler
 from actingweb.oauth2_server.oauth2_server import ActingWebOAuth2Server
 
@@ -65,6 +65,50 @@ def test_every_mcp_401_site_uses_the_shared_challenge():
             f"{module.__name__} hand-rolls the MCP 401 challenge instead of "
             "calling mcp_www_authenticate()"
         )
+
+
+def _mcp_handler(*, authenticated: bool) -> MCPHandler:
+    handler = MCPHandler.__new__(MCPHandler)
+    config = _config()
+    config.mcp = True
+    handler.config = config
+    handler.response = AWResponse()
+    actor = object() if authenticated else None
+    handler.authenticate_and_get_actor_cached = lambda: actor  # type: ignore[method-assign]
+    return handler
+
+
+def test_unauthenticated_get_on_the_mcp_endpoint_is_a_challenge():
+    """The MCP endpoint answers an unauthenticated GET with 401 + the
+    challenge, not with a 200 discovery document.
+
+    The old behaviour returned a bespoke JSON body to any GET. A client doing
+    the spec's discovery — unauthenticated request, then read
+    ``WWW-Authenticate`` — parsed that body as the protected-resource metadata
+    and failed on the missing ``resource`` field, never reaching the real
+    metadata. Codex reported exactly that: "Protected resource metadata
+    missing required resource field".
+    """
+    handler = _mcp_handler(authenticated=False)
+
+    body = handler.get()
+
+    assert handler.response.status_code == 401
+    assert "resource_metadata=" in handler.response.headers["WWW-Authenticate"]
+    # And the body must not look like protected-resource metadata to a parser.
+    assert "resource" not in body
+    assert body["error"] == "invalid_token"
+
+
+def test_authenticated_get_still_serves_the_discovery_document():
+    """Backward compatibility: the document did not move for callers that
+    authenticate (its canonical home is /mcp/info)."""
+    handler = _mcp_handler(authenticated=True)
+
+    body = handler.get()
+
+    assert body["server_name"] == "actingweb-mcp"
+    assert body["authentication"]["required"] is True
 
 
 def test_authorization_server_metadata_advertises_offline_access():

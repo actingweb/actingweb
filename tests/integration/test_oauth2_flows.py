@@ -670,3 +670,45 @@ class TestOAuth2Discovery:
         metadata = requests.get(f"{test_app}/.well-known/oauth-protected-resource/mcp")
         assert metadata.status_code == 200
         assert metadata.json()["resource"] == f"{test_app}/mcp"
+
+    def test_unauthenticated_get_on_mcp_is_a_challenge_not_a_document(self, test_app):
+        """An unauthenticated ``GET /mcp`` must be the 401 challenge.
+
+        The spec's discovery is an unauthenticated request to the MCP endpoint
+        followed by reading ``WWW-Authenticate``. This route used to answer any
+        GET with a 200 discovery document, which a conformant client parsed as
+        the protected-resource metadata and rejected for a missing ``resource``
+        field — never reaching the real metadata.
+
+        The unit tests stub the auth lookup, so they prove the branch; this
+        proves the status and header survive the integration's response
+        assembly on the GET path.
+        """
+        response = requests.get(f"{test_app}/mcp")
+
+        assert response.status_code == 401, (
+            f"Expected 401 for an unauthenticated GET, got {response.status_code}: "
+            f"{response.text[:200]}"
+        )
+
+        challenge = response.headers.get("WWW-Authenticate", "")
+        assert (
+            f'resource_metadata="{test_app}/.well-known/oauth-protected-resource/mcp"'
+            in challenge
+        ), f"GET challenge carries no resource_metadata pointer: {challenge!r}"
+
+        # The body must not be mistakable for protected-resource metadata.
+        body = response.json()
+        assert "server_name" not in body
+        assert "resource" not in body
+        assert body["error"] == "invalid_token"
+
+    def test_sse_stream_opener_is_challenged_too(self, test_app):
+        """``Accept: text/event-stream`` is the spec's server-to-client stream
+        opener; unauthenticated it gets the same challenge as any other GET."""
+        response = requests.get(
+            f"{test_app}/mcp", headers={"Accept": "text/event-stream"}
+        )
+
+        assert response.status_code == 401
+        assert "resource_metadata=" in response.headers.get("WWW-Authenticate", "")

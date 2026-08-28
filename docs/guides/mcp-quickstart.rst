@@ -96,8 +96,10 @@ Call initialize (no auth required):
      -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"curl"}}}'
 
 Every other method — ``tools/list``, ``prompts/list``, ``tools/call``, etc. —
-**requires an OAuth2 bearer token** (only ``initialize`` and
-``notifications/initialized`` are unauthenticated). There is **no dev bypass**;
+**requires an OAuth2 bearer token** (only ``initialize``,
+``notifications/initialized`` and ``ping`` — a liveness check — are
+unauthenticated). An unauthenticated ``GET /mcp`` is a ``401`` challenge too,
+not a discovery document. There is **no dev bypass**;
 ``with_devtest(True)`` does not open the MCP endpoint. Sending these without a
 token returns HTTP 401 with a ``WWW-Authenticate: Bearer`` header:
 

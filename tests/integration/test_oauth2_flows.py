@@ -598,3 +598,117 @@ class TestOAuth2Discovery:
         assert "authorization_servers" in data
         assert "scopes_supported" in data
         assert "bearer_methods_supported" in data
+
+    def test_authorization_server_metadata_served_with_offline_access(self, test_app):
+        """The served AS metadata must advertise ``offline_access``.
+
+        Three places in the codebase build authorization-server-shaped
+        metadata; only the one behind this route is live. Asserting on the
+        served document is what proves the advertised scope reaches a client
+        that gates long-lived sessions on it.
+        """
+        response = requests.get(f"{test_app}/.well-known/oauth-authorization-server")
+
+        assert response.status_code == 200, (
+            f"AS discovery failed: {response.status_code} {response.text[:200]}"
+        )
+        data = response.json()
+
+        assert "offline_access" in data["scopes_supported"], (
+            f"offline_access missing from served scopes_supported: "
+            f"{data['scopes_supported']}"
+        )
+        assert "mcp" in data["scopes_supported"]
+        # The scope is only honest because a refresh token is always issued.
+        assert "refresh_token" in data["grant_types_supported"]
+
+    def test_protected_resource_variants_served_with_offline_access(self, test_app):
+        """Both protected-resource documents advertise the same scopes."""
+        for path in (
+            ".well-known/oauth-protected-resource",
+            ".well-known/oauth-protected-resource/mcp",
+        ):
+            response = requests.get(f"{test_app}/{path}")
+
+            assert response.status_code == 200, f"{path} failed: {response.status_code}"
+            data = response.json()
+            assert data["scopes_supported"] == ["mcp", "offline_access"], (
+                f"{path} advertises {data['scopes_supported']}"
+            )
+
+    def test_unauthenticated_mcp_challenge_points_at_resource_metadata(self, test_app):
+        """The served 401 must carry the RFC 9728 discovery pointer.
+
+        The unit test proves the helper builds the right string and that no
+        call site hand-rolls it; this proves the header survives the FastAPI
+        header merge and actually reaches the client. Without it a conformant
+        MCP client reports the resource metadata as malformed and never opens
+        the sign-in window.
+        """
+        response = requests.post(
+            f"{test_app}/mcp",
+            json={"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
+            headers={"Content-Type": "application/json"},
+        )
+
+        assert response.status_code == 401, (
+            f"Expected 401 without a bearer token, got {response.status_code}: "
+            f"{response.text[:200]}"
+        )
+
+        challenge = response.headers.get("WWW-Authenticate", "")
+        assert challenge.startswith('Bearer realm="ActingWeb MCP"'), (
+            f"Unexpected challenge: {challenge!r}"
+        )
+        assert (
+            f'resource_metadata="{test_app}/.well-known/oauth-protected-resource/mcp"'
+            in challenge
+        ), f"Challenge carries no resource_metadata pointer: {challenge!r}"
+        assert 'error="invalid_token"' in challenge
+
+        # And the pointer must resolve.
+        metadata = requests.get(f"{test_app}/.well-known/oauth-protected-resource/mcp")
+        assert metadata.status_code == 200
+        assert metadata.json()["resource"] == f"{test_app}/mcp"
+
+    def test_unauthenticated_get_on_mcp_is_a_challenge_not_a_document(self, test_app):
+        """An unauthenticated ``GET /mcp`` must be the 401 challenge.
+
+        The spec's discovery is an unauthenticated request to the MCP endpoint
+        followed by reading ``WWW-Authenticate``. This route used to answer any
+        GET with a 200 discovery document, which a conformant client parsed as
+        the protected-resource metadata and rejected for a missing ``resource``
+        field — never reaching the real metadata.
+
+        The unit tests stub the auth lookup, so they prove the branch; this
+        proves the status and header survive the integration's response
+        assembly on the GET path.
+        """
+        response = requests.get(f"{test_app}/mcp")
+
+        assert response.status_code == 401, (
+            f"Expected 401 for an unauthenticated GET, got {response.status_code}: "
+            f"{response.text[:200]}"
+        )
+
+        challenge = response.headers.get("WWW-Authenticate", "")
+        assert (
+            f'resource_metadata="{test_app}/.well-known/oauth-protected-resource/mcp"'
+            in challenge
+        ), f"GET challenge carries no resource_metadata pointer: {challenge!r}"
+
+        # The body must not be mistakable for protected-resource metadata.
+        body = response.json()
+        assert "server_name" not in body
+        assert "resource" not in body
+        assert body["error"] == "invalid_token"
+
+    def test_sse_stream_opener_is_challenged_too(self, test_app):
+        """``Accept: text/event-stream`` is the spec's server-to-client stream
+        opener; unauthenticated it gets the same challenge as any other GET."""
+        response = requests.get(
+            f"{test_app}/mcp", headers={"Accept": "text/event-stream"}
+        )
+
+        assert response.status_code == 401
+        assert "resource_metadata=" in response.headers.get("WWW-Authenticate", "")

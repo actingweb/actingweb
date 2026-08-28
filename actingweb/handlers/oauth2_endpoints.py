@@ -758,7 +758,7 @@ class OAuth2EndpointsHandler(BaseHandler):
         return {
             "resource": f"{base_url}/mcp",
             "authorization_servers": [base_url],
-            "scopes_supported": ["mcp"],
+            "scopes_supported": ["mcp", "offline_access"],
             "bearer_methods_supported": ["header"],
             "resource_documentation": f"{base_url}/mcp/info",
             "resource_policy_uri": f"{base_url}",
@@ -783,7 +783,7 @@ class OAuth2EndpointsHandler(BaseHandler):
         return {
             "resource": f"{base_url}/mcp",
             "authorization_servers": [base_url],
-            "scopes_supported": ["mcp"],
+            "scopes_supported": ["mcp", "offline_access"],
             "bearer_methods_supported": ["header"],
             "resource_documentation": f"{base_url}/mcp/info",
             "resource_policy_uri": f"{base_url}",

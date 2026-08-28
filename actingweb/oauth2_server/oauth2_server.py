@@ -617,7 +617,12 @@ class ActingWebOAuth2Server:
             "authorization_endpoint": f"{base_url}/oauth/authorize",
             "token_endpoint": f"{base_url}/oauth/token",
             "registration_endpoint": f"{base_url}/oauth/register",
-            "scopes_supported": ["mcp"],
+            # offline_access is advertised because every authorization-code
+            # token response already carries a refresh token (see
+            # TokenManager.create_access_token) and refresh_token is an
+            # advertised grant. Clients that gate long-lived sessions on the
+            # scope being listed would otherwise re-prompt for authorization.
+            "scopes_supported": ["mcp", "offline_access"],
             "response_types_supported": ["code"],
             "grant_types_supported": [
                 "authorization_code",

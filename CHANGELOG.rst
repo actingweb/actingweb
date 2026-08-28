@@ -5,6 +5,59 @@ CHANGELOG
 Unreleased
 ----------
 
+v3.14.2: August 28, 2026
+-------------------------
+
+FIXED
+~~~~~
+
+- **``GET /mcp`` answered an unauthenticated request with a ``200`` discovery
+  document** instead of the ``401`` challenge — the other half of the same
+  discovery bug as the entry below. The MCP authorization spec has clients
+  find the authorization server by making an unauthenticated request to the
+  MCP endpoint and reading ``WWW-Authenticate``. A conformant client instead
+  parsed this handler's bespoke JSON body as the protected-resource metadata
+  and failed on the missing ``resource`` field, never reaching the real
+  metadata — which was correct all along. Codex reported exactly that:
+  *"Metadata error: Protected resource metadata missing required resource
+  field"*. An unauthenticated ``GET`` — including one carrying
+  ``Accept: text/event-stream``, the spec's stream opener — is now the same
+  ``401`` challenge as every other MCP method.
+  **Behavior change**: a caller that read the discovery document from
+  ``GET /mcp`` without a token now gets ``401``. The document is unchanged and
+  has not moved — an authenticated ``GET /mcp`` still returns it — but there
+  is no unauthenticated copy of it. A client that needs server metadata
+  without a token should read ``/.well-known/oauth-protected-resource/mcp``,
+  which is where the challenge points and which the MCP spec directs it to
+  anyway; ``/mcp/info`` is a separate endpoint with a different shape, not a
+  substitute. The ``.with_mcp(enable=False)`` ``404`` still takes precedence,
+  so a disabled endpoint never advertises an authorization server.
+- **The MCP ``401`` challenge did not point at the protected-resource
+  metadata.** ``WWW-Authenticate`` carried only a non-standard
+  ``authorization_uri``, omitting the ``resource_metadata`` parameter that
+  RFC 9728 section 5.1 (and, through it, the MCP authorization spec from
+  ``2025-06-18``) requires. A conformant client had no discovery pointer: it
+  either guessed the well-known location or reported the resource metadata as
+  missing/malformed and never opened the sign-in window — the user sees a
+  configured server that never asks them to authenticate. The challenge now
+  carries ``resource_metadata="<base>/.well-known/oauth-protected-resource/mcp"``
+  alongside the existing ``error="invalid_token"`` and ``authorization_uri``
+  hints, at all three sites that emit it — including the async handler the
+  FastAPI integration actually serves.
+
+CHANGED
+~~~~~~~
+
+- **``offline_access`` is now advertised in ``scopes_supported``** on the
+  authorization-server metadata and both protected-resource variants. The
+  server already issues a refresh token with every authorization-code token
+  response and already advertises the ``refresh_token`` grant; clients that
+  gate long-lived sessions on the scope being listed could re-prompt for
+  authorization. The authorization endpoint does not validate the requested
+  scope, so this is advertising catching up with behaviour — no token
+  semantics changed, and the token response still reports the granted scope
+  as ``mcp``.
+
 v3.14.1: August 25, 2026
 -------------------------
 

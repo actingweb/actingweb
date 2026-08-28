@@ -889,8 +889,9 @@ class FastAPIIntegration(BaseActingWebIntegration):
         @self.fastapi_app.get("/mcp")
         @self.fastapi_app.post("/mcp")
         async def app_mcp(request: Request) -> Response:  # pyright: ignore[reportUnusedFunction]
-            # For MCP, allow initial handshake without authentication
-            # Authentication will be handled within the MCP protocol
+            # POST initialize/notifications/initialized are the only
+            # unauthenticated MCP requests; everything else — including a
+            # GET — is answered with the 401 challenge by the handler.
             return await self._handle_mcp_request(request)
 
         # OAuth2 Discovery endpoints using OAuth2EndpointsHandler

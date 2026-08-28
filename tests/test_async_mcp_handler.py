@@ -308,8 +308,15 @@ class TestAsyncMCPHandler:
 
     @pytest.mark.asyncio
     async def test_get_async_returns_metadata(self, test_config, webobj):
-        """Verify get_async returns MCP server metadata."""
+        """Verify get_async returns MCP server metadata once authenticated.
+
+        The metadata used to be served to anyone. It is now behind the same
+        401 challenge as every other MCP method — an unauthenticated GET is
+        how a client discovers the authorization server, and a 200 body there
+        gets parsed as protected-resource metadata and rejected.
+        """
         handler = AsyncMCPHandler(webobj, test_config, hooks=None)
+        handler.authenticate_and_get_actor_cached = lambda: object()
 
         result = await handler.get_async()
 
@@ -319,6 +326,19 @@ class TestAsyncMCPHandler:
         assert "capabilities" in result
         assert "transport" in result
         assert "authentication" in result
+
+    @pytest.mark.asyncio
+    async def test_get_async_challenges_when_unauthenticated(self, test_config, webobj):
+        """The async handler is the one FastAPI serves, so the challenge has
+        to reach the wire through it."""
+        handler = AsyncMCPHandler(webobj, test_config, hooks=None)
+        handler.authenticate_and_get_actor_cached = lambda: None
+
+        result = await handler.get_async()
+
+        assert handler.response.status_code == 401
+        assert "resource_metadata=" in handler.response.headers["WWW-Authenticate"]
+        assert "server_name" not in result
 
     @pytest.mark.asyncio
     async def test_initialize_no_auth_required(self, app, test_config, webobj):

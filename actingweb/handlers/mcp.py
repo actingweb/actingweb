@@ -409,6 +409,28 @@ def _warn_if_output_schema_unsatisfied(
         _warn_missing_structured_content_once(tool_name)
 
 
+def mcp_www_authenticate(base_url: str) -> str:
+    """Build the 401 challenge for the MCP endpoint.
+
+    MCP's authorization spec (2025-06-18 onwards) requires the challenge to
+    point at the protected-resource metadata per RFC 9728 section 5.1, via a
+    ``resource_metadata`` parameter. Without it a spec-conformant client has
+    no discovery pointer: it either guesses the well-known location or
+    reports the resource metadata as missing/malformed and never starts the
+    OAuth flow, which looks to the user like "it never asked me to sign in".
+
+    ``error="invalid_token"`` stays so clients drop cached tokens (RFC 6750
+    section 3.1), and the non-standard ``authorization_uri`` stays for
+    clients that already keyed off it.
+    """
+    return (
+        'Bearer realm="ActingWeb MCP", error="invalid_token", '
+        'error_description="Authentication required", '
+        f'resource_metadata="{base_url}/.well-known/oauth-protected-resource/mcp", '
+        f'authorization_uri="{base_url}/oauth/authorize"'
+    )
+
+
 def format_call_tool_result(
     result: Any,
     negotiated_version: str,
@@ -578,14 +600,43 @@ class MCPHandler(BaseHandler):
         """
         Handle GET requests to /mcp endpoint.
 
-        For initial discovery, this returns basic information about the MCP server.
-        Authentication will be handled during the MCP protocol negotiation.
+        **An unauthenticated GET must be a 401 challenge, not a document.**
+        The MCP authorization spec has clients discover the authorization
+        server by making an unauthenticated request to the MCP endpoint and
+        reading ``WWW-Authenticate``. This handler used to answer any GET with
+        a bespoke 200 discovery document, so a conformant client trying to log
+        in got a JSON body where the protected-resource metadata should be and
+        failed on the missing ``resource`` field, without ever reaching the
+        real metadata. (Codex reported exactly that: "Protected resource
+        metadata missing required resource field".)
+
+        A GET carrying ``Accept: text/event-stream`` is the spec's
+        server-to-client stream opener, and it needs the same 401 when
+        unauthenticated.
+
+        The document did not move — an authenticated GET still receives it
+        here. It is not duplicated anywhere: ``/mcp/info`` is a separate,
+        differently-shaped info endpoint (it is what the protected-resource
+        metadata's ``resource_documentation`` points at, which is a
+        documentation pointer, not a copy of this body). An unauthenticated
+        caller that wants server metadata should read
+        ``/.well-known/oauth-protected-resource/mcp``, which is where the
+        challenge now sends it.
         """
         if not self.config.mcp:
             return self._mcp_disabled_response()
         try:
-            # For initial discovery, don't require authentication
-            # Return basic server information that MCP clients can use
+            if not self.authenticate_and_get_actor_cached():
+                base_url = f"{self.config.proto}{self.config.fqdn}"
+                self.response.headers["WWW-Authenticate"] = mcp_www_authenticate(
+                    base_url
+                )
+                self.response.set_status(401, "Unauthorized")
+                return {
+                    "error": "invalid_token",
+                    "error_description": "Authentication required for MCP access",
+                }
+
             return {
                 "version": LATEST_PROTOCOL_VERSION,
                 "server_name": "actingweb-mcp",
@@ -649,9 +700,7 @@ class MCPHandler(BaseHandler):
             if not actor:
                 # Set proper HTTP 401 response headers for framework-agnostic handling
                 base_url = f"{self.config.proto}{self.config.fqdn}"
-                # Include error="invalid_token" to force OAuth2 clients to invalidate cached tokens
-                # Per RFC 6750 Section 3.1: https://tools.ietf.org/html/rfc6750#section-3.1
-                www_auth = f'Bearer realm="ActingWeb MCP", error="invalid_token", error_description="Authentication required", authorization_uri="{base_url}/oauth/authorize"'
+                www_auth = mcp_www_authenticate(base_url)
 
                 # Set response headers for authentication challenge
                 self.response.headers["WWW-Authenticate"] = www_auth
@@ -2652,11 +2701,9 @@ class MCPHandler(BaseHandler):
         """Create an error response."""
         if status_code == 401:
             # Add WWW-Authenticate header for ActingWeb OAuth2 server
-            # Include error="invalid_token" to force OAuth2 clients to invalidate cached tokens
-            # Per RFC 6750 Section 3.1: https://tools.ietf.org/html/rfc6750#section-3.1
             try:
                 base_url = f"{self.config.proto}{self.config.fqdn}"
-                www_auth = f'Bearer realm="ActingWeb MCP", error="invalid_token", error_description="Authentication required", authorization_uri="{base_url}/oauth/authorize"'
+                www_auth = mcp_www_authenticate(base_url)
                 if hasattr(self, "response") and self.response:
                     self.response.headers["WWW-Authenticate"] = www_auth
             except Exception as e:

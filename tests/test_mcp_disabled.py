@@ -50,10 +50,28 @@ async def test_post_async_404s_when_mcp_disabled():
 
 
 def test_get_serves_normally_when_mcp_enabled():
-    """Sanity check the gate isn't inverted or unconditional."""
+    """Sanity check the gate isn't inverted or unconditional.
+
+    Authenticates first: an unauthenticated GET is now a 401 challenge, which
+    would mask a 404 from the mcp-disabled gate this test is about.
+    """
     handler = make_mcp_handler()  # make_mcp_config() defaults mcp=True
+    handler.authenticate_and_get_actor_cached = lambda: object()
 
     result = handler.get()
 
     assert handler.response.status_code != 404
     assert result.get("server_name") == "actingweb-mcp"
+
+
+def test_get_404s_when_disabled_rather_than_challenging():
+    """The disabled gate runs before the auth challenge — a disabled MCP
+    endpoint must 404, not advertise an authorization server."""
+    cfg = make_mcp_config()
+    cfg.mcp = False
+    handler = make_mcp_handler(cfg=cfg)
+
+    handler.get()
+
+    assert handler.response.status_code == 404
+    assert "WWW-Authenticate" not in handler.response.headers

@@ -1476,6 +1476,26 @@ Discovery Endpoints (served by integrations):
 - ``/.well-known/oauth-protected-resource``
 - ``/.well-known/oauth-protected-resource/mcp``
 
+The 401 from ``/mcp`` points at the last of these, as RFC 9728 section 5.1
+(and through it the MCP authorization spec) requires — a conformant client
+reads the pointer rather than guessing the well-known location:
+
+.. code-block:: text
+
+   WWW-Authenticate: Bearer realm="ActingWeb MCP", error="invalid_token",
+       error_description="Authentication required",
+       resource_metadata="https://<fqdn>/.well-known/oauth-protected-resource/mcp",
+       authorization_uri="https://<fqdn>/oauth/authorize"
+
+(Sent on one line.) ``error="invalid_token"`` makes clients drop a cached,
+now-invalid token (RFC 6750 section 3.1); ``authorization_uri`` is
+non-standard and kept for clients that already key off it.
+
+All three documents advertise ``scopes_supported`` of ``mcp`` and
+``offline_access``. Every authorization-code token response carries a refresh
+token, so a client may request ``offline_access`` for a long-lived session;
+the granted scope reported in the token response is ``mcp``.
+
 
 Provider Differences (Cheat Sheet)
 ----------------------------------

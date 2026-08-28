@@ -10,7 +10,11 @@ import inspect
 import logging
 from typing import Any
 
-from actingweb.handlers.mcp import MCPHandler, format_call_tool_result
+from actingweb.handlers.mcp import (
+    MCPHandler,
+    format_call_tool_result,
+    mcp_www_authenticate,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -28,13 +32,14 @@ class AsyncMCPHandler(MCPHandler):
         """
         Handle GET requests to /mcp endpoint asynchronously.
 
-        For initial discovery, this returns basic information about the MCP server.
-        Authentication will be handled during the MCP protocol negotiation.
+        An unauthenticated GET is a 401 challenge, not a document — see
+        ``MCPHandler.get()``. This is the method the FastAPI integration
+        actually serves, so it is the one that has to carry the challenge.
 
         The GET method doesn't involve hook execution, so we can delegate to
         the parent's synchronous implementation.
         """
-        # Reuse parent's get() - it doesn't call hooks, just returns metadata
+        # Reuse parent's get() - it doesn't call hooks
         return self.get()
 
     async def post_async(self, data: dict[str, Any]) -> dict[str, Any]:
@@ -78,9 +83,7 @@ class AsyncMCPHandler(MCPHandler):
             if not actor:
                 # Set proper HTTP 401 response headers for framework-agnostic handling
                 base_url = f"{self.config.proto}{self.config.fqdn}"
-                # Include error="invalid_token" to force OAuth2 clients to invalidate cached tokens
-                # Per RFC 6750 Section 3.1: https://tools.ietf.org/html/rfc6750#section-3.1
-                www_auth = f'Bearer realm="ActingWeb MCP", error="invalid_token", error_description="Authentication required", authorization_uri="{base_url}/oauth/authorize"'
+                www_auth = mcp_www_authenticate(base_url)
 
                 # Set response headers for authentication challenge
                 self.response.headers["WWW-Authenticate"] = www_auth

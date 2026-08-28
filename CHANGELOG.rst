@@ -5,6 +5,38 @@ CHANGELOG
 Unreleased
 ----------
 
+v3.14.2: August 28, 2026
+-------------------------
+
+FIXED
+~~~~~
+
+- **The MCP ``401`` challenge did not point at the protected-resource
+  metadata.** ``WWW-Authenticate`` carried only a non-standard
+  ``authorization_uri``, omitting the ``resource_metadata`` parameter that
+  RFC 9728 section 5.1 (and, through it, the MCP authorization spec from
+  ``2025-06-18``) requires. A conformant client had no discovery pointer: it
+  either guessed the well-known location or reported the resource metadata as
+  missing/malformed and never opened the sign-in window — the user sees a
+  configured server that never asks them to authenticate. The challenge now
+  carries ``resource_metadata="<base>/.well-known/oauth-protected-resource/mcp"``
+  alongside the existing ``error="invalid_token"`` and ``authorization_uri``
+  hints, at all three sites that emit it — including the async handler the
+  FastAPI integration actually serves.
+
+CHANGED
+~~~~~~~
+
+- **``offline_access`` is now advertised in ``scopes_supported``** on the
+  authorization-server metadata and both protected-resource variants. The
+  server already issues a refresh token with every authorization-code token
+  response and already advertises the ``refresh_token`` grant; clients that
+  gate long-lived sessions on the scope being listed could re-prompt for
+  authorization. The authorization endpoint does not validate the requested
+  scope, so this is advertising catching up with behaviour — no token
+  semantics changed, and the token response still reports the granted scope
+  as ``mcp``.
+
 v3.14.1: August 25, 2026
 -------------------------
 

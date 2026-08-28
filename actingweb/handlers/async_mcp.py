@@ -10,7 +10,11 @@ import inspect
 import logging
 from typing import Any
 
-from actingweb.handlers.mcp import MCPHandler, format_call_tool_result
+from actingweb.handlers.mcp import (
+    MCPHandler,
+    format_call_tool_result,
+    mcp_www_authenticate,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -78,9 +82,7 @@ class AsyncMCPHandler(MCPHandler):
             if not actor:
                 # Set proper HTTP 401 response headers for framework-agnostic handling
                 base_url = f"{self.config.proto}{self.config.fqdn}"
-                # Include error="invalid_token" to force OAuth2 clients to invalidate cached tokens
-                # Per RFC 6750 Section 3.1: https://tools.ietf.org/html/rfc6750#section-3.1
-                www_auth = f'Bearer realm="ActingWeb MCP", error="invalid_token", error_description="Authentication required", authorization_uri="{base_url}/oauth/authorize"'
+                www_auth = mcp_www_authenticate(base_url)
 
                 # Set response headers for authentication challenge
                 self.response.headers["WWW-Authenticate"] = www_auth

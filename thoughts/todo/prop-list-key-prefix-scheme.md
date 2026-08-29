@@ -85,6 +85,6 @@ separate table, is exactly the §1 design decision above — this adds a
 constraint it has to satisfy, not a new mechanism.
 
 Worth noting for sequencing: the consumer's need is real now but not blocked on
-this. Scoped bulk reads take it from 1,361 RCU to 686 in a patch release; this
+this. Scoped bulk reads take it from 1,361 RCU to 685 in a patch release; this
 scheme is what would take the remaining ~17% off, and it can wait for the major
 bump as planned.

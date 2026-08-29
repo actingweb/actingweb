@@ -52,3 +52,39 @@ That's why it waits for a major version.
    legacy-GSI removal first means the new scheme is designed against the
    *final* lookup-table-only shape rather than one that still has to carry
    the legacy fallback tiers.
+
+## A second motivation: out-of-band per-item payload (added 2026-08-29)
+
+Filed from `thoughts/research/2026-08-29-bulk-list-reads-from-a-consumer.md`,
+which measured a consumer's partition and found **66.3% of it is embedding
+payload no page renders**.
+
+Most of that is already answerable without a key change. Of the 66.3%, the
+`output_embeddings_*` sidecar is 49.8%, and a *scoped* bulk read simply
+excludes it — that is `thoughts/todo/scoped-bulk-list-reads.md` item A, which
+is a 3.14.x patch and needs nothing from this scheme.
+
+What survives is the other **16.7%: vectors stored inside `memory_*` item
+bodies** (90.6% of all `memory_*` bytes are vector). No range read can reach
+that, because those bytes are inside rows the page *does* render — you cannot
+exclude part of a row.
+
+And a consumer-side sidecar does not fix it either. That experiment has already
+been run: outputs moved their vectors out of item bodies into
+`output_embeddings_*`, and those rows landed in the **same partition**, which is
+why they still cost 678 RCU on every whole-partition dump. **Relocating bytes
+within a partition does not reduce what a partition read costs.** That is the
+same insight as this file's 1 MB-ceiling argument, arriving from the cost side
+rather than the limit side.
+
+So the scheme has a second requirement beyond raising the ceiling: **a way for a
+list to carry large per-item payload out of band**, so bulk and range reads over
+the item bodies do not pay for it. Whether that is a separate partition per
+list, a payload-carrying row class excluded from bulk reads by key shape, or a
+separate table, is exactly the §1 design decision above — this adds a
+constraint it has to satisfy, not a new mechanism.
+
+Worth noting for sequencing: the consumer's need is real now but not blocked on
+this. Scoped bulk reads take it from 1,361 RCU to 686 in a patch release; this
+scheme is what would take the remaining ~17% off, and it can wait for the major
+bump as planned.

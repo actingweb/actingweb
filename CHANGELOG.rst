@@ -8,6 +8,23 @@ Unreleased
 FIXED
 ~~~~~
 
+- **A transient read fault could empty a v1 list.** ``verify()``,
+  ``compact()`` and ``migrate_to_v2()`` each read the actor's whole property
+  partition through ``fetch_all_including_lists()`` and ended the line in
+  ``or {}``. PostgreSQL's ``fetch_all_including_lists`` returns ``None`` on a
+  *caught* exception, so a throttle or a dropped connection presented itself
+  as an empty partition: ``compact()`` computed ``ordered_values = []``,
+  deleted rows ``0..stored_length-1`` and wrote ``length: 0`` — and a
+  following ``verify()`` reported the now-empty list ``healthy: true``. All
+  three now read only their own list's rows, through
+  ``get_range(_v1_bounds())``, which **raises** ``DbError`` on a backend
+  fault instead of returning nothing.
+- **Those same three reads are now strongly consistent.** Two of them rewrite
+  destructively from what they read — ``compact()`` writes survivors to
+  ``0..n-1`` then deletes the tail, ``migrate_to_v2()`` deletes v1 rows
+  ``0..highest_seen`` — so a row missed by an eventually consistent replica
+  read was overwritten by its successor and its slot deleted, silently. The
+  v2 counterparts already stated this rule; v1 now agrees.
 - **DynamoDB attribute buckets matched by bare prefix, and one of them
   deleted what it matched.** ``Attribute``'s range key is
   ``bucket + ":" + name``, but ``get_bucket()`` and ``delete_bucket()``
@@ -25,6 +42,24 @@ FIXED
   ``remote``/name ``abc:x`` produce an identical range key and are in fact
   the same row. PostgreSQL compared ``bucket`` exactly on both paths and was
   never affected; the two backends now agree.
+
+CHANGED
+~~~~~~~
+
+- **The v1 list maintenance methods no longer dump the actor's whole property
+  partition.** ``verify()``, ``compact()`` and ``migrate_to_v2()`` read one
+  list through ``get_range()`` over that list's own bounds — the read shape
+  ``_v1_item_names_in_range()`` and every v2 counterpart already used. On an
+  actor with many lists this is roughly one dump's worth of read capacity
+  saved per call rather than spent per list. The user-facing beneficiary is
+  ``_maybe_lazy_migrate()`` (off by default, behind
+  ``ACTINGWEB_LAZY_MIGRATION_MAX_LENGTH``), which runs all three inside a
+  user's ``append()``/``insert()``: three whole-partition dumps in one
+  request become three one-list reads. Reports are unchanged, including
+  ``foreign_format_rows`` — v2 residue rows sort below the v1 bounds, so
+  they now cost one extra keys-only range read, mirroring what ``_v2_verify()``
+  already spends counting v1 residue. On a single-list actor the saving is
+  ~3×, not the headline ratio.
 
 v3.14.2: August 28, 2026
 -------------------------

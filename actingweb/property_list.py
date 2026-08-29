@@ -18,7 +18,7 @@ from typing import Any
 
 import fractional_indexing as fi
 
-from actingweb.db import get_property, get_property_list
+from actingweb.db import get_property
 
 logger = logging.getLogger(__name__)
 
@@ -2739,8 +2739,23 @@ class ListProperty:
         meta = self._load_metadata()
         stored_length = int(meta.get("length", 0) or 0)
 
-        db_list = get_property_list(self.config)
-        rows = db_list.fetch_all_including_lists(actor_id=self.actor_id) or {}
+        # Scoped to this list's own v1 item rows instead of dumping the
+        # whole partition -- _v2_verify() already reads this way, through
+        # _v2_load_full(); this is the v1 path catching up. See
+        # migrate_to_v2() for why _v1_bounds() rather than a name prefix, why
+        # consistent_read=True, and why the trailing "or {}" is gone.
+        #
+        # The report is unchanged: orphan_indices is drawn from `present`,
+        # already filtered by ^list:{name}-(\d+)$, so no orphan shape exists
+        # outside these bounds, and stored_length comes from _load_metadata()
+        # rather than from rows.
+        lower, upper = self._v1_bounds()
+        rows = get_property(self.config).get_range(
+            actor_id=self.actor_id,
+            lower=lower,
+            upper=upper,
+            consistent_read=True,
+        )
 
         pattern = re.compile(rf"^list:{re.escape(self.name)}-(\d+)$")
         present: set[int] = set()
@@ -2774,15 +2789,14 @@ class ListProperty:
                 ]
             )
 
-        # Cross-format residue, counted from the partition dump already in
-        # hand rather than a second range read.
-        v2_prefix = self._v2_item_prefix()
-        v2_prefix_len = len(v2_prefix)
-        foreign_format_rows = sum(
-            1
-            for key in rows
-            if key.startswith(v2_prefix) and _v2_is_rank(key[v2_prefix_len:])
-        )
+        # Cross-format residue. This USED to be counted out of the
+        # whole-partition dump that `rows` came from; the scoped read above
+        # cannot see it, because v2 rows sort at `#` (0x23), BELOW
+        # _v1_bounds()' lower bound `list:{name}-0` (0x30). So it costs one
+        # extra keys-only range read -- the exact mirror of what _v2_verify()
+        # already spends on `len(self._v1_item_names_in_range())`, and still a
+        # rounding error against the dump the pair of them replaced.
+        foreign_format_rows = len(self._v2_item_names_in_range())
 
         report: dict[str, Any] = {
             "stored_length": stored_length,
@@ -3009,8 +3023,20 @@ class ListProperty:
 
         stored_length = report["stored_length"]
 
-        db_list = get_property_list(self.config)
-        rows = db_list.fetch_all_including_lists(actor_id=self.actor_id) or {}
+        # Scoped, strongly-consistent, and no "or {}" -- see the identical
+        # read in migrate_to_v2() for the full argument. compact() is the
+        # sharpest case for all three: it writes survivors to 0..n-1 and then
+        # deletes len(ordered_values)..highest_seen, so a read that under-
+        # reports leaves the list shorter than it was, and a read FAULT used
+        # to compute ordered_values = [], delete rows 0..stored_length-1 and
+        # write length: 0. get_range() raises DbError instead.
+        lower, upper = self._v1_bounds()
+        rows = get_property(self.config).get_range(
+            actor_id=self.actor_id,
+            lower=lower,
+            upper=upper,
+            consistent_read=True,
+        )
 
         ordered_values: list[str] = [
             rows[self._get_item_property_name(i)]
@@ -3176,8 +3202,37 @@ class ListProperty:
 
         stored_length = report["stored_length"]
 
-        db_list = get_property_list(self.config)
-        rows = db_list.fetch_all_including_lists(actor_id=self.actor_id) or {}
+        # One scoped read of this list's own v1 item rows, not a
+        # whole-partition dump: fetch_all_including_lists() costs roughly one
+        # dump per list on a typical actor, which is why
+        # _v1_item_names_in_range() has never used it.
+        #
+        # _v1_bounds(), not a f"list:{name}" prefix -- the prefix would also
+        # match sibling lists sharing the name as a prefix (list "output"
+        # matching list:output_embeddings_*), which on a measured account is
+        # 403 rows and 678 RCU. The bounds span list:{name}-0 .. list:{name}-:
+        # and exclude both the -meta row and every v2 row.
+        #
+        # consistent_read=True, unlike the eventual public bulk path
+        # (PropertyListStore.list_prefix_with_rows()): this read is the input
+        # to a destructive rewrite. migrate_to_v2() deletes v1 rows
+        # 0..highest_seen below, so a row missed by a stale replica read has
+        # its slot deleted silently. Once the read is scoped to one list,
+        # strong consistency costs ~6-13 RCU more -- about 1% of what the
+        # scoping just saved. property_list.py's v2 twins already state this
+        # rule; this makes v1 agree.
+        #
+        # No "or {}": get_range() raises DbError on a backend fault, where
+        # fetch_all_including_lists() returned None on PostgreSQL and the
+        # trailing "or {}" turned a transient read fault into "every index is
+        # missing" -- and then into a destructive rewrite from nothing.
+        lower, upper = self._v1_bounds()
+        rows = get_property(self.config).get_range(
+            actor_id=self.actor_id,
+            lower=lower,
+            upper=upper,
+            consistent_read=True,
+        )
 
         ordered_values: list[str] = [
             rows[self._get_item_property_name(i)]
@@ -3187,10 +3242,11 @@ class ListProperty:
 
         # Re-check the stored format one last time before the first
         # destructive write. The gap between the check above and here spans
-        # verify()'s and fetch_all_including_lists()' partition reads -- wide
-        # enough for a concurrent migration to land in it. Reading the meta
-        # row directly (not through the cache, which verify() just
-        # repopulated) is what makes this a real second look.
+        # verify()'s read and the item-row read above -- narrower than it was
+        # when both were partition dumps, but still wide enough for a
+        # concurrent migration to land in it. Reading the meta row directly
+        # (not through the cache, which verify() just repopulated) is what
+        # makes this a real second look.
         format_db = get_property(self.config)
         current_meta_str = format_db.get(
             actor_id=self.actor_id, name=self._get_meta_property_name()

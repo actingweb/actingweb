@@ -290,13 +290,44 @@ effects.
 
 ### Verification
 
-- [ ] `poetry run pytest tests/test_property_list_integrity.py tests/test_v2_consistent_read.py -v` passes
-- [ ] `poetry run pytest tests/integration/test_property_list_migration.py -v` passes
-- [ ] `poetry run pytest tests/integration/test_verify_property_lists_script.py -v` passes
-- [ ] `poetry run ruff check actingweb tests` passes
-- [ ] `poetry run pyright actingweb tests` reports 0 errors
+- [x] `poetry run pytest tests/test_property_list_integrity.py tests/test_v2_consistent_read.py -v` passes
+- [x] `poetry run pytest tests/test_v1_maintenance_scoped_reads.py -v` passes (18 new tests)
+- [x] `poetry run pytest tests/integration/test_property_list_migration.py -v` passes on both backends
+- [x] `poetry run pytest tests/integration/test_verify_property_lists_script.py -v` passes on both backends
+- [x] `poetry run ruff check actingweb tests` passes
+- [x] `poetry run pyright actingweb tests` reports 0 errors
+- [x] Whole suite green: 2,278 unit + 888 integration, DynamoDB; the touched
+  integration files also green on PostgreSQL
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+**Deviations and learnings:**
+
+- **The plan's correctness argument had a hole: `foreign_format_rows`.** v1
+  `verify()` also counts v2-shaped residue rows, and it counted them out of the
+  partition dump. Those rows sort at `#` (0x23), **below** `_v1_bounds()`'s
+  lower bound `list:{name}-0` (0x30), so the scoped read cannot see them — four
+  existing tests caught it immediately. It now costs one extra keys-only
+  `get_range` via the already-existing `_v2_item_names_in_range()`, which is the
+  exact mirror of what `_v2_verify()` already spends on
+  `len(self._v1_item_names_in_range())`. So verify() issues two scoped reads,
+  not one, and the plan's "exactly one `get_range` each" test was written as
+  "every `get_range` is scoped to this list's own rows" instead.
+- **`get_property_list` is no longer imported by `property_list.py` at all** —
+  these three were its only callers there. That removed the import, which broke
+  27 monkeypatches of `actingweb.property_list.get_property_list` in
+  `test_property_list_integrity.py`. Deleting them is a strengthening, not a
+  concession: those tests now exercise the real scoped read through
+  `FakePropertyDb.get_range` rather than a hand-fed partition dict. Two AST
+  guards pin it (no `fetch_all_including_lists` call anywhere in the module, and
+  the name is not imported).
+- **The data-loss claim was demonstrated, not assumed.** Against the pre-fix
+  code, with `fetch_all_including_lists` returning `None` (PostgreSQL's
+  caught-exception return), `compact()` on a healthy 3-item list deleted all 3
+  item rows and wrote `length: 0`, reporting `missing_indices: [0, 1, 2]`.
+- **A `CountingPropertyDb` spy asserting zero `fetch_all_including_lists()`
+  calls would now be vacuous** — the module cannot reach that method any more.
+  The AST guards replace it and cover paths no test triggers.
 
 ---
 

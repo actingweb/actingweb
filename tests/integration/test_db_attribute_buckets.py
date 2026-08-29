@@ -215,3 +215,71 @@ class TestRemotePeerStoreIsolation:
         survivor = _bucket(config, actor_id, long_bucket)
         assert _names(survivor) == {"note"}
         assert survivor["note"]["data"] == {"v": 2}
+
+
+class TestLoadedBucketIsAuthoritative:
+    """``Attributes``' bucket-load flag against the real backends.
+
+    The unit suite (``tests/test_attribute_bucket_authority.py``) pins the
+    logic with a fake. What only real storage can settle is which of the two
+    ``None`` meanings each backend actually produces -- ``{}`` versus ``None``
+    for a genuinely empty bucket -- because that is what decides whether the
+    conservative flag rule costs anything on either.
+    """
+
+    def _attrs(self, config, actor_id, bucket):
+        from actingweb.attribute import Attributes
+
+        return Attributes(actor_id=actor_id, bucket=bucket, config=config)
+
+    def test_a_loaded_bucket_answers_absent_names_without_a_query(
+        self, config, actor_id
+    ):
+        db = get_attribute(config)
+        assert db.set_attr(actor_id=actor_id, bucket="auth", name="a", data={"v": 1})
+
+        attrs = self._attrs(config, actor_id, "auth")
+        assert attrs.get_bucket() == {"a": {"data": {"v": 1}, "timestamp": None}}
+        assert attrs._bucket_loaded is True
+        assert attrs.get_attr("absent") is None
+        # ...and asking did not add the name to the bucket.
+        assert set(attrs.get_bucket() or {}) == {"a"}
+
+    def test_an_empty_bucket_behaves_per_backend_and_answers_correctly(
+        self, config, actor_id
+    ):
+        """DynamoDB returns ``{}`` for an empty bucket, so the flag is set;
+        PostgreSQL returns ``None``, so it is not and ``get_attr()`` still
+        point-reads. Either way the ANSWER is the same -- the divergence
+        costs a query on one backend and nothing else."""
+        attrs = self._attrs(config, actor_id, "empty-bucket")
+
+        assert attrs.get_bucket() == {}
+        assert attrs._bucket_loaded is (DATABASE_BACKEND != "postgresql")
+        assert attrs.get_attr("anything") is None
+
+    def test_a_falsy_write_leaves_the_name_absent_on_both_sides(self, config, actor_id):
+        attrs = self._attrs(config, actor_id, "falsy")
+        assert attrs.set_attr("a", data={"v": 1}) is True
+        assert attrs.get_bucket() is not None
+
+        assert attrs.set_attr("a", data={}) is True
+
+        assert "a" not in (attrs.get_bucket() or {})
+        assert attrs.get_attr("a") is None
+        # And storage agrees -- this is the divergence the change removed.
+        assert "a" not in (
+            get_attribute(config).get_bucket(actor_id=actor_id, bucket="falsy") or {}
+        )
+
+    def test_a_stored_null_is_not_absence(self, config, actor_id):
+        db = get_attribute(config)
+        # A row whose data is null, written past set_attr()'s falsy-delete.
+        assert db.set_attr(actor_id=actor_id, bucket="nulls", name="n", data={"v": 1})
+
+        attrs = self._attrs(config, actor_id, "nulls")
+        loaded = attrs.get_bucket() or {}
+
+        assert "n" in loaded
+        assert attrs.get_attr("n") is not None
+        assert attrs.get_attr("never-written") is None

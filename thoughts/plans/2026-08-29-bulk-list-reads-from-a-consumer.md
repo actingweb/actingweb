@@ -758,13 +758,39 @@ consumer wrote a seven-line comment to justify.
 
 ### Verification
 
-- [ ] `poetry run pytest tests/test_attribute.py -v` passes
-- [ ] `poetry run pytest tests/integration/test_attributes.py -v` passes on both backends
-- [ ] `poetry run pytest tests/ -k "oauth or token" -v` passes
-- [ ] `poetry run ruff check actingweb tests` passes
-- [ ] `poetry run pyright actingweb tests` reports 0 errors
+- [x] `poetry run pytest tests/test_attribute.py -v` passes (unchanged)
+- [x] `poetry run pytest tests/test_attribute_bucket_authority.py -v` passes (28 new; 19 fail without the change)
+- [x] `poetry run pytest tests/integration/test_db_attribute_buckets.py -v` passes on both backends (10 each)
+- [x] `poetry run pytest tests/ -k "oauth or token" -v` passes (332)
+- [x] `poetry run ruff check actingweb tests` passes
+- [x] `poetry run pyright actingweb tests` reports 0 errors
+- [x] Whole suite green: 2,361 unit, 911 integration
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+**Deviations and learnings:**
+
+- **The premise correction recorded above was written into the code**, not just
+  the plan: `get_bucket()`'s docstring now says which fault shapes actually
+  produce `None` on each backend, and notes that on DynamoDB a throttle raises
+  through the method rather than returning `None` at all — because
+  `DbAttribute.get_bucket()` wraps only the Query construction while PynamoDB
+  fires the request lazily during iteration.
+- **The integration test asserts the divergence rather than papering over it.**
+  `attrs._bucket_loaded is (DATABASE_BACKEND != "postgresql")` after loading a
+  genuinely empty bucket: DynamoDB returns `{}` and is trusted, PostgreSQL
+  returns `None` and is not. The *answer* is identical on both; the divergence
+  costs one point read on PostgreSQL and nothing else. So a later backend
+  alignment (`thoughts/todo/`) changes a test rather than surprising someone.
+- **`set_attr()` needed restructuring, not a one-line guard.** The old body
+  unconditionally built `self.data[name] = {}` before assigning; the falsy
+  branch has to `pop` instead, and the truthy branch keeps the old shape.
+  `not data`, not `data is None` — `{}`, `[]`, `""`, `0` and `False` all delete
+  on both backends, each covered by a parametrised case.
+- **`InternalStore` keeps its own `_loaded` latch**, so a faulted load still
+  leaves that instance looking empty — unchanged by this phase, and given an
+  explicit test so the difference from `Attributes` is not later mistaken for a
+  regression introduced here.
 
 ---
 

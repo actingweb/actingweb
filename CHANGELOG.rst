@@ -113,6 +113,33 @@ ADDED
 CHANGED
 ~~~~~~~
 
+- **Behavior change**: **a fully-loaded attribute bucket is now authoritative.**
+  After ``Attributes.get_bucket()`` returns, ``get_attr()`` answers ``None`` for
+  a name absent from the loaded dict *without* a point read — where before every
+  absent name cost one read per instance. Nothing raises or warns, so this note
+  is the discovery mechanism. What changes observably: a long-lived
+  ``Attributes`` instance loses the accidental first-miss re-read, so an
+  attribute written by *another* process after this instance loaded the bucket
+  is not seen by ``get_attr()`` on it. Library call sites are unaffected —
+  every ``Attributes`` in the permission and token paths is constructed per
+  call — but note that ``handlers/mcp.py`` caches an ``ActorInterface`` on a
+  sliding five-minute TTL, so instances there can outlive a single request.
+  Call ``delete_bucket()``, or construct a fresh ``Attributes``, to force a
+  re-read. Two supporting corrections ride with it: the "loaded" flag is now set
+  only when the backend actually returned a dict, so a faulted read can never
+  present itself as "the bucket has no such attribute"; and ``get_attr()`` no
+  longer caches its misses into the loaded bucket, which used to make
+  ``get_bucket()`` report names that have no stored row.
+- **Behavior change**: **``Attributes.set_attr()`` now mirrors the backends'
+  falsy delete.** Both backends treat a falsy ``data`` as a delete and return
+  ``True`` — ``delete_attr()`` is literally ``set_attr(data=None)`` — while the
+  in-memory dict cached ``{"data": <falsy>, "timestamp": ...}``. So
+  ``set_attr(name, data={})`` (or ``[]``, ``""``, ``0``, ``False``) removed the
+  row but left the name present in the cache. The name is now dropped from the
+  cache too. "Absent" stays distinguishable from "present with a null value": a
+  stored row holding ``null`` still reads back as the truthy dict
+  ``{"data": None, "timestamp": ...}``.
+
 - **The v1 list maintenance methods no longer dump the actor's whole property
   partition.** ``verify()``, ``compact()`` and ``migrate_to_v2()`` read one
   list through ``get_range()`` over that list's own bounds — the read shape

@@ -81,6 +81,30 @@ class Attributes:
         a set_attr()/get_attr() may have cached individual entries, and
         treating a partially-cached dict as "loaded" would silently return
         an incomplete bucket.
+
+        ``_bucket_loaded`` is set only when the backend actually RETURNED A
+        DICT, and it means "loaded, and the backend answered". That
+        distinction is load-bearing now that ``get_attr()`` treats the flag
+        as authoritative about ABSENCE: a bucket that could not be read
+        must not become "the bucket has no such attribute", permanently,
+        for the life of this instance.
+
+        Both backends return ``None`` for a caught exception, and
+        PostgreSQL additionally returns it for a genuinely EMPTY bucket
+        (see the comment below and ``db/postgresql/attribute.py``). Not
+        distinguishing those is deliberate and conservative: on PostgreSQL
+        an empty bucket is simply never trusted, so ``get_attr()`` still
+        point-reads there, which costs nothing real — an empty bucket has
+        no absent-name savings to give up. Aligning the two backends'
+        empty-vs-fault contract is filed separately rather than smuggled in
+        here; the conservative version cannot break a caller that a grep
+        did not find.
+
+        Note that on DynamoDB most real faults do not arrive as ``None`` at
+        all: ``DbAttribute.get_bucket()`` wraps only the Query
+        CONSTRUCTION, and PynamoDB fires the request lazily during
+        iteration, so a throttle mid-page raises straight through this
+        method with the flag still unset — already the safe outcome.
         """
         if not self._bucket_loaded:
             if self.dbprop:
@@ -93,19 +117,38 @@ class Attributes:
                 else:
                     # Cast needed due to dict invariance in value types
                     self.data = cast(dict[str, dict[str, Any] | None], fetched_data)
+                    self._bucket_loaded = True
             else:
                 self.data = {}
-            self._bucket_loaded = True
+                self._bucket_loaded = True
         return self.data
 
     def get_attr(self, name: str | None = None) -> dict[str, Any] | None:
-        """Retrieves a single attribute"""
+        """Retrieves a single attribute.
+
+        A fully-loaded bucket is AUTHORITATIVE: once ``get_bucket()`` has
+        returned a dict, a name absent from it is absent from storage, and
+        answering ``None`` here costs no query. Before, every absent name
+        cost one point read per instance.
+
+        The early return also stops this method polluting a loaded bucket.
+        The miss path below caches ``self.data[name] = None``, and
+        ``get_bucket()`` returns ``self.data`` BY IDENTITY — so a loaded
+        bucket used to grow keys that have no stored row, and a caller
+        iterating the "bucket" saw names that do not exist.
+
+        "Absent" stays distinguishable from "present with a null value": a
+        stored row holding ``null`` reads back as the truthy dict
+        ``{"data": None, "timestamp": ...}``, while absence is ``None``.
+        """
         if not name:
             return None
         # Ensure self.data is initialized (defensive check)
         if self.data is None:
             self.data = {}
         if name not in self.data:
+            if self._bucket_loaded:
+                return None
             if self.dbprop:
                 self.data[name] = self.dbprop.get_attr(
                     actor_id=self.actor_id, bucket=self.bucket, name=name
@@ -136,12 +179,21 @@ class Attributes:
         if self.data is None:
             self.data = {}
         assert self.data is not None  # Type narrowing for pyright
-        if name not in self.data or self.data[name] is None:
-            self.data[name] = {}
-        attr_data = self.data[name]
-        assert attr_data is not None  # Type narrowing for pyright
-        attr_data["data"] = data
-        attr_data["timestamp"] = timestamp
+        if not data:
+            # Both backends treat a FALSY data as a delete and return True
+            # (delete_attr() is literally set_attr(data=None)), so caching
+            # an entry here would make the dict disagree with storage about
+            # presence -- and get_attr() now treats a loaded dict as
+            # authoritative about absence. `not data`, not `data is None`:
+            # {} / [] / "" / 0 / False all delete on the backend too.
+            self.data.pop(name, None)
+        else:
+            if self.data.get(name) is None:
+                self.data[name] = {}
+            attr_data = self.data[name]
+            assert attr_data is not None  # Type narrowing for pyright
+            attr_data["data"] = data
+            attr_data["timestamp"] = timestamp
         if self.dbprop:
             return self.dbprop.set_attr(
                 actor_id=self.actor_id,

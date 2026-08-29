@@ -179,6 +179,46 @@ Every method ``actor.property_lists.<name>`` exposes -- ``to_list()``,
 so on -- is reachable through the authenticated view with the matching
 permission check applied per call, not once when the list was obtained.
 
+Bulk reads
+~~~~~~~~~~
+
+The three bulk readers are defined on the view itself and filter by
+permission in **one** bulk evaluation, not one check per list:
+
+.. code-block:: python
+
+    names = peer_view.property_lists.list_all()
+    names, rows = peer_view.property_lists.list_all_with_rows()
+    names, rows = peer_view.property_lists.list_prefix_with_rows("memory_")
+
+    for name in names:                       # only lists this peer may read
+        items = getattr(peer_view.property_lists, name).to_list_from_rows(rows)
+
+A denied list is removed from **both** halves of the result -- its name from
+``names`` and every one of its rows from ``rows`` -- using the library's own
+row-attribution logic, so a permitted sibling such as ``foo-old`` keeps all
+its rows when ``foo`` is denied. A denied list is simply absent: nothing
+raises, and no denied name appears in any message or in this module's log
+records. If the permission system itself fails, the result is empty
+(``[]`` / ``([], {})``) rather than partial, following the REST
+``/properties`` handler's "exclude all list properties on error". As with
+``exists()``, an empty result is therefore indistinguishable from "this
+actor has no such lists". Everything else about the three methods --
+``prefix`` semantics, the cost contrast with the whole-partition read, and
+that ``list_prefix_with_rows()`` raises ``ValueError`` on an empty prefix
+and ``DbError`` on a backend fault -- is exactly as documented for the
+unauthenticated store in :doc:`/guides/property-lists`.
+
+Before 3.14.3 these calls fell through ``__getattr__`` and raised
+``TypeError``, the same way the removed ``create()`` did. The repair has one
+consequence worth knowing: a list whose name **collides with a store method**
+-- ``exists``, ``list_all``, ``list_all_with_rows``,
+``list_prefix_with_rows`` -- now raises ``AttributeError`` through the
+authenticated view rather than resolving either way. That is deliberate:
+resolving such a name to the underlying store's method would hand a
+permission-scoped accessor an unfiltered whole-partition read. Such a list
+is still reachable through the unauthenticated ``actor.property_lists``.
+
 Permission Errors
 -----------------
 

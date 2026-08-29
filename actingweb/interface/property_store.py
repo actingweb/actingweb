@@ -548,8 +548,35 @@ class PropertyListStore:
         The rows are an opaque, point-in-time snapshot of the actor's
         whole partition: feed them to a list's `prime_from_rows()` /
         `to_list_from_rows()`, never inspect or parse a row name.
+
+        For ONE namespace of lists see `list_prefix_with_rows()`. Its cost
+        does not go the way the names suggest: on a measured account this
+        dump was 1,361.0 RCU over 11 queries and the five scoped reads
+        covering the same lists were 1,363.5 over 15, so replacing one dump
+        with several scoped calls is marginally worse. Note also that this
+        method swallows a backend fault to `([], {})` while
+        `list_prefix_with_rows()` raises -- see there for why.
         """
         return self._core_store.list_all_with_rows()
+
+    def list_prefix_with_rows(self, prefix: str) -> tuple[list[str], dict[str, str]]:
+        """List property names beginning with `prefix`, and their rows --
+        see `property.PropertyListStore.list_prefix_with_rows()` for the
+        full contract.
+
+        BOTH halves are scoped: `names` holds only the matching lists. Code
+        migrating from `list_all_with_rows()` that keeps iterating `names`
+        silently stops seeing every list outside the prefix.
+
+        `prefix` is a prefix, not a namespace -- it also matches a list
+        named exactly `prefix` and siblings like `{prefix}-old`. Pass the
+        delimiter (`"memory_"`, not `"memory"`) if you mean a namespace.
+
+        Reads are eventually consistent; a backend fault RAISES `DbError`
+        rather than returning empty, because for a scoped read an empty
+        result is an ordinary answer. An empty `prefix` raises `ValueError`.
+        """
+        return self._core_store.list_prefix_with_rows(prefix)
 
     def __getattr__(self, name: str) -> NotifyingListProperty:
         """Return a NotifyingListProperty for the requested list name."""

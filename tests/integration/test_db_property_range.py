@@ -284,3 +284,164 @@ class TestGetLastInRange:
             actor_id=actor_id, lower="list:glcase-#", upper="list:glcase-$"
         )
         assert result == "list:glcase-#a"  # bytewise-greatest, not locale-greatest
+
+
+class TestGetPrefix:
+    """``get_prefix()`` -- the sibling ``get_range()`` cannot express, because
+    a prefix has no exact inclusive upper bound. Every synthesised sentinel
+    (``prefix + "~"``, ``prefix + "\\uffff"``) is a guess about which byte
+    sorts last, and byte ordering does not even agree across PostgreSQL
+    collations. These run against real storage on both backends precisely
+    because a fake would agree with whatever the implementation does.
+    """
+
+    def test_prefix_returns_exactly_the_rows_under_it(self, config, actor_id):
+        db = get_property(config)
+        assert db.set(actor_id=actor_id, name="list:memory_a-meta", value="{}")
+        assert db.set(actor_id=actor_id, name="list:memory_a-#a0", value='"one"')
+        assert db.set(actor_id=actor_id, name="list:memory_b-meta", value="{}")
+        # Outside: a different family, and a plain property.
+        assert db.set(actor_id=actor_id, name="list:notes-meta", value="{}")
+        assert db.set(actor_id=actor_id, name="memory_a", value="scalar")
+
+        result = get_property(config).get_prefix(
+            actor_id=actor_id, prefix="list:memory_"
+        )
+
+        assert result == {
+            "list:memory_a-meta": "{}",
+            "list:memory_a-#a0": '"one"',
+            "list:memory_b-meta": "{}",
+        }
+
+    def test_a_prefix_includes_the_list_named_exactly_that(self, config, actor_id):
+        """The documented semantics, and the reason the public wrapper tells
+        callers to pass the delimiter: ``"memory"`` means "and everything
+        beginning with it", not "the memory namespace"."""
+        db = get_property(config)
+        assert db.set(actor_id=actor_id, name="list:memory-meta", value="{}")
+        assert db.set(actor_id=actor_id, name="list:memory_a-meta", value="{}")
+        assert db.set(actor_id=actor_id, name="list:memory-old-meta", value="{}")
+
+        broad = get_property(config).get_prefix(actor_id=actor_id, prefix="list:memory")
+        narrow = get_property(config).get_prefix(
+            actor_id=actor_id, prefix="list:memory_"
+        )
+
+        assert set(broad) == {
+            "list:memory-meta",
+            "list:memory_a-meta",
+            "list:memory-old-meta",
+        }
+        assert set(narrow) == {"list:memory_a-meta"}
+
+    def test_non_ascii_prefix_and_row_names(self, config, actor_id):
+        """The case a ``~``-style sentinel gets wrong: ``é`` (U+00E9) encodes
+        to bytes above ``~`` (0x7E), so a synthesised upper bound of
+        ``list:étag~`` excludes rows a prefix read must return."""
+        db = get_property(config)
+        assert db.set(actor_id=actor_id, name="list:étag-meta", value="{}")
+        assert db.set(actor_id=actor_id, name="list:étag-#a0", value='"é-item"')
+        assert db.set(actor_id=actor_id, name="list:étagère-meta", value="{}")
+        assert db.set(actor_id=actor_id, name="list:etag-meta", value="{}")
+
+        result = get_property(config).get_prefix(actor_id=actor_id, prefix="list:éta")
+
+        assert set(result) == {
+            "list:étag-meta",
+            "list:étag-#a0",
+            "list:étagère-meta",
+        }
+
+    def test_no_unicode_normalization_on_either_backend(self, config, actor_id):
+        """An NFD prefix must not match an NFC name, nor the reverse. Both
+        ``begins_with`` and ``starts_with()`` compare bytes; this pins that
+        they agree, since a backend that normalized would return the row."""
+        nfc = "list:café-meta"  # café, precomposed
+        nfd_prefix = "list:café"  # cafe + combining acute
+        assert nfc != "list:café-meta"
+
+        assert get_property(config).set(actor_id=actor_id, name=nfc, value="{}")
+
+        assert (
+            get_property(config).get_prefix(actor_id=actor_id, prefix=nfd_prefix) == {}
+        )
+        assert set(
+            get_property(config).get_prefix(actor_id=actor_id, prefix="list:café")
+        ) == {nfc}
+
+    def test_adversarial_names_are_matched_byte_for_byte(self, config, actor_id):
+        """``_`` and ``%`` are LIKE metacharacters; this method uses neither
+        ``LIKE`` nor a pattern language, so both are literal. ``#`` and ``$``
+        are the v2 rank sentinel and its successor byte."""
+        db = get_property(config)
+        names = [
+            "list:foo-#a0",
+            "list:foo-$weird",
+            "list:foo%pct-meta",
+            "list:foo_und-meta",
+            "list:fooX-meta",
+            "list:foo-meta",
+        ]
+        for n in names:
+            assert db.set(actor_id=actor_id, name=n, value="v")
+
+        # "_" is literal: it must NOT act as LIKE's single-character wildcard.
+        assert set(
+            get_property(config).get_prefix(actor_id=actor_id, prefix="list:foo_")
+        ) == {"list:foo_und-meta"}
+        # "%" likewise.
+        assert set(
+            get_property(config).get_prefix(actor_id=actor_id, prefix="list:foo%")
+        ) == {"list:foo%pct-meta"}
+        # And a name that is a prefix of another is included, not excluded.
+        assert set(
+            get_property(config).get_prefix(actor_id=actor_id, prefix="list:foo-")
+        ) == {"list:foo-#a0", "list:foo-$weird", "list:foo-meta"}
+
+    def test_empty_prefix_returns_empty_and_raises_nothing(self, config, actor_id):
+        """PostgreSQL's ``starts_with(x, '')`` is true for every row and
+        DynamoDB's ``begins_with(name, "")`` is a ValidationException — so
+        the guard is what makes the two backends agree, and stops a method
+        named for a prefix silently becoming a partition dump."""
+        assert get_property(config).set(
+            actor_id=actor_id, name="list:anything-meta", value="{}"
+        )
+
+        assert get_property(config).get_prefix(actor_id=actor_id, prefix="") == {}
+        assert get_property(config).get_prefix(actor_id=actor_id, prefix=None) == {}
+        assert get_property(config).get_prefix(actor_id=None, prefix="list:") == {}
+
+    def test_no_match_returns_empty_dict(self, config, actor_id):
+        assert (
+            get_property(config).get_prefix(actor_id=actor_id, prefix="list:nothere")
+            == {}
+        )
+
+    def test_keys_only_returns_empty_values(self, config, actor_id):
+        db = get_property(config)
+        assert db.set(actor_id=actor_id, name="list:ko_a-meta", value="{}")
+        assert db.set(actor_id=actor_id, name="list:ko_b-meta", value="{}")
+
+        result = get_property(config).get_prefix(
+            actor_id=actor_id, prefix="list:ko_", keys_only=True
+        )
+
+        assert result == {"list:ko_a-meta": "", "list:ko_b-meta": ""}
+
+    def test_eventual_and_strong_reads_return_the_same_rows(self, config, actor_id):
+        """``consistent_read`` is forwarded, not dropped. PostgreSQL ignores
+        it by construction; on DynamoDB Local both modes read the same store,
+        so this asserts the parameter is accepted and the result unchanged —
+        the cost difference is not observable from here."""
+        db = get_property(config)
+        assert db.set(actor_id=actor_id, name="list:cr_a-meta", value="{}")
+
+        strong = get_property(config).get_prefix(
+            actor_id=actor_id, prefix="list:cr_", consistent_read=True
+        )
+        eventual = get_property(config).get_prefix(
+            actor_id=actor_id, prefix="list:cr_", consistent_read=False
+        )
+
+        assert strong == eventual == {"list:cr_a-meta": "{}"}

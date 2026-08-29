@@ -527,6 +527,50 @@ class DbProperty:
         except Exception as e:
             raise DbError("property range read", actor_id) from e
 
+    def get_prefix(
+        self,
+        actor_id: str | None = None,
+        prefix: str | None = None,
+        keys_only: bool = False,
+        consistent_read: bool = True,
+    ) -> dict[str, str]:
+        """Read rows whose name begins with ``prefix``.
+
+        See ``DbPropertyProtocol.get_prefix`` for the contract. Uses
+        DynamoDB's native ``begins_with`` on the range key, which is EXACT
+        for an arbitrary UTF-8 prefix: String sort keys are ordered by
+        their UTF-8 bytes, and UTF-8 is prefix-preserving, so "sorts under
+        this prefix" and "starts with these bytes" are the same set. That
+        is why this is not a ``get_range`` with a synthesised upper bound —
+        no such bound is exact.
+
+        ``begins_with`` performs NO Unicode normalization, so an NFD prefix
+        does not match an NFC name. This is deliberate and matches
+        PostgreSQL's ``starts_with()``; it is what makes the two backends
+        return byte-identical key sets.
+
+        The empty prefix is rejected here rather than passed down:
+        ``begins_with(name, "")`` is a ``ValidationException``.
+        """
+        if not actor_id or not prefix:
+            return {}
+
+        condition = Property.name.startswith(prefix)
+        attributes_to_get = ["name"] if keys_only else ["name", "value"]
+
+        try:
+            results: dict[str, str] = {}
+            for item in Property.query(
+                actor_id,
+                range_key_condition=condition,
+                consistent_read=consistent_read,
+                attributes_to_get=attributes_to_get,
+            ):
+                results[str(item.name)] = "" if keys_only else str(item.value or "")
+            return results
+        except Exception as e:
+            raise DbError("property prefix read", actor_id) from e
+
     def create_if_not_exists(
         self, actor_id: str | None = None, name: str | None = None, value: Any = None
     ) -> bool:

@@ -460,9 +460,10 @@ Reading Many Lists Cheaply
 
 If your code needs the *contents* of several of an actor's lists at once
 -- rendering a dashboard, say -- fetching each list separately means one
-database read per list. ``list_all_with_rows()`` fetches everything the
-actor has in one read instead, so you can fill in each list from data you
-already have:
+database read per list. Two methods return the names **and** the raw rows
+in one read, so you can fill in each list from data you already have.
+
+**All of them**, when you want everything the actor has:
 
 .. code-block:: python
 
@@ -472,14 +473,71 @@ already have:
        lst.prime_from_rows(rows)          # uses `rows`, no extra read
        items = lst.to_list_from_rows(rows)
 
-Treat ``rows`` as a snapshot from the moment you fetched it -- it won't
-reflect a change made a moment later -- and pass it straight into
-``prime_from_rows()``/``to_list_from_rows()`` rather than inspecting it
-yourself; its internal shape isn't part of the public API and may change
-in a future release. This also doesn't change the cost of position-based
-access covered above (``lst[i]``, ``pop()``, ``remove()``) -- those still
-check the list's current state directly, on purpose, so they can't return
-or destroy the wrong item using data that might already be out of date.
+**One namespace of them**, when your page only renders lists sharing a
+name prefix -- ``memory_personal``, ``memory_travel``, ``memory_food``:
+
+.. code-block:: python
+
+   names, rows = actor.property_lists.list_prefix_with_rows("memory_")
+   for name in names:                     # only the memory_* lists
+       lst = getattr(actor.property_lists, name)
+       items = lst.to_list_from_rows(rows)
+
+``prefix`` is a **prefix, not a namespace**. It also matches a list named
+exactly ``memory``, and siblings such as ``memory-old``. Pass the
+delimiter if you mean a namespace: ``"memory_"``, not ``"memory"``.
+
+Both halves of the return are scoped: ``names`` holds only the matching
+lists. That is worth reading twice, because it is the way a switch from
+``list_all_with_rows()`` goes wrong quietly -- code that keeps iterating
+``names`` simply stops seeing every list outside the prefix, and nothing
+raises.
+
+The two also differ on errors, deliberately.
+``list_all_with_rows()`` returns ``([], {})`` if the read fails;
+``list_prefix_with_rows()`` raises ``DbError``. For a scoped read an
+empty result is a perfectly ordinary answer, so swallowing a failure
+would present a throttled query as "you have no memories". An empty
+prefix raises ``ValueError`` rather than silently becoming the
+whole-partition read.
+
+When the scoped read actually pays
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Not universally, and the naming invites the wrong assumption. On a
+measured production account, ``list_all_with_rows()`` cost 1,361.0 read
+units across 11 chained pages; the five scoped reads covering the same
+lists cost 1,363.5 across 15 queries. **Summing several scoped reads over
+everything is marginally worse than one whole-partition read.** The
+saving comes entirely from the lists you *skip*: reading one namespace
+out of five cost 685.0 units across 8 queries, half the dump.
+
+The latency win is yours to take, not the library's. Each call is one
+synchronous query; the library issues no concurrent reads and spawns no
+threads. What makes several scoped reads faster than one dump is issuing
+them from independent request handlers or an async gather -- and the
+floor is not one round trip but the deepest pagination chain among them,
+since a large list still pages.
+
+One consequence of reading each namespace separately: two lists returned
+by two different calls reflect two different instants. There is no
+snapshot isolation across calls, and none across lists within one call
+either.
+
+For both methods, treat ``rows`` as a snapshot from the moment you
+fetched it -- it won't reflect a change made a moment later -- and pass
+it straight into ``prime_from_rows()``/``to_list_from_rows()`` rather
+than inspecting it yourself; its internal shape isn't part of the public
+API and may change in a future release. Neither changes the cost of
+position-based access covered above (``lst[i]``, ``pop()``,
+``remove()``) -- those still check the list's current state directly, on
+purpose, so they can't return or destroy the wrong item using data that
+might already be out of date.
+
+There is deliberately no names-only ``list_prefix()``. A keys-only
+projection saves no read capacity on DynamoDB -- it still pays for the
+whole item -- so it would break the ``list_all()``/``list_all_with_rows()``
+pairing for nothing.
 
 REST API
 --------

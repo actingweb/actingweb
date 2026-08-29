@@ -5,6 +5,162 @@ CHANGELOG
 Unreleased
 ----------
 
+v3.14.3: August 29, 2026
+-------------------------
+
+FIXED
+~~~~~
+
+- **A transient read fault could empty a v1 list.** ``verify()``,
+  ``compact()`` and ``migrate_to_v2()`` each read the actor's whole property
+  partition through ``fetch_all_including_lists()`` and ended the line in
+  ``or {}``. PostgreSQL's ``fetch_all_including_lists`` returns ``None`` on a
+  *caught* exception, so a throttle or a dropped connection presented itself
+  as an empty partition: ``compact()`` computed ``ordered_values = []``,
+  deleted rows ``0..stored_length-1`` and wrote ``length: 0`` — and a
+  following ``verify()`` reported the now-empty list ``healthy: true``. All
+  three now read only their own list's rows, through
+  ``get_range(_v1_bounds())``, which **raises** ``DbError`` on a backend
+  fault instead of returning nothing.
+- **Those same three reads are now strongly consistent.** Two of them rewrite
+  destructively from what they read — ``compact()`` writes survivors to
+  ``0..n-1`` then deletes the tail, ``migrate_to_v2()`` deletes v1 rows
+  ``0..highest_seen`` — so a row missed by an eventually consistent replica
+  read was overwritten by its successor and its slot deleted, silently. The
+  v2 counterparts already stated this rule; v1 now agrees.
+- **``actor.property_lists.list_all_with_rows()`` raised ``TypeError`` on a
+  permission-scoped actor view.** ``AuthenticatedPropertyListStore`` defined no
+  bulk readers, so the call fell through ``__getattr__``, which
+  permission-checked the *method name* as a list name — which passes, since an
+  unmatched target evaluates to ``NOT_FOUND`` and only ``DENIED`` raises — and
+  returned a ``_PermissionEnforcingListView`` wrapping a bound method. All
+  three bulk readers (``list_all()``, ``list_all_with_rows()``,
+  ``list_prefix_with_rows()``) are now defined explicitly and filter denied
+  lists out of **both** ``names`` and ``rows``, in one bulk permission
+  evaluation. Rows are narrowed with the library's own attribution logic, never
+  a bare ``startswith()`` prune, which for a denied list ``foo`` would also
+  strip permitted sibling ``foo-old``'s item rows while leaving its ``-meta``
+  row — after which the permitted list reads as ``[]`` with nothing raised.
+  A permission-system error returns an empty result rather than a partial one,
+  and no denied list name appears in any message or log emitted by this path.
+  **Behavior change**: ``__getattr__`` on that view now raises
+  ``AttributeError`` for a name colliding with a store method (``exists``,
+  ``list_all``, ``list_all_with_rows``, ``list_prefix_with_rows``), so a user
+  list actually named one of those is unreachable through the authenticated
+  view. That is the safe reading: the alternative repair — resolving such a
+  name to the underlying store's method — would hand a permission-scoped
+  accessor an unfiltered whole-partition read.
+- **DynamoDB attribute buckets matched by bare prefix, and one of them
+  deleted what it matched.** ``Attribute``'s range key is
+  ``bucket + ":" + name``, but ``get_bucket()`` and ``delete_bucket()``
+  queried it with ``begins_with(bucket)`` — no delimiter — so a bucket saw,
+  and in ``delete_bucket()``'s case destroyed, the rows of every bucket
+  having its name as a prefix. ``RemotePeerStore.delete_all()`` tears down
+  bucket ``remote:{peer_id}`` when a trust relationship ends, and most call
+  sites build that id with ``validate_peer_id=False``, so the ids are
+  remote-party-chosen: ending trust with peer ``abc`` deleted peer ``abcd``'s
+  entire dataset. Both methods now query with the delimiter **and** compare
+  the stored ``bucket`` exactly, the guard ``delete_by_chain()`` and
+  ``subscription_suspension``'s cascade check already carried. The delimiter
+  alone is not enough — bucket names contain ``:`` and attribute names
+  contain ``:``, so bucket ``remote:abc``/name ``x`` and bucket
+  ``remote``/name ``abc:x`` produce an identical range key and are in fact
+  the same row. PostgreSQL compared ``bucket`` exactly on both paths and was
+  never affected; the two backends now agree.
+
+ADDED
+~~~~~
+
+- **``property_lists.list_prefix_with_rows(prefix)``** — read one namespace of
+  an actor's list properties, and their rows, in a single query, instead of
+  dumping the whole partition. Available on ``PropertyListStore`` and on the
+  ``ActorInterface`` wrapper. Both halves of the return are scoped: ``names``
+  holds only the matching lists, so code migrating from
+  ``list_all_with_rows()`` that keeps iterating ``names`` silently stops seeing
+  every list outside the prefix — this is a contract, not a caveat.
+  ``prefix`` is a prefix, not a namespace: it also matches a list named
+  exactly ``prefix`` and siblings like ``{prefix}-old``, so pass the delimiter
+  (``"memory_"``, not ``"memory"``) if you mean a namespace. **It is not
+  universally cheaper**: on a measured account the whole-partition dump was
+  1,361.0 RCU over 11 queries and the five scoped reads covering the same lists
+  were 1,363.5 over 15, so replacing one dump with several scoped calls is
+  marginally worse. It pays when you want one namespace, or when you issue
+  several concurrently — the library stays synchronous and spends one query per
+  call, so the latency win is the caller's to take. Reads are eventually
+  consistent, matching what the dump already did. An empty prefix raises
+  ``ValueError``, and a backend fault raises ``DbError`` rather than swallowing
+  to ``([], {})`` as ``list_all_with_rows()`` does — for a scoped read an empty
+  result is the ordinary answer, so a swallowed throttle would read as content.
+  There is deliberately no names-only ``list_prefix()`` sibling: a keys-only
+  projection saves no DynamoDB read capacity.
+- **``actingweb.property.rows_for(names, rows)``** — the subset of a ``rows``
+  dict attributable to a given set of list names, using the library's own row
+  encoding. For narrowing a ``(names, rows)`` pair after pruning ``names``. A
+  bare ``startswith(f"list:{name}-")`` is wrong here: for list ``foo`` it also
+  claims sibling ``foo-old``'s rows, and used to prune it strips a permitted
+  sibling's item rows while keeping its ``-meta`` row, after which
+  ``to_list_from_rows()`` returns ``[]`` with nothing raised.
+- **``DbPropertyProtocol.get_prefix(actor_id, prefix, keys_only,
+  consistent_read)``** — read every property row of an actor whose name begins
+  with a prefix, in one query. The sibling ``get_range`` cannot express: a
+  prefix has no exact inclusive upper bound, and any synthesised sentinel
+  (``prefix + "~"``) is a guess about which byte sorts last that is wrong for
+  names continuing past it. DynamoDB uses native ``begins_with``; PostgreSQL
+  uses ``starts_with()`` with a bound parameter — **not** ``LIKE``, so ``_``
+  and ``%`` are literal, and **not** a ``COLLATE "C"`` bound pair, because
+  byte ordering itself disagrees between collations while ``starts_with`` does
+  not. Neither backend normalizes Unicode, so an NFD prefix does not match an
+  NFC name — the same on both. A falsy prefix returns ``{}`` without touching
+  the backend, since PostgreSQL would match every row and DynamoDB would raise.
+
+CHANGED
+~~~~~~~
+
+- **Behavior change**: **a fully-loaded attribute bucket is now authoritative.**
+  After ``Attributes.get_bucket()`` returns, ``get_attr()`` answers ``None`` for
+  a name absent from the loaded dict *without* a point read — where before every
+  absent name cost one read per instance. Nothing raises or warns, so this note
+  is the discovery mechanism. What changes observably: a long-lived
+  ``Attributes`` instance loses the accidental first-miss re-read, so an
+  attribute written by *another* process after this instance loaded the bucket
+  is not seen by ``get_attr()`` on it. Library call sites are unaffected —
+  every ``Attributes`` in the permission and token paths is constructed per
+  call — but note that ``handlers/mcp.py`` caches an ``ActorInterface`` on a
+  sliding five-minute TTL, so instances there can outlive a single request.
+  Call ``delete_bucket()``, or construct a fresh ``Attributes``, to force a
+  re-read. Three supporting corrections ride with it: the "loaded" flag is now
+  set only when the backend actually returned a dict, so a faulted read can
+  never present itself as "the bucket has no such attribute"; ``get_attr()``
+  no longer caches its misses into the loaded bucket, which used to make
+  ``get_bucket()`` report names that have no stored row; and a
+  ``delete_attr()`` (or falsy ``set_attr()``) that the backend reports as
+  **failed** clears the flag, so the row the backend still holds is re-read
+  rather than reported absent for the life of the instance.
+- **Behavior change**: **``Attributes.set_attr()`` now mirrors the backends'
+  falsy delete.** Both backends treat a falsy ``data`` as a delete and return
+  ``True`` — ``delete_attr()`` is literally ``set_attr(data=None)`` — while the
+  in-memory dict cached ``{"data": <falsy>, "timestamp": ...}``. So
+  ``set_attr(name, data={})`` (or ``[]``, ``""``, ``0``, ``False``) removed the
+  row but left the name present in the cache. The name is now dropped from the
+  cache too. "Absent" stays distinguishable from "present with a null value": a
+  stored row holding ``null`` still reads back as the truthy dict
+  ``{"data": None, "timestamp": ...}``.
+
+- **The v1 list maintenance methods no longer dump the actor's whole property
+  partition.** ``verify()``, ``compact()`` and ``migrate_to_v2()`` read one
+  list through ``get_range()`` over that list's own bounds — the read shape
+  ``_v1_item_names_in_range()`` and every v2 counterpart already used. On an
+  actor with many lists this is roughly one dump's worth of read capacity
+  saved per call rather than spent per list. The user-facing beneficiary is
+  ``_maybe_lazy_migrate()`` (off by default, behind
+  ``ACTINGWEB_LAZY_MIGRATION_MAX_LENGTH``), which runs all three inside a
+  user's ``append()``/``insert()``: three whole-partition dumps in one
+  request become three one-list reads. Reports are unchanged, including
+  ``foreign_format_rows`` — v2 residue rows sort below the v1 bounds, so
+  they now cost one extra keys-only range read, mirroring what ``_v2_verify()``
+  already spends counting v1 residue. On a single-list actor the saving is
+  ~3×, not the headline ratio.
+
 v3.14.2: August 28, 2026
 -------------------------
 

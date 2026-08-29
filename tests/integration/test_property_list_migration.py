@@ -752,3 +752,94 @@ class TestInterruptedMigrationConverges:
         assert owner.to_list() == ["a", "b"]
         sibling = ListProperty(test_actor.id, "sweep_owner-5", test_actor.config)
         assert sibling.to_list() == ["keep-1", "keep-2"]
+
+
+class TestScopedV1MaintenanceReadsAgainstRealStorage:
+    """The three v1 maintenance methods now read one list through
+    ``get_range(_v1_bounds())`` instead of dumping the actor's whole property
+    partition. Correctness must be byte-identical against real storage on
+    both backends -- the scoped read has different exclusion rules at its
+    edges (``-meta`` above, v2 rows below, a prefix sibling outside), and a
+    fake cannot prove the real range comparison agrees.
+    """
+
+    def test_compact_on_a_damaged_list_produces_the_same_result(self, test_actor):
+        _seed_v1_list(
+            test_actor.config, test_actor.id, "scoped_compact", ["a", "b", "c", "d"]
+        )
+        _punch_hole(test_actor.config, test_actor.id, "scoped_compact", 1)
+        prop_list = ListProperty(test_actor.id, "scoped_compact", test_actor.config)
+
+        report = prop_list.compact()
+
+        assert report["missing_indices"] == [1]
+        assert report["stored_length"] == 4
+        fresh = ListProperty(test_actor.id, "scoped_compact", test_actor.config)
+        assert fresh.to_list() == ["a", "c", "d"]
+
+    def test_a_prefix_sibling_list_is_not_read_and_not_touched(self, test_actor):
+        """``f"list:{name}"`` as a prefix would match ``scoped_out`` AND
+        ``scoped_out_embeddings`` -- the shape that measured 403 rows and 678
+        RCU. ``_v1_bounds()`` excludes it."""
+        _seed_v1_list(test_actor.config, test_actor.id, "scoped_out", ["a", "b"])
+        _seed_v1_list(
+            test_actor.config,
+            test_actor.id,
+            "scoped_out_embeddings",
+            ["x", "y", "z"],
+        )
+
+        report = ListProperty(test_actor.id, "scoped_out", test_actor.config).verify()
+
+        assert report["healthy"] is True
+        assert report["stored_length"] == 2
+        assert report["readable_count"] == 2
+        assert report["orphan_indices"] == []
+        sibling = ListProperty(
+            test_actor.id, "scoped_out_embeddings", test_actor.config
+        )
+        assert sibling.to_list() == ["x", "y", "z"]
+
+    def test_verify_still_counts_v2_residue_below_the_bounds(self, test_actor):
+        """v2 rows sort at ``#`` (0x23), below ``list:{name}-0`` (0x30), so
+        the scoped item read cannot see them. They are counted by a second,
+        keys-only range read -- and this asserts that read really reaches
+        real storage."""
+        import fractional_indexing as fi
+
+        _seed_v1_list(test_actor.config, test_actor.id, "scoped_residue", ["a", "b"])
+        db = get_property(test_actor.config)
+        for rank in fi.generate_n_keys_between(None, None, 3):
+            assert db.set(
+                actor_id=test_actor.id,
+                name=f"list:scoped_residue-#{rank}",
+                value=json.dumps("residue"),
+            )
+
+        report = ListProperty(
+            test_actor.id, "scoped_residue", test_actor.config
+        ).verify()
+
+        assert report["foreign_format_rows"] == 3
+        assert report["healthy"] is True
+
+    def test_migrate_to_v2_still_migrates_from_a_scoped_read(self, test_actor):
+        _seed_v1_list(
+            test_actor.config, test_actor.id, "scoped_migrate", ["a", "b", "c"]
+        )
+        # A prefix sibling that the old partition dump also read, and that
+        # migration must leave completely alone.
+        _seed_v1_list(
+            test_actor.config, test_actor.id, "scoped_migrate_other", ["x", "y"]
+        )
+
+        result = ListProperty(
+            test_actor.id, "scoped_migrate", test_actor.config
+        ).migrate_to_v2()
+
+        assert result["migrated"] is True
+        assert ListProperty(
+            test_actor.id, "scoped_migrate", test_actor.config
+        ).to_list() == ["a", "b", "c"]
+        other = ListProperty(test_actor.id, "scoped_migrate_other", test_actor.config)
+        assert other.to_list() == ["x", "y"]

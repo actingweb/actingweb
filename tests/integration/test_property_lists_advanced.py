@@ -554,3 +554,204 @@ class TestPropertyListLargeData:
             prop_list = getattr(test_actor.property_lists, memory_type)
             items = prop_list.to_list()
             assert len(items) == 20
+
+
+class TestListPrefixWithRows:
+    """``list_prefix_with_rows()`` end to end against real storage on both
+    backends -- the motivating case is exactly this file's subject: an
+    ``actingweb_mcp``-style actor whose ``memory_*`` lists are created at
+    runtime, where reading one namespace used to mean dumping the whole
+    partition.
+    """
+
+    def test_reads_one_namespace_and_primes_every_list_from_the_rows(self, test_actor):
+        from actingweb.property_list import ListProperty
+
+        for name, items in (
+            ("memory_personal", ["a", "b"]),
+            ("memory_travel", ["c"]),
+            ("notes", ["not-a-memory"]),
+        ):
+            prop_list = getattr(test_actor.property_lists, name)
+            for item in items:
+                prop_list.append(item)
+
+        names, rows = test_actor.property_lists.list_prefix_with_rows("memory_")
+
+        assert sorted(names) == ["memory_personal", "memory_travel"]
+        assert not any(row.startswith("list:notes") for row in rows)
+        # The point of returning rows: every named list reads out of them
+        # without a second query per list.
+        primed = {
+            name: ListProperty(
+                test_actor.id, name, test_actor.config
+            ).to_list_from_rows(rows)
+            for name in names
+        }
+        assert primed == {
+            "memory_personal": ["a", "b"],
+            "memory_travel": ["c"],
+        }
+
+    def test_a_prefix_matches_the_list_named_exactly_that_and_its_siblings(
+        self, test_actor
+    ):
+        for name in ("memory", "memory_a", "memory-old"):
+            getattr(test_actor.property_lists, name).append("x")
+
+        broad, _ = test_actor.property_lists.list_prefix_with_rows("memory")
+        narrow, _ = test_actor.property_lists.list_prefix_with_rows("memory_")
+
+        assert sorted(broad) == ["memory", "memory-old", "memory_a"]
+        assert narrow == ["memory_a"]
+
+    def test_a_non_ascii_list_name_round_trips(self, test_actor):
+        """DynamoDB's ``begins_with`` and PostgreSQL's ``starts_with()`` are
+        both byte comparisons; a synthesised ``~`` upper bound would drop
+        these, since ``é`` encodes above ``~``."""
+        from actingweb.property_list import ListProperty
+
+        test_actor.property_lists.mémoire_a.append("é-item")
+        test_actor.property_lists.mémoire_b.append("autre")
+        test_actor.property_lists.memoire_c.append("ascii")
+
+        names, rows = test_actor.property_lists.list_prefix_with_rows("mémoire_")
+
+        assert sorted(names) == ["mémoire_a", "mémoire_b"]
+        assert ListProperty(
+            test_actor.id, "mémoire_a", test_actor.config
+        ).to_list_from_rows(rows) == ["é-item"]
+
+    def test_an_underscore_is_literal_not_a_wildcard(self, test_actor):
+        """Fails loudly if the PostgreSQL side is ever rewritten as
+        ``LIKE prefix || '%'``."""
+        test_actor.property_lists.memory_a.append("x")
+        test_actor.property_lists.memoryXa.append("y")
+
+        names, _ = test_actor.property_lists.list_prefix_with_rows("memory_")
+
+        assert names == ["memory_a"]
+
+    def test_nothing_matching_is_an_ordinary_empty_answer(self, test_actor):
+        test_actor.property_lists.notes.append("x")
+
+        assert test_actor.property_lists.list_prefix_with_rows("memory_") == ([], {})
+
+    def test_an_empty_prefix_raises(self, test_actor):
+        with pytest.raises(ValueError):
+            test_actor.property_lists.list_prefix_with_rows("")
+
+    def test_list_all_with_rows_still_sees_everything(self, test_actor):
+        """The whole-partition method is unchanged -- the scoped one is an
+        addition, not a replacement."""
+        test_actor.property_lists.memory_a.append("x")
+        test_actor.property_lists.notes.append("y")
+
+        all_names, all_rows = test_actor.property_lists.list_all_with_rows()
+
+        assert sorted(all_names) == ["memory_a", "notes"]
+        assert any(row.startswith("list:notes") for row in all_rows)
+
+
+class TestAuthenticatedBulkListReads:
+    """``AuthenticatedPropertyListStore``'s three bulk readers over the REAL
+    store, not a fake. The unit suite
+    (``tests/test_authenticated_bulk_list_reads.py``) pins the filtering
+    logic; this pins that the real ``PropertyListStore`` actually satisfies
+    the interface those readers call, on both backends.
+    """
+
+    def _authed(self, test_actor, evaluator=None, accessor_id="peer123"):
+        from unittest.mock import Mock
+
+        from actingweb.interface.authenticated_views import (
+            AuthContext,
+            AuthenticatedPropertyListStore,
+        )
+
+        return AuthenticatedPropertyListStore(
+            test_actor.property_lists,
+            AuthContext(peer_id=accessor_id),
+            test_actor.id,
+            test_actor.config if evaluator is None else Mock(),
+        )
+
+    def test_all_three_readers_work_against_real_storage(self, test_actor):
+        from unittest.mock import Mock, patch
+
+        from actingweb.permission_evaluator import PermissionResult
+
+        test_actor.property_lists.memory_a.append("x")
+        test_actor.property_lists.memory_b.append("y")
+        test_actor.property_lists.secret.append("z")
+
+        with patch(
+            "actingweb.interface.authenticated_views.get_permission_evaluator"
+        ) as mock_get:
+            evaluator = Mock()
+            evaluator.evaluate_bulk_property_access = Mock(
+                side_effect=lambda a, p, paths, op: {
+                    path: (
+                        PermissionResult.DENIED
+                        if path == "secret"
+                        else PermissionResult.ALLOWED
+                    )
+                    for path in paths
+                }
+            )
+            mock_get.return_value = evaluator
+            authed = self._authed(test_actor, evaluator=evaluator)
+
+            assert sorted(authed.list_all()) == ["memory_a", "memory_b"]
+
+            names, rows = authed.list_all_with_rows()
+            assert sorted(names) == ["memory_a", "memory_b"]
+            assert not any("secret" in row for row in rows)
+
+            names, rows = authed.list_prefix_with_rows("memory_")
+            assert sorted(names) == ["memory_a", "memory_b"]
+            assert not any("secret" in row for row in rows)
+
+    def test_the_permitted_rows_still_read_as_real_contents(self, test_actor):
+        from unittest.mock import Mock, patch
+
+        from actingweb.permission_evaluator import PermissionResult
+        from actingweb.property_list import ListProperty
+
+        test_actor.property_lists.foo.append("a")
+        test_actor.property_lists.foo.append("b")
+        for item in ("p", "q"):
+            getattr(test_actor.property_lists, "foo-old").append(item)
+
+        with patch(
+            "actingweb.interface.authenticated_views.get_permission_evaluator"
+        ) as mock_get:
+            evaluator = Mock()
+            evaluator.evaluate_bulk_property_access = Mock(
+                side_effect=lambda a, p, paths, op: {
+                    path: (
+                        PermissionResult.DENIED
+                        if path == "foo"
+                        else PermissionResult.ALLOWED
+                    )
+                    for path in paths
+                }
+            )
+            mock_get.return_value = evaluator
+            names, rows = self._authed(
+                test_actor, evaluator=evaluator
+            ).list_all_with_rows()
+
+        assert names == ["foo-old"]
+        # The case a bare startswith() prune breaks: foo-old keeps its ITEM
+        # rows, so it reads as its contents rather than as [].
+        assert ListProperty(
+            test_actor.id, "foo-old", test_actor.config
+        ).to_list_from_rows(rows) == ["p", "q"]
+
+    def test_a_method_name_is_not_reachable_as_a_list_name(self, test_actor):
+        import pytest as _pytest
+
+        authed = self._authed(test_actor)
+        with _pytest.raises(AttributeError):
+            authed.__getattr__("list_all_with_rows")

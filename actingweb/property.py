@@ -2,7 +2,64 @@ from typing import Any
 
 from actingweb.db import get_property, get_property_list
 
-from .property_list import ListProperty
+from .property_list import _V1_INDEX_RE, _V2_RANK_MARKER, ListProperty, _v2_is_rank
+
+
+def rows_for(names: list[str], rows: dict[str, str]) -> dict[str, str]:
+    """The subset of ``rows`` attributable to the given list ``names``.
+
+    For narrowing a ``(names, rows)`` pair from ``list_all_with_rows()`` or
+    ``list_prefix_with_rows()`` after pruning ``names`` -- the permission
+    filter in ``interface/authenticated_views.py`` is the caller. It lives
+    here, in the module that owns the row encoding, because ``interface/``
+    must never parse a row name: ``list_all_with_rows()``'s own docstring
+    declares the rows OPAQUE to callers.
+
+    A bare ``name.startswith(f"list:{name}-")`` is WRONG and is the reason
+    this exists. For list ``foo`` it also claims every row of a sibling
+    named ``foo-old`` and ``foo-5``. Used to prune, that silently strips a
+    PERMITTED sibling's item rows while keeping its ``-meta`` row, and
+    ``to_list_from_rows()`` then returns ``[]`` -- a permitted list reported
+    as empty, with nothing raised. So attribution uses the same two shape
+    checks every reader in ``property_list.py`` uses: ``_V1_INDEX_RE`` for a
+    v1 item row's ``-{digits}`` suffix and ``_v2_is_rank()`` for a v2 row's
+    ``-#{rank}`` suffix, plus the exact ``-meta`` name.
+
+    Rows that belong to no name in ``names`` are dropped, including rows of
+    a list that simply was not asked for. Order is not meaningful.
+    """
+    if not names:
+        return {}
+
+    meta_names = {f"list:{name}-meta": name for name in names}
+    # Longest first: for lists "foo" and "foo-5", row "list:foo-5-0" must be
+    # tried against "foo-5" (where the suffix "0" passes _V1_INDEX_RE)
+    # before "foo" (where the suffix "5-0" fails it). Trying the short one
+    # first would reject and move on, which is correct here but only by
+    # accident -- ordering makes it correct by construction.
+    item_prefixes = sorted(
+        ((f"list:{name}-", name) for name in names),
+        key=lambda pair: len(pair[0]),
+        reverse=True,
+    )
+
+    result: dict[str, str] = {}
+    for row_name, value in rows.items():
+        if row_name in meta_names:
+            result[row_name] = value
+            continue
+        for prefix, _name in item_prefixes:
+            if not row_name.startswith(prefix):
+                continue
+            suffix = row_name[len(prefix) :]
+            if suffix.startswith(_V2_RANK_MARKER):
+                if _v2_is_rank(suffix[1:]):
+                    result[row_name] = value
+                    break
+            elif _V1_INDEX_RE.match(suffix):
+                result[row_name] = value
+                break
+    return result
 
 
 class PropertyListStore:
@@ -69,6 +126,22 @@ class PropertyListStore:
         encoding (`list:{name}-meta`, `list:{name}-{index}` or
         `list:{name}-#{rank}`) is a storage detail the next major
         version's key-prefix scheme will change.
+
+        If you only need ONE namespace of lists, see
+        `list_prefix_with_rows()`, which reads just that namespace. Note
+        the cost contrast carefully, because it does not go the way the
+        names suggest: on a measured account this dump was 1,361.0 RCU
+        over 11 queries, and the five scoped reads that together cover the
+        same lists were 1,363.5 RCU over 15. Replacing one dump with
+        several scoped reads is marginally WORSE. The scoped method pays
+        when you want one namespace and were dumping the partition to get
+        it -- and the latency win from issuing several of them is the
+        CALLER's, from issuing them concurrently.
+
+        On error this returns `([], {})` rather than raising. That is kept
+        for compatibility and is the OPPOSITE of
+        `list_prefix_with_rows()`; the asymmetry is deliberate and its
+        reasoning is on that method.
         """
         list_names: list[str] = []
         rows: dict[str, str] = {}
@@ -85,6 +158,93 @@ class PropertyListStore:
             logger = logging.getLogger(__name__)
             logger.error(f"Error in list_all_with_rows(): {e}")
             return [], {}
+        return list_names, rows
+
+    def list_prefix_with_rows(self, prefix: str) -> tuple[list[str], dict[str, str]]:
+        """List properties whose name begins with `prefix`, and their rows.
+
+        The scoped counterpart of `list_all_with_rows()`: ONE namespace of
+        the actor's lists instead of the whole partition. Both halves of
+        the return are scoped -- `names` holds only the matching lists, and
+        `rows` only their rows -- so the pair stays internally consistent.
+        That is worth reading twice, because it is where a migration from
+        `list_all_with_rows()` goes wrong SILENTLY: code that swaps the
+        method and keeps iterating `names` simply stops seeing every list
+        outside the prefix, with nothing raised.
+
+        `prefix` is a PREFIX, not a namespace. It matches every list whose
+        name begins with it -- including a list named exactly `prefix`, and
+        siblings such as `{prefix}-old`. If you mean a namespace, pass the
+        delimiter: `"memory_"`, not `"memory"`.
+
+        Cost, honestly: this is not universally cheaper than the dump. Five
+        scoped reads covering the same lists measured 1,363.5 RCU / 15
+        queries against the dump's 1,361.0 / 11 -- summing all of them is
+        marginally worse. It pays when you want ONE namespace, or when you
+        can issue several concurrently: the library is synchronous and
+        spends one query per call, so any latency win is the caller's to
+        take.
+
+        Reads are EVENTUALLY consistent, matching what
+        `fetch_all_including_lists()` already does on DynamoDB (PynamoDB's
+        `Model.query()` default), and halving the read capacity -- which is
+        what decides whether scoping pays at all. Do not call this to read
+        back a write you just made.
+
+        There is deliberately no names-only `list_prefix()` sibling. A
+        keys-only projection saves no DynamoDB read capacity (a projection
+        still pays for the whole item; measured 1,361.0 either way), so it
+        would break the `list_all`/`list_all_with_rows` pairing for nothing.
+
+        Rows are OPAQUE and a point-in-time snapshot, exactly as for
+        `list_all_with_rows()`. Different lists in one result may reflect
+        different instants; there is no snapshot isolation across them.
+
+        Args:
+            prefix: The list-name prefix, without the storage `list:`
+                prefix. Pass `"memory_"` to reach lists `memory_a`,
+                `memory_b`, ...
+
+        Returns:
+            `(names, rows)`. Both empty when nothing matches -- which for a
+            scoped read is a common, ordinary answer.
+
+            `names` is derived from `-meta` rows, exactly as in
+            `list_all_with_rows()`. A damaged list whose meta row was lost
+            therefore contributes rows attributed to no name, rather than
+            having those rows dropped -- matching the sibling method, and
+            leaving recoverable data visible. Use `rows_for()` when you
+            need only the rows belonging to a known set of names.
+
+        Raises:
+            ValueError: If `prefix` is empty. An empty prefix would be the
+                whole-partition dump under a name promising the opposite;
+                call `list_all_with_rows()` when that is what you want.
+            DbError: On a backend fault. UNLIKE `list_all_with_rows()`,
+                which swallows to `([], {})`. The asymmetry is deliberate:
+                for a scoped read "nothing here" is the common answer, so
+                swallowing would render a throttled query as "you have no
+                memories" and the caller could not tell.
+        """
+        if not prefix:
+            raise ValueError(
+                "list_prefix_with_rows() needs a non-empty prefix; an empty "
+                "one would read the actor's whole partition under a name "
+                "promising otherwise. Call list_all_with_rows() for that."
+            )
+        if not self._config:
+            return [], {}
+
+        rows = get_property(self._config).get_prefix(
+            actor_id=self._actor_id,
+            prefix=f"list:{prefix}",
+            consistent_read=False,
+        )
+        list_names = [
+            row_name[5:-5]
+            for row_name in rows
+            if row_name.startswith("list:") and row_name.endswith("-meta")
+        ]
         return list_names, rows
 
     def __getattr__(self, k: str) -> ListProperty:

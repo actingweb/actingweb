@@ -820,10 +820,6 @@ class TestV2LegacyHashSiblingIsolation:
         before = self._legacy_rows(fake_store, actor_id)
 
         _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
-        monkeypatch.setattr(
-            "actingweb.property_list.get_property_list",
-            lambda config: _FakePropertyList(fake_store),
-        )
 
         owner = ListProperty(actor_id=actor_id, name=self.OWNER, config=object())
         assert owner.migrate_to_v2()["migrated"] is True
@@ -858,10 +854,6 @@ class TestMigrateToV2StaleMetadata:
         name = "notes"
 
         _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
-        monkeypatch.setattr(
-            "actingweb.property_list.get_property_list",
-            lambda config: _FakePropertyList(fake_store),
-        )
 
         # The instance loaded metadata while the list was still v1...
         _seed_list(fake_store, actor_id, name, ["a", "b", "c"])
@@ -1062,10 +1054,6 @@ class TestLazyMigrationRefusesDamagedLists:
         del fake_store[(actor_id, f"list:{name}-1")]
 
         _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
-        monkeypatch.setattr(
-            "actingweb.property_list.get_property_list",
-            lambda config: _FakePropertyList(fake_store),
-        )
 
         prop_list = ListProperty(actor_id=actor_id, name=name, config=object())
         prop_list.append("d")
@@ -1087,10 +1075,6 @@ class TestLazyMigrationRefusesDamagedLists:
         _seed_list(fake_store, actor_id, name, ["a", "b"])
 
         _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
-        monkeypatch.setattr(
-            "actingweb.property_list.get_property_list",
-            lambda config: _FakePropertyList(fake_store),
-        )
 
         ListProperty(actor_id=actor_id, name=name, config=object()).append("c")
 
@@ -1110,10 +1094,6 @@ class TestLazyMigrationThresholdIsConfigurable:
 
         monkeypatch.setenv("ACTINGWEB_LAZY_MIGRATION_MAX_LENGTH", "0")
         _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
-        monkeypatch.setattr(
-            "actingweb.property_list.get_property_list",
-            lambda config: _FakePropertyList(fake_store),
-        )
 
         ListProperty(actor_id=actor_id, name=name, config=object()).append("b")
 
@@ -1127,10 +1107,6 @@ class TestLazyMigrationThresholdIsConfigurable:
         _seed_list(fake_store, actor_id, name, [f"i{n}" for n in range(60)])
 
         _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
-        monkeypatch.setattr(
-            "actingweb.property_list.get_property_list",
-            lambda config: _FakePropertyList(fake_store),
-        )
 
         # Default is 0 (off) -- a 60-item list is left alone either way.
         ListProperty(actor_id=actor_id, name=name, config=object()).append("x")
@@ -1359,10 +1335,6 @@ class TestDuplicateDetectionAfterAnEdit:
         name = "outputs"
         self._seed_diverged_duplicate(fake_store, actor_id, name)
         _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
-        monkeypatch.setattr(
-            "actingweb.property_list.get_property_list",
-            lambda config: _FakePropertyList(fake_store),
-        )
 
         prop_list = ListProperty(actor_id=actor_id, name=name, config=object())
         # This is the documented-but-previously-unstated weakness.
@@ -1373,10 +1345,6 @@ class TestDuplicateDetectionAfterAnEdit:
         name = "outputs"
         self._seed_diverged_duplicate(fake_store, actor_id, name)
         _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
-        monkeypatch.setattr(
-            "actingweb.property_list.get_property_list",
-            lambda config: _FakePropertyList(fake_store),
-        )
 
         prop_list = ListProperty(actor_id=actor_id, name=name, config=object())
         report = prop_list.verify(identity_key="id")
@@ -1395,10 +1363,6 @@ class TestDuplicateDetectionAfterAnEdit:
             [{"id": 1, "t": "x"}, {"id": 2, "t": "x"}, {"id": 3, "t": "x"}],
         )
         _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
-        monkeypatch.setattr(
-            "actingweb.property_list.get_property_list",
-            lambda config: _FakePropertyList(fake_store),
-        )
 
         prop_list = ListProperty(actor_id=actor_id, name=name, config=object())
         assert prop_list.verify(identity_key="id")["duplicate_identities"] == {}
@@ -1412,10 +1376,6 @@ class TestDuplicateDetectionAfterAnEdit:
         name = "outputs"
         _seed_list(fake_store, actor_id, name, ["alpha", "beta", "beta"])
         _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
-        monkeypatch.setattr(
-            "actingweb.property_list.get_property_list",
-            lambda config: _FakePropertyList(fake_store),
-        )
 
         prop_list = ListProperty(actor_id=actor_id, name=name, config=object())
         report = prop_list.verify(identity_key="id")
@@ -1457,10 +1417,6 @@ class TestDuplicateDetectionAfterAnEdit:
         items[6] = {"id": 1, "vec": "a newer vector for 1"}  # id 1 at 1 and 6
         _seed_list(fake_store, actor_id, name, items)
         _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
-        monkeypatch.setattr(
-            "actingweb.property_list.get_property_list",
-            lambda config: _FakePropertyList(fake_store),
-        )
 
         prop_list = ListProperty(actor_id=actor_id, name=name, config=object())
 
@@ -1483,10 +1439,6 @@ class TestDuplicateDetectionAfterAnEdit:
             fake_store, actor_id, name, [{"id": 3, "vec": f"v{n}"} for n in range(14)]
         )
         _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
-        monkeypatch.setattr(
-            "actingweb.property_list.get_property_list",
-            lambda config: _FakePropertyList(fake_store),
-        )
 
         prop_list = ListProperty(actor_id=actor_id, name=name, config=object())
         report = prop_list.verify(identity_key="id")
@@ -1505,10 +1457,6 @@ class TestDuplicateDetectionAfterAnEdit:
             [{"id": ["a", 1]}, {"id": ["b", 2]}, {"id": ["a", 1]}],
         )
         _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
-        monkeypatch.setattr(
-            "actingweb.property_list.get_property_list",
-            lambda config: _FakePropertyList(fake_store),
-        )
 
         prop_list = ListProperty(actor_id=actor_id, name=name, config=object())
         duplicates = prop_list.verify(identity_key="id")["duplicate_identities"]
@@ -1535,10 +1483,6 @@ class TestDuplicateDetectionAfterAnEdit:
             [{"itemId": 1, "t": "a"}, {"itemId": 1, "t": "b"}],
         )
         _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
-        monkeypatch.setattr(
-            "actingweb.property_list.get_property_list",
-            lambda config: _FakePropertyList(fake_store),
-        )
 
         prop_list = ListProperty(actor_id=actor_id, name=name, config=object())
 
@@ -1561,10 +1505,6 @@ class TestDuplicateDetectionAfterAnEdit:
         name = "outputs"
         _seed_list(fake_store, actor_id, name, [{"id": True}, {"id": 1}])
         _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
-        monkeypatch.setattr(
-            "actingweb.property_list.get_property_list",
-            lambda config: _FakePropertyList(fake_store),
-        )
 
         report = ListProperty(actor_id=actor_id, name=name, config=object()).verify(
             identity_key="id"
@@ -1616,10 +1556,6 @@ class TestCompactIsNotCrashSafe:
         actor_id = f"actor-compact-crash-{calls_before_crash}"
         name = "damaged"
         self._seed_holed(fake_store, actor_id, name)
-        monkeypatch.setattr(
-            "actingweb.property_list.get_property_list",
-            lambda config: _FakePropertyList(fake_store),
-        )
         counter = [0]
         _patch_get_property(
             monkeypatch,
@@ -1918,10 +1854,6 @@ class TestMigrateRefusesAVanishedMetaRow:
         actor_id = "actor-migrate-vanish"
         name = "notes"
         _seed_list(fake_store, actor_id, name, ["a", "b", "c"])
-        monkeypatch.setattr(
-            "actingweb.property_list.get_property_list",
-            lambda config: _FakePropertyList(fake_store),
-        )
 
         class DeletingMetaDb(FakePropertyDb):
             """Deletes the whole list the moment migration writes its first
@@ -2129,10 +2061,6 @@ class TestInterruptedRewritesConverge:
         items = ["a", "b", "c"]
         self._crash_migration_after_the_flip(fake_store, actor_id, name, items)
         _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
-        monkeypatch.setattr(
-            "actingweb.property_list.get_property_list",
-            lambda config: _FakePropertyList(fake_store),
-        )
 
         prop_list = ListProperty(actor_id=actor_id, name=name, config=object())
         assert prop_list.migrate_to_v2() == {"migrated": False, "reason": "already_v2"}
@@ -2163,10 +2091,6 @@ class TestInterruptedRewritesConverge:
         items = ["a", "b", "c"]
         self._crash_migration_after_the_flip(fake_store, actor_id, name, items)
         _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
-        monkeypatch.setattr(
-            "actingweb.property_list.get_property_list",
-            lambda config: _FakePropertyList(fake_store),
-        )
         monkeypatch.setattr(
             "actingweb.property.get_property_list",
             lambda config: _FakePropertyList(fake_store),
@@ -2280,10 +2204,6 @@ class TestVerifyReportsForeignFormatRows:
         _seed_list(fake_store, actor_id, name, ["a", "b"])
         fake_store[(actor_id, f"list:{name}-#a0")] = json.dumps("a")
         _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
-        monkeypatch.setattr(
-            "actingweb.property_list.get_property_list",
-            lambda config: _FakePropertyList(fake_store),
-        )
 
         report = ListProperty(actor_id=actor_id, name=name, config=object()).verify()
 
@@ -2320,10 +2240,6 @@ class TestMigrationRollbackDoesNotEatASuccessorList:
         actor_id = "actor-rollback-successor"
         name = "notes"
         _seed_list(fake_store, actor_id, name, ["a", "b", "c"])
-        monkeypatch.setattr(
-            "actingweb.property_list.get_property_list",
-            lambda config: _FakePropertyList(fake_store),
-        )
 
         first_rank = fi.generate_n_keys_between(None, None, 3)[0]
         successor_row = (actor_id, f"list:{name}-#{first_rank}")
@@ -2368,10 +2284,6 @@ class TestMigrationRollbackDoesNotEatASuccessorList:
         actor_id = "actor-rollback-own"
         name = "notes"
         _seed_list(fake_store, actor_id, name, ["a", "b", "c"])
-        monkeypatch.setattr(
-            "actingweb.property_list.get_property_list",
-            lambda config: _FakePropertyList(fake_store),
-        )
 
         class MetaVanishes(FakePropertyDb):
             def get(self, actor_id=None, name=None):
@@ -2445,10 +2357,6 @@ class TestCompactRefusesARevertedMigration:
         store = {}
         _seed_reverted_migration(store, "actor1", self.NAME, self.ITEMS)
         _patch_get_property(monkeypatch, lambda config: FakePropertyDb(store))
-        monkeypatch.setattr(
-            "actingweb.property_list.get_property_list",
-            lambda config: _FakePropertyList(store),
-        )
         return store
 
     def test_the_shape_is_detected_as_damaged_with_foreign_rows(
@@ -2523,10 +2431,6 @@ class TestCompactRefusesARevertedMigration:
         _seed_list(store, "actor1", "ordinary", ["a", "b", "c"])
         del store[("actor1", "list:ordinary-1")]
         _patch_get_property(monkeypatch, lambda config: FakePropertyDb(store))
-        monkeypatch.setattr(
-            "actingweb.property_list.get_property_list",
-            lambda config: _FakePropertyList(store),
-        )
         result = ListProperty(
             actor_id="actor1", name="ordinary", config=object()
         ).compact()
@@ -2552,10 +2456,6 @@ class TestAStaleFormatWriteIsLoud:
         store = {}
         _seed_list(store, "actor1", "held", ["alpha", "beta"])
         _patch_get_property(monkeypatch, lambda config: FakePropertyDb(store))
-        monkeypatch.setattr(
-            "actingweb.property_list.get_property_list",
-            lambda config: _FakePropertyList(store),
-        )
 
         stale = ListProperty(actor_id="actor1", name="held", config=object())
         assert stale.to_list() == ["alpha", "beta"]  # caches format v1
@@ -2575,10 +2475,6 @@ class TestAStaleFormatWriteIsLoud:
         store = {}
         _seed_list(store, "actor1", "held", ["alpha", "beta"])
         _patch_get_property(monkeypatch, lambda config: FakePropertyDb(store))
-        monkeypatch.setattr(
-            "actingweb.property_list.get_property_list",
-            lambda config: _FakePropertyList(store),
-        )
         stale = ListProperty(actor_id="actor1", name="held", config=object())
         stale.to_list()
         ListProperty(actor_id="actor1", name="held", config=object()).migrate_to_v2()
@@ -2599,10 +2495,6 @@ class TestAStaleFormatWriteIsLoud:
         store = {}
         _seed_list(store, "actor1", "quiet", ["alpha"])
         _patch_get_property(monkeypatch, lambda config: FakePropertyDb(store))
-        monkeypatch.setattr(
-            "actingweb.property_list.get_property_list",
-            lambda config: _FakePropertyList(store),
-        )
         lp = ListProperty(actor_id="actor1", name="quiet", config=object())
         lp.to_list()
         with caplog.at_level(logging.WARNING, logger="actingweb.property_list"):

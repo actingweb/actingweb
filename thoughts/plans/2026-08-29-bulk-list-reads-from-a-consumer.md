@@ -288,6 +288,31 @@ effects.
   (`docs/contributing/backend-testing.rst:13`). No `LIKE`, so no `%`/`_`/escape
   surface — worth a docstring line, since every family prefix in the measurement
   contains `_`.
+
+  **Verified on a live PostgreSQL 16.11**, because the whole reason for moving
+  off `COLLATE "C"` bounds is that collation-aware comparison disagrees with byte
+  order, and `starts_with` had to be shown not to inherit that. Running the same
+  cases under the database's libc collation and under `en-US-x-icu`:
+
+  | expression | libc `en_US.utf8` | ICU `en-US-x-icu` |
+  | --- | --- | --- |
+  | `'a' < '{'` | `true` | **`false`** |
+  | `'a-a' < 'a+a'` | `false` | **`true`** |
+  | `starts_with('list:a-b', 'list:a-')` | `true` | `true` |
+  | `starts_with('list:aXb', 'list:a-')` | `false` | `false` |
+  | `starts_with(U&'cafe\0301x', 'café')` | `false` | `false` |
+
+  Ordering flips between the two collations — that is C4's hazard, demonstrated,
+  and it is why no bound pair can be trusted. `starts_with` is identical under
+  both: byte-exact, punctuation not folded, no Unicode normalization. That last
+  row matters twice over — it is also what makes PostgreSQL agree with DynamoDB's
+  `begins_with`, which normalizes nothing either.
+
+  Two further results to encode: `starts_with('list:memoryXa', 'list:memory_')`
+  is `false`, so `_` is literal and there is genuinely no wildcard surface; and
+  `starts_with(x, '')` is `true` on PostgreSQL while DynamoDB's `begins_with("")`
+  raises `ValidationException` — a real cross-backend divergence that the
+  `if not prefix` guard below is what covers.
 - Guard `if not prefix` (falsy, not just `None`) and return `{}`:
   `begins_with(name, "")` is a DynamoDB `ValidationException`.
 
@@ -468,17 +493,32 @@ unfiltered partition dump. That converts a `TypeError` into a read bypass.
 Three changes in order; each is a prerequisite for the next. Phase 1 is a
 prerequisite for all of them.
 
-**6a — `get_bucket()` must distinguish empty from faulted.** Today
+**6a — a faulted bucket load must not set the flag.** Today
 `Attributes.get_bucket` sets `data = {}` and `_bucket_loaded = True` when the
 backend returns `None` (`attribute.py:91-98`), and both backends return `None`
 for a *caught exception* (`db/dynamodb/attribute.py:63-64`,
 `db/postgresql/attribute.py:221-223`) — with PostgreSQL additionally returning
 `None` for a genuinely empty bucket (`:209-210`). Making the flag authoritative on
 top of that would turn "I could not read the bucket" into "the bucket has no such
-attribute", permanently for that instance. Fix PostgreSQL's `get_bucket` to return
-`{}` for an empty bucket, matching DynamoDB, so `None` means fault on both
-backends; then have `Attributes.get_bucket` leave `_bucket_loaded` **False** when
-it gets `None`.
+attribute", permanently for that instance.
+
+The fix stays inside `attribute.py`: set `_bucket_loaded = True` **only when the
+backend returned a dict**, and leave it `False` on `None` whatever `None` meant.
+On DynamoDB that is exact (`{}` for empty, `None` only on a caught exception). On
+PostgreSQL it is conservative — an empty bucket is never trusted, so `get_attr`
+still point-reads there — and that costs nothing real, because an empty bucket has
+no absent-name savings to give up.
+
+**Deliberately not normalising the backend contract.** The obvious alternative is
+to make PostgreSQL's `get_bucket` return `{}` for an empty bucket so `None` means
+fault on both backends. `Attributes.get_bucket:90` carries an explicit comment
+about that divergence, so it is known and possibly depended on; a grep of
+`get_bucket()` across `actingweb/` finds no caller branching on `is None` (every
+one either goes through `Attributes`, which already normalises, or writes
+`or {}`), but "no caller I found" is a weaker guarantee than "no backend edit".
+The conservative version cannot break a caller that was not found. Aligning the
+two backends is worth doing on its own merits — filed to `thoughts/todo/`, not
+smuggled into a patch whose correctness argument does not need it.
 
 **6b — `set_attr()` mirrors the backends' delete.** Both backends treat a falsy
 `data` as a delete and return `True` (`db/dynamodb/attribute.py:140-148`,
@@ -502,11 +542,9 @@ consumer wrote a seven-line comment to justify.
 
 ### Changes
 
-- `actingweb/db/postgresql/attribute.py:209-210` — return `{}` for an empty
-  bucket; reserve `None` for a fault.
-- `actingweb/attribute.py:85-99` — do not set `_bucket_loaded` when the backend
-  returned `None`; update the docstring to say the flag means "loaded and the
-  backend answered".
+- `actingweb/attribute.py:85-99` — set `_bucket_loaded` only when the backend
+  returned a dict; update the docstring to say the flag means "loaded and the
+  backend answered". No backend edit.
 - `actingweb/attribute.py:117-154` — `set_attr()` drops the key from `self.data`
   when `not data`, mirroring the backend.
 - `actingweb/attribute.py:101-115` — `get_attr()` returns `None` early when
@@ -516,8 +554,11 @@ consumer wrote a seven-line comment to justify.
 
 - Unit: `get_bucket()` on a faulting backend leaves `_bucket_loaded` False and a
   subsequent `get_attr()` still reads through. **Fails today.**
-- Unit (both backends): `get_bucket()` on an empty bucket returns `{}`, not
-  `None`, and sets the flag.
+- Unit (DynamoDB): `get_bucket()` on a genuinely empty bucket sets the flag, so
+  `get_attr()` on it costs nothing.
+- Unit (PostgreSQL): `get_bucket()` on an empty bucket does **not** set the flag,
+  and `get_attr()` still point-reads. Pins the conservative choice deliberately,
+  so a later backend alignment changes a test rather than surprising someone.
 - Unit: after `get_bucket()`, `get_attr("absent")` issues **zero** backend calls
   and returns `None`.
 - Unit: after `get_bucket()` then `get_attr("absent")`, a second `get_bucket()`
@@ -568,6 +609,11 @@ consumer wrote a seven-line comment to justify.
 - Update `thoughts/todo/INDEX.md` row 22 and delete
   `thoughts/todo/scoped-bulk-list-reads.md` when the work lands — the plan and
   its verification are the record.
+- **PR shape.** The plan is written for seven phases landing as separate PRs.
+  Each of phases 1-6 adds a plain "Unreleased" CHANGELOG entry and **no version
+  bump**; this phase is the release PR, which is where CLAUDE.md puts the bump and
+  the "Unreleased" rename, with the tag going on the merge commit. If the phases
+  instead land as one PR, that PR is the release PR and the bump rides in it.
 - Version bump to **3.14.3** in `pyproject.toml` and `actingweb/__init__.py`,
   rename "Unreleased" to `v3.14.3: <date>`, per CLAUDE.md's release process. The
   bump rides in the release PR; the tag goes on the merge commit.

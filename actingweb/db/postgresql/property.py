@@ -522,6 +522,80 @@ class DbProperty:
             logger.error(f"Error range-reading properties for actor {actor_id}: {e}")
             raise DbError("property range read", actor_id) from e
 
+    def get_prefix(
+        self,
+        actor_id: str | None = None,
+        prefix: str | None = None,
+        keys_only: bool = False,
+        consistent_read: bool = True,
+    ) -> dict[str, str]:
+        """Read rows whose name begins with ``prefix``.
+
+        See ``DbPropertyProtocol.get_prefix`` for the contract.
+
+        ``starts_with(name, %s)`` with a BOUND parameter, deliberately not a
+        ``COLLATE "C"`` bound pair like ``get_range`` above. A range needs an
+        exact inclusive upper bound and a prefix has none — the same argument
+        that rejects ``list:~`` as a sentinel rejects any synthesised bound
+        here. Verified on a live PostgreSQL 16.11 under both the database's
+        libc ``en_US.utf8`` collation and ``en-US-x-icu``:
+
+        =========================================  =============  ==========
+        expression                                 libc en_US     ICU en-US
+        =========================================  =============  ==========
+        ``'a' < '{'``                              true           **false**
+        ``'a-a' < 'a+a'``                          false          **true**
+        ``starts_with('list:a-b', 'list:a-')``     true           true
+        ``starts_with('list:aXb', 'list:a-')``     false          false
+        ``starts_with(U&'cafe\0301x', 'café')``    false          false
+        =========================================  =============  ==========
+
+        Ordering flips between the two collations; ``starts_with`` does not.
+        It is byte-exact, folds no punctuation, and normalizes nothing — which
+        is also what makes it agree with DynamoDB's ``begins_with``.
+
+        NOT ``LIKE``, so there is no ``%``/``_``/escape surface at all:
+        ``starts_with('list:memoryXa', 'list:memory_')`` is ``false``, i.e.
+        ``_`` is a literal underscore. Worth stating, because every family
+        prefix a caller is likely to pass contains one.
+
+        ``starts_with`` is PostgreSQL 11+; the project floor is 12+.
+        ``consistent_read`` is accepted and ignored, as for ``get_range``.
+
+        The empty prefix returns ``{}`` before reaching SQL. PostgreSQL's
+        ``starts_with(x, '')`` is ``true`` for every row — it would silently
+        become the whole-partition dump this method exists to avoid, and
+        would disagree with DynamoDB, which raises.
+        """
+        if not actor_id or not prefix:
+            return {}
+
+        try:
+            with get_connection() as conn:
+                with conn.cursor() as cur:
+                    if keys_only:
+                        cur.execute(
+                            """
+                            SELECT name
+                            FROM properties
+                            WHERE id = %s AND starts_with(name, %s)
+                            """,
+                            (actor_id, prefix),
+                        )
+                        return {row[0]: "" for row in cur.fetchall()}
+                    cur.execute(
+                        """
+                        SELECT name, value
+                        FROM properties
+                        WHERE id = %s AND starts_with(name, %s)
+                        """,
+                        (actor_id, prefix),
+                    )
+                    return {row[0]: row[1] for row in cur.fetchall()}
+        except Exception as e:
+            logger.error(f"Error prefix-reading properties for actor {actor_id}: {e}")
+            raise DbError("property prefix read", actor_id) from e
+
     def create_if_not_exists(
         self, actor_id: str | None = None, name: str | None = None, value: Any = None
     ) -> bool:

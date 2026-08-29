@@ -407,12 +407,36 @@ list's item rows while keeping its `-meta` row produces `[]` from
 
 ### Verification
 
-- [ ] `poetry run pytest tests/integration/test_db_property_range.py -v` passes on DynamoDB
-- [ ] `DATABASE_BACKEND=postgresql … poetry run pytest tests/integration/test_db_property_range.py -v` passes
-- [ ] `poetry run ruff check actingweb tests` passes
-- [ ] `poetry run pyright actingweb tests` reports 0 errors
+- [x] `poetry run pytest tests/integration/test_db_property_range.py -v` passes on DynamoDB (25)
+- [x] `DATABASE_BACKEND=postgresql … poetry run pytest tests/integration/test_db_property_range.py -v` passes (25)
+- [x] `poetry run pytest tests/test_db_property_get_prefix.py -v` passes (11 new)
+- [x] `poetry run ruff check actingweb tests` passes
+- [x] `poetry run pyright actingweb tests` reports 0 errors
+- [x] Whole suite green: 2,289 unit, 897 integration
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+**Deviations and learnings:**
+
+- **`get_prefix` mirrors `get_range`'s implementation exactly**, checked rather
+  than assumed. On DynamoDB that means the `for item in Property.query(...)`
+  loop sits INSIDE the `try`, so PynamoDB's lazy `ResultIterator` — which fires
+  the HTTP request during iteration and pages transparently at 1 MB — cannot
+  raise past the `DbError` wrapper. (`DbAttribute.get_bucket()` has the opposite
+  shape; see Phase 6's note.) On PostgreSQL it means one `execute` + `fetchall`
+  under the same `get_connection()` idiom.
+- **The non-ASCII test is the one that would have caught a sentinel bound.**
+  `é` (U+00E9) encodes above `~` (0x7E), so `list:étag~` as a synthesised upper
+  bound would exclude rows a prefix read must return. Both backends return the
+  same three rows.
+- **A Unicode-normalization test was added beyond the plan's list.** It pins
+  that an NFD prefix does not match an NFC name on *either* backend — the
+  property that makes `starts_with()` and `begins_with` agree, and the one a
+  future switch to a collation-aware comparison would silently break.
+- **The `_`/`%` test earns its place**: it fails loudly if anyone rewrites the
+  PostgreSQL side as `LIKE prefix || '%'`, which is the obvious-looking
+  refactor and would turn every family prefix (all of which contain `_`) into
+  a wildcard pattern.
 
 ---
 
@@ -574,10 +598,30 @@ attribute", permanently for that instance.
 
 The fix stays inside `attribute.py`: set `_bucket_loaded = True` **only when the
 backend returned a dict**, and leave it `False` on `None` whatever `None` meant.
-On DynamoDB that is exact (`{}` for empty, `None` only on a caught exception). On
-PostgreSQL it is conservative — an empty bucket is never trusted, so `get_attr`
+On PostgreSQL it is conservative — an empty bucket is never trusted, so `get_attr`
 still point-reads there — and that costs nothing real, because an empty bucket has
 no absent-name savings to give up.
+
+**Premise corrected, verified empirically (2026-08-29).** The plan said "on
+DynamoDB that is exact — `{}` for empty, `None` only on a caught exception". Only
+half of that holds, and the half that does not is worth knowing before writing
+the test. `DbAttribute.get_bucket()`'s `try/except` wraps the Query
+*construction* only; PynamoDB returns a lazy `ResultIterator` there and the HTTP
+request fires during `for t in query`, which is **outside** the `except`.
+Measured against the running backend:
+
+| what happens | `DbAttribute.get_bucket()` |
+| --- | --- |
+| genuinely empty bucket | returns `{}` |
+| fault during iteration (a throttle mid-page — the realistic case) | **raises past the except** |
+| fault during construction (bad credentials, missing table) | returns `None` |
+
+And `Attributes.get_bucket()` does not catch, so a raised fault propagates to the
+caller with `_bucket_loaded` still `False` — already the safe outcome. So on
+DynamoDB the `None`-means-fault case this phase guards is the narrow
+construction-fault one; the case the fix genuinely earns its keep on is
+PostgreSQL's catch-to-`None`, where a throttle really does present as an empty
+bucket. The fix is unchanged; its justification is.
 
 **Deliberately not normalising the backend contract.** The obvious alternative is
 to make PostgreSQL's `get_bucket` return `{}` for an empty bucket so `None` means
@@ -709,8 +753,22 @@ consumer wrote a seven-line comment to justify.
 
 ### Verification
 
-- [ ] `make test-all-parallel` — all tests pass on DynamoDB
-- [ ] `DATABASE_BACKEND=postgresql … make test-integration` passes
+- [ ] `poetry run pytest tests/ --ignore=tests/integration -n auto` passes
+- [ ] `poetry run pytest tests/integration` (SEQUENTIAL) passes on DynamoDB
+- [ ] `DATABASE_BACKEND=postgresql … poetry run pytest tests/integration`
+  (sequential) passes
+
+  **Deviation from `make test-all-parallel`, measured.** On this machine the
+  parallel integration run is not a usable gate: `pytest tests/ -n auto` gave
+  103 failed / 167 errors in 623 s, every one an HTTP `TimeoutError` against a
+  per-worker uvicorn, spread across all nine workers. The same suite run
+  sequentially is **888 passed, 8 skipped, 71 s** — faster in wall clock as well
+  as trustworthy, because the failures are contention between ~10 concurrent
+  servers plus DynamoDB Local, not isolation. The `make` targets also (a) invoke
+  `docker-compose` hyphenated, which does not resolve here, and (b) end in
+  `down -v`, which destroys the containers and the mounted
+  `tests/integration/dynamodb-data` volume mid-session. Unit tests parallelise
+  fine (`-n auto`, 2,278 passed, ~3.5 min) and that half is kept.
 - [ ] `poetry run ruff format --check actingweb tests` passes (CI enforces it)
 - [ ] `poetry run pyright actingweb tests` reports 0 errors
 - [ ] Docs build clean

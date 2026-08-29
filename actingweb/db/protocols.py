@@ -244,6 +244,76 @@ class DbPropertyProtocol(Protocol):
         """
         ...
 
+    def get_prefix(
+        self,
+        actor_id: str | None = None,
+        prefix: str | None = None,
+        keys_only: bool = False,
+        consistent_read: bool = True,
+    ) -> dict[str, str]:
+        """
+        Read every property row of ``actor_id`` whose name BEGINS WITH
+        ``prefix``.
+
+        The sibling of ``get_range`` above, for the case a range cannot
+        express: a prefix has no exact inclusive upper bound. Any
+        synthesised sentinel (``prefix + "~"``, ``prefix + "\uffff"``) is a
+        guess about which byte sorts last, and it is wrong for names that
+        continue past it — so this is a first-class primitive rather than
+        arithmetic on ``get_range``'s bounds. DynamoDB has a native
+        ``begins_with``; PostgreSQL has ``starts_with()``.
+
+        Ordering is NOT guaranteed, exactly as for ``get_range``: backends
+        may return results in different orders, so a caller that needs a
+        specific order MUST sort the returned dict's items itself.
+
+        **No Unicode normalization, on either backend.** The comparison is
+        over bytes: an NFD prefix does not match an NFC name, nor the
+        reverse. Verified on a live PostgreSQL 16.11 under both the libc
+        ``en_US.utf8`` and the ICU ``en-US-x-icu`` collations —
+        ``starts_with(U&'cafe\0301x', 'café')`` is ``false`` under both,
+        which is also what DynamoDB's ``begins_with`` does. That agreement
+        is the reason for choosing these two primitives: byte ordering
+        itself does NOT agree across collations (``'a' < '{'`` is ``true``
+        under libc and ``false`` under ICU), which is why no bound pair can
+        be trusted here.
+
+        The failure direction, if a backend ever were inexact, is to
+        UNDER-read: a prefix read cannot leak rows from outside the prefix,
+        it can only silently truncate. That matters because truncating a v2
+        list's item rows while keeping its ``-meta`` row produces ``[]``
+        from ``to_list_from_rows()`` with no fallback — an empty list, not
+        an error.
+
+        Args:
+            actor_id: The actor ID
+            prefix: The name prefix. A FALSY prefix (``None`` or ``""``)
+                returns ``{}`` without touching the backend: PostgreSQL's
+                ``starts_with(x, '')`` is ``true`` for every row, while
+                DynamoDB's ``begins_with(name, "")`` is a
+                ``ValidationException`` — so "everything" and "an error"
+                are what the two backends would otherwise do, and neither
+                is a useful answer from a method named for a prefix.
+            keys_only: If True, returned values are ``""``. Same trade as
+                ``get_range``: cheaper on PostgreSQL (a genuine ``SELECT
+                name``), **no capacity saving on DynamoDB**, where a
+                projection still pays for the whole item.
+            consistent_read: Defaults to ``True``, matching ``get_range``.
+                On DynamoDB an eventually consistent read costs HALF the
+                read capacity. PostgreSQL accepts and ignores it. Pass
+                ``False`` only where the caller cannot have just written
+                the rows it is about to read.
+
+        Returns:
+            Dict of ``{name: value}`` (or ``{name: ""}`` when
+            ``keys_only``) for rows under the prefix. Empty dict if none
+            found, and for a falsy prefix.
+
+        Raises:
+            DbError: On a backend fault.
+        """
+        ...
+
     def create_if_not_exists(
         self, actor_id: str | None = None, name: str | None = None, value: Any = None
     ) -> bool:

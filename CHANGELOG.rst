@@ -43,6 +43,22 @@ FIXED
   the same row. PostgreSQL compared ``bucket`` exactly on both paths and was
   never affected; the two backends now agree.
 
+ADDED
+~~~~~
+
+- **``DbPropertyProtocol.get_prefix(actor_id, prefix, keys_only,
+  consistent_read)``** — read every property row of an actor whose name begins
+  with a prefix, in one query. The sibling ``get_range`` cannot express: a
+  prefix has no exact inclusive upper bound, and any synthesised sentinel
+  (``prefix + "~"``) is a guess about which byte sorts last that is wrong for
+  names continuing past it. DynamoDB uses native ``begins_with``; PostgreSQL
+  uses ``starts_with()`` with a bound parameter — **not** ``LIKE``, so ``_``
+  and ``%`` are literal, and **not** a ``COLLATE "C"`` bound pair, because
+  byte ordering itself disagrees between collations while ``starts_with`` does
+  not. Neither backend normalizes Unicode, so an NFD prefix does not match an
+  NFC name — the same on both. A falsy prefix returns ``{}`` without touching
+  the backend, since PostgreSQL would match every row and DynamoDB would raise.
+
 CHANGED
 ~~~~~~~
 

@@ -823,6 +823,53 @@ recorded behaviour, or make `set_attr` mirror the backends' delete.
 
 ---
 
+### Decision 7: What does a *partial* `rows` dict promise?
+
+Today every consumer of `list_all_with_rows()` feeds the dict to
+`prime_from_rows()` / `to_list_from_rows()` over lists it then touches
+(`handlers/www.py:186`, `handlers/trust.py:1190`,
+`handlers/properties.py:589-640`, `actor.py:2575-2577`), and all of them assume
+it is a **complete** partition dump. A scoped read returns something that is not.
+Traced through `actingweb/property_list.py:1011-1094`, the behaviour splits three
+ways:
+
+- **List entirely absent from the dict** (no `-meta` row): `prime_from_rows()`
+  returns early at `:1039` and the lazy path applies unchanged — a later read
+  hits the database. Correct, just not primed. This is the same behaviour
+  `tests/test_hot_path_n_plus_one.py:189` already pins for the empty dict.
+- **v1 list with `-meta` present but item rows absent**: `to_list_from_rows()`
+  falls back to `self[i]` per missing row (`:1088-1091`) and raises
+  `ListCorruptionError` only if the row is genuinely missing from *storage*.
+  Correct, but a per-item read.
+- **v2 list with `-meta` present but item rows absent**: the rank cache is built
+  from rows matching the item prefix (`:1046-1052`) and
+  `to_list_from_rows()`'s v2 branch is "derived entirely from `rows` — no
+  fallback reads" (`:1064`, `:1071-1077`). So it returns `[]` **silently**, and
+  `len()` reports 0.
+
+Only the third is dangerous, and it is reachable only if a list's `-meta` row is
+in the dict while its item rows are not. That gives the plan an **invariant to
+state and test rather than a contract to redesign**:
+
+> A scoped read must bound on the **list-name namespace** (`list:{prefix}`), so
+> every list it returns a `-meta` row for also gets all of that list's item rows.
+> It must never bound on a per-list sub-range that could separate the two.
+
+Note also that `names` is *necessarily* scoped alongside `rows`: a scoped read
+cannot produce the names of lists outside its prefix without paying for them,
+which is the cost the request exists to avoid. So `(names, rows)` stays
+internally consistent, and a caller iterating `names` never reaches the third
+case. Decision 4 should record that as forced rather than chosen — and if
+Decision 3 lands on caller-side concurrency, the same invariant has to survive a
+caller merging several partial dicts, which it does as long as each was bounded
+on a namespace prefix.
+
+What still needs deciding: whether the existing method gains the parameter (its
+docstring's "the actor's WHOLE partition" then becomes conditional) or a scoped
+variant gets its own name so the complete-dump contract stays literally true.
+
+---
+
 ## 8. Code References
 
 - `actingweb/db/dynamodb/property.py:734-748` — `fetch_all_including_lists()`, unconstrained `Property.query(actor_id)`; PynamoDB's `consistent_read` default is `False`

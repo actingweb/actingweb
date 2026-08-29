@@ -161,19 +161,53 @@ independent prefix reads can straddle a mutation in either direction and produce
 mode changes shape — the scoped method's docstring must say so rather than
 inherit the existing sentence.
 
+### A6. The invariant that keeps a partial `rows` dict safe
+
+Every caller of `list_all_with_rows()` today assumes a **complete** partition
+dump (`handlers/www.py:186`, `handlers/trust.py:1190`,
+`handlers/properties.py:589-640`, `actor.py:2575-2577`). Traced through
+`property_list.py:1011-1094`, a partial dict is safe in two of three cases and
+silently wrong in the third: a list entirely absent falls back to the lazy path
+(`:1039`), a **v1** list with meta-but-no-items falls back to a per-item read
+(`:1088-1091`), but a **v2** list with meta-but-no-items returns `[]` with no
+fallback (`:1071-1077`) and `len()` reports 0.
+
+So:
+
+> A scoped read must bound on the **list-name namespace** (`list:{prefix}`), so
+> every list it returns a `-meta` row for also gets all of that list's item rows.
+> Never bound on a per-list sub-range that could separate the two.
+
+`names` is necessarily scoped alongside `rows` — a scoped read cannot know names
+outside its prefix without paying for them — so the `(names, rows)` pair stays
+internally consistent and a caller iterating `names` never reaches the bad case.
+Record that as forced, not chosen. Still open: whether the existing method gains
+the parameter (its docstring's "the actor's WHOLE partition" then becomes
+conditional) or a scoped variant takes its own name.
+
 **Unscoped calls must stay byte-identical to today.**
+
+**Acceptance gate.** §5 of the research doc records that the 685/8 figure is
+*not* reproducible from any committed script, so the RCU number cannot be the
+test. The gate is `tests/test_v2_cost_library_callers.py`'s existing query-count
+spies (`_count_get_range`, and the per-caller budgets at `:139`, `:191`, `:215`)
+plus `tests/test_hot_path_n_plus_one.py` — extended so that **one of them asserts
+`consistent_read=False` was passed**, in the style of
+`tests/test_v2_consistent_read.py:32`, `:205-208`. Without that assertion A2.1 is
+a comment, not a constraint, and the regression it warns about ships green.
 
 **Effort.** Medium. A backend primitive on both backends, a public API surface
 and its interface wrapper, the internal-caller conversion (A3), and tests that
 pin the consistency default (A2.1), the prefix exactness (A2.2) and the
 call-budget regressions in `tests/test_v2_cost_library_callers.py`.
 
-**Open decisions** (laid out with options and evidence in the research doc §7):
+**Open decisions** (seven, laid out with options and evidence in the research doc §7):
 prefix vs exact names and the parameter name; reuse `get_range` vs add
 `get_prefix()`; where the concurrency lives, given a synchronous DB layer and a
 latency win that requires it somewhere; which public surfaces get the parameter
 and whether a permission-checked variant is needed; whether A3 ships in the same
-change; and how far item B's preconditions extend.
+change; what a partial `rows` dict promises (A6); and how far item B's
+preconditions extend.
 
 ---
 

@@ -554,3 +554,100 @@ class TestPropertyListLargeData:
             prop_list = getattr(test_actor.property_lists, memory_type)
             items = prop_list.to_list()
             assert len(items) == 20
+
+
+class TestListPrefixWithRows:
+    """``list_prefix_with_rows()`` end to end against real storage on both
+    backends -- the motivating case is exactly this file's subject: an
+    ``actingweb_mcp``-style actor whose ``memory_*`` lists are created at
+    runtime, where reading one namespace used to mean dumping the whole
+    partition.
+    """
+
+    def test_reads_one_namespace_and_primes_every_list_from_the_rows(self, test_actor):
+        from actingweb.property_list import ListProperty
+
+        for name, items in (
+            ("memory_personal", ["a", "b"]),
+            ("memory_travel", ["c"]),
+            ("notes", ["not-a-memory"]),
+        ):
+            prop_list = getattr(test_actor.property_lists, name)
+            for item in items:
+                prop_list.append(item)
+
+        names, rows = test_actor.property_lists.list_prefix_with_rows("memory_")
+
+        assert sorted(names) == ["memory_personal", "memory_travel"]
+        assert not any(row.startswith("list:notes") for row in rows)
+        # The point of returning rows: every named list reads out of them
+        # without a second query per list.
+        primed = {
+            name: ListProperty(
+                test_actor.id, name, test_actor.config
+            ).to_list_from_rows(rows)
+            for name in names
+        }
+        assert primed == {
+            "memory_personal": ["a", "b"],
+            "memory_travel": ["c"],
+        }
+
+    def test_a_prefix_matches_the_list_named_exactly_that_and_its_siblings(
+        self, test_actor
+    ):
+        for name in ("memory", "memory_a", "memory-old"):
+            getattr(test_actor.property_lists, name).append("x")
+
+        broad, _ = test_actor.property_lists.list_prefix_with_rows("memory")
+        narrow, _ = test_actor.property_lists.list_prefix_with_rows("memory_")
+
+        assert sorted(broad) == ["memory", "memory-old", "memory_a"]
+        assert narrow == ["memory_a"]
+
+    def test_a_non_ascii_list_name_round_trips(self, test_actor):
+        """DynamoDB's ``begins_with`` and PostgreSQL's ``starts_with()`` are
+        both byte comparisons; a synthesised ``~`` upper bound would drop
+        these, since ``é`` encodes above ``~``."""
+        from actingweb.property_list import ListProperty
+
+        getattr(test_actor.property_lists, "mémoire_a").append("é-item")
+        getattr(test_actor.property_lists, "mémoire_b").append("autre")
+        getattr(test_actor.property_lists, "memoire_c").append("ascii")
+
+        names, rows = test_actor.property_lists.list_prefix_with_rows("mémoire_")
+
+        assert sorted(names) == ["mémoire_a", "mémoire_b"]
+        assert ListProperty(
+            test_actor.id, "mémoire_a", test_actor.config
+        ).to_list_from_rows(rows) == ["é-item"]
+
+    def test_an_underscore_is_literal_not_a_wildcard(self, test_actor):
+        """Fails loudly if the PostgreSQL side is ever rewritten as
+        ``LIKE prefix || '%'``."""
+        getattr(test_actor.property_lists, "memory_a").append("x")
+        getattr(test_actor.property_lists, "memoryXa").append("y")
+
+        names, _ = test_actor.property_lists.list_prefix_with_rows("memory_")
+
+        assert names == ["memory_a"]
+
+    def test_nothing_matching_is_an_ordinary_empty_answer(self, test_actor):
+        getattr(test_actor.property_lists, "notes").append("x")
+
+        assert test_actor.property_lists.list_prefix_with_rows("memory_") == ([], {})
+
+    def test_an_empty_prefix_raises(self, test_actor):
+        with pytest.raises(ValueError):
+            test_actor.property_lists.list_prefix_with_rows("")
+
+    def test_list_all_with_rows_still_sees_everything(self, test_actor):
+        """The whole-partition method is unchanged -- the scoped one is an
+        addition, not a replacement."""
+        getattr(test_actor.property_lists, "memory_a").append("x")
+        getattr(test_actor.property_lists, "notes").append("y")
+
+        all_names, all_rows = test_actor.property_lists.list_all_with_rows()
+
+        assert sorted(all_names) == ["memory_a", "notes"]
+        assert any(row.startswith("list:notes") for row in all_rows)

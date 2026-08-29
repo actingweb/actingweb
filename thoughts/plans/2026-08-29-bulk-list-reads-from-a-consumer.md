@@ -492,12 +492,41 @@ list's item rows while keeping its `-meta` row produces `[]` from
 
 ### Verification
 
-- [ ] `poetry run pytest tests/test_v2_cost_library_callers.py tests/test_hot_path_n_plus_one.py -v` passes
-- [ ] `poetry run pytest tests/integration/test_property_lists_advanced.py -v` passes on both backends
-- [ ] `poetry run ruff check actingweb tests` passes
-- [ ] `poetry run pyright actingweb tests` reports 0 errors
+- [x] `poetry run pytest tests/test_v2_cost_library_callers.py tests/test_hot_path_n_plus_one.py -v` passes (21)
+- [x] `poetry run pytest tests/test_list_prefix_with_rows.py -v` passes (20 new)
+- [x] `poetry run pytest tests/integration/test_property_lists_advanced.py -v` passes on both backends (25 each)
+- [x] `poetry run ruff check actingweb tests` passes
+- [x] `poetry run pyright actingweb tests` reports 0 errors
+- [x] Whole suite green: 2,309 unit, 904 integration
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+**Deviations and learnings:**
+
+- **`consistent_read=False` really does match today's dump**, checked rather
+  than assumed: DynamoDB's `fetch_all_including_lists()` calls
+  `Property.query(actor_id)` with no `consistent_read` argument, and PynamoDB's
+  `Model.query` defaults it to `False`. So the plan's "matching today's
+  whole-partition read exactly" is literally true, and this is not a
+  consistency downgrade dressed as parity.
+- **The A6 invariant only holds in one direction, and that is now a documented
+  contract rather than a silent choice.** `names` is derived from `-meta` rows,
+  so a damaged list whose meta row was lost contributes rows attributed to no
+  name — "no row in `rows` belongs to a list not in `names`" is therefore
+  unsatisfiable without pruning those rows. Pruning was rejected: it would
+  silently discard recoverable data, and it would diverge from
+  `list_all_with_rows()`, which returns them today. A test asserts both methods
+  behave identically here, so the choice reads as chosen.
+- **`rows_for()` sorts its candidate prefixes longest-first.** For lists `foo`
+  and `foo-5`, row `list:foo-5-0` must be tried against `foo-5` (suffix `0`,
+  passes `_V1_INDEX_RE`) before `foo` (suffix `5-0`, fails it). Short-first
+  happens to give the same answer, but only because the shape check rejects —
+  ordering makes it correct by construction rather than by luck.
+- **`rows_for()` also handles the legacy `#`-named sibling**, which the plan did
+  not call out: a pre-ban list named `foo-#bar` stores `list:foo-#bar-0`, inside
+  v2 list `foo`'s item prefix. `_v2_is_rank()` rejects it because `-` is not in
+  the base62 alphabet — the same guard every reader in `property_list.py`
+  applies. Given its own test.
 
 ---
 

@@ -46,6 +46,35 @@ FIXED
 ADDED
 ~~~~~
 
+- **``property_lists.list_prefix_with_rows(prefix)``** — read one namespace of
+  an actor's list properties, and their rows, in a single query, instead of
+  dumping the whole partition. Available on ``PropertyListStore`` and on the
+  ``ActorInterface`` wrapper. Both halves of the return are scoped: ``names``
+  holds only the matching lists, so code migrating from
+  ``list_all_with_rows()`` that keeps iterating ``names`` silently stops seeing
+  every list outside the prefix — this is a contract, not a caveat.
+  ``prefix`` is a prefix, not a namespace: it also matches a list named
+  exactly ``prefix`` and siblings like ``{prefix}-old``, so pass the delimiter
+  (``"memory_"``, not ``"memory"``) if you mean a namespace. **It is not
+  universally cheaper**: on a measured account the whole-partition dump was
+  1,361.0 RCU over 11 queries and the five scoped reads covering the same lists
+  were 1,363.5 over 15, so replacing one dump with several scoped calls is
+  marginally worse. It pays when you want one namespace, or when you issue
+  several concurrently — the library stays synchronous and spends one query per
+  call, so the latency win is the caller's to take. Reads are eventually
+  consistent, matching what the dump already did. An empty prefix raises
+  ``ValueError``, and a backend fault raises ``DbError`` rather than swallowing
+  to ``([], {})`` as ``list_all_with_rows()`` does — for a scoped read an empty
+  result is the ordinary answer, so a swallowed throttle would read as content.
+  There is deliberately no names-only ``list_prefix()`` sibling: a keys-only
+  projection saves no DynamoDB read capacity.
+- **``actingweb.property.rows_for(names, rows)``** — the subset of a ``rows``
+  dict attributable to a given set of list names, using the library's own row
+  encoding. For narrowing a ``(names, rows)`` pair after pruning ``names``. A
+  bare ``startswith(f"list:{name}-")`` is wrong here: for list ``foo`` it also
+  claims sibling ``foo-old``'s rows, and used to prune it strips a permitted
+  sibling's item rows while keeping its ``-meta`` row, after which
+  ``to_list_from_rows()`` returns ``[]`` with nothing raised.
 - **``DbPropertyProtocol.get_prefix(actor_id, prefix, keys_only,
   consistent_read)``** — read every property row of an actor whose name begins
   with a prefix, in one query. The sibling ``get_range`` cannot express: a

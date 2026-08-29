@@ -57,6 +57,13 @@ list. Both are independent of everything else and go first.
   divergence, because Phase 6 makes the loaded dict authoritative and a dict that
   is knowingly wrong about presence cannot be authoritative about absence.
   Research §7 D6.
+- **All seven phases land as a single PR, released as 3.14.3** — so that PR *is*
+  the release PR, and CLAUDE.md's rule applies to it directly: the version bump
+  and the "Unreleased" rename ride in it, and the tag goes on the merge commit
+  after CI is green on **both** database backends. Each phase stays its own commit
+  inside that PR, and each remains independently testable, so a phase that fails
+  late can be dropped without unpicking the others. If any phase has to be
+  dropped, the drop happens **before** the version bump commit, not after.
 - **Empty prefix raises `ValueError`**, and `list_prefix_with_rows()` propagates
   `DbError` rather than swallowing to `([], {})`. For a scoped read an empty
   result is the common answer, so the existing swallow idiom would render a
@@ -609,14 +616,28 @@ consumer wrote a seven-line comment to justify.
 - Update `thoughts/todo/INDEX.md` row 22 and delete
   `thoughts/todo/scoped-bulk-list-reads.md` when the work lands — the plan and
   its verification are the record.
-- **PR shape.** The plan is written for seven phases landing as separate PRs.
-  Each of phases 1-6 adds a plain "Unreleased" CHANGELOG entry and **no version
-  bump**; this phase is the release PR, which is where CLAUDE.md puts the bump and
-  the "Unreleased" rename, with the tag going on the merge commit. If the phases
-  instead land as one PR, that PR is the release PR and the bump rides in it.
+- **PR shape (decided).** One PR carrying all seven phases, each as its own
+  commit. That PR is therefore the release PR, so the bump and the "Unreleased"
+  rename belong in it, per CLAUDE.md — there is no separate release PR and no
+  bump on master afterwards.
+
+  Two consequences worth stating, because a single PR is where phasing quietly
+  stops paying:
+
+  - **Phases 1-6 write their CHANGELOG entries under "Unreleased" as they land.**
+    Only this phase renames that section to `v3.14.3: <date>` and opens a fresh
+    empty one. Doing the rename earlier would leave later phases writing into a
+    released section.
+  - **The version bump is the last commit.** If a phase has to be dropped because
+    it cannot be made green, it is dropped before the bump, not reverted after —
+    which is the whole reason the phases stay independently testable inside one
+    PR. Phase 6 is the likeliest candidate: it depends on Phase 1 and has the
+    smallest measured payoff. Phases 1 and 2 are the least droppable, since both
+    are correctness fixes with a data-loss shape.
 - Version bump to **3.14.3** in `pyproject.toml` and `actingweb/__init__.py`,
   rename "Unreleased" to `v3.14.3: <date>`, per CLAUDE.md's release process. The
-  bump rides in the release PR; the tag goes on the merge commit.
+  bump rides in this PR, as the shape note above requires; the tag goes on the
+  merge commit after it lands on `master`, which is protected.
 
 ### New Tests
 

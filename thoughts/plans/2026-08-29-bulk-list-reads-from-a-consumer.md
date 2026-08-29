@@ -1,5 +1,6 @@
 ---
 status: done
+verified: thoughts/verifications/2026-08-29-bulk-list-reads-from-a-consumer.md
 ---
 
 # Implementation Plan: scoped bulk list reads, and the attribute-bucket cache

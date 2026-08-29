@@ -128,11 +128,14 @@ CHANGED
   call — but note that ``handlers/mcp.py`` caches an ``ActorInterface`` on a
   sliding five-minute TTL, so instances there can outlive a single request.
   Call ``delete_bucket()``, or construct a fresh ``Attributes``, to force a
-  re-read. Two supporting corrections ride with it: the "loaded" flag is now set
-  only when the backend actually returned a dict, so a faulted read can never
-  present itself as "the bucket has no such attribute"; and ``get_attr()`` no
-  longer caches its misses into the loaded bucket, which used to make
-  ``get_bucket()`` report names that have no stored row.
+  re-read. Three supporting corrections ride with it: the "loaded" flag is now
+  set only when the backend actually returned a dict, so a faulted read can
+  never present itself as "the bucket has no such attribute"; ``get_attr()``
+  no longer caches its misses into the loaded bucket, which used to make
+  ``get_bucket()`` report names that have no stored row; and a
+  ``delete_attr()`` (or falsy ``set_attr()``) that the backend reports as
+  **failed** clears the flag, so the row the backend still holds is re-read
+  rather than reported absent for the life of the instance.
 - **Behavior change**: **``Attributes.set_attr()`` now mirrors the backends'
   falsy delete.** Both backends treat a falsy ``data`` as a delete and return
   ``True`` — ``delete_attr()`` is literally ``set_attr(data=None)`` — while the

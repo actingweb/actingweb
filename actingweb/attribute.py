@@ -96,9 +96,10 @@ class Attributes:
         an empty bucket is simply never trusted, so ``get_attr()`` still
         point-reads there, which costs nothing real — an empty bucket has
         no absent-name savings to give up. Aligning the two backends'
-        empty-vs-fault contract is filed separately rather than smuggled in
-        here; the conservative version cannot break a caller that a grep
-        did not find.
+        empty-vs-fault contract is filed separately
+        (``thoughts/todo/attribute-get-bucket-empty-vs-none.md``) rather
+        than smuggled in here; the conservative version cannot break a
+        caller that a grep did not find.
 
         Note that on DynamoDB most real faults do not arrive as ``None`` at
         all: ``DbAttribute.get_bucket()`` wraps only the Query
@@ -195,7 +196,7 @@ class Attributes:
             attr_data["data"] = data
             attr_data["timestamp"] = timestamp
         if self.dbprop:
-            return self.dbprop.set_attr(
+            ok = self.dbprop.set_attr(
                 actor_id=self.actor_id,
                 bucket=self.bucket,
                 name=name,
@@ -203,7 +204,27 @@ class Attributes:
                 timestamp=timestamp,
                 ttl_seconds=ttl_seconds,
             )
+            if not ok and not data:
+                self._unload_after_failed_delete(name)
+            return ok
         return False
+
+    def _unload_after_failed_delete(self, name: str) -> None:
+        """A delete the backend did not confirm must not leave the loaded
+        bucket asserting absence.
+
+        The cache entry is dropped BEFORE the backend call, so if the backend
+        then reports failure (PostgreSQL returns ``False`` on a caught
+        exception; DynamoDB swallows and returns ``True``, so this never
+        fires there) the dict says "absent" while storage still holds the
+        row -- and ``get_attr()`` would answer ``None`` from the
+        authoritative dict for the life of this instance, where before the
+        bucket was authoritative a cache miss point-read and recovered it.
+        Clearing the flag is the fail-safe repair: the next ``get_attr()``
+        or ``get_bucket()`` reads through again.
+        """
+        self.data.pop(name, None)
+        self._bucket_loaded = False
 
     def conditional_update_attr(
         self,
@@ -260,9 +281,12 @@ class Attributes:
         if self.data and name in self.data:
             del self.data[name]
         if self.dbprop:
-            return self.dbprop.delete_attr(
+            ok = self.dbprop.delete_attr(
                 actor_id=self.actor_id, bucket=self.bucket, name=name
             )
+            if not ok:
+                self._unload_after_failed_delete(name)
+            return ok
         return False
 
     def delete_attr_conditional(self, name: str | None = None) -> bool:

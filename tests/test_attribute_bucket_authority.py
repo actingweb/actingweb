@@ -39,6 +39,9 @@ class CountingBackend:
     def __init__(self, rows=None, fault=False, empty_returns={}):  # noqa: B006
         self.rows = dict(rows or {})
         self.fault = fault
+        # PostgreSQL's falsy set_attr() returns False on a caught exception;
+        # the row then survives. Models a failed delete.
+        self.fail_deletes = False
         self.empty_returns = empty_returns
         self.get_bucket_calls = 0
         self.get_attr_calls: list[object] = []
@@ -68,6 +71,8 @@ class CountingBackend:
     ):
         self.set_attr_calls.append((name, data))
         if not data:
+            if self.fail_deletes:
+                return False
             self.rows.pop(name, None)
         else:
             self.rows[name] = {"data": data, "timestamp": timestamp}
@@ -260,6 +265,44 @@ class TestSetAttrMirrorsTheBackendsDelete:
         before = len(backend.get_attr_calls)
         assert attrs.get_attr("a") is None
         assert len(backend.get_attr_calls) == before
+
+    @pytest.mark.parametrize("via", ["delete_attr", "set_attr"])
+    def test_a_failed_delete_does_not_leave_a_stale_authoritative_miss(
+        self, monkeypatch, via
+    ):
+        """Codex P2 on PR #139. The cache entry goes BEFORE the backend
+        call; if the backend then reports failure the row still exists, and
+        a loaded bucket must not go on asserting its absence. Before the
+        bucket was authoritative the cache miss point-read and recovered the
+        value -- this pins that it still does."""
+        backend = CountingBackend({"a": _row("v"), "b": _row("w")})
+        attrs = _attrs(monkeypatch, backend)
+        attrs.get_bucket()
+        backend.fail_deletes = True
+
+        if via == "delete_attr":
+            assert attrs.delete_attr("a") is False
+        else:
+            assert attrs.set_attr("a", data=None) is False
+
+        assert "a" in backend.rows
+        assert attrs._bucket_loaded is False
+        got = attrs.get_attr("a")
+        assert got is not None
+        assert got["data"] == "v"
+        assert backend.get_attr_calls == ["a"]
+        # And a following get_bucket() re-reads rather than serving the dict.
+        assert set(_loaded(attrs)) == {"a", "b"}
+        assert backend.get_bucket_calls == 2
+
+    def test_a_confirmed_delete_keeps_the_bucket_authoritative(self, monkeypatch):
+        backend = CountingBackend({"a": _row("v")})
+        attrs = _attrs(monkeypatch, backend)
+        attrs.get_bucket()
+
+        assert attrs.set_attr("a", data=None) is True
+
+        assert attrs._bucket_loaded is True
 
     def test_a_stored_null_is_still_distinguishable_from_absence(self, monkeypatch):
         """A stored row holding ``null`` reads back as the TRUTHY dict

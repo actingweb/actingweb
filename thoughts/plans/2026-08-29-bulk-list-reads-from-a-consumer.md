@@ -1,5 +1,5 @@
 ---
-status: active
+status: done
 ---
 
 # Implementation Plan: scoped bulk list reads, and the attribute-bucket cache
@@ -863,12 +863,41 @@ consumer wrote a seven-line comment to justify.
   `down -v`, which destroys the containers and the mounted
   `tests/integration/dynamodb-data` volume mid-session. Unit tests parallelise
   fine (`-n auto`, 2,278 passed, ~3.5 min) and that half is kept.
-- [ ] `poetry run ruff format --check actingweb tests` passes (CI enforces it)
-- [ ] `poetry run pyright actingweb tests` reports 0 errors
-- [ ] Docs build clean
-- [ ] Manual: `pyproject.toml` and `actingweb/__init__.py` versions match the tag
+- [x] `poetry run ruff format --check actingweb tests` passes (357 files, CI enforces it)
+- [x] `poetry run pyright actingweb tests` reports 0 errors
+- [x] Docs build clean (`sphinx-build -W`)
+- [x] Manual: `pyproject.toml` and `actingweb/__init__.py` both read `3.14.3`
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+**Deviations and learnings:**
+
+- **The docs section grew a sub-section rather than becoming two parallel
+  recipes.** "When the scoped read actually pays" carries the three things the
+  old prose could not: that summing scoped reads over everything is *worse*
+  than one dump (1,363.5 RCU / 15 queries against 1,361.0 / 11), that the
+  latency win is caller-side and its floor is the deepest pagination chain, and
+  that there is no snapshot isolation across calls or across lists within one.
+  The existing "pass it straight into `prime_from_rows()`" paragraph now applies
+  to both, as planned.
+- **Two todos were filed, not one.** The `_glob_to_regex` gaps went to
+  `thoughts/todo/glob-to-regex-anchoring-gaps.md` (INDEX row 23) as planned; the
+  backend upsert divergence found in Phase 1 went to
+  `thoughts/todo/attribute-upsert-bucket-drift.md` (row 24).
+- **`thoughts/todo/scoped-bulk-list-reads.md` is deleted and INDEX row 22 is
+  gone**, with §1 carrying a one-line pointer at this plan instead of a "CLOSED"
+  row. `prop-list-key-prefix-scheme.md`'s reference to the deleted file was
+  repointed at this plan rather than left dangling.
+- **PostgreSQL's *unit* leg needs `alembic upgrade head` against the `public`
+  schema first**, which CI does as a separate step and which is easy to miss
+  locally: without it 58 tests fail identically on this branch and on `master`.
+  After the migration the only remaining failures are two
+  `tests/performance/test_backend_performance.py` subscription cases, which fail
+  on `master` too — the test passes a callback URL where the backend expects a
+  boolean. **CI never sees them**: they carry `@pytest.mark.benchmark` and the
+  workflow runs `-m "not benchmark"`, under which the PostgreSQL unit leg is
+  2,245 passed / 0 failed. Untouched by this branch, and not filed here because
+  it is a test bug in code this release does not go near.
 
 ---
 
@@ -969,3 +998,87 @@ consumer wrote a seven-line comment to justify.
 - **No migration page**; `docs/migration/` is minors-only. Behaviour changes go to
   CHANGELOG in the established style, and for Phase 6 the release note *is* the
   discovery mechanism, since nothing raises or warns.
+
+## Implementation Summary
+
+**Completed:** 2026-08-29
+**All phases:** Complete (1-7)
+**Test status:** All passing
+
+Final run, per the amended Phase 7 gate:
+
+| suite | DynamoDB | PostgreSQL |
+| --- | --- | --- |
+| unit (`tests/`, `--ignore=tests/integration`) | 2,361 passed, 23 skipped | 2,245 passed, 122 skipped, 17 deselected |
+| integration (`tests/integration`, sequential) | 911 passed, 8 skipped | 903 passed, 16 skipped |
+
+The PostgreSQL unit column uses CI's own `-m "not benchmark"` filter. Without
+it, two `tests/performance` subscription cases fail — identically on `master`,
+in code this branch does not touch — and CI deselects them, so its Postgres leg
+is clean. That leg also needs `alembic upgrade head` against the `public` schema
+first, which CI does as its own step.
+
+`ruff format --check` clean over 357 files, `ruff check` clean, `pyright` 0
+errors, `sphinx-build -W` clean, `poetry check --lock` clean.
+
+Six commits, one per phase, then the release commit. `master` is protected, so
+the tag goes on the merge commit after CI is green on both backends.
+
+### Deviations from Plan
+
+Each phase's own "Deviations and learnings" carries the detail. The four that
+changed the work rather than its packaging:
+
+1. **Phase 2 had a correctness hole the plan did not see.** v1 `verify()` counts
+   `foreign_format_rows` — v2-shaped residue — out of the partition dump, and v2
+   rows sort at `#` (0x23), *below* `_v1_bounds()`'s lower bound `list:{name}-0`
+   (0x30). Four existing tests caught it. It now costs one extra keys-only range
+   read via `_v2_item_names_in_range()`, the mirror of what `_v2_verify()`
+   already spends counting v1 residue.
+2. **Phase 1's "ambiguous composite key" is a primary-key COLLISION, not two
+   coexisting rows.** Both backends key on `(id, bucket_name)`, so bucket
+   `remote:abc`/name `x` and bucket `remote`/name `abc:x` are the same row and
+   the second write overwrites the first. That makes the exact-`bucket` compare
+   *more* necessary, not less, but the test had to be rewritten around storable
+   data. A backend divergence underneath it is filed to `thoughts/todo/`.
+3. **Phase 4's A6 invariant only holds in one direction.** `names` comes from
+   `-meta` rows, so a damaged list whose meta row was lost contributes rows
+   attributed to no name. Pruning them was rejected — it would discard
+   recoverable data and diverge from `list_all_with_rows()` — so it is a
+   documented contract with a test asserting both methods agree.
+4. **Phase 6a's stated premise was half wrong.** On DynamoDB most real faults do
+   not arrive as `None` at all: `DbAttribute.get_bucket()` wraps only the Query
+   construction while PynamoDB fires the request lazily during iteration, so a
+   throttle raises straight through with the flag unset — already safe. Measured
+   against the running backend. The fix is unchanged; its justification is
+   PostgreSQL's catch-to-`None`.
+
+Packaging deviations: tests went to new files where the plan named files that
+turned out to be the wrong shape (`tests/integration/test_attributes.py` is an
+HTTP flow suite, not a DB-level one); and Phase 7's `make test-all-parallel`
+gate was replaced with a parallel unit run plus a sequential integration run,
+because the parallel integration run on this machine gives 103 failures in 623 s
+where the sequential one gives 0 in 71 s.
+
+### Learnings
+
+- **`get_property_list` had exactly three callers in `property_list.py`.**
+  Removing them removed the import, which broke 27 monkeypatches in
+  `test_property_list_integrity.py`. Deleting those is a strengthening: the tests
+  now exercise the real scoped read rather than a hand-fed partition dict.
+- **The three "fails today" claims were each demonstrated against the pre-change
+  code** rather than asserted: `compact()` deleting all three rows of a healthy
+  list and writing `length: 0` on a faulted read; `authed.list_all_with_rows`
+  resolving to a `_PermissionEnforcingListView` and raising `TypeError` when
+  called, after the permission check passed on the *method name*; and 19 of
+  Phase 6's 28 tests failing without the attribute change.
+- **`rows_for()` was verified independently.** The security review brute-forced
+  every name pair over `{a, -, 0, #}` up to length 5 against all five row shapes
+  and found zero cross-attribution leaks. The longest-first ordering turns out to
+  be defensive rather than load-bearing — the shape checks alone are sufficient —
+  but it makes the property true by construction rather than by argument.
+- **The security review found nothing.** It specifically cleared the PostgreSQL
+  parameterisation, the prefix's inability to escape the `list:` namespace, the
+  new `AttributeError` branch, and the fail-closed paths; and noted that
+  `NOT_FOUND`-counts-as-permitted is the existing REST behaviour this SDK path is
+  reaching parity with, not new ground.

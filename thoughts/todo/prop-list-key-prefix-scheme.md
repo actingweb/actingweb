@@ -61,8 +61,10 @@ payload no page renders**.
 
 Most of that is already answerable without a key change. Of the 66.3%, the
 `output_embeddings_*` sidecar is 49.8%, and a *scoped* bulk read simply
-excludes it — that is `thoughts/todo/scoped-bulk-list-reads.md` item A, which
-is a 3.14.x patch and needs nothing from this scheme.
+excludes it — which **shipped in v3.14.3** as
+`property_lists.list_prefix_with_rows(prefix)`
+(`thoughts/plans/2026-08-29-bulk-list-reads-from-a-consumer.md`, Phase 4). It
+needed nothing from this scheme.
 
 What survives is the other **16.7%: vectors stored inside `memory_*` item
 bodies** (90.6% of all `memory_*` bytes are vector). No range read can reach

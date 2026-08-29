@@ -53,17 +53,33 @@ class DbAttribute:
 
     @staticmethod
     def get_bucket(actor_id=None, bucket=None):
-        """Returns a dict of attributes from a bucket, each with data and timestamp"""
+        """Returns a dict of attributes from a bucket, each with data and timestamp
+
+        ``bucket_name`` is ``bucket + ":" + name``, so ``begins_with(bucket)``
+        would also match every bucket that has this one as a prefix — bucket
+        ``remote:abc`` seeing ``remote:abcd``'s rows. The delimiter narrows the
+        Query, and the exact ``t.bucket`` compare is what actually separates
+        them, because both halves of the composite key may themselves contain
+        ``:`` (bucket ``remote:{peer_id}``, name ``list:{name}:{index}``), so
+        bucket ``remote:abc``/name ``x`` and bucket ``remote``/name ``abc:x``
+        produce an identical ``bucket_name``. Same guard as
+        ``delete_by_chain()`` below and
+        ``db/dynamodb/subscription_suspension.py``'s cascade check.
+        """
         if not actor_id or not bucket:
             return None
         try:
             query = Attribute.query(
-                actor_id, Attribute.bucket_name.startswith(bucket), consistent_read=True
+                actor_id,
+                Attribute.bucket_name.startswith(bucket + ":"),
+                consistent_read=True,
             )
         except Exception:  # PynamoDB DoesNotExist exception
             return None
         ret = {}
         for t in query:
+            if t.bucket != bucket:
+                continue
             ret[t.name] = {
                 "data": t.data,
                 "timestamp": t.timestamp,
@@ -288,16 +304,29 @@ class DbAttribute:
 
     @staticmethod
     def delete_bucket(actor_id=None, bucket=None):
-        """Deletes an entire bucket"""
+        """Deletes an entire bucket
+
+        Carries ``get_bucket()``'s guard, and needs it more: without the
+        delimiter and the exact ``t.bucket`` compare this deletes the rows of
+        every bucket that has this one as a prefix. ``RemotePeerStore``
+        deletes bucket ``remote:{peer_id}`` on trust teardown and most call
+        sites build that id with ``validate_peer_id=False``, so ending trust
+        with peer ``abc`` would destroy peer ``abcd``'s dataset. Same guard as
+        ``delete_by_chain()`` below.
+        """
         if not actor_id or not bucket:
             return False
         try:
             query = Attribute.query(
-                actor_id, Attribute.bucket_name.startswith(bucket), consistent_read=True
+                actor_id,
+                Attribute.bucket_name.startswith(bucket + ":"),
+                consistent_read=True,
             )
         except Exception:  # PynamoDB DoesNotExist exception
             return True
         for t in query:
+            if t.bucket != bucket:
+                continue
             t.delete()
         return True
 

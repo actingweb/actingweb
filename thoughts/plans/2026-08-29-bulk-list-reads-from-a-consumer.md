@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: active
 ---
 
 # Implementation Plan: scoped bulk list reads, and the attribute-bucket cache
@@ -154,16 +154,48 @@ exactly, which is what `delete_by_chain` already does.
 
 ### Verification
 
-- [ ] `poetry run pytest tests/test_attribute.py tests/integration/test_attributes.py -v` passes
-- [ ] `poetry run pytest tests/ -k "remote_storage or attribute" -v` passes
-- [ ] `poetry run ruff check actingweb tests` passes
-- [ ] `poetry run pyright actingweb tests` reports 0 errors
-- [ ] Manual: confirm no library-constant bucket name is a prefix of another
-  (`constants.py:120-173`, `oauth2_server/token_manager.py:45-54`,
-  `oauth_session.py:31-32`) — this holds today by luck, and the fix is what makes
-  it not matter
+- [x] `poetry run pytest tests/test_attribute.py tests/integration/test_db_attribute_buckets.py -v` passes
+- [x] `poetry run pytest tests/ -k "remote_storage or attribute" -v` passes (173 passed)
+- [x] `poetry run ruff check actingweb tests` passes
+- [x] `poetry run pyright actingweb tests` reports 0 errors
+- [x] Both backends: the new integration file passes on DynamoDB and on
+  PostgreSQL
+- [x] Manual: confirmed no library-constant bucket name is a prefix of another.
+  Swept 33 bucket-name literals across `actingweb/` (every `*BUCKET* = "..."` /
+  `bucket = "..."` binding) plus the dynamic `remote:` family; no pair has a
+  prefix relationship. Holds today by luck; the fix is what makes it not matter
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+**Deviations and learnings:**
+
+- **The tests went to new homes.** The plan named
+  `tests/integration/test_attributes.py`, which is an HTTP request-flow file
+  with no direct DB access. The DB-level both-backends cases went to a new
+  `tests/integration/test_db_attribute_buckets.py`, modelled on
+  `test_db_property_range.py` (the same `aw_app`/`config`/`actor_id` fixture
+  shape, so PostgreSQL gets the migrated schema). The mocked-DynamoDB unit
+  cases went into `tests/test_attribute.py` as
+  `TestDbAttributeBucketIsolation`; all seven fail without the fix.
+- **The "ambiguous composite key" case is a primary-key COLLISION, not two
+  coexisting rows.** The plan's test asked for bucket `remote:abc`/name `x`
+  *and* bucket `remote`/name `abc:x` to be stored simultaneously and told
+  apart. They cannot be: both backends key on `(id, bucket_name)` and both
+  pairs produce `remote:abc:x`, so they are the same row and the second write
+  overwrites the first. That makes the exact-`bucket` compare *more* necessary,
+  not less — the delimiter cannot arbitrate ownership of a row only one bucket
+  can own — but the test had to be rewritten around storable data: a single
+  row written by one bucket must be invisible and undeletable to the other.
+- **A cross-backend divergence surfaced underneath it**, orthogonal to this
+  phase: on that colliding key DynamoDB's `save()` is a PutItem and reattributes
+  the row to the last writer, while PostgreSQL's `ON CONFLICT DO UPDATE`
+  refreshes only `data`/`timestamp` and keeps the first writer's `bucket`. The
+  test asserts only what both agree on — the row answers to exactly one bucket,
+  never both — and the divergence is filed to
+  `thoughts/todo/attribute-upsert-bucket-drift.md`.
+- **`delete_by_chain()` was left alone** (its bare `begins_with` over-fetches
+  but its exact compare is already correct); widening the diff would only
+  muddy Phase 5's `/security-review`.
 
 ---
 

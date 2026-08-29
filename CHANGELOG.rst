@@ -5,6 +5,27 @@ CHANGELOG
 Unreleased
 ----------
 
+FIXED
+~~~~~
+
+- **DynamoDB attribute buckets matched by bare prefix, and one of them
+  deleted what it matched.** ``Attribute``'s range key is
+  ``bucket + ":" + name``, but ``get_bucket()`` and ``delete_bucket()``
+  queried it with ``begins_with(bucket)`` — no delimiter — so a bucket saw,
+  and in ``delete_bucket()``'s case destroyed, the rows of every bucket
+  having its name as a prefix. ``RemotePeerStore.delete_all()`` tears down
+  bucket ``remote:{peer_id}`` when a trust relationship ends, and most call
+  sites build that id with ``validate_peer_id=False``, so the ids are
+  remote-party-chosen: ending trust with peer ``abc`` deleted peer ``abcd``'s
+  entire dataset. Both methods now query with the delimiter **and** compare
+  the stored ``bucket`` exactly, the guard ``delete_by_chain()`` and
+  ``subscription_suspension``'s cascade check already carried. The delimiter
+  alone is not enough — bucket names contain ``:`` and attribute names
+  contain ``:``, so bucket ``remote:abc``/name ``x`` and bucket
+  ``remote``/name ``abc:x`` produce an identical range key and are in fact
+  the same row. PostgreSQL compared ``bucket`` exactly on both paths and was
+  never affected; the two backends now agree.
+
 v3.14.2: August 28, 2026
 -------------------------
 

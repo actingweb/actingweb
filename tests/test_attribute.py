@@ -461,3 +461,149 @@ class TestInternalStoreAccess:
         store["test_key"] = "test_value"
 
         assert store.test_key == "test_value"
+
+
+class _FakeAttributeRow:
+    """Stand-in for a stored ``Attribute`` item.
+
+    ``bucket_name`` is derived the way ``set_attr()`` writes it — the only
+    writer — so the fake table cannot drift from the real key layout.
+    """
+
+    def __init__(self, bucket: str, name: str, data: object) -> None:
+        self.bucket = bucket
+        self.name = name
+        self.data = data
+        self.timestamp = None
+        self.deleted = False
+
+    @property
+    def bucket_name(self) -> str:
+        return self.bucket + ":" + self.name
+
+    def delete(self) -> None:
+        self.deleted = True
+
+
+class _FakeAttributeTable:
+    """A ``begins_with`` Query over an in-memory row list.
+
+    Mirrors DynamoDB's semantics exactly: the range-key condition is a byte
+    prefix match and nothing else, so anything separating buckets has to come
+    from the code under test rather than from the fake.
+    """
+
+    def __init__(self, rows: list[_FakeAttributeRow]) -> None:
+        self.rows = rows
+        self.prefixes: list[str] = []
+
+    def query(self, actor_id, condition, consistent_read=True, **kwargs):  # noqa: ANN001, ARG002
+        prefix = condition.values[1].value["S"]
+        self.prefixes.append(prefix)
+        return [r for r in self.rows if r.bucket_name.startswith(prefix)]
+
+
+class TestDbAttributeBucketIsolation:
+    """A bucket must never see or delete a prefix sibling's rows.
+
+    ``bucket_name`` is ``bucket + ":" + name``, so a bare
+    ``begins_with(bucket)`` matched every bucket having this one as a prefix.
+    ``delete_bucket()`` then deleted them: ``RemotePeerStore.delete_all()``
+    tears down bucket ``remote:{peer_id}`` and most call sites build that id
+    with ``validate_peer_id=False``, so ending trust with peer ``abc``
+    destroyed peer ``abcd``'s dataset.
+    """
+
+    def _install(self, monkeypatch, rows):
+        from actingweb.db.dynamodb import attribute as dynamo_attribute
+
+        table = _FakeAttributeTable(rows)
+        monkeypatch.setattr(dynamo_attribute.Attribute, "query", table.query)
+        return dynamo_attribute.DbAttribute, table
+
+    def test_get_bucket_skips_prefix_sibling_rows(self, monkeypatch):
+        rows = [
+            _FakeAttributeRow("b", "x", "b-value"),
+            _FakeAttributeRow("bb", "y", "bb-value"),
+        ]
+        db, _table = self._install(monkeypatch, rows)
+
+        result = db.get_bucket(actor_id="actor1", bucket="b")
+
+        assert result is not None
+        assert set(result) == {"x"}
+        assert result["x"]["data"] == "b-value"
+
+    def test_delete_bucket_spares_prefix_sibling_rows(self, monkeypatch):
+        rows = [
+            _FakeAttributeRow("b", "x", "b-value"),
+            _FakeAttributeRow("bb", "y", "bb-value"),
+        ]
+        db, _table = self._install(monkeypatch, rows)
+
+        assert db.delete_bucket(actor_id="actor1", bucket="b") is True
+
+        assert rows[0].deleted is True
+        assert rows[1].deleted is False
+
+    def test_get_bucket_separates_remote_peer_prefix_siblings(self, monkeypatch):
+        rows = [
+            _FakeAttributeRow("remote:abc", "x", "abc-value"),
+            _FakeAttributeRow("remote:abcd", "x", "abcd-value"),
+        ]
+        db, _table = self._install(monkeypatch, rows)
+
+        result = db.get_bucket(actor_id="actor1", bucket="remote:abc")
+
+        assert result == {"x": {"data": "abc-value", "timestamp": None}}
+
+    def test_delete_bucket_spares_remote_peer_prefix_sibling(self, monkeypatch):
+        rows = [
+            _FakeAttributeRow("remote:abc", "x", "abc-value"),
+            _FakeAttributeRow("remote:abcd", "x", "abcd-value"),
+        ]
+        db, _table = self._install(monkeypatch, rows)
+
+        assert db.delete_bucket(actor_id="actor1", bucket="remote:abc") is True
+
+        assert rows[0].deleted is True
+        assert rows[1].deleted is False
+
+    def test_exact_compare_rejects_a_colliding_composite_key(self, monkeypatch):
+        """The delimiter alone is not enough.
+
+        Bucket names contain ``:`` (``remote:{peer_id}``) and attribute names
+        contain ``:`` (``list:{name}:{index}``), so bucket ``remote``/name
+        ``abc:x`` produces the byte-identical ``bucket_name``
+        ``remote:abc:x`` that bucket ``remote:abc``/name ``x`` would. Both
+        backends key on ``(id, bucket_name)``, so those two are the *same row*
+        and only one can exist — which is exactly why the delimiter cannot
+        settle who owns it. The stored ``bucket`` does, and only an exact
+        compare reads it.
+        """
+        rows = [_FakeAttributeRow("remote", "abc:x", "flat-bucket")]
+        db, table = self._install(monkeypatch, rows)
+
+        assert db.get_bucket(actor_id="actor1", bucket="remote:abc") == {}
+        assert db.get_bucket(actor_id="actor1", bucket="remote") == {
+            "abc:x": {"data": "flat-bucket", "timestamp": None}
+        }
+        # The narrowed prefix matched the row in both calls; the compare split them.
+        assert table.prefixes == ["remote:abc:", "remote:"]
+
+    def test_exact_compare_stops_a_colliding_composite_key_delete(self, monkeypatch):
+        rows = [_FakeAttributeRow("remote", "abc:x", "flat-bucket")]
+        db, _table = self._install(monkeypatch, rows)
+
+        assert db.delete_bucket(actor_id="actor1", bucket="remote:abc") is True
+
+        assert rows[0].deleted is False
+
+    def test_queries_carry_the_delimiter(self, monkeypatch):
+        rows = [_FakeAttributeRow("b", "x", "b-value")]
+        db, table = self._install(monkeypatch, rows)
+
+        db.get_bucket(actor_id="actor1", bucket="b")
+        db.delete_bucket(actor_id="actor1", bucket="b")
+
+        assert table.prefixes == ["b:", "b:"]

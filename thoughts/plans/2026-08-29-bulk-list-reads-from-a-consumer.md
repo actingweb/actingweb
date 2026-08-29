@@ -601,13 +601,52 @@ unfiltered partition dump. That converts a `TypeError` into a read bypass.
 
 ### Verification
 
-- [ ] `poetry run pytest tests/test_authenticated_views.py -v` passes
-- [ ] `poetry run pytest tests/ -k "permission" -v` passes
-- [ ] `poetry run ruff check actingweb tests` passes
-- [ ] `poetry run pyright actingweb tests` reports 0 errors
-- [ ] Manual: `/security-review` on the diff for this phase
+- [x] `poetry run pytest tests/test_authenticated_views.py -v` passes (54, unchanged)
+- [x] `poetry run pytest tests/test_authenticated_bulk_list_reads.py -v` passes (24 new)
+- [x] `poetry run pytest tests/ -k "permission" -v` passes (219)
+- [x] `poetry run pytest tests/integration/test_property_lists_advanced.py -v` passes on both backends (28 each)
+- [x] `poetry run ruff check actingweb tests` passes
+- [x] `poetry run pyright actingweb tests` reports 0 errors
+- [x] Whole suite green: 2,333 unit, 907 integration
+- [x] `/security-review` on the branch diff
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+**Deviations and learnings:**
+
+- **The bug was reproduced before it was fixed.** Against the pre-phase code,
+  `authed.list_all_with_rows` resolved to a `_PermissionEnforcingListView`; the
+  permission check ran with `list_name="list_all_with_rows"` and passed; calling
+  the result raised `TypeError: '_PermissionEnforcingListView' object is not
+  callable`. Exactly the shape the class documents about its own removed
+  `create()`.
+- **The collision set is COMPUTED, not hand-listed.** `__getattr__` raises
+  `AttributeError` for any name in
+  `_PROPERTY_LIST_STORE_METHOD_NAMES`, derived at import from `vars()` of both
+  `property.PropertyListStore` and `interface.property_store.PropertyListStore`.
+  A hand-written literal would rot: a method added to either store and forgotten
+  here is a latent `TypeError` at best, and — if anyone later "fixes"
+  `__getattr__` by resolving to the store — a read bypass. A test re-derives the
+  set independently and asserts they agree.
+- **The bypass guard is asserted directly**, not implied. A sentinel object is
+  planted on the unauthenticated store as `list_all_with_rows`, and the test
+  asserts `__getattr__` raises rather than ever returning it. The dangerous
+  repair (`return getattr(self._store, name)`) makes every other test in the
+  file pass, so this is the only one that would catch it.
+- **The "no denied name in any log record" test had to be scoped**, as the plan
+  half-anticipated: `evaluate_bulk_property_access` logs every denied name at
+  WARNING under `actingweb.permission_evaluator`. A bare `caplog` assertion
+  catches those. The test asserts only that no record from
+  `actingweb.interface.authenticated_views` carries a denied name — the real
+  property, since in the single-list path the name came from the caller and here
+  it came from storage.
+- **The drop-all-on-error path needed two catches, not one.**
+  `evaluate_bulk_property_access` swallows its own exceptions and returns
+  all-`DENIED`, but `get_permission_evaluator()` itself can raise; both are
+  covered, and both yield `([], {})` rather than a partial result.
+- **`ValueError` and `DbError` deliberately propagate** through
+  `list_prefix_with_rows()`. Neither is a permission outcome, and swallowing
+  either would be indistinguishable from "you may read nothing here".
 
 ---
 

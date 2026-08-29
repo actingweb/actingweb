@@ -25,6 +25,28 @@ FIXED
   ``0..highest_seen`` — so a row missed by an eventually consistent replica
   read was overwritten by its successor and its slot deleted, silently. The
   v2 counterparts already stated this rule; v1 now agrees.
+- **``actor.property_lists.list_all_with_rows()`` raised ``TypeError`` on a
+  permission-scoped actor view.** ``AuthenticatedPropertyListStore`` defined no
+  bulk readers, so the call fell through ``__getattr__``, which
+  permission-checked the *method name* as a list name — which passes, since an
+  unmatched target evaluates to ``NOT_FOUND`` and only ``DENIED`` raises — and
+  returned a ``_PermissionEnforcingListView`` wrapping a bound method. All
+  three bulk readers (``list_all()``, ``list_all_with_rows()``,
+  ``list_prefix_with_rows()``) are now defined explicitly and filter denied
+  lists out of **both** ``names`` and ``rows``, in one bulk permission
+  evaluation. Rows are narrowed with the library's own attribution logic, never
+  a bare ``startswith()`` prune, which for a denied list ``foo`` would also
+  strip permitted sibling ``foo-old``'s item rows while leaving its ``-meta``
+  row — after which the permitted list reads as ``[]`` with nothing raised.
+  A permission-system error returns an empty result rather than a partial one,
+  and no denied list name appears in any message or log emitted by this path.
+  **Behavior change**: ``__getattr__`` on that view now raises
+  ``AttributeError`` for a name colliding with a store method (``exists``,
+  ``list_all``, ``list_all_with_rows``, ``list_prefix_with_rows``), so a user
+  list actually named one of those is unreachable through the authenticated
+  view. That is the safe reading: the alternative repair — resolving such a
+  name to the underlying store's method — would hand a permission-scoped
+  accessor an unfiltered whole-partition read.
 - **DynamoDB attribute buckets matched by bare prefix, and one of them
   deleted what it matched.** ``Attribute``'s range key is
   ``bucket + ":" + name``, but ``get_bucket()`` and ``delete_bucket()``

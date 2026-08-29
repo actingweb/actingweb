@@ -9,6 +9,7 @@ from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any, Optional
 
 from ..permission_evaluator import PermissionResult, get_permission_evaluator
+from ..property import rows_for
 from ..property_list import ListItemHandle
 
 if TYPE_CHECKING:
@@ -343,8 +344,37 @@ class _PermissionEnforcingListView:
         return self._list_prop.migrate_to_v2(allow_damaged=allow_damaged)
 
 
+# List names that collide with a method on either PropertyListStore, and so
+# cannot be reached through AuthenticatedPropertyListStore.__getattr__.
+# Computed rather than hand-listed, so a method added to either store lands
+# here without anyone remembering to update a literal -- an omission would be
+# a latent TypeError at best and, if __getattr__ ever resolved to the
+# unauthenticated store's bound method, a read bypass at worst.
+def _property_list_store_method_names() -> frozenset[str]:
+    from ..property import PropertyListStore as _CorePropertyListStore
+    from .property_store import PropertyListStore as _WrappedPropertyListStore
+
+    return frozenset(
+        name
+        for cls in (_CorePropertyListStore, _WrappedPropertyListStore)
+        for name in vars(cls)
+        if not name.startswith("_")
+    )
+
+
+_PROPERTY_LIST_STORE_METHOD_NAMES = _property_list_store_method_names()
+
+
 class AuthenticatedPropertyListStore:
-    """Property list store wrapper that enforces permission checks."""
+    """Property list store wrapper that enforces permission checks.
+
+    Note on log volume, not disclosure: the bulk readers below evaluate
+    every discovered list name in ONE
+    `evaluate_bulk_property_access()` call, and that method logs every
+    DENIED name at WARNING per call. Those records are owner-side and go
+    to `actingweb.permission_evaluator`; nothing here re-emits a denied
+    name. Worth knowing before one of these lands on a hot path.
+    """
 
     def __init__(
         self,
@@ -401,12 +431,129 @@ class AuthenticatedPropertyListStore:
         `delete` on each mutating call so a read-only accessor cannot
         mutate through the object this returns (see
         `_PermissionEnforcingListView`).
+
+        A name that collides with a `PropertyListStore` METHOD raises
+        `AttributeError` rather than resolving either way. Both readings
+        are wrong and one is dangerous: treating it as a list name
+        permission-checks a method name -- which passes, because an
+        unmatched target evaluates to `NOT_FOUND` and only `DENIED`
+        raises -- and returns a view wrapping a bound method, which raises
+        `TypeError` when called; while "resolve it to the store's method"
+        would hand a permission-scoped accessor the UNAUTHENTICATED
+        store's `list_all_with_rows()`, turning a `TypeError` into a full
+        unfiltered read bypass. The consequence, already true for
+        `exists`/`delete`, is that a user list actually NAMED `list_all`
+        is unreachable through this view.
         """
         if name.startswith("_"):
             return super().__getattribute__(name)
 
+        if name in _PROPERTY_LIST_STORE_METHOD_NAMES:
+            raise AttributeError(
+                f"'{name}' is a {type(self).__name__} method name, so it "
+                f"cannot be used as a list name here. A list actually named "
+                f"'{name}' is unreachable through the authenticated view."
+            )
+
         self._check_permission(name, "read")
         return _PermissionEnforcingListView(getattr(self._store, name), name, self)
+
+    def _permitted(self, names: list[str]) -> list[str] | None:
+        """`names` filtered to those this accessor may read.
+
+        Returns `None` when the permission system could not answer, which
+        callers turn into an empty result -- following
+        `handlers/properties.py`: *"On error, exclude all list properties
+        for security"*. Drop-all, never partial.
+
+        `NOT_FOUND` counts as permitted, matching `_check_permission()`
+        above (which denies only on `DENIED`) and the REST `listall()`
+        handler. One bulk call, not one per name.
+
+        No denied name is ever returned, raised or logged from here. In
+        the single-list path a name in an error message came from the
+        CALLER, so echoing it tells them nothing; here the names came from
+        storage, so naming one would tell an accessor that a list exists
+        which they are not permitted to know about.
+        """
+        if not self._auth_context.accessor_id or not self._config:
+            return names
+
+        try:
+            evaluator = get_permission_evaluator(self._config)
+            results = evaluator.evaluate_bulk_property_access(
+                self._actor_id,
+                self._auth_context.accessor_id,
+                list(names),
+                "read",
+            )
+        except Exception as e:
+            logger.error(
+                "Permission system error during bulk list read for actor %s: %s. "
+                "Returning no lists as a security precaution.",
+                self._actor_id,
+                e,
+            )
+            return None
+
+        return [
+            name
+            for name in names
+            if results.get(name, PermissionResult.DENIED)
+            in (PermissionResult.ALLOWED, PermissionResult.NOT_FOUND)
+        ]
+
+    def list_all(self) -> list[str]:
+        """Every list name this accessor may read.
+
+        Defined explicitly rather than left to `__getattr__`, which would
+        permission-check `"list_all"` as a list name and then return a
+        view wrapping a bound method -- a `TypeError` on call.
+
+        A denied list is simply absent. An empty result is therefore
+        indistinguishable from "this actor has no lists", the same trade
+        `exists()` makes deliberately below.
+        """
+        permitted = self._permitted(self._store.list_all())
+        return [] if permitted is None else permitted
+
+    def list_all_with_rows(self) -> tuple[list[str], dict[str, str]]:
+        """`list_all_with_rows()`, with denied lists removed from BOTH
+        halves -- see `property.PropertyListStore.list_all_with_rows()`.
+
+        Rows are narrowed with `property.rows_for()`, the library's own
+        attribution logic, never a bare `startswith()` prune: for a denied
+        list `foo`, `startswith("list:foo-")` also strips PERMITTED
+        sibling `foo-old`'s item rows while leaving its `-meta` row, after
+        which `to_list_from_rows()` reports that permitted list as empty
+        with nothing raised.
+
+        On a permission-system error this returns `([], {})` rather than a
+        partial result.
+        """
+        names, rows = self._store.list_all_with_rows()
+        return self._filtered(names, rows)
+
+    def list_prefix_with_rows(self, prefix: str) -> tuple[list[str], dict[str, str]]:
+        """`list_prefix_with_rows()`, with denied lists removed from both
+        halves -- see `property.PropertyListStore.list_prefix_with_rows()`
+        for the prefix semantics, the cost contrast and the error
+        contract.
+
+        `ValueError` on an empty prefix and `DbError` on a backend fault
+        both propagate: neither is a permission outcome, and both would be
+        indistinguishable from "you may read nothing here" if swallowed.
+        """
+        names, rows = self._store.list_prefix_with_rows(prefix)
+        return self._filtered(names, rows)
+
+    def _filtered(
+        self, names: list[str], rows: dict[str, str]
+    ) -> tuple[list[str], dict[str, str]]:
+        permitted = self._permitted(names)
+        if permitted is None:
+            return [], {}
+        return permitted, rows_for(permitted, rows)
 
     def exists(self, name: str) -> bool:
         """Check if list exists (requires read permission)."""

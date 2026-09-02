@@ -19,7 +19,7 @@ with the DELETE todo below rather than waiting for the next hang.
 branch shipped `ACTINGWEB_PG_DELETE_DIAGNOSTICS` and lifted that todo's
 quarantine. Nothing here was instrumented: follow-up 1's process-global
 singletons were the shared surface, and the pool half of that surface was
-already rebuilt in #117 (see the DELETE todo's "What changed under this todo"),
+already rebuilt in #117 (see the deleted DELETE todo's "What changed under this todo", in git history),
 leaving `trust_type_registry._registry` and the fixed `creator` as the only
 untouched part of it. The three follow-ups below all remain open.
 
@@ -37,7 +37,10 @@ untouched part of it. The three follow-ups below all remain open.
 
 ## Why this is not the same item as the DELETE todo
 
-`thoughts/todo/2026-06-15-postgres-parallel-delete-not-persisting.md` is a
+The former `thoughts/todo/2026-06-15-postgres-parallel-delete-not-persisting.md`
+(deleted 2026-09-02 after the matrix stayed green from #128 on 2026-08-15
+through the v3.14.3 tag; the file's full evidence is in git history before
+that date, and `ACTINGWEB_PG_DELETE_DIAGNOSTICS` stays on in `tests.yml`) was a
 **correctness** question — a per-actor attribute `DELETE` that intermittently
 does not persist, with a mechanism that could drop writes in production. This
 one is **test-infrastructure reliability** only. Same date, same CI matrix, same

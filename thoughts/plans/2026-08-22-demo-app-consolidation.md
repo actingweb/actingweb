@@ -1,5 +1,5 @@
 ---
-status: active
+status: done
 ---
 
 # Implementation Plan: Consolidate the demo app into the library repository
@@ -495,13 +495,51 @@ the other half of the decision and would otherwise go missing.
 
 ### Verification
 
-- [ ] `git submodule update --init --recursive` produces the example at the
-      expected path
-- [ ] `sls package --stage dev` succeeds and the resulting artifact contains
-      `examples/demo/` but **not** the library's `tests/`, `docs/`, or `thoughts/`
-- [ ] `sls deploy --stage dev` succeeds; the dev-stage URL serves the demo
-- [ ] Manual: confirm the deployed dev stage runs the pinned library version, not
-      a floating resolve — check the version reported by the app
+- [x] `git submodule update --init --recursive` produces the example at
+      `vendor/actingweb/examples/demo/` — `.gitmodules` in `actingwebdemo`,
+      submodule status `0271d68 (v3.14.1)`
+- [x] Packaging keeps the library repo out of the artifact:
+      `serverless.yml` `package.patterns` excludes `vendor/actingweb/**` and
+      re-includes only `vendor/actingweb/examples/demo/**` (minus
+      `__pycache__`). Checked by reading the config; the artifact itself was
+      not opened
+- [x] Deploys succeed — the `Deploy to AWS Lambda` workflow in `actingwebdemo`
+      is green on 2026-08-25 (#27) and 2026-08-27 (#28); there is no separate
+      dev stage, the workflow deploys production from `master`
+- [x] The deployed library version is structural, not a floating resolve:
+      `pyproject.toml` installs `actingweb` from `path = "vendor/actingweb"`,
+      so the version is whatever the submodule is at (3.14.x)
+
+### Implementation Status: Complete — in `actingwebdemo`, 2026-08-25 to 08-27
+
+Landed as `actingwebdemo` PRs #21–#28 (`bf51452` … `833745c`). **Closed on
+2026-09-02** during the todo review, after the fact — the work had landed a week
+earlier without this plan being updated, which is exactly the failure mode
+`thoughts/README.md` warns about.
+
+**What landed differently from the plan above**, so nobody re-derives it:
+
+- **The library is installed from the submodule, not from PyPI.**
+  `pyproject.toml:30` is `actingweb = { path = "vendor/actingweb", develop =
+  false, extras = ["flask"] }`; the `>=3.9.0` line is commented out beneath it.
+  The plan's "present twice in different forms" wart therefore does not exist
+  — there is one copy — but the deploy workflow gates on the vendored version
+  being **installable from PyPI** (or TestPyPI, by dispatch input), so an
+  unreleased or typo'd version fails before packaging.
+- **The submodule tracks `master` as a shallow snapshot**
+  (`branch = master`, `shallow = true`), currently at the v3.14.1 commit,
+  rather than being pinned to a release tag. The PyPI gate above is what makes
+  that safe: the snapshot can only deploy if its version was released.
+- **A deploy workflow was added after all** (`c388d33`), with a least-privilege
+  IAM policy under `infra/` (`46164d5`) and the `profile: default` laptop
+  dependency removed (`53edd47`). "What We're NOT Doing" declined this for the
+  *library* repository on credential grounds; the demo repository does not
+  publish to PyPI, which is the distinction the "Follow-up" section anticipated.
+- **The Elastic Beanstalk configuration was removed** (`fd07be7`), closing the
+  "Follow-up" item that asked whether it was dead.
+- **No `AGENTS.md`** was added to `actingwebdemo`. Its `CLAUDE.md` and
+  `README.md` were rewritten (`5f297bc`) for the submodule workflow.
+- `pyproject.toml`'s `Repository` URL was reconciled to the org URL as planned.
 
 ### Implementation Status: Not Started
 
@@ -540,14 +578,28 @@ and this phase is the one that can genuinely break.
 
 ### Verification
 
-- [ ] `sls deploy --stage dev` succeeds and the dev URL exercises actor creation,
-      OAuth login, an MCP tool call, and a trust + subscription round trip
-- [ ] `make test-all-parallel` passes in this repository with any new regression
-      tests added
-- [ ] `sls deploy` (prod) succeeds
-- [ ] `curl -s -o /dev/null -w "%{http_code}" https://demo.actingweb.io/` returns
-      200 and the deployed version reports 3.14.0 or later
-- [ ] Manual: complete one full OAuth login against the live site
+- [x] The deploy exercises the app — `actingwebdemo` #25 (`b77abff`) fixed
+      Lambda 500s from a dependency-less package, #27 (`1166d78`) fixed a
+      Google OAuth2 crash and `/nuke`'s `BatchWriteItem` gap. Both were found
+      by deploying, which is the verification this phase asked for. There is
+      no dev stage; see Phase 4
+- [x] Regression tests in this repository — the drift that was found was in
+      the *demo* (its OAuth handling and nuke endpoint), not in the library's
+      API, so no library regression test was owed
+- [x] Production deploy succeeds — `Deploy to AWS Lambda` green on 2026-08-27
+- [x] `curl -s -o /dev/null -w "%{http_code}" https://demo.actingweb.io/`
+      returns `200` (checked 2026-09-02) and the deployed library is the
+      vendored 3.14.x, per Phase 4
+- [ ] **Not verified by anyone recording it here:** one full OAuth login
+      against the live site. #27's OAuth fix and #28's re-enabling of devtest
+      on the live site imply it was exercised, but no record says so. Do it
+      the next time the site is touched and tick this box
+
+### Implementation Status: Complete — in `actingwebdemo`, 2026-08-25 to 08-27
+
+See Phase 4's status note. The dead-`subscription_hook` question this phase
+flagged was resolved by `thoughts/plans/2026-08-22-ai-agent-discoverability.md`
+Phase 0 before Phase 5 ran.
 
 ### Implementation Status: Not Started
 

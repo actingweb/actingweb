@@ -89,17 +89,15 @@ class Attributes:
         must not become "the bucket has no such attribute", permanently,
         for the life of this instance.
 
-        Both backends return ``None`` for a caught exception, and
-        PostgreSQL additionally returns it for a genuinely EMPTY bucket
-        (see the comment below and ``db/postgresql/attribute.py``). Not
-        distinguishing those is deliberate and conservative: on PostgreSQL
-        an empty bucket is simply never trusted, so ``get_attr()`` still
-        point-reads there, which costs nothing real — an empty bucket has
-        no absent-name savings to give up. Aligning the two backends'
-        empty-vs-fault contract is filed separately
-        (``thoughts/todo/attribute-get-bucket-empty-vs-none.md``) rather
-        than smuggled in here; the conservative version cannot break a
-        caller that a grep did not find.
+        Both backends return ``{}`` for an empty bucket and reserve
+        ``None`` for a caught fault (PostgreSQL joined DynamoDB in 3.14.4;
+        before that it returned ``None`` for empty too). So an empty bucket
+        is authoritative on both: ``get_attr(name)`` after
+        ``get_bucket() == {}`` answers ``None`` without a backend read for
+        the life of this instance. Every ``Attributes`` instance in the
+        library is request-local except ``InternalStore._db``, which loads
+        once via ``_ensure_loaded`` on both backends regardless and does
+        not use this path.
 
         Note that on DynamoDB most real faults do not arrive as ``None`` at
         all: ``DbAttribute.get_bucket()`` wraps only the Query
@@ -112,7 +110,8 @@ class Attributes:
                 fetched_data = self.dbprop.get_bucket(
                     actor_id=self.actor_id, bucket=self.bucket
                 )
-                # PostgreSQL backend returns None for non-existent buckets
+                # None is a caught backend fault (either backend): the
+                # bucket stays unloaded so absence is never inferred from it.
                 if fetched_data is None:
                     self.data = {}
                 else:

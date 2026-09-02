@@ -189,7 +189,10 @@ class DbAttribute:
             bucket: The bucket name
 
         Returns:
-            Dict of {attribute_name: {data: ..., timestamp: ...}}, or None
+            Dict of {attribute_name: {data: ..., timestamp: ...}} -- ``{}``
+            for an empty bucket. ``None`` only for missing arguments or a
+            caught backend fault, matching DynamoDB (3.14.4; before,
+            an empty bucket also read as ``None`` here).
         """
         if not actor_id or not bucket:
             return None
@@ -208,10 +211,7 @@ class DbAttribute:
                     )
                     rows = cur.fetchall()
 
-                    if not rows:
-                        return None
-
-                    ret = {}
+                    ret: dict[str, dict[str, Any]] = {}
                     for row in rows:
                         ret[row[0]] = {
                             "data": row[1],
@@ -247,13 +247,17 @@ class DbAttribute:
         try:
             with get_connection() as conn:
                 with conn.cursor() as cur:
+                    # ``bucket_name`` alone is ambiguous -- bucket ``remote:abc``
+                    # / name ``x`` and bucket ``remote`` / name ``abc:x`` share
+                    # it -- so the exact bucket compare is what keeps a point
+                    # read inside its own bucket, as it does for get_bucket().
                     cur.execute(
                         """
                         SELECT data, timestamp
                         FROM attributes
-                        WHERE id = %s AND bucket_name = %s
+                        WHERE id = %s AND bucket_name = %s AND bucket = %s
                         """,
-                        (actor_id, bucket_name),
+                        (actor_id, bucket_name, bucket),
                     )
                     row = cur.fetchone()
 
@@ -295,9 +299,9 @@ class DbAttribute:
                     """
                     SELECT data, timestamp, ttl_timestamp
                     FROM attributes
-                    WHERE id = %s AND bucket_name = %s
+                    WHERE id = %s AND bucket_name = %s AND bucket = %s
                     """,
-                    (actor_id, bucket_name),
+                    (actor_id, bucket_name, bucket),
                 )
                 row = cur.fetchone()
 
@@ -352,9 +356,9 @@ class DbAttribute:
                         cur.execute(
                             """
                             DELETE FROM attributes
-                            WHERE id = %s AND bucket_name = %s
+                            WHERE id = %s AND bucket_name = %s AND bucket = %s
                             """,
-                            (actor_id, bucket_name),
+                            (actor_id, bucket_name, bucket),
                         )
                         rowcount = cur.rowcount
                         if diagnostics:
@@ -406,6 +410,8 @@ class DbAttribute:
                         )
                         ON CONFLICT (id, bucket_name)
                         DO UPDATE SET
+                            bucket = EXCLUDED.bucket,
+                            name = EXCLUDED.name,
                             data = EXCLUDED.data,
                             timestamp = EXCLUDED.timestamp,
                             ttl_timestamp = EXCLUDED.ttl_timestamp
@@ -480,9 +486,9 @@ class DbAttribute:
                     cur.execute(
                         """
                         DELETE FROM attributes
-                        WHERE id = %s AND bucket_name = %s
+                        WHERE id = %s AND bucket_name = %s AND bucket = %s
                         """,
-                        (actor_id, bucket_name),
+                        (actor_id, bucket_name, bucket),
                     )
                     rows_deleted = cur.rowcount
                 conn.commit()
@@ -539,13 +545,15 @@ class DbAttribute:
                         """
                         UPDATE attributes
                         SET data = %s::jsonb, timestamp = %s
-                        WHERE id = %s AND bucket_name = %s AND data = %s::jsonb
+                        WHERE id = %s AND bucket_name = %s AND bucket = %s
+                          AND data = %s::jsonb
                         """,
                         (
                             json.dumps(new_data),
                             timestamp,
                             actor_id,
                             bucket_name,
+                            bucket,
                             json.dumps(old_data),
                         ),
                     )

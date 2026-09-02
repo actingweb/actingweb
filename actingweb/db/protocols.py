@@ -1028,7 +1028,13 @@ class DbAttributeProtocol(Protocol):
             bucket: Bucket name
 
         Returns:
-            Dict of {attr_name: {"data": ..., "timestamp": ...}}, or None
+            Dict of {attr_name: {"data": ..., "timestamp": ...}}. An empty
+            bucket is ``{}`` on both backends. ``None`` is reserved for
+            missing arguments and for a backend fault the implementation
+            caught -- on PostgreSQL every query error; on DynamoDB only a
+            failure to construct the Query, because PynamoDB fires the
+            request lazily during iteration and a fault there raises
+            straight through the caller.
         """
         ...
 

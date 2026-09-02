@@ -5,6 +5,138 @@ CHANGELOG
 Unreleased
 ----------
 
+v3.14.4: September 2, 2026
+--------------------------
+
+SECURITY
+~~~~~~~~
+
+- **A peer could write into a namespace its trust type excludes by putting a
+  newline in the property name.** Permission globs were compiled to a regex
+  anchored with ``$`` and without ``re.DOTALL``, so ``*`` could not cross a
+  newline and ``$`` tolerated a trailing one: for a ``friend`` or ``partner``
+  peer, ``excluded_patterns: ["private/*", "security/*", "_internal/*"]`` did
+  not match ``private/\nx``. The reachable vector is the JSON body of
+  ``POST /{actor}/properties`` (keys are property names); at the previous
+  release a ``friend`` peer's ``{"private/\nx": "v"}`` returned 201 and the
+  row appeared in the owner's listing. A newline in the URL path never reaches
+  a handler on either integration (both routers answer 404), and tab, NUL and
+  CR were already matched by ``*``. Impact is integrity — a value planted
+  inside a protected namespace — not disclosure. Affected: any deployment
+  that grants ``friend`` or ``partner``, or a custom trust type with
+  ``excluded_patterns`` or a bare-literal ``denied`` entry, to a peer. What
+  changed, all of it about **identifiers only** (property, list, tool, prompt,
+  method and resource names, peer ids); values — property content, list
+  items, tool input — are untouched:
+
+  - Patterns now match the **whole** identifier (``\Z``), and ``*``/``?``
+    match a newline like any other character (``re.DOTALL``).
+  - The evaluator **denies any identifier containing a C0 or C1 control
+    character** before consulting rules. This is also what keeps a
+    bare-literal ``denied: ["secret"]`` from flipping to an allow for
+    ``secret\n`` now that the anchor is exact. Denials are logged at
+    ``WARNING`` with the identifier's ``repr()``.
+  - New property and list names containing a control character are refused
+    at the store (``ValueError``) and answered ``400`` by the REST layer, for
+    every path segment of a ``PUT`` and every key of a ``POST`` (checked
+    before any key is applied). A name that already exists stays readable and
+    deletable by its owner.
+  - Six other identifier validators moved from ``$`` to ``\Z`` /
+    ``fullmatch``: the two remote peer-id patterns (a ``<32 hex>\n`` peer id
+    is how a ``remote:<id>\n`` bucket came to exist), the two encrypted-state
+    classifiers, the v1 list index and orphan-row patterns, and MCP resource
+    URI template matching. Legacy ``uri_pattern`` resource dispatch uses
+    ``re.fullmatch`` instead of the prefix match ``re.match``.
+  - The six MCP single-item permission checks (``tools/call``,
+    ``prompts/get``, ``resources/read`` on both transports) now **fail
+    closed**: an evaluator that raises denies with ``-32003`` and an
+    ``ERROR`` log line carrying the traceback, instead of serving the request
+    at ``DEBUG``. The ``*/list`` filters are unchanged.
+
+  Observable changes for legitimate use: a wildcard rule that used to miss an
+  identifier with an embedded newline now matches it; an identifier carrying
+  any control character is now denied to peers and cannot be created; and a
+  fault inside the permission subsystem (a failing trust lookup, say) now
+  blocks MCP ``tools/call``, ``prompts/get`` and ``resources/read`` with
+  ``-32003`` until it is fixed, where it used to let them through — an
+  availability cost taken deliberately on a security path, and the
+  ``ERROR`` log line names it. The equivalent ``methods``/``actions`` deny
+  bypass was never reachable — dispatch there is an exact dict lookup.
+
+FIXED
+~~~~~
+
+- **PostgreSQL ``get_bucket()`` returned ``None`` for an empty bucket.** It
+  now returns ``{}`` and reserves ``None`` for missing arguments or a caught
+  backend fault, matching DynamoDB. Consequence: an empty bucket is now
+  authoritative on PostgreSQL as it has been on DynamoDB since 3.14.3 —
+  ``Attributes.get_attr(name)`` after ``get_bucket() == {}`` answers ``None``
+  without a backend read for the life of that instance. DynamoDB still
+  reports most faults by raising rather than returning ``None``, because the
+  guarded region there is Query construction and PynamoDB fires the request
+  lazily. The five library call sites that end in ``get_bucket(...) or {}``
+  (``attribute_list_store``, ``callback_processor``, ``remote_storage`` twice,
+  ``fanout``) still fold a fault into "empty" and are knowingly deferred.
+- **The two backends stored different attribution for a colliding attribute
+  row.** ``bucket_name`` is ``bucket + ":" + name`` and both halves may
+  contain ``:``, so bucket ``remote:abc``/name ``x`` and bucket
+  ``remote``/name ``abc:x`` share a primary key. DynamoDB's PutItem
+  reattributed the row to the last writer; PostgreSQL's ``ON CONFLICT DO
+  UPDATE`` refreshed only ``data``/``timestamp`` and kept the first writer's
+  ``bucket``. The upsert now sets ``bucket`` and ``name`` too, so on both
+  backends the row belongs to the last writer — which means a later write
+  through the other pair *moves* it between buckets.
+- **Attribute point reads and deletes compare the bucket exactly.**
+  ``get_attr``, ``get_attr_strict``, ``delete_attr``,
+  ``delete_attr_conditional`` and ``conditional_update_attr`` keyed on
+  ``bucket_name`` alone and would answer, or delete, the colliding sibling's
+  row; they now apply the same exact ``bucket`` compare ``get_bucket()`` and
+  ``delete_bucket()`` gained in 3.14.3.
+
+CHANGED
+~~~~~~~
+
+- **``GET /mcp/info`` is derived from the application, not the demo.** Both
+  integrations carried a byte-identical literal document (``tools_count: 4``,
+  ``prompts_count: 3``, ``actor_lookup: "email_based"``, "ActingWeb MCP
+  Demo …") for every deployment. It is the ``resource_documentation`` target
+  of the OAuth discovery chain and unauthenticated, so it is now built by one
+  function from config and the in-memory hook registry only. Removed:
+  ``tools_count``, ``prompts_count``, ``actor_lookup``. Added: ``server_name``
+  (from ``with_mcp(server_name=)``). Changed: ``mcp_enabled`` follows the
+  configured value (it was a literal ``True``), ``description`` is the app's
+  own (``ActingWeb app: {aw_type}`` unless the app sets ``desc``), and
+  ``supported_features`` lists only what the registry actually exposes.
+  Read the tool list from ``tools/list``. No library version is disclosed.
+  **This changes a response shape in a patch release**: a client that reads
+  ``tools_count``, ``prompts_count`` or ``actor_lookup`` from ``/mcp/info``
+  will find them gone. The old values were the demo's literals for every
+  deployment, so nothing that read them was reading anything true; still, a
+  client that hard-coded them needs updating.
+- **``GET /mcp`` reports the configured server name and real
+  capabilities.** It answered ``"actingweb-mcp"`` and three literal ``True``
+  capabilities regardless of configuration while the ``initialize`` handshake
+  answered the configured name; the three surfaces now share one derivation.
+  A deployment that never set ``server_name`` sees ``"actingweb"`` here now,
+  which a client keyed on the old ``"actingweb-mcp"`` string will notice.
+- **``fqdn`` and ``proto`` are stripped, then validated, when ``Config`` is
+  built.** Surrounding whitespace (a trailing newline from a ``.env`` file)
+  is stripped; a double quote, backslash, interior whitespace or control
+  character raises ``ValueError`` naming the character, ``APP_HOST_FQDN`` /
+  ``APP_HOST_PROTOCOL``, and the accepted form ``host[:port][/base]`` with no
+  scheme. ``ActingWebApp`` strips at its boundary too. A scheme prefix on
+  ``fqdn`` is not detected — it produces the doubled scheme it always has.
+
+REMOVED
+~~~~~~~
+
+- **``BaseActingWebIntegration.get_oauth_discovery_metadata()``**, and the
+  two tests that were its only callers. Both integrations serve
+  ``/.well-known/oauth-authorization-server`` from ``OAuth2EndpointsHandler``,
+  the method was never rendered in the API docs, and while it lived it
+  advertised ``scopes_supported: ["openid", "profile", "email", "mcp"]`` —
+  neither the served list nor a subset of it.
+
 v3.14.3: August 29, 2026
 -------------------------
 

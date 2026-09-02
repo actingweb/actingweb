@@ -2,6 +2,7 @@ import binascii
 import importlib
 import logging
 import os
+import re
 import uuid
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -10,6 +11,32 @@ if TYPE_CHECKING:
 
     from actingweb.interface.hooks import HookRegistry
     from actingweb.subscription_config import SubscriptionProcessingConfig
+
+
+_HOST_SETTING_FORBIDDEN_RE = re.compile(r'["\\\s\x00-\x1f\x7f-\x9f]')
+
+
+def _validated_host_setting(name: str, value: Any, env_var: str) -> str:
+    """Strip ``value`` and reject what cannot appear inside a URL or header.
+
+    Surrounding whitespace is stripped rather than rejected so a trailing
+    newline in a ``.env`` file keeps the app booting. A double quote, a
+    backslash, interior whitespace or a control character is refused --
+    each would break the quoted ``resource_metadata`` in the MCP challenge
+    or the URLs built from it. ``/`` (a base path) and ``:`` (``host:port``)
+    are accepted. A scheme prefix on ``fqdn`` is not detected here; it
+    produces the doubled scheme it always has.
+    """
+    text = str(value if value is not None else "").strip()
+    m = _HOST_SETTING_FORBIDDEN_RE.search(text)
+    if m is not None:
+        raise ValueError(
+            f"Config {name}={text!r} contains the disallowed character "
+            f"{m.group(0)!r} (quote, backslash, whitespace or control "
+            f"character). Check {env_var} or the {name}= argument; the "
+            f"accepted form is host[:port][/base] with no scheme."
+        )
+    return text
 
 
 class Config:
@@ -248,6 +275,12 @@ class Config:
         # Pick up the config variables
         for k, v in kwargs.items():
             self.__setattr__(k, v)
+
+        # fqdn/proto are spliced into every URL the app emits and into the
+        # WWW-Authenticate challenge, so they are checked here -- after the
+        # caller's values have landed, before root/auth_realm are derived.
+        self.fqdn = _validated_host_setting("fqdn", self.fqdn, "APP_HOST_FQDN")
+        self.proto = _validated_host_setting("proto", self.proto, "APP_HOST_PROTOCOL")
 
         # Environment variable overrides for property lookup configuration
         if os.getenv("INDEXED_PROPERTIES"):

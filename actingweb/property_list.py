@@ -79,7 +79,7 @@ _V2_RANK_ALPHABET = frozenset(fi.BASE_62_DIGITS)
 # digit ("foo-5") stores "list:foo-5-0", which sorts inside list "foo"'s
 # range. The suffix "5-0" fails this pattern; a genuine "list:foo-7" row's
 # suffix "7" passes. Same role _v2_is_rank() plays for the v2 range.
-_V1_INDEX_RE = re.compile(r"^\d+$")
+_V1_INDEX_RE = re.compile(r"^\d+\Z")
 _lazy_migration_nudge_logged = False
 
 
@@ -2757,7 +2757,7 @@ class ListProperty:
             consistent_read=True,
         )
 
-        pattern = re.compile(rf"^list:{re.escape(self.name)}-(\d+)$")
+        pattern = re.compile(rf"^list:{re.escape(self.name)}-(\d+)\Z")
         present: set[int] = set()
         for key in rows:
             m = pattern.match(key)

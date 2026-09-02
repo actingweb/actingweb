@@ -23,7 +23,7 @@ def match_uri_template(template: str, uri: str) -> dict[str, str] | None:
         pattern_parts.append(f"(?P<{var_name}>[^/]+)")
         last_index = end
     pattern_parts.append(re.escape(template[last_index:]))
-    pattern = "^" + "".join(pattern_parts) + "$"
+    pattern = "^" + "".join(pattern_parts) + "\\Z"
 
     match = re.match(pattern, uri)
     if not match:

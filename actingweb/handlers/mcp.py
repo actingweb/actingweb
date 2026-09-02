@@ -409,6 +409,95 @@ def _warn_if_output_schema_unsatisfied(
         _warn_missing_structured_content_once(tool_name)
 
 
+def _registry_has_mcp_kind(
+    hooks: HookRegistry | None, hook_map: str, kind: str
+) -> bool:
+    """True if any hook in ``hooks.<hook_map>`` is MCP-exposed as ``kind``.
+
+    An in-memory scan of the registry -- no database -- which is what makes
+    it acceptable on the unauthenticated ``/mcp/info`` endpoint.
+    """
+    if not hooks:
+        return False
+    from ..mcp.decorators import get_mcp_metadata, is_mcp_exposed
+
+    for _name, hook_list in getattr(hooks, hook_map).items():
+        for hook in hook_list:
+            if is_mcp_exposed(hook):
+                metadata = get_mcp_metadata(hook)
+                if metadata and metadata.get("type") == kind:
+                    return True
+    return False
+
+
+def registry_has_mcp_tools(hooks: HookRegistry | None) -> bool:
+    """Whether the registry exposes at least one MCP tool."""
+    return _registry_has_mcp_kind(hooks, "_action_hooks", "tool")
+
+
+def registry_has_mcp_resources(hooks: HookRegistry | None) -> bool:
+    """Whether the registry exposes at least one MCP resource."""
+    return _registry_has_mcp_kind(hooks, "_method_hooks", "resource")
+
+
+def registry_has_mcp_prompts(hooks: HookRegistry | None) -> bool:
+    """Whether the registry exposes at least one MCP prompt."""
+    return _registry_has_mcp_kind(hooks, "_method_hooks", "prompt")
+
+
+def mcp_server_name(config: config_class.Config) -> str:
+    """The name announced in ``initialize``, ``GET /mcp`` and ``/mcp/info``.
+
+    ``getattr`` rather than an attribute read: several suites build the
+    handler config from ``Mock()``.
+    """
+    return getattr(config, "mcp_server_name", None) or "actingweb"
+
+
+def build_mcp_info(
+    config: config_class.Config, hooks: HookRegistry | None
+) -> dict[str, Any]:
+    """The ``GET /mcp/info`` document, shared by both integrations.
+
+    This endpoint is unauthenticated and is the ``resource_documentation``
+    target of the OAuth discovery chain, so every field is derived from
+    config scalars or the in-memory hook registry -- it must stay free of
+    database reads, and it deliberately carries no library version.
+    """
+    base_url = f"{config.proto}{config.fqdn}"
+    supported_features = [
+        feature
+        for feature, present in (
+            ("tools", registry_has_mcp_tools(hooks)),
+            ("resources", registry_has_mcp_resources(hooks)),
+            ("prompts", registry_has_mcp_prompts(hooks)),
+        )
+        if present
+    ]
+    return {
+        "mcp_enabled": bool(getattr(config, "mcp", False)),
+        "mcp_endpoint": "/mcp",
+        "server_name": mcp_server_name(config),
+        "description": getattr(config, "desc", None) or "",
+        "authentication": {
+            "type": "oauth2",
+            "provider": "actingweb",
+            "required_scopes": ["mcp"],
+            "flow": "authorization_code",
+            "auth_url": f"{base_url}/oauth/authorize",
+            "token_url": f"{base_url}/oauth/token",
+            "callback_url": f"{base_url}/oauth/callback",
+            "registration_endpoint": f"{base_url}/oauth/register",
+            "authorization_endpoint": f"{base_url}/oauth/authorize",
+            "token_endpoint": f"{base_url}/oauth/token",
+            "discovery_url": f"{base_url}/.well-known/oauth-authorization-server",
+            "resource_discovery_url": f"{base_url}/.well-known/oauth-protected-resource",
+            "enabled": True,
+        },
+        "supported_features": supported_features,
+    }
+
+
 def mcp_www_authenticate(base_url: str) -> str:
     """Build the 401 challenge for the MCP endpoint.
 
@@ -637,13 +726,15 @@ class MCPHandler(BaseHandler):
                     "error_description": "Authentication required for MCP access",
                 }
 
+            # Same derivations as initialize and /mcp/info, so the three
+            # can no longer disagree.
             return {
                 "version": LATEST_PROTOCOL_VERSION,
-                "server_name": "actingweb-mcp",
+                "server_name": mcp_server_name(self.config),
                 "capabilities": {
-                    "tools": True,  # We support tools
-                    "resources": True,  # We support resources
-                    "prompts": True,  # We support prompts
+                    "tools": self._has_mcp_tools(),
+                    "resources": self._has_mcp_resources(),
+                    "prompts": self._has_mcp_prompts(),
                 },
                 "transport": {
                     "type": "http",
@@ -742,51 +833,15 @@ class MCPHandler(BaseHandler):
 
     def _has_mcp_tools(self) -> bool:
         """Check if server has any MCP-exposed tools."""
-        if not self.hooks:
-            return False
-
-        # Check if any action hooks are MCP-exposed
-        from ..mcp.decorators import get_mcp_metadata, is_mcp_exposed
-
-        for _action_name, hooks in self.hooks._action_hooks.items():
-            for hook in hooks:
-                if is_mcp_exposed(hook):
-                    metadata = get_mcp_metadata(hook)
-                    if metadata and metadata.get("type") == "tool":
-                        return True
-        return False
+        return registry_has_mcp_tools(self.hooks)
 
     def _has_mcp_resources(self) -> bool:
         """Check if server has any MCP-exposed resources."""
-        if not self.hooks:
-            return False
-
-        # Check if any method hooks are MCP-exposed as resources
-        from ..mcp.decorators import get_mcp_metadata, is_mcp_exposed
-
-        for _method_name, hooks in self.hooks._method_hooks.items():
-            for hook in hooks:
-                if is_mcp_exposed(hook):
-                    metadata = get_mcp_metadata(hook)
-                    if metadata and metadata.get("type") == "resource":
-                        return True
-        return False
+        return registry_has_mcp_resources(self.hooks)
 
     def _has_mcp_prompts(self) -> bool:
         """Check if server has any MCP-exposed prompts."""
-        if not self.hooks:
-            return False
-
-        # Check if any method hooks are MCP-exposed
-        from ..mcp.decorators import get_mcp_metadata, is_mcp_exposed
-
-        for _method_name, hooks in self.hooks._method_hooks.items():
-            for hook in hooks:
-                if is_mcp_exposed(hook):
-                    metadata = get_mcp_metadata(hook)
-                    if metadata and metadata.get("type") == "prompt":
-                        return True
-        return False
+        return registry_has_mcp_prompts(self.hooks)
 
     def _handle_initialize(
         self, request_id: Any, params: dict[str, Any]
@@ -844,7 +899,7 @@ class MCPHandler(BaseHandler):
         # configuration (carried on Config). The server name is what some
         # clients use as the default tool prefix; instructions are surfaced to
         # the LLM on initial connection.
-        server_name = getattr(self.config, "mcp_server_name", None) or "actingweb"
+        server_name = mcp_server_name(self.config)
         result: dict[str, Any] = {
             "protocolVersion": negotiated_version,
             "capabilities": capabilities,
@@ -869,14 +924,14 @@ class MCPHandler(BaseHandler):
         authentication, or ``(None, denial_response)`` when it did not -- an
         authenticated token that resolves to no trust relationship is a
         security condition (fail-closed), distinct from "permission
-        subsystem unavailable" (fail-open, which callers implement
-        separately around evaluator construction/use).
+        subsystem unavailable" (also fail-closed since 3.14.4, which
+        callers implement separately around evaluator construction/use
+        so the two denials stay distinguishable).
 
         Callers must use the returned denial verbatim and must not evaluate
-        it inside a ``try/except`` that treats exceptions as fail-open:
-        ``RuntimeContext`` access here does not raise, but nesting the
-        denial return inside such a block would silently revert this to
-        fail-open the moment an unrelated exception is added nearby.
+        it inside the evaluator ``try/except``: ``RuntimeContext`` access
+        here does not raise, but nesting the denial return inside that
+        block would report a no-trust request as an evaluator fault.
 
         Shared by both the sync (``MCPHandler``) and async
         (``AsyncMCPHandler``) single-item gates (``tools/call``,
@@ -1337,16 +1392,16 @@ class MCPHandler(BaseHandler):
             )
 
         # No trust relationship resolved for this client -> fail-closed. This
-        # check must happen before the evaluator try/except below: placing it
-        # inside that block would let the availability fail-open swallow it.
+        # check happens before the evaluator try/except below so its denial
+        # message stays distinct from an evaluator fault.
         peer_id, denial = self._require_mcp_peer_id(actor, request_id)
         if denial is not None:
             return denial
         assert peer_id is not None
 
         # Check permission before finding/dispatching the hook. An evaluator
-        # that raises here (permission subsystem unavailable) stays
-        # fail-open, deliberately distinct from the no-trust denial above.
+        # that raises here (permission subsystem unavailable) is a denial
+        # too, since 3.14.4; only the message differs from the no-trust one.
         try:
             from ..permission_evaluator import (
                 PermissionResult,
@@ -1365,8 +1420,19 @@ class MCPHandler(BaseHandler):
                     f"Access denied: You don't have permission to use tool '{tool_name}'",
                 )
         except Exception as e:
-            # Don't block execution if permission system not initialized; log and continue
-            logger.debug(f"Skipping tool permission check due to error: {e}")
+            # Fail closed: an evaluator that raises cannot vouch for this
+            # request, and serving it anyway would hand out whatever the broken
+            # subsystem was guarding. Same policy as authenticated_views.py.
+            logger.error(
+                f"Permission system error checking tool '{tool_name}': {e}. "
+                f"Denying access as security precaution.",
+                exc_info=True,
+            )
+            return self._create_jsonrpc_error(
+                request_id,
+                -32003,
+                f"Access denied: unable to verify permission to use tool '{tool_name}'",
+            )
 
         # Find the corresponding action hook
         from ..mcp.decorators import get_mcp_metadata, is_mcp_exposed
@@ -1423,7 +1489,8 @@ class MCPHandler(BaseHandler):
             )
 
         # No trust relationship resolved for this client -> fail-closed,
-        # evaluated before the fail-open evaluator try/except below.
+        # evaluated before the evaluator try/except below so the two
+        # denials stay distinguishable in logs.
         peer_id, denial = self._require_mcp_peer_id(actor, request_id)
         if denial is not None:
             return denial
@@ -1452,7 +1519,19 @@ class MCPHandler(BaseHandler):
                     f"Access denied: You don't have permission to use prompt '{prompt_name}'",
                 )
         except Exception as e:
-            logger.debug(f"Skipping prompt permission check due to error: {e}")
+            # Fail closed: an evaluator that raises cannot vouch for this
+            # request, and serving it anyway would hand out whatever the broken
+            # subsystem was guarding. Same policy as authenticated_views.py.
+            logger.error(
+                f"Permission system error checking prompt '{prompt_name}': {e}. "
+                f"Denying access as security precaution.",
+                exc_info=True,
+            )
+            return self._create_jsonrpc_error(
+                request_id,
+                -32003,
+                f"Access denied: unable to verify permission to use prompt '{prompt_name}'",
+            )
 
         # Find the corresponding method hook
         from ..mcp.decorators import get_mcp_metadata, is_mcp_exposed
@@ -1530,7 +1609,7 @@ class MCPHandler(BaseHandler):
             )
 
         # No trust relationship resolved for this client -> fail-closed,
-        # evaluated before the fail-open evaluator try/except below (and
+        # evaluated before the evaluator try/except below (and
         # before the outer try, so the general exception handler at the
         # bottom of this method cannot intercept it either).
         peer_id, denial = self._require_mcp_peer_id(actor, request_id)
@@ -1562,7 +1641,19 @@ class MCPHandler(BaseHandler):
                         f"Access denied: You don't have permission to access resource '{uri}'",
                     )
             except Exception as e:
-                logger.debug(f"Skipping resource permission check due to error: {e}")
+                # Fail closed: an evaluator that raises cannot vouch for this
+                # request, and serving it anyway would hand out whatever the broken
+                # subsystem was guarding. Same policy as authenticated_views.py.
+                logger.error(
+                    f"Permission system error checking resource '{uri}': {e}. "
+                    f"Denying access as security precaution.",
+                    exc_info=True,
+                )
+                return self._create_jsonrpc_error(
+                    request_id,
+                    -32003,
+                    f"Access denied: unable to verify permission to access resource '{uri}'",
+                )
 
             # Find the corresponding resource hook
             from ..mcp.decorators import get_mcp_metadata, is_mcp_exposed
@@ -1594,7 +1685,7 @@ class MCPHandler(BaseHandler):
                                 uri_matches = True
                             elif uri_pattern:
                                 try:
-                                    if re.match(uri_pattern, str(uri)):
+                                    if re.fullmatch(uri_pattern, str(uri)):
                                         uri_matches = True
                                 except re.error:
                                     logger.warning(

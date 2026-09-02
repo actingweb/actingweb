@@ -51,8 +51,10 @@ class ActingWebApp:
         self.aw_type = aw_type
         # Allow DATABASE_BACKEND environment variable to override default
         self.database = database or os.getenv("DATABASE_BACKEND", "dynamodb")
-        self.fqdn = fqdn or os.getenv("APP_HOST_FQDN", "localhost")
-        self.proto = proto or os.getenv("APP_HOST_PROTOCOL", "https://")
+        # Stripped here so the value the app holds is the value Config
+        # accepts (Config validates the rest at construction).
+        self.fqdn = (fqdn or os.getenv("APP_HOST_FQDN", "localhost")).strip()
+        self.proto = (proto or os.getenv("APP_HOST_PROTOCOL", "https://")).strip()
 
         # Configuration options
         # Multi-provider OAuth: dict of provider_name -> config dict
@@ -506,7 +508,8 @@ class ActingWebApp:
 
         Args:
             enable: If True, enable MCP support.
-            server_name: Name announced in the MCP initialise handshake.
+            server_name: Name announced in the MCP initialise handshake
+                and reported by ``GET /mcp`` and ``GET /mcp/info``.
                 Some clients use this as the default tool prefix
                 (``emm:search`` vs ``actingweb:search``). Defaults to
                 ``"actingweb"``. The first ``with_mcp()`` call sets the

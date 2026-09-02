@@ -2,6 +2,7 @@ from typing import Any
 
 from actingweb.db import get_property, get_property_list
 
+from .identifiers import first_control_character
 from .property_list import _V1_INDEX_RE, _V2_RANK_MARKER, ListProperty, _v2_is_rank
 
 
@@ -258,6 +259,16 @@ class PropertyListStore:
         if self._actor_id is None:
             raise RuntimeError("Cannot create ListProperty without a valid actor_id")
 
+        # A list name with a control character cannot be created (see
+        # identifiers.py). One that already exists stays reachable so its
+        # owner can still read it and delete it.
+        bad = first_control_character(k)
+        if bad is not None and not self.exists(k):
+            raise ValueError(
+                f"Cannot create list property {k!r}: name contains the "
+                f"control character {bad}"
+            )
+
         # Return a ListProperty - don't add "list:" prefix here, ListProperty will handle it
         return ListProperty(self._actor_id, k, self._config)
 
@@ -293,6 +304,15 @@ class PropertyStore:
             if k in self.__dict__:
                 self.__delattr__(k)
         else:
+            # A property name with a control character is refused at write
+            # time (see identifiers.py). Deletion (v is None) is not guarded
+            # so an owner can still remove one that predates the check.
+            bad = first_control_character(k)
+            if bad is not None:
+                raise ValueError(
+                    f"Cannot create property {k!r}: name contains the "
+                    f"control character {bad}"
+                )
             # Check for list collision - error if list exists. Only needed
             # when the property is not already known as an existing simple
             # property in this store (collision checks in both directions

@@ -49,18 +49,6 @@ class TestFlaskIntegrationMethods:
         assert hasattr(integration, "get_handler_class")
         assert callable(integration.get_handler_class)
 
-    def test_get_oauth_discovery_metadata_inherited(self):
-        """Test FlaskIntegration inherits get_oauth_discovery_metadata from base."""
-        mock_config = Mock()
-        mock_config.proto = "https://"
-        mock_config.fqdn = "test.example.com"
-
-        result = FlaskIntegration.get_oauth_discovery_metadata(mock_config)
-
-        assert result["issuer"] == "https://test.example.com"
-        assert "authorization_endpoint" in result
-        assert "token_endpoint" in result
-
 
 class TestFlaskIntegrationAttributes:
     """Test Flask integration attributes."""

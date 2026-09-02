@@ -26,7 +26,11 @@ Core Identity
 -------------
 
 - ``aw_type``: ActingWeb type URI for your app (required).
-- ``fqdn``: Hostname used for URLs (e.g., ``myapp.example.com``).
+- ``fqdn``: Host used for URLs, in the form ``host[:port][/base]`` with no
+  scheme and no trailing slash (e.g., ``myapp.example.com``,
+  ``localhost:5000``). Surrounding whitespace is stripped; a quote,
+  backslash, interior whitespace or control character is rejected at
+  startup.
 - ``proto``: URL scheme (``https://`` recommended).
 - ``version``: Populated from library version; can be displayed to clients.
 
@@ -1261,7 +1265,8 @@ MCP Capability
 
 - Toggle with ``ActingWebApp.with_mcp(enable=True|False)``.
 - When enabled, ``mcp`` appears in supported options returned by meta discovery.
-- Set the server name announced in the MCP initialise handshake with
+- Set the server name announced in the MCP initialise handshake, and
+  reported by ``GET /mcp`` and ``GET /mcp/info``, with
   ``with_mcp(server_name="emm")``. Some clients use this as the default tool
   prefix (``emm:search`` vs ``actingweb:search``). Defaults to ``"actingweb"``.
   The first call sets the process-wide name; later changes won't rename

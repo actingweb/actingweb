@@ -95,6 +95,10 @@ class DbAttribute:
             r = Attribute.get(actor_id, bucket + ":" + name, consistent_read=True)
         except Exception:  # PynamoDB DoesNotExist exception
             return None
+        # Same guard as get_bucket(): the composite key can collide across
+        # buckets, and the stored ``bucket`` is what says whose row it is.
+        if r.bucket != bucket:
+            return None
         return {
             "data": r.data,
             "timestamp": r.timestamp,
@@ -122,6 +126,8 @@ class DbAttribute:
         try:
             r = Attribute.get(actor_id, bucket + ":" + name, consistent_read=True)
         except DoesNotExist:
+            return None
+        if r.bucket != bucket:
             return None
         if r.ttl_timestamp is not None and r.ttl_timestamp <= int(time.time()):
             return None
@@ -158,7 +164,8 @@ class DbAttribute:
                 item = Attribute.get(
                     actor_id, bucket + ":" + name, consistent_read=True
                 )
-                item.delete()
+                if item.bucket == bucket:
+                    item.delete()
             except Exception:  # PynamoDB DoesNotExist exception
                 pass
             return True
@@ -216,6 +223,8 @@ class DbAttribute:
             item = Attribute.get(actor_id, bucket + ":" + name, consistent_read=True)
         except Exception:  # PynamoDB DoesNotExist exception
             return False
+        if item.bucket != bucket:
+            return False
         try:
             # Condition fails (raises) if a concurrent caller already deleted it.
             item.delete(condition=Attribute.id.exists())
@@ -267,6 +276,8 @@ class DbAttribute:
         try:
             # Get current item with consistent read
             item = Attribute.get(actor_id, bucket_name, consistent_read=True)
+            if item.bucket != bucket:
+                return False
 
             # Normalize JSON for order-independent comparison
             # This ensures {"a": 1, "b": 2} == {"b": 2, "a": 1}

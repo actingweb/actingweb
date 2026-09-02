@@ -72,6 +72,7 @@ def _mcp_handler(*, authenticated: bool) -> MCPHandler:
     config = _config()
     config.mcp = True
     handler.config = config
+    handler.hooks = None
     handler.response = AWResponse()
     actor = object() if authenticated else None
     handler.authenticate_and_get_actor_cached = lambda: actor  # type: ignore[method-assign]
@@ -107,7 +108,7 @@ def test_authenticated_get_still_serves_the_discovery_document():
 
     body = handler.get()
 
-    assert body["server_name"] == "actingweb-mcp"
+    assert body["server_name"] == "actingweb"
     assert body["authentication"]["required"] is True
 
 

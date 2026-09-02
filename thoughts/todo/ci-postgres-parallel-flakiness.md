@@ -39,8 +39,7 @@ untouched part of it. The three follow-ups below all remain open.
 
 The former `thoughts/todo/2026-06-15-postgres-parallel-delete-not-persisting.md`
 (deleted 2026-09-02 after the matrix stayed green from #128 on 2026-08-15
-through the v3.14.3 tag; the file's full evidence is in git history before
-that date, and `ACTINGWEB_PG_DELETE_DIAGNOSTICS` stays on in `tests.yml`) was a
+through the v3.14.3 tag; the full file is at `git show aaf101f:thoughts/todo/2026-06-15-postgres-parallel-delete-not-persisting.md`, and `ACTINGWEB_PG_DELETE_DIAGNOSTICS` stays on in `tests.yml`) was a
 **correctness** question — a per-actor attribute `DELETE` that intermittently
 does not persist, with a mechanism that could drop writes in production. This
 one is **test-infrastructure reliability** only. Same date, same CI matrix, same

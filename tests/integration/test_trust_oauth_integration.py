@@ -48,8 +48,9 @@ DATABASE_BACKEND = os.environ.get("DATABASE_BACKEND", "dynamodb")
 # If the flake returns, the run will say which mechanism it is: set
 # ACTINGWEB_PG_DELETE_DIAGNOSTICS=1 (already on in the CI matrix) and grep the job
 # log for PG_DELETE_DIAG — rowcount, the deleting connection's schema, and a
-# post-commit re-read on a fresh connection. See
-# thoughts/todo/2026-06-15-postgres-parallel-delete-not-persisting.md.
+# post-commit re-read on a fresh connection. The investigation record is the
+# retired todo, readable with:
+#   git show aaf101f:thoughts/todo/2026-06-15-postgres-parallel-delete-not-persisting.md
 
 
 @pytest.fixture

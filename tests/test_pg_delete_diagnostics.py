@@ -1,8 +1,9 @@
 """Unit tests for the PostgreSQL attribute-DELETE diagnostics.
 
 The diagnostics exist to name the mechanism behind an intermittent CI failure
-where a per-actor attribute ``DELETE`` did not take effect
-(``thoughts/todo/2026-06-15-postgres-parallel-delete-not-persisting.md``). They
+where a per-actor attribute ``DELETE`` did not take effect (the todo that
+carried the investigation was retired on 2026-09-02 after weeks of green; read it
+with ``git show aaf101f:thoughts/todo/2026-06-15-postgres-parallel-delete-not-persisting.md``). They
 are off by default and must stay that way: they cost a savepoint-wrapped schema
 read plus a post-commit re-read per delete, on a path that runs during every
 actor and trust teardown.

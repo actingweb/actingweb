@@ -541,8 +541,6 @@ earlier without this plan being updated, which is exactly the failure mode
   `README.md` were rewritten (`5f297bc`) for the submodule workflow.
 - `pyproject.toml`'s `Repository` URL was reconciled to the org URL as planned.
 
-### Implementation Status: Not Started
-
 ---
 
 ## Phase 5: Bring `demo.actingweb.io` current
@@ -592,16 +590,16 @@ and this phase is the one that can genuinely break.
       vendored 3.14.x, per Phase 4
 - [ ] **Not verified by anyone recording it here:** one full OAuth login
       against the live site. #27's OAuth fix and #28's re-enabling of devtest
-      on the live site imply it was exercised, but no record says so. Do it
-      the next time the site is touched and tick this box
+      on the live site imply it was exercised, but no record says so. Owed
+      work does not live in a `done` plan, so it is filed as
+      `thoughts/todo/demo-live-oauth-login-unverified.md` (INDEX row 26);
+      tick this box when that todo is deleted
 
 ### Implementation Status: Complete — in `actingwebdemo`, 2026-08-25 to 08-27
 
 See Phase 4's status note. The dead-`subscription_hook` question this phase
 flagged was resolved by `thoughts/plans/2026-08-22-ai-agent-discoverability.md`
 Phase 0 before Phase 5 ran.
-
-### Implementation Status: Not Started
 
 ---
 

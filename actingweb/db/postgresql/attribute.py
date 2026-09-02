@@ -17,8 +17,10 @@ def _delete_diagnostics_enabled() -> bool:
 
     Off by default. Set ``ACTINGWEB_PG_DELETE_DIAGNOSTICS=1`` to turn it on;
     enabled in the parallel PostgreSQL CI matrix, where a per-actor attribute
-    ``DELETE`` has intermittently failed to take effect since 2026-06-15
-    (``thoughts/todo/2026-06-15-postgres-parallel-delete-not-persisting.md``).
+    ``DELETE`` intermittently failed to take effect between 2026-06-15 and
+    2026-08-15. The symptom has not recurred since the path was instrumented
+    (#128); the investigation record was a todo, retired on 2026-09-02, and is
+    readable with ``git show aaf101f:thoughts/todo/2026-06-15-postgres-parallel-delete-not-persisting.md``.
 
     The two candidate mechanisms produce different evidence, and nothing in the
     logs today distinguishes them:

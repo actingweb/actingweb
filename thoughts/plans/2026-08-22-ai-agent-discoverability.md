@@ -1506,3 +1506,14 @@ Recorded in each phase's Verification section, not silently dropped:
   `make test-all-parallel` and passed immediately when re-run in isolation
   or sequentially — consistent, pre-existing parallel-execution flakiness
   per `CLAUDE.md`'s own documented caveat, not regressions from this work.
+
+### Post-verification, 2026-09-02
+
+The post-merge Read the Docs check owed above is done. Both `latest` and
+`stable` built successfully at the v3.14.3 commit (`f552747`, RTD builds
+34293120 and 34293121). Every advertised link in `README.rst`, `AGENTS.md`,
+`actingweb/__init__.py` and `skills/actingweb-app/SKILL.md` uses the
+`/en/latest/docs/...` prefix the root `conf.py` build produces, and
+`docs/guides/p2p-quickstart.html` and `docs/guides/mcp-quickstart.html` both
+return 200 there. The Context7, live-MCP-client and Agent-Skill items remain in
+`thoughts/todo/ai-agent-discoverability-followups.md`.

@@ -130,3 +130,76 @@ class TestControlCharacterGuard(unittest.TestCase):
                 logging.disable(logging.NOTSET)
         self.assertEqual(literal, PermissionResult.ALLOWED)
         self.assertEqual(excluded, PermissionResult.DENIED)
+
+
+class TestGuardPrecedesPermissionLookup(unittest.TestCase):
+    """The blanket denial must not depend on the peer having a rule.
+
+    ``evaluate_permission()`` returns NOT_FOUND when the peer has no
+    effective permissions or none of the requested type, and the handlers
+    treat NOT_FOUND permissively (legacy fallback; bulk listings keep the
+    name). A control-character identifier is DENIED before that lookup, on
+    both the single and the bulk path.
+    """
+
+    def _ev(self, perms):
+        ev = _evaluator()
+        ev._get_effective_permissions = lambda actor_id, peer_id: perms  # type: ignore[method-assign]
+        return ev
+
+    def test_single_path_with_no_effective_permissions(self) -> None:
+        from actingweb.permission_evaluator import PermissionType
+
+        ev = self._ev({})
+        with self.assertLogs("actingweb.permission_evaluator", level="WARNING") as logs:
+            result = ev.evaluate_permission(
+                "a", "p", PermissionType.PROPERTIES, "private/\nx", "read"
+            )
+        self.assertEqual(result, PermissionResult.DENIED)
+        # The clean sibling is still NOT_FOUND, unchanged.
+        self.assertEqual(
+            ev.evaluate_permission("a", "p", PermissionType.PROPERTIES, "ok", "read"),
+            PermissionResult.NOT_FOUND,
+        )
+        # Logged with repr(): no raw newline reaches the log line.
+        self.assertTrue(any("'private/\\nx'" in line for line in logs.output))
+        self.assertFalse(any("private/\nx" in line for line in logs.output))
+
+    def test_single_path_with_no_rule_of_that_type(self) -> None:
+        from actingweb.permission_evaluator import PermissionType
+
+        ev = self._ev({"methods": {"allowed": ["*"]}})
+        result = ev.evaluate_permission(
+            "a", "p", PermissionType.PROPERTIES, "x\ty", "read"
+        )
+        self.assertEqual(result, PermissionResult.DENIED)
+
+    def test_denial_log_uses_repr(self) -> None:
+        from actingweb.permission_evaluator import PermissionType
+
+        ev = self._ev({"properties": {"denied": ["secret"], "allowed": ["*"]}})
+        with self.assertLogs("actingweb.permission_evaluator", level="WARNING") as logs:
+            ev.evaluate_permission(
+                "a", "p", PermissionType.PROPERTIES, "secret", "read"
+            )
+        self.assertTrue(any("properties:'secret':read" in line for line in logs.output))
+
+    def test_bulk_path_with_no_effective_permissions(self) -> None:
+        ev = self._ev({})
+        result = ev.evaluate_bulk_property_access(
+            "a", "p", ["ok", "bad\nname", "also\x00bad"], "read"
+        )
+        self.assertEqual(
+            result,
+            {
+                "ok": PermissionResult.NOT_FOUND,
+                "bad\nname": PermissionResult.DENIED,
+                "also\x00bad": PermissionResult.DENIED,
+            },
+        )
+
+    def test_bulk_path_with_rules(self) -> None:
+        ev = self._ev({"properties": {"allowed": ["*"]}})
+        result = ev.evaluate_bulk_property_access("a", "p", ["ok", "bad\n"], "read")
+        self.assertEqual(result["ok"], PermissionResult.ALLOWED)
+        self.assertEqual(result["bad\n"], PermissionResult.DENIED)

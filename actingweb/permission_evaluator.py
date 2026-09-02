@@ -94,6 +94,19 @@ class PermissionEvaluator:
             PermissionResult indicating whether access is allowed
         """
         try:
+            # Ahead of the permission-map lookup, not only inside
+            # _evaluate_rules: a peer with no effective permissions, or none
+            # for this type, would otherwise return NOT_FOUND here, which the
+            # handlers treat permissively (legacy fallback, keep in listing).
+            # The blanket denial has to be blanket.
+            if has_control_characters(target):
+                logger.warning(
+                    f"Permission denied: {actor_id}:{peer_id} -> "
+                    f"{permission_type.value}:{target!r}:{operation} "
+                    f"(identifier contains a control character)"
+                )
+                return PermissionResult.DENIED
+
             # Get the effective permissions for this trust relationship
             effective_perms = self._get_effective_permissions(actor_id, peer_id)
             if not effective_perms:
@@ -113,16 +126,17 @@ class PermissionEvaluator:
             # Evaluate the permission rules
             result = self._evaluate_rules(permission_rules, target, operation)
 
-            # Only log denials for security monitoring
+            # Only log denials for security monitoring. repr() so a
+            # peer-controlled identifier cannot inject lines into the log.
             if result == PermissionResult.DENIED:
                 logger.warning(
-                    f"Permission denied: {actor_id}:{peer_id} -> {permission_type.value}:{target}:{operation}"
+                    f"Permission denied: {actor_id}:{peer_id} -> {permission_type.value}:{target!r}:{operation}"
                 )
             return result
 
         except Exception as e:
             logger.error(
-                f"Error evaluating permission for {actor_id}:{peer_id} -> {permission_type.value}:{target}: {e}"
+                f"Error evaluating permission for {actor_id}:{peer_id} -> {permission_type.value}:{target!r}: {e}"
             )
             return PermissionResult.DENIED
 
@@ -172,6 +186,22 @@ class PermissionEvaluator:
         """
         results: dict[str, PermissionResult] = {}
 
+        # Same blanket denial as evaluate_permission(), applied before the
+        # early returns below so a control-character name is DENIED even
+        # when the peer has no properties rule at all.
+        clean_paths: list[str] = []
+        for property_path in property_paths:
+            if has_control_characters(property_path):
+                results[property_path] = PermissionResult.DENIED
+            else:
+                clean_paths.append(property_path)
+        if len(clean_paths) < len(property_paths):
+            logger.warning(
+                f"Permission denied: {actor_id}:{peer_id} -> "
+                f"{len(property_paths) - len(clean_paths)} property name(s) "
+                f"containing control characters"
+            )
+
         try:
             # Get the effective permissions once for all properties
             effective_perms = self._get_effective_permissions(actor_id, peer_id)
@@ -179,7 +209,8 @@ class PermissionEvaluator:
                 logger.warning(
                     f"No effective permissions found for {actor_id}:{peer_id}"
                 )
-                return dict.fromkeys(property_paths, PermissionResult.NOT_FOUND)
+                results.update(dict.fromkeys(clean_paths, PermissionResult.NOT_FOUND))
+                return results
 
             # Get the permission rules
             permission_rules = effective_perms.get(PermissionType.PROPERTIES.value)
@@ -187,10 +218,11 @@ class PermissionEvaluator:
                 logger.debug(
                     f"No properties permissions defined for {actor_id}:{peer_id}"
                 )
-                return dict.fromkeys(property_paths, PermissionResult.NOT_FOUND)
+                results.update(dict.fromkeys(clean_paths, PermissionResult.NOT_FOUND))
+                return results
 
             # Evaluate each property (suppress individual logging for bulk operations)
-            for property_path in property_paths:
+            for property_path in clean_paths:
                 results[property_path] = self._evaluate_rules(
                     permission_rules, property_path, operation, suppress_logging=True
                 )

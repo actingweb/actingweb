@@ -53,11 +53,15 @@ SECURITY
     ``ERROR`` log line carrying the traceback, instead of serving the request
     at ``DEBUG``. The ``*/list`` filters are unchanged.
 
-  The one observable change for legitimate use: a wildcard rule that used to
-  miss an identifier with an embedded newline now matches it, and an
-  identifier carrying any control character is now denied to peers and
-  cannot be created. The equivalent ``methods``/``actions`` deny bypass was
-  never reachable — dispatch there is an exact dict lookup.
+  Observable changes for legitimate use: a wildcard rule that used to miss an
+  identifier with an embedded newline now matches it; an identifier carrying
+  any control character is now denied to peers and cannot be created; and a
+  fault inside the permission subsystem (a failing trust lookup, say) now
+  blocks MCP ``tools/call``, ``prompts/get`` and ``resources/read`` with
+  ``-32003`` until it is fixed, where it used to let them through — an
+  availability cost taken deliberately on a security path, and the
+  ``ERROR`` log line names it. The equivalent ``methods``/``actions`` deny
+  bypass was never reachable — dispatch there is an exact dict lookup.
 
 FIXED
 ~~~~~
@@ -104,11 +108,17 @@ CHANGED
   own (``ActingWeb app: {aw_type}`` unless the app sets ``desc``), and
   ``supported_features`` lists only what the registry actually exposes.
   Read the tool list from ``tools/list``. No library version is disclosed.
+  **This changes a response shape in a patch release**: a client that reads
+  ``tools_count``, ``prompts_count`` or ``actor_lookup`` from ``/mcp/info``
+  will find them gone. The old values were the demo's literals for every
+  deployment, so nothing that read them was reading anything true; still, a
+  client that hard-coded them needs updating.
 - **``GET /mcp`` reports the configured server name and real
   capabilities.** It answered ``"actingweb-mcp"`` and three literal ``True``
   capabilities regardless of configuration while the ``initialize`` handshake
   answered the configured name; the three surfaces now share one derivation.
-  A deployment that never set ``server_name`` sees ``"actingweb"`` here now.
+  A deployment that never set ``server_name`` sees ``"actingweb"`` here now,
+  which a client keyed on the old ``"actingweb-mcp"`` string will notice.
 - **``fqdn`` and ``proto`` are stripped, then validated, when ``Config`` is
   built.** Surrounding whitespace (a trailing newline from a ``.env`` file)
   is stripped; a double quote, backslash, interior whitespace or control

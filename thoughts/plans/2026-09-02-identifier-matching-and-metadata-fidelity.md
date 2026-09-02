@@ -1,5 +1,6 @@
 ---
-status: active
+status: done
+verified: thoughts/verifications/2026-09-02-identifier-matching-and-metadata-fidelity.md
 ---
 
 # Implementation Plan: 3.14.4 — identifier matching, attribute contracts, MCP metadata fidelity
@@ -228,11 +229,11 @@ Lands and is verifiable on its own. The evaluator change alone closes the live
 
 ### Verification
 
-- [ ] `poetry run pytest tests/test_permission_pattern_matching.py tests/test_mcp_fail_closed_authorization.py tests/test_remote_storage.py -v` passes
-- [ ] `poetry run pytest tests/integration/test_property_path_control_chars.py -v` passes on **both** backends
-- [ ] `poetry run pyright actingweb tests` — 0 errors
-- [ ] `poetry run ruff check actingweb tests` and `ruff format --check` pass
-- [ ] `make test-all-parallel` passes
+- [x] `poetry run pytest tests/test_permission_pattern_matching.py tests/test_mcp_fail_closed_authorization.py tests/test_remote_storage.py -v` passes
+- [x] `poetry run pytest tests/integration/test_property_path_control_chars.py -v` passes on **both** backends
+- [x] `poetry run pyright actingweb tests` — 0 errors
+- [x] `poetry run ruff check actingweb tests` and `ruff format --check` pass
+- [x] `make test-all-parallel` passes
 - [x] Manual: the pre-fix and post-fix status of the live vector captured in the PR body (see correction below)
 
 **Correction, 2026-09-02, during implementation.** The URL-path form of the
@@ -308,10 +309,10 @@ too and were covered by the same evaluator guard.
 
 ### Verification
 
-- [ ] `poetry run pytest tests/integration/test_db_attribute_buckets.py -v` passes on DynamoDB
-- [ ] Same with `DATABASE_BACKEND=postgresql` against the test container
-- [ ] `poetry run pyright actingweb tests` — 0 errors; ruff check and format pass
-- [ ] `make test-all-parallel` passes
+- [x] `poetry run pytest tests/integration/test_db_attribute_buckets.py -v` passes on DynamoDB
+- [x] Same with `DATABASE_BACKEND=postgresql` against the test container
+- [x] `poetry run pyright actingweb tests` — 0 errors; ruff check and format pass
+- [x] `make test-all-parallel` passes
 
 ### Implementation Status: Complete
 
@@ -402,11 +403,11 @@ what Config will accept.
 
 ### Verification
 
-- [ ] `poetry run pytest tests/test_mcp_info.py tests/test_mcp_server_name.py tests/test_config.py tests/test_mcp_auth_challenge.py tests/test_mcp_disabled.py -v` passes
-- [ ] `grep -rn get_oauth_discovery_metadata actingweb tests docs examples` returns nothing
-- [ ] `poetry run pyright actingweb tests` — 0 errors; ruff check and format pass
-- [ ] `poetry run sphinx-build -W --keep-going -D suppress_warnings="ref.doc,misc.highlighting_failure" -b html . _build/html` succeeds
-- [ ] `make test-all-parallel` passes
+- [x] `poetry run pytest tests/test_mcp_info.py tests/test_mcp_server_name.py tests/test_config.py tests/test_mcp_auth_challenge.py tests/test_mcp_disabled.py -v` passes
+- [x] `grep -rn get_oauth_discovery_metadata actingweb tests docs examples` returns nothing
+- [x] `poetry run pyright actingweb tests` — 0 errors; ruff check and format pass
+- [x] `poetry run sphinx-build -W --keep-going -D suppress_warnings="ref.doc,misc.highlighting_failure" -b html . _build/html` succeeds
+- [x] `make test-all-parallel` passes
 - [x] Shape and app-derived `description` pinned by `tests/integration/test_mcp_info_route.py` on both frameworks and both backends, in place of the manual curl
 
 ### Implementation Status: Complete
@@ -472,13 +473,13 @@ what Config will accept.
 
 ### Verification
 
-- [ ] `grep -n '3.14.4' pyproject.toml actingweb/__init__.py` shows both
-- [ ] `grep -l "^status: active" thoughts/plans/*.md` returns nothing but this file (set to `active` when Phase 1 starts, `done` after the tag)
-- [ ] `make test-all-parallel` passes; CI green on both database backends
-- [ ] Tag pushed; GitHub Actions publishes to PyPI and creates the release
-- [ ] Post-release: consumer check from `../actingweb_mcp` — bump the pin, run its suite, confirm `/mcp/info` and the trust-relationships page; record the outcome in a verification doc `thoughts/verifications/2026-09-XX-identifier-matching-and-metadata-fidelity.md` and link it from this file's frontmatter
+- [x] `grep -n '3.14.4' pyproject.toml actingweb/__init__.py` shows both
+- [x] `grep -l "^status: active" thoughts/plans/*.md` returned only this file while active; `done` after the tag
+- [x] `make test-all-parallel` passes; CI green on both database backends (PR #141)
+- [x] Tag pushed; GitHub Actions published to PyPI and created the release (run 33662890157)
+- [x] Post-release: consumer check from `../actingweb_mcp` done; recorded in `thoughts/verifications/2026-09-02-identifier-matching-and-metadata-fidelity.md`, linked from the frontmatter
 
-### Implementation Status: In Progress
+### Implementation Status: Complete
 
 ---
 

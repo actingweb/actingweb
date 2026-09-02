@@ -204,6 +204,68 @@ The half of item 4 that §1 of
 - Trust deletion with a subscription created earlier in the same instance
   (item 3 above).
 
+## Consumer evidence, 2026-09-01 — Bug 2 also lands on a *read* path, per page load
+
+Reported from `../actingweb_mcp`. Everything above frames Bug 2 as a per-**write**
+cost ("one Query per property write" via `register_diffs()`). It is also a
+per-**read** cost, and there the multiplier is the number of peers rather than
+one, which makes it user-visible latency rather than background spend.
+
+`api/trust_unified.py`'s `get_all_relationships` (the `GET /api/trust/relationships`
+endpoint behind the SPA's connections page, and part of both shell families)
+loops over trust relationships and calls four per-peer helpers. Three of them
+reach for subscriptions:
+
+- `_determine_direction` → `get_subscriptions_from_peer` **and** `get_subscriptions_to_peer`
+- `_get_inbound_summary` → `get_subscriptions_from_peer`
+- `_get_outbound_summary` → `get_subscriptions_to_peer`
+
+An **MCP-client-only account has trust relationships and zero subscriptions** —
+exactly the falsy-guard case — so the memo never sticks and every one of those
+calls refetches.
+
+**Measured** on a persona actor with 5 trust relationships and 0 subscriptions,
+by patching `subscription.Subscriptions.fetch` and counting through the loop's
+exact helper sequence:
+
+| | subscription fetches |
+| --- | --- |
+| per-peer lookups | **40** |
+| single read, indexed by peer | **2** |
+
+(Two rather than one because each logical `get_subscriptions()` triggers two
+`Subscriptions.fetch` calls; the ratio is 20 logical reads → 1.)
+
+Why this is worth adding to an already-thorough file:
+
+1. **It changes the severity shape.** The write-path cost is bounded at one
+   Query per write. The read-path cost is `4 × peers` per page load, on the
+   critical path of a page the user is waiting for. In production this endpoint
+   sat at **p50 689 ms** and was the only shell endpoint that did not improve
+   while every other fell 55–60%.
+2. **It confirms the "quiet actor" case is not rare.** The file notes the two
+   cases mask each other and that the zero-subscription path is "accidentally
+   always-fresh". Accounts that connect AI clients but never subscribe to a peer
+   are a normal, probably majority, shape for this consumer — so the accidental
+   freshness is being paid for constantly, not occasionally.
+3. **It does not change the blocked-ness of item 2.** The reasoning in "Status
+   after v3.13.0rc2" holds: making the cache stick would make a long-lived
+   MCP-cached zero-subscription actor blind to subscriptions created in another
+   container. This evidence raises the *value* of fixing item 4, it does not
+   offer a shortcut past it.
+
+**Consumer-side workaround, for other callers hitting the same shape.** The fix
+that does not need the library: read `all_subscriptions` **once** and index it by
+`(peer_id, is_outbound)`, then hand each peer its slice, instead of calling the
+per-peer accessors in a loop. `SubscriptionInfo.is_outbound` is `is_callback` is
+the `callback` flag, which is the same discriminator
+`get_subscriptions_to_peer(peer_id)` queries with, so the in-memory split is
+equivalent. Landed downstream as `actingweb_mcp@f9bef42f`; downstream note in
+`../actingweb_mcp/thoughts/todo/2026-09-01-trust-relationships-is-now-the-slowest-shell-endpoint.md`.
+
+This workaround is per-call-site and does not generalise — which is the argument
+for item 4, not against it.
+
 ## Related
 
 - `thoughts/research/2026-07-25-rc2-triage.md` — the 3.13.0 triage this came

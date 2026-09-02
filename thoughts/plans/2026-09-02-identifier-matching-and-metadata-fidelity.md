@@ -478,7 +478,7 @@ what Config will accept.
 - [ ] Tag pushed; GitHub Actions publishes to PyPI and creates the release
 - [ ] Post-release: consumer check from `../actingweb_mcp` — bump the pin, run its suite, confirm `/mcp/info` and the trust-relationships page; record the outcome in a verification doc `thoughts/verifications/2026-09-XX-identifier-matching-and-metadata-fidelity.md` and link it from this file's frontmatter
 
-### Implementation Status: Not Started
+### Implementation Status: In Progress
 
 ---
 

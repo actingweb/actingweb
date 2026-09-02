@@ -90,3 +90,11 @@ Worth noting for sequencing: the consumer's need is real now but not blocked on
 this. Scoped bulk reads take it from 1,361 RCU to 685 in a patch release; this
 scheme is what would take the remaining ~17% off, and it can wait for the major
 bump as planned.
+
+**Carried here from `attribute-upsert-bucket-drift.md` (closed in 3.14.4):**
+the attribute composite key `bucket + ":" + name` can collide because both
+halves may contain `:`. 3.14.4 made both backends attribute a colliding row to
+the last writer and compare `bucket` exactly on every read and delete, which
+is the most a patch can do. The real fix is a delimiter that cannot appear in
+either half, which is a key-layout change with a migration — it belongs in
+this scheme, alongside the `prop#`/`list#` prefixes.

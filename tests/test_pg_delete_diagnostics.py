@@ -107,7 +107,7 @@ class TestDeletePathCost:
         )
 
         assert statements == [
-            "DELETE FROM attributes WHERE id = %s AND bucket_name = %s",
+            "DELETE FROM attributes WHERE id = %s AND bucket_name = %s AND bucket = %s",
             "COMMIT",
         ]
 

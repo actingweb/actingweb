@@ -313,7 +313,7 @@ too and were covered by the same evaluator guard.
 - [ ] `poetry run pyright actingweb tests` — 0 errors; ruff check and format pass
 - [ ] `make test-all-parallel` passes
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
 
 ---
 

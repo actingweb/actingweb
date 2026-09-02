@@ -32,8 +32,9 @@ class CountingBackend:
     """A dict-backed DbAttribute, counting every backend call.
 
     ``get_bucket`` can be told to fault. Both real backends return ``None``
-    for a CAUGHT exception, and PostgreSQL also returns it for a genuinely
-    empty bucket -- ``empty_returns`` models that divergence directly.
+    for a CAUGHT exception and ``{}`` for an empty bucket (PostgreSQL since
+    3.14.4) -- ``empty_returns=None`` models a fault that arrives on the
+    empty path.
     """
 
     def __init__(self, rows=None, fault=False, empty_returns={}):  # noqa: B006
@@ -135,14 +136,14 @@ class TestAFaultedLoadIsNotAuthoritative:
         assert attrs._bucket_loaded is True
 
 
-class TestTheEmptyBucketDivergenceIsHandledConservatively:
-    """Both backends return ``None`` on a caught exception; PostgreSQL ALSO
-    returns it for a genuinely empty bucket. Not distinguishing them is the
-    deliberate conservative choice -- pinned here so a later backend
-    alignment changes a test rather than surprising someone."""
+class TestEmptyIsAuthoritativeAndNoneIsAFault:
+    """Both backends return ``{}`` for an empty bucket and reserve ``None``
+    for a caught exception (the 3.14.4 contract; before it PostgreSQL also
+    returned ``None`` for empty, so an empty bucket was never trusted
+    there)."""
 
-    def test_dynamodb_shape_an_empty_bucket_is_trusted(self, monkeypatch):
-        backend = CountingBackend({}, empty_returns={})  # DynamoDB returns {}
+    def test_an_empty_bucket_is_trusted(self, monkeypatch):
+        backend = CountingBackend({}, empty_returns={})
         attrs = _attrs(monkeypatch, backend)
 
         assert attrs.get_bucket() == {}
@@ -150,16 +151,16 @@ class TestTheEmptyBucketDivergenceIsHandledConservatively:
         assert attrs.get_attr("anything") is None
         assert backend.get_attr_calls == [], "an empty bucket costs nothing"
 
-    def test_postgresql_shape_an_empty_bucket_is_not_trusted(self, monkeypatch):
-        backend = CountingBackend({}, empty_returns=None)  # PostgreSQL returns None
+    def test_a_none_return_is_a_fault_and_is_not_trusted(self, monkeypatch):
+        backend = CountingBackend({}, empty_returns=None)
         attrs = _attrs(monkeypatch, backend)
 
         assert attrs.get_bucket() == {}
         assert attrs._bucket_loaded is False
         assert attrs.get_attr("anything") is None
         assert backend.get_attr_calls == ["anything"], (
-            "conservative on PostgreSQL: an empty bucket is never trusted, "
-            "which costs nothing real -- it has no absent-name savings to give"
+            "a bucket that could not be read must not become "
+            "'the bucket has no such attribute'"
         )
 
 

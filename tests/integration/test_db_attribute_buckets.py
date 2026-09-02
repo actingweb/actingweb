@@ -58,9 +58,8 @@ def _names(bucket_contents):
 def _bucket(config, actor_id, bucket):
     """get_bucket() narrowed to a dict.
 
-    Both backends return ``None`` on a backend fault (and PostgreSQL also for
-    a genuinely empty bucket), so a test that subscripts the result has to say
-    it expected content.
+    Both backends return ``None`` on a backend fault, so a test that
+    subscripts the result has to say it expected content.
     """
     result = get_attribute(config).get_bucket(actor_id=actor_id, bucket=bucket)
     assert result is not None
@@ -155,16 +154,13 @@ class TestBucketPrefixIsolation:
     def test_colliding_composite_key_answers_to_exactly_one_bucket(
         self, config, actor_id
     ):
-        """Both buckets write the colliding key; exactly one may own the row.
+        """Both buckets write the colliding key; the last writer owns the row.
 
-        *Which* one is a backend difference this phase does not touch, and
-        deliberately does not assert: DynamoDB's ``save()`` is a PutItem that
-        replaces ``bucket`` wholesale, while PostgreSQL's ``ON CONFLICT DO
-        UPDATE`` refreshes only ``data``/``timestamp`` and keeps the original
-        attribution. Filed as thoughts/todo/attribute-upsert-bucket-drift.md.
-        What both backends must agree on — and what only the exact ``bucket``
-        compare delivers on DynamoDB — is that the single stored row never
-        answers to *both*.
+        DynamoDB's ``save()`` is a PutItem that replaces ``bucket`` wholesale;
+        since 3.14.4 PostgreSQL's ``ON CONFLICT DO UPDATE`` also rewrites
+        ``bucket``/``name``, so the stored attribution follows the last
+        writer on both. The row answers to exactly one bucket, and deleting
+        the *loser's* bucket leaves it untouched.
         """
         db = get_attribute(config)
         assert db.set_attr(
@@ -174,14 +170,59 @@ class TestBucketPrefixIsolation:
             actor_id=actor_id, bucket="remote:abc", name="x", data="nested-bucket"
         )
 
-        nested = _names(
-            get_attribute(config).get_bucket(actor_id=actor_id, bucket="remote:abc")
+        nested = _bucket(config, actor_id, "remote:abc")
+        flat = _bucket(config, actor_id, "remote")
+        assert _names(nested) == {"x"}
+        assert nested["x"]["data"] == "nested-bucket"
+        assert _names(flat) == set()
+
+        # The loser's delete_bucket() must not reach the winner's row.
+        assert db.delete_bucket(actor_id=actor_id, bucket="remote")
+        assert _names(_bucket(config, actor_id, "remote:abc")) == {"x"}
+
+        # And the other way round: writing "remote"/"abc:x" again moves it back.
+        assert db.set_attr(
+            actor_id=actor_id, bucket="remote", name="abc:x", data="flat-again"
         )
-        flat = _names(
-            get_attribute(config).get_bucket(actor_id=actor_id, bucket="remote")
+        assert _names(_bucket(config, actor_id, "remote:abc")) == set()
+        assert _bucket(config, actor_id, "remote")["abc:x"]["data"] == "flat-again"
+
+    def test_point_reads_stay_inside_their_bucket(self, config, actor_id):
+        """``get_attr``/``get_attr_strict``/``delete_attr`` key on the composite
+        ``bucket_name`` and must not answer for the colliding sibling."""
+        db = get_attribute(config)
+        assert db.set_attr(
+            actor_id=actor_id, bucket="remote:abc", name="x", data="nested-bucket"
         )
 
-        assert (nested, flat) in (({"x"}, set()), (set(), {"abc:x"}))
+        assert db.get_attr(actor_id=actor_id, bucket="remote", name="abc:x") is None
+        assert (
+            db.get_attr_strict(actor_id=actor_id, bucket="remote", name="abc:x") is None
+        )
+        owner = db.get_attr(actor_id=actor_id, bucket="remote:abc", name="x")
+        assert owner is not None and owner["data"] == "nested-bucket"
+        strict = db.get_attr_strict(actor_id=actor_id, bucket="remote:abc", name="x")
+        assert strict is not None and strict["data"] == "nested-bucket"
+
+        # A delete through the wrong bucket is a no-op on the row.
+        db.delete_attr(actor_id=actor_id, bucket="remote", name="abc:x")
+        assert (
+            db.delete_attr_conditional(actor_id=actor_id, bucket="remote", name="abc:x")
+            is False
+        )
+        assert _names(_bucket(config, actor_id, "remote:abc")) == {"x"}
+
+        assert (
+            db.delete_attr_conditional(actor_id=actor_id, bucket="remote:abc", name="x")
+            is True
+        )
+        assert _names(_bucket(config, actor_id, "remote:abc")) == set()
+
+    def test_an_empty_bucket_reads_as_empty_dict_on_both_backends(
+        self, config, actor_id
+    ):
+        db = get_attribute(config)
+        assert db.get_bucket(actor_id=actor_id, bucket="never-written") == {}
 
 
 class TestRemotePeerStoreIsolation:
@@ -245,18 +286,20 @@ class TestLoadedBucketIsAuthoritative:
         # ...and asking did not add the name to the bucket.
         assert set(attrs.get_bucket() or {}) == {"a"}
 
-    def test_an_empty_bucket_behaves_per_backend_and_answers_correctly(
-        self, config, actor_id
-    ):
-        """DynamoDB returns ``{}`` for an empty bucket, so the flag is set;
-        PostgreSQL returns ``None``, so it is not and ``get_attr()`` still
-        point-reads. Either way the ANSWER is the same -- the divergence
-        costs a query on one backend and nothing else."""
+    def test_an_empty_bucket_is_authoritative_on_both_backends(self, config, actor_id):
+        """Both backends return ``{}`` for an empty bucket (PostgreSQL since
+        3.14.4), so the flag is set and ``get_attr()`` answers an absent
+        name without a backend read."""
+        from unittest.mock import patch
+
         attrs = self._attrs(config, actor_id, "empty-bucket")
 
         assert attrs.get_bucket() == {}
-        assert attrs._bucket_loaded is (DATABASE_BACKEND != "postgresql")
-        assert attrs.get_attr("anything") is None
+        assert attrs._bucket_loaded is True
+        with patch.object(
+            type(attrs.dbprop), "get_attr", side_effect=AssertionError("read")
+        ):
+            assert attrs.get_attr("anything") is None
 
     def test_a_falsy_write_leaves_the_name_absent_on_both_sides(self, config, actor_id):
         attrs = self._attrs(config, actor_id, "falsy")

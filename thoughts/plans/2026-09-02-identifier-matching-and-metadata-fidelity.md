@@ -233,9 +233,23 @@ Lands and is verifiable on its own. The evaluator change alone closes the live
 - [ ] `poetry run pyright actingweb tests` — 0 errors
 - [ ] `poetry run ruff check actingweb tests` and `ruff format --check` pass
 - [ ] `make test-all-parallel` passes
-- [ ] Manual: against a local run, `curl -X PUT .../properties/private/%0Asecret` as a `friend` peer returns 403 before the change it returned 200 — capture both in the PR body
+- [x] Manual: the pre-fix and post-fix status of the live vector captured in the PR body (see correction below)
 
-### Implementation Status: Not Started
+**Correction, 2026-09-02, during implementation.** The URL-path form of the
+exploit (`PUT /{actor}/properties/private/%0Asecret`) does not reach a
+handler on either integration: Starlette's `{name:path}` and Werkzeug's
+`<path:name>` converters both stop at a newline and answer 404. The reachable
+form is the JSON body of `POST /{actor}/properties`, whose keys are property
+names: at the pre-fix tree a `friend` peer's `{"private/\nx": "v"}` and
+`{"_internal/\nx": "v"}` both returned 201 and appeared in the owner's
+listing (harness run against `e8eddf1` with `actingweb/` stashed). After the
+change both return 400. Tab, NUL and CR *do* reach the handler through the
+path, but `*` already matched them, so they were never a bypass; they are
+now refused on write. The integration test and the changelog describe the
+POST vector, not the path one. MCP `resources/read` URIs are body-carried
+too and were covered by the same evaluator guard.
+
+### Implementation Status: Complete
 
 ---
 

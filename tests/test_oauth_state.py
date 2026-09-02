@@ -47,3 +47,13 @@ def test_validate_expected_email_matches():
 def test_validate_expected_email_rejects_mismatch():
     state = encode_state(csrf="c", expected_email="user@example.com")
     assert validate_expected_email(state, "other@example.com") is False
+
+
+def test_decode_state_trailing_newline_is_not_encrypted_mcp_shape():
+    # A long base64-safe blob is classed as encrypted MCP state (all-empty
+    # tuple); one with a trailing newline is not and falls through to the
+    # CSRF-only shape. ``$`` used to tolerate the newline.
+    assert decode_state("A" * 60) == ("", "", "", "", "", "")
+    csrf, *rest = decode_state("A" * 60 + "\n")
+    assert csrf == "A" * 60 + "\n"
+    assert rest == ["", "", "", "", ""]

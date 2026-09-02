@@ -576,7 +576,7 @@ class OAuth2Authenticator:
         # If it contains only base64-safe characters and is reasonably long,
         # it's likely an encrypted MCP state
 
-        if len(state) > 50 and re.match(r"^[A-Za-z0-9+/_=-]+$", state):
+        if len(state) > 50 and re.fullmatch(r"[A-Za-z0-9+/_=-]+", state):
             return True
 
         return False

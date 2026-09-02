@@ -9,7 +9,8 @@ matching:
    containment.
 2. An authenticated token that resolves to no trust relationship is now
    denied (fail-closed), distinct from "permission subsystem unavailable"
-   (fail-open, unchanged).
+   (fail-open until 3.14.4; also fail-closed since, with its own message --
+   see ``TestFailClosedOnEvaluatorErrors``).
 """
 
 import base64
@@ -398,43 +399,105 @@ class TestFailClosedAcrossAllGates(unittest.TestCase):
         self.assertEqual(resp["result"]["tools"], [])
 
 
-class TestFailOpenPreservedOnEvaluatorErrors(unittest.TestCase):
-    """An evaluator that raises (permission subsystem unavailable) must not
-    deny -- this is a distinct policy from the no-trust fail-closed above,
-    and both must coexist.
+class TestFailClosedOnEvaluatorErrors(unittest.TestCase):
+    """An evaluator that raises (permission subsystem unavailable) denies.
+
+    Until 3.14.4 the six single-item gates logged at debug and served the
+    request. They now deny with -32003, a message distinct from the no-trust
+    denial, and an ``error`` log line with the traceback -- the same policy
+    ``authenticated_views.py`` applies to property access.
     """
 
-    def test_tool_call_not_denied_when_evaluator_raises(self) -> None:
-        handler = MCPHandler()
-        handler.hooks = _make_resource_prompt_tool_hooks()
-        actor = FakeAuthedActor()
+    def setUp(self) -> None:
+        self.hooks = _make_resource_prompt_tool_hooks()
+        self.actor = FakeAuthedActor()
 
+    def _ctx(self):
+        ctx = Mock()
+        ctx.peer_id = "oauth2_client:client-A:client-A"
+        return ctx
+
+    def _sync(self, method: str, params: dict) -> dict:
+        handler = MCPHandler()
+        handler.hooks = self.hooks
         with (
             patch.object(
-                MCPHandler, "authenticate_and_get_actor_cached", return_value=actor
+                MCPHandler, "authenticate_and_get_actor_cached", return_value=self.actor
             ),
             patch("actingweb.handlers.mcp.RuntimeContext") as mock_rc,
             patch(
                 "actingweb.permission_evaluator.get_permission_evaluator",
                 side_effect=RuntimeError("permission system unavailable"),
             ),
+            self.assertLogs("actingweb.handlers.mcp", level="ERROR") as logs,
         ):
-            ctx = Mock()
-            ctx.peer_id = "oauth2_client:client-A:client-A"
-            mock_rc.return_value.get_mcp_context.return_value = ctx
-            resp = _post(handler, "tools/call", {"name": "a_tool", "arguments": {}})
+            mock_rc.return_value.get_mcp_context.return_value = self._ctx()
+            resp = _post(handler, method, params)
+        self.assertTrue(any("Denying access" in line for line in logs.output))
+        return resp
 
-        self.assertNotIn("error", resp)
-        self.assertIn("result", resp)
+    def _async(self, method: str, params: dict) -> dict:
+        import asyncio
+
+        handler = AsyncMCPHandler()
+        handler.hooks = self.hooks
+        with (
+            patch.object(
+                AsyncMCPHandler,
+                "authenticate_and_get_actor_cached",
+                return_value=self.actor,
+            ),
+            patch("actingweb.handlers.mcp.RuntimeContext") as mock_rc,
+            patch(
+                "actingweb.permission_evaluator.get_permission_evaluator",
+                side_effect=RuntimeError("permission system unavailable"),
+            ),
+            self.assertLogs("actingweb.handlers.async_mcp", level="ERROR") as logs,
+        ):
+            mock_rc.return_value.get_mcp_context.return_value = self._ctx()
+            resp = asyncio.run(_post_async(handler, method, params))
+        self.assertTrue(any("Denying access" in line for line in logs.output))
+        return resp
+
+    def _assert_denied(self, resp: dict, kind: str) -> None:
+        self.assertNotIn("result", resp)
+        self.assertEqual(resp["error"]["code"], -32003)
+        self.assertIn("unable to verify permission", resp["error"]["message"])
+        self.assertIn(kind, resp["error"]["message"])
+        self.assertNotIn("no trust relationship", resp["error"]["message"])
+
+    def test_sync_tools_call(self) -> None:
+        resp = self._sync("tools/call", {"name": "a_tool", "arguments": {}})
+        self._assert_denied(resp, "tool 'a_tool'")
+
+    def test_sync_prompts_get(self) -> None:
+        resp = self._sync("prompts/get", {"name": "a_prompt", "arguments": {}})
+        self._assert_denied(resp, "prompt 'a_prompt'")
+
+    def test_sync_resources_read(self) -> None:
+        resp = self._sync("resources/read", {"uri": "notes://1"})
+        self._assert_denied(resp, "resource 'notes://1'")
+
+    def test_async_tools_call(self) -> None:
+        resp = self._async("tools/call", {"name": "a_tool", "arguments": {}})
+        self._assert_denied(resp, "tool 'a_tool'")
+
+    def test_async_prompts_get(self) -> None:
+        resp = self._async("prompts/get", {"name": "a_prompt", "arguments": {}})
+        self._assert_denied(resp, "prompt 'a_prompt'")
+
+    def test_async_resources_read(self) -> None:
+        resp = self._async("resources/read", {"uri": "notes://1"})
+        self._assert_denied(resp, "resource 'notes://1'")
 
 
 class TestNoTrustDenialSurvivesBrokenEvaluator(unittest.TestCase):
-    """The no-trust denial must not sit inside the fail-open try/except.
+    """The no-trust denial must not sit inside the evaluator try/except.
 
-    If it did, forcing the evaluator to raise would make a no-trust request
-    fall through to fail-open (tool executes) instead of being denied. This
-    is the discriminating test for gate placement -- see research finding
-    on positioning the denial outside the guarded region.
+    Both paths deny since 3.14.4, but with different messages: a no-trust
+    request must still be reported as such rather than as an evaluator
+    fault. This is the discriminating test for gate placement -- see
+    research finding on positioning the denial outside the guarded region.
     """
 
     def test_denial_survives_evaluator_construction_raising(self) -> None:

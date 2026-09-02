@@ -17,11 +17,11 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Default pattern matches actingweb library's UUID v5 .hex format
-DEFAULT_PEER_ID_PATTERN = re.compile(r"^[a-f0-9]{32}$")
+DEFAULT_PEER_ID_PATTERN = re.compile(r"^[a-f0-9]{32}\Z")
 
 # More permissive pattern that accepts both formats
 PERMISSIVE_PEER_ID_PATTERN = re.compile(
-    r"^[a-f0-9]{32}$|^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$"
+    r"^[a-f0-9]{32}\Z|^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\Z"
 )
 
 
@@ -43,7 +43,7 @@ def get_remote_bucket(
     """
     if validate:
         pat = pattern or PERMISSIVE_PEER_ID_PATTERN
-        if not pat.match(peer_id):
+        if not pat.fullmatch(peer_id):
             raise ValueError(
                 f"Invalid peer_id format: {peer_id}. Expected pattern: {pat.pattern}"
             )

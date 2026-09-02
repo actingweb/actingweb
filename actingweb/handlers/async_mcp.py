@@ -139,7 +139,8 @@ class AsyncMCPHandler(MCPHandler):
             )
 
         # No trust relationship resolved for this client -> fail-closed,
-        # evaluated before the fail-open evaluator try/except below.
+        # evaluated before the evaluator try/except below so the two
+        # denials stay distinguishable in logs.
         peer_id, denial = self._require_mcp_peer_id(actor, request_id)
         if denial is not None:
             return denial
@@ -173,8 +174,19 @@ class AsyncMCPHandler(MCPHandler):
                     f"Access denied: You don't have permission to use tool '{tool_name}'",
                 )
         except Exception as e:
-            # Don't block execution if permission system not initialized; log and continue
-            logger.debug(f"Skipping tool permission check due to error: {e}")
+            # Fail closed: an evaluator that raises cannot vouch for this
+            # request, and serving it anyway would hand out whatever the broken
+            # subsystem was guarding. Same policy as authenticated_views.py.
+            logger.error(
+                f"Permission system error checking tool '{tool_name}': {e}. "
+                f"Denying access as security precaution.",
+                exc_info=True,
+            )
+            return self._create_jsonrpc_error(
+                request_id,
+                -32003,
+                f"Access denied: unable to verify permission to use tool '{tool_name}'",
+            )
 
         # Find the corresponding action hook
         from ..mcp.decorators import get_mcp_metadata, is_mcp_exposed
@@ -231,7 +243,8 @@ class AsyncMCPHandler(MCPHandler):
             )
 
         # No trust relationship resolved for this client -> fail-closed,
-        # evaluated before the fail-open evaluator try/except below.
+        # evaluated before the evaluator try/except below so the two
+        # denials stay distinguishable in logs.
         peer_id, denial = self._require_mcp_peer_id(actor, request_id)
         if denial is not None:
             return denial
@@ -260,7 +273,19 @@ class AsyncMCPHandler(MCPHandler):
                     f"Access denied: You don't have permission to use prompt '{prompt_name}'",
                 )
         except Exception as e:
-            logger.debug(f"Skipping prompt permission check due to error: {e}")
+            # Fail closed: an evaluator that raises cannot vouch for this
+            # request, and serving it anyway would hand out whatever the broken
+            # subsystem was guarding. Same policy as authenticated_views.py.
+            logger.error(
+                f"Permission system error checking prompt '{prompt_name}': {e}. "
+                f"Denying access as security precaution.",
+                exc_info=True,
+            )
+            return self._create_jsonrpc_error(
+                request_id,
+                -32003,
+                f"Access denied: unable to verify permission to use prompt '{prompt_name}'",
+            )
 
         # Find the corresponding method hook
         from ..mcp.decorators import get_mcp_metadata, is_mcp_exposed
@@ -338,7 +363,8 @@ class AsyncMCPHandler(MCPHandler):
             )
 
         # No trust relationship resolved for this client -> fail-closed,
-        # evaluated before the fail-open evaluator try/except below.
+        # evaluated before the evaluator try/except below so the two
+        # denials stay distinguishable in logs.
         peer_id, denial = self._require_mcp_peer_id(actor, request_id)
         if denial is not None:
             return denial
@@ -367,7 +393,19 @@ class AsyncMCPHandler(MCPHandler):
                     f"Access denied: You don't have permission to access resource '{uri}'",
                 )
         except Exception as e:
-            logger.debug(f"Skipping resource permission check due to error: {e}")
+            # Fail closed: an evaluator that raises cannot vouch for this
+            # request, and serving it anyway would hand out whatever the broken
+            # subsystem was guarding. Same policy as authenticated_views.py.
+            logger.error(
+                f"Permission system error checking resource '{uri}': {e}. "
+                f"Denying access as security precaution.",
+                exc_info=True,
+            )
+            return self._create_jsonrpc_error(
+                request_id,
+                -32003,
+                f"Access denied: unable to verify permission to access resource '{uri}'",
+            )
 
         # Find the corresponding method hook and extract URI template variables
         from ..mcp.decorators import get_mcp_metadata, is_mcp_exposed

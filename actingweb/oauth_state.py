@@ -61,7 +61,7 @@ def decode_state(state: str) -> tuple[str, str, str, str, str, str]:
             pass
 
     # Base64-like encrypted MCP state should be handled upstream; return minimal tuple
-    if len(state) > 50 and re.match(r"^[A-Za-z0-9+/_=-]+$", state):
+    if len(state) > 50 and re.fullmatch(r"[A-Za-z0-9+/_=-]+", state):
         return "", "", "", "", "", ""
 
     # Legacy: 32 hex actor id

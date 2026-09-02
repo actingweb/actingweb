@@ -7,6 +7,7 @@ from actingweb.db import get_property_list
 from actingweb.handlers import base_handler
 from actingweb.property_list import ListCorruptionError, ListMetadataContentionError
 
+from ..identifiers import first_control_character
 from ..permission_evaluator import PermissionResult, get_permission_evaluator
 
 
@@ -816,6 +817,12 @@ class PropertiesHandler(base_handler.BaseHandler):
             if self.response:
                 self.response.set_status(403)
             return
+        # Peers with a control character in the path were denied above by
+        # the evaluator; the owner is refused here so no such identifier is
+        # created. Every segment counts: a sub-path is the permission
+        # target's tail, not a value.
+        if self._reject_control_characters(path):
+            return
         body = self.request.body
         if isinstance(body, bytes):
             body = body.decode("utf-8", "ignore")
@@ -903,11 +910,35 @@ class PropertiesHandler(base_handler.BaseHandler):
         res = final_res
         res = json.dumps(res)
         if myself and myself.property:
-            myself.property[name] = res
+            try:
+                myself.property[name] = res
+            except ValueError as e:
+                # The store refuses a name it cannot key (control character,
+                # collision with an existing list); the request is malformed.
+                self.response.set_status(400, str(e))
+                return
         myself.register_diffs(
             target="properties", subtarget=name, resource=resource, blob=blob
         )
         self.response.set_status(204)
+
+    def _reject_control_characters(self, names: list[str]) -> bool:
+        """Answer 400 and return True if any identifier carries a control character.
+
+        Property names, list names and ``/properties`` path segments are
+        identifiers (see identifiers.py); values are never checked here.
+        """
+        for candidate in names:
+            bad = first_control_character(candidate)
+            if bad is not None:
+                if self.response:
+                    self.response.set_status(
+                        400,
+                        f"Property name {candidate!r} contains the control "
+                        f"character {bad}, which is not allowed in a name",
+                    )
+                return True
+        return False
 
     def post(self, actor_id, name):
         """POST /properties -- includes the bulk list-item update path.
@@ -938,6 +969,8 @@ class PropertiesHandler(base_handler.BaseHandler):
         # Handle the form with property type support
         if self.request.get("property"):
             prop_name = self.request.get("property")
+            if self._reject_control_characters([prop_name]):
+                return
             prop_type = (
                 self.request.get("property_type") or "simple"
             )  # Default to simple
@@ -1015,6 +1048,8 @@ class PropertiesHandler(base_handler.BaseHandler):
                     self.response.set_status(400, "Value required for simple property")
                 return
         elif len(self.request.arguments()) > 0:
+            if self._reject_control_characters(list(self.request.arguments())):
+                return
             for name in self.request.arguments():
                 # Execute property post hook if available
                 val = self.request.get(name)
@@ -1043,6 +1078,10 @@ class PropertiesHandler(base_handler.BaseHandler):
             except (TypeError, ValueError, KeyError):
                 if self.response:
                     self.response.set_status(400, "Error in json body")
+                return
+            # Checked before any key is applied so a bad name never leaves a
+            # half-applied batch behind.
+            if self._reject_control_characters(list(params)):
                 return
             for key in params:
                 val = params[key]

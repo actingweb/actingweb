@@ -24,10 +24,14 @@ from typing import Any
 from actingweb.db import get_trust
 
 from . import config as config_class
+from .identifiers import has_control_characters
 from .trust_permissions import get_trust_permission_store, merge_permissions
 from .trust_type_registry import get_registry as get_trust_type_registry
 
 logger = logging.getLogger(__name__)
+
+# Upper bound on cached compiled glob patterns per evaluator; see __init__.
+_PATTERN_CACHE_MAX_ENTRIES = 1024
 
 
 class PermissionResult(Enum):
@@ -62,7 +66,10 @@ class PermissionEvaluator:
         self.trust_type_registry = get_trust_type_registry(config)
         self.permission_store = get_trust_permission_store(config)
 
-        # Cache for compiled regex patterns
+        # Cache for compiled regex patterns, keyed by the glob pattern alone.
+        # Patterns are owner-authored config so cardinality is small; the
+        # bound is a backstop against a rule source that never repeats
+        # (dynamic per-peer patterns), and a cold recompile is cheap.
         self._pattern_cache: dict[str, re.Pattern] = {}
 
     def evaluate_permission(
@@ -517,6 +524,23 @@ class PermissionEvaluator:
                 f"Evaluating rules: target='{target}', operation='{operation}', rules={permission_rules}"
             )
 
+        # An identifier carrying a control character is denied before any
+        # rule is consulted. This is the single funnel every evaluate_*_access
+        # path goes through, so one guard covers property, list, method,
+        # action, tool, prompt and resource names. Two reasons it lives here
+        # rather than relying on the whole-string anchoring below: a
+        # wildcard rule must not be the only thing standing between
+        # ``private/\nsecret`` and a protected namespace, and a bare-literal
+        # ``denied: ["notes"]`` used to catch ``notes\n`` by accident (the
+        # old ``$`` anchor tolerated a trailing newline) -- narrowing the
+        # anchor alone would have turned that deny into an allow.
+        if has_control_characters(target):
+            logger.warning(
+                f"Denying {operation} on identifier {target!r}: identifiers "
+                f"must not contain control characters"
+            )
+            return PermissionResult.DENIED
+
         # Check explicit denied patterns first (highest priority)
         if "denied" in permission_rules:
             denied_patterns = permission_rules["denied"]
@@ -625,9 +649,14 @@ class PermissionEvaluator:
         if pattern in self._pattern_cache:
             regex = self._pattern_cache[pattern]
         else:
-            # Convert glob pattern to regex
+            if len(self._pattern_cache) >= _PATTERN_CACHE_MAX_ENTRIES:
+                self._pattern_cache.clear()
+            # Convert glob pattern to regex. This is the only compile site and
+            # the cache key is the bare pattern, so the flags must stay fixed
+            # here: DOTALL makes ``*`` and ``?`` match a newline the way they
+            # match every other character, which is what a glob means.
             regex_pattern = self._glob_to_regex(pattern)
-            regex = re.compile(regex_pattern)
+            regex = re.compile(regex_pattern, re.DOTALL)
             self._pattern_cache[pattern] = regex
 
         return bool(regex.match(target))
@@ -641,8 +670,10 @@ class PermissionEvaluator:
         escaped = escaped.replace(r"\*", ".*")  # * matches any characters
         escaped = escaped.replace(r"\?", ".")  # ? matches single character
 
-        # Anchor the pattern to match the entire string
-        return f"^{escaped}$"
+        # Anchor the pattern to match the entire string. ``\Z`` rather than
+        # ``$``: ``$`` also matches just before a trailing newline, so
+        # ``notes$`` accepted ``notes\n``.
+        return f"^{escaped}\\Z"
 
 
 # Convenience functions for common permission checks

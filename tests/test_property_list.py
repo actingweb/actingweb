@@ -2,7 +2,7 @@
 
 from unittest.mock import Mock
 
-from actingweb.property_list import ListProperty
+from actingweb.property_list import _V1_INDEX_RE, ListProperty
 
 
 class TestListPropertyMetadataAccess:
@@ -184,3 +184,11 @@ class TestPropertyListCollisionDetection:
             call_args = mock_db.set.call_args[1]
             assert call_args["name"] == "normal_property"
             assert call_args["value"] == "some_value"
+
+
+def test_v1_index_pattern_rejects_trailing_newline():
+    """``_V1_INDEX_RE`` isolates a v1 list's item rows by suffix; a suffix
+    that is digits plus a newline is a foreign row, not an index (3.14.4)."""
+    assert _V1_INDEX_RE.match("12")
+    assert _V1_INDEX_RE.match("12\n") is None
+    assert _V1_INDEX_RE.match("\n12") is None

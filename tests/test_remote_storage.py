@@ -35,6 +35,22 @@ class TestGetRemoteBucket:
         bucket = get_remote_bucket(peer_id)
         assert bucket == f"remote:{peer_id}"
 
+    def test_trailing_newline_rejected_by_both_patterns(self):
+        """A trailing newline must not pass either pattern (3.14.4).
+
+        ``$`` matched before a trailing newline, which is how a
+        ``remote:<id>\\n`` bucket name came to exist.
+        """
+        hex_id = "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6"
+        uuid_id = "a1b2c3d4-e5f6-a7b8-c9d0-e1f2a3b4c5d6"
+        for bad in (hex_id + "\n", uuid_id + "\n", hex_id + "\nx"):
+            assert DEFAULT_PEER_ID_PATTERN.fullmatch(bad) is None
+            assert PERMISSIVE_PEER_ID_PATTERN.fullmatch(bad) is None
+            with pytest.raises(ValueError, match="Invalid peer_id format"):
+                get_remote_bucket(bad)
+            with pytest.raises(ValueError, match="Invalid peer_id format"):
+                get_remote_bucket(bad, pattern=DEFAULT_PEER_ID_PATTERN)
+
     def test_invalid_peer_id_raises(self):
         """Test invalid peer ID raises ValueError."""
         with pytest.raises(ValueError, match="Invalid peer_id format"):

@@ -869,14 +869,14 @@ class MCPHandler(BaseHandler):
         authentication, or ``(None, denial_response)`` when it did not -- an
         authenticated token that resolves to no trust relationship is a
         security condition (fail-closed), distinct from "permission
-        subsystem unavailable" (fail-open, which callers implement
-        separately around evaluator construction/use).
+        subsystem unavailable" (also fail-closed since 3.14.4, which
+        callers implement separately around evaluator construction/use
+        so the two denials stay distinguishable).
 
         Callers must use the returned denial verbatim and must not evaluate
-        it inside a ``try/except`` that treats exceptions as fail-open:
-        ``RuntimeContext`` access here does not raise, but nesting the
-        denial return inside such a block would silently revert this to
-        fail-open the moment an unrelated exception is added nearby.
+        it inside the evaluator ``try/except``: ``RuntimeContext`` access
+        here does not raise, but nesting the denial return inside that
+        block would report a no-trust request as an evaluator fault.
 
         Shared by both the sync (``MCPHandler``) and async
         (``AsyncMCPHandler``) single-item gates (``tools/call``,
@@ -1337,16 +1337,16 @@ class MCPHandler(BaseHandler):
             )
 
         # No trust relationship resolved for this client -> fail-closed. This
-        # check must happen before the evaluator try/except below: placing it
-        # inside that block would let the availability fail-open swallow it.
+        # check happens before the evaluator try/except below so its denial
+        # message stays distinct from an evaluator fault.
         peer_id, denial = self._require_mcp_peer_id(actor, request_id)
         if denial is not None:
             return denial
         assert peer_id is not None
 
         # Check permission before finding/dispatching the hook. An evaluator
-        # that raises here (permission subsystem unavailable) stays
-        # fail-open, deliberately distinct from the no-trust denial above.
+        # that raises here (permission subsystem unavailable) is a denial
+        # too, since 3.14.4; only the message differs from the no-trust one.
         try:
             from ..permission_evaluator import (
                 PermissionResult,
@@ -1365,8 +1365,19 @@ class MCPHandler(BaseHandler):
                     f"Access denied: You don't have permission to use tool '{tool_name}'",
                 )
         except Exception as e:
-            # Don't block execution if permission system not initialized; log and continue
-            logger.debug(f"Skipping tool permission check due to error: {e}")
+            # Fail closed: an evaluator that raises cannot vouch for this
+            # request, and serving it anyway would hand out whatever the broken
+            # subsystem was guarding. Same policy as authenticated_views.py.
+            logger.error(
+                f"Permission system error checking tool '{tool_name}': {e}. "
+                f"Denying access as security precaution.",
+                exc_info=True,
+            )
+            return self._create_jsonrpc_error(
+                request_id,
+                -32003,
+                f"Access denied: unable to verify permission to use tool '{tool_name}'",
+            )
 
         # Find the corresponding action hook
         from ..mcp.decorators import get_mcp_metadata, is_mcp_exposed
@@ -1423,7 +1434,8 @@ class MCPHandler(BaseHandler):
             )
 
         # No trust relationship resolved for this client -> fail-closed,
-        # evaluated before the fail-open evaluator try/except below.
+        # evaluated before the evaluator try/except below so the two
+        # denials stay distinguishable in logs.
         peer_id, denial = self._require_mcp_peer_id(actor, request_id)
         if denial is not None:
             return denial
@@ -1452,7 +1464,19 @@ class MCPHandler(BaseHandler):
                     f"Access denied: You don't have permission to use prompt '{prompt_name}'",
                 )
         except Exception as e:
-            logger.debug(f"Skipping prompt permission check due to error: {e}")
+            # Fail closed: an evaluator that raises cannot vouch for this
+            # request, and serving it anyway would hand out whatever the broken
+            # subsystem was guarding. Same policy as authenticated_views.py.
+            logger.error(
+                f"Permission system error checking prompt '{prompt_name}': {e}. "
+                f"Denying access as security precaution.",
+                exc_info=True,
+            )
+            return self._create_jsonrpc_error(
+                request_id,
+                -32003,
+                f"Access denied: unable to verify permission to use prompt '{prompt_name}'",
+            )
 
         # Find the corresponding method hook
         from ..mcp.decorators import get_mcp_metadata, is_mcp_exposed
@@ -1530,7 +1554,7 @@ class MCPHandler(BaseHandler):
             )
 
         # No trust relationship resolved for this client -> fail-closed,
-        # evaluated before the fail-open evaluator try/except below (and
+        # evaluated before the evaluator try/except below (and
         # before the outer try, so the general exception handler at the
         # bottom of this method cannot intercept it either).
         peer_id, denial = self._require_mcp_peer_id(actor, request_id)
@@ -1562,7 +1586,19 @@ class MCPHandler(BaseHandler):
                         f"Access denied: You don't have permission to access resource '{uri}'",
                     )
             except Exception as e:
-                logger.debug(f"Skipping resource permission check due to error: {e}")
+                # Fail closed: an evaluator that raises cannot vouch for this
+                # request, and serving it anyway would hand out whatever the broken
+                # subsystem was guarding. Same policy as authenticated_views.py.
+                logger.error(
+                    f"Permission system error checking resource '{uri}': {e}. "
+                    f"Denying access as security precaution.",
+                    exc_info=True,
+                )
+                return self._create_jsonrpc_error(
+                    request_id,
+                    -32003,
+                    f"Access denied: unable to verify permission to access resource '{uri}'",
+                )
 
             # Find the corresponding resource hook
             from ..mcp.decorators import get_mcp_metadata, is_mcp_exposed
@@ -1594,7 +1630,7 @@ class MCPHandler(BaseHandler):
                                 uri_matches = True
                             elif uri_pattern:
                                 try:
-                                    if re.match(uri_pattern, str(uri)):
+                                    if re.fullmatch(uri_pattern, str(uri)):
                                         uri_matches = True
                                 except re.error:
                                     logger.warning(

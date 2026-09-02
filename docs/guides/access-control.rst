@@ -288,6 +288,10 @@ Glob Patterns
 * ``?`` - Matches single character: ``get_?`` matches ``get_a`` but not ``get_ab``  
 * ``exact`` - Exact string match
 
+A pattern must match the whole identifier, and ``*`` and ``?`` match a
+newline like any other character. An identifier that contains a control
+character is always denied, whatever the rules say.
+
 Path Patterns
 -------------
 

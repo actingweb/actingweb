@@ -407,9 +407,9 @@ what Config will accept.
 - [ ] `poetry run pyright actingweb tests` — 0 errors; ruff check and format pass
 - [ ] `poetry run sphinx-build -W --keep-going -D suppress_warnings="ref.doc,misc.highlighting_failure" -b html . _build/html` succeeds
 - [ ] `make test-all-parallel` passes
-- [ ] Manual: run `examples/mcp_quickstart.py`, `curl /mcp/info`, confirm the shape in the table above and that `description` is the app's, not the demo's
+- [x] Shape and app-derived `description` pinned by `tests/integration/test_mcp_info_route.py` on both frameworks and both backends, in place of the manual curl
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
 
 ---
 

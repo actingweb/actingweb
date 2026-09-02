@@ -1791,34 +1791,8 @@ class FlaskIntegration(BaseActingWebIntegration):
             return {"error": "OAuth provider not configured"}
 
     def _create_mcp_info_response(self) -> dict[str, Any]:
-        """Create MCP information response."""
-        config = self.aw_app.get_config()
-        base_url = f"{config.proto}{config.fqdn}"
-
-        return {
-            "mcp_enabled": True,
-            "mcp_endpoint": "/mcp",
-            "authentication": {
-                "type": "oauth2",
-                "provider": "actingweb",
-                "required_scopes": ["mcp"],
-                "flow": "authorization_code",
-                "auth_url": f"{base_url}/oauth/authorize",
-                "token_url": f"{base_url}/oauth/token",
-                "callback_url": f"{base_url}/oauth/callback",
-                "registration_endpoint": f"{base_url}/oauth/register",
-                "authorization_endpoint": f"{base_url}/oauth/authorize",
-                "token_endpoint": f"{base_url}/oauth/token",
-                "discovery_url": f"{base_url}/.well-known/oauth-authorization-server",
-                "resource_discovery_url": f"{base_url}/.well-known/oauth-protected-resource",
-                "enabled": True,
-            },
-            "supported_features": ["tools", "prompts"],
-            "tools_count": 4,
-            "prompts_count": 3,
-            "actor_lookup": "email_based",
-            "description": "ActingWeb MCP Demo - AI can interact with actors through MCP protocol using OAuth2",
-        }
+        """The ``GET /mcp/info`` document; see ``handlers.mcp.build_mcp_info``."""
+        return mcp.build_mcp_info(self.aw_app.get_config(), self.aw_app.hooks)
 
     def _create_services_handler(self, webobj: AWWebObj, config) -> Any:
         """Create services handler with service registry injection."""

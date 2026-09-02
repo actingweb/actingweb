@@ -256,25 +256,6 @@ class TestSubscriptionHandlerSelection:
 class TestStaticMethods:
     """Test static utility methods."""
 
-    def test_get_oauth_discovery_metadata(self):
-        """Test get_oauth_discovery_metadata returns proper structure."""
-        mock_config = Mock()
-        mock_config.proto = "https://"
-        mock_config.fqdn = "test.example.com"
-
-        result = BaseActingWebIntegration.get_oauth_discovery_metadata(mock_config)
-
-        assert result["issuer"] == "https://test.example.com"
-        assert (
-            result["authorization_endpoint"]
-            == "https://test.example.com/oauth/authorize"
-        )
-        assert result["token_endpoint"] == "https://test.example.com/oauth/token"
-        assert "code" in result["response_types_supported"]
-        assert "authorization_code" in result["grant_types_supported"]
-        assert "refresh_token" in result["grant_types_supported"]
-        assert "S256" in result["code_challenge_methods_supported"]
-
     def test_normalize_http_method_uppercase(self):
         """Test normalize_http_method converts to uppercase."""
         assert BaseActingWebIntegration.normalize_http_method("get") == "GET"

@@ -77,3 +77,40 @@ class TestWithMcpBuilderPropagation:
         cfg = self._app(enable=True, server_name="doctest").get_config()
         result = _initialize(cfg)["result"]
         assert result["serverInfo"]["name"] == "doctest"
+
+
+class TestGetMcpAgreesWithInitialize:
+    """``GET /mcp`` derives server_name and capabilities the same way
+    ``initialize`` does (3.14.4); before, it announced ``actingweb-mcp`` and
+    three literal ``True`` capabilities regardless of configuration."""
+
+    def _get(self, cfg, hooks=None):
+        handler = make_mcp_handler(cfg=cfg, hooks=hooks)
+        handler.authenticate_and_get_actor_cached = lambda: object()
+        return handler.get()
+
+    def test_server_name_matches(self) -> None:
+        cfg = make_mcp_config(server_name="emm")
+        assert self._get(cfg)["server_name"] == "emm"
+        assert self._get(make_mcp_config())["server_name"] == "actingweb"
+
+    def test_capabilities_follow_the_registry(self) -> None:
+        from actingweb.interface.hooks import HookRegistry
+        from actingweb.mcp.decorators import mcp_tool
+
+        hooks = HookRegistry()
+        body = self._get(make_mcp_config(), hooks)
+        assert body["capabilities"] == {
+            "tools": False,
+            "resources": False,
+            "prompts": False,
+        }
+
+        @mcp_tool(description="a tool")
+        def a_tool(actor, action_name, data):
+            return {}
+
+        hooks.register_action_hook("a_tool", a_tool)
+        body = self._get(make_mcp_config(), hooks)
+        assert body["capabilities"]["tools"] is True
+        assert body["capabilities"]["prompts"] is False

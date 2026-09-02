@@ -409,6 +409,95 @@ def _warn_if_output_schema_unsatisfied(
         _warn_missing_structured_content_once(tool_name)
 
 
+def _registry_has_mcp_kind(
+    hooks: HookRegistry | None, hook_map: str, kind: str
+) -> bool:
+    """True if any hook in ``hooks.<hook_map>`` is MCP-exposed as ``kind``.
+
+    An in-memory scan of the registry -- no database -- which is what makes
+    it acceptable on the unauthenticated ``/mcp/info`` endpoint.
+    """
+    if not hooks:
+        return False
+    from ..mcp.decorators import get_mcp_metadata, is_mcp_exposed
+
+    for _name, hook_list in getattr(hooks, hook_map).items():
+        for hook in hook_list:
+            if is_mcp_exposed(hook):
+                metadata = get_mcp_metadata(hook)
+                if metadata and metadata.get("type") == kind:
+                    return True
+    return False
+
+
+def registry_has_mcp_tools(hooks: HookRegistry | None) -> bool:
+    """Whether the registry exposes at least one MCP tool."""
+    return _registry_has_mcp_kind(hooks, "_action_hooks", "tool")
+
+
+def registry_has_mcp_resources(hooks: HookRegistry | None) -> bool:
+    """Whether the registry exposes at least one MCP resource."""
+    return _registry_has_mcp_kind(hooks, "_method_hooks", "resource")
+
+
+def registry_has_mcp_prompts(hooks: HookRegistry | None) -> bool:
+    """Whether the registry exposes at least one MCP prompt."""
+    return _registry_has_mcp_kind(hooks, "_method_hooks", "prompt")
+
+
+def mcp_server_name(config: config_class.Config) -> str:
+    """The name announced in ``initialize``, ``GET /mcp`` and ``/mcp/info``.
+
+    ``getattr`` rather than an attribute read: several suites build the
+    handler config from ``Mock()``.
+    """
+    return getattr(config, "mcp_server_name", None) or "actingweb"
+
+
+def build_mcp_info(
+    config: config_class.Config, hooks: HookRegistry | None
+) -> dict[str, Any]:
+    """The ``GET /mcp/info`` document, shared by both integrations.
+
+    This endpoint is unauthenticated and is the ``resource_documentation``
+    target of the OAuth discovery chain, so every field is derived from
+    config scalars or the in-memory hook registry -- it must stay free of
+    database reads, and it deliberately carries no library version.
+    """
+    base_url = f"{config.proto}{config.fqdn}"
+    supported_features = [
+        feature
+        for feature, present in (
+            ("tools", registry_has_mcp_tools(hooks)),
+            ("resources", registry_has_mcp_resources(hooks)),
+            ("prompts", registry_has_mcp_prompts(hooks)),
+        )
+        if present
+    ]
+    return {
+        "mcp_enabled": bool(getattr(config, "mcp", False)),
+        "mcp_endpoint": "/mcp",
+        "server_name": mcp_server_name(config),
+        "description": getattr(config, "desc", None) or "",
+        "authentication": {
+            "type": "oauth2",
+            "provider": "actingweb",
+            "required_scopes": ["mcp"],
+            "flow": "authorization_code",
+            "auth_url": f"{base_url}/oauth/authorize",
+            "token_url": f"{base_url}/oauth/token",
+            "callback_url": f"{base_url}/oauth/callback",
+            "registration_endpoint": f"{base_url}/oauth/register",
+            "authorization_endpoint": f"{base_url}/oauth/authorize",
+            "token_endpoint": f"{base_url}/oauth/token",
+            "discovery_url": f"{base_url}/.well-known/oauth-authorization-server",
+            "resource_discovery_url": f"{base_url}/.well-known/oauth-protected-resource",
+            "enabled": True,
+        },
+        "supported_features": supported_features,
+    }
+
+
 def mcp_www_authenticate(base_url: str) -> str:
     """Build the 401 challenge for the MCP endpoint.
 
@@ -637,13 +726,15 @@ class MCPHandler(BaseHandler):
                     "error_description": "Authentication required for MCP access",
                 }
 
+            # Same derivations as initialize and /mcp/info, so the three
+            # can no longer disagree.
             return {
                 "version": LATEST_PROTOCOL_VERSION,
-                "server_name": "actingweb-mcp",
+                "server_name": mcp_server_name(self.config),
                 "capabilities": {
-                    "tools": True,  # We support tools
-                    "resources": True,  # We support resources
-                    "prompts": True,  # We support prompts
+                    "tools": self._has_mcp_tools(),
+                    "resources": self._has_mcp_resources(),
+                    "prompts": self._has_mcp_prompts(),
                 },
                 "transport": {
                     "type": "http",
@@ -742,51 +833,15 @@ class MCPHandler(BaseHandler):
 
     def _has_mcp_tools(self) -> bool:
         """Check if server has any MCP-exposed tools."""
-        if not self.hooks:
-            return False
-
-        # Check if any action hooks are MCP-exposed
-        from ..mcp.decorators import get_mcp_metadata, is_mcp_exposed
-
-        for _action_name, hooks in self.hooks._action_hooks.items():
-            for hook in hooks:
-                if is_mcp_exposed(hook):
-                    metadata = get_mcp_metadata(hook)
-                    if metadata and metadata.get("type") == "tool":
-                        return True
-        return False
+        return registry_has_mcp_tools(self.hooks)
 
     def _has_mcp_resources(self) -> bool:
         """Check if server has any MCP-exposed resources."""
-        if not self.hooks:
-            return False
-
-        # Check if any method hooks are MCP-exposed as resources
-        from ..mcp.decorators import get_mcp_metadata, is_mcp_exposed
-
-        for _method_name, hooks in self.hooks._method_hooks.items():
-            for hook in hooks:
-                if is_mcp_exposed(hook):
-                    metadata = get_mcp_metadata(hook)
-                    if metadata and metadata.get("type") == "resource":
-                        return True
-        return False
+        return registry_has_mcp_resources(self.hooks)
 
     def _has_mcp_prompts(self) -> bool:
         """Check if server has any MCP-exposed prompts."""
-        if not self.hooks:
-            return False
-
-        # Check if any method hooks are MCP-exposed
-        from ..mcp.decorators import get_mcp_metadata, is_mcp_exposed
-
-        for _method_name, hooks in self.hooks._method_hooks.items():
-            for hook in hooks:
-                if is_mcp_exposed(hook):
-                    metadata = get_mcp_metadata(hook)
-                    if metadata and metadata.get("type") == "prompt":
-                        return True
-        return False
+        return registry_has_mcp_prompts(self.hooks)
 
     def _handle_initialize(
         self, request_id: Any, params: dict[str, Any]
@@ -844,7 +899,7 @@ class MCPHandler(BaseHandler):
         # configuration (carried on Config). The server name is what some
         # clients use as the default tool prefix; instructions are surfaced to
         # the LLM on initial connection.
-        server_name = getattr(self.config, "mcp_server_name", None) or "actingweb"
+        server_name = mcp_server_name(self.config)
         result: dict[str, Any] = {
             "protocolVersion": negotiated_version,
             "capabilities": capabilities,

@@ -2,6 +2,8 @@
 
 import os
 
+import pytest
+
 from actingweb.config import Config
 from actingweb.constants import DatabaseType, Environment
 
@@ -219,3 +221,50 @@ class TestConfigValidation:
         original_ui = config.ui
         config.ui = not original_ui
         assert config.ui != original_ui
+
+
+class TestHostSettingValidation:
+    """``fqdn``/``proto`` are stripped, then validated, at construction (3.14.4)."""
+
+    def test_surrounding_whitespace_is_stripped(self):
+        config = Config(fqdn="myapp.example.com\n", proto=" https:// ")
+        assert config.fqdn == "myapp.example.com"
+        assert config.proto == "https://"
+        assert config.root == "https://myapp.example.com/"
+        assert config.auth_realm == "myapp.example.com"
+
+    @pytest.mark.parametrize(
+        "bad", ['my"app', "my app", "my\x00app", "my\\app", "my\x85app", "a\tb"]
+    )
+    def test_forbidden_characters_are_rejected_with_a_useful_message(self, bad):
+        with pytest.raises(ValueError) as exc:
+            Config(fqdn=bad)
+        message = str(exc.value)
+        assert repr(bad) in message
+        assert "APP_HOST_FQDN" in message
+        assert "host[:port][/base]" in message
+
+    @pytest.mark.parametrize("bad", ['ht"tp://', "http ://", "http://\x00"])
+    def test_proto_is_validated_too(self, bad):
+        with pytest.raises(ValueError) as exc:
+            Config(proto=bad)
+        assert "APP_HOST_PROTOCOL" in str(exc.value)
+
+    @pytest.mark.parametrize(
+        "good", ["localhost:5000", "demo.actingweb.io/base", "127.0.0.1", "x"]
+    )
+    def test_port_and_base_path_are_accepted(self, good):
+        assert Config(fqdn=good).fqdn == good
+
+    def test_app_strips_before_config_sees_it(self):
+        from actingweb.interface import ActingWebApp
+
+        app = ActingWebApp(
+            aw_type="urn:actingweb:test:strip",
+            database="dynamodb",
+            fqdn=" x.example.com ",
+            proto="https://\n",
+        )
+        assert app.fqdn == "x.example.com"
+        assert app.get_config().fqdn == "x.example.com"
+        assert app.get_config().proto == "https://"

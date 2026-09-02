@@ -61,7 +61,7 @@ def test_get_serves_normally_when_mcp_enabled():
     result = handler.get()
 
     assert handler.response.status_code != 404
-    assert result.get("server_name") == "actingweb-mcp"
+    assert result.get("server_name") == "actingweb"
 
 
 def test_get_404s_when_disabled_rather_than_challenging():

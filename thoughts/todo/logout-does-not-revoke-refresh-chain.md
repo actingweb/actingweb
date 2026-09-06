@@ -42,13 +42,41 @@ to the *main* endpoints handler, not to the SPA handler:
   marked deprecated in favour of `/oauth/logout`
 
 `OAuth2SPAHandler.post()` still dispatches `"logout"` to it (`:232-233`), but
-nothing routes there. So the cookie-revoking branch never runs, and the web SPA
-session is in exactly the same state as the mobile one.
+nothing routes there. So the cookie-revoking branch never runs, and the browser
+is **worse off than mobile** — see the cookie-name defect below.
 
 The dead branch is still being maintained — a later change edited
 `_handle_logout`'s provider lookup alongside the two live paths, treating all
 three as reachable, which is how this recurs. Re-confirm the routing before
 fixing, and decide whether to delete `_handle_logout` or wire it.
+
+### The browser also keeps its cookies — an independent, cheap fix
+
+The live path clears the wrong cookie names. `_handle_provider_token_logout`
+returns `"clear_cookies": ["oauth_token", "oauth_refresh_token", "session_id"]`
+(`oauth2_endpoints.py:966`, `:980`), and both integrations delete only
+`oauth_token` themselves. SPA issuance writes `access_token`, `oauth_token`
+(compat) and `refresh_token` (`oauth2_spa.py:1638-1675`, HttpOnly by default).
+
+So after `/oauth/logout` in a browser, `access_token` and `refresh_token` are
+still in the cookie jar — `oauth_refresh_token` is a name nothing ever writes.
+The dead `_handle_logout` gets this right: it calls `_clear_token_cookies()`,
+which uses the names the issuance path actually sets. The live path drifted
+from it.
+
+**Two consequences, both independent of everything below:**
+
+1. The browser is not merely as exposed as mobile. Mobile wipes its own
+   Keychain copy, so the surviving refresh token is only usable by someone who
+   already stole it. The browser **keeps a working refresh cookie on the
+   device**, and it is sent automatically on the next request.
+2. **The workaround does not save the browser.** The refresh cookie is HttpOnly,
+   so page JavaScript cannot read it to call `/oauth/revoke` with a
+   `token_type_hint`. Only a server-side fix closes the browser case.
+
+Fixing the name list is a two-line change with no design question attached —
+reuse `_clear_token_cookies()`'s list, or have the endpoints handler call it —
+and it should not wait behind the storage decision below.
 
 ## The decision is already made — by `create_refresh_token`, not by us
 
@@ -182,7 +210,8 @@ the body and revokes that refresh token. It is routed on both integrations
 at the canonical path.
 
 A mobile client can therefore revoke its refresh token before calling
-`/oauth/logout`, today, with no library change. The report's candidate 2
+`/oauth/logout`, today, with no library change. **A browser SPA cannot** — its
+refresh token is an HttpOnly cookie that page JavaScript cannot read. The report's candidate 2
 ("expose a dedicated revoke") is already shipped — which is why this is filed
 as "real, not urgent" rather than queued behind a release. It does not make the
 library-side fix unnecessary: correct logout should not depend on every client

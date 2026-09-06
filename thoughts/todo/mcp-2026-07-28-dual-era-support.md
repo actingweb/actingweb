@@ -45,11 +45,17 @@ when?** That is unknown and unverifiable from public sources as of 2026-08-13.
    `MCP-Protocol-Version: 2026-07-28` (or later). One per client origin is
    normal and healthy — that *is* the fallback handshake. A *sustained* stream
    from the same origin means a client is retrying rather than falling back,
-   i.e. it is modern-only or mis-implements the fallback. **Since 2026-08-15
-   the library fires this criterion for you**: the one-off logs at INFO and a
-   sustained run from one origin escalates to a WARNING naming the origin.
-   Before that it was not logged at all, so the criterion could only have
-   surfaced via a user report. See "Cheap hardening" below.
+   i.e. it is modern-only or mis-implements the fallback. **The library fires
+   this criterion for you**: a lone rejection logs at INFO (it is the healthy
+   handshake), and five from one origin inside five minutes escalate to a
+   WARNING naming the origin. Escalation is by origin, not volume, deliberately
+   — the path is unauthenticated, so an unconditional WARNING would let any
+   anonymous caller bury the actionable case in alert noise. Origin is
+   `Mcp-Session-Id` when present, else `User-Agent`; `remote_addr` does not
+   exist on this request object (`AWWebObj`/`AWRequest` carry only url, params,
+   body, headers and cookies, and the two call sites reading
+   `getattr(self.request, "remote_addr", "unknown")` always evaluate to
+   `"unknown"`).
 3. **A user reports an MCP client that can no longer connect** and the trace
    shows no `initialize` ever arriving.
 4. **We want a feature that only exists in the modern revision** — most
@@ -77,38 +83,13 @@ server, so the client would stop falling back and instead retry a
 modern-shaped request declaring `2025-11-25` — incoherent, since that version
 requires `initialize`. A working fallback becomes a retry loop.
 
-`-32600` without `data.supported` is the correct legacy-only signal. It was
-written as ordinary spec compliance, not as a deliberate era signal, and **no
-test asserted it in that role** until 2026-08-15 —
-`tests/test_mcp_version_negotiation.py` asserted the 400 and the code, but not
-the absence of `data`, which is the half a `-32022` "fix" would change.
-`tests/test_mcp_dual_era_signal.py` now guards it, and the rejection site
-carries the reasoning inline so it is visible to whoever edits it.
-
-## Cheap hardening — DONE 2026-08-15 (#129)
-
-All three landed: the regression test (`tests/test_mcp_dual_era_signal.py`,
-which asserts the *absence* of `data` and that the code falls outside the whole
-reserved `-32020`–`-32099` range), the supported versions named in the error
-`message` via `unsupported_version_message()` in `actingweb/mcp/protocol.py`,
-and origin-graded logging of the rejection. None of it implements any part of
-the modern revision — it protects the current behaviour and makes criterion 2
-observable.
-
-Two facts from that work that outlive it:
-
-- **The rejection escalates by origin, not by volume.** A lone rejection logs at
-  INFO (it is the healthy handshake); five from one origin inside five minutes
-  warn once, naming the origin. An unconditional WARNING was rejected because
-  the path is unauthenticated — any anonymous caller could pull it as an
-  alert-noise lever, burying the actionable case.
-- **`remote_addr` does not exist on this request object.** `AWWebObj`/`AWRequest`
-  carry only url, params, body, headers and cookies, and neither integration
-  sets an address, so the two call sites reading
-  `getattr(self.request, "remote_addr", "unknown")` always evaluate to
-  `"unknown"`. Origin is `Mcp-Session-Id` when present, else `User-Agent` —
-  which is also the field naming the client implementation criterion 1 asks you
-  to watch.
+`-32600` without `data.supported` is the correct legacy-only signal.
+`tests/test_mcp_version_negotiation.py` asserts the 400 and the code;
+**`tests/test_mcp_dual_era_signal.py` is the one that guards the era role** —
+the absence of `data`, and that the code falls outside the whole reserved
+`-32020`–`-32099` range. That is the half a `-32022` "fix" would change, so
+treat a failure there as the fix being wrong, not the test. The rejection site
+carries the reasoning inline for whoever edits it.
 
 ## Scope when it is picked up
 
@@ -153,8 +134,8 @@ longer exists.
 
 - `thoughts/research/2026-08-13-mcp-2026-07-28-stateless-revision.md` — the
   full analysis, spec quotes, and the traced fallback path
-- `thoughts/todo/mcp-cache-lifecycle-and-revocation.md` — §2 cross-process
-  invalidation, §4 `_mcp_client_info_cache` keyed by a client-supplied header;
+- `thoughts/todo/mcp-cache-lifecycle-and-revocation.md` — §1 cross-process
+  invalidation, §3 `_mcp_client_info_cache` keyed by a client-supplied header;
   both overlap the cleanup above
 - `thoughts/plans/2026-05-26-mcp-version-negotiation-structuredcontent.md` — the
   Phase 3 roadmap that `actingweb/mcp/protocol.py:8-13` defers transport

@@ -42,6 +42,8 @@ pip install 'actingweb[fastapi]'   # or [flask], or [all] for everything incl. M
 ## Thoughts directory
 
 Development notes, research, and plans live under `thoughts/` — see
-[`thoughts/README.md`](thoughts/README.md) for the five directories
-(`research/`, `plans/`, `verifications/`, `reference/`, `todo/`) and their
-conventions.
+[`thoughts/README.md`](thoughts/README.md) for the six directories
+(`research/`, `plans/`, `verifications/`, `reference/`, `todo/`, `inbound/`)
+and their conventions. A report written **outside** this repository goes in
+`inbound/`, not straight into `todo/`: it is triaged here — every claim
+verified against the tree — and deleted once what survives is filed.

@@ -8,7 +8,7 @@ Kind never changes — a plan is a plan forever. Status changes constantly. Enco
 status as a location means every state change is a file move, and every file move
 breaks the links pointing at it.
 
-## The five directories
+## The six directories
 
 | Directory | Holds | Dated? | Written by |
 | --- | --- | --- | --- |
@@ -17,8 +17,9 @@ breaks the links pointing at it.
 | `verifications/` | Evidence a plan actually landed | yes | `/verify_implementation` |
 | `reference/` | Durable knowledge — patterns, architecture, protocol flows | no | by hand |
 | `todo/` | Known work not yet scheduled | no | by hand |
+| `inbound/` | Reports from outside this repo, not yet triaged | no | whoever files one |
 
-Nothing else. If a document doesn't fit one of these five, it is probably a
+Nothing else. If a document doesn't fit one of these six, it is probably a
 `research/` note.
 
 ### Dated vs undated is not cosmetic
@@ -29,8 +30,8 @@ Nothing else. If a document doesn't fit one of these five, it is probably a
   when it stops being true. A date in the filename would become a lie the first
   time you update it.
 
-`research/`, `plans/` and `verifications/` are snapshots. `reference/` and
-`todo/` are living.
+`research/`, `plans/` and `verifications/` are snapshots. `reference/`,
+`todo/` and `inbound/` are living.
 
 ### Same slug = same thread of work
 
@@ -38,6 +39,73 @@ Nothing else. If a document doesn't fit one of these five, it is probably a
 `plans/2026-07-23-dynamodb-scalability.md` → `verifications/...`. Reusing the
 slug across directories is how you follow a piece of work end to end. Dates may
 differ (research precedes the plan); the slug should not drift.
+
+### `inbound/` is an inbox, and an inbox is meant to be empty
+
+`inbound/` holds reports written **outside this repository** — a consumer
+project, a downstream deployment, a security evaluation elsewhere — that nobody
+here has evaluated yet. It exists so a report has somewhere to land without its
+author having to guess whether it is a bug, a todo, or a plan. That judgement is
+ours, not theirs.
+
+Undated filenames: a report carries its own filed-by date in the body, and the
+date that matters afterwards is the date *we* triaged it, which lands in what
+the triage produces.
+
+It is the one directory with a lifecycle that ends in deletion:
+
+```
+someone drops a report in inbound/
+        ↓ triage: verify the claims against the tree
+    the finding is real  → todo/ (or research/, or a plan) + INDEX.md row
+    the finding is wrong → say so in the reply, or write it up in research/
+        ↓
+delete the inbound file — the todo/research/plan is the record
+```
+
+Triage means *verify*, not *transcribe*. An external reporter reads the code
+from outside and can be right about the symptom and wrong about the cause, the
+blast radius, or which fix the codebase already supports. Check every claim
+against the tree before filing anything, and write down what the check changed —
+that delta is most of the value of doing this at all.
+
+Carry the attribution across (who filed it, when, out of what) — the report is
+deleted, so what you write is the only surviving record of where it came from.
+
+**The normal state of this directory is empty.** A file sitting here is a
+report nobody has looked at, which is exactly what the directory is for and
+exactly what it should not accumulate. `inbound/README.md` stays regardless: it
+is the signpost, not an item in the queue.
+
+### `todo/` holds only what is *not* done
+
+A todo says what is wrong, where, what it would buy, and what has to be decided
+or unblocked first. It does not say what shipped, when, or in which release.
+When the work lands the file is **deleted** — the plan and the verification are
+the record, and they are dated, linked and immutable in a way a living file
+cannot be.
+
+The three things that creep in and should be cut on sight:
+
+- **Closed sub-items kept for the tally** ("§1 — DONE in #130"). Delete the
+  section; if it established a constraint the remaining work inherits, keep the
+  *constraint*, not the announcement.
+- **Decision ceremony** ("Decided 2026-08-14, owner walkthrough"). The decision
+  survives as a present-tense statement of the approach; the date and the
+  meeting do not.
+- **Release archaeology in the index** — sections recording what each release
+  closed, ledger rows for deleted files, a running log of when the list was
+  reviewed. All of it is a worse copy of `plans/` and `verifications/`.
+
+What is *not* history and should stay: provenance (which review found this,
+which tree the line numbers were checked against), constraints established by
+work that already landed, and the reason an item is blocked.
+
+**Todos are identified by filename, never by a number.** Numbering a living
+queue forces a choice between renumbering — which silently changes what an
+older reference means — and freezing the numbers, which turns the index into a
+record of what used to be there. A stale filename reference is visibly stale,
+which is the failure mode you want.
 
 ## Status lives in the plan, not in the path
 
@@ -116,6 +184,8 @@ point.
 - Learned something durable about how the system works → `reference/slug.md`,
   updated in place forever.
 - Investigated something and wrote it up → `research/`, even if no plan follows.
+- A report arrived from outside the repo → it lands in `inbound/`; triage it,
+  file what survives verification, then delete the file.
 
 **Rule of thumb:** if you'd want to read it in a year, it's `reference/`. If it
 only makes sense next to a date, it's `research/`. If it's a promise, it's

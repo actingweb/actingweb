@@ -1,19 +1,8 @@
 # v2 list access — verification follow-ups (3.14.0)
 
-Source: `thoughts/verifications/2026-08-21-v2-positional-access-cost.md`.
-**Most of this file was actioned on 2026-08-21** (the same day it was
-filed) in the follow-up commit on `release/3.14.0-v2-positional-access-cost`:
-the release-blocking cross-version wording (Issue 1), bulk
-duplicate-index regression tests (2), the `None`-item diff sentinel (3),
-the ambiguous-match WARNING (4), the parametrized permission-enforcement
-suite (5), the third drift-term test (6), advisory append-index docs (7),
-the orphan-scan replay guard + exit 3 (8), and the low roll-up's code and
-docs items (v1 capture-during-scan, stale-cache `_where` tests, guard
-hardening, migration-guide restorations, doc nits).
-
-What remains, none release-blocking (the 19-file `ruff format` drift was
-closed post-tag: the files were reformatted and `ruff format --check` was
-added to CI in the same PR, so it cannot drift again):
+What is left from `thoughts/verifications/2026-08-21-v2-positional-access-cost.md`
+after its same-day follow-up commit. None of it is release-blocking; the
+verification records what was actioned.
 
 - **End-to-end peer-replica integration test for Phase 10 diffs.** Sender
   and receiver halves are each unit-pinned

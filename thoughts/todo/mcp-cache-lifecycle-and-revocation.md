@@ -1,84 +1,71 @@
-# TODO: MCP cache lifecycle — revocation doesn't evict, cross-process invalidation, and related residuals
+# TODO: MCP cache lifecycle — cross-process invalidation and related residuals
 
-**Status:** Open. Deferred out of the `bug/trust_mcp_cache` plan
-(`thoughts/plans/2026-07-30-mcp-trust-cache-crosses-clients.md`) on purpose —
-that plan's "What We're NOT Doing" section calls out most of these items by
-name as scope decisions, not oversights.
-**Severity:** Medium. None of these are the authorization bypass that plan
-fixed (client-A-sees-client-B's-permissions) — that's closed. These are
-staleness/consistency gaps: a revoked credential or changed permission can
-still be honored for up to the in-process cache TTL, and a few narrower
-correctness/robustness issues found along the way.
+**Status:** Open. Scoped out of `thoughts/plans/2026-07-30-mcp-trust-cache-crosses-clients.md`
+by name — see its "What We're NOT Doing", which is where the reasoning for each
+cut lives.
+**Severity:** Medium. None of these is the authorization bypass that plan fixed
+(client-A-sees-client-B's-permissions). These are staleness/consistency gaps — a
+revoked credential or changed permission can still be honored for up to the
+in-process cache TTL — plus a few narrower correctness and robustness issues
+found alongside them.
 **Origin:** `thoughts/research/2026-07-30-mcp-trust-cache-crosses-clients.md`
-(research Patch 5, "cache lifecycle"), plus items discovered while
-implementing Phases 1–4 of the plan above.
+(research Patch 5, "cache lifecycle"), plus items found while implementing that
+plan.
 
-## 1. Revocation does not evict the MCP caches (research C7) — DONE (#130)
+## The constraint everything here inherits
 
-**Landed 2026-08-15**, single-process eviction on every revocation path:
-`TokenManager.revoke_token()`, `OAuthSession.revoke_all_tokens()`,
-`Trust.delete()`, and both the store and delete paths of
-`TrustPermissionStore`, via the lazy shims in `actingweb/mcp/invalidation.py`.
+**Cache eviction must be actor-wide, not keyed on `_trust_cache` alone.**
+`_actor_cache` holds a live `ActorInterface` carrying the trust list itself, so
+dropping the trust tuple leaves the shared wrapper serving stale trust
+(`thoughts/research/2026-08-15-mcp-actor-cache-holds-instance-state.md`). Anyone
+adding a seventh cache or a new revocation path inherits this.
 
-**Eviction is actor-wide, not `_trust_cache`-keyed as this file originally
-proposed.** `_actor_cache` holds a live `ActorInterface` carrying the trust list
-itself, so dropping the tuple alone leaves the shared wrapper serving stale
-trust — see
-`thoughts/research/2026-08-15-mcp-actor-cache-holds-instance-state.md`. Anyone
-adding a seventh cache or a new revocation path inherits that constraint.
-
-§2 below is the part that stays open: none of this crosses a process boundary.
-
-## 2. No cross-process invalidation
+## 1. No cross-process invalidation
 
 All six MCP caches (`_token_cache`, `_actor_cache`, `_trust_cache`,
 `_mcp_client_info_cache`, and two more — see `mcp.py`'s module-level
-declarations) are plain module globals. Even with (1) fixed, calling
-`clear_token_from_cache()` only clears the process that served the
-revocation request. In any multi-process deployment (multiple Lambda
-containers, multiple Flask/gunicorn workers, multiple FastAPI/uvicorn
-workers) every *other* process keeps serving the stale entry until its own
-TTL expires.
+declarations) are plain module globals. Single-process eviction on every
+revocation path exists (`actingweb/mcp/invalidation.py`), and none of it crosses
+a process boundary: `clear_token_from_cache()` clears the process that served
+the revocation request, and in any multi-process deployment (multiple Lambda
+containers, gunicorn or uvicorn workers) every *other* process keeps serving the
+stale entry until its own TTL expires.
 
 **Proposed fix:** out of scope for a quick patch — needs either a shared
-invalidation channel (pub/sub, a version stamp read on each cache hit, etc.)
-or a documented acceptance of "revocation takes up to N minutes to
-propagate across a fleet," made explicit in `docs/reference/security.rst`
-rather than left implicit.
+invalidation channel (pub/sub, a version stamp read on each cache hit) or a
+documented acceptance of "revocation takes up to N minutes to propagate across a
+fleet", made explicit in `docs/reference/security.rst` rather than left implicit.
 
-## 3. No explicit trust-freshness policy (research C6)
+This is also the design that would replace the four unbounded per-process dicts
+in `thoughts/todo/permission-path-unbounded-caches.md`.
 
-There's no documented answer to "how stale can a cached trust relationship
-be, and is that acceptable for this deployment's threat model?" Right now
-it's an accident of `_cache_ttl = 300` (shared across all three caches) plus
-whatever TTL scaffold Phase 1 of the parent plan added
-(`_TRUST_CACHE_TTL`, currently unset/infinite). Should be a deliberate,
-documented, and probably independently-configurable value — trust
-freshness and token freshness are different security properties with
-different acceptable staleness windows.
+## 2. No explicit trust-freshness policy
 
-## 4. `_mcp_client_info_cache` is a residual cross-client channel (clientInfo only)
+There is no documented answer to "how stale can a cached trust relationship be,
+and is that acceptable for this deployment's threat model?" Today it is an
+accident of `_cache_ttl = 300` shared across three caches, plus `_TRUST_CACHE_TTL`
+(unset/infinite). It should be a deliberate, documented and probably
+independently-configurable value: trust freshness and token freshness are
+different security properties with different acceptable staleness windows.
+
+## 3. `_mcp_client_info_cache` is a residual cross-client channel (clientInfo only)
 
 `_mcp_client_info_cache` (`actingweb/handlers/mcp.py`, keyed by
 `Mcp-Session-Id`) is keyed by a **client-supplied header**, not by anything
-server-verified. It does not affect `peer_id` or any permission decision —
-confirmed during the parent plan's Phase 1 investigation — so it cannot
-reproduce the authorization bypass. But it is a distinct cache with its own
-key shape that was deliberately *not* touched or "harmonized" into the
-`(actor_id, client_id)` tuple scheme, and a client that reuses another
-client's session id (if that's even attacker-reachable — not verified
-either way) could see its own request's `clientInfo` respond with a stale
-or mismatched cached value. Needs someone to actually characterize whether
-`Mcp-Session-Id` is attacker-controllable in a way that matters, and if so,
-whether it should be scoped by something server-verified (e.g. bound to the
-resolved `peer_id`).
+server-verified. It does not affect `peer_id` or any permission decision, so it
+cannot reproduce the authorization bypass — but it is a distinct cache with its
+own key shape that was deliberately not harmonized into the
+`(actor_id, client_id)` tuple scheme, and a client that reuses another client's
+session id could see its own request's `clientInfo` answered from a stale or
+mismatched entry. Needs someone to characterize whether `Mcp-Session-Id` is
+attacker-controllable in a way that matters, and if so whether the cache should
+be scoped by something server-verified (e.g. bound to the resolved `peer_id`).
 
-## 5. Substring/`endswith` peer-id matching survives on the deletion path
+## 4. Substring/`endswith` peer-id matching survives on the deletion path
 
-The exact-match resolver fix in the parent plan (Phase 3) only touched the
-*authentication* trust lookup (`_lookup_mcp_trust_relationship` in
-`mcp.py`). A structurally identical substring-matching pattern still exists
-on the **client deletion** path,
+The exact-match resolver fix touched only the *authentication* trust lookup
+(`_lookup_mcp_trust_relationship` in `mcp.py`). A structurally identical
+substring match still exists on the **client deletion** path,
 `actingweb/oauth2_server/client_registry.py:521`:
 
 ```python
@@ -86,87 +73,67 @@ for pattern in expected_peer_patterns:
     if pattern in peer_id or peer_id.endswith(client_id):
 ```
 
-This is lower severity than the authentication-path bug was, and the
-reason is worth recording rather than assuming: `_delete_client_trust_relationship`
-(`client_registry.py`) has exactly one caller, `ClientRegistry.delete_client()`,
-which itself has two callers — `OAuth2ClientManager.delete_client()`
-(actor-owner-initiated, via the web UI/SDK) and `Trust.delete()`
-(`actingweb/trust.py:114-122`), which triggers it only
-`if result and oauth2_client_id and self.config` — i.e. **only when the
-trust row actually being deleted already carries a server-issued
-`oauth_client_id`**. That field is written exclusively by the two live
-OAuth2 client-creation paths (confirmed during the parent plan's Phase 3
-work); a trust row created through the ordinary `/trust` peer protocol
-never has one, so it can never be the *trigger* for this cascade. An
-attacker cannot manufacture a crafted `client_id` to delete-by-substring on
-demand, because `client_id` values are server-generated
-(`f"mcp_{secrets.token_hex(16)}"`, `client_registry.py:51`) — high enough
-entropy that no client can choose or predict another's id, and the
-substring/`endswith` check can only ever match a *coincidental* collision
-between two already-legitimate, server-issued client ids (or between a
-legitimate id and an already-existing `/trust`-protocol peer id that
-happens to contain it), not an attacker-steered one. So this remains a
-data-integrity/availability problem (deleting client A can collaterally
-delete an unrelated trust row whose peer id happens to contain A's high-entropy
-client id as a substring) rather than a reachable privilege escalation.
-Still worth the same exact-match treatment for defense in depth and
-consistency with the authentication-path fix: `oauth_client_id ==
-client_id` first, falling back to the same gated full-string peer-id
-reconstruction the resolver now uses.
+**Why this is lower severity than the authentication-path bug was — worth
+recording rather than re-deriving.** `_delete_client_trust_relationship` has one
+caller, `ClientRegistry.delete_client()`, which has two: `OAuth2ClientManager.delete_client()`
+(actor-owner-initiated) and `Trust.delete()`, which triggers it only when the
+trust row being deleted already carries a server-issued `oauth_client_id`. That
+field is written exclusively by the two OAuth2 client-creation paths; a trust row
+created through the ordinary `/trust` peer protocol never has one, so it can
+never be the *trigger*. And `client_id` values are server-generated
+(`f"mcp_{secrets.token_hex(16)}"`), high enough entropy that no client can choose
+or predict another's, so the substring check can only ever match a *coincidental*
+collision between legitimate ids, not an attacker-steered one.
 
-## 6. Registration doesn't hard-fail when trust creation fails
+That makes it a data-integrity/availability problem — deleting client A can
+collaterally delete an unrelated trust row whose peer id happens to contain A's
+client id — rather than a reachable privilege escalation. Still worth the same
+exact-match treatment for defense in depth: `oauth_client_id == client_id`
+first, falling back to the gated full-string peer-id reconstruction the resolver
+now uses.
 
-`client_registry.py` currently swallows trust-creation failure during
-client registration — the comment says "client registration can continue
-without trust relationship" — and the authorize callback
-(`oauth2_server.py:406-409`) continues past a `trust_error`. Before the
-parent plan's Phase 3, such a client got full **fail-open** access (no
-trust to check against, and the old fail-open default let it through
-anyway). After Phase 3's fail-closed change, such a client instead gets a
-**permanent** `-32003` — it can never authorize, because no trust row will
-ever exist for it to resolve. Neither behavior is intended; issuing
-credentials that can never authorize (or that silently bypass authorization
-entirely) both point at the same root cause: registration should hard-fail
-when trust creation fails, surfacing the error to the registering client
-rather than silently completing.
+## 5. Registration doesn't hard-fail when trust creation fails
 
-## 7. Module-global cache keys assume one ActingWeb application per interpreter
+`client_registry.py` swallows trust-creation failure during client registration
+("client registration can continue without trust relationship"), and the
+authorize callback continues past a `trust_error`. Under the current fail-closed
+authorization such a client gets a **permanent** `-32003` — it can never
+authorize, because no trust row will ever exist for it to resolve. Issuing
+credentials that can never authorize and issuing credentials that bypass
+authorization are the same root cause: registration should hard-fail when trust
+creation fails, surfacing the error to the registering client.
+
+## 6. Module-global cache keys assume one ActingWeb application per interpreter
 
 All six MCP caches are bare module globals with no namespacing by
-application/config. A process hosting more than one `ActingWebApp` instance
-(distinct `aw_type`/config) would have their MCP caches collide on identical
-`(actor_id, client_id)` tuples if actor ids can coincide across apps. Not
-believed to be a real deployment shape today (one app per process is the
-documented pattern), but worth a `docs/quickstart/configuration.rst` note if
-someone asks, and worth namespacing by `config` object identity or app id if
-multi-app-per-process ever becomes supported.
+application/config. A process hosting more than one `ActingWebApp` (distinct
+`aw_type`/config) would have their MCP caches collide on identical
+`(actor_id, client_id)` tuples if actor ids can coincide across apps. Not a
+deployment shape we support today (one app per process is the documented
+pattern), but worth a `docs/quickstart/configuration.rst` note if someone asks,
+and worth namespacing by config identity if multi-app-per-process ever becomes
+supported.
 
-## 8. Sync/async `resources/read` result-formatting divergence (found in Phase 3, not fixed)
+## 7. Sync/async `resources/read` result-formatting divergence
 
-Not a permission-decision bug — found via the parent plan's Phase 3 manual
-sync/async parity check, explicitly scoped out of that (security-focused)
-plan and recorded here instead. For a **successful** `resources/read` on a
+Not a permission-decision bug. For a **successful** `resources/read` on a
 dict-shaped result, the sync handler (`mcp.py`) serializes with
-`json.dumps(result, indent=2)`, while the async handler
-(`async_mcp.py`) uses `str(result)` for the same shape. This means an
-MCP client can get differently-formatted (and for `str()`, arguably
-malformed-for-JSON-consumers, since Python dict `repr` uses single quotes
-and `None`/`True`/`False` rather than JSON's `null`/`true`/`false`) resource
-content depending on whether it's served by the Flask or FastAPI transport.
-Both paths return `-32003` identically on authorization decisions — this is
-purely a content-formatting bug on the success path.
+`json.dumps(result, indent=2)` while the async handler (`async_mcp.py`) uses
+`str(result)` — so an MCP client gets differently-formatted (and for `str()`,
+malformed-for-JSON-consumers: single quotes, `None`/`True`/`False`) resource
+content depending on whether Flask or FastAPI served it. Both paths return
+`-32003` identically on authorization decisions; this is purely content
+formatting on the success path.
 
-**Proposed fix:** make the async path use the same `json.dumps(result,
-indent=2)` formatting as sync for dict results, and add a
-sync/async parity test asserting byte-identical `resources/read` response
-bodies for a successful read (not just identical authorization decisions,
-which `tests/test_mcp_resource_read_permissions.py` already covers).
+**Proposed fix:** make the async path use the same `json.dumps(result, indent=2)`
+for dict results, and add a sync/async parity test asserting byte-identical
+`resources/read` response bodies for a successful read — not just identical
+authorization decisions, which `tests/test_mcp_resource_read_permissions.py`
+already covers.
 
 ## Related
 
-- `thoughts/plans/2026-07-30-mcp-trust-cache-crosses-clients.md` — the
-  parent plan; see "What We're NOT Doing" for items 1, 2, 4, 5, 6, 7 above
-  as originally-scoped-out decisions, and Phase 3's Verification notes for
-  item 8's discovery.
-- `thoughts/research/2026-07-30-mcp-trust-cache-crosses-clients.md` — C6,
-  C7, and the `_mcp_client_info_cache` analysis.
+- `thoughts/plans/2026-07-30-mcp-trust-cache-crosses-clients.md` — the parent
+  plan; "What We're NOT Doing" is the long form of why these were cut.
+- `thoughts/research/2026-07-30-mcp-trust-cache-crosses-clients.md` — C6, C7 and
+  the `_mcp_client_info_cache` analysis.

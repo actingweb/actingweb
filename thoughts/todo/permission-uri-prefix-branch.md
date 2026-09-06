@@ -22,8 +22,8 @@ are "what does a resource rule match against".
 
 ## Related: the MCP `*/list` filters stay fail-open
 
-3.14.4 made the six single-item MCP permission checks fail closed. The three
-listing filters (`tools/list`, `resources/list`, `prompts/list`;
+The six single-item MCP permission checks fail closed. The three listing
+filters (`tools/list`, `resources/list`, `prompts/list`;
 `actingweb/handlers/mcp.py:1008`, `:1254`, `:1329`) still treat an evaluator
 that raises as "no evaluator" and return the unfiltered list. That discloses
 names, not access — a listed tool still fails its `tools/call` check — but it

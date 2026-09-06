@@ -16,5 +16,5 @@ Each is a plain dict on a config-bound singleton with no size bound and no
 TTL-driven eviction of the *key* (some entries carry a TTL, the dict keeps the
 slot). In a long-lived process serving many actors the working set is the
 number of distinct trust pairs ever seen. `[[mcp-cache-lifecycle-and-revocation]]`
-§2 (cross-process invalidation) is the design that would replace them; until
+§1 (cross-process invalidation) is the design that would replace them; until
 then a bound plus LRU on each is the cheap holding fix.

@@ -1,29 +1,13 @@
 # Postgres parallel CI: the watchdog bounds the symptom, the flakiness remains
 
 **Origin:** `thoughts/research/2026-06-15-ci-postgres-test-hang.md`
-§"Follow-up (not done here)".
-**Status:** Open. The mitigation shipped; none of the three follow-ups did.
+§"Follow-up (not done here)" — read it before re-deriving the root cause or
+re-trying the several approaches that did not help. A watchdog now bounds the
+hang (it used to reach ~99% of the suite, go silent, and be cancelled at the
+20-minute wall with no diagnostics), so a hang fails fast and says something.
+The three causes below are untouched.
 
-## What already shipped
-
-The `Tests (Python 3.11, postgresql)` job used to reach ~99% of the suite in
-~2.5 min, go silent, and be cancelled at the 20-minute `timeout-minutes` wall
-**with no diagnostics**. A watchdog now bounds that, so a hang fails fast and
-says something. Root cause and the several attempts that did *not* help are in
-the research doc — read it before re-deriving them.
-
-**Decided 2026-08-14** (owner walkthrough): instrument now, on one branch shared
-with the DELETE todo below rather than waiting for the next hang.
-
-**Done 2026-08-15, and it collected for the DELETE todo only.** The shared
-branch shipped `ACTINGWEB_PG_DELETE_DIAGNOSTICS` and lifted that todo's
-quarantine. Nothing here was instrumented: follow-up 1's process-global
-singletons were the shared surface, and the pool half of that surface was
-already rebuilt in #117 (see the deleted DELETE todo's "What changed under this todo", in git history),
-leaving `trust_type_registry._registry` and the fixed `creator` as the only
-untouched part of it. The three follow-ups below all remain open.
-
-## The three follow-ups
+This is **test-infrastructure reliability**, not correctness.
 
 1. **Stabilise `test_oauth2_client_manager.py::TestOAuth2ClientCreation` under
    parallel execution.** It combines a fixed `creator="user@example.com"` with
@@ -35,17 +19,6 @@ untouched part of it. The three follow-ups below all remain open.
    disabling rerunfailures' xdist socket machinery under parallel runs is
    viable instead.
 
-## Why this is not the same item as the DELETE todo
-
-The former `thoughts/todo/2026-06-15-postgres-parallel-delete-not-persisting.md`
-(deleted 2026-09-02 after the matrix stayed green from #128 on 2026-08-15
-through the v3.14.3 tag; the full file is at `git show aaf101f:thoughts/todo/2026-06-15-postgres-parallel-delete-not-persisting.md`, and `ACTINGWEB_PG_DELETE_DIAGNOSTICS` stays on in `tests.yml`) was a
-**correctness** question — a per-actor attribute `DELETE` that intermittently
-does not persist, with a mechanism that could drop writes in production. This
-one is **test-infrastructure reliability** only. Same date, same CI matrix, same
-`-n 4 --dist loadgroup` conditions, different defect.
-
-They are worth reading together anyway: follow-up 1's process-global singletons
-and follow-up 3's distribution-mode question both touch the pooled-connection
-behaviour that is the DELETE bug's leading hypothesis. If one investigation
-instruments the postgres CI matrix, it should collect for both.
+Follow-ups 1 and 3 both touch pooled-connection behaviour under
+`-n 4 --dist loadgroup`; `ACTINGWEB_PG_DELETE_DIAGNOSTICS` is still enabled in
+`tests.yml` and is the nearest existing instrumentation.

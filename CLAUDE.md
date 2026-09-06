@@ -320,7 +320,8 @@ thoughts/
 ├── plans/          # What we intend to do       (dated, /create_plan)
 ├── verifications/  # Evidence a plan landed     (dated, /verify_implementation)
 ├── reference/      # Durable knowledge          (undated, updated in place)
-└── todo/           # Known work not scheduled   (undated, deleted when done)
+├── todo/           # Known work not scheduled   (undated, deleted when done)
+└── inbound/        # Unevaluated external reports (undated, deleted at triage)
 ```
 
 A directory is a **kind** of document, never a **status**. A finished plan stays
@@ -334,9 +335,10 @@ Check these before starting significant work to find existing patterns and conte
 The three rules that get broken in practice:
 
 - **`todo/` holds only what is NOT done.** When work lands, the todo is
-  *removed* — not annotated with a "CLOSED" section that grows forever. If a
-  closed item is worth citing later (other files reference its number), leave a
-  one-line ledger row pointing at the record, not the body.
+  *removed* — not annotated with a "CLOSED" section that grows forever, and not
+  kept as a ledger row. The plan and the verification are the record; a todo
+  points at them, it does not summarise them. Todos are identified by filename,
+  never by an index number.
 - **The record of finished work lives in `plans/` and `verifications/`**, which
   are dated and immutable-ish. Put the evidence there — numbers, commands,
   what was checked — and have the todo point at it. A register that carries its

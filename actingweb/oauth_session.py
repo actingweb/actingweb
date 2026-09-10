@@ -305,6 +305,7 @@ class OAuth2SessionManager:
         email: str,
         *,
         hooks: "HookRegistry | None" = None,
+        create_only: bool = False,
     ) -> Optional["actor_module.Actor"]:
         """
         Complete an already-claimed OAuth session.
@@ -319,9 +320,14 @@ class OAuth2SessionManager:
             email: User's email address
             hooks: Lifecycle hooks forwarded to actor creation. When
                 omitted, falls back to ``config._hooks``.
+            create_only: Refuse to adopt an actor that already has this
+                email as its creator, returning None instead. The free-text
+                email branch passes this: it probed for an existing actor
+                before claiming the session, and an independent login can
+                create one in between.
 
         Returns:
-            Created or existing actor, or None if failed
+            Created or existing actor, or None if failed or refused
         """
         try:
             # Extract session data
@@ -341,7 +347,7 @@ class OAuth2SessionManager:
 
             authenticator = create_oauth2_authenticator(self.config, provider)
             actor_instance = authenticator.lookup_or_create_actor_by_email(
-                email, hooks=hooks
+                email, hooks=hooks, create_only=create_only
             )
 
             if not actor_instance:

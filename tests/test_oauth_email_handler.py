@@ -175,6 +175,54 @@ class TestFreeTextExistingAddressRefused:
         session_mgr.try_claim_session.assert_called_once_with("sess-1")
         session_mgr.complete_claimed_session.assert_not_called()
 
+    def test_create_only_refusal_after_the_claim_is_also_409(self):
+        """The probe runs before the claim, so an independent login can create
+        the actor in between. Completion is create-only and returns None; the
+        handler must answer 409, not the generic 500."""
+        config = _config()
+        webobj = _webobj(email=NEW_EMAIL)
+        hooks = _hooks()
+        session = _session(verified_emails=[])
+
+        # Not found by the pre-claim probe, found by the post-refusal recheck.
+        existing_check = MagicMock()
+        existing_check.get_from_creator.side_effect = [False, True]
+
+        session_mgr = MagicMock()
+        session_mgr.get_session.return_value = session
+        session_mgr.try_claim_session.return_value = session
+        session_mgr.complete_claimed_session.return_value = None  # refused
+
+        with (
+            patch("actingweb.actor.Actor", return_value=existing_check),
+            patch(
+                "actingweb.oauth_session.get_oauth2_session_manager",
+                return_value=session_mgr,
+            ),
+        ):
+            result = OAuth2EmailHandler(webobj, config, hooks=hooks).post()
+
+        assert result["code"] == "actor_exists"
+        assert result["status_code"] == 409
+        assert webobj.response.status_code == 409
+        _args, kwargs = session_mgr.complete_claimed_session.call_args
+        assert kwargs["create_only"] is True
+
+    def test_dropdown_branch_is_not_create_only(self):
+        """A dropdown-selected address is a returning user; adopting the
+        existing actor there is correct and must stay allowed."""
+        config = _config()
+        webobj = _webobj(email=EXISTING_EMAIL)
+        hooks = _hooks()
+        session = _session(verified_emails=[EXISTING_EMAIL])
+
+        _result, session_mgr = _run_post(
+            config, webobj, hooks, session=session, complete_actor=_new_actor()
+        )
+
+        _args, kwargs = session_mgr.complete_claimed_session.call_args
+        assert kwargs["create_only"] is False
+
     def test_losing_the_claim_race_is_an_expired_session_error(self):
         """A concurrent caller that loses the atomic claim gets the ordinary
         expired-session 400 and never reaches the existence probe."""

@@ -531,6 +531,16 @@ class OAuth2CallbackHandler(BaseHandler):
                                 f"access an actor belonging to '{actor_instance.creator}'. Please log in with the correct account.",
                             )
 
+                    # A state-selected actor skips
+                    # lookup_or_create_actor_by_identifier() entirely, so it
+                    # would otherwise keep any squatted pending-verification
+                    # state. The creator check above already established that
+                    # the provider vouched for this actor's owner, which is
+                    # exactly the condition the cleanup is for.
+                    from ..oauth2 import clear_pending_email_verification
+
+                    clear_pending_email_verification(actor_instance, self.config)
+
             except Exception as e:
                 logger.warning(
                     f"Failed to load actor {actor_id} from state: {e}, will lookup/create by identifier"

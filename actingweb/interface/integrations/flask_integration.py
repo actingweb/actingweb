@@ -769,10 +769,15 @@ class FlaskIntegration(BaseActingWebIntegration):
                     pass  # Fall back to default response
             elif not is_json_request and webobj.response.status_code == 400:
                 try:
+                    # Carry the handler's status onto the rendered page.
+                    # Without it a provider outage (502) or a rejected login
+                    # (403) is served as 200, so anything reading the status
+                    # rather than the page sees a success.
                     return Response(
                         render_template(
                             "aw-root-failed.html", **webobj.response.template_values
-                        )
+                        ),
+                        status=webobj.response.status_code,
                     )
                 except Exception:
                     pass  # Fall back to default response
@@ -911,10 +916,15 @@ class FlaskIntegration(BaseActingWebIntegration):
                     pass  # Fall back to default response
             elif webobj.response.status_code == 400:
                 try:
+                    # Carry the handler's status onto the rendered page.
+                    # Without it a provider outage (502) or a rejected login
+                    # (403) is served as 200, so anything reading the status
+                    # rather than the page sees a success.
                     return Response(
                         render_template(
                             "aw-root-failed.html", **webobj.response.template_values
-                        )
+                        ),
+                        status=webobj.response.status_code,
                     )
                 except Exception:
                     pass  # Fall back to default response
@@ -976,10 +986,15 @@ class FlaskIntegration(BaseActingWebIntegration):
         ):
             if webobj.response.template_values:
                 try:
+                    # Carry the handler's status onto the rendered page.
+                    # Without it a provider outage (502) or a rejected login
+                    # (403) is served as 200, so anything reading the status
+                    # rather than the page sees a success.
                     return Response(
                         render_template(
                             "aw-root-failed.html", **webobj.response.template_values
-                        )
+                        ),
+                        status=webobj.response.status_code,
                     )
                 except Exception:
                     pass  # Fall back to default response
@@ -1016,10 +1031,15 @@ class FlaskIntegration(BaseActingWebIntegration):
         ):
             if webobj.response.template_values:
                 try:
+                    # Carry the handler's status onto the rendered page.
+                    # Without it a provider outage (502) or a rejected login
+                    # (403) is served as 200, so anything reading the status
+                    # rather than the page sees a success.
                     return Response(
                         render_template(
                             "aw-root-failed.html", **webobj.response.template_values
-                        )
+                        ),
+                        status=webobj.response.status_code,
                     )
                 except Exception:
                     pass  # Fall back to default response
@@ -1058,7 +1078,9 @@ class FlaskIntegration(BaseActingWebIntegration):
             and webobj.response.template_values
         ):
             if webobj.response.template_values.get("status"):
-                return self._render_verification_result(webobj.response.template_values)
+                return self._render_verification_result(
+                    webobj.response.template_values, webobj.response.status_code
+                )
             try:
                 # App provides aw-oauth-email.html template
                 return Response(
@@ -1112,12 +1134,22 @@ class FlaskIntegration(BaseActingWebIntegration):
         return self._create_flask_response(webobj)
 
     def _render_verification_result(
-        self, template_values: dict[str, Any]
+        self, template_values: dict[str, Any], status_code: int = 200
     ) -> Response | WerkzeugResponse | str:
-        """Render the email-verification result page for a browser client."""
+        """Render the email-verification result page for a browser client.
+
+        ``status_code`` is the handler's own status. It must be carried onto
+        the rendered response: an invalid, missing or expired token sets 403,
+        404 or 410, and a Response built without it answers 200, which would
+        report a failed verification as a success to anything reading the
+        status rather than the page.
+        """
         try:
             # App provides aw-verify-email.html template
-            return Response(render_template("aw-verify-email.html", **template_values))
+            return Response(
+                render_template("aw-verify-email.html", **template_values),
+                status=status_code,
+            )
         except Exception as e:
             # Template not found - provide basic HTML as fallback
             logger.warning(f"Template aw-verify-email.html not found: {e}")
@@ -1144,7 +1176,7 @@ class FlaskIntegration(BaseActingWebIntegration):
             </body>
             </html>
             """
-            return Response(fallback_html, mimetype="text/html")
+            return Response(fallback_html, mimetype="text/html", status=status_code)
 
     def _handle_oauth2_endpoint(
         self, endpoint: str

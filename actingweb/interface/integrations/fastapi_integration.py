@@ -1798,10 +1798,15 @@ class FastAPIIntegration(BaseActingWebIntegration):
             and webobj.response.status_code >= 400
         ):
             if self.templates and webobj.response.template_values:
+                # Carry the handler's status onto the rendered page. Without
+                # it a provider outage (502) or a rejected login (403) is
+                # served as 200, so anything reading the status rather than
+                # the page sees a success.
                 return self.templates.TemplateResponse(
                     request,
                     "aw-root-failed.html",
                     context=webobj.response.template_values,
+                    status_code=webobj.response.status_code,
                 )
 
         return self._create_fastapi_response(webobj, request)
@@ -1844,10 +1849,15 @@ class FastAPIIntegration(BaseActingWebIntegration):
             and webobj.response.status_code >= 400
         ):
             if self.templates and webobj.response.template_values:
+                # Carry the handler's status onto the rendered page. Without
+                # it a provider outage (502) or a rejected login (403) is
+                # served as 200, so anything reading the status rather than
+                # the page sees a success.
                 return self.templates.TemplateResponse(
                     request,
                     "aw-root-failed.html",
                     context=webobj.response.template_values,
+                    status_code=webobj.response.status_code,
                 )
 
         return self._create_fastapi_response(webobj, request)
@@ -1886,7 +1896,9 @@ class FastAPIIntegration(BaseActingWebIntegration):
         ):
             if webobj.response.template_values.get("status"):
                 return self._render_verification_result(
-                    request, webobj.response.template_values
+                    request,
+                    webobj.response.template_values,
+                    webobj.response.status_code,
                 )
             if self.templates:
                 try:
@@ -1942,9 +1954,19 @@ class FastAPIIntegration(BaseActingWebIntegration):
         return self._create_fastapi_response(webobj, request)
 
     def _render_verification_result(
-        self, request: Request, template_values: dict[str, Any]
+        self,
+        request: Request,
+        template_values: dict[str, Any],
+        status_code: int = 200,
     ) -> Response:
-        """Render the email-verification result page for a browser client."""
+        """Render the email-verification result page for a browser client.
+
+        ``status_code`` is the handler's own status. It must be carried onto
+        the rendered response: an invalid, missing or expired token sets 403,
+        404 or 410, and a TemplateResponse built without it answers 200, which
+        would report a failed verification as a success to anything reading
+        the status rather than the page.
+        """
         if self.templates:
             try:
                 # App provides aw-verify-email.html template
@@ -1952,6 +1974,7 @@ class FastAPIIntegration(BaseActingWebIntegration):
                     request,
                     "aw-verify-email.html",
                     context=template_values,
+                    status_code=status_code,
                 )
             except Exception as e:
                 # Template not found - provide basic HTML as fallback
@@ -1978,7 +2001,7 @@ class FastAPIIntegration(BaseActingWebIntegration):
         </body>
         </html>
         """
-        return HTMLResponse(content=fallback_html)
+        return HTMLResponse(content=fallback_html, status_code=status_code)
 
     async def _handle_oauth2_endpoint(
         self, request: Request, endpoint: str

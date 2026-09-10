@@ -923,6 +923,7 @@ class OAuth2Authenticator:
         email: str,
         *,
         hooks: "HookRegistry | None" = None,
+        create_only: bool = False,
     ) -> actor_module.Actor | None:
         """
         Look up actor by email or create new one if not found.
@@ -941,7 +942,7 @@ class OAuth2Authenticator:
             Actor instance or None if failed
         """
         return self.lookup_or_create_actor_by_identifier(
-            email, user_info=None, hooks=hooks
+            email, user_info=None, hooks=hooks, create_only=create_only
         )
 
     def lookup_or_create_actor_by_identifier(
@@ -950,6 +951,7 @@ class OAuth2Authenticator:
         user_info: dict[str, Any] | None = None,
         *,
         hooks: "HookRegistry | None" = None,
+        create_only: bool = False,
     ) -> actor_module.Actor | None:
         """
         Look up actor by identifier (email or provider ID) or create new one if not found.
@@ -959,9 +961,21 @@ class OAuth2Authenticator:
             user_info: Optional user info for additional metadata storage
             hooks: Lifecycle hooks to pass through to actor creation. When
                 omitted, falls back to ``config._hooks``.
+            create_only: Refuse to adopt an existing actor. Returns ``None``
+                if one already has this creator, instead of returning it.
+                Used by the free-text branch of ``POST /oauth/email``, where
+                adopting an existing actor is the vulnerability being closed:
+                the caller's own existence probe runs before the session is
+                claimed, leaving a window in which an *independent* login can
+                create that actor first. Checking again here, immediately
+                before the create, narrows that window to the gap between
+                these two adjacent statements. It cannot close it — nothing
+                enforces creator uniqueness in the database yet (see
+                ``thoughts/todo/creator-uniqueness-not-enforced.md``) — so
+                this is a best-effort narrowing, not a guarantee.
 
         Returns:
-            Actor instance or None if failed
+            Actor instance, or None if failed or refused under ``create_only``
         """
         if not identifier:
             return None
@@ -974,6 +988,12 @@ class OAuth2Authenticator:
             # Use get_from_creator() method to find existing actor by identifier
             existing_actor = actor_module.Actor(config=self.config)
             if existing_actor.get_from_creator(identifier):
+                if create_only:
+                    logger.warning(
+                        f"Refusing to adopt existing actor for identifier "
+                        f"{identifier}: caller asked for create-only"
+                    )
+                    return None
                 logger.info(f"Found existing actor for identifier: {identifier}")
                 # Record the most recent provider on every sign-in (not only on
                 # create) so revocation logic can rely on it.

@@ -103,6 +103,42 @@ class OAuth2EmailHandler(BaseHandler):
         }
         return {}
 
+    def _actor_exists_response(self, provider: str) -> dict[str, Any]:
+        """409 for a free-text address that already has an actor.
+
+        Raised from two places: the probe before the session is claimed, and
+        again if the create-only completion finds that an independent login
+        created the actor in between.
+        """
+        message = (
+            "An account already exists for this email address. "
+            "Sign in again to use a different address."
+        )
+        if self._wants_json():
+            self._set_cors_headers()
+            self.response.set_status(409)
+            response_data = {
+                "error": True,
+                "code": "actor_exists",
+                "status_code": 409,
+                "message": message,
+            }
+            self.response.write(json.dumps(response_data))
+            self.response.headers["Content-Type"] = "application/json"
+            return response_data
+        if self.config.ui:
+            self.response.set_status(409)
+            self.response.template_values = {
+                "session_id": "",
+                "action": "/oauth/email",
+                "method": "POST",
+                "provider": provider,
+                "error": message,
+                "status_code": 409,
+            }
+            return {}
+        return self.error_response(409, message)
+
     def _handle_email_verification(self, token: str) -> dict[str, Any]:
         """
         Handle email verification via GET /oauth/email?verify=<token>.
@@ -414,35 +450,9 @@ class OAuth2EmailHandler(BaseHandler):
                 logger.warning(
                     f"Free-text email {email} already has an actor; refusing"
                 )
-
-                message = (
-                    "An account already exists for this email address. "
-                    "Sign in again to use a different address."
+                return self._actor_exists_response(
+                    session.get("provider", "OAuth provider")
                 )
-                if self._wants_json():
-                    self._set_cors_headers()
-                    self.response.set_status(409)
-                    response_data = {
-                        "error": True,
-                        "code": "actor_exists",
-                        "status_code": 409,
-                        "message": message,
-                    }
-                    self.response.write(json.dumps(response_data))
-                    self.response.headers["Content-Type"] = "application/json"
-                    return response_data
-                if self.config.ui:
-                    self.response.set_status(409)
-                    self.response.template_values = {
-                        "session_id": "",
-                        "action": "/oauth/email",
-                        "method": "POST",
-                        "provider": session.get("provider", "OAuth provider"),
-                        "error": message,
-                        "status_code": 409,
-                    }
-                    return {}
-                return self.error_response(409, message)
 
             logger.info(
                 f"No verified emails from OAuth provider - {email} will require verification"
@@ -460,9 +470,32 @@ class OAuth2EmailHandler(BaseHandler):
         # lookup_or_create_actor_by_email ->
         # lookup_or_create_actor_by_identifier), not here — a handler-level
         # call here would double-fire it for a new actor.
+        # create_only on the free-text branch: the probe above ran before the
+        # claim, so an independent login could have created this actor in
+        # between. Without it, completion would adopt that actor and overwrite
+        # its provider tokens — the very thing the 409 exists to prevent.
         actor_instance = session_manager.complete_claimed_session(
-            claimed_session, email, hooks=self.hooks
+            claimed_session,
+            email,
+            hooks=self.hooks,
+            create_only=email_requires_verification,
         )
+
+        if not actor_instance and email_requires_verification:
+            # Distinguish "refused because it now exists" from "failed". Only
+            # the create-only branch can be refused, and re-probing tells the
+            # two apart; anything else falls through to the 500 below.
+            from .. import actor as actor_module
+
+            recheck = actor_module.Actor(config=self.config)
+            if recheck.get_from_creator(email):
+                logger.warning(
+                    f"Free-text email {email} was created by a concurrent login "
+                    f"between the probe and completion; refusing"
+                )
+                return self._actor_exists_response(
+                    claimed_session.get("provider", "OAuth provider")
+                )
 
         if not actor_instance:
             logger.error(f"Failed to complete OAuth session for email {email}")

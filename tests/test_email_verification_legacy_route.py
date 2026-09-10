@@ -104,10 +104,9 @@ class TestSurvivingRouteRendersAResultNotTheForm:
     asked the user for the address they had just verified. They now branch on
     the ``status`` key that only the verification path sets.
 
-    The status code is 200 in both cases because neither integration
-    propagates the handler's status to a templated response; that is
-    pre-existing and applies equally to the form's own error branches. The
-    body is the assertion that matters.
+    The handler's status is carried onto the rendered page: an invalid or
+    expired token must not answer 200 just because it now has a page to
+    show.
     """
 
     def test_flask_verify_link_renders_the_result_template(
@@ -123,6 +122,11 @@ class TestSurvivingRouteRendersAResultNotTheForm:
         assert "<form" not in body
         assert 'name="email"' not in body
 
+    def test_flask_bad_token_keeps_its_403(self, flask_app: Flask) -> None:
+        """Rendering a result page must not downgrade the status to 200."""
+        resp = flask_app.test_client().get("/oauth/email?verify=no-such-token")
+        assert resp.status_code == 403
+
     def test_fastapi_verify_link_renders_the_result_template(
         self, fastapi_client: TestClient
     ) -> None:
@@ -131,6 +135,10 @@ class TestSurvivingRouteRendersAResultNotTheForm:
         assert "Email verification" in body
         assert "<form" not in body
         assert 'name="email"' not in body
+
+    def test_fastapi_bad_token_keeps_its_403(self, fastapi_client: TestClient) -> None:
+        resp = fastapi_client.get("/oauth/email?verify=no-such-token")
+        assert resp.status_code == 403
 
     def test_flask_form_path_still_renders_the_form(self, flask_app: Flask) -> None:
         """The other side of the branch: no verify token means the form."""

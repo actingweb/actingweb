@@ -27,7 +27,15 @@ SECURITY
   afterwards: several concurrent submissions carrying one session id would
   otherwise each get to probe a different address, so one provider login
   would be worth N guesses instead of one. Exactly one concurrent caller
-  wins the claim; the rest get the ordinary expired-session error. A
+  wins the claim; the rest get the ordinary expired-session error.
+  Completion of a free-text address is additionally **create-only**: the
+  existence probe necessarily runs before the claim, so an *independent*
+  login can create that actor in between, and a plain lookup-or-create would
+  then adopt it — the original defect, through a narrow race. Create-only
+  re-checks immediately before the create and answers the same 409 instead.
+  This narrows the window rather than closing it; nothing enforces creator
+  uniqueness in the database yet (tracked in
+  ``thoughts/todo/creator-uniqueness-not-enforced.md``). A
   dropdown-selected address — verified by the provider in the same session —
   is unaffected; that is a returning user, not this bug.
 - **The ``oauth_token`` cookie set by the email form was not HttpOnly.**
@@ -150,6 +158,23 @@ FIXED
   ``config._hooks`` fallback rather than threading ``hooks=`` like the other
   three actor-creation sites. Applications configured through
   ``ActingWebApp`` were never affected, since it sets ``config._hooks``.
+- **A rendered error page answered 200.** Both integrations render
+  ``aw-root-failed.html`` (OAuth callback) and the email-verification result
+  page without passing the handler's status, so a provider-outage 502, a
+  rejected-login 403, and an invalid or expired verification token's 403 /
+  404 / 410 all reached the browser as ``200 OK``. Anything reading the
+  status rather than the page — a monitor, a client, a test — saw a success.
+  The status is now carried onto those rendered responses. Pre-existing for
+  400 and 403; this release would have widened it to 502 and to the
+  verification result page.
+- **A state-selected actor kept squatted pending-verification state.** When
+  the OAuth callback loads an actor named by ``actor_id`` in the state
+  parameter, it never calls ``lookup_or_create_actor_by_identifier()`` and so
+  skipped the cleanup added above — leaving ``email_verified = "false"``, the
+  stale token and its index row intact on a provider-verified login. That is
+  the common shape for an actor-specific or MCP authorization flow. The
+  cleanup now runs on that branch too, after the existing check that the
+  provider's identifier matches the actor's creator.
 - **A peer's trust-verification-token compare could raise an uncaught
   ``KeyError``**, past the surrounding ``except ValueError``, when the
   peer's callback response omitted the ``verification_token`` key. Switched

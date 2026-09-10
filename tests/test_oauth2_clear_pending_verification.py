@@ -93,3 +93,70 @@ class TestClearPendingWiredIntoLookupOrCreate:
 
         assert result is existing_actor
         mock_clear.assert_called_once_with(existing_actor, config)
+
+
+class TestClearPendingOnStateSelectedActor:
+    """An actor named by ``actor_id`` in the OAuth state is loaded directly
+    and never reaches ``lookup_or_create_actor_by_identifier``, so the
+    cleanup has to be wired at that branch too. The creator check just above
+    it has already established that the provider vouched for this actor's
+    owner."""
+
+    def test_state_selected_actor_gets_pending_state_cleared(self):
+        import json
+
+        from actingweb.aw_web_request import AWWebObj
+        from actingweb.handlers.oauth2_callback import OAuth2CallbackHandler
+
+        config = MagicMock()
+        config.proto = "https://"
+        config.fqdn = "test.example.com"
+        config.oauth2_provider = "google"
+        config.force_email_prop_as_creator = False
+        config.service_registry = None
+        config.ui = False
+
+        state_actor = _actor()
+        state_actor.id = "actor-from-state"
+        state_actor.creator = "user@example.com"
+        state_actor.get.return_value = True
+
+        auth = MagicMock()
+        auth.is_enabled.return_value = True
+        auth.provider.name = "google"
+        auth.provider.mobile_deep_link = ""
+        auth.exchange_code_for_token.return_value = {
+            "access_token": "at",
+            "expires_in": 3600,
+        }
+        auth.provider.extract_user_info_from_token_response.return_value = None
+        auth.validate_token_and_get_user_info.return_value = {
+            "email": "user@example.com"
+        }
+        auth.get_email_from_user_info.return_value = "user@example.com"
+
+        state = json.dumps({"provider": "google", "actor_id": "actor-from-state"})
+        webobj = AWWebObj(
+            url="https://test.example.com/oauth/callback",
+            params={"code": "c", "state": state},
+            body="",
+            headers={},
+            cookies={},
+        )
+
+        hooks = MagicMock()
+        hooks.execute_lifecycle_hooks.return_value = True
+
+        with (
+            patch(
+                "actingweb.handlers.oauth2_callback.create_oauth2_authenticator",
+                return_value=auth,
+            ),
+            patch("actingweb.actor.Actor", return_value=state_actor),
+            patch("actingweb.oauth2.clear_pending_email_verification") as mock_clear,
+        ):
+            OAuth2CallbackHandler(webobj, config, hooks=hooks).get()
+
+        # The state branch was taken (no lookup/create) and the cleanup ran.
+        auth.lookup_or_create_actor_by_identifier.assert_not_called()
+        mock_clear.assert_called_once_with(state_actor, config)

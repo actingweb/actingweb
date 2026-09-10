@@ -199,11 +199,6 @@ class FlaskIntegration(BaseActingWebIntegration):
         def app_oauth2_email() -> Response | WerkzeugResponse | str:  # pyright: ignore[reportUnusedFunction]
             return self._handle_oauth2_email()
 
-        # Email verification endpoint - verifies email addresses for OAuth2 actors
-        @self.flask_app.route("/<actor_id>/www/verify_email", methods=["GET", "POST"])
-        def email_verification(actor_id: str) -> Response | WerkzeugResponse | str:  # pyright: ignore[reportUnusedFunction]
-            return self._handle_email_verification(actor_id)
-
         # OAuth2 server endpoints for MCP clients
         @self.flask_app.route("/oauth/register", methods=["POST", "OPTIONS"])
         def oauth2_register() -> Response | WerkzeugResponse | str:  # pyright: ignore[reportUnusedFunction]
@@ -774,10 +769,15 @@ class FlaskIntegration(BaseActingWebIntegration):
                     pass  # Fall back to default response
             elif not is_json_request and webobj.response.status_code == 400:
                 try:
+                    # Carry the handler's status onto the rendered page.
+                    # Without it a provider outage (502) or a rejected login
+                    # (403) is served as 200, so anything reading the status
+                    # rather than the page sees a success.
                     return Response(
                         render_template(
                             "aw-root-failed.html", **webobj.response.template_values
-                        )
+                        ),
+                        status=webobj.response.status_code,
                     )
                 except Exception:
                     pass  # Fall back to default response
@@ -916,10 +916,15 @@ class FlaskIntegration(BaseActingWebIntegration):
                     pass  # Fall back to default response
             elif webobj.response.status_code == 400:
                 try:
+                    # Carry the handler's status onto the rendered page.
+                    # Without it a provider outage (502) or a rejected login
+                    # (403) is served as 200, so anything reading the status
+                    # rather than the page sees a success.
                     return Response(
                         render_template(
                             "aw-root-failed.html", **webobj.response.template_values
-                        )
+                        ),
+                        status=webobj.response.status_code,
                     )
                 except Exception:
                     pass  # Fall back to default response
@@ -981,10 +986,15 @@ class FlaskIntegration(BaseActingWebIntegration):
         ):
             if webobj.response.template_values:
                 try:
+                    # Carry the handler's status onto the rendered page.
+                    # Without it a provider outage (502) or a rejected login
+                    # (403) is served as 200, so anything reading the status
+                    # rather than the page sees a success.
                     return Response(
                         render_template(
                             "aw-root-failed.html", **webobj.response.template_values
-                        )
+                        ),
+                        status=webobj.response.status_code,
                     )
                 except Exception:
                     pass  # Fall back to default response
@@ -1021,10 +1031,15 @@ class FlaskIntegration(BaseActingWebIntegration):
         ):
             if webobj.response.template_values:
                 try:
+                    # Carry the handler's status onto the rendered page.
+                    # Without it a provider outage (502) or a rejected login
+                    # (403) is served as 200, so anything reading the status
+                    # rather than the page sees a success.
                     return Response(
                         render_template(
                             "aw-root-failed.html", **webobj.response.template_values
-                        )
+                        ),
+                        status=webobj.response.status_code,
                     )
                 except Exception:
                     pass  # Fall back to default response
@@ -1053,11 +1068,19 @@ class FlaskIntegration(BaseActingWebIntegration):
         else:
             handler.get()
 
-        # Handle template rendering for email form
+        # Handle template rendering. The verification path
+        # (GET /oauth/email?verify=<token>) sets a "status" key and needs the
+        # result template, not the email-entry form: aw-oauth-email.html
+        # renders a form unconditionally, so a verified user would be asked
+        # for their address again. The form paths never set "status".
         if (
             hasattr(webobj.response, "template_values")
             and webobj.response.template_values
         ):
+            if webobj.response.template_values.get("status"):
+                return self._render_verification_result(
+                    webobj.response.template_values, webobj.response.status_code
+                )
             try:
                 # App provides aw-oauth-email.html template
                 return Response(
@@ -1110,88 +1133,50 @@ class FlaskIntegration(BaseActingWebIntegration):
 
         return self._create_flask_response(webobj)
 
-    def _handle_email_verification(
-        self, actor_id: str
+    def _render_verification_result(
+        self, template_values: dict[str, Any], status_code: int = 200
     ) -> Response | WerkzeugResponse | str:
-        """Handle email verification requests."""
-        req_data = self._normalize_request()
-        webobj = AWWebObj(
-            url=req_data["url"],
-            params=req_data["values"],
-            body=req_data["data"],
-            headers=req_data["headers"],
-            cookies=req_data["cookies"],
-        )
+        """Render the email-verification result page for a browser client.
 
-        from ...handlers.email_verification import EmailVerificationHandler
-
-        handler = EmailVerificationHandler(
-            webobj, self.aw_app.get_config(), hooks=self.aw_app.hooks
-        )
-
-        if request.method == "POST":
-            handler.post()
-        else:
-            handler.get()
-
-        # Handle template rendering for email verification
-        if (
-            hasattr(webobj.response, "template_values")
-            and webobj.response.template_values
-        ):
-            try:
-                # App provides aw-verify-email.html template
-                return Response(
-                    render_template(
-                        "aw-verify-email.html", **webobj.response.template_values
-                    )
-                )
-            except Exception as e:
-                # Template not found - provide basic HTML as fallback
-                logger.warning(f"Template aw-verify-email.html not found: {e}")
-                status = webobj.response.template_values.get("status", "")
-                webobj.response.template_values.get("message", "")
-                email = webobj.response.template_values.get("email", "")
-                error = webobj.response.template_values.get("error", "")
-
-                if status == "success":
-                    fallback_html = f"""
-                    <!DOCTYPE html>
-                    <html>
-                    <head><title>Email Verified</title></head>
-                    <body>
-                        <h1>✓ Email Verified!</h1>
-                        <p>Your email address <strong>{email}</strong> has been verified.</p>
-                        <p><a href="/{actor_id}/www">Continue to Dashboard</a></p>
-                    </body>
-                    </html>
-                    """
-                elif status == "error":
-                    fallback_html = f"""
-                    <!DOCTYPE html>
-                    <html>
-                    <head><title>Verification Failed</title></head>
-                    <body>
-                        <h1>Verification Failed</h1>
-                        <p>{error}</p>
-                        <p><a href="/{actor_id}/www">Return to Dashboard</a></p>
-                    </body>
-                    </html>
-                    """
-                else:
-                    fallback_html = """
-                    <!DOCTYPE html>
-                    <html>
-                    <head><title>Email Verification</title></head>
-                    <body>
-                        <h1>Email Verification</h1>
-                        <p>Please check your email for a verification link.</p>
-                    </body>
-                    </html>
-                    """
-                return Response(fallback_html, mimetype="text/html")
-
-        return self._create_flask_response(webobj)
+        ``status_code`` is the handler's own status. It must be carried onto
+        the rendered response: an invalid, missing or expired token sets 403,
+        404 or 410, and a Response built without it answers 200, which would
+        report a failed verification as a success to anything reading the
+        status rather than the page.
+        """
+        try:
+            # App provides aw-verify-email.html template
+            return Response(
+                render_template("aw-verify-email.html", **template_values),
+                status=status_code,
+            )
+        except Exception as e:
+            # Template not found - provide basic HTML as fallback
+            logger.warning(f"Template aw-verify-email.html not found: {e}")
+            status = template_values.get("status", "")
+            message = template_values.get("message", "")
+            email = template_values.get("email", "")
+            actor_id = template_values.get("actor_id", "")
+            ok = status in ("success", "verified", "already_verified")
+            heading = "Email Verified" if ok else "Verification Failed"
+            cont = (
+                f'<p><a href="/{actor_id}/www">Continue</a></p>'
+                if ok and actor_id
+                else ""
+            )
+            fallback_html = f"""
+            <!DOCTYPE html>
+            <html>
+            <head><title>{heading} - ActingWeb</title></head>
+            <body>
+                <h1>{heading}</h1>
+                <p>{message}</p>
+                {f"<p>{email}</p>" if email else ""}
+                {cont}
+            </body>
+            </html>
+            """
+            return Response(fallback_html, mimetype="text/html", status=status_code)
 
     def _handle_oauth2_endpoint(
         self, endpoint: str

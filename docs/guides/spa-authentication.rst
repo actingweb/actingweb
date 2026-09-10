@@ -377,7 +377,7 @@ When the user submits their email, POST it to ``/oauth/email``:
 
 .. code-block:: javascript
 
-   const response = await fetch('/oauth/email', {
+   const res = await fetch('/oauth/email', {
        method: 'POST',
        headers: {
            'Content-Type': 'application/json',
@@ -387,7 +387,8 @@ When the user submits their email, POST it to ``/oauth/email``:
            session: sessionId,
            email: userEmail
        })
-   }).then(r => r.json());
+   });
+   const response = await res.json();
 
    if (response.success) {
        if (response.email_requires_verification) {
@@ -400,6 +401,17 @@ When the user submits their email, POST it to ``/oauth/email``:
            setAccessToken(response.access_token);
            window.location.href = response.redirect_url;
        }
+   } else if (response.code === 'actor_exists') {
+       // 409 — a free-text address already has an actor. The pending
+       // session was consumed; the user must sign in again to try a
+       // different address.
+       showError('An account already exists for that address. Please sign in again.');
+   } else if (response.code === 'authentication_rejected') {
+       // 403 — the oauth_success lifecycle hook rejected this login.
+       showError('Authentication was rejected.');
+   } else {
+       // Any other error carries {error: true, status_code, message}.
+       showError(response.message || 'Something went wrong. Please try again.');
    }
 
 The verification email is sent by your application's ``email_verification_required``
@@ -904,6 +916,11 @@ Here's a complete SPA authentication flow:
            const params = new URLSearchParams(window.location.search);
 
            if (params.get('error')) {
+               // 'identifier_failed' covers both "no identifier could be
+               // extracted" and a provider verified-emails API failure (e.g.
+               // GitHub's /user/emails call itself failed); its
+               // error_description is retry-worded ("please try signing in
+               // again") rather than blaming the user's provider settings.
                throw new Error(params.get('error_description') || 'OAuth failed');
            }
 
@@ -1389,6 +1406,46 @@ Submit email address to complete actor creation.
 
 When ``email_requires_verification`` is ``true``, the ``email_verification_required``
 lifecycle hook has been fired. Your backend hook handler should send the verification email.
+
+**Error responses:**
+
+A free-text address that already has an actor is refused rather than
+silently adopted — the pending session is consumed, so a resubmit needs a
+fresh ``/oauth/callback`` round trip:
+
+.. code-block:: json
+
+   {
+       "error": true,
+       "code": "actor_exists",
+       "status_code": 409,
+       "message": "An account already exists for this email address. Sign in again to use a different address."
+   }
+
+If your application's ``oauth_success`` lifecycle hook rejects the login
+(returns a falsy value), the actor row is left in place but no session
+cookie or access token is issued:
+
+.. code-block:: json
+
+   {
+       "error": true,
+       "code": "authentication_rejected",
+       "status_code": 403,
+       "message": "Authentication rejected"
+   }
+
+Every other error from this endpoint (and from ``GET /oauth/email``) carries
+the same shape without a ``code`` field, for any ``Accept: application/json``
+request:
+
+.. code-block:: json
+
+   {
+       "error": true,
+       "status_code": 400,
+       "message": "..."
+   }
 
 Troubleshooting
 ---------------

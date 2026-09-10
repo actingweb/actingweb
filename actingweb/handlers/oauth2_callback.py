@@ -401,16 +401,24 @@ class OAuth2CallbackHandler(BaseHandler):
                 )
 
             # Email required mode - try to get verified emails for dropdown
-            verified_emails: list[str] | None = None
-
-            if self.authenticator.provider.name == "github" and access_token:
-                verified_emails = self.authenticator.get_github_verified_emails(
-                    access_token
+            verified_emails = (
+                self.authenticator.provider.get_verified_emails(access_token)
+                if access_token
+                else []
+            )
+            if verified_emails is None:
+                logger.warning(
+                    f"{self.authenticator.provider.name}: could not confirm verified emails"
                 )
-                if verified_emails:
-                    logger.info(
-                        f"Found {len(verified_emails)} verified emails from GitHub"
-                    )
+                return self.error_response(
+                    502,
+                    "We could not confirm your email address with your sign-in "
+                    "provider. Please try signing in again.",
+                )
+            if verified_emails:
+                logger.info(
+                    f"Found {len(verified_emails)} verified emails from {self.authenticator.provider.name}"
+                )
 
             # Check if this is an MCP authorization flow
             if trust_type:
@@ -523,25 +531,32 @@ class OAuth2CallbackHandler(BaseHandler):
                                 f"access an actor belonging to '{actor_instance.creator}'. Please log in with the correct account.",
                             )
 
+                    # A state-selected actor skips
+                    # lookup_or_create_actor_by_identifier() entirely, so it
+                    # would otherwise keep any squatted pending-verification
+                    # state. The creator check above already established that
+                    # the provider vouched for this actor's owner, which is
+                    # exactly the condition the cleanup is for.
+                    from ..oauth2 import clear_pending_email_verification
+
+                    clear_pending_email_verification(actor_instance, self.config)
+
             except Exception as e:
                 logger.warning(
                     f"Failed to load actor {actor_id} from state: {e}, will lookup/create by identifier"
                 )
                 actor_instance = None
 
-        # If no actor from state or loading failed, lookup/create by identifier
-        is_new_actor = False
+        # If no actor from state or loading failed, lookup/create by identifier.
+        # actor_created fires exactly once, inside Actor.create() itself (via
+        # the hooks= kwarg below) — no separate existence pre-check is needed
+        # here since lookup_or_create_actor_by_identifier() is unconditional
+        # and repeats the same lookup on its own.
         if not actor_instance:
-            # Check if actor exists before attempting creation
-            from actingweb.actor import Actor as CoreActor
-
-            existing_check_actor = CoreActor(config=self.config)
-            actor_exists = existing_check_actor.get_from_creator(identifier)
-            is_new_actor = not actor_exists
-
             actor_instance = self.authenticator.lookup_or_create_actor_by_identifier(
                 identifier,
                 user_info=user_info,  # Pass user_info for additional metadata
+                hooks=self.hooks,
             )
             if not actor_instance:
                 logger.error(
@@ -650,19 +665,9 @@ class OAuth2CallbackHandler(BaseHandler):
                 logger.error(f"Error creating OAuth2 trust relationship: {e}")
                 # Don't fail the OAuth flow - just log the error
 
-        # Execute actor_created lifecycle hook for new actors
-        if is_new_actor and self.hooks:
-            try:
-                # Convert core Actor to ActorInterface for hook consistency
-                from actingweb.interface.actor_interface import ActorInterface
-
-                registry = getattr(self.config, "service_registry", None)
-                actor_interface = ActorInterface(
-                    core_actor=actor_instance, service_registry=registry
-                )
-                self.hooks.execute_lifecycle_hooks("actor_created", actor_interface)
-            except Exception as e:
-                logger.error(f"Error in lifecycle hook for actor_created: {e}")
+        # actor_created fires exactly once, inside Actor.create() itself (via
+        # the hooks= kwarg passed to lookup_or_create_actor_by_identifier()
+        # above) — not here, which would double-fire it for a new actor.
 
         # Execute OAuth success lifecycle hook
         oauth_valid = True
@@ -899,7 +904,7 @@ class OAuth2CallbackHandler(BaseHandler):
         self.response.set_status(status_code)
 
         # For user-facing errors, try to render template
-        if status_code in [403, 400] and hasattr(self.response, "template_values"):
+        if status_code in [403, 400, 502] and hasattr(self.response, "template_values"):
             self.response.template_values = {
                 "error": message,
                 "status_code": status_code,
@@ -1096,10 +1101,20 @@ class OAuth2CallbackHandler(BaseHandler):
                 )
 
                 # Try to get verified emails for dropdown
-                verified_emails: list[str] | None = None
-                if self.authenticator.provider.name == "github" and access_token:
-                    verified_emails = self.authenticator.get_github_verified_emails(
-                        access_token
+                verified_emails = (
+                    self.authenticator.provider.get_verified_emails(access_token)
+                    if access_token
+                    else []
+                )
+                if verified_emails is None:
+                    logger.warning(
+                        f"{self.authenticator.provider.name}: could not confirm verified emails"
+                    )
+                    return self._redirect_to_spa_with_error(
+                        spa_redirect_url,
+                        "identifier_failed",
+                        "We could not confirm your email address with your "
+                        "sign-in provider. Please try signing in again.",
                     )
 
                 try:
@@ -1167,9 +1182,12 @@ class OAuth2CallbackHandler(BaseHandler):
             self.response.set_redirect(spa_error_url)
             return {"redirect_required": True, "redirect_url": spa_error_url}
 
-        # Lookup or create actor
+        # Lookup or create actor. hooks= is threaded here for the same reason
+        # as the other creation sites: without it a handler built with a bare
+        # Config (no config._hooks to fall back on) fires actor_created zero
+        # times on this path.
         actor_instance = self.authenticator.lookup_or_create_actor_by_identifier(
-            identifier, user_info=user_info
+            identifier, user_info=user_info, hooks=self.hooks
         )
         if not actor_instance:
             logger.error("SPA OAuth: Failed to create actor")

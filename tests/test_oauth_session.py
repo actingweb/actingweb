@@ -67,6 +67,14 @@ class TestOAuth2SessionManager:
                     return True
                 return False
 
+            def delete_attr_conditional(self, actor_id, bucket, name):  # type: ignore
+                """Race-free consume: True only if this call removed a value."""
+                key = f"{actor_id}:{bucket}"
+                if key in self.storage and name in self.storage[key]:
+                    del self.storage[key][name]
+                    return True
+                return False
+
             def delete_bucket(self, actor_id, bucket):  # type: ignore
                 key = f"{actor_id}:{bucket}"
                 if key in self.storage:
@@ -237,7 +245,7 @@ class TestOAuth2SessionManager:
             assert actor_result is not None
             assert actor_result.id == "actor123"
             mock_authenticator.lookup_or_create_actor_by_email.assert_called_once_with(
-                "user@example.com"
+                "user@example.com", hooks=None, create_only=False
             )
 
             # Verify OAuth tokens were stored
@@ -565,6 +573,181 @@ class TestOAuth2SessionManager:
         }
         assert self.manager.maybe_purge_expired_tokens() == 0
         assert "expired-rt-2" in self._test_storage[refresh_key]
+
+    def test_complete_session_forwards_hooks_kwarg(self):
+        """complete_session(hooks=...) threads through to
+        lookup_or_create_actor_by_email so actor_created fires exactly once,
+        inside Actor.create(), even for a handler built with a bare Config
+        (no config._hooks fallback available)."""
+        with patch("actingweb.oauth2.create_oauth2_authenticator") as mock_create_auth:
+            mock_authenticator = Mock()
+            mock_actor = Mock()
+            mock_actor.id = "actor123"
+            mock_actor.store = Mock()
+            mock_create_auth.return_value = mock_authenticator
+            mock_authenticator.lookup_or_create_actor_by_email.return_value = mock_actor
+
+            session_id = self.manager.store_session(
+                token_data={"access_token": "t"},
+                user_info={"sub": "u"},
+                state="",
+                provider="google",
+            )
+            sentinel_hooks = Mock()
+            self.manager.complete_session(
+                session_id, "user@example.com", hooks=sentinel_hooks
+            )
+
+            mock_authenticator.lookup_or_create_actor_by_email.assert_called_once_with(
+                "user@example.com", hooks=sentinel_hooks, create_only=False
+            )
+
+    def test_delete_session_removes_row(self):
+        """delete_session() removes a pending session unconditionally. The
+        race-free counterpart used to consume one is try_claim_session()."""
+        session_id = self.manager.store_session(
+            token_data={"access_token": "t"},
+            user_info={"sub": "u"},
+            state="",
+            provider="google",
+        )
+        assert self.manager.get_session(session_id) is not None
+
+        self.manager.delete_session(session_id)
+
+        assert self.manager.get_session(session_id) is None
+
+    def test_try_claim_session_returns_dict_once_and_none_to_the_loser(self):
+        """The claim is single-use: several concurrent POSTs carrying the same
+        session id must not each get to run their own existence probe, or one
+        provider login is worth N guesses instead of one."""
+        session_id = self.manager.store_session(
+            token_data={"access_token": "t"},
+            user_info={"sub": "u"},
+            state="",
+            provider="google",
+        )
+
+        first = self.manager.try_claim_session(session_id)
+        second = self.manager.try_claim_session(session_id)
+
+        assert first is not None
+        assert first["token_data"]["access_token"] == "t"
+        assert second is None
+        assert self.manager.get_session(session_id) is None
+
+    def test_try_claim_session_unknown_id_returns_none(self):
+        assert self.manager.try_claim_session("no-such-session") is None
+
+    def test_complete_session_claims_before_completing(self):
+        """complete_session() consumes the session through try_claim_session();
+        a second completion of the same session id fails."""
+        with patch("actingweb.oauth2.create_oauth2_authenticator") as mock_create_auth:
+            mock_authenticator = Mock()
+            mock_actor = Mock()
+            mock_actor.id = "actor123"
+            mock_actor.store = Mock()
+            mock_create_auth.return_value = mock_authenticator
+            mock_authenticator.lookup_or_create_actor_by_email.return_value = mock_actor
+
+            session_id = self.manager.store_session(
+                token_data={"access_token": "t"},
+                user_info={"sub": "u"},
+                state="",
+                provider="google",
+            )
+            assert (
+                self.manager.complete_session(session_id, "user@example.com")
+                is not None
+            )
+            assert self.manager.get_session(session_id) is None
+            assert self.manager.complete_session(session_id, "user@example.com") is None
+
+    def test_retrieve_spa_session_none_for_pending_email_session(self):
+        """A pending email-entry session (raw provider token response, no
+        actor_id) is never returned by retrieve_spa_session — only a success
+        session (token_data carrying actor_id) is."""
+        session_id = self.manager.store_session(
+            token_data={"access_token": "raw-provider-token"},
+            user_info={"sub": "u"},
+            state="",
+            provider="google",
+        )
+
+        assert self.manager.retrieve_spa_session(session_id) is None
+        # Not consumed by the failed retrieval — still a valid pending session.
+        assert self.manager.get_session(session_id) is not None
+
+    def test_retrieve_spa_session_nonexistent_returns_none(self):
+        assert self.manager.retrieve_spa_session("nonexistent") is None
+
+    def test_retrieve_spa_session_returns_success_session_and_stamps_retrieved_at(
+        self,
+    ):
+        session_id = self.manager.store_session(
+            token_data={"access_token": "aw-token", "actor_id": "actor-1"},
+            user_info={},
+            state="",
+            provider="google",
+        )
+
+        result = self.manager.retrieve_spa_session(session_id)
+        assert result is not None
+        assert result["token_data"]["actor_id"] == "actor-1"
+        assert "retrieved_at" in result
+
+        # Stamped on the stored row too, not just the returned copy.
+        stored = self.manager.get_session(session_id)
+        assert stored is not None
+        assert "retrieved_at" in stored
+
+    def test_retrieve_spa_session_within_grace_window_still_returns(self):
+        from actingweb.constants import OAUTH_SESSION_RETRIEVE_GRACE
+
+        session_id = self.manager.store_session(
+            token_data={"access_token": "aw-token", "actor_id": "actor-1"},
+            user_info={},
+            state="",
+            provider="google",
+        )
+        first = self.manager.retrieve_spa_session(session_id)
+        assert first is not None
+
+        # Second retrieval, still inside the grace window (covers a
+        # duplicate fetch, e.g. React StrictMode's double effect).
+        assert OAUTH_SESSION_RETRIEVE_GRACE > 0
+        second = self.manager.retrieve_spa_session(session_id)
+        assert second is not None
+        assert second["token_data"]["actor_id"] == "actor-1"
+
+    def test_retrieve_spa_session_past_grace_window_deletes_and_returns_none(self):
+        from actingweb import attribute
+        from actingweb.constants import OAUTH2_SYSTEM_ACTOR, OAUTH_SESSION_BUCKET
+
+        session_id = self.manager.store_session(
+            token_data={"access_token": "aw-token", "actor_id": "actor-1"},
+            user_info={},
+            state="",
+            provider="google",
+        )
+        first = self.manager.retrieve_spa_session(session_id)
+        assert first is not None
+
+        # Rewind retrieved_at to simulate the grace window having elapsed.
+        bucket = attribute.Attributes(
+            actor_id=OAUTH2_SYSTEM_ACTOR,
+            bucket=OAUTH_SESSION_BUCKET,
+            config=self.config,
+        )
+        session_attr = bucket.get_attr(name=session_id)
+        assert session_attr is not None
+        session_data = session_attr["data"]
+        session_data["retrieved_at"] = int(time.time()) - 3600
+        bucket.set_attr(name=session_id, data=session_data)
+
+        assert self.manager.retrieve_spa_session(session_id) is None
+        # The row is deleted, not just refused.
+        assert self.manager.get_session(session_id) is None
 
     def test_multiple_sessions_independent(self):
         """Test that multiple sessions are independent."""

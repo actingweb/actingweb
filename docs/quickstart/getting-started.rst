@@ -320,7 +320,7 @@ Handle actor lifecycle events:
 
     @app.lifecycle_hook("oauth_success")
     def on_oauth_success(actor, **kwargs):
-        token = kwargs.get("token")
+        token = kwargs.get("access_token")
         if token:
             actor.properties.oauth_token = token
 

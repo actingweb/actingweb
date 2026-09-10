@@ -8,6 +8,7 @@ from pynamodb.exceptions import DoesNotExist, PutError, UpdateError
 from actingweb import actor, request_context, trust
 from actingweb import config as config_class
 from actingweb.constants import TRUSTEE_CREATOR
+from actingweb.secret_compare import secret_equals
 
 # This is where each path and subpath in actingweb is assigned an authentication type
 # Currently only basic auth is supported. OAuth2 peer auth is automatic if an Authorization Bearer <token> header is
@@ -146,16 +147,10 @@ class Auth:
             self.response["text"] = "Invalid username or password"
             logger.debug("Wrong creator username")
             return False
-        if not self.actor or password != self.actor.passphrase:
+        if not self.actor or not secret_equals(password, self.actor.passphrase):
             self.response["code"] = 403
             self.response["text"] = "Invalid username or password"
-            logger.debug(
-                "Wrong creator passphrase("
-                + password
-                + ") correct("
-                + (self.actor.passphrase if self.actor else "")
-                + ")"
-            )
+            logger.debug("Wrong creator passphrase")
             return False
         self.acl["relationship"] = "creator"
         self.acl["authenticated"] = True
@@ -247,7 +242,7 @@ class Auth:
                 self.actor.passphrase
                 and math.floor(len(self.actor.passphrase) * math.log(94, 2)) > 80
             ):
-                if token == self.actor.passphrase:
+                if secret_equals(token, self.actor.passphrase):
                     self.acl["relationship"] = TRUSTEE_CREATOR
                     self.acl["peerid"] = ""
                     self.acl["approved"] = True
@@ -571,7 +566,7 @@ class Auth:
                 self.actor.passphrase
                 and math.floor(len(self.actor.passphrase) * math.log(94, 2)) > 80
             ):
-                if token == self.actor.passphrase:
+                if secret_equals(token, self.actor.passphrase):
                     self.acl["relationship"] = TRUSTEE_CREATOR
                     self.acl["peerid"] = ""
                     self.acl["approved"] = True

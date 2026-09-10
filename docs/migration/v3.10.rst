@@ -888,6 +888,8 @@ In both cases, the email verification flow is the same:
 
 1. Collects the user's email address (SPA form or HTML template)
 2. ``POST /oauth/email`` creates the actor with ``email_verified = "false"``
+   for a new address; an address that already has an actor is refused with
+   409 ``actor_exists`` instead
 3. Fires the ``email_verification_required`` lifecycle hook
 4. The application's hook handler sends a verification email
 5. User clicks ``GET /oauth/email?verify=<token>`` to complete verification

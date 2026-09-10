@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any, Optional
 if TYPE_CHECKING:
     from . import actor as actor_module
     from . import config as config_class
+    from .interface.hooks import HookRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -158,8 +159,117 @@ class OAuth2SessionManager:
 
         return cast(dict[str, Any], session)
 
+    def delete_session(self, session_id: str) -> None:
+        """
+        Delete an OAuth2 session row outright, unconditionally.
+
+        For abandoning a session whose outcome nobody is racing for. To
+        *consume* a session — where exactly one of several concurrent callers
+        must be allowed to act on it — use :meth:`try_claim_session` instead;
+        an unconditional delete cannot tell the winner from the losers.
+        """
+        from . import attribute
+        from .constants import OAUTH2_SYSTEM_ACTOR, OAUTH_SESSION_BUCKET
+
+        bucket = attribute.Attributes(
+            actor_id=OAUTH2_SYSTEM_ACTOR,
+            bucket=OAUTH_SESSION_BUCKET,
+            config=self.config,
+        )
+        bucket.delete_attr(name=session_id)
+
+    def try_claim_session(self, session_id: str) -> dict[str, Any] | None:
+        """
+        Atomically claim a pending session: read it, then delete it under a
+        condition so exactly one concurrent caller wins.
+
+        ``get_session`` followed by a plain ``delete_session`` is not enough:
+        several concurrent ``POST /oauth/email`` requests carrying the same
+        session id all read the row before any of them deletes it, so each
+        gets to run its own ``get_from_creator`` probe and one provider login
+        becomes N guesses. ``delete_attr_conditional`` is the race-free
+        counterpart already used for single-use consume semantics elsewhere
+        in the library — DynamoDB puts an ``attribute_exists`` condition on
+        the ``DeleteItem``, PostgreSQL reads ``rowcount`` from the ``DELETE``
+        — so exactly one caller sees ``True``.
+
+        Returns:
+            The session dict if this call claimed it; ``None`` if the session
+            does not exist, has expired, or another caller claimed it first.
+        """
+        from . import attribute
+        from .constants import OAUTH2_SYSTEM_ACTOR, OAUTH_SESSION_BUCKET
+
+        session = self.get_session(session_id)
+        if not session:
+            return None
+
+        bucket = attribute.Attributes(
+            actor_id=OAUTH2_SYSTEM_ACTOR,
+            bucket=OAUTH_SESSION_BUCKET,
+            config=self.config,
+        )
+        if not bucket.delete_attr_conditional(name=session_id):
+            logger.warning(
+                f"Session {session_id[:8]}... was claimed by a concurrent request"
+            )
+            return None
+
+        return session
+
+    def retrieve_spa_session(self, session_id: str) -> dict[str, Any] | None:
+        """
+        Retrieve an SPA success session (one that carries ``actor_id`` in its
+        ``token_data``) for one-time-ish delivery to the SPA frontend.
+
+        A pending email-entry session never carries ``actor_id`` in
+        ``token_data`` (it stores the raw provider token response) and is
+        never returned here. A success session is returned once freely; a
+        second retrieval within ``OAUTH_SESSION_RETRIEVE_GRACE`` seconds of
+        the first is still honoured (covers a duplicate fetch, e.g. a
+        React StrictMode double-effect in development), but a retrieval
+        after the grace window has elapsed deletes the row and returns
+        ``None``.
+        """
+        from . import attribute
+        from .constants import (
+            OAUTH2_SYSTEM_ACTOR,
+            OAUTH_SESSION_BUCKET,
+            OAUTH_SESSION_RETRIEVE_GRACE,
+            OAUTH_SESSION_TTL,
+        )
+
+        session = self.get_session(session_id)
+        if not session:
+            return None
+
+        token_data = session.get("token_data")
+        if not isinstance(token_data, dict) or not token_data.get("actor_id"):
+            return None
+
+        bucket = attribute.Attributes(
+            actor_id=OAUTH2_SYSTEM_ACTOR,
+            bucket=OAUTH_SESSION_BUCKET,
+            config=self.config,
+        )
+
+        retrieved_at = session.get("retrieved_at")
+        if retrieved_at is not None:
+            if int(time.time()) - int(retrieved_at) > OAUTH_SESSION_RETRIEVE_GRACE:
+                bucket.delete_attr(name=session_id)
+                return None
+            return session
+
+        session["retrieved_at"] = int(time.time())
+        bucket.set_attr(name=session_id, data=session, ttl_seconds=OAUTH_SESSION_TTL)
+        return session
+
     def complete_session(
-        self, session_id: str, email: str
+        self,
+        session_id: str,
+        email: str,
+        *,
+        hooks: "HookRegistry | None" = None,
     ) -> Optional["actor_module.Actor"]:
         """
         Complete OAuth flow with provided email and create actor.
@@ -167,21 +277,61 @@ class OAuth2SessionManager:
         Args:
             session_id: Session ID from store_session()
             email: User's email address
+            hooks: Lifecycle hooks forwarded to actor creation. When
+                omitted, falls back to ``config._hooks``.
 
         Returns:
             Created or existing actor, or None if failed
         """
-        session = self.get_session(session_id)
+        # Validate before claiming so a malformed submission does not burn
+        # the session (the claim is single-use and irreversible).
+        if not email or "@" not in email:
+            logger.error(f"Invalid email format: {email}")
+            return None
+
+        session = self.try_claim_session(session_id)
         if not session:
             logger.error(
-                f"Cannot complete session {session_id[:8]}... - session not found or expired"
+                f"Cannot complete session {session_id[:8]}... - session not found, "
+                "expired, or already claimed"
             )
             return None
 
+        return self.complete_claimed_session(session, email, hooks=hooks)
+
+    def complete_claimed_session(
+        self,
+        session: dict[str, Any],
+        email: str,
+        *,
+        hooks: "HookRegistry | None" = None,
+        create_only: bool = False,
+    ) -> Optional["actor_module.Actor"]:
+        """
+        Complete an already-claimed OAuth session.
+
+        The session row is gone by the time this runs (``try_claim_session``
+        consumed it), so callers that need to refuse the submission — the
+        free-text branch of ``POST /oauth/email`` rejecting an address that
+        already has an actor — can claim first, decide, and never call this.
+
+        Args:
+            session: The session dict returned by ``try_claim_session()``
+            email: User's email address
+            hooks: Lifecycle hooks forwarded to actor creation. When
+                omitted, falls back to ``config._hooks``.
+            create_only: Refuse to adopt an actor that already has this
+                email as its creator, returning None instead. The free-text
+                email branch passes this: it probed for an existing actor
+                before claiming the session, and an independent login can
+                create one in between.
+
+        Returns:
+            Created or existing actor, or None if failed or refused
+        """
         try:
             # Extract session data
             token_data = session["token_data"]
-            session["user_info"]
             provider = session.get("provider", "google")
 
             # Validate email format
@@ -196,7 +346,9 @@ class OAuth2SessionManager:
             from .oauth2 import create_oauth2_authenticator
 
             authenticator = create_oauth2_authenticator(self.config, provider)
-            actor_instance = authenticator.lookup_or_create_actor_by_email(email)
+            actor_instance = authenticator.lookup_or_create_actor_by_email(
+                email, hooks=hooks, create_only=create_only
+            )
 
             if not actor_instance:
                 logger.error(f"Failed to create actor for email {email}")
@@ -217,16 +369,7 @@ class OAuth2SessionManager:
                 actor_instance.store.oauth_token_timestamp = str(int(time.time()))
                 actor_instance.store.oauth_provider = provider
 
-            # Clean up session from database
-            from . import attribute
-            from .constants import OAUTH2_SYSTEM_ACTOR, OAUTH_SESSION_BUCKET
-
-            bucket = attribute.Attributes(
-                actor_id=OAUTH2_SYSTEM_ACTOR,
-                bucket=OAUTH_SESSION_BUCKET,
-                config=self.config,
-            )
-            bucket.delete_attr(name=session_id)
+            # The session row was already consumed by try_claim_session().
 
             logger.info(
                 f"Completed OAuth session for {email} -> actor {actor_instance.id}"

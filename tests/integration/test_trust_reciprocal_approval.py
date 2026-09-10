@@ -90,6 +90,18 @@ class TestReciprocalApprovalReachesInitiator:
                 "actor2's row is already approved before anyone approved it; "
                 "modify_trust_and_notify() will skip notifying the initiator"
             )
+            # Separately: the peer callback has to have worked at all. A
+            # deployment whose advertised baseuri is unreachable — a preview
+            # server behind a tunnel that is down, say — still creates both
+            # rows and still answers the approval 204, but leaves verified
+            # false and never propagates anything. Asserting it here names
+            # that cause directly instead of leaving a bare peer_approved
+            # failure to be mistaken for a library regression.
+            assert _truthy(row2.get("verified")), (
+                "actor2 could not verify back to actor1: the peer callback did "
+                "not complete. Check that the advertised baseuri is reachable "
+                "from the peer before suspecting the approval path"
+            )
 
             # Actor2 approves.
             approved = requests.put(

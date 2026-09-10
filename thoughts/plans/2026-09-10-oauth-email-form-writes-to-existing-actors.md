@@ -1,5 +1,6 @@
 ---
 status: done
+verified: thoughts/verifications/2026-09-10-oauth-email-form-writes-to-existing-actors.md
 ---
 
 # Implementation Plan: 3.14.5 — close the OAuth email-entry form's inputs, fire `actor_created` once, constant-time secret compares

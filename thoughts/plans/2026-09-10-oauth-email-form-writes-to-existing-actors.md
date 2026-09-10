@@ -1,5 +1,5 @@
 ---
-status: active
+status: done
 ---
 
 # Implementation Plan: 3.14.5 — close the OAuth email-entry form's inputs, fire `actor_created` once, constant-time secret compares
@@ -857,7 +857,38 @@ None beyond the version-consistency check CI already runs on the tag.
 - [ ] `ls thoughts/todo/` has no `oauth-email-form-*` file and has the two new ones; `INDEX.md` rows match
 - [ ] Consumer note in the PR description: `actingweb_mcp` can drop its planned `/oauth/email` 404 shadow after upgrading; its `CallbackPage.tsx` needs no change under the grace window.
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+**Verification results:** `grep -n "3.14.5" pyproject.toml actingweb/__init__.py`
+— both. `poetry run pytest tests/ -q --ignore=tests/integration` (unit-only,
+run standalone to avoid the sandbox's pytest-rerunfailures socket-bind
+restriction under `make`): 2489 passed, 23 skipped. Full
+`make test-all-parallel`: **3413 passed, 31 skipped, 0 errors** — clean this
+time (the three prior full runs, Phases 1–3, each passed everything except
+one distinct, standalone-passing test in an unrelated module, matching
+CLAUDE.md's documented parallel-isolation caveat; this run hit none).
+`thoughts/todo/`: the old `oauth-email-form-writes-to-existing-actors.md`
+is deleted; `creator-uniqueness-not-enforced.md` and
+`github-emails-api-called-twice.md` are added; `INDEX.md`'s row is replaced
+with the two new rows in the same "Real, not urgent" section.
+`ruff check` / `ruff format --check` / `pyright actingweb tests` — all clean.
+
+**Deviations from the plan:**
+
+- No PR was created and nothing was pushed or tagged in this session — Phase
+  4 as executed here is the release commit only (version bump, CHANGELOG
+  rename, todo housekeeping), on the local branch
+  `fix/3.14.5-oauth-email-form`. Creating the PR, merging, and tagging on
+  master are the user's remaining steps per `CLAUDE.md`'s release process
+  (tags are only cut from commits on master, and pushing/PR-creation are
+  actions this session does not take without being asked).
+- The CHANGELOG's SECURITY/REMOVED/FIXED entries were rewritten from the
+  plan's draft to match the code as actually shipped (e.g. the plan's draft
+  predates the `secret_digest_equals`-for-trust-tokens naming and the exact
+  `docs/quickstart/configuration.rst` wording landed in Phase 3) rather than
+  copied verbatim; the substance matches.
+- `thoughts/todo/INDEX.md`'s "Last full re-rank" date was left unchanged —
+  the plan did not ask for a full re-rank, only the row swap.
 
 ---
 
@@ -966,3 +997,72 @@ settled the Apple caveat.
   never yielded a working session anyway (see "What We're NOT Doing").
 - Full list of doc lines the changes falsify is in Phase 3; the changelog
   shape follows the 3.14.4 entries.
+
+---
+
+## Implementation Summary
+
+**Completed:** 2026-09-10
+**All phases:** Complete
+**Test status:** All passing — `make test-all-parallel`: 3413 passed, 31
+skipped, 0 errors. `pyright actingweb tests`: 0 errors, 0 warnings.
+`ruff check` / `ruff format --check`: clean.
+
+Four commits on `fix/3.14.5-oauth-email-form` (branched from `master` at
+`efc10a5`), one per phase: `bde44f3` (Phase 1), `c5829b0` (Phase 2),
+`009b037` (Phase 3), and the Phase 4 release commit made alongside this
+summary.
+
+### Deviations from Plan
+
+Recorded in full under each phase's own "Implementation Status: Complete"
+note above; summarised here:
+
+- **Test file consolidation.** The plan specified up to seven new test files
+  per phase in places; several were merged into fewer files covering the
+  same load-bearing assertions (named per phase above), and a small number
+  of enumerated cases (a Flask-specific duplicate of an already-covered SPA
+  code path, a fourth near-duplicate `actor_created` no-double-fire test)
+  were judged redundant with an existing test rather than written separately.
+- **`test_oauth_session.py` isolation rules corrected.** It is a full
+  in-memory mock (`MockDbAttribute`), not DynamoDB-Local-backed as the plan
+  assumed; the uuid-creator/yield-fixture-teardown rules apply to the
+  handler-level tests that hit real `Actor`/`ActorInterface` lookups
+  instead.
+- **One extra `hooks=` threading site.** The SPA browser-redirect path in
+  `oauth2_callback.py` (`_process_spa_oauth_and_create_session`) was not one
+  of the plan's four enumerated handler-level `actor_created` sites — it
+  never had its own duplicate call — but got the same `hooks=self.hooks`
+  threading for consistency with the bare-Config robustness fix, at no cost.
+- **Research-doc correction extended.** Beyond the Flask-route claim named
+  in the plan, the "Code References" line for the same file/line was also
+  corrected.
+- **Phase 4 stopped at the local release commit.** No PR was created, and
+  nothing was pushed or tagged — those are the user's remaining steps per
+  `CLAUDE.md`'s release process (tags are only cut from commits on master;
+  pushing and PR-creation are actions requiring explicit confirmation this
+  session does not have).
+- **`docs/` has no Sphinx build** (no `conf.py`/`Makefile`); the plan's
+  `cd docs && make html` verification step was replaced with a `docutils`
+  RST-parse check over every edited file plus a manual read.
+
+### Learnings
+
+- `poetry run pytest` under this sandbox fails immediately with a
+  `PermissionError` from `pytest-rerunfailures`' `ServerStatusDB` binding a
+  socket — every test invocation in this session needed
+  `dangerouslyDisableSandbox: true`. Purely a local sandbox artifact, not a
+  code or CI issue.
+- `make test-all-parallel` brings the test containers up and tears them
+  down itself (`docker-compose ... down -v` at the end of the target) —
+  running it stopped and removed the `actingweb-test-dynamodb` /
+  `actingweb-test-postgres` containers that were already running
+  persistently at the start of this session. Restart them with
+  `docker compose -f docker-compose.test.yml up -d` before working
+  interactively against them again.
+- Across four separate full `make test-all-parallel` runs in this session,
+  three each hit exactly one different, standalone-passing test failure in
+  an unrelated module (`test_hot_path_n_plus_one.py`,
+  `test_bulk_list_update_handles.py` twice on different sub-tests) — a
+  live example of the parallel-isolation flakiness CLAUDE.md already warns
+  about, not a regression from this plan's changes each time.

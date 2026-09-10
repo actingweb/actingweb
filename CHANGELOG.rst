@@ -5,6 +5,138 @@ CHANGELOG
 Unreleased
 ----------
 
+v3.14.5: September 10, 2026
+----------------------------
+
+SECURITY
+~~~~~~~~
+
+- **``POST /oauth/email`` selected and rewrote an existing actor for any
+  typed address.** When an OAuth provider returned no verified email, the
+  free-text branch of the email form looked up the typed address by creator
+  and, on a hit, adopted that actor: overwrote its ``oauth_token`` /
+  ``oauth_provider`` / token timestamp fields and re-ran ``actor_created``
+  against it, while returning 200 with the victim's ``actor_id`` and marking
+  it ``email_verified = "false"``. The free-text branch now checks
+  ``Actor.get_from_creator()`` before completing the session; an address
+  that already has an actor answers ``409`` with
+  ``{"code": "actor_exists"}`` and the pending session is deleted (not left
+  to expire naturally), so a single provider login is worth exactly one
+  guess. A dropdown-selected address — verified by the provider in the same
+  session — is unaffected; that is a returning user, not this bug.
+- **The ``oauth_token`` cookie set by the email form was not HttpOnly.**
+  Every other credential cookie in the library already was. Fixed.
+
+REMOVED
+~~~~~~~
+
+- **``/{actor_id}/www/verify_email``, GET and POST — the legacy
+  email-verification handler.** The POST had no authentication and rejected
+  only ``email_verified == "true"``, a value the library never writes for a
+  provider-verified actor: anyone holding an actor id could rotate its
+  verification token and fire ``email_verification_required`` (mail to
+  ``actor.creator``) an unlimited number of times, without logging in. The
+  GET duplicated ``GET /oauth/email?verify=<token>`` against the same store
+  fields but did not delete the token-index row on success. Both routes now
+  answer 404 on both the Flask and FastAPI integrations; the handler module,
+  the ``aw-verify-email.html`` template, and its rendering paths are
+  deleted. **This retracts the v3.10 changelog's note that the legacy URL
+  "remains functional for backward compatibility"**: the library's own
+  ``email_verification_required`` hook has passed the
+  ``/oauth/email?verify=`` URL format since v3.10, and the legacy resend
+  emitted that format too, so only an application that composed the legacy
+  URL by hand is affected — its user redoes the sign-in and gets a current
+  link. An application shipping its own ``aw-verify-email.html`` template is
+  also affected; it is no longer rendered. One verification mechanism
+  remains: ``GET /oauth/email?verify=<token>``.
+- **Ten in-process secret compares were not constant-time** (client
+  secrets, Basic-auth and Bearer-token passphrases, the devtest passphrase
+  grant, the email-verification token, the trustee-passphrase adoption
+  check, a peer's trust-verification-token, and both PKCE compare sites).
+  All now route through the new ``actingweb.secret_compare`` module
+  (``secrets.compare_digest``). The Basic-auth handler's DEBUG log, which
+  printed both the submitted and stored passphrase on a mismatch, is
+  deleted. **Behavior change**: the trustee-passphrase adoption check
+  (``actor.py``) previously adopted on ``None == None`` when a candidate
+  record had no stored passphrase; it no longer does (``"" == ""`` still
+  adopts, matching a set-but-empty passphrase).
+
+FIXED
+~~~~~
+
+- **``actor_created`` fired twice for every OAuth-created actor since
+  v3.5.1.** Four handler-level calls (the email form, the web callback, the
+  SPA token-exchange path, and the SPA native-grant tail) duplicated the
+  single firing site already inside ``Actor.create()``. The four calls are
+  removed; ``Actor.create()`` now receives an explicit ``hooks=`` kwarg
+  (threaded through ``lookup_or_create_actor_by_identifier()``,
+  ``lookup_or_create_actor_by_email()`` and
+  ``OAuth2SessionManager.complete_session()``) so a handler built with a
+  bare ``Config`` — no ``config._hooks`` to fall back on — still fires the
+  hook once instead of zero times. **Behavior change**: the single
+  remaining call runs before ``auth_method``, ``created_at``,
+  ``oauth_provider``, ``email``, ``oauth_token``, ``oauth_token_expiry``,
+  ``oauth_refresh_token``, ``oauth_token_timestamp`` and
+  ``email_verified`` are stored on the actor; a hook that read any of those
+  fields on the (now-removed) second call sees them absent. ``oauth_success``
+  is the hook that carries the OAuth tokens and provider metadata.
+- **A GitHub ``/user/emails`` API failure was indistinguishable from "no
+  verified emails" and sent a fully-verified user to the free-text form.**
+  ``OAuth2Provider.get_verified_emails()`` (default ``[]``, overridden by
+  GitHub) now returns ``None`` when the API call itself fails — a non-200
+  status (including a 404 from a token whose ``scope`` omits
+  ``user:email``) or a network exception — distinct from the legitimate
+  ``[]`` ("the provider vouches for nothing"). Both OAuth callback branches
+  now answer 502 (web) or an ``identifier_failed`` redirect with a
+  retry-worded description (SPA) on ``None``, instead of falling through to
+  the free-text form.
+- **``oauth_success`` did not fire on the email-form path.** It now fires
+  with the same kwarg shape as the OAuth callback (``email``,
+  ``access_token``, ``token_data``, ``user_info``), ordered after the
+  pending-verification flag is set and before the verification token is
+  generated, so a hook that rejects the login (returns a falsy value)
+  answers 403 with no token, index row, or verification mail written.
+- **The membership check against the provider's verified-email list ran on
+  the raw form submission**, so mixed-case input (e.g.
+  ``Probe.Existing@Example.com``) against a lowercased list was wrongly
+  rejected. The submitted address is now normalised (stripped, lowercased)
+  before the check.
+- **JSON clients got an HTML template body, or an empty body, on
+  ``/oauth/email`` errors.** ``error_response()`` now writes a JSON body
+  (``{"error": true, "status_code": N, "message": ...}``) and sets CORS
+  headers whenever the client sent ``Accept: application/json``, instead of
+  letting the integration render ``template_values`` first.
+- **``GET /oauth/spa/session/{id}`` echoed a pending email-entry session's
+  raw provider token, and was replayable for the full ten-minute session
+  TTL.** It now answers 404 for a pending email-entry session (only a
+  success session, one carrying ``actor_id``, is retrievable at all) and
+  grants a success session a 30-second retrieval grace window rather than
+  full-TTL replay — long enough to cover a duplicate fetch (e.g. a React
+  ``StrictMode`` double effect in development) without leaving the session
+  readable indefinitely.
+- **A form-created orphan actor, later claimed by its real owner through a
+  provider login, kept its abandoned ``email_verified = "false"`` state and
+  a live verification token.** A provider-verified login of an existing
+  actor now clears any pending-verification token, its index row, and the
+  ``email_verified`` flag.
+- **A peer's trust-verification-token compare could raise an uncaught
+  ``KeyError``**, past the surrounding ``except ValueError``, when the
+  peer's callback response omitted the ``verification_token`` key. Switched
+  to ``data.get(...)``.
+- **``Actor.get_from_creator()`` silently picked one of several actors
+  sharing a creator** when ``unique_creator`` is disabled, with no signal
+  that a duplicate existed. It now logs a ``WARNING`` with the lookup
+  creator and every candidate id before falling back to the existing
+  deterministic (lowest-id) selection; selection behavior is unchanged.
+  Enforcing uniqueness is tracked separately — see
+  ``thoughts/todo/creator-uniqueness-not-enforced.md``.
+- Documentation corrected in several places where it described behavior the
+  code did not implement: ``email_verified`` is **absent** (not ``"true"``)
+  for a provider-verified address; the email-form's ``oauth_token`` cookie
+  carries the OAuth *provider's* token, not a separate ActingWeb session
+  token; the actor-creator lookup lowercases identifiers containing ``@``
+  while the indexed-property lookup matches verbatim.
+
 v3.14.4: September 2, 2026
 --------------------------
 

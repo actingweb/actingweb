@@ -43,9 +43,12 @@ REMOVED
   verification token and fire ``email_verification_required`` (mail to
   ``actor.creator``) an unlimited number of times, without logging in. The
   GET duplicated ``GET /oauth/email?verify=<token>`` against the same store
-  fields but did not delete the token-index row on success. Both routes now
-  answer 404 on both the Flask and FastAPI integrations, and the handler
-  module is deleted. The ``aw-verify-email.html`` template stays — it is now
+  fields but did not delete the token-index row on success. Neither
+  integration registers the route any more and the handler module is
+  deleted: on FastAPI both verbs answer 404, and on Flask the path falls
+  through to the generic authenticated ``/{actor_id}/www/<path>`` route and
+  answers 401. Nothing rotates a verification token either way, which is
+  what the removal was for. The ``aw-verify-email.html`` template stays — it is now
   rendered by the surviving ``GET /oauth/email?verify=<token>`` route (see
   FIXED below). **This retracts the v3.10 changelog's note that the legacy URL
   "remains functional for backward compatibility"**: the library's own

@@ -10,8 +10,8 @@ during this verification: `4b8cb1b`, `f91640f`, `8965548`)
 
 All four phases were read against the tree, not taken from the plan's own
 "Implementation Status" notes. Two automated reviews landed on the PR during
-this verification and raised eight findings between them; five were real and
-are fixed on this branch. They are described under "Review findings
+this verification and raised eight findings between them; five were real,
+four of them fixed on this branch and one declined with reasons. They are described under "Review findings
 actioned" and are part of the commits above.
 
 ## Automated Check Results
@@ -115,10 +115,11 @@ specific and would fail if the behaviour regressed.
 and exception matrix. `tests/test_oauth2_callback_email_required.py` (6)
 covers both branches' `None`/`[]`/list handling including the Google no-502
 case. `tests/test_oauth2_clear_pending_verification.py` (5) covers the
-helper and its wiring. `tests/test_email_verification_legacy_route.py` (5)
-covers 404 on both integrations plus `ModuleNotFoundError`, and
-`tests/test_oauth_email_verify_link.py` (9, added here) covers the surviving
-verify link.
+helper and its wiring. `tests/test_email_verification_legacy_route.py` (9, rewritten here — see
+issue 7) covers the route table, the real per-integration status codes,
+`ModuleNotFoundError`, and the result-vs-form rendering on both
+integrations. `tests/test_oauth_email_verify_link.py` (9, added here) covers
+the surviving verify link at the handler level.
 
 **Deviations from plan:**
 
@@ -418,7 +419,29 @@ rules warn about for the creator index, which this file had already handled.
 address. Fixed in `8965548`. Worth generalising: *any* key in a bucket under
 `ACTINGWEB_SYSTEM_ACTOR` is process-global, not just the creator index.
 
-### 7. Both verification greps searched contents, never filenames
+### 7. The legacy-route tests were vacuous, and the 404 claim was wrong on Flask (fixed during this verification)
+
+**Severity:** Medium
+**Location:** `tests/test_email_verification_legacy_route.py`
+**Description:** Two problems, found while adding integration-level coverage
+for finding B. First, the file built its clients as
+`FlaskIntegration(aw_app, flask_app)` and `FastAPIIntegration(aw_app,
+fastapi_app)` and never called `setup_routes()`, which is what actually
+registers routes (`ActingWebApp.integrate_flask()` calls it). The Flask app
+under test had exactly one rule — `static` — so *every* path answered 404 and
+the assertions would have passed with the legacy route fully intact. Second,
+with routes registered the Flask legacy path answers **401**, not 404: the
+generic `/<actor_id>/www/<path:path>` route claims it. The changelog's
+"Both routes now answer 404 on both the Flask and FastAPI integrations" was
+therefore false for Flask.
+**Recommendation:** Done. The file now registers routes, asserts on the route
+*table* (the precise statement of "removed", and immune to a catch-all
+answering 401), asserts the real per-integration status codes, and asserts
+that the verify path renders the result template while the form path still
+renders the form — on both integrations. The changelog entry now says 404 on
+FastAPI, 401 on Flask, and that nothing rotates a token either way.
+
+### 8. Both verification greps searched contents, never filenames
 
 **Severity:** Low, but worth carrying forward
 **Description:** The plan's Phase 1 verification grep and this document's
@@ -440,8 +463,10 @@ content grep cannot see a file that nothing references.
       merge commit on master and push the tag (`CLAUDE.md` release process,
       steps 6-7). The version files already match.
 - [ ] Decide issue 1: write the planned `tests/test_spa_session_retrieve.py`
-      endpoint test, or file it in `thoughts/todo/`. Issues 2, 5 and 6 were
-      fixed during this verification; issues 3, 4 and 7 are notes.
+      endpoint test. **Filed** as
+      `thoughts/todo/spa-session-retrieve-endpoint-test.md` with an
+      `INDEX.md` row. Issues 2, 5, 6 and 8 were fixed during this
+      verification; issues 3, 4 and 7 are notes needing no action.
 - [ ] Consumer note for the PR description: `actingweb_mcp` can drop its
       planned `/oauth/email` 404 shadow after upgrading, and its
       `CallbackPage.tsx` needs no change under the 30 s grace window.
@@ -459,8 +484,8 @@ refusal, the consumed session, the removal of the unauthenticated resend
 route, ten constant-time compares, the HttpOnly cookie, the bounded SPA
 session retrieval — hold against the code.
 
-Five real defects surfaced from the PR's two automated reviews and are fixed
-here. The session consumption was not atomic, so concurrent submissions of
+Five real defects surfaced from the PR's two automated reviews; four are
+fixed here and one is recorded as a note. The session consumption was not atomic, so concurrent submissions of
 one session id each got a free existence probe, defeating the one-guess bound
 the changelog asserts. The SPA browser-redirect path was the one creation
 site that never received its `hooks=` kwarg. And the email verification link

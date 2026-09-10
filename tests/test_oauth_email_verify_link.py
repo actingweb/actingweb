@@ -6,9 +6,10 @@ After 3.14.5 removed the legacy ``/{actor_id}/www/verify_email`` handler
 (GET and POST), this is the *only* way an email address gets verified, and
 Phase 3 changed the token compare inside it to ``secret_equals``. Nothing
 exercised the path before. Runs against DynamoDB Local like the rest of the
-unit suite; creator addresses are uuid-based because the creator index is
-shared across xdist workers, and each actor is torn down with its
-token-index row.
+unit suite. Both the creator index and the verification-token index live
+under one shared system actor across xdist workers, so the creator address
+*and* the token are uuid-based per test; each actor is torn down with its
+token-index row even on assertion failure.
 """
 
 import time
@@ -22,8 +23,6 @@ from actingweb.constants import ACTINGWEB_SYSTEM_ACTOR, EMAIL_VERIFY_TOKEN_INDEX
 from actingweb.handlers.oauth_email import OAuth2EmailHandler
 from actingweb.interface import ActingWebApp
 from actingweb.interface.actor_interface import ActorInterface
-
-VALID_TOKEN = "verify-token-that-is-long-enough-to-be-real"
 
 
 @pytest.fixture
@@ -58,7 +57,15 @@ def _reload_store(actor_id: str, config):
 
 
 @pytest.fixture
-def pending_actor(config):
+def valid_token() -> str:
+    """Per-test token. The token index is keyed by the token alone under one
+    shared system actor, so a module constant would collide across xdist
+    workers and point one worker's index row at another worker's actor."""
+    return f"verify-token-{uuid.uuid4()}"
+
+
+@pytest.fixture
+def pending_actor(config, valid_token):
     """An actor mid-verification: email_verified="false", a stored token, and
     the reverse-index row the GET handler looks the actor up through."""
     creator = f"{uuid.uuid4()}@example.com"
@@ -66,14 +73,14 @@ def pending_actor(config):
     core = actor.core_actor
     store = _store(core)
     store.email_verified = "false"
-    store.email_verification_token = VALID_TOKEN
+    store.email_verification_token = valid_token
     store.email_verification_created_at = str(int(time.time()))
-    _index(config).set_attr(VALID_TOKEN, data=core.id)
+    _index(config).set_attr(valid_token, data=core.id)
 
     yield core
 
     # Teardown runs even on assertion failure.
-    _index(config).delete_attr(VALID_TOKEN)
+    _index(config).delete_attr(valid_token)
     core.delete()
 
 
@@ -93,9 +100,9 @@ def _get(
 
 class TestVerifyLinkMarksActorVerified:
     def test_valid_token_verifies_and_deletes_the_index_row(
-        self, config, pending_actor
+        self, config, pending_actor, valid_token
     ):
-        result, webobj = _get(config, VALID_TOKEN)
+        result, webobj = _get(config, valid_token)
 
         assert result["success"] is True
         assert result["status"] == "verified"
@@ -107,9 +114,11 @@ class TestVerifyLinkMarksActorVerified:
         assert reloaded.email_verified_at
 
         # The reverse index row is consumed, so the link cannot be replayed.
-        assert not _index(config).get_attr(VALID_TOKEN)
+        assert not _index(config).get_attr(valid_token)
 
-    def test_email_verified_hook_fires_with_the_creator(self, config, pending_actor):
+    def test_email_verified_hook_fires_with_the_creator(
+        self, config, pending_actor, valid_token
+    ):
         calls: list[tuple[str, dict]] = []
 
         class _Hooks:
@@ -117,7 +126,7 @@ class TestVerifyLinkMarksActorVerified:
                 calls.append((name, kwargs))
                 return True
 
-        _get(config, VALID_TOKEN, hooks=_Hooks())
+        _get(config, valid_token, hooks=_Hooks())
 
         assert ("email_verified", {"email": pending_actor.creator}) in calls
 
@@ -128,8 +137,8 @@ class TestBrowserClientGetsAResultPage:
     shape they branch on; without it a verified user is shown the form again
     and a bad link gets an empty body."""
 
-    def test_success_sets_a_result_status(self, config, pending_actor):
-        _result, webobj = _get(config, VALID_TOKEN, json_client=False)
+    def test_success_sets_a_result_status(self, config, pending_actor, valid_token):
+        _result, webobj = _get(config, valid_token, json_client=False)
 
         values = webobj.response.template_values
         assert values["status"] == "success"
@@ -137,7 +146,7 @@ class TestBrowserClientGetsAResultPage:
         assert values["redirect_url"] == f"/{pending_actor.id}/www"
 
     def test_expired_link_sets_an_error_status_not_an_empty_body(
-        self, config, pending_actor
+        self, config, pending_actor, valid_token
     ):
         from actingweb.constants import EMAIL_VERIFICATION_TOKEN_EXPIRY
 
@@ -145,7 +154,7 @@ class TestBrowserClientGetsAResultPage:
             int(time.time()) - EMAIL_VERIFICATION_TOKEN_EXPIRY - 60
         )
 
-        _result, webobj = _get(config, VALID_TOKEN, json_client=False)
+        _result, webobj = _get(config, valid_token, json_client=False)
 
         assert webobj.response.status_code == 410
         values = webobj.response.template_values
@@ -153,14 +162,16 @@ class TestBrowserClientGetsAResultPage:
         assert values["status_code"] == 410
         assert "expired" in values["message"].lower()
 
-    def test_unknown_token_sets_an_error_status(self, config, pending_actor):
+    def test_unknown_token_sets_an_error_status(
+        self, config, pending_actor, valid_token
+    ):
         _result, webobj = _get(config, "no-such-token", json_client=False)
 
         assert webobj.response.status_code == 403
         assert webobj.response.template_values["status"] == "error"
 
     def test_json_client_still_gets_json_not_template_values(
-        self, config, pending_actor
+        self, config, pending_actor, valid_token
     ):
         result, webobj = _get(config, "no-such-token")
 
@@ -170,36 +181,38 @@ class TestBrowserClientGetsAResultPage:
 
 
 class TestVerifyLinkRejections:
-    def test_unknown_token_is_403_and_changes_nothing(self, config, pending_actor):
+    def test_unknown_token_is_403_and_changes_nothing(
+        self, config, pending_actor, valid_token
+    ):
         result, _webobj = _get(config, "no-such-token")
 
         assert result["status_code"] == 403
 
         reloaded = _reload_store(pending_actor.id, config)
         assert reloaded.email_verified == "false"
-        assert reloaded.email_verification_token == VALID_TOKEN
+        assert reloaded.email_verification_token == valid_token
 
     def test_index_row_pointing_at_a_different_token_is_403(
-        self, config, pending_actor
+        self, config, pending_actor, valid_token
     ):
         """The stored-token compare (secret_equals) is the second gate: an
         index row can name the actor while the actor's own stored token has
         since been rotated."""
         _store(pending_actor).email_verification_token = "a-rotated-token"
 
-        result, _webobj = _get(config, VALID_TOKEN)
+        result, _webobj = _get(config, valid_token)
 
         assert result["status_code"] == 403
         assert _reload_store(pending_actor.id, config).email_verified == "false"
 
-    def test_expired_token_is_410(self, config, pending_actor):
+    def test_expired_token_is_410(self, config, pending_actor, valid_token):
         from actingweb.constants import EMAIL_VERIFICATION_TOKEN_EXPIRY
 
         _store(pending_actor).email_verification_created_at = str(
             int(time.time()) - EMAIL_VERIFICATION_TOKEN_EXPIRY - 60
         )
 
-        result, _webobj = _get(config, VALID_TOKEN)
+        result, _webobj = _get(config, valid_token)
 
         assert result["status_code"] == 410
         assert _reload_store(pending_actor.id, config).email_verified == "false"

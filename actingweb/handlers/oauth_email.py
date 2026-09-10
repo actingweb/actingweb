@@ -371,13 +371,23 @@ class OAuth2EmailHandler(BaseHandler):
                     403,
                     "Email not verified with OAuth provider. Please select from your verified emails.",
                 )
-        else:
+
+        # Past the retryable validation branches above, this submission
+        # consumes the session whether it completes or is refused. Claim it
+        # atomically *before* the existence probe below: reading the session
+        # and deleting it afterwards lets several concurrent requests carrying
+        # the same session id each run their own get_from_creator() probe,
+        # turning one provider login into N guesses. Exactly one concurrent
+        # caller wins the claim; the rest get the expired-session error.
+        claimed_session = session_manager.try_claim_session(session_id)
+        if not claimed_session:
+            return self.error_response(400, "Invalid or expired session")
+
+        if not verified_emails:
             # No verified emails from provider - user can enter any email but
-            # it needs verification. Before completing the session, refuse an
-            # address that already has an actor: today's code would silently
-            # adopt that actor, overwrite its provider tokens and mark it
-            # unverified. The session is consumed on refusal so one provider
-            # login is worth exactly one guess.
+            # it needs verification. Before completing, refuse an address that
+            # already has an actor: today's code would silently adopt that
+            # actor, overwrite its provider tokens and mark it unverified.
             from .. import actor as actor_module
 
             existing_check = actor_module.Actor(config=self.config)
@@ -385,7 +395,6 @@ class OAuth2EmailHandler(BaseHandler):
                 logger.warning(
                     f"Free-text email {email} already has an actor; refusing"
                 )
-                session_manager.delete_session(session_id)
 
                 message = (
                     "An account already exists for this email address. "
@@ -421,19 +430,19 @@ class OAuth2EmailHandler(BaseHandler):
             )
             email_requires_verification = True
 
-        # Capture the session's token_data/user_info before completing it —
-        # complete_session() deletes the session row, and the oauth_success
-        # hook below needs both.
-        session_token_data = session.get("token_data", {}) or {}
-        session_user_info = session.get("user_info", {}) or {}
+        # The session row is already gone (claimed above), so the oauth_success
+        # hook below reads its token_data/user_info from the claimed copy.
+        session_token_data = claimed_session.get("token_data", {}) or {}
+        session_user_info = claimed_session.get("user_info", {}) or {}
 
-        # Complete OAuth session with provided email. actor_created fires
-        # exactly once, inside Actor.create() itself (via the hooks= kwarg
-        # threaded through complete_session -> lookup_or_create_actor_by_email
-        # -> lookup_or_create_actor_by_identifier), not here — a handler-level
+        # Complete the claimed session with the provided email. actor_created
+        # fires exactly once, inside Actor.create() itself (via the hooks=
+        # kwarg threaded through complete_claimed_session ->
+        # lookup_or_create_actor_by_email ->
+        # lookup_or_create_actor_by_identifier), not here — a handler-level
         # call here would double-fire it for a new actor.
-        actor_instance = session_manager.complete_session(
-            session_id, email, hooks=self.hooks
+        actor_instance = session_manager.complete_claimed_session(
+            claimed_session, email, hooks=self.hooks
         )
 
         if not actor_instance:

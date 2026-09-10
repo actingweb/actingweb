@@ -20,10 +20,16 @@ SECURITY
   it ``email_verified = "false"``. The free-text branch now checks
   ``Actor.get_from_creator()`` before completing the session; an address
   that already has an actor answers ``409`` with
-  ``{"code": "actor_exists"}`` and the pending session is deleted (not left
-  to expire naturally), so a single provider login is worth exactly one
-  guess. A dropdown-selected address — verified by the provider in the same
-  session — is unaffected; that is a returning user, not this bug.
+  ``{"code": "actor_exists"}``. The pending session is claimed by an
+  *atomic* conditional delete (``delete_attr_conditional``, the same
+  single-use consume primitive the refresh-token rotation uses) **before**
+  the existence probe runs, not left to expire naturally and not deleted
+  afterwards: several concurrent submissions carrying one session id would
+  otherwise each get to probe a different address, so one provider login
+  would be worth N guesses instead of one. Exactly one concurrent caller
+  wins the claim; the rest get the ordinary expired-session error. A
+  dropdown-selected address — verified by the provider in the same session —
+  is unaffected; that is a returning user, not this bug.
 - **The ``oauth_token`` cookie set by the email form was not HttpOnly.**
   Every other credential cookie in the library already was. Fixed.
 

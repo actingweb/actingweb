@@ -97,7 +97,10 @@ def _run_post(
 
     session_mgr = MagicMock()
     session_mgr.get_session.return_value = session
-    session_mgr.complete_session.return_value = complete_actor
+    # try_claim_session() consumes the row and hands back the same dict; a
+    # second concurrent caller would get None.
+    session_mgr.try_claim_session.return_value = session
+    session_mgr.complete_claimed_session.return_value = complete_actor
 
     with (
         patch("actingweb.actor.Actor", return_value=existing_check),
@@ -136,8 +139,8 @@ class TestMixedCaseMatchesLowercasedVerifiedList:
         )
 
         assert result.get("status") == "success"
-        session_mgr.complete_session.assert_called_once()
-        call_args = session_mgr.complete_session.call_args[0]
+        session_mgr.complete_claimed_session.assert_called_once()
+        call_args = session_mgr.complete_claimed_session.call_args[0]
         assert call_args[1] == EXISTING_EMAIL  # normalised
 
 
@@ -157,7 +160,9 @@ class TestFreeTextExistingAddressRefused:
         assert result["status_code"] == 409
         assert webobj.response.status_code == 409
 
-    def test_session_is_consumed(self):
+    def test_session_is_consumed_before_the_existence_probe(self):
+        """The claim is taken before get_from_creator() runs, so concurrent
+        submissions of one session cannot each probe a different address."""
         config = _config()
         webobj = _webobj(email=NEW_EMAIL)
         hooks = _hooks()
@@ -167,8 +172,37 @@ class TestFreeTextExistingAddressRefused:
             config, webobj, hooks, session=session, actor_exists=True
         )
 
-        session_mgr.delete_session.assert_called_once_with("sess-1")
-        session_mgr.complete_session.assert_not_called()
+        session_mgr.try_claim_session.assert_called_once_with("sess-1")
+        session_mgr.complete_claimed_session.assert_not_called()
+
+    def test_losing_the_claim_race_is_an_expired_session_error(self):
+        """A concurrent caller that loses the atomic claim gets the ordinary
+        expired-session 400 and never reaches the existence probe."""
+        config = _config()
+        webobj = _webobj(email=NEW_EMAIL)
+        hooks = _hooks()
+        session = _session(verified_emails=[])
+
+        existing_check = MagicMock()
+        existing_check.get_from_creator.return_value = True
+
+        session_mgr = MagicMock()
+        session_mgr.get_session.return_value = session
+        session_mgr.try_claim_session.return_value = None
+
+        with (
+            patch("actingweb.actor.Actor", return_value=existing_check),
+            patch(
+                "actingweb.oauth_session.get_oauth2_session_manager",
+                return_value=session_mgr,
+            ),
+        ):
+            result = OAuth2EmailHandler(webobj, config, hooks=hooks).post()
+
+        assert result["status_code"] == 400
+        assert "code" not in result
+        existing_check.get_from_creator.assert_not_called()
+        session_mgr.complete_claimed_session.assert_not_called()
 
     def test_no_hooks_fire(self):
         config = _config()
@@ -281,7 +315,7 @@ class TestFreeTextNewAddressFiresOauthSuccess:
         )
 
         assert not any(c[0] == "actor_created" for c in hooks.calls)
-        _args, kwargs = session_mgr.complete_session.call_args
+        _args, kwargs = session_mgr.complete_claimed_session.call_args
         assert kwargs["hooks"] is hooks
 
     def test_rejected_oauth_success_returns_403_and_writes_nothing(self):

@@ -161,12 +161,12 @@ class OAuth2SessionManager:
 
     def delete_session(self, session_id: str) -> None:
         """
-        Delete an OAuth2 session row outright.
+        Delete an OAuth2 session row outright, unconditionally.
 
-        Used to consume a pending email-entry session on refusal (the
-        free-text branch of ``POST /oauth/email`` rejecting an address that
-        already has an actor), so a single provider login is worth exactly
-        one guess rather than leaving the session usable until it expires.
+        For abandoning a session whose outcome nobody is racing for. To
+        *consume* a session — where exactly one of several concurrent callers
+        must be allowed to act on it — use :meth:`try_claim_session` instead;
+        an unconditional delete cannot tell the winner from the losers.
         """
         from . import attribute
         from .constants import OAUTH2_SYSTEM_ACTOR, OAUTH_SESSION_BUCKET
@@ -177,6 +177,45 @@ class OAuth2SessionManager:
             config=self.config,
         )
         bucket.delete_attr(name=session_id)
+
+    def try_claim_session(self, session_id: str) -> dict[str, Any] | None:
+        """
+        Atomically claim a pending session: read it, then delete it under a
+        condition so exactly one concurrent caller wins.
+
+        ``get_session`` followed by a plain ``delete_session`` is not enough:
+        several concurrent ``POST /oauth/email`` requests carrying the same
+        session id all read the row before any of them deletes it, so each
+        gets to run its own ``get_from_creator`` probe and one provider login
+        becomes N guesses. ``delete_attr_conditional`` is the race-free
+        counterpart already used for single-use consume semantics elsewhere
+        in the library — DynamoDB puts an ``attribute_exists`` condition on
+        the ``DeleteItem``, PostgreSQL reads ``rowcount`` from the ``DELETE``
+        — so exactly one caller sees ``True``.
+
+        Returns:
+            The session dict if this call claimed it; ``None`` if the session
+            does not exist, has expired, or another caller claimed it first.
+        """
+        from . import attribute
+        from .constants import OAUTH2_SYSTEM_ACTOR, OAUTH_SESSION_BUCKET
+
+        session = self.get_session(session_id)
+        if not session:
+            return None
+
+        bucket = attribute.Attributes(
+            actor_id=OAUTH2_SYSTEM_ACTOR,
+            bucket=OAUTH_SESSION_BUCKET,
+            config=self.config,
+        )
+        if not bucket.delete_attr_conditional(name=session_id):
+            logger.warning(
+                f"Session {session_id[:8]}... was claimed by a concurrent request"
+            )
+            return None
+
+        return session
 
     def retrieve_spa_session(self, session_id: str) -> dict[str, Any] | None:
         """
@@ -244,17 +283,49 @@ class OAuth2SessionManager:
         Returns:
             Created or existing actor, or None if failed
         """
-        session = self.get_session(session_id)
+        # Validate before claiming so a malformed submission does not burn
+        # the session (the claim is single-use and irreversible).
+        if not email or "@" not in email:
+            logger.error(f"Invalid email format: {email}")
+            return None
+
+        session = self.try_claim_session(session_id)
         if not session:
             logger.error(
-                f"Cannot complete session {session_id[:8]}... - session not found or expired"
+                f"Cannot complete session {session_id[:8]}... - session not found, "
+                "expired, or already claimed"
             )
             return None
 
+        return self.complete_claimed_session(session, email, hooks=hooks)
+
+    def complete_claimed_session(
+        self,
+        session: dict[str, Any],
+        email: str,
+        *,
+        hooks: "HookRegistry | None" = None,
+    ) -> Optional["actor_module.Actor"]:
+        """
+        Complete an already-claimed OAuth session.
+
+        The session row is gone by the time this runs (``try_claim_session``
+        consumed it), so callers that need to refuse the submission — the
+        free-text branch of ``POST /oauth/email`` rejecting an address that
+        already has an actor — can claim first, decide, and never call this.
+
+        Args:
+            session: The session dict returned by ``try_claim_session()``
+            email: User's email address
+            hooks: Lifecycle hooks forwarded to actor creation. When
+                omitted, falls back to ``config._hooks``.
+
+        Returns:
+            Created or existing actor, or None if failed
+        """
         try:
             # Extract session data
             token_data = session["token_data"]
-            session["user_info"]
             provider = session.get("provider", "google")
 
             # Validate email format
@@ -292,8 +363,7 @@ class OAuth2SessionManager:
                 actor_instance.store.oauth_token_timestamp = str(int(time.time()))
                 actor_instance.store.oauth_provider = provider
 
-            # Clean up session from database
-            self.delete_session(session_id)
+            # The session row was already consumed by try_claim_session().
 
             logger.info(
                 f"Completed OAuth session for {email} -> actor {actor_instance.id}"

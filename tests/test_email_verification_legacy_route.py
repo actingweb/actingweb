@@ -5,8 +5,9 @@ Regression tests for the removal of the legacy email-verification handler.
 that let anyone holding an actor id rotate its verification token and fire
 ``email_verification_required`` — see the 3.14.5 plan and changelog REMOVED
 entry. This pins that both integrations no longer register the route and
-that the module is gone, while the surviving mechanism
-(``GET /oauth/email?verify=<token>``) still works.
+that the module is gone. The surviving mechanism
+(``GET /oauth/email?verify=<token>``) is covered in
+``tests/test_oauth_email_verify_link.py``.
 """
 
 import pytest

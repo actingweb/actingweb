@@ -67,6 +67,14 @@ class TestOAuth2SessionManager:
                     return True
                 return False
 
+            def delete_attr_conditional(self, actor_id, bucket, name):  # type: ignore
+                """Race-free consume: True only if this call removed a value."""
+                key = f"{actor_id}:{bucket}"
+                if key in self.storage and name in self.storage[key]:
+                    del self.storage[key][name]
+                    return True
+                return False
+
             def delete_bucket(self, actor_id, bucket):  # type: ignore
                 key = f"{actor_id}:{bucket}"
                 if key in self.storage:
@@ -595,9 +603,8 @@ class TestOAuth2SessionManager:
             )
 
     def test_delete_session_removes_row(self):
-        """delete_session() consumes a pending session outright (used to
-        refuse a free-text email that already has an actor, so a single
-        provider login is worth exactly one guess)."""
+        """delete_session() removes a pending session unconditionally. The
+        race-free counterpart used to consume one is try_claim_session()."""
         session_id = self.manager.store_session(
             token_data={"access_token": "t"},
             user_info={"sub": "u"},
@@ -610,8 +617,31 @@ class TestOAuth2SessionManager:
 
         assert self.manager.get_session(session_id) is None
 
-    def test_complete_session_still_clears_via_delete_session(self):
-        """complete_session() delegates its cleanup to delete_session()."""
+    def test_try_claim_session_returns_dict_once_and_none_to_the_loser(self):
+        """The claim is single-use: several concurrent POSTs carrying the same
+        session id must not each get to run their own existence probe, or one
+        provider login is worth N guesses instead of one."""
+        session_id = self.manager.store_session(
+            token_data={"access_token": "t"},
+            user_info={"sub": "u"},
+            state="",
+            provider="google",
+        )
+
+        first = self.manager.try_claim_session(session_id)
+        second = self.manager.try_claim_session(session_id)
+
+        assert first is not None
+        assert first["token_data"]["access_token"] == "t"
+        assert second is None
+        assert self.manager.get_session(session_id) is None
+
+    def test_try_claim_session_unknown_id_returns_none(self):
+        assert self.manager.try_claim_session("no-such-session") is None
+
+    def test_complete_session_claims_before_completing(self):
+        """complete_session() consumes the session through try_claim_session();
+        a second completion of the same session id fails."""
         with patch("actingweb.oauth2.create_oauth2_authenticator") as mock_create_auth:
             mock_authenticator = Mock()
             mock_actor = Mock()
@@ -626,8 +656,12 @@ class TestOAuth2SessionManager:
                 state="",
                 provider="google",
             )
-            self.manager.complete_session(session_id, "user@example.com")
+            assert (
+                self.manager.complete_session(session_id, "user@example.com")
+                is not None
+            )
             assert self.manager.get_session(session_id) is None
+            assert self.manager.complete_session(session_id, "user@example.com") is None
 
     def test_retrieve_spa_session_none_for_pending_email_session(self):
         """A pending email-entry session (raw provider token response, no

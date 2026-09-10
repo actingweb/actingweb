@@ -126,12 +126,13 @@ class TestHandlerLevelSitesDoNotDoubleFire:
     """The four former handler-level actor_created call sites now thread
     hooks= through instead of firing their own copy. Pins that no
     handler-level "actor_created" execute_lifecycle_hooks call remains, and
-    that lookup_or_create_actor_by_identifier is called with hooks=self.hooks."""
+    that lookup_or_create_actor_by_identifier is called with hooks=self.hooks.
 
-    def test_oauth_email_handler_threads_hooks_no_direct_call(self):
-        # Covered end-to-end in tests/test_oauth_email_handler.py::
-        # TestFreeTextNewAddressFiresOauthSuccess::test_no_handler_level_actor_created_call
-        pass
+    The email-form site is pinned in tests/test_oauth_email_handler.py::
+    TestFreeTextNewAddressFiresOauthSuccess::
+    test_no_handler_level_actor_created_call. The SPA token-exchange site
+    deletes an is_new_actor block of the same shape as the native-grant tail
+    pinned below."""
 
     def test_oauth2_callback_web_path_no_direct_actor_created_call(self):
         import json
@@ -200,7 +201,7 @@ class TestHandlerLevelSitesDoNotDoubleFire:
         _args, kwargs = auth.lookup_or_create_actor_by_identifier.call_args
         assert kwargs.get("hooks") is hooks
 
-    def test_oauth2_spa_token_exchange_path_no_direct_actor_created_call(self):
+    def test_oauth2_spa_native_grant_tail_no_direct_actor_created_call(self):
         import json
         from unittest.mock import patch
 

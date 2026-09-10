@@ -266,3 +266,63 @@ class TestHandlerLevelSitesDoNotDoubleFire:
         assert not any(name == "actor_created" for name, _ in calls)
         _args, kwargs = authenticator.lookup_or_create_actor_by_identifier.call_args
         assert kwargs.get("hooks") is hooks
+
+    def test_spa_browser_redirect_path_threads_hooks(self):
+        """The SPA browser-redirect path (_process_spa_oauth_and_create_session)
+        never had its own actor_created call, so it could not double-fire —
+        but it relied on the config._hooks fallback, which is exactly what
+        fails for a handler built with a bare Config. It threads hooks= too."""
+        from unittest.mock import patch
+
+        from actingweb.aw_web_request import AWWebObj
+        from actingweb.handlers.oauth2_callback import OAuth2CallbackHandler
+
+        config = MagicMock()
+        config.proto = "https://"
+        config.fqdn = "test.example.com"
+        config.oauth2_provider = "google"
+        config.force_email_prop_as_creator = False
+        config.service_registry = None
+        config.ui = False
+
+        actor = MagicMock()
+        actor.id = "actor-spa-redirect-1"
+        actor.creator = "user@example.com"
+        actor.store = MagicMock()
+
+        auth = MagicMock()
+        auth.is_enabled.return_value = True
+        auth.provider.name = "google"
+        auth.exchange_code_for_token.return_value = {
+            "access_token": "at",
+            "expires_in": 3600,
+        }
+        auth.provider.extract_user_info_from_token_response.return_value = None
+        auth.validate_token_and_get_user_info.return_value = {
+            "email": "user@example.com"
+        }
+        auth.get_email_from_user_info.return_value = "user@example.com"
+        auth.lookup_or_create_actor_by_identifier.return_value = actor
+
+        hooks = MagicMock()
+        hooks.execute_lifecycle_hooks.return_value = True
+
+        webobj = AWWebObj(
+            url="https://test.example.com/oauth/callback",
+            params={},
+            body="",
+            headers={},
+            cookies={},
+        )
+
+        with patch(
+            "actingweb.handlers.oauth2_callback.create_oauth2_authenticator",
+            return_value=auth,
+        ):
+            handler = OAuth2CallbackHandler(webobj, config, hooks=hooks)
+            handler._process_spa_oauth_and_create_session(
+                "code", "state", {}, "https://spa.example.com/callback"
+            )
+
+        _args, kwargs = auth.lookup_or_create_actor_by_identifier.call_args
+        assert kwargs.get("hooks") is hooks

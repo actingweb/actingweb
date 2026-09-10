@@ -84,6 +84,25 @@ class OAuth2EmailHandler(BaseHandler):
             )
             self.response.headers["Access-Control-Allow-Credentials"] = "true"
 
+    def _verification_error(self, status_code: int, message: str) -> dict[str, Any]:
+        """Error result for the verification link, rendered as a result page.
+
+        ``error_response`` only templates 400 and 500, which are not the codes
+        this path uses (403 invalid, 404 missing actor, 410 expired) — a
+        browser would get the right status and an empty body. The verification
+        result template branches on ``status``, so set it here.
+        """
+        if self._wants_json():
+            return self.error_response(status_code, message)
+
+        self.response.set_status(status_code)
+        self.response.template_values = {
+            "status": "error",
+            "message": message,
+            "status_code": status_code,
+        }
+        return {}
+
     def _handle_email_verification(self, token: str) -> dict[str, Any]:
         """
         Handle email verification via GET /oauth/email?verify=<token>.
@@ -108,7 +127,7 @@ class OAuth2EmailHandler(BaseHandler):
         token_entry = index.get_attr(token)
         if not token_entry or not token_entry.get("data"):
             logger.warning("Email verification: invalid or expired token")
-            return self.error_response(403, "Invalid or expired verification link")
+            return self._verification_error(403, "Invalid or expired verification link")
 
         actor_id = token_entry["data"]
 
@@ -116,7 +135,7 @@ class OAuth2EmailHandler(BaseHandler):
         actor = actor_module.Actor(actor_id=actor_id, config=self.config)
         if not actor.id:
             logger.error(f"Email verification: actor {actor_id} not found")
-            return self.error_response(404, "Actor not found")
+            return self._verification_error(404, "Actor not found")
 
         # Check if already verified
         if actor.store and actor.store.email_verified == "true":
@@ -142,7 +161,7 @@ class OAuth2EmailHandler(BaseHandler):
             return {}
 
         if not actor.store:
-            return self.error_response(500, "Internal error")
+            return self._verification_error(500, "Internal error")
 
         # Validate stored token matches
         stored_token = actor.store.email_verification_token or ""
@@ -150,12 +169,12 @@ class OAuth2EmailHandler(BaseHandler):
 
         if not stored_token or not secret_equals(stored_token, token):
             logger.warning(f"Invalid verification token for actor {actor_id}")
-            return self.error_response(403, "Invalid verification token")
+            return self._verification_error(403, "Invalid verification token")
 
         # Check token expiry
         if int(time.time()) - int(token_created_at) > EMAIL_VERIFICATION_TOKEN_EXPIRY:
             logger.warning(f"Verification token expired for actor {actor_id}")
-            return self.error_response(410, "Verification link has expired")
+            return self._verification_error(410, "Verification link has expired")
 
         # Mark email as verified
         actor.store.email_verified = "true"

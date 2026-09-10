@@ -77,12 +77,14 @@ def pending_actor(config):
     core.delete()
 
 
-def _get(config, token: str, hooks=None) -> tuple[dict, AWWebObj]:
+def _get(
+    config, token: str, hooks=None, json_client: bool = True
+) -> tuple[dict, AWWebObj]:
     webobj = AWWebObj(
         url=f"https://test.example.com/oauth/email?verify={token}",
         params={"verify": token},
         body="",
-        headers={"Accept": "application/json"},
+        headers={"Accept": "application/json"} if json_client else {},
         cookies={},
     )
     result = OAuth2EmailHandler(webobj, config, hooks=hooks).get()
@@ -118,6 +120,53 @@ class TestVerifyLinkMarksActorVerified:
         _get(config, VALID_TOKEN, hooks=_Hooks())
 
         assert ("email_verified", {"email": pending_actor.creator}) in calls
+
+
+class TestBrowserClientGetsAResultPage:
+    """The integrations render aw-verify-email.html — not the email-entry
+    form — whenever template_values carries a "status" key. These pin the
+    shape they branch on; without it a verified user is shown the form again
+    and a bad link gets an empty body."""
+
+    def test_success_sets_a_result_status(self, config, pending_actor):
+        _result, webobj = _get(config, VALID_TOKEN, json_client=False)
+
+        values = webobj.response.template_values
+        assert values["status"] == "success"
+        assert values["email"] == pending_actor.creator
+        assert values["redirect_url"] == f"/{pending_actor.id}/www"
+
+    def test_expired_link_sets_an_error_status_not_an_empty_body(
+        self, config, pending_actor
+    ):
+        from actingweb.constants import EMAIL_VERIFICATION_TOKEN_EXPIRY
+
+        _store(pending_actor).email_verification_created_at = str(
+            int(time.time()) - EMAIL_VERIFICATION_TOKEN_EXPIRY - 60
+        )
+
+        _result, webobj = _get(config, VALID_TOKEN, json_client=False)
+
+        assert webobj.response.status_code == 410
+        values = webobj.response.template_values
+        assert values["status"] == "error"
+        assert values["status_code"] == 410
+        assert "expired" in values["message"].lower()
+
+    def test_unknown_token_sets_an_error_status(self, config, pending_actor):
+        _result, webobj = _get(config, "no-such-token", json_client=False)
+
+        assert webobj.response.status_code == 403
+        assert webobj.response.template_values["status"] == "error"
+
+    def test_json_client_still_gets_json_not_template_values(
+        self, config, pending_actor
+    ):
+        result, webobj = _get(config, "no-such-token")
+
+        assert result["error"] is True
+        assert result["status_code"] == 403
+        assert not webobj.response.template_values
 
 
 class TestVerifyLinkRejections:

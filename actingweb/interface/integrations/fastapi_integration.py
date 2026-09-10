@@ -1875,11 +1875,19 @@ class FastAPIIntegration(BaseActingWebIntegration):
         else:
             await self._run_in_executor_with_context(handler.get)
 
-        # Handle template rendering for email form
+        # Handle template rendering. The verification path
+        # (GET /oauth/email?verify=<token>) sets a "status" key and needs the
+        # result template, not the email-entry form: aw-oauth-email.html
+        # renders a form unconditionally, so a verified user would be asked
+        # for their address again. The form paths never set "status".
         if (
             hasattr(webobj.response, "template_values")
             and webobj.response.template_values
         ):
+            if webobj.response.template_values.get("status"):
+                return self._render_verification_result(
+                    request, webobj.response.template_values
+                )
             if self.templates:
                 try:
                     # App provides aw-oauth-email.html template
@@ -1932,6 +1940,45 @@ class FastAPIIntegration(BaseActingWebIntegration):
                     return HTMLResponse(content=fallback_html)
 
         return self._create_fastapi_response(webobj, request)
+
+    def _render_verification_result(
+        self, request: Request, template_values: dict[str, Any]
+    ) -> Response:
+        """Render the email-verification result page for a browser client."""
+        if self.templates:
+            try:
+                # App provides aw-verify-email.html template
+                return self.templates.TemplateResponse(
+                    request,
+                    "aw-verify-email.html",
+                    context=template_values,
+                )
+            except Exception as e:
+                # Template not found - provide basic HTML as fallback
+                self.logger.warning(f"Template aw-verify-email.html not found: {e}")
+
+        status = template_values.get("status", "")
+        message = template_values.get("message", "")
+        email = template_values.get("email", "")
+        actor_id = template_values.get("actor_id", "")
+        ok = status in ("success", "verified", "already_verified")
+        heading = "Email Verified" if ok else "Verification Failed"
+        cont = (
+            f'<p><a href="/{actor_id}/www">Continue</a></p>' if ok and actor_id else ""
+        )
+        fallback_html = f"""
+        <!DOCTYPE html>
+        <html>
+        <head><title>{heading} - ActingWeb</title></head>
+        <body>
+            <h1>{heading}</h1>
+            <p>{message}</p>
+            {f"<p>{email}</p>" if email else ""}
+            {cont}
+        </body>
+        </html>
+        """
+        return HTMLResponse(content=fallback_html)
 
     async def _handle_oauth2_endpoint(
         self, request: Request, endpoint: str

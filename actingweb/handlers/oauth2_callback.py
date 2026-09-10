@@ -1172,9 +1172,12 @@ class OAuth2CallbackHandler(BaseHandler):
             self.response.set_redirect(spa_error_url)
             return {"redirect_required": True, "redirect_url": spa_error_url}
 
-        # Lookup or create actor
+        # Lookup or create actor. hooks= is threaded here for the same reason
+        # as the other creation sites: without it a handler built with a bare
+        # Config (no config._hooks to fall back on) fires actor_created zero
+        # times on this path.
         actor_instance = self.authenticator.lookup_or_create_actor_by_identifier(
-            identifier, user_info=user_info
+            identifier, user_info=user_info, hooks=self.hooks
         )
         if not actor_instance:
             logger.error("SPA OAuth: Failed to create actor")

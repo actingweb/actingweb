@@ -44,17 +44,18 @@ REMOVED
   ``actor.creator``) an unlimited number of times, without logging in. The
   GET duplicated ``GET /oauth/email?verify=<token>`` against the same store
   fields but did not delete the token-index row on success. Both routes now
-  answer 404 on both the Flask and FastAPI integrations; the handler module,
-  the ``aw-verify-email.html`` template, and its rendering paths are
-  deleted. **This retracts the v3.10 changelog's note that the legacy URL
+  answer 404 on both the Flask and FastAPI integrations, and the handler
+  module is deleted. The ``aw-verify-email.html`` template stays — it is now
+  rendered by the surviving ``GET /oauth/email?verify=<token>`` route (see
+  FIXED below). **This retracts the v3.10 changelog's note that the legacy URL
   "remains functional for backward compatibility"**: the library's own
   ``email_verification_required`` hook has passed the
   ``/oauth/email?verify=`` URL format since v3.10, and the legacy resend
   emitted that format too, so only an application that composed the legacy
   URL by hand is affected — its user redoes the sign-in and gets a current
-  link. An application shipping its own ``aw-verify-email.html`` template is
-  also affected; it is no longer rendered. One verification mechanism
-  remains: ``GET /oauth/email?verify=<token>``.
+  link. One verification mechanism remains:
+  ``GET /oauth/email?verify=<token>``, and an application shipping its own
+  ``aw-verify-email.html`` still has it rendered, now by that route.
 - **Ten in-process secret compares were not constant-time** (client
   secrets, Basic-auth and Bearer-token passphrases, the devtest passphrase
   grant, the email-verification token, the trustee-passphrase adoption
@@ -125,6 +126,27 @@ FIXED
   a live verification token.** A provider-verified login of an existing
   actor now clears any pending-verification token, its index row, and the
   ``email_verified`` flag.
+- **The email verification link rendered the email-entry form instead of a
+  result page, and its errors rendered nothing at all.** Both integrations
+  routed every ``template_values`` from ``/oauth/email`` to
+  ``aw-oauth-email.html``, which renders an input form unconditionally, so a
+  user who clicked a valid link was asked for their address again; and the
+  handler's 403 / 404 / 410 results set no ``template_values`` at all
+  (``error_response()`` templates only 400 and 500), so a bad or expired link
+  answered with the right status and an empty body. The integrations now
+  render ``aw-verify-email.html`` — which already shipped and branches on
+  ``status`` — whenever the handler sets a ``status`` value, which only the
+  verification path does, and the verification path sets one for its error
+  results too. Previously masked by the legacy
+  ``/{actor_id}/www/verify_email`` route, which rendered that template
+  correctly; removing it (see REMOVED) would otherwise have left the broken
+  rendering as the only path. JSON clients are unaffected.
+- **``actor_created`` fired zero times on the SPA browser-redirect path for a
+  handler built with a bare ``Config``.** That path
+  (``_process_spa_oauth_and_create_session``) relied on the
+  ``config._hooks`` fallback rather than threading ``hooks=`` like the other
+  three actor-creation sites. Applications configured through
+  ``ActingWebApp`` were never affected, since it sets ``config._hooks``.
 - **A peer's trust-verification-token compare could raise an uncaught
   ``KeyError``**, past the surrounding ``except ValueError``, when the
   peer's callback response omitted the ``verification_token`` key. Switched

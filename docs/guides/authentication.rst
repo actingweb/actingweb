@@ -1080,12 +1080,18 @@ The verification state is stored in actor properties:
 Templates
 ---------
 
-ActingWeb provides a default template for email verification:
+ActingWeb provides default templates for the email flow:
 
 **aw-oauth-email.html**
-    Email input form with dropdown support for verified emails. Also renders
-    the verification result page (success, error, expired) for
-    ``GET /oauth/email?verify=<token>``.
+    Email input form with dropdown support for verified emails, rendered by
+    ``GET /oauth/email?session=<id>`` and by a ``POST /oauth/email`` that has
+    to be re-shown with an error.
+
+**aw-verify-email.html**
+    Verification result page (success, already verified, error, expired),
+    rendered by ``GET /oauth/email?verify=<token>``. The integrations pick
+    this template whenever the handler sets a ``status`` value, which only
+    the verification path does.
 
 Applications can override these templates by placing them in their ``templates/`` directory.
 

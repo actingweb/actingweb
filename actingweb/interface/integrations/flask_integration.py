@@ -1048,11 +1048,17 @@ class FlaskIntegration(BaseActingWebIntegration):
         else:
             handler.get()
 
-        # Handle template rendering for email form
+        # Handle template rendering. The verification path
+        # (GET /oauth/email?verify=<token>) sets a "status" key and needs the
+        # result template, not the email-entry form: aw-oauth-email.html
+        # renders a form unconditionally, so a verified user would be asked
+        # for their address again. The form paths never set "status".
         if (
             hasattr(webobj.response, "template_values")
             and webobj.response.template_values
         ):
+            if webobj.response.template_values.get("status"):
+                return self._render_verification_result(webobj.response.template_values)
             try:
                 # App provides aw-oauth-email.html template
                 return Response(
@@ -1104,6 +1110,41 @@ class FlaskIntegration(BaseActingWebIntegration):
                 return Response(fallback_html, mimetype="text/html")
 
         return self._create_flask_response(webobj)
+
+    def _render_verification_result(
+        self, template_values: dict[str, Any]
+    ) -> Response | WerkzeugResponse | str:
+        """Render the email-verification result page for a browser client."""
+        try:
+            # App provides aw-verify-email.html template
+            return Response(render_template("aw-verify-email.html", **template_values))
+        except Exception as e:
+            # Template not found - provide basic HTML as fallback
+            logger.warning(f"Template aw-verify-email.html not found: {e}")
+            status = template_values.get("status", "")
+            message = template_values.get("message", "")
+            email = template_values.get("email", "")
+            actor_id = template_values.get("actor_id", "")
+            ok = status in ("success", "verified", "already_verified")
+            heading = "Email Verified" if ok else "Verification Failed"
+            cont = (
+                f'<p><a href="/{actor_id}/www">Continue</a></p>'
+                if ok and actor_id
+                else ""
+            )
+            fallback_html = f"""
+            <!DOCTYPE html>
+            <html>
+            <head><title>{heading} - ActingWeb</title></head>
+            <body>
+                <h1>{heading}</h1>
+                <p>{message}</p>
+                {f"<p>{email}</p>" if email else ""}
+                {cont}
+            </body>
+            </html>
+            """
+            return Response(fallback_html, mimetype="text/html")
 
     def _handle_oauth2_endpoint(
         self, endpoint: str

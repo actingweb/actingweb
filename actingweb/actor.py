@@ -14,6 +14,7 @@ from actingweb.constants import (
 from actingweb.db import get_actor, get_actor_list, get_subscription_suspension
 from actingweb.permission_evaluator import PermissionResult, get_permission_evaluator
 from actingweb.property_list import ListCorruptionError
+from actingweb.secret_compare import secret_digest_equals, secret_equals
 
 logger = logging.getLogger(__name__)
 
@@ -305,6 +306,12 @@ class Actor:
         # Ensure deterministic selection order even when DynamoDB returns arbitrary order
         candidates.sort(key=lambda item: item.get("id", ""))
 
+        if len(candidates) > 1:
+            candidate_ids = [c.get("id") for c in candidates]
+            logger.warning(
+                f"Multiple actors share creator {lookup_creator!r}: {candidate_ids}"
+            )
+
         for candidate in candidates:
             actor_id = candidate.get("id")
             if not actor_id:
@@ -361,7 +368,7 @@ class Actor:
                             if em:
                                 anactor.modify(creator=em.lower())
                     for c in exists:
-                        if c["passphrase"] == passphrase:
+                        if secret_equals(c["passphrase"], passphrase):
                             self.handle = in_db
                             self.id = c["id"]
                             self.passphrase = c["passphrase"]
@@ -1252,7 +1259,9 @@ class Actor:
                         f"Verifying trust response: verified={data.get('verified', False)}, "
                         f"approved={data.get('approved', False)}, peer_approved={data.get('peer_approved', False)}"
                     )
-                    if data["verification_token"] == verification_token:
+                    if secret_digest_equals(
+                        data.get("verification_token"), verification_token
+                    ):
                         verified = True
                     else:
                         verified = False

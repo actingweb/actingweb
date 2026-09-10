@@ -173,7 +173,7 @@ GitHub OAuth2 Provider
 
     .. note::
 
-       Only verified emails from the GitHub ``/user/emails`` API are accepted for actor creation and linking. If the user's primary email is not verified, the first verified email is used instead. If no verified emails are found, the email-based flow fails gracefully.
+       Only verified emails from the GitHub ``/user/emails`` API are accepted for actor creation and linking. If the user's primary email is not verified, the first verified email is used instead. If the API answers with no verified emails, the user is sent to the free-text email form. If the API call itself fails — including a ``scope`` override that omits ``user:email``, which makes the endpoint answer 404 — the login fails with a 502 (web) or an ``identifier_failed`` redirect (SPA) asking the user to retry, rather than silently falling through to the free-text form.
 
 GitHub App Setup
 ----------------
@@ -380,7 +380,8 @@ When OAuth providers don't provide email addresses (e.g., GitHub with private em
 1. Stores OAuth tokens temporarily in a session (10-minute TTL)
 2. Redirects to ``/oauth/email`` with a session token
 3. Presents email input form to the user
-4. Completes actor creation after email is provided
+4. Completes actor creation after email is provided, or answers 409
+   ``actor_exists`` for a free-text address that already has an actor
 
 Applications should provide an ``aw-oauth-email.html`` template for email input. If not provided, a basic fallback form is used.
 
@@ -950,7 +951,9 @@ How It Works
 ------------
 
 **Scenario 1: Provider Has Verified Emails**
-    OAuth provider returns verified emails → User selects from dropdown → Actor created (email_verified=true)
+    OAuth provider returns verified emails → User selects from dropdown → Actor
+    created (``email_verified`` is **absent** — the provider vouched for the
+    address, so there is nothing to mark as pending or link-verified)
 
 **Scenario 2: No Verified Emails Available**
     No verified emails → User enters email → Verification email sent → User clicks link → Email marked verified
@@ -1047,23 +1050,15 @@ Verification Endpoints
 ----------------------
 
 ``GET /oauth/email?verify=<token>``
-    Primary verification endpoint. Validates the verification token via reverse index
-    lookup and marks the email as verified. No actor ID needed in the URL.
+    The only verification endpoint. Validates the verification token via reverse
+    index lookup and marks the email as verified. No actor ID needed in the URL.
+    There is no resend endpoint; an expired or lost link means signing in again
+    to restart the flow.
 
     **Responses:**
         - Success: Shows "Email Verified!" page (HTML) or JSON success response
         - Invalid/expired token: Shows error with explanation
         - Already verified: Shows confirmation message
-
-``GET /<actor_id>/www/verify_email?token=<token>``
-    Legacy verification endpoint. Still functional for backward compatibility.
-    Validates the token directly against the actor's stored token.
-
-``POST /<actor_id>/www/verify_email``
-    Resends the verification email with a new token. Generates a new token,
-    stores the reverse index, and fires the ``email_verification_required`` hook.
-
-    **Use case:** User didn't receive the original email or token expired
 
 Verification State
 ------------------
@@ -1085,13 +1080,12 @@ The verification state is stored in actor properties:
 Templates
 ---------
 
-ActingWeb provides default templates for email verification:
-
-**aw-verify-email.html**
-    Verification result page (success, error, expired)
+ActingWeb provides a default template for email verification:
 
 **aw-oauth-email.html**
-    Email input form with dropdown support for verified emails
+    Email input form with dropdown support for verified emails. Also renders
+    the verification result page (success, error, expired) for
+    ``GET /oauth/email?verify=<token>``.
 
 Applications can override these templates by placing them in their ``templates/`` directory.
 
@@ -1328,7 +1322,8 @@ Migration Between Modes
         # In provider ID mode, email is stored separately
         actor.creator  # "google:105123456789012345678"
         actor.store.email  # "user@gmail.com" (if provided by OAuth)
-        actor.store.email_verified  # "true" if verified by OAuth provider
+        actor.store.email_verified  # absent when provider-verified; "false" pending
+                                     # a clicked link; "true" once the link is clicked
 
 Comparison: Email vs Provider ID Modes
 ---------------------------------------

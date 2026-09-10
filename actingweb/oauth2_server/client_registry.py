@@ -14,6 +14,7 @@ from typing import Any
 from .. import attribute
 from .. import config as config_class
 from ..constants import CLIENT_INDEX_BUCKET, OAUTH2_SYSTEM_ACTOR
+from ..secret_compare import secret_equals
 
 logger = logging.getLogger(__name__)
 
@@ -128,7 +129,7 @@ class MCPClientRegistry:
         # For confidential clients, validate secret
         if client_secret is not None:
             stored_secret = client_data.get("client_secret")
-            if stored_secret != client_secret:
+            if not secret_equals(stored_secret, client_secret):
                 logger.warning(f"Invalid client secret for client {client_id}")
                 logger.debug(
                     f"Client secret validation failed - Expected length: {len(stored_secret) if stored_secret else 0}, Provided length: {len(client_secret)}"

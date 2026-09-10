@@ -249,8 +249,14 @@ the same bucket through the same `store_session`
 (`fastapi_integration.py:2238-2298`) returns `token_data.get("access_token")`
 for any session id it finds, with `actor_id` and `email` as `None` for a
 pending-email session. Probe confirmed the stored value is the raw provider
-token; the endpoint itself was read, not exercised. The Flask integration
-registers the same route (`flask_integration.py:259`).
+token; the endpoint itself was read, not exercised.
+
+**Correction (2026-09-10, Phase 3 review):** the claim above that the Flask
+integration "registers the same route" is wrong. `flask_integration.py:259`
+registers `/oauth/spa/session` (the session-*check* compat route, no `<id>`
+path segment), not a `/oauth/spa/session/<id>` retrieval route. Flask has no
+equivalent of FastAPI's `_handle_spa_session_retrieve`; the finding above is
+FastAPI-only. See the Code References line below for the same correction.
 
 **Documentation claims that do not match the code.** `oauth-login-flow.rst:336`
 says the HTML flow of `POST /oauth/email` sets an "HttpOnly cookie" (it does
@@ -513,7 +519,7 @@ Any change here is a minor, not a patch.
 - `actingweb/auth.py:290-370`, `:475-540` — provider-token auth requires provider email equal to creator; `:149`, `:250`, `:574` non-constant-time compares
 - `actingweb/interface/app.py:1320`, `:1327` — `config._hooks` wiring
 - `actingweb/interface/integrations/fastapi_integration.py:693-698` — `/oauth/email` routes; `:2238-2298` `/oauth/spa/session/<id>` echoes `token_data.access_token`; `:1412-1419` cookie translation drops `path`/`samesite`; `:1895` template rendered without status
-- `actingweb/interface/integrations/flask_integration.py:198` — `/oauth/email`; `:259` SPA session route; `:639-648` cookie translation; `:1063`, `:1099-1105` template and free-text fallback form
+- `actingweb/interface/integrations/flask_integration.py:198` — `/oauth/email`; `:259` `/oauth/spa/session` check route (not a `<id>` retrieval route — see correction above; Flask has no equivalent of FastAPI's `_handle_spa_session_retrieve`); `:639-648` cookie translation; `:1063`, `:1099-1105` template and free-text fallback form
 - `actingweb/handlers/email_verification.py` — legacy `/{actor_id}/www/verify_email`; `:135` compare; `:147` writes `"true"`; no index-row delete
 - `actingweb/oauth2_server/client_registry.py:131` — `!=` on client secret; `actingweb/oauth2_server/token_manager.py:970`, `:977` PKCE compares
 - `actingweb/db/dynamodb/actor.py:21-30`, `:101-103`, `:139-147` — plain GSI, lowercase on `@`, unconditional `save()`

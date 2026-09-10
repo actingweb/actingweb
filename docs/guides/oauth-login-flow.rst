@@ -114,7 +114,8 @@ New handler ``actingweb.handlers.oauth_email.OAuth2EmailHandler``:
 
 - **GET /oauth/email?session=...**: Shows email input form (sets ``template_values`` for app to render, or returns JSON for SPAs)
 - **GET /oauth/email?verify=...**: Validates email verification token and marks email as verified
-- **POST /oauth/email**: Processes email input and completes actor creation
+- **POST /oauth/email**: Processes email input and completes actor creation, or
+  answers 409 ``actor_exists`` when a free-text address already has an actor
 
 Both Flask and FastAPI integrations automatically route ``/oauth/email`` to this handler.
 
@@ -324,14 +325,18 @@ Flow 2.2: Web UI Login without Email (GitHub Private Email)
        ↓
        Retrieve OAuth tokens from session
        ↓
-       Create actor with provided email
+       Free-text address already has an actor? → 409 actor_exists,
+       session consumed, nothing written
+       ↓
+       Create actor with provided email; fire oauth_success
        ↓
        If email needs verification:
          - Store verification token and reverse index
          - Fire email_verification_required lifecycle hook
          - App backend sends verification email
        ↓
-       Generate ActingWeb session token
+       Set oauth_token cookie (HttpOnly) — this is the OAuth provider's own
+       token, not a separate ActingWeb session token
        ↓
        HTML template flow: Set HttpOnly cookie, redirect to /{actor_id}/www
        SPA flow: Return JSON with actor_id, access_token, email_requires_verification

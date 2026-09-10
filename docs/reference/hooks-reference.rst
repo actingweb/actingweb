@@ -131,9 +131,22 @@ Event Details
 ~~~~~~~~~~~~~
 
 ``actor_created``
-    Triggered when a new actor is created.
+    Triggered when a new actor is created. Fires exactly once, from inside
+    ``Actor.create()`` itself, before an OAuth handler stores tokens or
+    provider metadata on the actor — so at hook time, fields like
+    ``oauth_token``, ``oauth_provider``, ``auth_method``, ``created_at``,
+    ``email`` and ``email_verified`` are **not yet set**. ``oauth_success``
+    (below) is the hook that carries the tokens and provider info.
 
     **Signature**: ``func(actor: ActorInterface) -> None``
+
+    .. note::
+
+       Before 3.14.5, every OAuth-created actor fired ``actor_created``
+       twice — once from a handler-level call after tokens/metadata were
+       stored, once from inside ``Actor.create()``. The single remaining
+       call is the earlier (pre-metadata) one; a hook that read those
+       fields on the second call now sees them absent.
 
 ``actor_deleted``
     Triggered when an actor is deleted, **before any data is removed**. The
@@ -182,6 +195,18 @@ Event Details
        Apple returns the user's name **only on the very first sign-in**. Persist
        ``given_name`` / ``family_name`` on first contact — they are not available
        on subsequent sign-ins. See :doc:`../guides/apple-sign-in`.
+
+    .. note::
+
+       Also fires on the free-text email-entry path
+       (``POST /oauth/email``, when the OAuth provider returned no verified
+       email), not only from ``/oauth/callback``. There: ``email`` is the
+       address the user typed (normalised — stripped and lowercased), not a
+       value the provider vouched for; ``user_info["email"]`` is absent
+       (the provider returned none); and at hook time
+       ``actor.store.email_verified == "false"`` until the user clicks the
+       verification link. A hook returning a falsy value here answers the
+       request with 403 and writes no verification token or index row.
 
 ``trust_initiated``
     Triggered when this actor initiates a trust request to another actor (outgoing request).

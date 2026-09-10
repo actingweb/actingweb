@@ -474,6 +474,15 @@ Precedence: an explicit ``with_indexed_properties()`` /
 ``with_legacy_property_index()`` call beats the environment variable,
 which beats the library default.
 
+.. note::
+
+   These two lookup paths normalise case differently. The creator lookup
+   (``Actor.get_from_creator()``) lowercases any identifier containing
+   ``@`` before matching. The indexed-property lookup above matches
+   verbatim — it does not lowercase. An application storing an email
+   address as an indexed property should store it already lowercased, or a
+   mixed-case lookup will miss.
+
 Usage Example
 ~~~~~~~~~~~~~
 

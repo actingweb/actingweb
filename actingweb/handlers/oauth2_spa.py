@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING, Any, Optional
 from urllib.parse import urlparse
 
 from ..constants import SPA_REFRESH_TOKEN_REUSE_WINDOW
+from ..secret_compare import secret_digest_equals, secret_equals
 from .base_handler import BaseHandler
 from .oauth2_utils import normalize_user_info
 
@@ -117,7 +118,7 @@ def verify_pkce(code_verifier: str, stored_challenge: str) -> bool:
     """
     digest = hashlib.sha256(code_verifier.encode("ascii")).digest()
     computed_challenge = base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
-    return secrets.compare_digest(computed_challenge, stored_challenge)
+    return secret_digest_equals(computed_challenge, stored_challenge)
 
 
 class OAuth2SPAHandler(BaseHandler):
@@ -1325,7 +1326,7 @@ class OAuth2SPAHandler(BaseHandler):
             return self._json_error(404, "Actor not found")
 
         # Validate passphrase
-        if not actor.passphrase or passphrase != actor.passphrase:
+        if not actor.passphrase or not secret_equals(passphrase, actor.passphrase):
             logger.debug(
                 f"Passphrase grant failed: invalid passphrase for actor {actor_id}"
             )

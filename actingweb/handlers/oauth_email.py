@@ -13,6 +13,7 @@ import logging
 import time
 from typing import TYPE_CHECKING, Any, Optional
 
+from ..secret_compare import secret_equals
 from .base_handler import BaseHandler
 
 if TYPE_CHECKING:
@@ -147,7 +148,7 @@ class OAuth2EmailHandler(BaseHandler):
         stored_token = actor.store.email_verification_token or ""
         token_created_at = actor.store.email_verification_created_at or "0"
 
-        if not stored_token or stored_token != token:
+        if not stored_token or not secret_equals(stored_token, token):
             logger.warning(f"Invalid verification token for actor {actor_id}")
             return self.error_response(403, "Invalid verification token")
 

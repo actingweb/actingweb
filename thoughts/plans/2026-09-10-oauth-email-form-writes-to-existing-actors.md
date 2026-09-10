@@ -727,7 +727,49 @@ that check runs on every property write.
 - [ ] `cd docs && make html` (or the project's docs build) with no new warnings
 - [ ] Manual: read each corrected doc line against the code it describes.
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+**Verification results:** `pyright actingweb tests` — 0 errors, 0 warnings.
+`ruff check` / `ruff format --check` — clean. `grep -rn " == \| != " actingweb/
+| grep -iE "passphrase|secret|verification_token|code_verifier|code_challenge"`
+returns exactly the `oauth_client_manager.py:253` line plus non-secret
+`len(...) == 0` / mode-string matches (`code_challenge_method == "plain"` etc.),
+matching the plan's expectation. New tests: `test_secret_compare.py` (12),
+`test_actor_get_from_creator_warning.py` (3),
+`test_trust_verification_token_missing.py` (3) — 18 new, plus every existing
+compare-site test (`test_oauth2_client_manager.py`,
+`test_oauth2_spa_passphrase.py`, `test_authenticated_access.py`, the PKCE
+tests in `test_oauth2_spa.py`) passing unchanged (107 total in that run).
+Docs: no Sphinx build exists in this repo (no `docs/conf.py` or
+`docs/Makefile`), so the plan's `cd docs && make html` step doesn't apply;
+substituted a `docutils` RST-parse check over every edited file (parses
+clean — the only diagnostics are pre-existing `:doc:`/`:ref:` role warnings
+from not running under Sphinx, present on untouched lines too) plus a manual
+read of each corrected line against the code. Full `make test-all-parallel`:
+3413 passed, 31 skipped, 1 error
+(`test_bulk_list_update_handles.py::TestNoConcurrentWriterEverythingApplies::test_k10_update_and_k10_delete_all_apply_and_none_is_reported_raced`,
+unrelated — passes standalone; the same parallel-isolation flake pattern as
+Phases 1 and 2, this time landing on a third distinct test within the same
+bulk-list-update module across three separate full-suite runs).
+
+**Deviations from the plan:**
+
+- `secret_digest_equals` is implemented as "hash both sides, then delegate to
+  `secret_equals`" rather than a second direct `secrets.compare_digest` call,
+  per the plan's own description ("SHA-256 both sides then secret_equals");
+  no behavioural difference from a from-scratch implementation.
+- `actor.py`'s `create_verified_trust` — the peer-response `KeyError` fix
+  (`data.get("verification_token")` replacing `data["verification_token"]`)
+  is on the request path that authenticates a *remote peer's* callback
+  response, not an in-process secret compare between two locally-held
+  values; still using `secret_digest_equals` per the plan's table, since the
+  two operands (a token echoed by the peer HTTP response and the token this
+  actor generated) can differ in length under attacker control.
+- Doc corrections applied beyond the plan's exact list where the same
+  falsehood repeated nearby in a file the plan already named for editing
+  (e.g. `authentication.rst`'s "Templates" section still listed
+  `aw-verify-email.html`, which Phase 1 deleted — corrected alongside the
+  named "Verification Endpoints" edit in the same file).
 
 ---
 

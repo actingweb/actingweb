@@ -19,6 +19,7 @@ from ..constants import (
     OAUTH2_SYSTEM_ACTOR,
     REFRESH_TOKEN_INDEX_BUCKET,
 )
+from ..secret_compare import secret_digest_equals, secret_equals
 
 logger = logging.getLogger(__name__)
 
@@ -967,14 +968,14 @@ class ActingWebTokenManager:
 
             # Validate based on method
             if code_challenge_method == "plain":
-                return code_verifier == code_challenge
+                return secret_equals(code_verifier, code_challenge)
             elif code_challenge_method == "S256":
                 # Create SHA256 hash of code_verifier and base64url encode it
                 digest = hashlib.sha256(code_verifier.encode("utf-8")).digest()
                 expected_challenge = (
                     base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
                 )
-                return expected_challenge == code_challenge
+                return secret_digest_equals(expected_challenge, code_challenge)
             else:
                 logger.warning(
                     f"Unsupported PKCE challenge method: {code_challenge_method}"

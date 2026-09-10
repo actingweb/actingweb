@@ -4,8 +4,8 @@
 **Plan:** thoughts/plans/2026-09-10-oauth-email-form-writes-to-existing-actors.md
 **Research:** thoughts/research/2026-09-09-oauth-email-form-writes-to-existing-actors.md
 **Branch:** fix/3.14.5-oauth-email-form
-**Commit:** `8965548` (the release commit `64ac9c0` plus three commits made
-during this verification: `4b8cb1b`, `f91640f`, `8965548`)
+**Commit:** `46f9852` (the release commit `64ac9c0` plus four commits made
+during this verification: `4b8cb1b`, `f91640f`, `8965548`, `46f9852`)
 **PR:** https://github.com/actingweb/actingweb/pull/144
 
 All four phases were read against the tree, not taken from the plan's own
@@ -19,13 +19,13 @@ actioned" and are part of the commits above.
 - **Ruff check:** Pass — `All checks passed!`
 - **Ruff format:** Pass — `374 files already formatted`
 - **Pyright:** Pass — `0 errors, 0 warnings, 0 informations`
-- **Pytest, `make test-all-parallel` at `8965548`:** Pass — 3424 passed,
-  31 skipped, 0 failed, 2 errors. Both errors are in the two modules the
-  plan already documented as pre-existing parallel-isolation flakes
-  (`test_hot_path_n_plus_one.py`, `test_bulk_list_update_handles.py`);
-  both pass standalone, and CI's own parallel run of the same commit
-  reports zero failures and zero flaky retries on both backends.
-- **CI at `8965548`, every check green:** `Tests (Python 3.11, dynamodb)`,
+- **Pytest, `make test-all-parallel` at `46f9852`:** Pass — **3429 passed,
+  31 skipped, 0 failed, 0 errors**, fully clean. (The run one commit
+  earlier hit two of the parallel-isolation flakes the plan already
+  documents in `test_hot_path_n_plus_one.py` and
+  `test_bulk_list_update_handles.py`; both pass standalone, and this run
+  hit neither.)
+- **CI, every check green:** `Tests (Python 3.11, dynamodb)`,
   `Tests (Python 3.11, postgresql)`, `type-check`, `Documentation Build`,
   `test-summary`, `Detect changes`, and all four codecov checks. The
   matrix summary reports 0 failed and 0 flaky on both backends.

@@ -237,7 +237,7 @@ class TestOAuth2SessionManager:
             assert actor_result is not None
             assert actor_result.id == "actor123"
             mock_authenticator.lookup_or_create_actor_by_email.assert_called_once_with(
-                "user@example.com"
+                "user@example.com", hooks=None
             )
 
             # Verify OAuth tokens were stored
@@ -565,6 +565,34 @@ class TestOAuth2SessionManager:
         }
         assert self.manager.maybe_purge_expired_tokens() == 0
         assert "expired-rt-2" in self._test_storage[refresh_key]
+
+    def test_complete_session_forwards_hooks_kwarg(self):
+        """complete_session(hooks=...) threads through to
+        lookup_or_create_actor_by_email so actor_created fires exactly once,
+        inside Actor.create(), even for a handler built with a bare Config
+        (no config._hooks fallback available)."""
+        with patch("actingweb.oauth2.create_oauth2_authenticator") as mock_create_auth:
+            mock_authenticator = Mock()
+            mock_actor = Mock()
+            mock_actor.id = "actor123"
+            mock_actor.store = Mock()
+            mock_create_auth.return_value = mock_authenticator
+            mock_authenticator.lookup_or_create_actor_by_email.return_value = mock_actor
+
+            session_id = self.manager.store_session(
+                token_data={"access_token": "t"},
+                user_info={"sub": "u"},
+                state="",
+                provider="google",
+            )
+            sentinel_hooks = Mock()
+            self.manager.complete_session(
+                session_id, "user@example.com", hooks=sentinel_hooks
+            )
+
+            mock_authenticator.lookup_or_create_actor_by_email.assert_called_once_with(
+                "user@example.com", hooks=sentinel_hooks
+            )
 
     def test_delete_session_removes_row(self):
         """delete_session() consumes a pending session outright (used to

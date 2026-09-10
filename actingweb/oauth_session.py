@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any, Optional
 if TYPE_CHECKING:
     from . import actor as actor_module
     from . import config as config_class
+    from .interface.hooks import HookRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -225,7 +226,11 @@ class OAuth2SessionManager:
         return session
 
     def complete_session(
-        self, session_id: str, email: str
+        self,
+        session_id: str,
+        email: str,
+        *,
+        hooks: "HookRegistry | None" = None,
     ) -> Optional["actor_module.Actor"]:
         """
         Complete OAuth flow with provided email and create actor.
@@ -233,6 +238,8 @@ class OAuth2SessionManager:
         Args:
             session_id: Session ID from store_session()
             email: User's email address
+            hooks: Lifecycle hooks forwarded to actor creation. When
+                omitted, falls back to ``config._hooks``.
 
         Returns:
             Created or existing actor, or None if failed
@@ -262,7 +269,9 @@ class OAuth2SessionManager:
             from .oauth2 import create_oauth2_authenticator
 
             authenticator = create_oauth2_authenticator(self.config, provider)
-            actor_instance = authenticator.lookup_or_create_actor_by_email(email)
+            actor_instance = authenticator.lookup_or_create_actor_by_email(
+                email, hooks=hooks
+            )
 
             if not actor_instance:
                 logger.error(f"Failed to create actor for email {email}")

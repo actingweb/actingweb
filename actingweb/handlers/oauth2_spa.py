@@ -875,15 +875,13 @@ class OAuth2SPAHandler(BaseHandler):
         if actor_exists:
             # Use the already-fetched actor instead of doing another DB lookup
             actor_instance = existing_check
-            is_new_actor = False
             from ..oauth2 import clear_pending_email_verification
 
             clear_pending_email_verification(actor_instance, self.config)
         else:
             actor_instance = authenticator.lookup_or_create_actor_by_identifier(
-                identifier, user_info=user_info
+                identifier, user_info=user_info, hooks=self.hooks
             )
-            is_new_actor = True
 
         if not actor_instance:
             logger.error(f"Failed to lookup or create actor for {identifier}")
@@ -901,18 +899,8 @@ class OAuth2SPAHandler(BaseHandler):
                 actor_instance.store.oauth_refresh_token = provider_refresh_token
             actor_instance.store.oauth_token_timestamp = str(int(time.time()))
 
-        # Execute actor_created lifecycle hook for new actors
-        if is_new_actor and self.hooks:
-            try:
-                from actingweb.interface.actor_interface import ActorInterface
-
-                registry = getattr(self.config, "service_registry", None)
-                actor_interface = ActorInterface(
-                    core_actor=actor_instance, service_registry=registry
-                )
-                self.hooks.execute_lifecycle_hooks("actor_created", actor_interface)
-            except Exception as e:
-                logger.error(f"Error in lifecycle hook for actor_created: {e}")
+        # actor_created fires exactly once, inside Actor.create() itself (via
+        # the hooks= kwarg above) — not here, which would double-fire it.
 
         # Execute OAuth success lifecycle hook
         oauth_valid = True
@@ -1045,15 +1033,13 @@ class OAuth2SPAHandler(BaseHandler):
         existing_check = actor_module.Actor(config=self.config)
         if existing_check.get_from_creator(identifier):
             actor_instance = existing_check
-            is_new_actor = False
             from ..oauth2 import clear_pending_email_verification
 
             clear_pending_email_verification(actor_instance, self.config)
         else:
             actor_instance = authenticator.lookup_or_create_actor_by_identifier(
-                identifier, user_info=user_info
+                identifier, user_info=user_info, hooks=self.hooks
             )
-            is_new_actor = True
 
         if not actor_instance:
             logger.error(f"Failed to lookup or create actor for {identifier}")
@@ -1071,17 +1057,8 @@ class OAuth2SPAHandler(BaseHandler):
                 actor_instance.store.oauth_refresh_token = provider_refresh_token
             actor_instance.store.oauth_token_timestamp = str(int(time.time()))
 
-        if is_new_actor and self.hooks:
-            try:
-                from actingweb.interface.actor_interface import ActorInterface
-
-                registry = getattr(self.config, "service_registry", None)
-                actor_interface = ActorInterface(
-                    core_actor=actor_instance, service_registry=registry
-                )
-                self.hooks.execute_lifecycle_hooks("actor_created", actor_interface)
-            except Exception as e:
-                logger.error(f"Error in lifecycle hook for actor_created: {e}")
+        # actor_created fires exactly once, inside Actor.create() itself (via
+        # the hooks= kwarg above) — not here, which would double-fire it.
 
         oauth_valid = True
         if self.hooks:

@@ -12,7 +12,7 @@ import logging
 import re
 import time
 from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
 import requests  # type: ignore[import-untyped]
@@ -24,6 +24,9 @@ from . import config as config_class
 from .constants import ESTABLISHED_VIA_OAUTH2_INTERACTIVE
 from .interface.actor_interface import ActorInterface
 from .oauth2_id_token import JWKSIdTokenValidator
+
+if TYPE_CHECKING:
+    from .interface.hooks import HookRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -915,7 +918,12 @@ class OAuth2Authenticator:
         """
         return self.provider.get_verified_emails(access_token)
 
-    def lookup_or_create_actor_by_email(self, email: str) -> actor_module.Actor | None:
+    def lookup_or_create_actor_by_email(
+        self,
+        email: str,
+        *,
+        hooks: "HookRegistry | None" = None,
+    ) -> actor_module.Actor | None:
         """
         Look up actor by email or create new one if not found.
 
@@ -923,14 +931,25 @@ class OAuth2Authenticator:
 
         Args:
             email: User email from OAuth2 provider
+            hooks: Lifecycle hooks to pass through to actor creation. When
+                omitted, falls back to ``config._hooks`` (set by
+                ``ActingWebApp.get_config()``); a handler built with a bare
+                ``Config`` needs to pass this explicitly or ``actor_created``
+                never fires.
 
         Returns:
             Actor instance or None if failed
         """
-        return self.lookup_or_create_actor_by_identifier(email, user_info=None)
+        return self.lookup_or_create_actor_by_identifier(
+            email, user_info=None, hooks=hooks
+        )
 
     def lookup_or_create_actor_by_identifier(
-        self, identifier: str, user_info: dict[str, Any] | None = None
+        self,
+        identifier: str,
+        user_info: dict[str, Any] | None = None,
+        *,
+        hooks: "HookRegistry | None" = None,
     ) -> actor_module.Actor | None:
         """
         Look up actor by identifier (email or provider ID) or create new one if not found.
@@ -938,12 +957,18 @@ class OAuth2Authenticator:
         Args:
             identifier: User identifier - can be email or provider-specific ID
             user_info: Optional user info for additional metadata storage
+            hooks: Lifecycle hooks to pass through to actor creation. When
+                omitted, falls back to ``config._hooks``.
 
         Returns:
             Actor instance or None if failed
         """
         if not identifier:
             return None
+
+        effective_hooks = (
+            hooks if hooks is not None else getattr(self.config, "_hooks", None)
+        )
 
         try:
             # Use get_from_creator() method to find existing actor by identifier
@@ -965,7 +990,7 @@ class OAuth2Authenticator:
                     creator=identifier,
                     config=self.config,
                     passphrase="",  # ActingWeb will auto-generate
-                    hooks=getattr(self.config, "_hooks", None),
+                    hooks=effective_hooks,
                 )
 
                 # Set up initial properties for OAuth actor

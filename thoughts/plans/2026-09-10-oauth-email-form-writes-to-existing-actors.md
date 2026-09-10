@@ -559,7 +559,50 @@ agnostic, no DB-read assertions):
 - [ ] `make test-all-parallel` green
 - [ ] Manual: the research's probe (`OAuth2EmailHandler.post()` end to end with a counting hook) reports 1, not 2.
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+**Verification results:** `pyright actingweb tests` — 0 errors, 0 warnings.
+`ruff check` / `ruff format --check` — clean. New test file
+`test_actor_created_fires_once.py` (6 tests, real `ActingWebApp` +
+DynamoDB-Local-backed actor creation for the core-firing-site tests, mocked
+handlers for the two no-double-fire tests) plus a new `complete_session`
+hooks-forwarding test added to `test_oauth_session.py`, plus the existing
+`test_oauth2_lifecycle_hooks.py` — all green (174 tests across the OAuth
+regression set). Full `make test-all-parallel`: 3393 passed, 31 skipped, 1
+error (`test_bulk_list_update_handles.py::TestOrderingSemanticsMatchV1::test_v1_and_v2_branches_produce_the_same_final_list`,
+unrelated to this change — a property-list ordering test that passes
+standalone; the same pre-existing parallel-isolation flake pattern seen in
+Phase 1, landing on a different test this run).
+
+**Deviations from the plan:**
+
+- The plan's four enumerated handler-level `actor_created` call sites (email
+  form, web callback, SPA token-exchange, SPA native-grant tail) are all
+  removed and thread `hooks=` through. Additionally threaded `hooks=self.hooks`
+  into the **SPA browser-redirect path**'s `lookup_or_create_actor_by_identifier`
+  call (`oauth2_callback.py`'s `_process_spa_oauth_and_create_session`,
+  ~line 1176) even though the plan did not name it as one of the four —
+  it never had its own handler-level `actor_created` call (so no double-fire
+  existed there), but it shares the same bare-Config-with-explicit-hooks
+  robustness concern as the other call sites and costs nothing to make
+  consistent.
+- `test_actor_created_fires_once.py` covers the core firing-site claims (new
+  identifier fires once; existing identifier fires zero times on relookup;
+  bare `Config` + explicit `hooks=` still fires once) with real DynamoDB-Local
+  actor creation, and covers "no handler-level double call" for the email
+  form (pointer to `test_oauth_email_handler.py`), web callback, and SPA
+  native-grant tail with mocked handlers. Not separately covered: the SPA
+  token-exchange path and the SPA browser-redirect path's own
+  no-double-fire assertion (both delete an `is_new_actor` block of the same
+  shape already pinned by the native-grant-tail test; the removal is
+  identical code shape, verified by reading, not by a fourth near-duplicate
+  test). The hook-time field-visibility assertion (`oauth_token`,
+  `oauth_provider`, etc. absent at hook time) from the plan's "New tests"
+  section was not written as a separate test — Phase 1's
+  `test_email_verified_false_visible_during_oauth_success` already exercises
+  the same "read actor.store during the hook call" pattern, and the field
+  list itself becomes a changelog/doc claim in Phase 3/4, not a new behavior
+  introduced by Phase 2.
 
 ---
 

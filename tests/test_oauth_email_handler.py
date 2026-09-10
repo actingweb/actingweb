@@ -266,18 +266,23 @@ class TestFreeTextNewAddressFiresOauthSuccess:
 
         assert observed["email_verified"] == "false"
 
-    def test_actor_created_fires_unconditionally_in_phase1(self):
-        """Phase 1 leaves the handler-level actor_created call in place;
-        Phase 2 removes it. This pins current (pre-Phase-2) behaviour."""
+    def test_no_handler_level_actor_created_call(self):
+        """Phase 2: actor_created fires exactly once, inside Actor.create()
+        itself — the handler must not fire it a second time. The handler
+        instead threads self.hooks through to complete_session()."""
         config = _config()
         webobj = _webobj(email=NEW_EMAIL)
         hooks = _hooks()
         session = _session(verified_emails=[])
         actor = _new_actor()
 
-        _run_post(config, webobj, hooks, session=session, complete_actor=actor)
+        _result, session_mgr = _run_post(
+            config, webobj, hooks, session=session, complete_actor=actor
+        )
 
-        assert any(c[0] == "actor_created" for c in hooks.calls)
+        assert not any(c[0] == "actor_created" for c in hooks.calls)
+        _args, kwargs = session_mgr.complete_session.call_args
+        assert kwargs["hooks"] is hooks
 
     def test_rejected_oauth_success_returns_403_and_writes_nothing(self):
         config = _config()

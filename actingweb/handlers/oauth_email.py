@@ -426,8 +426,14 @@ class OAuth2EmailHandler(BaseHandler):
         session_token_data = session.get("token_data", {}) or {}
         session_user_info = session.get("user_info", {}) or {}
 
-        # Complete OAuth session with provided email
-        actor_instance = session_manager.complete_session(session_id, email)
+        # Complete OAuth session with provided email. actor_created fires
+        # exactly once, inside Actor.create() itself (via the hooks= kwarg
+        # threaded through complete_session -> lookup_or_create_actor_by_email
+        # -> lookup_or_create_actor_by_identifier), not here — a handler-level
+        # call here would double-fire it for a new actor.
+        actor_instance = session_manager.complete_session(
+            session_id, email, hooks=self.hooks
+        )
 
         if not actor_instance:
             logger.error(f"Failed to complete OAuth session for email {email}")
@@ -443,19 +449,6 @@ class OAuth2EmailHandler(BaseHandler):
                 }
                 return {}
             return self.error_response(500, "Failed to create actor")
-
-        # Execute actor_created lifecycle hook if this is a new actor
-        if self.hooks:
-            try:
-                from ..interface.actor_interface import ActorInterface
-
-                registry = getattr(self.config, "service_registry", None)
-                actor_interface = ActorInterface(
-                    core_actor=actor_instance, service_registry=registry
-                )
-                self.hooks.execute_lifecycle_hooks("actor_created", actor_interface)
-            except Exception as e:
-                logger.error(f"Error in lifecycle hook for actor_created: {e}")
 
         # Mark the pending-verification state before firing oauth_success (not
         # after), so a consumer hook reading actor.store sees the state that

@@ -537,19 +537,16 @@ class OAuth2CallbackHandler(BaseHandler):
                 )
                 actor_instance = None
 
-        # If no actor from state or loading failed, lookup/create by identifier
-        is_new_actor = False
+        # If no actor from state or loading failed, lookup/create by identifier.
+        # actor_created fires exactly once, inside Actor.create() itself (via
+        # the hooks= kwarg below) — no separate existence pre-check is needed
+        # here since lookup_or_create_actor_by_identifier() is unconditional
+        # and repeats the same lookup on its own.
         if not actor_instance:
-            # Check if actor exists before attempting creation
-            from actingweb.actor import Actor as CoreActor
-
-            existing_check_actor = CoreActor(config=self.config)
-            actor_exists = existing_check_actor.get_from_creator(identifier)
-            is_new_actor = not actor_exists
-
             actor_instance = self.authenticator.lookup_or_create_actor_by_identifier(
                 identifier,
                 user_info=user_info,  # Pass user_info for additional metadata
+                hooks=self.hooks,
             )
             if not actor_instance:
                 logger.error(
@@ -658,19 +655,9 @@ class OAuth2CallbackHandler(BaseHandler):
                 logger.error(f"Error creating OAuth2 trust relationship: {e}")
                 # Don't fail the OAuth flow - just log the error
 
-        # Execute actor_created lifecycle hook for new actors
-        if is_new_actor and self.hooks:
-            try:
-                # Convert core Actor to ActorInterface for hook consistency
-                from actingweb.interface.actor_interface import ActorInterface
-
-                registry = getattr(self.config, "service_registry", None)
-                actor_interface = ActorInterface(
-                    core_actor=actor_instance, service_registry=registry
-                )
-                self.hooks.execute_lifecycle_hooks("actor_created", actor_interface)
-            except Exception as e:
-                logger.error(f"Error in lifecycle hook for actor_created: {e}")
+        # actor_created fires exactly once, inside Actor.create() itself (via
+        # the hooks= kwarg passed to lookup_or_create_actor_by_identifier()
+        # above) — not here, which would double-fire it for a new actor.
 
         # Execute OAuth success lifecycle hook
         oauth_valid = True

@@ -180,6 +180,12 @@ DELETED_ACTORS_BUCKET = "_deleted_actors"
 # OAuth session TTL (for postponed actor creation)
 OAUTH_SESSION_TTL = 600  # 10 minutes
 
+# Grace window for retrieving an SPA success session by id (GET
+# /oauth/spa/session/<id>): long enough to cover a duplicate fetch (e.g. a
+# React StrictMode double-effect) without leaving the session readable for
+# its full TTL. Invariant: OAUTH_SESSION_RETRIEVE_GRACE < OAUTH_SESSION_TTL.
+OAUTH_SESSION_RETRIEVE_GRACE = 30  # seconds
+
 # SPA token TTLs
 SPA_ACCESS_TOKEN_TTL = 3600  # 1 hour
 SPA_REFRESH_TOKEN_TTL = 86400 * 14  # 2 weeks (1,209,600 seconds)

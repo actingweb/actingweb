@@ -876,6 +876,9 @@ class OAuth2SPAHandler(BaseHandler):
             # Use the already-fetched actor instead of doing another DB lookup
             actor_instance = existing_check
             is_new_actor = False
+            from ..oauth2 import clear_pending_email_verification
+
+            clear_pending_email_verification(actor_instance, self.config)
         else:
             actor_instance = authenticator.lookup_or_create_actor_by_identifier(
                 identifier, user_info=user_info
@@ -1043,6 +1046,9 @@ class OAuth2SPAHandler(BaseHandler):
         if existing_check.get_from_creator(identifier):
             actor_instance = existing_check
             is_new_actor = False
+            from ..oauth2 import clear_pending_email_verification
+
+            clear_pending_email_verification(actor_instance, self.config)
         else:
             actor_instance = authenticator.lookup_or_create_actor_by_identifier(
                 identifier, user_info=user_info

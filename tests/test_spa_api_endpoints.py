@@ -141,25 +141,6 @@ class TestTrustEndpointOAuth2Data(unittest.TestCase):
         self.assertTrue(hasattr(OAuth2ClientManager, "list_clients"))
 
 
-class TestEmailVerificationHandlerJSON(unittest.TestCase):
-    """Test EmailVerificationHandler JSON API methods exist."""
-
-    def test_email_verification_handler_has_json_methods(self):
-        """Verify EmailVerificationHandler has JSON API methods."""
-        from actingweb.handlers.email_verification import EmailVerificationHandler
-
-        # Verify it has the JSON helper methods
-        self.assertTrue(hasattr(EmailVerificationHandler, "_wants_json"))
-        self.assertTrue(hasattr(EmailVerificationHandler, "_json_response"))
-
-    def test_email_verification_handler_has_error_response(self):
-        """Verify EmailVerificationHandler has error_response method."""
-        from actingweb.handlers.email_verification import EmailVerificationHandler
-
-        # Verify it has error_response method
-        self.assertTrue(hasattr(EmailVerificationHandler, "error_response"))
-
-
 class TestMetaHandlerTrustTypes(unittest.TestCase):
     """Test MetaHandler includes trusttypes support."""
 

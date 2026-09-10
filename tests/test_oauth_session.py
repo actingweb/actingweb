@@ -566,6 +566,127 @@ class TestOAuth2SessionManager:
         assert self.manager.maybe_purge_expired_tokens() == 0
         assert "expired-rt-2" in self._test_storage[refresh_key]
 
+    def test_delete_session_removes_row(self):
+        """delete_session() consumes a pending session outright (used to
+        refuse a free-text email that already has an actor, so a single
+        provider login is worth exactly one guess)."""
+        session_id = self.manager.store_session(
+            token_data={"access_token": "t"},
+            user_info={"sub": "u"},
+            state="",
+            provider="google",
+        )
+        assert self.manager.get_session(session_id) is not None
+
+        self.manager.delete_session(session_id)
+
+        assert self.manager.get_session(session_id) is None
+
+    def test_complete_session_still_clears_via_delete_session(self):
+        """complete_session() delegates its cleanup to delete_session()."""
+        with patch("actingweb.oauth2.create_oauth2_authenticator") as mock_create_auth:
+            mock_authenticator = Mock()
+            mock_actor = Mock()
+            mock_actor.id = "actor123"
+            mock_actor.store = Mock()
+            mock_create_auth.return_value = mock_authenticator
+            mock_authenticator.lookup_or_create_actor_by_email.return_value = mock_actor
+
+            session_id = self.manager.store_session(
+                token_data={"access_token": "t"},
+                user_info={"sub": "u"},
+                state="",
+                provider="google",
+            )
+            self.manager.complete_session(session_id, "user@example.com")
+            assert self.manager.get_session(session_id) is None
+
+    def test_retrieve_spa_session_none_for_pending_email_session(self):
+        """A pending email-entry session (raw provider token response, no
+        actor_id) is never returned by retrieve_spa_session — only a success
+        session (token_data carrying actor_id) is."""
+        session_id = self.manager.store_session(
+            token_data={"access_token": "raw-provider-token"},
+            user_info={"sub": "u"},
+            state="",
+            provider="google",
+        )
+
+        assert self.manager.retrieve_spa_session(session_id) is None
+        # Not consumed by the failed retrieval — still a valid pending session.
+        assert self.manager.get_session(session_id) is not None
+
+    def test_retrieve_spa_session_nonexistent_returns_none(self):
+        assert self.manager.retrieve_spa_session("nonexistent") is None
+
+    def test_retrieve_spa_session_returns_success_session_and_stamps_retrieved_at(
+        self,
+    ):
+        session_id = self.manager.store_session(
+            token_data={"access_token": "aw-token", "actor_id": "actor-1"},
+            user_info={},
+            state="",
+            provider="google",
+        )
+
+        result = self.manager.retrieve_spa_session(session_id)
+        assert result is not None
+        assert result["token_data"]["actor_id"] == "actor-1"
+        assert "retrieved_at" in result
+
+        # Stamped on the stored row too, not just the returned copy.
+        stored = self.manager.get_session(session_id)
+        assert stored is not None
+        assert "retrieved_at" in stored
+
+    def test_retrieve_spa_session_within_grace_window_still_returns(self):
+        from actingweb.constants import OAUTH_SESSION_RETRIEVE_GRACE
+
+        session_id = self.manager.store_session(
+            token_data={"access_token": "aw-token", "actor_id": "actor-1"},
+            user_info={},
+            state="",
+            provider="google",
+        )
+        first = self.manager.retrieve_spa_session(session_id)
+        assert first is not None
+
+        # Second retrieval, still inside the grace window (covers a
+        # duplicate fetch, e.g. React StrictMode's double effect).
+        assert OAUTH_SESSION_RETRIEVE_GRACE > 0
+        second = self.manager.retrieve_spa_session(session_id)
+        assert second is not None
+        assert second["token_data"]["actor_id"] == "actor-1"
+
+    def test_retrieve_spa_session_past_grace_window_deletes_and_returns_none(self):
+        from actingweb import attribute
+        from actingweb.constants import OAUTH2_SYSTEM_ACTOR, OAUTH_SESSION_BUCKET
+
+        session_id = self.manager.store_session(
+            token_data={"access_token": "aw-token", "actor_id": "actor-1"},
+            user_info={},
+            state="",
+            provider="google",
+        )
+        first = self.manager.retrieve_spa_session(session_id)
+        assert first is not None
+
+        # Rewind retrieved_at to simulate the grace window having elapsed.
+        bucket = attribute.Attributes(
+            actor_id=OAUTH2_SYSTEM_ACTOR,
+            bucket=OAUTH_SESSION_BUCKET,
+            config=self.config,
+        )
+        session_attr = bucket.get_attr(name=session_id)
+        assert session_attr is not None
+        session_data = session_attr["data"]
+        session_data["retrieved_at"] = int(time.time()) - 3600
+        bucket.set_attr(name=session_id, data=session_data)
+
+        assert self.manager.retrieve_spa_session(session_id) is None
+        # The row is deleted, not just refused.
+        assert self.manager.get_session(session_id) is None
+
     def test_multiple_sessions_independent(self):
         """Test that multiple sessions are independent."""
         session_id1 = self.manager.store_session(

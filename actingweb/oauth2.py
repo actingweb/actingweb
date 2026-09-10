@@ -163,6 +163,15 @@ class OAuth2Provider:
         """Provider-specific email fallback (e.g. GitHub's ``/user/emails``)."""
         return None
 
+    def get_verified_emails(self, access_token: str) -> list[str] | None:
+        """All verified emails the provider will vouch for, lowercased.
+
+        Default: no provider-side verified-email listing API, so an empty
+        list (distinct from ``None``, which means the lookup itself failed
+        and the caller should not treat it as "no verified emails").
+        """
+        return []
+
     def store_provider_identity(self, store: Any, identifier: str) -> None:
         """Persist provider-specific identity fields on ``actor.store``."""
         return None
@@ -317,6 +326,9 @@ class GitHubOAuth2Provider(OAuth2Provider):
 
     def get_primary_email(self, access_token: str) -> str | None:
         return _get_github_primary_email(access_token)
+
+    def get_verified_emails(self, access_token: str) -> list[str] | None:
+        return _get_github_verified_emails(access_token)
 
 
 class AppleOAuth2Provider(OAuth2Provider):
@@ -888,53 +900,20 @@ class OAuth2Authenticator:
         """
         Fetch ALL verified emails from GitHub's emails API.
 
+        Backward-compat shim delegating to ``self.provider.get_verified_emails``.
+        Returns ``[]`` when GitHub answered with no verified emails, ``None``
+        when the API call itself failed (non-200 or exception). Both existing
+        in-package callers use truthiness, so this contract change (previously
+        an empty result and a failed call were both ``None``) is safe for them.
+
         Args:
             access_token: GitHub OAuth access token
 
         Returns:
-            List of verified email addresses, or None if API call fails
+            List of verified email addresses (possibly empty), or None if the
+            API call failed.
         """
-        if not access_token:
-            return None
-
-        headers = {
-            "Authorization": f"Bearer {access_token}",
-            "Accept": "application/json",
-            "User-Agent": "ActingWeb-OAuth2-Client",
-        }
-
-        try:
-            response = requests.get(
-                url="https://api.github.com/user/emails",
-                headers=headers,
-                timeout=(5, 10),
-            )
-
-            if response.status_code != 200:
-                logger.warning(
-                    f"GitHub emails API request failed: {response.status_code}"
-                )
-                return None
-
-            emails = response.json()
-
-            # Extract all verified emails
-            verified = []
-            for email_info in emails:
-                if email_info.get("verified", False):
-                    email = email_info.get("email")
-                    if email:
-                        verified.append(str(email).lower())
-
-            if verified:
-                logger.debug(f"Found {len(verified)} verified emails from GitHub")
-                return verified
-
-            return None
-
-        except Exception as e:
-            logger.warning(f"Failed to get GitHub verified emails: {e}")
-            return None
+        return self.provider.get_verified_emails(access_token)
 
     def lookup_or_create_actor_by_email(self, email: str) -> actor_module.Actor | None:
         """
@@ -975,6 +954,7 @@ class OAuth2Authenticator:
                 # create) so revocation logic can rely on it.
                 if existing_actor.store:
                     existing_actor.store.oauth_provider = self.provider.name
+                clear_pending_email_verification(existing_actor, self.config)
                 return existing_actor
 
             # Create new actor with identifier as creator
@@ -1210,6 +1190,55 @@ def _get_github_primary_email(access_token: str) -> str | None:
         return None
 
 
+def _get_github_verified_emails(access_token: str) -> list[str] | None:
+    """Get all verified emails from GitHub's emails API.
+
+    Lives at module level so it can be reused by ``GitHubOAuth2Provider``
+    without holding authenticator state (mirrors ``_get_github_primary_email``).
+
+    Returns ``[]`` when GitHub answered 200 with no verified emails (a
+    legitimate "nothing to offer" result); ``None`` when the API call itself
+    failed — a non-200 status (e.g. a 404 from a token whose scope omits
+    ``user:email``) or a network exception — so callers can tell "GitHub
+    vouches for nothing" apart from "we could not ask GitHub".
+    """
+    if not access_token:
+        return None
+
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Accept": "application/json",
+        "User-Agent": "ActingWeb-OAuth2-Client",
+    }
+
+    try:
+        response = requests.get(
+            url="https://api.github.com/user/emails",
+            headers=headers,
+            timeout=(5, 10),
+        )
+
+        if response.status_code != 200:
+            logger.warning(f"GitHub emails API request failed: {response.status_code}")
+            return None
+
+        emails = response.json()
+
+        verified = []
+        for email_info in emails:
+            if email_info.get("verified", False):
+                email = email_info.get("email")
+                if email:
+                    verified.append(str(email).lower())
+
+        logger.debug(f"Found {len(verified)} verified emails from GitHub")
+        return verified
+
+    except Exception as e:
+        logger.warning(f"Failed to get GitHub verified emails: {e}")
+        return None
+
+
 def _get_provider_config(
     config: config_class.Config, provider_name: str
 ) -> dict[str, Any] | None:
@@ -1441,3 +1470,41 @@ def create_oauth2_trust_relationship(
     except Exception as e:
         logger.error(f"Error creating OAuth2 trust relationship: {e}")
         return False
+
+
+def clear_pending_email_verification(
+    actor_instance: actor_module.Actor, config: config_class.Config
+) -> None:
+    """
+    Clear squatted pending-verification state on a provider-verified login.
+
+    A form-created actor left in ``email_verified == "false"`` (its typed
+    address never clicked the verification link) can later be logged into
+    by its real owner through a provider that *does* vouch for the same
+    identifier (e.g. the identifier resolves via provider id, or a second
+    provider login lands on the same creator). That login is authoritative;
+    the leftover pending-verification token and index row are stale and
+    would otherwise let the abandoned link keep "verifying" the actor.
+
+    No-op unless ``store.email_verified == "false"``.
+    """
+    if not actor_instance.store:
+        return
+    if actor_instance.store.email_verified != "false":
+        return
+
+    from .attribute import Attributes
+    from .constants import ACTINGWEB_SYSTEM_ACTOR, EMAIL_VERIFY_TOKEN_INDEX_BUCKET
+
+    token = actor_instance.store.email_verification_token
+    if token:
+        index = Attributes(
+            actor_id=ACTINGWEB_SYSTEM_ACTOR,
+            bucket=EMAIL_VERIFY_TOKEN_INDEX_BUCKET,
+            config=config,
+        )
+        index.delete_attr(token)
+
+    actor_instance.store.email_verified = None
+    actor_instance.store.email_verification_token = None
+    actor_instance.store.email_verification_created_at = None

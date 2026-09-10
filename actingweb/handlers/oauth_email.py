@@ -58,13 +58,25 @@ class OAuth2EmailHandler(BaseHandler):
         return False
 
     def _set_cors_headers(self) -> None:
-        """Set CORS headers for SPA access."""
+        """Set CORS headers for SPA access.
+
+        Reflects the request Origin only when it is in the configured
+        ``spa_cors_origins`` allowlist (default ``["*"]``, unchanged
+        behaviour) rather than reflecting any origin unconditionally.
+        """
         if self.response:
-            if self.request.headers:
-                origin = self.request.headers.get("Origin", "*")
+            allowed_origins = getattr(self.config, "spa_cors_origins", ["*"]) or ["*"]
+            origin = (
+                self.request.headers.get("Origin", "*") if self.request.headers else "*"
+            )
+
+            if "*" in allowed_origins or origin in allowed_origins:
                 self.response.headers["Access-Control-Allow-Origin"] = origin
             else:
-                self.response.headers["Access-Control-Allow-Origin"] = "*"
+                self.response.headers["Access-Control-Allow-Origin"] = allowed_origins[
+                    0
+                ]
+
             self.response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
             self.response.headers["Access-Control-Allow-Headers"] = (
                 "Authorization, Content-Type, Accept"
@@ -315,6 +327,13 @@ class OAuth2EmailHandler(BaseHandler):
                 return {}
             return self.error_response(400, "Invalid email address")
 
+        # Normalize now so the membership check below (and everything
+        # downstream) runs against the same form the provider's verified-email
+        # list was lowercased to (oauth2.py's _get_github_verified_emails).
+        # Otherwise "Probe.Existing@Example.com" against
+        # ["probe.existing@example.com"] is wrongly rejected.
+        email = email.strip().lower()
+
         # Get session with verified emails list
         from ..oauth_session import get_oauth2_session_manager
 
@@ -352,11 +371,60 @@ class OAuth2EmailHandler(BaseHandler):
                     "Email not verified with OAuth provider. Please select from your verified emails.",
                 )
         else:
-            # No verified emails from provider - user can enter any email but needs verification
+            # No verified emails from provider - user can enter any email but
+            # it needs verification. Before completing the session, refuse an
+            # address that already has an actor: today's code would silently
+            # adopt that actor, overwrite its provider tokens and mark it
+            # unverified. The session is consumed on refusal so one provider
+            # login is worth exactly one guess.
+            from .. import actor as actor_module
+
+            existing_check = actor_module.Actor(config=self.config)
+            if existing_check.get_from_creator(email):
+                logger.warning(
+                    f"Free-text email {email} already has an actor; refusing"
+                )
+                session_manager.delete_session(session_id)
+
+                message = (
+                    "An account already exists for this email address. "
+                    "Sign in again to use a different address."
+                )
+                if self._wants_json():
+                    self._set_cors_headers()
+                    self.response.set_status(409)
+                    response_data = {
+                        "error": True,
+                        "code": "actor_exists",
+                        "status_code": 409,
+                        "message": message,
+                    }
+                    self.response.write(json.dumps(response_data))
+                    self.response.headers["Content-Type"] = "application/json"
+                    return response_data
+                if self.config.ui:
+                    self.response.set_status(409)
+                    self.response.template_values = {
+                        "session_id": "",
+                        "action": "/oauth/email",
+                        "method": "POST",
+                        "provider": session.get("provider", "OAuth provider"),
+                        "error": message,
+                        "status_code": 409,
+                    }
+                    return {}
+                return self.error_response(409, message)
+
             logger.info(
                 f"No verified emails from OAuth provider - {email} will require verification"
             )
             email_requires_verification = True
+
+        # Capture the session's token_data/user_info before completing it —
+        # complete_session() deletes the session row, and the oauth_success
+        # hook below needs both.
+        session_token_data = session.get("token_data", {}) or {}
+        session_user_info = session.get("user_info", {}) or {}
 
         # Complete OAuth session with provided email
         actor_instance = session_manager.complete_session(session_id, email)
@@ -389,6 +457,68 @@ class OAuth2EmailHandler(BaseHandler):
             except Exception as e:
                 logger.error(f"Error in lifecycle hook for actor_created: {e}")
 
+        # Mark the pending-verification state before firing oauth_success (not
+        # after), so a consumer hook reading actor.store sees the state that
+        # will be documented, and so a rejected hook never gets past this
+        # point having already looked verified.
+        if email_requires_verification and actor_instance.store:
+            actor_instance.store.email_verified = "false"
+
+        # Execute the oauth_success lifecycle hook — mirrors the OAuth
+        # callback's firing site and kwargs (oauth2_callback.py). This path
+        # never fired oauth_success before; a consumer hook that creates
+        # trust relationships or sends a welcome email on oauth_success never
+        # ran for actors created through the email form.
+        oauth_valid = True
+        if self.hooks:
+            try:
+                from ..interface.actor_interface import ActorInterface
+
+                registry = getattr(self.config, "service_registry", None)
+                actor_interface = ActorInterface(
+                    core_actor=actor_instance, service_registry=registry
+                )
+                result = self.hooks.execute_lifecycle_hooks(
+                    "oauth_success",
+                    actor_interface,
+                    email=email,
+                    access_token=session_token_data.get("access_token", ""),
+                    token_data=session_token_data,
+                    user_info=session_user_info,
+                )
+                oauth_valid = bool(result) if result is not None else True
+            except Exception as e:
+                logger.error(f"Error in lifecycle hook for oauth_success: {e}")
+                oauth_valid = False
+
+        if not oauth_valid:
+            logger.warning(f"OAuth success hook rejected authentication for {email}")
+            message = "Authentication rejected"
+            if self._wants_json():
+                self._set_cors_headers()
+                self.response.set_status(403)
+                response_data = {
+                    "error": True,
+                    "code": "authentication_rejected",
+                    "status_code": 403,
+                    "message": message,
+                }
+                self.response.write(json.dumps(response_data))
+                self.response.headers["Content-Type"] = "application/json"
+                return response_data
+            if self.config.ui:
+                self.response.set_status(403)
+                self.response.template_values = {
+                    "session_id": "",
+                    "action": "/oauth/email",
+                    "method": "POST",
+                    "provider": "OAuth provider",
+                    "error": message,
+                    "status_code": 403,
+                }
+                return {}
+            return self.error_response(403, message)
+
         # If email requires verification, set up verification flow
         if email_requires_verification and actor_instance.store:
             import secrets
@@ -404,8 +534,8 @@ class OAuth2EmailHandler(BaseHandler):
             # Generate verification token
             verification_token = secrets.token_urlsafe(EMAIL_VERIFICATION_TOKEN_LENGTH)
 
-            # Store verification state on actor
-            actor_instance.store.email_verified = "false"
+            # Store verification state on actor (email_verified was already
+            # set to "false" above, before oauth_success)
             actor_instance.store.email_verification_token = verification_token
             actor_instance.store.email_verification_created_at = str(int(time.time()))
 
@@ -461,6 +591,7 @@ class OAuth2EmailHandler(BaseHandler):
                 max_age=cookie_max_age,
                 path="/",
                 secure=True,
+                httponly=True,
             )
 
             logger.debug(f"Set oauth_token cookie for actor {actor_instance.id}")
@@ -514,6 +645,21 @@ class OAuth2EmailHandler(BaseHandler):
     def error_response(self, status_code: int, message: str) -> dict[str, Any]:
         """Create error response with template rendering for user-friendly errors."""
         self.response.set_status(status_code)
+        response_data = {
+            "error": True,
+            "status_code": status_code,
+            "message": message,
+        }
+
+        if self._wants_json():
+            # A JSON client must not receive the rendered HTML template: both
+            # integrations render `template_values` (when truthy) before the
+            # handler's own body reaches the wire, so setting it here would
+            # silently swap the JSON error for an HTML page.
+            self._set_cors_headers()
+            self.response.write(json.dumps(response_data))
+            self.response.headers["Content-Type"] = "application/json"
+            return response_data
 
         # For user-facing errors, try to render template
         if status_code in [400, 500] and hasattr(self.response, "template_values"):
@@ -527,4 +673,4 @@ class OAuth2EmailHandler(BaseHandler):
                 "status_code": status_code,
             }
 
-        return {"error": True, "status_code": status_code, "message": message}
+        return response_data

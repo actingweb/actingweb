@@ -158,6 +158,72 @@ class OAuth2SessionManager:
 
         return cast(dict[str, Any], session)
 
+    def delete_session(self, session_id: str) -> None:
+        """
+        Delete an OAuth2 session row outright.
+
+        Used to consume a pending email-entry session on refusal (the
+        free-text branch of ``POST /oauth/email`` rejecting an address that
+        already has an actor), so a single provider login is worth exactly
+        one guess rather than leaving the session usable until it expires.
+        """
+        from . import attribute
+        from .constants import OAUTH2_SYSTEM_ACTOR, OAUTH_SESSION_BUCKET
+
+        bucket = attribute.Attributes(
+            actor_id=OAUTH2_SYSTEM_ACTOR,
+            bucket=OAUTH_SESSION_BUCKET,
+            config=self.config,
+        )
+        bucket.delete_attr(name=session_id)
+
+    def retrieve_spa_session(self, session_id: str) -> dict[str, Any] | None:
+        """
+        Retrieve an SPA success session (one that carries ``actor_id`` in its
+        ``token_data``) for one-time-ish delivery to the SPA frontend.
+
+        A pending email-entry session never carries ``actor_id`` in
+        ``token_data`` (it stores the raw provider token response) and is
+        never returned here. A success session is returned once freely; a
+        second retrieval within ``OAUTH_SESSION_RETRIEVE_GRACE`` seconds of
+        the first is still honoured (covers a duplicate fetch, e.g. a
+        React StrictMode double-effect in development), but a retrieval
+        after the grace window has elapsed deletes the row and returns
+        ``None``.
+        """
+        from . import attribute
+        from .constants import (
+            OAUTH2_SYSTEM_ACTOR,
+            OAUTH_SESSION_BUCKET,
+            OAUTH_SESSION_RETRIEVE_GRACE,
+            OAUTH_SESSION_TTL,
+        )
+
+        session = self.get_session(session_id)
+        if not session:
+            return None
+
+        token_data = session.get("token_data")
+        if not isinstance(token_data, dict) or not token_data.get("actor_id"):
+            return None
+
+        bucket = attribute.Attributes(
+            actor_id=OAUTH2_SYSTEM_ACTOR,
+            bucket=OAUTH_SESSION_BUCKET,
+            config=self.config,
+        )
+
+        retrieved_at = session.get("retrieved_at")
+        if retrieved_at is not None:
+            if int(time.time()) - int(retrieved_at) > OAUTH_SESSION_RETRIEVE_GRACE:
+                bucket.delete_attr(name=session_id)
+                return None
+            return session
+
+        session["retrieved_at"] = int(time.time())
+        bucket.set_attr(name=session_id, data=session, ttl_seconds=OAUTH_SESSION_TTL)
+        return session
+
     def complete_session(
         self, session_id: str, email: str
     ) -> Optional["actor_module.Actor"]:
@@ -218,15 +284,7 @@ class OAuth2SessionManager:
                 actor_instance.store.oauth_provider = provider
 
             # Clean up session from database
-            from . import attribute
-            from .constants import OAUTH2_SYSTEM_ACTOR, OAUTH_SESSION_BUCKET
-
-            bucket = attribute.Attributes(
-                actor_id=OAUTH2_SYSTEM_ACTOR,
-                bucket=OAUTH_SESSION_BUCKET,
-                config=self.config,
-            )
-            bucket.delete_attr(name=session_id)
+            self.delete_session(session_id)
 
             logger.info(
                 f"Completed OAuth session for {email} -> actor {actor_instance.id}"

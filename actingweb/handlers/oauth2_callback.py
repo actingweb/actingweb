@@ -401,16 +401,24 @@ class OAuth2CallbackHandler(BaseHandler):
                 )
 
             # Email required mode - try to get verified emails for dropdown
-            verified_emails: list[str] | None = None
-
-            if self.authenticator.provider.name == "github" and access_token:
-                verified_emails = self.authenticator.get_github_verified_emails(
-                    access_token
+            verified_emails = (
+                self.authenticator.provider.get_verified_emails(access_token)
+                if access_token
+                else []
+            )
+            if verified_emails is None:
+                logger.warning(
+                    f"{self.authenticator.provider.name}: could not confirm verified emails"
                 )
-                if verified_emails:
-                    logger.info(
-                        f"Found {len(verified_emails)} verified emails from GitHub"
-                    )
+                return self.error_response(
+                    502,
+                    "We could not confirm your email address with your sign-in "
+                    "provider. Please try signing in again.",
+                )
+            if verified_emails:
+                logger.info(
+                    f"Found {len(verified_emails)} verified emails from {self.authenticator.provider.name}"
+                )
 
             # Check if this is an MCP authorization flow
             if trust_type:
@@ -899,7 +907,7 @@ class OAuth2CallbackHandler(BaseHandler):
         self.response.set_status(status_code)
 
         # For user-facing errors, try to render template
-        if status_code in [403, 400] and hasattr(self.response, "template_values"):
+        if status_code in [403, 400, 502] and hasattr(self.response, "template_values"):
             self.response.template_values = {
                 "error": message,
                 "status_code": status_code,
@@ -1096,10 +1104,20 @@ class OAuth2CallbackHandler(BaseHandler):
                 )
 
                 # Try to get verified emails for dropdown
-                verified_emails: list[str] | None = None
-                if self.authenticator.provider.name == "github" and access_token:
-                    verified_emails = self.authenticator.get_github_verified_emails(
-                        access_token
+                verified_emails = (
+                    self.authenticator.provider.get_verified_emails(access_token)
+                    if access_token
+                    else []
+                )
+                if verified_emails is None:
+                    logger.warning(
+                        f"{self.authenticator.provider.name}: could not confirm verified emails"
+                    )
+                    return self._redirect_to_spa_with_error(
+                        spa_redirect_url,
+                        "identifier_failed",
+                        "We could not confirm your email address with your "
+                        "sign-in provider. Please try signing in again.",
                     )
 
                 try:

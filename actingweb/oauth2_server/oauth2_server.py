@@ -729,6 +729,9 @@ class ActingWebOAuth2Server:
             # Attempt to find an existing actor for this email
             existing_actor = actor_module.Actor(config=self.config)
             if existing_actor.get_from_creator(email):
+                from ..oauth2 import clear_pending_email_verification
+
+                clear_pending_email_verification(existing_actor, self.config)
                 return existing_actor
 
             # Create new actor using ActorInterface for proper lifecycle hook execution

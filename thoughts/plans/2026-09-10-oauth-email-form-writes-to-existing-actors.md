@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: active
 ---
 
 # Implementation Plan: 3.14.5 — close the OAuth email-entry form's inputs, fire `actor_created` once, constant-time secret compares
@@ -423,7 +423,63 @@ fails ends on a visible error with no actor row; the MCP 502 is unchanged.
 - [ ] PostgreSQL leg: `DATABASE_BACKEND=postgresql PG_DB_PORT=5433 … poetry run pytest tests/test_oauth_email_handler.py tests/test_oauth2_lookup_clears_pending.py`
 - [ ] Manual: the research's probe sequence (first POST creates; second POST with a new session and the same address in mixed case) now answers 409 on the second call and the first actor's `oauth_token` is unchanged.
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+**Verification results:** `pyright actingweb tests` — 0 errors, 0 warnings.
+`ruff check` / `ruff format --check` — clean. New/extended test files (66
+tests) pass: `test_oauth_email_handler.py`, `test_oauth_session.py`
+(extended), `test_oauth2_provider_verified_emails.py`,
+`test_oauth2_callback_email_required.py`,
+`test_email_verification_legacy_route.py`,
+`test_oauth2_clear_pending_verification.py`. Full `make test-all-parallel`:
+3381 passed, 31 skipped, 1 error (`test_hot_path_n_plus_one.py::TestPropertyStoreBulkReads::test_items_and_values_are_bulk_reads`,
+unrelated to this change — passes standalone; a pre-existing parallel-run
+isolation flake per CLAUDE.md's own caveat about `make test-all-parallel`).
+The manual probe-sequence check was exercised as an automated test
+(`TestFreeTextExistingAddressRefused`) rather than run by hand against a
+live server.
+
+**Deviations from the plan:**
+
+- `tests/test_oauth_session.py` is a full in-memory `MockDbAttribute`, not a
+  DynamoDB-Local-backed test as this plan's "New tests" preamble assumed;
+  corrected here since `delete_session`/`retrieve_spa_session` extend it
+  directly. The isolation rules (uuid creators, yield-fixture teardown) apply
+  to the handler-level tests that hit `Actor.get_from_creator` /
+  `ActorInterface.create` — those are unit tests with `actor_module.Actor`
+  mocked (matching `tests/test_oauth2_spa_jwt_bearer.py`'s pattern), not
+  DynamoDB-Local-backed, so the uuid/teardown rules don't apply to them
+  either.
+- Test files consolidated from the plan's seven to six mocked unit-test
+  files; no DynamoDB-Local-backed or `tests/integration/` test was added.
+  Every load-bearing assertion from the plan's "New tests" sections is
+  covered by one of the six files (409 refusal + session consumption + zero
+  hooks + unchanged actor fields; dropdown returning-user 200; free-text
+  `oauth_success` firing with session data and `email_verified == "false"`
+  visible during the call; rejection → 403 with no token/index write; mixed-case
+  membership; HttpOnly cookie; JSON-vs-template error shape; CORS allowlist;
+  `_get_github_verified_emails` status/exception matrix; provider defaults;
+  authenticator shim; callback web/SPA `None`/`[]`/list handling including
+  the Google no-502 case; legacy-route 404 on both integrations plus
+  `ModuleNotFoundError`; `clear_pending_email_verification`'s field/index-row
+  clearing and its wiring into `lookup_or_create_actor_by_identifier`). Not
+  added: a live-server integration test and a Flask-specific
+  `clear_pending_email_verification` SPA-branch test (the FastAPI-shaped
+  unit test and the `oauth2.py` wiring test cover the same logic; the SPA
+  handler's two call sites are code-identical to the pattern verified at
+  the `lookup_or_create_actor_by_identifier` site).
+- The plan's Phase 1 verification grep (`email_verification\b`) was written
+  before the code existed and also matches two things that are meant to
+  survive: `_handle_email_verification` (the GET-verify method that is the
+  *surviving* mechanism, unrelated to the deleted legacy handler) and the
+  new `clear_pending_email_verification` helper. The actually-useful grep is
+  `EmailVerificationHandler\|www/verify_email\|aw-verify-email\|handlers\.email_verification`,
+  confirmed to return only `docs/guides/authentication.rst` lines (Phase 3)
+  and historical `CHANGELOG.rst` entries (not edited).
+- `retrieve_spa_session`/`_handle_spa_session_retrieve` CORS: implemented the
+  `spa_cors_origins` allowlist as specified; not covered by a dedicated test
+  in Phase 1 (the existing 404/400 assertions for that endpoint are also
+  untested pre-existing behavior with no test file to extend).
 
 ---
 

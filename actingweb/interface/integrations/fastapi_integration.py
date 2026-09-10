@@ -698,15 +698,6 @@ class FastAPIIntegration(BaseActingWebIntegration):
         async def oauth_email_post(request: Request) -> Response:  # pyright: ignore[reportUnusedFunction]
             return await self._handle_oauth2_email(request)
 
-        # Email verification endpoint - verifies email addresses for OAuth2 actors
-        @self.fastapi_app.get("/{actor_id}/www/verify_email")
-        async def email_verification_get(request: Request, actor_id: str) -> Response:  # pyright: ignore[reportUnusedFunction]
-            return await self._handle_email_verification(request, actor_id)
-
-        @self.fastapi_app.post("/{actor_id}/www/verify_email")
-        async def email_verification_post(request: Request, actor_id: str) -> Response:  # pyright: ignore[reportUnusedFunction]
-            return await self._handle_email_verification(request, actor_id)
-
         # OAuth2 server endpoints for MCP clients
         @self.fastapi_app.post("/oauth/register")
         @self.fastapi_app.options("/oauth/register")
@@ -1942,91 +1933,6 @@ class FastAPIIntegration(BaseActingWebIntegration):
 
         return self._create_fastapi_response(webobj, request)
 
-    async def _handle_email_verification(
-        self, request: Request, actor_id: str
-    ) -> Response:
-        """Handle email verification requests."""
-        req_data = await self._normalize_request(request)
-        webobj = AWWebObj(
-            url=req_data["url"],
-            params=req_data["values"],
-            body=req_data["data"],
-            headers=req_data["headers"],
-            cookies=req_data["cookies"],
-        )
-
-        from ...handlers.email_verification import EmailVerificationHandler
-
-        handler = EmailVerificationHandler(
-            webobj, self.aw_app.get_config(), hooks=self.aw_app.hooks
-        )
-
-        # Run the synchronous handler in a thread pool
-        if request.method == "POST":
-            await self._run_in_executor_with_context(handler.post)
-        else:
-            await self._run_in_executor_with_context(handler.get)
-
-        # Handle template rendering for email verification
-        if (
-            hasattr(webobj.response, "template_values")
-            and webobj.response.template_values
-        ):
-            if self.templates:
-                try:
-                    # App provides aw-verify-email.html template
-                    return self.templates.TemplateResponse(
-                        request,
-                        "aw-verify-email.html",
-                        context=webobj.response.template_values,
-                    )
-                except Exception as e:
-                    # Template not found - provide basic HTML as fallback
-                    self.logger.warning(f"Template aw-verify-email.html not found: {e}")
-                    status = webobj.response.template_values.get("status", "")
-                    webobj.response.template_values.get("message", "")
-                    email = webobj.response.template_values.get("email", "")
-                    error = webobj.response.template_values.get("error", "")
-
-                    if status == "success":
-                        fallback_html = f"""
-                        <!DOCTYPE html>
-                        <html>
-                        <head><title>Email Verified</title></head>
-                        <body>
-                            <h1>✓ Email Verified!</h1>
-                            <p>Your email address <strong>{email}</strong> has been verified.</p>
-                            <p><a href="/{actor_id}/www">Continue to Dashboard</a></p>
-                        </body>
-                        </html>
-                        """
-                    elif status == "error":
-                        fallback_html = f"""
-                        <!DOCTYPE html>
-                        <html>
-                        <head><title>Verification Failed</title></head>
-                        <body>
-                            <h1>Verification Failed</h1>
-                            <p>{error}</p>
-                            <p><a href="/{actor_id}/www">Return to Dashboard</a></p>
-                        </body>
-                        </html>
-                        """
-                    else:
-                        fallback_html = """
-                        <!DOCTYPE html>
-                        <html>
-                        <head><title>Email Verification</title></head>
-                        <body>
-                            <h1>Email Verification</h1>
-                            <p>Please check your email for a verification link.</p>
-                        </body>
-                        </html>
-                        """
-                    return HTMLResponse(content=fallback_html)
-
-        return self._create_fastapi_response(webobj, request)
-
     async def _handle_oauth2_endpoint(
         self, request: Request, endpoint: str
     ) -> Response:
@@ -2252,20 +2158,33 @@ class FastAPIIntegration(BaseActingWebIntegration):
         # Get origin for CORS
         req_data = await self._normalize_request(request)
         origin = req_data["headers"].get("origin", "*")
+        config = self.aw_app.get_config()
+        allowed_origins = getattr(config, "spa_cors_origins", ["*"]) or ["*"]
+        allowed_origin = (
+            origin
+            if ("*" in allowed_origins or origin in allowed_origins)
+            else allowed_origins[0]
+        )
 
         cors_headers = {
-            "Access-Control-Allow-Origin": origin,
+            "Access-Control-Allow-Origin": allowed_origin,
             "Access-Control-Allow-Methods": "GET, OPTIONS",
             "Access-Control-Allow-Headers": "Authorization, Content-Type, Accept",
             "Access-Control-Allow-Credentials": "true",
         }
 
         try:
-            session_manager = get_oauth2_session_manager(self.aw_app.get_config())
+            session_manager = get_oauth2_session_manager(config)
 
-            # Look up the pending session
-            # The session was stored with pending_session_id as part of token_data
-            session_data = session_manager.get_session(session_id)
+            # Look up the pending session. Only a success session (one whose
+            # token_data carries actor_id) is retrievable here — a pending
+            # email-entry session (raw provider token response, no actor_id)
+            # returns None just like a missing one, so it cannot be echoed
+            # back through this endpoint. A success session is readable once
+            # freely, and again within a short grace window (covers a
+            # duplicate fetch, e.g. React StrictMode's double effect in
+            # development); past that window the row is deleted.
+            session_data = session_manager.retrieve_spa_session(session_id)
 
             if not session_data:
                 return JSONResponse(
@@ -2278,14 +2197,14 @@ class FastAPIIntegration(BaseActingWebIntegration):
             token_data = session_data.get("token_data", {})
 
             if not token_data or "access_token" not in token_data:
+                # Defensive fallback: retrieve_spa_session() already requires
+                # actor_id (and a success session always carries access_token
+                # alongside it), so this should be unreachable in practice.
                 return JSONResponse(
                     content={"error": True, "message": "Invalid session data"},
                     status_code=400,
                     headers=cors_headers,
                 )
-
-            # Pending session will expire naturally (short TTL)
-            # This is one-time use by design - second retrieval will fail after expiry
 
             # Return the session data
             response_data = {

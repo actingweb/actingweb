@@ -48,7 +48,7 @@ def initialize_mcp_session(oauth2_client, client_name="Test Client"):
         },
         headers={"Content-Type": "application/json"},
     )
-    assert notif_response.status_code == 200
+    assert notif_response.status_code == 202
 
 
 class TestClientDescriptionDetection:

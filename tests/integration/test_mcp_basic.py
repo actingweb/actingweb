@@ -45,7 +45,7 @@ def initialize_mcp_session(oauth2_client):
         },
         headers={"Content-Type": "application/json"},
     )
-    assert notif_response.status_code == 200
+    assert notif_response.status_code == 202
 
 
 class TestMCPAuthentication:
@@ -299,3 +299,70 @@ class TestMCPAuthentication:
                 f"Resource name is not string: {type(resource['name'])}"
             )
             assert len(resource["name"]) > 0, "Resource name is empty string"
+
+
+class TestMCPNotifications:
+    """A JSON-RPC notification must never be answered with a response body.
+
+    A notification carries no ``id``, so there is no valid id to answer on.
+    The server used to reply ``200`` with
+    ``{"jsonrpc": "2.0", "id": null, "result": {}}``, which is not a
+    JSON-RPC message at all. Lenient clients ignored it; the Codex CLI's
+    ``rmcp`` client rejected it and killed the transport, so the server was
+    unreachable rather than merely noisy. These tests pin the spec shape:
+    ``202 Accepted``, empty body.
+    """
+
+    def test_initialized_notification_is_accepted_with_no_body(self, oauth2_client):
+        response = oauth2_client.post(
+            "/mcp",
+            json={
+                "jsonrpc": "2.0",
+                "method": "notifications/initialized",
+                "params": {},
+            },
+            headers={"Content-Type": "application/json"},
+        )
+
+        assert response.status_code == 202
+        assert response.content == b"", (
+            f"a notification must get an empty body, got {response.content!r}"
+        )
+
+    def test_unknown_notification_is_accepted_with_no_body(self, oauth2_client):
+        """Any ``notifications/*`` without an id, not just ``initialized``.
+
+        An unknown one used to fall through to the authenticated dispatch and
+        come back as a method-not-found error keyed on a null id — the same
+        invalid shape, from a different branch.
+        """
+        response = oauth2_client.post(
+            "/mcp",
+            json={"jsonrpc": "2.0", "method": "notifications/cancelled", "params": {}},
+            headers={"Content-Type": "application/json"},
+        )
+
+        assert response.status_code == 202
+        assert response.content == b""
+
+    def test_initialized_sent_as_a_request_still_gets_a_response(self, oauth2_client):
+        """The lenient branch: some clients send it with an ``id``.
+
+        That is a client bug, but it has always been answered and the fix
+        must not break those clients — an id in, a result out.
+        """
+        response = oauth2_client.post(
+            "/mcp",
+            json={
+                "jsonrpc": "2.0",
+                "id": 7,
+                "method": "notifications/initialized",
+                "params": {},
+            },
+            headers={"Content-Type": "application/json"},
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["id"] == 7
+        assert body["result"] == {}

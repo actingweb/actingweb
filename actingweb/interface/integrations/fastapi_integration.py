@@ -880,9 +880,11 @@ class FastAPIIntegration(BaseActingWebIntegration):
         @self.fastapi_app.get("/mcp")
         @self.fastapi_app.post("/mcp")
         async def app_mcp(request: Request) -> Response:  # pyright: ignore[reportUnusedFunction]
-            # POST initialize/notifications/initialized are the only
-            # unauthenticated MCP requests; everything else — including a
-            # GET — is answered with the 401 challenge by the handler.
+            # POST initialize, ping, any ``notifications/*`` message sent
+            # without an ``id`` and a client's JSON-RPC response (both answered
+            # 202 with no body) are the only unauthenticated MCP requests;
+            # everything else — including a GET — is answered with the 401
+            # challenge by the handler.
             return await self._handle_mcp_request(request)
 
         # OAuth2 Discovery endpoints using OAuth2EndpointsHandler
@@ -2366,6 +2368,14 @@ class FastAPIIntegration(BaseActingWebIntegration):
         # Check if the handler set custom headers (e.g., WWW-Authenticate for OAuth2)
         if hasattr(webobj, "response") and hasattr(webobj.response, "headers"):
             headers = dict(webobj.response.headers)
+
+        # A JSON-RPC notification must be answered with 202 and an empty
+        # body, never a JSON document — ``JSONResponse(content={})`` would
+        # send ``{}``, which is still not a valid JSON-RPC message and is
+        # what a strict client rejects. The handler signals this by pairing
+        # status 202 with an empty result.
+        if status_code == 202 and not result:
+            return Response(status_code=202, headers=headers)
 
         return JSONResponse(content=result, status_code=status_code, headers=headers)
 

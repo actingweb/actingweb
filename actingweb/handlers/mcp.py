@@ -752,7 +752,36 @@ class MCPHandler(BaseHandler):
             logger.error(f"Error handling MCP GET request: {e}")
             return self.error_response(500, f"Internal server error: {str(e)}")
 
-    def post(self, data: dict[str, Any]) -> dict[str, Any]:
+    def _reject_non_object_body(self, data: Any) -> dict[str, Any]:
+        """Answer a POST body that is not a single JSON-RPC object.
+
+        The framework integrations pass along whatever ``json.loads`` returned,
+        so ``data`` can be a list (a JSON-RPC batch), a string or a number.
+        Every one of those used to reach ``data.get(...)`` inside
+        :meth:`post` and then again in its ``except`` clause, so the
+        ``AttributeError`` escaped the handler and became a ``500``.
+
+        The answer is HTTP ``400`` with JSON-RPC ``-32600 Invalid Request`` and
+        ``id: null`` — the one place JSON-RPC requires a null id, because no
+        request id could be read.
+
+        Batches are declined rather than processed. MCP 2025-06-18 removed
+        batching, but 2025-03-26, which this server still negotiates, required
+        servers to receive them; that gap is recorded in
+        ``thoughts/todo/mcp-batch-receive.md``.
+        """
+        kind = "array (batch)" if isinstance(data, list) else type(data).__name__
+        logger.info("MCP POST rejected: body is a JSON %s, not an object", kind)
+        self.response.set_status(400, "Bad Request")
+        message = (
+            "Invalid Request: JSON-RPC batches are not supported; "
+            "send one message per request"
+            if isinstance(data, list)
+            else "Invalid Request: the body must be a JSON-RPC object"
+        )
+        return self._create_jsonrpc_error(None, -32600, message)
+
+    def post(self, data: Any) -> dict[str, Any]:
         """
         Handle POST requests to /mcp endpoint.
 
@@ -761,6 +790,12 @@ class MCPHandler(BaseHandler):
         """
         if not self.config.mcp:
             return self._mcp_disabled_response()
+        # One JSON-RPC object per POST. Anything else — a batch array above
+        # all — is rejected before the ``try``, so the error path below, which
+        # reads ``data.get("id")``, never sees a list. See
+        # :meth:`_reject_non_object_body`.
+        if not isinstance(data, dict):
+            return self._reject_non_object_body(data)
         try:
             method = data.get("method")
             params = data.get("params", {})
@@ -772,6 +807,24 @@ class MCPHandler(BaseHandler):
             # initialize would be rejected before it could learn what to use.
             if method == "initialize":
                 return self._handle_initialize(request_id, params)
+
+            # A notification (no ``id``) gets 202 and no body, whatever it
+            # is. Answering one with a JSON-RPC response is what breaks
+            # strict clients; see :meth:`_accept_notification`. This runs
+            # before version resolution because a notification has no id to
+            # carry a version error back on either.
+            if (
+                request_id is None
+                and isinstance(method, str)
+                and method.startswith("notifications/")
+            ):
+                return self._accept_notification(method)
+
+            # A JSON-RPC *response* from the client (no ``method``; a
+            # ``result`` or an ``error``) is not answered either — 202, no
+            # body. See :meth:`_accept_client_response`.
+            if method is None and ("result" in data or "error" in data):
+                return self._accept_client_response(request_id)
 
             # All other methods: resolve/validate the negotiated protocol
             # version from the header (sets self._negotiated_version; returns
@@ -1750,13 +1803,59 @@ class MCPHandler(BaseHandler):
                 request_id, -32603, f"Resource read failed: {str(e)}"
             )
 
+    def _accept_notification(self, method: str) -> dict[str, Any]:
+        """Accept a JSON-RPC notification without answering it.
+
+        A notification carries no ``id``, and JSON-RPC forbids a response to
+        one. The MCP streamable-HTTP transport spells out what that means
+        over HTTP: the server replies ``202 Accepted`` with an **empty
+        body**.
+
+        This used to answer ``200`` with
+        ``{"jsonrpc": "2.0", "id": null, "result": {}}``. ``null`` is not a
+        valid response id, so that body is not a JSON-RPC message at all. A
+        lenient client ignores it; a strict one rejects it and tears down the
+        transport before the session is usable — which is what the Codex CLI
+        does (``rmcp``: *data did not match any variant of untagged enum
+        JsonRpcMessage, when send initialized notification*), leaving the
+        server unreachable rather than merely noisy.
+
+        The empty dict is the signal to the framework integration: paired
+        with the 202 it means "no body", and both integrations turn it into a
+        bodyless response.
+        """
+        logger.info("MCP notification accepted: %r", method)
+        self.response.set_status(202, "Accepted")
+        return {}
+
+    def _accept_client_response(self, request_id: Any) -> dict[str, Any]:
+        """Accept a JSON-RPC response sent by the client, without answering it.
+
+        The streamable-HTTP transport lets a client POST a *response* — the
+        reply to a request the server sent it — and gives it the same answer
+        as a notification: ``202 Accepted``, empty body. This server sends no
+        requests to clients, so nothing is waiting for the response and it is
+        dropped.
+
+        It used to fall through to the authenticated dispatch, which answered
+        ``401`` with a JSON-RPC error — a reply to a reply, the same protocol
+        violation :meth:`_accept_notification` fixes.
+        """
+        logger.info("MCP client response accepted and dropped: id=%r", request_id)
+        self.response.set_status(202, "Accepted")
+        return {}
+
     def _handle_notifications_initialized(
         self, request_id: Any, params: dict[str, Any]
     ) -> dict[str, Any]:
-        """Handle MCP notifications/initialized request."""
-        # This is a notification that the client has finished initialization
-        # According to MCP spec, this is a notification (no response expected)
-        # However, some clients may send it as a request, so we respond
+        """Handle ``notifications/initialized`` **sent as a request**.
+
+        Sending it with an ``id`` is a client bug — the method is a
+        notification — but it has always been answered here and some clients
+        rely on that, so the lenient branch stays. The spec-correct path, no
+        ``id``, is handled by :meth:`_accept_notification` before dispatch
+        ever reaches this method.
+        """
         logger.info("MCP client initialization completed")
 
         return {"jsonrpc": "2.0", "id": request_id, "result": {}}

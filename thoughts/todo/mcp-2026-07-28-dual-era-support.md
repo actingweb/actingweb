@@ -95,9 +95,11 @@ carries the reasoning inline for whoever edits it.
 
 Branch on **presence of modern `_meta`, never on method name** — `ping` is the
 documented era-ambiguous trap (no parameters, so nothing distinguishes eras),
-and `notifications/initialized` has the identical shape. Those are the
-library's only two unauthenticated methods
-(`actingweb/handlers/mcp.py:392-395`); both are removed in 2026-07-28.
+and `notifications/initialized` has the identical shape. Both are
+unauthenticated, alongside `initialize`, any other `notifications/*`
+message sent without an `id`, and a JSON-RPC response sent by the client (see
+`MCPHandler.post`, `_accept_notification` and `_accept_client_response` in
+`actingweb/handlers/mcp.py`); both are removed in 2026-07-28.
 
 | Item | Notes |
 | --- | --- |

@@ -41,7 +41,7 @@ def initialize_mcp_session(oauth2_client):
         },
         headers={"Content-Type": "application/json"},
     )
-    assert notif_response.status_code == 200
+    assert notif_response.status_code == 202
 
 
 class TestMCPCompleteWorkflow:
@@ -99,7 +99,7 @@ class TestMCPCompleteWorkflow:
             },
             headers={"Content-Type": "application/json"},
         )
-        assert notif_response.status_code == 200
+        assert notif_response.status_code == 202
 
         # Step 3: List all capabilities
         tools_response = oauth2_client.post(
@@ -266,7 +266,7 @@ class TestMCPProtocolCompliance:
         )
 
         # Notification should be accepted
-        assert notif_response.status_code == 200
+        assert notif_response.status_code == 202
 
     def test_jsonrpc_version_must_be_2_0(self, oauth2_client):
         """

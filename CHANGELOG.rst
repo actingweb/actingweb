@@ -5,6 +5,52 @@ CHANGELOG
 Unreleased
 ----------
 
+v3.14.6: September 12, 2026
+----------------------------
+
+FIXED
+~~~~~
+
+- **A JSON-RPC notification was answered with a response body, which made
+  the MCP server unreachable from strict clients.** ``POST /mcp`` with
+  ``notifications/initialized`` and no ``id`` — the shape every client sends
+  right after ``initialize`` — came back ``200`` with
+  ``{"jsonrpc": "2.0", "id": null, "result": {}}``. JSON-RPC forbids
+  answering a notification, and ``null`` is not a valid response id, so that
+  body is not a protocol message at all. Lenient clients (Claude, ChatGPT)
+  ignored it; the Codex CLI's ``rmcp`` client rejected it (*data did not
+  match any variant of untagged enum JsonRpcMessage*) and tore down the
+  transport, so the whole server showed up as unavailable rather than
+  merely noisy. Any ``notifications/*`` method arriving without an ``id``
+  now gets ``202 Accepted`` with an empty body, as the streamable-HTTP
+  transport specifies — including unknown ones, which previously fell
+  through to the authenticated dispatch and came back as a method-not-found
+  error keyed on a null id. ``notifications/initialized`` sent *with* an
+  ``id`` is a client bug, but it has always been answered and still is.
+  Both the FastAPI and Flask integrations emit the bodyless 202, with no
+  ``Content-Type``.
+
+- **A JSON-RPC response sent by an MCP client was answered with a 401.** The
+  streamable-HTTP transport lets a client ``POST`` a response (an ``id`` with
+  a ``result`` or an ``error``, and no ``method``). It fell through to the
+  authenticated dispatch and came back ``401`` with a JSON-RPC error — a
+  reply to a reply, the same violation as the notification bug above. It now
+  gets ``202 Accepted`` with an empty body. This server sends no requests to
+  clients, so the response is dropped.
+
+- **A JSON array posted to ``/mcp`` crashed the handler.** ``POST /mcp``
+  with a JSON-RPC batch reached ``data.get(...)`` on a list, and so did the
+  handler's own error path, so both integrations failed with an unhandled
+  ``AttributeError`` — a ``500`` with no JSON-RPC body. Any body that is not
+  a single JSON object now gets ``400`` with a ``-32600 Invalid Request``
+  error whose ``id`` is ``null``; unlike the notification reply above, a null
+  id is what JSON-RPC requires here, because no request id could be read.
+  Batches are declined, not processed. MCP 2025-06-18 removed batching, but
+  2025-03-26 — which this server still negotiates, and assumes when a
+  request carries no ``MCP-Protocol-Version`` header — required servers to
+  receive them, so that revision is not fully honoured. Tracked in
+  ``thoughts/todo/mcp-batch-receive.md``.
+
 v3.14.5: September 10, 2026
 ----------------------------
 

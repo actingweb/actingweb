@@ -42,7 +42,7 @@ class AsyncMCPHandler(MCPHandler):
         # Reuse parent's get() - it doesn't call hooks
         return self.get()
 
-    async def post_async(self, data: dict[str, Any]) -> dict[str, Any]:
+    async def post_async(self, data: Any) -> dict[str, Any]:
         """
         Handle POST requests to /mcp endpoint asynchronously.
 
@@ -53,6 +53,10 @@ class AsyncMCPHandler(MCPHandler):
         """
         if not self.config.mcp:
             return self._mcp_disabled_response()
+        # One JSON-RPC object per POST; see
+        # :meth:`MCPHandler._reject_non_object_body`.
+        if not isinstance(data, dict):
+            return self._reject_non_object_body(data)
         try:
             method = data.get("method")
             params = data.get("params", {})
@@ -65,12 +69,29 @@ class AsyncMCPHandler(MCPHandler):
             if method == "initialize":
                 return self._handle_initialize(request_id, params)
 
-            # All other methods: resolve/validate the negotiated protocol
+            # Everything else: resolve/validate the negotiated protocol
             # version from the header (sets self._negotiated_version; returns
-            # 400 if the header is present but unsupported).
+            # 400 if the header is present but unsupported). Runs before the
+            # no-reply branches below; see ``MCPHandler.post``.
             version_error = self._resolve_request_protocol_version(request_id)
             if version_error is not None:
                 return version_error
+
+            # A notification (no ``id``) gets 202 and no body, whatever it
+            # is. Answering one with a JSON-RPC response is what breaks
+            # strict clients; see :meth:`MCPHandler._accept_notification`.
+            if (
+                request_id is None
+                and isinstance(method, str)
+                and method.startswith("notifications/")
+            ):
+                return self._accept_notification(method)
+
+            # A JSON-RPC *response* from the client (no ``method``; a
+            # ``result`` or an ``error``) is not answered either — 202, no
+            # body. See :meth:`MCPHandler._accept_client_response`.
+            if method is None and ("result" in data or "error" in data):
+                return self._accept_client_response(request_id)
 
             # Other methods that don't require authentication
             if method == "notifications/initialized":

@@ -268,9 +268,11 @@ class FlaskIntegration(BaseActingWebIntegration):
         # MCP endpoint
         @self.flask_app.route("/mcp", methods=["GET", "POST"])
         def app_mcp() -> Response | WerkzeugResponse | str:  # pyright: ignore[reportUnusedFunction]
-            # POST initialize/notifications/initialized are the only
-            # unauthenticated MCP requests; everything else — including a
-            # GET — is answered with the 401 challenge by the handler.
+            # POST initialize, ping, any ``notifications/*`` message sent
+            # without an ``id`` and a client's JSON-RPC response (both answered
+            # 202 with no body) are the only unauthenticated MCP requests;
+            # everything else — including a GET — is answered with the 401
+            # challenge by the handler.
             return self._handle_mcp_request()
 
         # OAuth2 Discovery endpoints using OAuth2EndpointsHandler
@@ -1439,6 +1441,20 @@ class FlaskIntegration(BaseActingWebIntegration):
         # Check if the handler set custom headers (e.g., WWW-Authenticate for OAuth2)
         if hasattr(webobj, "response") and hasattr(webobj.response, "headers"):
             headers = dict(webobj.response.headers)
+
+        # A JSON-RPC notification must be answered with 202 and an empty
+        # body, never a JSON document — ``jsonify({})`` would send ``{}``,
+        # which is still not a valid JSON-RPC message and is what a strict
+        # client rejects. The handler signals this by pairing status 202
+        # with an empty result.
+        if status_code == 202 and not result:
+            accepted = Response(status=202)
+            # werkzeug stamps every Response with a default ``text/html``
+            # type; a response with no body has no type, as on FastAPI.
+            accepted.headers.pop("Content-Type", None)
+            for header_name, header_value in headers.items():
+                accepted.headers[header_name] = header_value
+            return accepted
 
         json_response = jsonify(result)
         json_response.status_code = status_code

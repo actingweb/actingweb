@@ -41,7 +41,7 @@ def initialize_mcp_session(oauth2_client):
         },
         headers={"Content-Type": "application/json"},
     )
-    assert notif_response.status_code == 200
+    assert notif_response.status_code == 202
 
 
 @pytest.fixture(scope="module")

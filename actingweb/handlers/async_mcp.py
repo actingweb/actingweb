@@ -69,6 +69,14 @@ class AsyncMCPHandler(MCPHandler):
             if method == "initialize":
                 return self._handle_initialize(request_id, params)
 
+            # Everything else: resolve/validate the negotiated protocol
+            # version from the header (sets self._negotiated_version; returns
+            # 400 if the header is present but unsupported). Runs before the
+            # no-reply branches below; see ``MCPHandler.post``.
+            version_error = self._resolve_request_protocol_version(request_id)
+            if version_error is not None:
+                return version_error
+
             # A notification (no ``id``) gets 202 and no body, whatever it
             # is. Answering one with a JSON-RPC response is what breaks
             # strict clients; see :meth:`MCPHandler._accept_notification`.
@@ -84,13 +92,6 @@ class AsyncMCPHandler(MCPHandler):
             # body. See :meth:`MCPHandler._accept_client_response`.
             if method is None and ("result" in data or "error" in data):
                 return self._accept_client_response(request_id)
-
-            # All other methods: resolve/validate the negotiated protocol
-            # version from the header (sets self._negotiated_version; returns
-            # 400 if the header is present but unsupported).
-            version_error = self._resolve_request_protocol_version(request_id)
-            if version_error is not None:
-                return version_error
 
             # Other methods that don't require authentication
             if method == "notifications/initialized":

@@ -28,15 +28,18 @@ FIXED
   error keyed on a null id. ``notifications/initialized`` sent *with* an
   ``id`` is a client bug, but it has always been answered and still is.
   Both the FastAPI and Flask integrations emit the bodyless 202, with no
-  ``Content-Type``.
+  ``Content-Type``. The ``MCP-Protocol-Version`` header is still validated
+  first: a notification carrying an unsupported version gets ``400``, as
+  before.
 
 - **A JSON-RPC response sent by an MCP client was answered with a 401.** The
   streamable-HTTP transport lets a client ``POST`` a response (an ``id`` with
   a ``result`` or an ``error``, and no ``method``). It fell through to the
   authenticated dispatch and came back ``401`` with a JSON-RPC error — a
   reply to a reply, the same violation as the notification bug above. It now
-  gets ``202 Accepted`` with an empty body. This server sends no requests to
-  clients, so the response is dropped.
+  gets ``202 Accepted`` with an empty body, unless its
+  ``MCP-Protocol-Version`` header is unsupported, which still gets ``400``.
+  This server sends no requests to clients, so the response is dropped.
 
 - **A JSON array posted to ``/mcp`` crashed the handler.** ``POST /mcp``
   with a JSON-RPC batch reached ``data.get(...)`` on a list, and so did the
@@ -50,6 +53,18 @@ FIXED
   request carries no ``MCP-Protocol-Version`` header — required servers to
   receive them, so that revision is not fully honoured. Tracked in
   ``thoughts/todo/mcp-batch-receive.md``.
+
+- **The Flask integration ignored the ``MCP-Protocol-Version`` header.**
+  werkzeug hands header names over title-cased (``Mcp-Protocol-Version``),
+  and the MCP handler looked up only ``MCP-Protocol-Version`` and
+  ``mcp-protocol-version``, so on Flask the header was never read. Every
+  request was treated as 2025-03-26: an unsupported version was never refused
+  with ``400``, and a client that negotiated 2025-06-18 or later never got
+  what that version gates, such as ``structuredContent`` in tool results. The
+  lookup is now case-insensitive. FastAPI was not affected. A Flask
+  deployment whose clients send a newer version will start returning those
+  fields, and one whose clients send an unsupported version will start
+  answering ``400``.
 
 v3.14.5: September 10, 2026
 ----------------------------

@@ -9,7 +9,8 @@ frameworks through their in-process test clients, the same way
 The contract matters because a response body on a notification — even ``{}``
 — is not a JSON-RPC message, and a strict client (the Codex CLI's ``rmcp``)
 rejects it and tears the transport down. A client's JSON-RPC *response* is
-given the same bodyless 202. Neither needs a token.
+given the same bodyless 202. Neither needs a token, but both still go through
+``MCP-Protocol-Version`` validation: an unsupported version is a ``400``.
 
 A body that is not one JSON object (a batch array) is rejected with ``400``
 and a ``-32600`` error; it used to crash the handler and its error path with
@@ -55,6 +56,10 @@ NO_REPLY_BODIES = [
     CLIENT_ERROR_RESPONSE,
 ]
 NO_REPLY_IDS = ["initialized", "unknown", "client-result", "client-error"]
+
+# The transport requires 400 for any message carrying an unsupported version,
+# notifications and client responses included.
+UNSUPPORTED_VERSION = {"MCP-Protocol-Version": "1999-01-01"}
 
 
 @pytest.fixture
@@ -103,6 +108,13 @@ class TestFlaskNotifications:
             f"got {resp.headers.get('Content-Type')!r}"
         )
 
+    @pytest.mark.parametrize("body", NO_REPLY_BODIES, ids=NO_REPLY_IDS)
+    def test_unsupported_protocol_version_is_refused(self, flask_client, body):
+        resp = flask_client.post("/mcp", json=body, headers=UNSUPPORTED_VERSION)
+
+        assert resp.status_code == 400
+        assert "error" in resp.get_json()
+
     def test_initialized_sent_as_a_request_still_gets_a_response(self, flask_client):
         resp = flask_client.post("/mcp", json=AS_A_REQUEST)
 
@@ -131,6 +143,13 @@ class TestFastAPINotifications:
             "a bodyless 202 must not claim a content type, "
             f"got {resp.headers.get('content-type')!r}"
         )
+
+    @pytest.mark.parametrize("body", NO_REPLY_BODIES, ids=NO_REPLY_IDS)
+    def test_unsupported_protocol_version_is_refused(self, fastapi_client, body):
+        resp = fastapi_client.post("/mcp", json=body, headers=UNSUPPORTED_VERSION)
+
+        assert resp.status_code == 400
+        assert "error" in resp.json()
 
     def test_initialized_sent_as_a_request_still_gets_a_response(self, fastapi_client):
         resp = fastapi_client.post("/mcp", json=AS_A_REQUEST)

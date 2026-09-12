@@ -808,11 +808,20 @@ class MCPHandler(BaseHandler):
             if method == "initialize":
                 return self._handle_initialize(request_id, params)
 
+            # Everything else: resolve/validate the negotiated protocol
+            # version from the header (sets self._negotiated_version; returns
+            # 400 if the header is present but unsupported). The transport
+            # requires that 400 for *every* message with an unsupported
+            # header, so it runs before the no-reply branches below too — a
+            # notification or client response with a bad header is refused,
+            # not accepted.
+            version_error = self._resolve_request_protocol_version(request_id)
+            if version_error is not None:
+                return version_error
+
             # A notification (no ``id``) gets 202 and no body, whatever it
             # is. Answering one with a JSON-RPC response is what breaks
-            # strict clients; see :meth:`_accept_notification`. This runs
-            # before version resolution because a notification has no id to
-            # carry a version error back on either.
+            # strict clients; see :meth:`_accept_notification`.
             if (
                 request_id is None
                 and isinstance(method, str)
@@ -825,13 +834,6 @@ class MCPHandler(BaseHandler):
             # body. See :meth:`_accept_client_response`.
             if method is None and ("result" in data or "error" in data):
                 return self._accept_client_response(request_id)
-
-            # All other methods: resolve/validate the negotiated protocol
-            # version from the header (sets self._negotiated_version; returns
-            # 400 if the header is present but unsupported).
-            version_error = self._resolve_request_protocol_version(request_id)
-            if version_error is not None:
-                return version_error
 
             # Other methods that don't require authentication
             if method == "notifications/initialized":
@@ -1894,12 +1896,19 @@ class MCPHandler(BaseHandler):
         """
         header_value: str | None = None
         if self.request and self.request.headers:
-            # ActingWeb wraps framework headers into a plain dict, so handle
-            # both the spec casing and the all-lowercase normalization (matches
-            # get_auth_header()'s Authorization/authorization handling).
-            header_value = self.request.headers.get(
-                "MCP-Protocol-Version"
-            ) or self.request.headers.get("mcp-protocol-version")
+            # ActingWeb wraps framework headers into a plain dict whose key
+            # casing depends on the framework: FastAPI lowercases
+            # (``mcp-protocol-version``), werkzeug title-cases
+            # (``Mcp-Protocol-Version``), and a hand-built dict may use the
+            # spec's ``MCP-Protocol-Version``. Matching only the first and
+            # last meant Flask never saw the header at all — every Flask
+            # request was treated as 2025-03-26 and an unsupported version
+            # was never refused. HTTP header names are case-insensitive, so
+            # match them that way.
+            for name, value in self.request.headers.items():
+                if isinstance(name, str) and name.lower() == "mcp-protocol-version":
+                    header_value = value
+                    break
 
         if not header_value:
             self._negotiated_version = DEFAULT_NEGOTIATED_VERSION

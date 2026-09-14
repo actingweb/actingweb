@@ -19,6 +19,7 @@ from typing import Any
 import fractional_indexing as fi
 
 from actingweb.db import get_property
+from actingweb.db.exceptions import DbError
 
 logger = logging.getLogger(__name__)
 
@@ -202,18 +203,28 @@ class ListMetadataContentionError(RuntimeError):
     semantic field (a ``format`` flip, v1's ``length``) -- there the
     metadata write IS the operation. An advisory touch (``updated_at``
     plus v2's ``count_hint`` on an already-existing row) swallows the
-    same exhaustion with one WARNING instead: the item row it is
-    recording is already committed, and failing the whole mutation over
-    a missed count-hint update would manufacture retries (and duplicate
-    writes) a caller cannot guard against in-process on lambda.
+    same exhaustion, or a backend fault, with one WARNING instead: the
+    item row it is recording is already committed, and failing the whole
+    mutation over a missed count-hint update would manufacture retries
+    (and duplicate writes) a caller cannot guard against in-process on
+    lambda.
+
+    Also raised, with a ``detail``, by a list's first mutation that lost
+    its conditional meta-row create to a writer whose row it cannot
+    follow (see ``ListProperty._v2_create_meta_row()``): nothing has been
+    written in that case, and the 503's "retry" is exactly right.
     """
 
-    def __init__(self, list_name: str, actor_id: str) -> None:
+    def __init__(
+        self, list_name: str, actor_id: str, *, detail: str | None = None
+    ) -> None:
         self.list_name = list_name
         self.actor_id = actor_id
+        clause = (
+            detail if detail is not None else "metadata is under sustained contention"
+        )
         super().__init__(
-            f"List '{list_name}' (actor {actor_id}) metadata is under "
-            f"sustained contention -- retry the request"
+            f"List '{list_name}' (actor {actor_id}) {clause} -- retry the request"
         )
 
 
@@ -321,6 +332,13 @@ class ListProperty:
     check that must never over-admit should trust the hint while strictly
     below its limit and confirm with ``len()`` once it reaches the limit --
     the exact read is then paid only at the boundary, not on every save.
+
+    A v2 item mutator (``append``/``extend``/``insert``/``__setitem__``/
+    ``__delitem__``/``pop``/``remove``/``delete_by_handle``/
+    ``update_by_handle``/``remove_where``/``update_where``) that RETURNS
+    has committed its item write -- the metadata touch that follows it can
+    neither fail that mutation nor be the reason it raised (see
+    ``ListMetadataContentionError`` and ``_v2_touch_metadata()``).
     """
 
     def __init__(self, actor_id: str, name: str, config: Any) -> None:
@@ -424,6 +442,17 @@ class ListProperty:
             return int(parsed.get("format", 1) or 1)
         except (TypeError, ValueError):
             return 1
+
+    def _dispatch_saw_no_row(self) -> bool:
+        """True if the ``_dispatch_and_stash()`` call at the top of this
+        mutation found no meta row -- the stash it left is the ``(None,
+        None)`` reading, not ``_NO_STASH`` (which means "no dispatch stash
+        was taken at all" and never compares equal to a stashed tuple).
+        The three creating v2 mutators (``append``/``extend``/``insert``)
+        use this to decide whether to run ``_v2_create_meta_row()`` before
+        their first item write.
+        """
+        return self._pending_meta_read == (None, None)
 
     def _decode_item(self, item_str: str) -> Any:
         try:
@@ -764,13 +793,14 @@ class ListProperty:
                 caller's mutation already succeeded; the missed count-hint
                 update is Phase 5's documented drift bound's third term,
                 repaired by the next rank-counting mutation or
-                ``compact()``. Does NOT apply to the row-creation branch
-                above (an unconditional write either succeeds or raises on
-                a genuine backend fault, which is not a condition to
-                swallow either way) or to any write carrying a semantic
-                field (``format``, v1's ``length``) -- there the metadata
-                write IS the operation, so those callers must pass
-                ``advisory=False`` (the default).
+                ``compact()``. Does NOT apply to any write carrying a
+                semantic field (``format``, v1's ``length``) -- there the
+                metadata write IS the operation, so those callers must pass
+                ``advisory=False`` (the default). A genuine backend fault
+                under ``advisory=True`` (on either the CAS write or the
+                row-creation branch above) is not swallowed here -- see
+                ``_v2_touch_metadata()``, the only ``advisory=True`` caller,
+                for where that is caught.
 
         Raises:
             ListMetadataContentionError: the retry bound was exhausted on a
@@ -965,8 +995,11 @@ class ListProperty:
             expected to re-read and retry, not to treat this as failure.
 
         Raises:
-            RuntimeError: a genuine backend fault on an unconditional
-                write.
+            RuntimeError: an unconditional write reports a fault as
+                ``False`` (PostgreSQL's ``set``).
+            DbError: an unconditional write raises directly on a fault
+                (DynamoDB's ``set``), or a conditional write faults on
+                either backend (``set_if_value_equals``).
         """
         meta["updated_at"] = datetime.now().isoformat()
 
@@ -1289,36 +1322,64 @@ class ListProperty:
         stale format-2 cache over storage another process has downgraded
         to v1.
 
-        It DOES create the row when absent, unlike the v1 length writers,
-        which skip the write on the grounds that a vanished row means a
-        concurrent ``delete()`` won. The asymmetry is real and deliberate:
-        under v2 there is no separate creation step, so ``append()`` to a
-        list with no metadata row is how a list comes into existence. A
-        ``delete()`` racing an ``append()`` therefore leaves a one-item list
-        rather than nothing -- which is the same answer appending to a
-        never-created list gives, and the alternative is an item row no
-        ``exists()`` or ``list_all()`` can see.
+        A list comes into existence through ``_v2_create_meta_row()``,
+        called by ``append()``/``extend()``/``insert()`` before their first
+        item write when ``_dispatch_saw_no_row()`` is true -- not through
+        this touch. This method's own row-creation branch (inside
+        ``_save_metadata()``, reached when the meta row is absent) is the
+        FALLBACK for a row that vanished between the two writes -- a
+        ``delete()`` racing the first mutation's create-then-item-write
+        window -- or for a mutation landing against orphan rows left by a
+        pre-3.14.7 fault. Either way it still creates the row rather than
+        skip the write the way the v1 length writers do on an absent row:
+        the asymmetry is real and deliberate, and the result -- a
+        ``delete()`` racing a v2 mutation leaves a one-item list rather
+        than nothing -- is the same answer appending to a never-created
+        list gives.
 
         Always passes ``advisory=True`` to ``_save_metadata()``: every
         caller of this method is a v2 mutator that has ALREADY written (or
         deleted) the item row it is now recording -- that write is
         committed regardless of what happens to this touch. Contention
-        that exhausts the (smaller) advisory retry bound is swallowed with
-        one WARNING rather than raised, so the mutation the caller invoked
-        still returns success. (The row-creation branch inside
-        ``_save_metadata()`` -- this list's first-ever mutation, meta row
-        absent -- is unconditional and never reaches CAS exhaustion at
-        all, so ``advisory`` has no effect on it either way; see that
-        method's docstring.)
+        that exhausts the (smaller) advisory retry bound, AND a genuine
+        backend fault (``DbError``, or PostgreSQL's ``RuntimeError`` on
+        the row-creation branch), are both swallowed with one WARNING
+        rather than raised, so the mutation the caller invoked still
+        returns success. A ``ValueError`` (unparsable meta row, or the
+        row-creation branch's ``#``-name/scalar-collision check) is
+        semantic corruption, not a fault, and is deliberately let through.
         """
         updates: dict[str, Any] = {}
         if count is not None:
             updates["count_hint"] = count
-        self._save_metadata(
-            updates,
-            count_delta=0 if count is not None else count_delta,
-            advisory=True,
-        )
+        try:
+            self._save_metadata(
+                updates,
+                count_delta=0 if count is not None else count_delta,
+                advisory=True,
+            )
+        except (DbError, RuntimeError) as exc:
+            # ListMetadataContentionError subclasses RuntimeError, so this
+            # clause WOULD swallow it -- but _save_metadata() never raises
+            # it under advisory=True: its exhaustion path returns after
+            # one WARNING when advisory is set, and the raise sits behind
+            # that return. If that invariant ever changes, the outcome
+            # here (swallow: the item write is already committed) is still
+            # the right one, but the WARNING below would mislabel
+            # contention as a backend fault -- catch it separately then.
+            logger.warning(
+                "List '%s' (actor %s): advisory metadata touch hit a "
+                "backend fault after the item write committed (%s) -- the "
+                "mutation this touch was recording already succeeded. "
+                "count_hint may be off by one until the next "
+                "rank-counting mutation or compact(); if the meta row was "
+                "being recreated, it may be absent until the next "
+                "mutation.",
+                self.name,
+                self.actor_id,
+                exc,
+                exc_info=True,
+            )
 
     def _v2_setitem(self, index: int, value: Any) -> None:
         # Force a fresh rank read: this is a DESTRUCTIVE positional write,
@@ -1478,6 +1539,84 @@ class ListProperty:
             return iter(self._v2_to_list())
         return ListPropertyIterator(self)
 
+    def _v2_create_meta_row(self) -> None:
+        """A list's first mutation creates its meta row BEFORE its first
+        item row, conditionally. Called by ``_v2_append()``/
+        ``_v2_extend()``/``_v2_insert()`` only when
+        ``_dispatch_saw_no_row()`` is true, so an item row can no longer
+        exist without a meta row through this path -- except when a
+        concurrent ``delete()`` races the first mutation and the
+        recreation write (inside ``_v2_touch_metadata()``'s row-creation
+        branch) also faults, which is logged and reported by ``verify()``.
+
+        ::
+
+            append()/extend()/insert() on a list whose dispatch read found NO meta row
+            ──────────────────────────────────────────────────────────────────────────
+             _dispatch_and_stash()        read meta ──► (None, None) stashed
+                    │
+                    ▼
+             _v2_create_meta_row()        _load_metadata() ── ValueError ('#' name,
+                    │                     (2 reads)             scalar collision) ► raise, nothing written
+                    │                                        ── DbError            ► raise, nothing written
+                    │
+                    ├─ create_if_not_exists(meta) ── DbError  ► raise, nothing written            [exit 1]
+                    │        ├─ True  ► stash = (meta, bytes just written)
+                    │        └─ False ► re-read: v2 row     ► stash = (row, raw); continue
+                    │                            absent / v1 ► ListMetadataContentionError(detail=…)
+                    │                                          nothing written                    [exit 2]
+                    ▼
+             item write  create_if_not_exists(list:{name}-#rank)
+                    │        └─ DbError ► raise; meta row exists: list is EMPTY and VISIBLE      [exit 3]
+                    ▼
+             _v2_touch_metadata()   try: _save_metadata(advisory=True)
+                    │                 attempt 0 CASes on the stashed bytes
+                    │                 ├─ CAS exhausted         ► WARNING, return (hint drift +1)
+                    │                 ├─ DbError/RuntimeError  ► WARNING, return (hint drift +1)  [exit 4]
+                    │                 │    (creation branch only if a delete() swept the row
+                    │                 │     between create and item write: residual orphan)
+                    │                 └─ ValueError            ► raise (corruption stays visible)
+                    ▼
+             return   the item write is committed; nothing after it can fail the call
+
+        The re-stash on a successful create is load-bearing: without it,
+        the touch's attempt 0 would consume the ``(None, None)`` stash
+        ``_dispatch_and_stash()`` left, take the creation branch, and
+        overwrite the row just created with an unconditional ``set`` --
+        defeating the CAS and any concurrent writer's update. With it,
+        attempt 0 conditions on the exact bytes just written.
+
+        ``_invalidate_cache()`` runs first, for the same reason the
+        creation branch inside ``_save_metadata()`` does it: a retained
+        instance's stale v1 (or otherwise stale) cache must not seed the
+        row. ``_load_metadata()`` then takes its absent-row path and
+        returns a clean v2 default (``_create_default_metadata_v2()``,
+        ``count_hint: 0``, ``format_ever_changed: False``) -- which is
+        also where the ``#``-name ban and the scalar-property-collision
+        check run, before any write.
+        """
+        self._invalidate_cache()
+        meta = dict(self._load_metadata())
+        meta_json = json.dumps(meta)
+        meta_db = get_property(self.config)
+        if meta_db.create_if_not_exists(
+            actor_id=self.actor_id, name=self._get_meta_property_name(), value=meta_json
+        ):
+            self._meta_cache = meta
+            self._pending_meta_read = (meta, meta_json)
+            return
+        # Lost the create: another writer made the row in the window.
+        parsed, raw = self._read_meta_row()
+        if parsed is not None and int(parsed.get("format", 1) or 1) == 2:
+            self._meta_cache = parsed
+            self._pending_meta_read = (parsed, raw)
+            return
+        raise ListMetadataContentionError(
+            self.name,
+            self.actor_id,
+            detail="metadata row changed under a first-mutation create",
+        )
+
     def _v2_append(self, item: Any) -> None:
         """Phase 9B: one ``get_last_in_range`` read (a single item's read
         capacity) instead of ``_v2_ensure_rank_cache()``'s whole-list range
@@ -1502,7 +1641,13 @@ class ListProperty:
         advanced, so ``while len(list_prop) <= index: list_prop.append(
         None)`` never terminated -- found via a hang in
         ``tests/integration/test_post_properties.py``.
+
+        On a list whose dispatch found no meta row, creates it first via
+        ``_v2_create_meta_row()`` -- see that method's docstring for the
+        full write-order diagram.
         """
+        if self._dispatch_saw_no_row():
+            self._v2_create_meta_row()
         value_str = self._encode_item(item)
         last = self._v2_last_rank()
         for attempt in range(_V2_MAX_RANK_RETRIES):
@@ -1587,7 +1732,14 @@ class ListProperty:
         Same cache discipline as ``_v2_append()``: created ranks are
         appended to ``self._v2_rank_cache`` IF it is already warm, never
         loading a cold one.
+
+        On a list whose dispatch found no meta row, creates it first via
+        ``_v2_create_meta_row()``. ``extend()`` already returns before
+        dispatch on an empty ``items``, so this never runs on a
+        never-created list for an empty batch.
         """
+        if self._dispatch_saw_no_row():
+            self._v2_create_meta_row()
         last = self._v2_last_rank()
         remaining = items
         created = 0
@@ -2032,6 +2184,11 @@ class ListProperty:
         return item
 
     def _v2_insert(self, index: int, item: Any) -> None:
+        """On a list whose dispatch found no meta row, creates it first via
+        ``_v2_create_meta_row()`` -- see that method's docstring for the
+        full write-order diagram."""
+        if self._dispatch_saw_no_row():
+            self._v2_create_meta_row()
         value_str = self._encode_item(item)
         for attempt in range(_V2_MAX_RANK_RETRIES):
             ranks = self._v2_ensure_rank_cache(force=(attempt > 0))
@@ -2578,14 +2735,23 @@ class ListProperty:
     def _v2_verify(self, identity_key: str | None = None) -> dict[str, Any]:
         """Read-only integrity check for v2 lists.
 
-        Structurally, v2 cannot have holes or orphans -- there is no
-        separate "recorded length" a row could disagree with; every
-        present row IS a position. The only thing worth reporting is rank
-        keys approaching the length cap (a signal to compact()/rebalance
-        before insert()/append() start failing) and the same
-        adjacent-duplicate heuristic v1 reports (informational, not part
-        of ``healthy`` -- a duplicate value is never itself corruption
-        under v2).
+        Structurally, v2 cannot have holes -- there is no separate
+        "recorded length" a row could disagree with; every present row IS
+        a position. It CAN have an orphan: item rows with no meta row at
+        all, the state a fault on the item write of a list's first
+        mutation could leave before thoughts/plans/2026-09-14-v2-list-
+        mutation-raises-after-its-write-committed.md's Phase 1, and that a
+        rare residual (a concurrent ``delete()`` plus a fault on the
+        touch's recreation write) can still leave. An orphan is invisible
+        to ``exists()``/``list_all()``/REST and is swept as residue by the
+        next ``delete()``/``clear()``/``migrate_to_v2()`` -- worth
+        flagging even though the next mutation through ``ListProperty``,
+        or ``compact()``, repairs it. Besides that, the only other things
+        worth reporting are rank keys approaching the length cap (a signal
+        to compact()/rebalance before insert()/append() start failing) and
+        the same adjacent-duplicate heuristic v1 reports (informational,
+        not part of ``healthy`` -- a duplicate value is never itself
+        corruption under v2).
 
         Returns:
             Dict with:
@@ -2606,14 +2772,24 @@ class ListProperty:
               goes false for duplicate identities that ``compact()`` will
               not touch
             - count_hint: the stored advisory count (``None`` if this
-              list's metadata predates ``count_hint`` entirely)
+              list's metadata predates ``count_hint`` entirely, or if the
+              meta row is absent entirely -- see ``meta_row_present``)
             - count_hint_drift: ``count_hint - length`` (``None`` when
               ``count_hint`` is ``None``). Informational, NOT part of
               ``healthy`` -- see the class docstring for the documented
               drift bound; nonzero here is expected under concurrent
               mutation, not corruption
+            - meta_row_present: whether the meta row physically exists.
+              ``False`` for a never-created list (no meta row, no items)
+              as well as for an orphan. The orphan state is the
+              combination ``meta_row_present is False and length > 0``;
+              ``healthy`` encodes exactly that combination, so a consumer
+              wanting "is this an orphan" should read ``healthy`` (or
+              test both keys), not ``meta_row_present`` alone
             - healthy: True iff no rank key is within the rebalance
-              warning zone of the cap and no identity is repeated
+              warning zone of the cap, no identity is repeated, and the
+              list is not an orphan (``meta_row_present is False`` while
+              ``length > 0``). A never-created list is healthy.
         """
         pairs = self._v2_load_full()
         max_rank_length = max((len(rank) for rank, _ in pairs), default=0)
@@ -2625,6 +2801,7 @@ class ListProperty:
                 adjacent_duplicates.append((i, i + 1))
 
         stored, _ = self._read_meta_row()
+        meta_row_present = stored is not None
         stored = stored or {}
         count_hint = stored.get("count_hint")
         count_hint = count_hint if isinstance(count_hint, int) else None
@@ -2640,7 +2817,11 @@ class ListProperty:
             "count_hint_drift": (
                 count_hint - length if count_hint is not None else None
             ),
-            "healthy": max_rank_length < _V2_RANK_WARNING_LENGTH,
+            "meta_row_present": meta_row_present,
+            "healthy": (
+                max_rank_length < _V2_RANK_WARNING_LENGTH
+                and not (not meta_row_present and length > 0)
+            ),
         }
         duplicates: dict[Any, list[int]] | None = None
         identity_checked_count: int | None = None

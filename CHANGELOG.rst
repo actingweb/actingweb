@@ -5,6 +5,103 @@ CHANGELOG
 Unreleased
 ----------
 
+v3.14.7: September 14, 2026
+----------------------------
+
+SECURITY
+~~~~~~~~
+
+- **``cryptography`` floor raised to ``>= 50.0.0``** (was ``>= 48.0.1``).
+  Versions 44.0.0 through 49.x expose a Bleichenbacher oracle in PKCS#7
+  ``EnvelopedData`` decryption (CVE-2026-69247, GHSA-g6cj-pr64-35w5).
+  ActingWeb itself never calls the affected ``pkcs7_decrypt_*`` APIs -- it
+  uses ``Fernet`` and PEM private-key loading only -- so no ActingWeb code
+  path was exploitable, but the library pulled the vulnerable range into
+  every consumer's environment and Dependabot flagged both ``poetry.lock``
+  and ``docs/requirements.txt``. Both now resolve to ``cryptography``
+  50.0.1. Consumers pinned below 50.0.0 will see a resolver conflict on
+  upgrade and should lift their pin. ``cryptography`` 50 also *deprecates*
+  finite-field Diffie-Hellman (``asymmetric.dh``); ActingWeb does not use
+  it, but an application importing it will now get a deprecation warning
+  from the shared dependency.
+
+- **``pyjwt`` floor raised to ``^2.14`` (was ``^2.13``).** 2.14.0 is a
+  security release: it hardens HMAC key validation against public-key
+  material supplied as a key (the algorithm-confusion class,
+  GHSA-r6x4-923q-g947 and related), stops ``PyJWKClient`` following
+  redirects to untrusted JWKS hosts, bounds JWKS refreshes on unknown key
+  IDs, and rejects malformed or deeply nested JWS/JWK input without
+  uncaught recursion. ActingWeb decodes and verifies provider ID tokens
+  through ``pyjwt`` (``oauth2_id_token.py``; the JWKS fetch itself is
+  ActingWeb's own ``oauth2_jwks`` module, so the ``PyJWKClient`` fixes do
+  not apply to it) and signs Apple client secrets with it, so consumers
+  get the JWS/JWK parsing and HMAC-key hardening by upgrading. Consumers
+  pinned to ``pyjwt`` 2.13.x will see a resolver conflict on upgrade and
+  should lift their pin.
+
+- **Lock file refreshed.** All other dependencies updated to the newest
+  releases within their existing constraints, notably ``fastapi`` 0.139.0
+  → 0.141.1, ``starlette`` 1.3.1 → 1.6.0, ``uvicorn`` 0.50.0 → 0.53.0,
+  ``boto3``/``botocore`` 1.43.40 → 1.43.93, ``psycopg`` 3.3.4 → 3.3.5,
+  ``sqlalchemy`` 2.0.51 → 2.0.52, ``alembic`` 1.18.5 → 1.20.0. No
+  constraint other than ``cryptography`` and ``pyjwt`` changed, so
+  consumers on the previous lock are unaffected until they re-resolve.
+
+FIXED
+~~~~~
+
+- **A v2 list mutation could raise after its item write had committed.**
+  Every v2 ``ListProperty`` mutator writes its item row and then makes an
+  advisory metadata touch (``updated_at``/``count_hint``); the touch's
+  ``advisory=True`` swallowed compare-and-swap contention only, so a
+  genuine backend fault (a throttle, timeout, or connection error) during
+  the touch still raised — out of a mutation whose item write had already
+  committed. A caller that retried on that exception duplicated its own
+  save, got ``not_found`` against its own delete, or lost one side of a
+  move. Backend faults during the touch are now logged at WARNING and
+  swallowed on every v2 item mutator, including ``pop()`` (which still
+  returns the popped item), ``remove_where()``/``update_where()`` (which
+  still return their partial results), and ``NotifyingListProperty``
+  (which still registers its subscription diff). **Behavior change:** a v2
+  mutation whose metadata touch hits a backend fault now returns success
+  and logs one WARNING instead of raising; the advisory ``count_hint`` may
+  be off by one until the next rank-counting mutation or ``compact()``.
+
+- **A list's first mutation could leave item rows with no meta row.** Under
+  v2 there is no separate creation step — a list's first ``append()``/
+  ``extend()``/``insert()`` created its meta row as a side effect of the
+  advisory touch, *after* the item write. A fault on that touch left item
+  rows with no meta row: invisible to ``exists()``/``list_all()``/the REST
+  handlers, called healthy by ``verify()``, and swept as residue by the
+  next ``delete()``/``clear()``/``migrate_to_v2()``. A list's first
+  mutation now creates its meta row, conditionally, *before* its first
+  item write; the one remaining way to get this orphan is a ``delete()``
+  racing the first mutation while the touch's recreation write also
+  faults, which is now logged and which ``verify()`` reports (see below).
+  **Behavior change:** a fault on the item write of a list's first
+  ``append()``/``extend()``/``insert()`` now leaves an empty, visible list
+  where it previously left nothing; a lost meta-row create (another writer
+  created the row first, and it is not v2) raises
+  ``ListMetadataContentionError`` before any item write, mapped to 503
+  with ``Retry-After``. ``ListMetadataContentionError`` gains a
+  keyword-only ``detail`` argument (default ``None``, existing message
+  unchanged) so that raise says what happened. The browser UI's list-item
+  form (``/{actor_id}/www/properties``) now maps
+  ``ListMetadataContentionError`` to 503 with ``Retry-After`` too, where it
+  previously rendered a 500 "Error processing list item"; that also covers
+  the v1 contention raise the UI never mapped.
+
+- **``verify()`` called an orphaned v2 list healthy.** **Behavior change:**
+  the v2 report gains ``meta_row_present`` (whether the meta row physically
+  exists -- also ``False`` for a never-created list with no items);
+  ``healthy`` is ``False`` when item rows exist without a meta row, and
+  stays ``True`` for a never-created list.
+
+  Retrying a *raised* mutation is still not safe in general: a timed-out
+  conditional write retried by the SDK can itself report ``False`` for a
+  write that landed, independent of the fix above — tracked in
+  ``thoughts/todo/conditional-write-ambiguous-after-sdk-retry.md``.
+
 v3.14.6: September 12, 2026
 ----------------------------
 

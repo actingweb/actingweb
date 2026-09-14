@@ -206,7 +206,10 @@ class TestExtendBatchesOneLastRankReadForTheWholeCall:
 
         assert fake_db.range_call_count == 0
         assert fake_db.last_in_range_call_count == 1
-        assert fake_db.create_call_count == 4
+        # 1 meta-row create (this is the list's first-ever mutation, so
+        # _v2_create_meta_row() creates the row before any item) + 4 item
+        # creates.
+        assert fake_db.create_call_count == 5
         assert lst.to_list() == ["a", "b", "c", "d"]
 
     def test_extend_iteration_order_matches_insertion_order(
@@ -278,7 +281,10 @@ class TestExtendRankCollisionReKeysFromTheCollisionPoint:
 
         def _flaky_create(self, actor_id=None, name=None, value=None):
             calls["n"] += 1
-            if calls["n"] == 2:
+            # Call 1 is this never-created list's meta-row create
+            # (_v2_create_meta_row()); call 2 is item "a"; call 3 is the
+            # SECOND planned item rank ("b"), where the injection lands.
+            if calls["n"] == 3:
                 # Simulate a concurrent writer stealing the SECOND
                 # planned rank between our read and our write.
                 self.store[(actor_id, name)] = json.dumps("stolen-by-concurrent-writer")

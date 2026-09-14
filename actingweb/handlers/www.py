@@ -4,7 +4,7 @@ import logging
 
 from actingweb.db import get_property
 from actingweb.handlers import base_handler
-from actingweb.property_list import ListCorruptionError
+from actingweb.property_list import ListCorruptionError, ListMetadataContentionError
 
 logger = logging.getLogger(__name__)
 
@@ -1028,6 +1028,11 @@ class WwwHandler(base_handler.BaseHandler):
                     )
                     return
 
+                except ListMetadataContentionError as e:
+                    logger.warning(f"List metadata contended for '{prop_name}': {e}")
+                    self.response.set_status(503, "List metadata contended -- retry")
+                    self.response.headers["Retry-After"] = "1"
+                    return
                 except Exception as e:
                     logger.error(f"Error in list item management: {e}")
                     self.response.set_status(

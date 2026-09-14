@@ -160,12 +160,43 @@ contract**: at any moment, ``|count_hint - len(lst)|`` is at most the
 number of mutations currently in flight against the list, plus -- during
 a rolling deploy only -- mutations applied by pre-3.14 writers since the
 last rank-counting 3.14 mutation, plus one per mutation whose advisory
-metadata touch failed since the last rank-counting mutation. It never
-accumulates beyond those three terms, and it self-corrects: the next
-``insert()``/``pop()``/``remove()``/``del lst[i]``/``compact()`` call
-overwrites the hint with the counted truth (``append()``/``extend()``
-merge stored-plus-delta and never re-count on their own). A quiesced list
-whose mutations all landed cleanly reports an exact hint.
+metadata touch failed (contention that outlasted its retries, or a
+backend fault after the item write) since the last rank-counting
+mutation. It never accumulates beyond those three terms, and it
+self-corrects: the next ``insert()``/``pop()``/``remove()``/``del
+lst[i]``/``compact()`` call overwrites the hint with the counted truth
+(``append()``/``extend()`` merge stored-plus-delta and never re-count on
+their own). A quiesced list whose mutations all landed cleanly reports an
+exact hint.
+
+**What a returned mutation guarantees**
+
+- Once a v2 mutator returns, its item write is committed, and a fault in
+  the metadata bookkeeping that follows it can neither fail that
+  mutation nor be the reason it raised.
+- A v2 mutator that raises ``DbError``, ``RuntimeError`` or
+  ``ListMetadataContentionError`` did NOT commit its item row. Two facts
+  about the *meta* row go with that: a raise on a list's first mutation
+  may still have created the list (a fault on the item write, after the
+  meta row was created, leaves an empty, visible list that a retry then
+  appends to); and a *return* may, in one rare race (a concurrent
+  ``delete()`` landing between the meta-row create and the item write,
+  followed by a fault on the touch's recreation write), leave the
+  committed item without a meta row -- logged as a WARNING and reported
+  by ``verify()``'s ``meta_row_present`` key.
+- A ``ValueError`` is not covered by that sentence: an unparsable
+  metadata row read on a compare-and-swap retry, or a scalar property
+  created under the list's name between dispatch and the touch, raises
+  *after* the item write by design -- corruption and name collisions
+  stay visible, and the REST handlers map it to 400.
+- ``extend()``, ``remove_where()`` and ``update_where()`` are batches: a
+  raise part-way through means the earlier items landed, exactly as
+  today.
+- None of this makes retrying a *raised* mutation safe in general: a
+  timed-out conditional write retried by the SDK can itself report
+  ``False`` for a write that actually landed, independent of anything
+  above (see
+  ``thoughts/todo/conditional-write-ambiguous-after-sdk-retry.md``).
 
 A quota check that must never over-admit should trust the hint while
 strictly below its limit, and confirm with the exact ``len()`` only once
@@ -182,6 +213,20 @@ quota boundary, not on every save::
 ``count_hint_drift`` (informational, not part of ``healthy`` -- expected
 drift under concurrent mutation is not corruption), and ``compact()``
 always rewrites the hint to the counted truth as part of its rebalance.
+
+``verify()`` also reports ``meta_row_present``: whether the list's meta
+row physically exists. It is ``False`` for a never-created list (no meta
+row, no items) as well as for an *orphan* -- item rows with no meta row
+at all, the state described above, where the list is invisible to
+``exists()``/``list_all()`` and is swept as residue by the next
+``delete()``/``clear()``/``migrate_to_v2()``. The orphan condition is the
+combination ``meta_row_present is False and length > 0``, and unlike
+``count_hint_drift`` that combination IS part of ``healthy``:
+``healthy`` is ``False`` for an orphan and ``True`` for a never-created
+list. Read ``healthy`` (or test both keys) to classify an orphan; do not
+treat ``meta_row_present`` alone as the orphan flag. The next mutation
+through ``ListProperty``, or ``compact()``, recreates the row and clears
+the state.
 
 **Reading with `consistent=False`**
 

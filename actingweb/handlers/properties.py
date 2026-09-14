@@ -798,9 +798,13 @@ class PropertiesHandler(base_handler.BaseHandler):
                 # append()/__setitem__ can raise this on a v1 list -- v1's
                 # length write is semantic (advisory=False), so an
                 # exhausted CAS retry surfaces here rather than being
-                # swallowed. A v2 list's metadata touch is advisory and
-                # never raises this. Map to 503 rather than letting it
-                # fall through as an unhandled 500.
+                # swallowed. A v2 list's metadata touch is advisory: it
+                # swallows contention and backend faults alike, so a v2
+                # mutation that reaches this handler's except did not
+                # commit an item row (the only v2 raise on this path is
+                # the pre-write ListMetadataContentionError from a lost
+                # meta-row create, which is safe to retry). Map to 503
+                # rather than letting it fall through as an unhandled 500.
                 self._respond_list_metadata_contended(e)
                 return
             except (ValueError, IndexError) as e:

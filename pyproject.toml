@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "actingweb"
-version = "3.14.6"
+version = "3.14.7"
 description = "Python framework for AI-ready, per-user micro-services — per-actor MCP servers, OAuth2, and peer-to-peer data sharing over the ActingWeb REST protocol."
 authors = ["Greger Wedel <support@actingweb.io>"]
 maintainers = ["Greger Wedel <support@actingweb.io>"]
@@ -45,8 +45,8 @@ requests = ">=2.32.4"
 httpx = "^0.28"
 typing-extensions = ">=4.0"
 oauthlib = ">=3.2.2"
-cryptography = ">=48.0.1"
-pyjwt = { version = "^2.13", extras = ["crypto"] }
+cryptography = ">=50.0.0"
+pyjwt = { version = "^2.14", extras = ["crypto"] }
 # PostgreSQL backend (optional)
 psycopg = { version = "^3.1", extras = ["binary", "pool"], optional = true }
 sqlalchemy = { version = "^2.0", optional = true }

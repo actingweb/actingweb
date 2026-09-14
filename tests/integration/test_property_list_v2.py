@@ -207,6 +207,61 @@ class TestV2InterleavedMutationStaleCache:
         assert fresh.to_list() == ["a", "b"]
 
 
+class TestV2FirstMutationLeavesAHealthyMetaRow:
+    """thoughts/plans/2026-09-14-v2-list-mutation-raises-after-its-write-
+    committed.md Phase 1: a list's first mutation now creates its meta row
+    BEFORE the first item write (append/extend/insert), instead of the
+    touch creating it as a side effect afterward. Pins the resulting meta
+    row shape and verify() report on a real backend."""
+
+    def test_first_append_leaves_a_healthy_meta_row(self, test_actor):
+        lst = test_actor.property_lists.first_append_list
+        lst.append("a")
+
+        assert test_actor.property_lists.exists("first_append_list")
+        report = lst._list_prop.verify()
+        assert report["healthy"] is True
+        assert report["count_hint"] == 1
+        assert report["count_hint_drift"] == 0
+
+        meta = lst._list_prop._load_metadata()
+        assert meta["format"] == 2
+        assert meta["format_ever_changed"] is False
+        assert meta["description"] == ""
+
+    def test_first_extend_leaves_a_healthy_meta_row(self, test_actor):
+        lst = test_actor.property_lists.first_extend_list
+        lst.extend(["a", "b", "c"])
+
+        report = lst._list_prop.verify()
+        assert report["healthy"] is True
+        assert report["count_hint"] == 3
+        assert report["count_hint_drift"] == 0
+
+    def test_first_insert_leaves_a_healthy_meta_row(self, test_actor):
+        lst = test_actor.property_lists.first_insert_list
+        lst.insert(0, "a")
+
+        report = lst._list_prop.verify()
+        assert report["healthy"] is True
+        assert report["count_hint"] == 1
+        assert report["count_hint_drift"] == 0
+
+    def test_first_append_colliding_with_a_scalar_raises_and_writes_nothing(
+        self, test_actor
+    ):
+        """Regression pin: this already holds on master, because
+        ``_maybe_lazy_migrate()`` runs the collision check before dispatch
+        -- the meta-row-first reordering must keep it."""
+        test_actor.properties["collision_first_mutation"] = "i am a scalar"
+        lst = test_actor.property_lists.collision_first_mutation
+
+        with pytest.raises(ValueError):
+            lst.append("a")
+
+        assert not test_actor.property_lists.exists("collision_first_mutation")
+
+
 class TestV2RankRebalanceIntegration:
     def test_compact_after_many_inserts_shrinks_ranks(self, test_actor):
         lst = test_actor.property_lists.rebalance_list

@@ -1,5 +1,6 @@
 ---
-status: active
+status: done
+verified: pending
 ---
 
 # Implementation Plan: a v2 list mutation never raises after its item write has committed
@@ -967,3 +968,45 @@ edits the docstrings Phase 1 wrote; Phase 3 is the release.
 - **VERDICT:** ENG CLEARED — ready to implement (`status: proposed` until implementation starts).
 
 NO UNRESOLVED DECISIONS
+
+## Implementation Summary
+
+**Completed:** 2026-09-14
+**All phases:** Complete (code and docs). The release's remaining
+administrative steps (PR merge, tag, PyPI publish, consumer notification)
+are explicitly left to the user — see below.
+**Test status:** All passing — `poetry run pytest tests/ -n auto --dist
+loadgroup`: 3512 passed, 31 skipped, 0 failed, on both DynamoDB and
+PostgreSQL. `pyright`/`ruff` clean. `sphinx-build -W` clean modulo one
+pre-existing, unrelated warning.
+
+**PR:** https://github.com/actingweb/actingweb/pull/146 (branch
+`fix/3.14.7-list-mutation-committed`, pushed; not merged)
+
+### Deviations from Plan
+
+- `_v2_extend()`'s "only when `items` is non-empty" guard needed no
+  in-method check: `extend()` already returns before dispatch on an empty
+  `items`.
+- One existing test not anticipated by the plan's test-gap review
+  (`tests/test_v1_maintenance_scoped_reads.py::TestV2ListsAreUntouched::
+  test_v2_verify_still_reports_the_same_way`) pinned `verify()`'s v2
+  report via exact dict equality and needed `meta_row_present` added to
+  its expected dict.
+- Merge, tag, PyPI publish and consumer notification (Phase 3's last
+  bullet and its two pending verification items) were explicitly deferred
+  to the user in this session, rather than performed automatically.
+
+### Learnings
+
+- Running this repo's test suite from a sandboxed shell needs
+  `dangerouslyDisableSandbox: true` for anything touching the DynamoDB
+  Local / PostgreSQL test containers (localhost:8001/5433) or the
+  `pytest-rerunfailures` plugin's loopback socket bind — both are blocked
+  by the default macOS Seatbelt sandbox, independent of this plan's
+  content.
+- `docs/sdk/authenticated-views.rst:197` has a pre-existing broken
+  `:doc:` cross-reference to `/guides/property-lists` (confirmed present
+  before this branch's first commit) that makes `sphinx-build -W` report
+  exactly one warning regardless of changes made here. Not fixed — out of
+  scope for this patch.

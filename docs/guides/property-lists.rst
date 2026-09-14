@@ -214,13 +214,19 @@ quota boundary, not on every save::
 drift under concurrent mutation is not corruption), and ``compact()``
 always rewrites the hint to the counted truth as part of its rebalance.
 
-``verify()`` also reports ``meta_row_present``: ``False`` iff item rows
-exist with no meta row at all -- the orphan state described above, where
-the list is invisible to ``exists()``/``list_all()`` and is swept as
-residue by the next ``delete()``/``clear()``/``migrate_to_v2()``. Unlike
-``count_hint_drift``, this IS part of ``healthy`` -- ``healthy`` is
-``False`` for an orphan. The next mutation through ``ListProperty``, or
-``compact()``, recreates the row and clears it.
+``verify()`` also reports ``meta_row_present``: whether the list's meta
+row physically exists. It is ``False`` for a never-created list (no meta
+row, no items) as well as for an *orphan* -- item rows with no meta row
+at all, the state described above, where the list is invisible to
+``exists()``/``list_all()`` and is swept as residue by the next
+``delete()``/``clear()``/``migrate_to_v2()``. The orphan condition is the
+combination ``meta_row_present is False and length > 0``, and unlike
+``count_hint_drift`` that combination IS part of ``healthy``:
+``healthy`` is ``False`` for an orphan and ``True`` for a never-created
+list. Read ``healthy`` (or test both keys) to classify an orphan; do not
+treat ``meta_row_present`` alone as the orphan flag. The next mutation
+through ``ListProperty``, or ``compact()``, recreates the row and clears
+the state.
 
 **Reading with `consistent=False`**
 

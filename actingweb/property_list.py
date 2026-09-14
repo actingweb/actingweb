@@ -1359,6 +1359,14 @@ class ListProperty:
                 advisory=True,
             )
         except (DbError, RuntimeError) as exc:
+            # ListMetadataContentionError subclasses RuntimeError, so this
+            # clause WOULD swallow it -- but _save_metadata() never raises
+            # it under advisory=True: its exhaustion path returns after
+            # one WARNING when advisory is set, and the raise sits behind
+            # that return. If that invariant ever changes, the outcome
+            # here (swallow: the item write is already committed) is still
+            # the right one, but the WARNING below would mislabel
+            # contention as a backend fault -- catch it separately then.
             logger.warning(
                 "List '%s' (actor %s): advisory metadata touch hit a "
                 "backend fault after the item write committed (%s) -- the "
@@ -2771,13 +2779,17 @@ class ListProperty:
               ``healthy`` -- see the class docstring for the documented
               drift bound; nonzero here is expected under concurrent
               mutation, not corruption
-            - meta_row_present: ``False`` iff item rows exist with no meta
-              row at all -- the orphan state. ``True`` for a list that has
-              a meta row, INCLUDING a never-created list with zero items
-              (there is nothing to be an orphan of)
+            - meta_row_present: whether the meta row physically exists.
+              ``False`` for a never-created list (no meta row, no items)
+              as well as for an orphan. The orphan state is the
+              combination ``meta_row_present is False and length > 0``;
+              ``healthy`` encodes exactly that combination, so a consumer
+              wanting "is this an orphan" should read ``healthy`` (or
+              test both keys), not ``meta_row_present`` alone
             - healthy: True iff no rank key is within the rebalance
               warning zone of the cap, no identity is repeated, and the
-              list is not an orphan (item rows with no meta row)
+              list is not an orphan (``meta_row_present is False`` while
+              ``length > 0``). A never-created list is healthy.
         """
         pairs = self._v2_load_full()
         max_rank_length = max((len(rank) for rank, _ in pairs), default=0)

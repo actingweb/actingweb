@@ -53,8 +53,10 @@ FIXED
   the v1 contention raise the UI never mapped.
 
 - **``verify()`` called an orphaned v2 list healthy.** **Behavior change:**
-  the v2 report gains ``meta_row_present``; ``healthy`` is ``False`` when
-  item rows exist without a meta row.
+  the v2 report gains ``meta_row_present`` (whether the meta row physically
+  exists -- also ``False`` for a never-created list with no items);
+  ``healthy`` is ``False`` when item rows exist without a meta row, and
+  stays ``True`` for a never-created list.
 
   Retrying a *raised* mutation is still not safe in general: a timed-out
   conditional write retried by the SDK can itself report ``False`` for a

@@ -1,8 +1,8 @@
 # A conditional write retried by the SDK can report False for a write that landed
 
-**Provenance:** found during the 2026-09-14 triage of
-[`v2-list-mutation-raises-after-its-write-committed.md`](v2-list-mutation-raises-after-its-write-committed.md)
-(the plan that closed the touch-fault report). Traced against the installed
+**Provenance:** found during the 2026-09-14 triage that produced
+[`../plans/2026-09-14-v2-list-mutation-raises-after-its-write-committed.md`](../plans/2026-09-14-v2-list-mutation-raises-after-its-write-committed.md)
+(the plan that closed the touch-fault report, released as 3.14.7). Traced against the installed
 PynamoDB/botocore source, not reproduced. Details, retry-mode math and links
 are in
 [`../research/2026-09-14-v2-list-mutation-raises-after-its-write-committed.md`](../research/2026-09-14-v2-list-mutation-raises-after-its-write-committed.md)'s
@@ -36,11 +36,11 @@ attempt whose response I never saw":
   vanished") for their own write.
 
 Different mechanism from the one
-[`v2-list-mutation-raises-after-its-write-committed.md`](v2-list-mutation-raises-after-its-write-committed.md)
+[`../plans/2026-09-14-v2-list-mutation-raises-after-its-write-committed.md`](../plans/2026-09-14-v2-list-mutation-raises-after-its-write-committed.md)
 fixed: that plan closed "the touch fails after the item committed". This one
 is ambiguity **inside a single primitive** — the mutator cannot tell "I lost
 the race" from "I won it on a retried attempt". Fixing the touch does not
-touch this; CHANGELOG's Unreleased entry for that plan says so explicitly.
+touch this; the CHANGELOG's v3.14.7 entry for that plan says so explicitly.
 
 ## What doing it buys
 

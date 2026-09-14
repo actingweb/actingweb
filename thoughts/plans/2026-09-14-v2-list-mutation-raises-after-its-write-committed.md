@@ -1,6 +1,6 @@
 ---
 status: done
-verified: pending
+verified: thoughts/verifications/2026-09-14-v2-list-mutation-raises-after-its-write-committed.md
 ---
 
 # Implementation Plan: a v2 list mutation never raises after its item write has committed

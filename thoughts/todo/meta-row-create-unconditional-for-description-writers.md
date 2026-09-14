@@ -1,7 +1,7 @@
 # set_description()/set_explanation() still create the meta row unconditionally
 
 **Provenance:** found during implementation of
-[`v2-list-mutation-raises-after-its-write-committed.md`](v2-list-mutation-raises-after-its-write-committed.md)
+[`../plans/2026-09-14-v2-list-mutation-raises-after-its-write-committed.md`](../plans/2026-09-14-v2-list-mutation-raises-after-its-write-committed.md)
 (Phase 1: a list's first `append()`/`extend()`/`insert()` now creates its
 meta row conditionally, via `_v2_create_meta_row()`, before the first item
 write). Depends on that plan having landed.

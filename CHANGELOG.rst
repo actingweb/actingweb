@@ -8,6 +8,45 @@ Unreleased
 v3.14.7: September 14, 2026
 ----------------------------
 
+SECURITY
+~~~~~~~~
+
+- **``cryptography`` floor raised to ``>= 50.0.0``** (was ``>= 48.0.1``).
+  Versions 44.0.0 through 49.x expose a Bleichenbacher oracle in PKCS#7
+  ``EnvelopedData`` decryption (CVE-2026-69247, GHSA-g6cj-pr64-35w5).
+  ActingWeb itself never calls the affected ``pkcs7_decrypt_*`` APIs -- it
+  uses ``Fernet`` and PEM private-key loading only -- so no ActingWeb code
+  path was exploitable, but the library pulled the vulnerable range into
+  every consumer's environment and Dependabot flagged both ``poetry.lock``
+  and ``docs/requirements.txt``. Both now resolve to ``cryptography``
+  50.0.1. Consumers pinned below 50.0.0 will see a resolver conflict on
+  upgrade and should lift their pin. ``cryptography`` 50 also *deprecates*
+  finite-field Diffie-Hellman (``asymmetric.dh``); ActingWeb does not use
+  it, but an application importing it will now get a deprecation warning
+  from the shared dependency.
+
+- **``pyjwt`` floor raised to ``^2.14`` (was ``^2.13``).** 2.14.0 is a
+  security release: it hardens HMAC key validation against public-key
+  material supplied as a key (the algorithm-confusion class,
+  GHSA-r6x4-923q-g947 and related), stops ``PyJWKClient`` following
+  redirects to untrusted JWKS hosts, bounds JWKS refreshes on unknown key
+  IDs, and rejects malformed or deeply nested JWS/JWK input without
+  uncaught recursion. ActingWeb decodes and verifies provider ID tokens
+  through ``pyjwt`` (``oauth2_id_token.py``; the JWKS fetch itself is
+  ActingWeb's own ``oauth2_jwks`` module, so the ``PyJWKClient`` fixes do
+  not apply to it) and signs Apple client secrets with it, so consumers
+  get the JWS/JWK parsing and HMAC-key hardening by upgrading. Consumers
+  pinned to ``pyjwt`` 2.13.x will see a resolver conflict on upgrade and
+  should lift their pin.
+
+- **Lock file refreshed.** All other dependencies updated to the newest
+  releases within their existing constraints, notably ``fastapi`` 0.139.0
+  → 0.141.1, ``starlette`` 1.3.1 → 1.6.0, ``uvicorn`` 0.50.0 → 0.53.0,
+  ``boto3``/``botocore`` 1.43.40 → 1.43.93, ``psycopg`` 3.3.4 → 3.3.5,
+  ``sqlalchemy`` 2.0.51 → 2.0.52, ``alembic`` 1.18.5 → 1.20.0. No
+  constraint other than ``cryptography`` and ``pyjwt`` changed, so
+  consumers on the previous lock are unaffected until they re-resolve.
+
 FIXED
 ~~~~~
 

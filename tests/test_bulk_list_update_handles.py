@@ -673,3 +673,104 @@ class TestItemsActionEndpointContract:
         assert body["success"] is True
         assert body["index"] == 2
         assert myself.property_lists.action_add.to_list()[2] == {"n": "new"}
+
+
+class _FaultingMetaTouchDb:
+    """Proxies a real ``DbPropertyProtocol`` instance, faulting only
+    ``set_if_value_equals`` on the meta row -- exactly the write the v2
+    advisory touch (``_v2_touch_metadata()``) makes on an existing row.
+    Everything else (item reads/writes, the bulk handler's own metadata
+    reads) goes straight to the real backend.
+
+    thoughts/plans/2026-09-14-v2-list-mutation-raises-after-its-write-
+    committed.md Phase 1: pins that a v2 mutation whose metadata touch
+    hits a genuine backend fault (not just CAS contention) still returns
+    success at the HANDLER layer, against real DynamoDB.
+    """
+
+    def __init__(self, real_db):
+        self._real = real_db
+
+    def set_if_value_equals(self, actor_id=None, name=None, expected=None, value=None):
+        if name is not None and name.endswith("-meta"):
+            from actingweb.db.exceptions import DbError
+
+            raise DbError("property write", actor_id)
+        return self._real.set_if_value_equals(
+            actor_id=actor_id, name=name, expected=expected, value=value
+        )
+
+    def __getattr__(self, item):
+        return getattr(self._real, item)
+
+
+class TestAdvisoryTouchBackendFaultDoesNotFailTheHandler:
+    """thoughts/plans/2026-09-14-v2-list-mutation-raises-after-its-write-
+    committed.md Phase 1: a backend fault in the advisory metadata touch,
+    AFTER the item write has already committed, must not turn a
+    successful mutation into a handler-level error."""
+
+    def test_put_index_returns_204_with_the_faulting_touch(self, myself, config):
+        lst = myself.property_lists.faulting_touch_put
+        for item in [{"n": 0}, {"n": 1}, {"n": 2}]:
+            lst.append(item)
+
+        real_get_property = get_property
+
+        with mock.patch(
+            "actingweb.property_list.get_property",
+            lambda cfg: _FaultingMetaTouchDb(real_get_property(cfg)),
+        ):
+            webobj = _run_handler(
+                PropertiesHandler,
+                myself,
+                config,
+                "put",
+                "faulting_touch_put",
+                params={"index": "1"},
+                body=json.dumps({"n": "replaced"}),
+            )
+
+        assert webobj.response.status_code == 204
+        assert myself.property_lists.faulting_touch_put.to_list()[1] == {
+            "n": "replaced"
+        }
+
+    def test_bulk_post_returns_200_with_every_entry_applied_with_the_faulting_touch(
+        self, myself, config, caplog
+    ):
+        lst = myself.property_lists.faulting_touch_bulk
+        for item in [{"n": 0}, {"n": 1}]:
+            lst.append(item)
+
+        real_get_property = get_property
+
+        with (
+            mock.patch(
+                "actingweb.property_list.get_property",
+                lambda cfg: _FaultingMetaTouchDb(real_get_property(cfg)),
+            ),
+            caplog.at_level("WARNING"),
+        ):
+            webobj = _post_bulk(
+                myself,
+                config,
+                "faulting_touch_bulk",
+                [
+                    {"index": 0, "n": "updated"},  # update, existing index
+                    {"index": 2, "n": "appended"},  # index == length -> append
+                    {"index": 1},  # only "index" -> delete
+                ],
+            )
+
+        assert webobj.response.status_code == 201
+        body = json.loads(webobj.response.body)
+        summary = body["faulting_touch_bulk"]
+        assert "2 items updated" in summary
+        assert "1 items deleted" in summary
+        assert "concurrently modified" not in caplog.text
+
+        final = myself.property_lists.faulting_touch_bulk.to_list()
+        assert {"n": "updated"} in final
+        assert {"n": "appended"} in final
+        assert {"n": 1} not in final

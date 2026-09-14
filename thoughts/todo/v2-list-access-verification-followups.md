@@ -14,11 +14,6 @@ verification records what was actioned.
   Two instances appending alternately, asserting iteration order matches
   insertion order, on both backends. Nearest existing coverage is the
   weaker `test_stale_reader_append_still_lands_correctly`.
-- **`www.py` HTML UI has no `ListMetadataContentionError` handler.** The
-  docs accurately name only the three JSON handlers as mapping it to 503;
-  the browser UI surfaces it as a generic error page (`set_description`)
-  or unhandled (`append`). Decide whether the web UI deserves the same
-  mapping.
 - **Bulk response counts for duplicate deletes of a batch-created index**
   credit each request entry (`items_deleted` can exceed rows removed by
   design, matching update counting) — noise-level; revisit only if a

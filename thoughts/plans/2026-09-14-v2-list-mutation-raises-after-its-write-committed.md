@@ -823,20 +823,26 @@ backends before merge and again on the tag.
 
 Automated:
 
-- [ ] `grep -n "3.14.7" pyproject.toml actingweb/__init__.py` shows both files
-- [ ] `git diff master --stat -- thoughts/todo/` shows the todo deleted and the INDEX row gone
-- [ ] CI green on the PR for DynamoDB and PostgreSQL
-- [ ] The tag workflow publishes to PyPI and creates the GitHub Release
+- [x] `grep -n "3.14.7" pyproject.toml actingweb/__init__.py` shows both files
+- [x] `git diff master --stat -- thoughts/todo/` shows the todo deleted and the INDEX row gone
+- [ ] CI green on the PR for DynamoDB and PostgreSQL — pending, PR just opened
+- [ ] The tag workflow publishes to PyPI and creates the GitHub Release — pending merge + tag
 
 Manual:
 
-- [ ] `pip index versions actingweb` (or the PyPI page) lists 3.14.7
+- [ ] `pip index versions actingweb` (or the PyPI page) lists 3.14.7 — pending
 - [ ] The consumer (`actingweb_mcp`) is told the release closes their
   `list-mutation-reported-failed-after-commit` todo for the reported
   mechanism, and is pointed at the new SDK-retry todo for what it does not
-  close
+  close — pending
 
-### Implementation Status: Not Started
+### Implementation Status: In Progress
+
+**Deferred by explicit user choice (2026-09-14):** version bump, CHANGELOG
+rename, todo cleanup, and the release commit are done, and the branch is
+pushed with a PR opened. Merging the PR, tagging `v3.14.7` on master, and
+notifying the consumer are left to the user — those are the shared/
+publishing actions the session stopped short of on request.
 
 ---
 

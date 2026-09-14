@@ -295,6 +295,55 @@ class TestSweepActor:
         assert after["length"] == 2
         assert fresh.to_list() == ["left", "right"]
 
+    def test_orphan_under_an_unenumerated_name_does_not_affect_the_sweep(
+        self, test_actor
+    ):
+        """thoughts/plans/2026-09-14-v2-list-mutation-raises-after-its-
+        write-committed.md Phase 2: a v2 orphan (item rows with no meta
+        row -- the state a fault on a list's first mutation used to be
+        able to leave) is never enumerated by ``list_all()``, which
+        sources names only from meta rows. Pins the CHANGELOG claim that
+        no automated consumer's outcome changes: the sweep must report
+        the other, healthy list exactly as it would without the orphan
+        present, and exit clean.
+        """
+        import verify_property_lists as script  # type: ignore[import-not-found]
+
+        healthy = test_actor.property_lists.sweep_orphan_control
+        for item in ["a", "b"]:
+            healthy.append(item)
+
+        db = get_property(test_actor.config)
+        assert db.set(
+            actor_id=test_actor.id,
+            name="list:sweep_orphan_unenumerated-#a0",
+            value=json.dumps("orphan-item"),
+        )
+        # Deliberately no "list:sweep_orphan_unenumerated-meta" row.
+
+        checked, unhealthy, errored = script.sweep_actor(
+            test_actor.id,
+            test_actor.config,
+            repair=True,
+            limiter=script.RateLimiter(0),
+        )
+
+        assert errored == 0
+        assert unhealthy == 0
+        # The orphan is invisible to list_all() (names come only from meta
+        # rows), so it does not add to the checked count either -- only
+        # the healthy control list does.
+        assert checked == 1
+
+        fresh = test_actor.property_lists.sweep_orphan_control
+        assert fresh.to_list() == ["a", "b"]
+
+        # The orphan's own row is untouched: sweep_actor() never saw its
+        # name, so it neither swept it as residue nor repaired it.
+        assert db.get(
+            actor_id=test_actor.id, name="list:sweep_orphan_unenumerated-#a0"
+        ) == json.dumps("orphan-item")
+
     def test_checkpoint_round_trips(self, tmp_path):
         import verify_property_lists as script  # type: ignore[import-not-found]
 

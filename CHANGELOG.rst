@@ -5,6 +5,59 @@ CHANGELOG
 Unreleased
 ----------
 
+FIXED
+~~~~~
+
+- **A v2 list mutation could raise after its item write had committed.**
+  Every v2 ``ListProperty`` mutator writes its item row and then makes an
+  advisory metadata touch (``updated_at``/``count_hint``); the touch's
+  ``advisory=True`` swallowed compare-and-swap contention only, so a
+  genuine backend fault (a throttle, timeout, or connection error) during
+  the touch still raised — out of a mutation whose item write had already
+  committed. A caller that retried on that exception duplicated its own
+  save, got ``not_found`` against its own delete, or lost one side of a
+  move. Backend faults during the touch are now logged at WARNING and
+  swallowed on every v2 item mutator, including ``pop()`` (which still
+  returns the popped item), ``remove_where()``/``update_where()`` (which
+  still return their partial results), and ``NotifyingListProperty``
+  (which still registers its subscription diff). **Behavior change:** a v2
+  mutation whose metadata touch hits a backend fault now returns success
+  and logs one WARNING instead of raising; the advisory ``count_hint`` may
+  be off by one until the next rank-counting mutation or ``compact()``.
+
+- **A list's first mutation could leave item rows with no meta row.** Under
+  v2 there is no separate creation step — a list's first ``append()``/
+  ``extend()``/``insert()`` created its meta row as a side effect of the
+  advisory touch, *after* the item write. A fault on that touch left item
+  rows with no meta row: invisible to ``exists()``/``list_all()``/the REST
+  handlers, called healthy by ``verify()``, and swept as residue by the
+  next ``delete()``/``clear()``/``migrate_to_v2()``. A list's first
+  mutation now creates its meta row, conditionally, *before* its first
+  item write; the one remaining way to get this orphan is a ``delete()``
+  racing the first mutation while the touch's recreation write also
+  faults, which is now logged and which ``verify()`` reports (see below).
+  **Behavior change:** a fault on the item write of a list's first
+  ``append()``/``extend()``/``insert()`` now leaves an empty, visible list
+  where it previously left nothing; a lost meta-row create (another writer
+  created the row first, and it is not v2) raises
+  ``ListMetadataContentionError`` before any item write, mapped to 503
+  with ``Retry-After``. ``ListMetadataContentionError`` gains a
+  keyword-only ``detail`` argument (default ``None``, existing message
+  unchanged) so that raise says what happened. The browser UI's list-item
+  form (``/{actor_id}/www/properties``) now maps
+  ``ListMetadataContentionError`` to 503 with ``Retry-After`` too, where it
+  previously rendered a 500 "Error processing list item"; that also covers
+  the v1 contention raise the UI never mapped.
+
+- **``verify()`` called an orphaned v2 list healthy.** **Behavior change:**
+  the v2 report gains ``meta_row_present``; ``healthy`` is ``False`` when
+  item rows exist without a meta row.
+
+  Retrying a *raised* mutation is still not safe in general: a timed-out
+  conditional write retried by the SDK can itself report ``False`` for a
+  write that landed, independent of the fix above — tracked in
+  ``thoughts/todo/conditional-write-ambiguous-after-sdk-retry.md``.
+
 v3.14.6: September 12, 2026
 ----------------------------
 

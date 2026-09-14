@@ -766,19 +766,30 @@ from the rewritten docstrings into a failure).
 
 Automated:
 
-- [ ] `poetry run pytest tests/test_v2_list_mutation_committed.py tests/integration/test_verify_property_lists_script.py -v` passes
-- [ ] `poetry run pyright actingweb tests` — 0 errors
-- [ ] `poetry run ruff check actingweb tests` passes
-- [ ] `poetry run sphinx-build -W --keep-going . _build/html` succeeds
-- [ ] `make test-all-parallel` passes
+- [x] `poetry run pytest tests/test_v2_list_mutation_committed.py tests/integration/test_verify_property_lists_script.py -v` passes
+- [x] `poetry run pyright actingweb tests` — 0 errors
+- [x] `poetry run ruff check actingweb tests` passes
+- [x] `poetry run sphinx-build -W --keep-going . _build/html` succeeds, modulo one PRE-EXISTING warning
+      (`docs/sdk/authenticated-views.rst:197: unknown document: '/guides/property-lists'`)
+      unrelated to this plan and confirmed present before Phase 1's commit too — not fixed here, out of scope
+- [x] `make test-all-parallel` passes (run as `poetry run pytest tests/ -n auto --dist loadgroup` directly, same
+      reasoning as Phase 1; 3512 passed, 31 skipped, 0 failed)
 
 Manual:
 
-- [ ] `grep -rn "never raises this" actingweb/` returns nothing
-- [ ] `grep -n "backend fault" docs/guides/property-lists.rst actingweb/property_list.py` finds the guide's third term, the class docstring and the warning
-- [ ] `grep -n "retry" CHANGELOG.rst` under Unreleased shows the "not safe in general" sentence
+- [x] `grep -rn "never raises this" actingweb/` returns nothing
+- [x] `grep -n "backend fault" docs/guides/property-lists.rst actingweb/property_list.py` finds the guide's third term, the class docstring and the warning
+- [x] `grep -n "retry" CHANGELOG.rst` under Unreleased shows the "not safe in general" sentence
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+**Deviation:** the full-suite run surfaced one pre-existing test
+(`tests/test_v1_maintenance_scoped_reads.py::TestV2ListsAreUntouched::
+test_v2_verify_still_reports_the_same_way`) that asserted `verify()`'s v2
+report via exact dict equality. Not anticipated by the plan's test-gap
+review. Updated to include the new `meta_row_present: True` key rather than
+loosening the equality check, since exact-shape pinning is this test's whole
+purpose.
 
 ---
 

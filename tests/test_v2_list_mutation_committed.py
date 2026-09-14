@@ -885,3 +885,67 @@ class TestExistingRegressionsStayGreen:
         pytest.importorskip("tests.test_property_list_integrity")
         pytest.importorskip("tests.test_v2_metadata_cas")
         pytest.importorskip("tests.test_property_list_notifications")
+
+
+class TestVerifyReportsOrphanState:
+    """Phase 2: ``verify()`` gains ``meta_row_present`` and stops calling
+    an orphaned v2 list (item rows with no meta row) healthy."""
+
+    def test_item_rows_with_no_meta_row_report_the_orphan(
+        self, monkeypatch, fake_store
+    ):
+        actor_id = "actor-committed-verify-orphan"
+        name = "notes"
+        _seed_v2_list(fake_store, actor_id, name, ["a", "b", "c"])
+        del fake_store[(actor_id, _meta_name(name))]
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
+
+        lst = ListProperty(actor_id=actor_id, name=name, config=object())
+        report = lst.verify()
+
+        assert report["meta_row_present"] is False
+        assert report["healthy"] is False
+        assert report["count_hint"] is None
+        assert report["length"] == 3
+
+    def test_a_never_created_list_is_not_an_orphan(self, monkeypatch, fake_store):
+        actor_id = "actor-committed-verify-never-created"
+        name = "notes"
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
+
+        lst = ListProperty(actor_id=actor_id, name=name, config=object())
+        report = lst.verify()
+
+        assert report["meta_row_present"] is False
+        assert report["healthy"] is True
+        assert report["length"] == 0
+
+    def test_a_normal_v2_list_reports_meta_row_present_and_healthy(
+        self, monkeypatch, fake_store
+    ):
+        actor_id = "actor-committed-verify-normal"
+        name = "notes"
+        _seed_v2_list(fake_store, actor_id, name, ["a"])
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
+
+        lst = ListProperty(actor_id=actor_id, name=name, config=object())
+        report = lst.verify()
+
+        assert report["meta_row_present"] is True
+        assert report["healthy"] is True
+
+    def test_compact_repairs_the_orphan(self, monkeypatch, fake_store):
+        actor_id = "actor-committed-verify-repair"
+        name = "notes"
+        _seed_v2_list(fake_store, actor_id, name, ["a", "b"])
+        del fake_store[(actor_id, _meta_name(name))]
+        _patch_get_property(monkeypatch, lambda config: FakePropertyDb(fake_store))
+
+        lst = ListProperty(actor_id=actor_id, name=name, config=object())
+        assert lst.verify()["meta_row_present"] is False
+
+        lst.compact()
+
+        fresh = ListProperty(actor_id=actor_id, name=name, config=object())
+        assert fresh.verify()["meta_row_present"] is True
+        assert fresh.verify()["healthy"] is True

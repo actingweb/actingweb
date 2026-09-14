@@ -332,6 +332,13 @@ class ListProperty:
     check that must never over-admit should trust the hint while strictly
     below its limit and confirm with ``len()`` once it reaches the limit --
     the exact read is then paid only at the boundary, not on every save.
+
+    A v2 item mutator (``append``/``extend``/``insert``/``__setitem__``/
+    ``__delitem__``/``pop``/``remove``/``delete_by_handle``/
+    ``update_by_handle``/``remove_where``/``update_where``) that RETURNS
+    has committed its item write -- the metadata touch that follows it can
+    neither fail that mutation nor be the reason it raised (see
+    ``ListMetadataContentionError`` and ``_v2_touch_metadata()``).
     """
 
     def __init__(self, actor_id: str, name: str, config: Any) -> None:
@@ -2720,14 +2727,23 @@ class ListProperty:
     def _v2_verify(self, identity_key: str | None = None) -> dict[str, Any]:
         """Read-only integrity check for v2 lists.
 
-        Structurally, v2 cannot have holes or orphans -- there is no
-        separate "recorded length" a row could disagree with; every
-        present row IS a position. The only thing worth reporting is rank
-        keys approaching the length cap (a signal to compact()/rebalance
-        before insert()/append() start failing) and the same
-        adjacent-duplicate heuristic v1 reports (informational, not part
-        of ``healthy`` -- a duplicate value is never itself corruption
-        under v2).
+        Structurally, v2 cannot have holes -- there is no separate
+        "recorded length" a row could disagree with; every present row IS
+        a position. It CAN have an orphan: item rows with no meta row at
+        all, the state a fault on the item write of a list's first
+        mutation could leave before thoughts/plans/2026-09-14-v2-list-
+        mutation-raises-after-its-write-committed.md's Phase 1, and that a
+        rare residual (a concurrent ``delete()`` plus a fault on the
+        touch's recreation write) can still leave. An orphan is invisible
+        to ``exists()``/``list_all()``/REST and is swept as residue by the
+        next ``delete()``/``clear()``/``migrate_to_v2()`` -- worth
+        flagging even though the next mutation through ``ListProperty``,
+        or ``compact()``, repairs it. Besides that, the only other things
+        worth reporting are rank keys approaching the length cap (a signal
+        to compact()/rebalance before insert()/append() start failing) and
+        the same adjacent-duplicate heuristic v1 reports (informational,
+        not part of ``healthy`` -- a duplicate value is never itself
+        corruption under v2).
 
         Returns:
             Dict with:
@@ -2748,14 +2764,20 @@ class ListProperty:
               goes false for duplicate identities that ``compact()`` will
               not touch
             - count_hint: the stored advisory count (``None`` if this
-              list's metadata predates ``count_hint`` entirely)
+              list's metadata predates ``count_hint`` entirely, or if the
+              meta row is absent entirely -- see ``meta_row_present``)
             - count_hint_drift: ``count_hint - length`` (``None`` when
               ``count_hint`` is ``None``). Informational, NOT part of
               ``healthy`` -- see the class docstring for the documented
               drift bound; nonzero here is expected under concurrent
               mutation, not corruption
+            - meta_row_present: ``False`` iff item rows exist with no meta
+              row at all -- the orphan state. ``True`` for a list that has
+              a meta row, INCLUDING a never-created list with zero items
+              (there is nothing to be an orphan of)
             - healthy: True iff no rank key is within the rebalance
-              warning zone of the cap and no identity is repeated
+              warning zone of the cap, no identity is repeated, and the
+              list is not an orphan (item rows with no meta row)
         """
         pairs = self._v2_load_full()
         max_rank_length = max((len(rank) for rank, _ in pairs), default=0)
@@ -2767,6 +2789,7 @@ class ListProperty:
                 adjacent_duplicates.append((i, i + 1))
 
         stored, _ = self._read_meta_row()
+        meta_row_present = stored is not None
         stored = stored or {}
         count_hint = stored.get("count_hint")
         count_hint = count_hint if isinstance(count_hint, int) else None
@@ -2782,7 +2805,11 @@ class ListProperty:
             "count_hint_drift": (
                 count_hint - length if count_hint is not None else None
             ),
-            "healthy": max_rank_length < _V2_RANK_WARNING_LENGTH,
+            "meta_row_present": meta_row_present,
+            "healthy": (
+                max_rank_length < _V2_RANK_WARNING_LENGTH
+                and not (not meta_row_present and length > 0)
+            ),
         }
         duplicates: dict[Any, list[int]] | None = None
         identity_checked_count: int | None = None

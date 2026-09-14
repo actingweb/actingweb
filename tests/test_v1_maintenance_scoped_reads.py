@@ -376,6 +376,7 @@ class TestV2ListsAreUntouched:
             "needs_rebalance": False,
             "count_hint": None,
             "count_hint_drift": None,
+            "meta_row_present": True,
             "healthy": True,
             "duplicate_identities": None,
             "identity_checked_count": None,

@@ -123,6 +123,12 @@ Phase 1's chain-revocation fault path.
   at DEBUG. The two no-op helpers that log a WARNING per call are deleted.
   **Behavior change**: a refresh response carries a new refresh token and
   the presented one is single-use.
+  **[Updated 2026-09-25]** The re-stamp is no longer a second write: the
+  compare-and-swap sets the consumed row's TTL itself
+  (`conditional_update_attr(ttl_seconds=)`), so it can never re-create a
+  row a revocation deleted. A failed swap is re-read strictly, and a row
+  still unused (or a re-read that faults) is a store fault answered with
+  `server_error`, never "already used". Iteration 16.
 - **Chain revocation uses the existing `delete_by_chain` primitive plus a
   bucket snapshot.** `db/protocols.py:1210` `delete_by_chain(actor_id,
   buckets, chain_id)` exists on both backends (PostgreSQL has an expression
@@ -133,6 +139,15 @@ Phase 1's chain-revocation fault path.
   index row by name and pops each access token from the cache. Per-actor
   buckets keep this small; the per-row `_remove_*` helpers (5–9 round-trips
   each) are not used on this path.
+  **[Updated 2026-09-25]** `_revoke_chain` takes the loaded row as an
+  anchor:
+  - `delete_by_chain(defer_name=)` deletes it last, so a partial DynamoDB
+    delete leaves it to retry from;
+  - a delete that removed nothing reads it strictly, to tell a concurrent
+    revocation from a fault.
+
+  Eviction runs in a `finally`. `/oauth/logout` with an MCP token now
+  reaches `revoke_token`. Iterations 17 and 18.
 - **Authorization codes become single-use atomically; nothing more.**
   `exchange_authorization_code` today reads `used`, validates PKCE, then
   writes `used = True`; two concurrent exchanges both mint tokens. It now
@@ -215,6 +230,10 @@ Phase 1's chain-revocation fault path.
   `initialize` path already writes the request's own `clientInfo` to the
   trust row. Deduced, not confirmed: every connector re-initialises with its
   bearer token after OAuth; the Phase 4 rc pass checks it per connector.
+  **[Updated 2026-09-25]** The live `clientInfo` cache's session entries
+  carry the owning actor; see Iteration 19. A client that only initialised
+  before signing in keeps its info: its first authenticated request claims
+  the entry.
 - **Client-supplied text is sanitised at write and at read.** Names and
   versions (`clientInfo`, DCR `client_name`) are stripped of control and
   format characters (U+200C/U+200D kept), whitespace-collapsed and capped at
@@ -1088,7 +1107,10 @@ Notes (2026-09-25):
   its MCP clients persist rotated refresh tokens; its own OAuth password
   path is unaffected (`plain` still exchanges, no `redirect_uri` stored);
   users with Codex/ChatGPT connectors added before the upgrade reconnect
-  once.
+  once. **[Updated 2026-09-25]** Also: `/oauth/logout` called with an MCP
+  bearer token now revokes that token's whole chain (Iteration 18); a custom
+  attribute backend, if the consumer has one, must accept
+  `conditional_update_attr(ttl_seconds=)` and `delete_by_chain(defer_name=)`.
 
 ### New Tests, both unit and integration tests
 
@@ -1478,6 +1500,261 @@ had 3637 passed and 31 skipped with no errors. PostgreSQL had 3526 passed,
 already filed in
 `benchmark-subscription-tests-pass-url-to-boolean-callback.md`.
 `sphinx-build -W` is clean.
+
+### 2026-09-25, after verification thoughts/verifications/2026-09-25-mcp-oauth-hardening-and-credential-exposure-2.md
+
+The owner asked for all ten issues of the re-verification to be fixed, and
+chose to route MCP tokens through `/oauth/logout` rather than correct the
+docs (issue 2). Numbering continues. Root causes and regression tests:
+`thoughts/research/2026-09-25-mcp-oauth-hardening-verification-fixes-2.md`.
+
+#### 16. A faulted compare-and-swap is a store fault, and the consumed row's TTL is written by the swap
+
+**Category**: Bug fix (re-verification issues 1 and 3)
+
+**What changed**:
+- `consume_once` tells a lost race from a fault. Both backends answer
+  `False` from `conditional_update_attr` for either, so the loser now
+  re-reads with `get_attr_strict`:
+  - a used row means another caller won, as before;
+  - a row still unused, or a re-read that faults, raises the new
+    `single_use.StoreFault`.
+- The MCP `_consume` turns `StoreFault` into `TokenStoreUnavailable`, so the
+  refresh and code grants answer `server_error` and the token or code stays
+  usable.
+- The SPA `try_mark_refresh_token_used` catches `StoreFault` and returns
+  `(False, None)`: the SPA endpoint keeps answering 401 on that path, as it
+  always has. It never deleted there, so this is a deliberate non-change and
+  its fault contract stays outside this plan.
+- `refresh_access_token` no longer deletes a consumed row that lacks
+  `used_at`; it refuses it.
+- The best-effort `set_attr` re-stamp after the swap is gone. The swap
+  writes the TTL itself: `conditional_update_attr` gains an additive
+  `ttl_seconds=` on the `Attributes` wrapper, `db/protocols.py`, both
+  backends and the three test doubles. It is never an upsert, so a
+  revocation landing between the swap and the mint is no longer undone by
+  re-creating the consumed row. The `consume_once` keyword is renamed
+  `restamp_ttl` → `consumed_ttl`.
+- Residual, accepted: a winner whose chain is revoked between its swap and
+  its mint still gets its own new pair; that race needs a transaction to
+  close.
+
+**Files affected**:
+- `actingweb/single_use.py`: `StoreFault`, strict re-read, TTL in the swap
+- `actingweb/oauth2_server/token_manager.py`: `_consume` translates the
+  fault; no delete on a missing `used_at`
+- `actingweb/oauth_session.py`: catches `StoreFault`
+- `actingweb/attribute.py`, `actingweb/db/protocols.py`,
+  `actingweb/db/dynamodb/attribute.py`, `actingweb/db/postgresql/attribute.py`:
+  `ttl_seconds=` on `conditional_update_attr`
+- `tests/mcp_token_double.py`: `cas_fault`, TTL recorded by the swap;
+  `tests/test_oauth_session.py`, `tests/test_oauth2_spa_refresh_rotation.py`:
+  doubles gain `ttl_seconds=` and `get_attr_strict`
+- `tests/test_mcp_refresh_rotation.py`, `tests/test_mcp_auth_code_single_use.py`:
+  new tests
+
+**Rationale**: one throttle at the swap deleted a legitimate refresh token
+and answered `invalid_grant`, the failure Phase 2 exists to remove. The
+upsert re-stamp could revive a revoked row. Four new tests fail on `253ee76`
+and pass now: `test_cas_fault_is_a_store_fault_not_a_dead_token`,
+`test_cas_fault_with_unreadable_store_is_a_store_fault`,
+`test_revocation_between_swap_and_mint_is_not_undone`,
+`test_cas_fault_leaves_the_code_exchangeable`.
+
+#### 17. Revocation and deletes confirm what they did
+
+**Category**: Bug fix (re-verification issues 4, 5, 6, 7, 8)
+
+**What changed**:
+- `_revoke_chain` takes `anchor=(bucket, name)`, the row its caller just
+  loaded, and uses it in two ways:
+  - It is deleted last: `delete_by_chain` gains an additive `defer_name=`
+    (protocol, both backends, the double). DynamoDB deletes row by row and
+    defers that row; PostgreSQL's single DELETE ignores it. A fault
+    part-way therefore leaves the replayed token for the next presentation
+    to retry from.
+  - When the delete removed nothing, a strict read of the anchor tells a
+    chain another revocation already removed (not a fault; logged at INFO,
+    returns 0) from a failed delete (`TokenStoreUnavailable`).
+- `_revoke_chain` evicts the actor's caches in a `finally`.
+- `revoke_token` removes the presented token (and, for a refresh token, its
+  access token) in a `finally` around the chain revocation, then lets the
+  fault propagate.
+- New `single_use.delete_confirmed()`: a conditional delete, then a strict
+  read when that answers False. `delete_attr` cannot report a fault:
+  DynamoDB swallows it and answers True. It is used by:
+  - `_remove_access_token(actor_id=...)`, which now returns whether the row
+    is gone and logs an unconfirmed delete at ERROR (the rotation path);
+  - the new `_remove_refresh_token_row(actor_id, token)`;
+  - `revoke_client_tokens`, which passes the actor it already knows, counts
+    only confirmed deletes, and raises `TokenStoreUnavailable` naming the
+    unconfirmed ones;
+  - `delete_client`, which confirms the client row and its index row and
+    answers False only when neither is gone. The token endpoint needs both,
+    so either one gone disables the client.
+- `load_client_strict` uses `self.clients_bucket`.
+- `revoke_token` removes the presented token through its known owner
+  (`_remove_access_token(actor_id=...)`, `_remove_refresh_token_row`). That
+  path skips the index read a fault would fail, and confirms the delete.
+- `Trust.delete` logs "Deleted OAuth2 client" only when `delete_client`
+  answered True; `delete_client` logs its own ERROR otherwise.
+- `revoke_token`'s docstring no longer claims a pre-chain token revokes the
+  token it is linked to. The removed helpers never did: they were stubs that
+  only logged "not implemented" (`2d5eaa4`). It also gains a `Raises:`
+  section. The comment on `access_token_id` names its real reader, a
+  pre-3.15 process in a rolling deploy.
+
+**Files affected**:
+- `actingweb/single_use.py`: `delete_confirmed`
+- `actingweb/oauth2_server/token_manager.py`: `_revoke_chain`,
+  `revoke_token`, `_remove_access_token`, `_remove_refresh_token_row`,
+  `revoke_client_tokens`
+- `actingweb/oauth2_server/client_registry.py`: `delete_client`,
+  `load_client_strict`
+- `actingweb/trust.py`: the INFO line after `delete_client`
+- `actingweb/db/protocols.py`, `actingweb/db/dynamodb/attribute.py`,
+  `actingweb/db/postgresql/attribute.py`: `defer_name=`
+- `tests/mcp_token_double.py`: `delete_attr_conditional`, `delete_faults`,
+  the `"partial"` chain-delete fault, `defer_name`
+- `tests/test_mcp_refresh_rotation.py`, `tests/test_mcp_token_store_faults.py`:
+  new tests
+
+**Rationale**: the backends report faults as ordinary results, and the
+revocation paths took those results at face value. The first six tests
+below fail on `253ee76` and pass now:
+- `test_revocation_fault_still_removes_the_presented_token_and_evicts`
+- `test_a_chain_revoked_concurrently_is_not_a_fault`
+- `test_partial_chain_delete_leaves_the_replayed_token_to_retry_from`
+- `test_unconfirmed_delete_of_the_old_access_token_is_logged`
+- `test_delete_client_fails_when_nothing_is_confirmed_deleted`
+- `test_revoke_client_tokens_counts_only_confirmed_deletes`
+- `test_delete_client_succeeds_when_its_index_row_is_gone` (coverage for
+  the rule; it passes on both)
+
+#### 18. `/oauth/logout` revokes an MCP token and its chain
+
+**Category**: Decision changed / new functionality (re-verification issue 2;
+owner chose to route rather than correct the docs)
+
+**What changed**:
+- `_handle_provider_token_logout` sends a token carrying the MCP token
+  manager's prefix (`aw_`) to the new `_handle_mcp_token_logout`, which calls
+  `ActingWebTokenManager.revoke_token` and so revokes the whole chain. SPA
+  session tokens come from `config.new_token()`, which is hex and can never
+  carry the prefix; they keep the session-store path.
+- A `TokenStoreUnavailable` is logged at ERROR and answered with the
+  endpoint's existing success shape and the message "Logged out (token
+  revocation failed)". The presented token is still removed. The route's
+  contract (always success, cookies cleared) is unchanged.
+- `ActingWebOAuth2Server.handle_logout_request` (SDK-only; nothing routes to
+  it) answers "Logged out (with errors)" when revocation raised, instead of
+  "Successfully logged out".
+- The SPA refresh-chain gap (`thoughts/todo/logout-does-not-revoke-refresh-chain.md`)
+  is untouched and stays open.
+
+**Files affected**:
+- `actingweb/handlers/oauth2_endpoints.py`: prefix dispatch,
+  `_handle_mcp_token_logout`
+- `actingweb/oauth2_server/oauth2_server.py`: `handle_logout_request` message
+- `tests/test_oauth2_logout_mcp_tokens.py` (new)
+
+**Rationale**: the 3.15 changelog and migration guide promised that
+`/oauth/logout` revokes an MCP token's chain, but no route reached the MCP
+token manager. Three tests fail on `253ee76` and pass now:
+`test_logout_revokes_the_mcp_token_and_its_chain`,
+`test_logout_reports_a_revocation_fault_and_still_drops_the_token`,
+`test_sdk_logout_does_not_claim_success_on_a_fault`.
+`test_a_session_token_still_goes_to_the_session_store` pins the unchanged
+SPA path.
+
+#### 19. Session `clientInfo` entries have an owner; the smaller items
+
+**Category**: Verification fix (re-verification issues 9 and 10)
+
+**What changed**:
+- Client-info cache entries carry an `owner`: the actor of the
+  authenticated `initialize` that wrote them. That `initialize` now caches
+  the session entry too, not only the token entry.
+- An unowned write (an unauthenticated `initialize`) never replaces a fresh
+  owned entry.
+- `_resolve_live_client_info(actor_id)` still reads the token entry first.
+  On an authenticated request it then:
+  - uses a session entry owned by the same actor;
+  - ignores one owned by another actor;
+  - claims an unowned one for this actor (a client that initialised before
+    signing in keeps its info).
+
+  A hit resets the entry's age, so an active session keeps it past the
+  ten-minute expiry and across token rotation. The four call sites pass the
+  authenticated actor.
+- Residual, documented in the docstring: after ten idle minutes an
+  unauthenticated `initialize` that knows the session id can seed an entry
+  before the owner's next request claims it.
+- `initialize` no longer swallows a failure silently: `TokenStoreUnavailable`
+  and any other exception are logged at WARNING.
+- Token-only eviction records: `_token_eviction_pruned_through` holds the
+  highest sequence pruned, and a fill whose snapshot predates it is refused.
+  A read that stalls past the 120 s keep time can no longer cache a
+  rotated-out token. This was chosen over raising the keep time, which only
+  moves the bound.
+- New tests drive the real fill in `authenticate_and_get_actor_cached`, not
+  only the helper.
+- `PurgeThrottle` uses `time.monotonic()`. `last_attempt` is `None` until the
+  first claim, so a fresh process still purges on its first call on a host
+  with short uptime.
+- Docstrings:
+  - `TokenStoreUnavailable` lists every raiser;
+  - `refresh_access_token` gains `Raises:`;
+  - `_snapshot_bucket` describes the PostgreSQL fault shape correctly.
+
+**Files affected**:
+- `actingweb/handlers/mcp.py`: owner, `_claim_client_info`, call sites,
+  `initialize` logging, the pruned-through floor
+- `actingweb/single_use.py`: monotonic `PurgeThrottle`
+- `actingweb/oauth2_server/token_manager.py`: docstrings
+- `tests/test_mcp_client_info_cache.py`: the spoof test now asserts that the
+  owned entry survives, plus six new tests;
+  `tests/test_mcp_trust_cache_key.py`: `TestRotationEvictionDuringFill`;
+  `tests/test_single_use.py`, `tests/test_mcp_refresh_rotation.py`,
+  `tests/test_oauth_session.py`: the throttle reset is `None`, and a
+  clock-step test
+
+**Rationale**: the token-first lookup protected only until the token entry
+expired or rotated, and then fell back to a session entry anyone naming the
+session could write. Nine tests fail on `253ee76` and pass now (listed in
+the research note).
+
+**Backend coverage for the batch**:
+`tests/integration/test_mcp_refresh_rotation_backend.py::TestBackendKeywordsForSingleUse`
+runs the two new protocol keywords on real DynamoDB and PostgreSQL:
+- a swap with `ttl_seconds=` in the past makes the row read as absent, and a
+  swap on a missing row creates nothing;
+- `delete_by_chain(defer_name=)` still deletes the whole chain and nothing
+  else.
+
+It passes on both backends (4 passed each, run on their own after the Full
+tier).
+
+**Docs for the batch**:
+- `CHANGELOG.rst`: the rotation SECURITY entry gains the consume-fault rule
+  and the `/oauth/logout` **Behavior change**; the client-info entry gains
+  ownership; the additive-keywords entry names the two protocol keywords;
+  the client-deletion FIXED entry gains confirmed deletes and a **Behavior
+  change**.
+- `docs/migration/v3.15.rst`: the consume-fault bullet, logout with an MCP
+  token, session-entry ownership, and a new "Custom database backends"
+  section.
+- The Phase 4 consumer message gains the logout and backend-keyword notes.
+
+**Checks**:
+- Fast tier: ruff, format and pyright clean; unit tests 2686 passed, 23
+  skipped. Re-run after the last two changes in entry 17 (the owner path in
+  `revoke_token`, the `Trust.delete` log line): same result.
+- Full tier, DynamoDB: 3663 passed, 31 skipped, 0 errors.
+- Full tier, PostgreSQL: 3554 passed, 140 skipped, 2 failed. The failures are
+  the benchmark subscription tests already filed in
+  `benchmark-subscription-tests-pass-url-to-boolean-callback.md`.
+- `sphinx-build -W`: clean.
 
 ## Evaluation Notes
 

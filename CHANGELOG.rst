@@ -5,6 +5,20 @@ CHANGELOG
 Unreleased
 ----------
 
+CHANGED
+~~~~~~~
+
+- **The agent workflow instructions in ``CLAUDE.md`` now follow the shared
+  contract the slash commands read**: one ``## Workflow`` section listing the
+  check tiers (Fast and Full, both database backends), how to start the
+  reference app for browser QA, the CI re-trigger policy, tool pins, and
+  the changelog and release recipes, with per-command addenda under
+  ``.claude/workflow/``. The former "Quick Reference", "Release Process",
+  "Quality Standards", "Testing" and "Project Documentation System"
+  sections are folded into it without loss. ``thoughts/`` gains a
+  ``features/`` directory for ``/plan_feature`` documents, matching the
+  ``actingweb_mcp`` repository. No library code changes.
+
 v3.14.7: September 14, 2026
 ----------------------------
 

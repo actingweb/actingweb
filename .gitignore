@@ -170,10 +170,12 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
-# Local tooling directories (do not commit)
+# Local tooling directories (do not commit), except the per-command workflow
+# addenda in .claude/workflow/, which are part of the repo's agent contract
 .idea/
 .vscode/
-.claude/
+.claude/*
+!.claude/workflow/
 
 ### macOS ###
 # General

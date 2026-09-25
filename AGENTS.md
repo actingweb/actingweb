@@ -9,8 +9,10 @@ persistence.
 
 ## Contributing to this repository
 
-**All contributor guidance — commands, quality gates, testing, the release
-process, architecture — lives in [`CLAUDE.md`](CLAUDE.md). Read it before
+**All contributor guidance — the `## Workflow` contract the slash commands
+read (check tiers, app start, CI policy, tool pins, changelog and release
+recipes), its per-command addenda under [`.claude/workflow/`](.claude/workflow/),
+and the architecture — lives in [`CLAUDE.md`](CLAUDE.md). Read it before
 making changes.** This file deliberately does not repeat any of it: `CLAUDE.md`
 is the maintained source, and duplicating it here is exactly what let an
 earlier version of this file go stale for eight months.

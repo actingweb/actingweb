@@ -6,92 +6,220 @@ This file provides guidance to Claude Code when working with this repository.
 
 **ActingWeb** is a Python library implementing the ActingWeb REST protocol for distributed micro-services. Each user gets their own "actor" instance with a unique URL, enabling secure bot-to-bot communication and granular data sharing.
 
-## Quick Reference
+## Workflow
 
-### Essential Commands
+This repository uses the workflow and slash commands from
+<https://github.com/gregertw/claude> (installed at `~/.claude`; the process is
+described in its `README.md` there). The commands read the subsections below
+as instructions, not prose. Per-command addenda live in
+[`.claude/workflow/<command>.md`](.claude/workflow/README.md).
+
+The chain: `/plan_feature` → `/research_codebase` → `/create_plan` (or
+`/update_plan` before work starts) → `/implement_plan` →
+`/verify_implementation` → `/iterate_plan`. `/fix_bug` for bugs.
+`/changelog` → `/commit` → `/release` to ship. All thinking is checked in
+under `thoughts/` alongside the code. Reports from consumer repositories land
+in `thoughts/inbound/` and are triaged before anything is filed from them.
+
+### Checks
+
+Two tiers. **Fast** runs after every implementation phase and after each
+group of iteration changes. **Full** runs before every commit, during
+verification, and before a release. All must pass with **0 errors and 0
+warnings**; never commit code that breaks the existing suite. Type hints are
+required on all functions.
+
+Fast:
 
 ```bash
-# Development
-poetry install                    # Install dependencies
-poetry shell                      # Activate virtual environment
-
-# Quality Checks (run before committing)
-poetry run pyright actingweb tests   # Type checking - must be 0 errors
-poetry run ruff check actingweb tests # Linting - must pass
-poetry run ruff format actingweb tests # Auto-format
-
-# Testing (Sequential)
-make test-integration             # Integration tests only (sequential, ~5 min)
-make test-integration-fast        # Skip slow tests (sequential, ~3 min)
-poetry run pytest tests/ -v       # All tests (requires DynamoDB running)
-
-# Testing (Parallel) - FASTER but may have isolation issues
-make test-parallel                # Integration tests (parallel, ~2 min)
-make test-parallel-fast           # Skip slow tests (parallel, ~1 min)
-make test-all-parallel            # ALL tests inc. unit tests (parallel, ~4 min)
-
-# Final Validation Before Committing
-make test-all-parallel            # Run ALL tests (unit + integration)
-
-# Build
-poetry build                      # Build package
+docker compose -f docker-compose.test.yml up -d dynamodb-test
+poetry run ruff check actingweb tests
+poetry run ruff format --check actingweb tests
+poetry run pyright actingweb tests
+poetry run pytest tests/ --ignore=tests/integration --ignore=tests/performance -m "not benchmark" --no-cov -q
 ```
 
-### Release Process
+Full:
 
-Releases are triggered by git tags. **The version bump and changelog rename go
-in the release PR itself** — we do not use a separate release PR, and we do not
-bump on master after merging. Tag the merge commit.
-
-**For contributors (PRs that are not a release):**
-1. Make changes
-2. Add entry to "Unreleased" section in `CHANGELOG.rst`
-3. Create PR, merge when approved
-4. No version bump needed
-
-**For maintainers (releasing, stable or pre-release):**
-1. On the PR branch, update version in `pyproject.toml` and `actingweb/__init__.py`
-2. Rename "Unreleased" to `vX.Y.Z: Date` in `CHANGELOG.rst` (or `vX.Y.ZrcN: Date`)
-3. Add new empty "Unreleased" section at top
-4. Commit: `git commit -am "Release vX.Y.Z"` (or `"Pre-release vX.Y.ZrcN"`)
-5. Push and merge the PR — CI must be green on both database backends
-6. On master: `git pull`, then `git tag vX.Y.Z` on the merge commit
-7. Push: `git push --tags`
-8. GitHub Actions validates the tag matches the version files, runs tests, then
-   publishes — production PyPI for a stable version, **TestPyPI** for a
-   pre-release — and creates a GitHub Release (marked pre-release where
-   applicable)
-
-Both version files must match the tag exactly, and step 6 is why the tag can
-only be created after the merge: tags are only released from commits on master.
-
-**`master` is a protected branch.** Direct commit pushes are rejected, so every
-change — including the version bump — must arrive through a PR. Tag pushes are
-not affected, which is exactly why the bump rides in the release PR and only the
-tag is pushed to master afterwards.
-
-**Pre-release version patterns** (published to TestPyPI):
-- Alpha: `X.Y.ZaN` (e.g., `3.10.0a1`, `3.10.0a2`)
-- Beta: `X.Y.ZbN` (e.g., `3.10.0b1`, `3.10.0b2`)
-- Release Candidate: `X.Y.ZrcN` (e.g., `3.10.0rc1`, `3.10.0rc2`)
-- Development: `X.Y.Z.devN` (e.g., `3.10.0.dev1`)
-
-**Installing pre-releases from TestPyPI:**
 ```bash
-pip install --index-url https://test.pypi.org/simple/ \
-    --extra-index-url https://pypi.org/simple/ \
-    actingweb==X.Y.ZaN
+poetry run ruff check actingweb tests
+poetry run ruff format --check actingweb tests
+poetry run pyright actingweb tests
+make test-all-parallel
+DATABASE_BACKEND=postgresql PG_DB_HOST=localhost PG_DB_PORT=5433 PG_DB_NAME=actingweb_test PG_DB_USER=actingweb PG_DB_PASSWORD=testpassword make test-all-parallel
+poetry run sphinx-build -W --keep-going -D suppress_warnings="ref.doc,misc.highlighting_failure" -b html . _build/html
 ```
 
-**Version files** (must match tag):
-- `pyproject.toml` - `version = "X.Y.Z"` or `version = "X.Y.ZaN"`
-- `actingweb/__init__.py` - `__version__ = "X.Y.Z"` or `__version__ = "X.Y.ZaN"`
+Preconditions and warnings (the commands follow these as instructions):
 
-**Required repository secrets:**
-- `POETRY_PYPI_TOKEN_PYPI` - Production PyPI API token
-- `POETRY_TESTPYPI_TOKEN` - TestPyPI API token
+- After switching branches or pulling a lock change run
+  `poetry install --with dev --extras "all"` first.
+- Docker must be running. `docker-compose.test.yml` maps DynamoDB Local to
+  `:8001` and PostgreSQL to `:5433`. The unit tests need DynamoDB Local too
+  (system-actor bootstrap); without it they fail with "Could not connect to
+  the endpoint URL", which is not a code regression. The `make` targets start
+  and stop both containers themselves.
+- Run one test run at a time. Separate runs, including one in another
+  session, share the test server port `5555` and the `test_w0_` database
+  prefix and corrupt each other; serialize before trusting a failure.
+- Parallel runs (`make test-all-parallel`, `-n auto --dist loadgroup`) are
+  2–3x faster but can show isolation flakes. Re-run a failure sequentially
+  (`make test-integration`, or the failing file alone) before treating it as
+  real.
+- Inside the Claude Code sandbox add `-p no:rerunfailures` to a direct
+  `pytest` call: the rerun plugin binds a loopback socket the sandbox
+  refuses. CI keeps `--reruns 2`.
+- Benchmarks (`-m benchmark`, `tests/performance/`) never run in parallel and
+  are excluded from CI; run them alone when a change touches list storage.
+- A PostgreSQL failure that DynamoDB does not show is a real backend
+  difference, not a flake; CI requires both backends green.
+- Docs: `-W` turns warnings into errors. Read the Docs builds the same tree
+  with `fail_on_warning: false`, so CI is the stricter gate.
 
-**Branch restriction:** Tags can only be released from commits on the master branch.
+### App
+
+- Start for checks: none. The integration tests start their own server on
+  `:5555` and the database containers.
+- Start for browser QA: the reference app in `examples/demo/`. Start
+  DynamoDB Local (`docker compose -f docker-compose.test.yml up -d
+  dynamodb-test`), copy `examples/demo/.env.example` to `examples/demo/.env`
+  with a real OAuth2 client id and secret, then `poetry install --extras
+  flask && poetry run python examples/demo/application.py`
+  (`http://localhost:5000`). Login goes through the real provider, so browser
+  QA can only cover what an already-logged-in session reaches.
+- Allowed hosts for browser QA: `localhost`, `127.0.0.1`
+- Seed or reset data: none. (`GET /nuke?secret=` deletes every actor and is
+  only armed when `NUKE_SECRET` is set; leave it unset.)
+- Stop: `Ctrl-C`, then `docker compose -f docker-compose.test.yml down -v`
+
+### Test account
+
+- none. The demo app logs in through a real OAuth2 provider; the browser
+  agent never types a real account's credentials.
+
+### Commits
+
+- Attribution lines (Co-Authored-By, session links added by the harness): keep
+- Never stage: `.env*`, `examples/demo/.env`, `coverage.xml`, `htmlcov/`,
+  `dist/`, `_build/` (all gitignored; do not force-add them)
+- When `pyproject.toml` changes, regenerate `docs/requirements.txt`
+  (`poetry export --with docs --without-hashes -o docs/requirements.txt`) in
+  the same commit; `scripts/install-git-hooks.sh` installs a pre-commit hook
+  that does it.
+- Branch names: `fix/<version>-<slug>` for a patch, `release/<version>-<slug>`
+  for a minor or a release PR, `docs/<slug>` for docs-only work. `master` is
+  protected: every change arrives through a PR.
+
+### CI policy
+
+- Opening a PR: triggers Tests (Python 3.11 × dynamodb, postgresql),
+  type-check (pyright, ruff check, ruff format) and Documentation Build, plus
+  a Claude code review on open only. All four check contexts are required on
+  `master`.
+- Pushing to an open PR: re-runs the test workflows (`pull_request`
+  synchronize); the Claude review does not re-run.
+- Re-triggering CI: push a commit. Never `gh workflow run` the test workflow;
+  the release workflow's `workflow_dispatch` is the user's only.
+- A docs-only PR skips the heavy matrix through the `changes` job's
+  step-level gating; never move those filters up to `on:`, the required
+  per-backend contexts would then never be created and the PR could not
+  merge (the workflow file says why).
+- Local pre-PR gate: none beyond the Full tier.
+
+### Tools
+
+- Second opinion for plans: use codex
+- Second opinion for diffs: use codex
+- Scope lock: use self-check
+- Diagrams: use mermaid-fence
+
+Browser QA auto-detects (`bash ~/.claude/bin/detect-tools`).
+
+### Changelog
+
+- File: `CHANGELOG.rst`, top section `Unreleased` (dashes underline), then
+  `vX.Y.Z: Month D, YYYY` sections
+- Categories, in the order they appear when present: `SECURITY`, `REMOVED`,
+  `CHANGED`, `ADDED`, `FIXED` (tilde underline)
+- Entry style: multi-line user-facing RST prose. A bold first sentence names
+  the symptom, then the cause, then the new behaviour and what a consumer
+  should check. Every consumer-visible shift gets a bold **Behavior change:**
+  sentence; a wire-shape or API change gets a **Breaking:** lead under
+  `CHANGED`. Exactly-true guarantee wording beats shorter wording.
+- Sidecar files to keep in sync: none. A minor gets `docs/migration/vX.Y.rst`
+  plus its `docs/migration/index.rst` row; a patch never touches
+  `docs/migration/`, the changelog carries its behaviour notes.
+- Contributors add the entry under `Unreleased` in the same PR; no version
+  bump outside a release PR.
+
+### Release
+
+Releases are triggered by git tags. **The version bump and changelog rename
+go in the release PR itself**: no separate release PR, no bump on `master`
+after merging. Tag the merge commit.
+
+- Version files: `pyproject.toml` (`version = "X.Y.Z"`) and
+  `actingweb/__init__.py` (`__version__ = "X.Y.Z"`), PEP 440; both must match
+  the tag exactly. The tag workflow validates this.
+- Patch vs minor: a patch (`3.14.x`) when no route, hook name, kwarg,
+  response field, public signature or config option changes (additive
+  keyword-only parameters with defaults are fine); a minor otherwise, with a
+  migration guide.
+- Changelog promotion: rename `Unreleased` to `vX.Y.Z: Month D, YYYY` (or
+  `vX.Y.ZrcN: ...`), add a new empty `Unreleased` above it; a minor's entry
+  opens with a `.. note::` pointing at its migration guide.
+- Branch and PR: `release/<version>-<slug>` (or the feature's `fix/` branch)
+  with the bump, commit `Release vX.Y.Z` (or `Pre-release vX.Y.ZrcN`), PR to
+  `master`, CI green on both backends, merge; then on `master`: `git pull`,
+  `git tag vX.Y.Z` on the merge commit, `git push origin vX.Y.Z`. Tags are
+  pushed by name. Tags on any commit not on `master` fail the release
+  workflow.
+- Tags: `vX.Y.Z`; extra tags: none
+- Pre-releases (`X.Y.ZaN`, `X.Y.ZbN`, `X.Y.ZrcN`, `X.Y.Z.devN`) publish to
+  **TestPyPI** and a GitHub Release marked pre-release; a stable version
+  publishes to PyPI. Install a pre-release with
+  `pip install --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ actingweb==X.Y.ZrcN`.
+- Publish: nothing beyond the tag (`.github/workflows/publish-to-pypi.yml`
+  reacts to `v*`). Repository secrets `POETRY_PYPI_TOKEN_PYPI` and
+  `POETRY_TESTPYPI_TOKEN` must exist.
+- Pre-PR gate for release PRs: skip (a version-only diff was reviewed in its
+  feature PRs)
+- Runbook: this section; `CONTRIBUTING.rst` repeats the tag restriction.
+
+### Dependencies
+
+- `../actingweb_mcp` (Emm AI) and `../actingwebdemo` consume this library
+  pinned by version. A regression reported from a consumer is bisected in a
+  git worktree of this repo pointed at by the consumer's path dependency;
+  never move this repo's `HEAD` for that. Consumer reports arrive as
+  `thoughts/inbound/<slug>.md` and are verified against the tree before
+  anything is filed (`thoughts/README.md`, "inbound/").
+- `examples/demo/` is the application code behind `demo.actingweb.io`; the
+  `actingwebdemo` repository only deploys it. It is imported by tests here,
+  so it cannot drift from the library.
+
+### Thoughts
+
+- Layout: [`thoughts/README.md`](thoughts/README.md) is authoritative. Read
+  it before adding anything there, and re-read it before recording that work
+  is finished. Directories: `features/`, `research/`, `plans/`,
+  `verifications/`, `reference/`, `todo/`, `inbound/`. A directory is a
+  **kind** of document, never a **status**; a finished plan stays in `plans/`
+  with `status: done`, it is never moved.
+- `todo/` holds only what is NOT done. When work lands the file is
+  **deleted**, not annotated; the plan and the verification are the record.
+  Keep `todo/INDEX.md` in step: add a row with the file, remove it with the
+  file. Todos are identified by filename, never by a number.
+- `inbound/` is an inbox and is normally empty. Triage means **verify**, not
+  transcribe: check every claim against the tree, write down what the check
+  changed, file what survives (a todo with an `INDEX.md` row, a research
+  note, or a plan), carry the attribution across, then delete the report.
+- Update a plan's `status:` when its last phase lands, including phases it
+  deliberately deferred. Find work in flight with
+  `grep -l "^status: active" thoughts/plans/*.md`.
+- Durable **product** documentation released publicly goes in `docs/` (see
+  the index below), not in `thoughts/reference/`. Check both before starting
+  significant work.
 
 ## Documentation
 
@@ -283,74 +411,6 @@ export INDEXED_PROPERTIES=oauthId,email,externalUserId  # Configure indexed prop
 ```
 
 See `docs/quickstart/configuration.rst` for full migration guide and best practices.
-
-## Quality Standards
-
-**Zero-tolerance policy**: All code must pass with 0 errors, 0 warnings.
-
-- **Type hints required** on all functions
-- **Pyright** for type checking (primary)
-- **Ruff** for linting and formatting
-- **Tests**: 900+ tests, 100% passing required
-
-## Testing
-
-**Before committing**: Always run `make test-all-parallel` (all 900+ tests)
-
-**Test Modes**:
-- **Parallel** (recommended for development): `make test-all-parallel` (~4 min)
-- **Sequential** (recommended for CI): `make test-integration` (~5 min)
-
-Parallel tests are 2-3x faster but may have occasional isolation issues. If parallel tests fail, re-run sequentially to verify.
-
-**Full testing guide**: See `docs/contributing/testing.rst` for:
-- Test execution modes and tradeoffs
-- Test isolation troubleshooting
-- Running specific tests
-- Known parallel execution issues
-
-## Project Documentation System
-
-The `thoughts/` directory tracks development work. **`thoughts/README.md` is the
-authoritative convention** — read it before adding anything there.
-
-```text
-thoughts/
-├── research/       # What we found out          (dated, /research_codebase)
-├── plans/          # What we intend to do       (dated, /create_plan)
-├── verifications/  # Evidence a plan landed     (dated, /verify_implementation)
-├── reference/      # Durable knowledge          (undated, updated in place)
-├── todo/           # Known work not scheduled   (undated, deleted when done)
-└── inbound/        # Unevaluated external reports (undated, deleted at triage)
-```
-
-A directory is a **kind** of document, never a **status**. A finished plan stays
-in `plans/` with `status: done` in its frontmatter — it is never moved, because
-moving it rots the links that verifications and research write to it.
-
-Find work in flight: `grep -l "^status: active" thoughts/plans/*.md`
-
-Check these before starting significant work to find existing patterns and context.
-
-The three rules that get broken in practice:
-
-- **`todo/` holds only what is NOT done.** When work lands, the todo is
-  *removed* — not annotated with a "CLOSED" section that grows forever, and not
-  kept as a ledger row. The plan and the verification are the record; a todo
-  points at them, it does not summarise them. Todos are identified by filename,
-  never by an index number.
-- **The record of finished work lives in `plans/` and `verifications/`**, which
-  are dated and immutable-ish. Put the evidence there — numbers, commands,
-  what was checked — and have the todo point at it. A register that carries its
-  own history stops being a work queue.
-- **Update the plan's `status:` when its last phase lands**, including phases it
-  deliberately deferred. A plan marked `done` while one step is still owed is
-  how a deferral goes missing.
-
-A useful tell, from the README: if you are editing a dated file to keep it
-accurate, it is in the wrong directory.
-
-Durable **product** documentation released publicly goes in `docs/` (see the index below), not in `thoughts/reference/`. Check both before starting significant work.
 
 ## Logging and Request Correlation
 

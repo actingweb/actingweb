@@ -212,7 +212,7 @@ class MCPClientRegistry:
             if not actor_id:
                 return None
             client_row = db.get_attr_strict(
-                actor_id=actor_id, bucket="mcp_clients", name=client_id
+                actor_id=actor_id, bucket=self.clients_bucket, name=client_id
             )
         except Exception as e:
             raise TokenStoreUnavailable(
@@ -350,23 +350,31 @@ class MCPClientRegistry:
                     f"an hour"
                 )
 
-            # Delete from actor's bucket
-            bucket = attribute.Attributes(
-                actor_id=actor_id, bucket="mcp_clients", config=self.config
-            )
-            bucket.delete_attr(name=client_id)
+            # Delete the client row and its index row, confirming each: the
+            # token endpoint needs both to authenticate the client, so either
+            # one gone disables it. A plain delete cannot be trusted to report
+            # a fault (DynamoDB swallows it), and the outage that stopped the
+            # token listing above usually fails these too.
+            from ..single_use import delete_confirmed
 
-            # Delete from global index
-            try:
-                global_bucket = attribute.Attributes(
-                    actor_id=OAUTH2_SYSTEM_ACTOR,
-                    bucket=CLIENT_INDEX_BUCKET,
-                    config=self.config,
+            row_gone = delete_confirmed(
+                self.config, actor_id, self.clients_bucket, client_id
+            )
+            index_gone = delete_confirmed(
+                self.config, OAUTH2_SYSTEM_ACTOR, CLIENT_INDEX_BUCKET, client_id
+            )
+            if not row_gone and not index_gone:
+                logger.error(
+                    f"Could not delete OAuth2 client {client_id} for actor "
+                    f"{actor_id}: neither its row nor its index row is confirmed "
+                    f"gone, so it can still authenticate"
                 )
-                global_bucket.delete_attr(name=client_id)
-            except Exception as e:
+                return False
+            if not (row_gone and index_gone):
                 logger.warning(
-                    f"Failed to remove client {client_id} from global index: {e}"
+                    f"OAuth2 client {client_id}: only its "
+                    f"{'row' if row_gone else 'index row'} is confirmed deleted; "
+                    f"that is enough to disable it"
                 )
 
             # Delete corresponding trust relationship

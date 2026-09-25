@@ -75,11 +75,18 @@ SECURITY
   without revoking. A refresh token issued before 3.15 joins a chain on its
   first rotation and is covered from then on. If the store cannot complete
   a theft revocation, the grant answers ``server_error`` and leaves the
-  chain for the next presentation to revoke, rather than report it revoked.
-  Revoking a token (``/oauth/logout``, ``revoke_token``) revokes every token
-  in its chain, consumed ones included, so a consumed refresh token cannot
-  rotate after its successor was revoked. MCP clients must store the refresh
-  token from every response. Revocation clears this process's MCP token cache only: another
+  replayed token in place for the next presentation to retry from, rather
+  than report the chain revoked. A store fault while a refresh token or an
+  authorization code is being consumed answers ``server_error`` and leaves
+  it usable; it is never read as "already used". Revoking an MCP token
+  (``/oauth/logout`` with an MCP bearer token, or ``revoke_token``) revokes
+  every token in its chain, consumed ones included, so a consumed refresh
+  token cannot rotate after its successor was revoked. **Behavior change:**
+  ``/oauth/logout`` with an MCP bearer token now revokes it in the MCP
+  token store; before, the route knew only the SPA session store and the
+  MCP token and its chain stayed live. SPA session tokens keep their
+  existing logout path. MCP clients must store the refresh token from every
+  response. Revocation clears this process's MCP token cache only: another
   worker or container may honour a revoked access token from its own cache
   for up to 300 seconds. Two concurrent exchanges of one authorization code
   now mint exactly one token pair, and a wrong PKCE verifier burns the code.
@@ -97,7 +104,10 @@ SECURITY
   is keyed only by ``Mcp-Session-Id`` or, after authentication, by the
   bearer token, is bounded and thread-safe, and a request that carries a
   bearer token reads its token entry first, since the session id is chosen
-  by the client. Every string in the cached ``clientInfo`` is sanitised, not
+  by the client. A session entry belongs to the actor whose authenticated
+  ``initialize`` wrote it (or whose request first used it): an
+  unauthenticated ``initialize`` cannot replace it while it is in use, and
+  another actor's request ignores it. Every string in the cached ``clientInfo`` is sanitised, not
   only the name and version: ``title`` is capped like the name, and other
   strings, nested ones included, at 200 characters. **Behavior change:** a request without
   ``Mcp-Session-Id`` gets no cached ``clientInfo`` until the client sends an
@@ -163,7 +173,12 @@ CHANGED
 - **Additive keyword arguments:** ``create_authorization_code(redirect_uri=)``,
   ``exchange_authorization_code(redirect_uri=)``,
   ``MCPHandler.clear_token_from_cache(actor_wide=)`` and
-  ``evict_caches_for_token(actor_wide=)``. New constants
+  ``evict_caches_for_token(actor_wide=)``. The attribute backend protocol
+  gains ``conditional_update_attr(ttl_seconds=)`` (the same conditional
+  write sets the row's TTL, never re-creating a deleted row) and
+  ``delete_by_chain(defer_name=)`` (a row-by-row backend deletes that row
+  last); both built-in backends implement them, and a custom backend must
+  accept them. New constants
   ``MCP_REFRESH_TOKEN_GRACE_PERIOD`` (60), ``MCP_REFRESH_TOKEN_REUSE_WINDOW``
   (two days) and ``MCP_TOKEN_PURGE_INTERVAL`` (one hour).
 
@@ -212,10 +227,13 @@ FIXED
   ``revoke_client_tokens`` read the client's token buckets with a read that
   answers "empty" on a store fault, so a delete during a throttle revoked
   nothing and logged "Revoked 0 tokens". It now raises
-  ``TokenStoreUnavailable`` after revoking what it could read.
-  ``delete_client`` still deletes the client, which is what disables its
-  refresh tokens, and logs at ERROR that unrevoked access tokens expire
-  within an hour.
+  ``TokenStoreUnavailable`` after revoking what it could read, and counts
+  only deletes it could confirm (DynamoDB reports a failed delete as a
+  success). ``delete_client`` still deletes the client, which is what
+  disables its refresh tokens, and logs at ERROR that unrevoked access
+  tokens expire within an hour. **Behavior change:** it confirms the client
+  row and its index row are gone, and answers ``False`` when neither is,
+  instead of reporting success for a client that can still authenticate.
 
 v3.14.7: September 14, 2026
 ----------------------------

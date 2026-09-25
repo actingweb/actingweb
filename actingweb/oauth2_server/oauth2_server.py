@@ -734,6 +734,7 @@ class ActingWebOAuth2Server:
         Returns:
             Response indicating logout success
         """
+        message = "Successfully logged out"
         try:
             if token:
                 logger.info("Processing logout with token")
@@ -767,13 +768,15 @@ class ActingWebOAuth2Server:
                     logger.error(
                         f"Token revocation error traceback: {traceback.format_exc()}"
                     )
-                    # Continue with logout process even if revocation fails
+                    # Continue with logout process even if revocation fails,
+                    # but do not report a revocation that did not happen.
+                    message = "Logged out (with errors)"
             else:
                 logger.info("Logout requested without token - clearing cookies only")
 
             return {
                 "action": "success",
-                "message": "Successfully logged out",
+                "message": message,
                 "clear_cookies": ["oauth_token", "oauth_refresh_token", "session_id"],
                 "redirect_url": f"{self.config.proto}{self.config.fqdn}/",
             }

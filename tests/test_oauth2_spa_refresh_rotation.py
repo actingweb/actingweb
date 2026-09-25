@@ -61,7 +61,14 @@ def _make_config() -> tuple[Config, dict]:
             return False
 
         def conditional_update_attr(
-            self, actor_id, bucket, name, old_data, new_data, timestamp=None
+            self,
+            actor_id,
+            bucket,
+            name,
+            old_data,
+            new_data,
+            timestamp=None,
+            ttl_seconds=None,
         ):  # type: ignore
             key = f"{actor_id}:{bucket}"
             current = self.storage.get(key, {}).get(name)
@@ -69,6 +76,9 @@ def _make_config() -> tuple[Config, dict]:
                 return False
             self.storage[key][name] = {"data": new_data}
             return True
+
+        def get_attr_strict(self, actor_id, bucket, name):  # type: ignore
+            return self.storage.get(f"{actor_id}:{bucket}", {}).get(name)
 
         def delete_bucket(self, actor_id, bucket):  # type: ignore
             return self.storage.pop(f"{actor_id}:{bucket}", None) is not None

@@ -75,12 +75,15 @@ was issued with is revoked.
 - After two days it answers ``invalid_grant`` without revoking anything.
 - If the store fails during a theft revocation, the grant answers
   ``server_error`` and the chain is revoked on the next presentation.
+- If the store fails while the token is being consumed, the grant answers
+  ``server_error`` and the token stays usable; retry it.
 
 A refresh token issued before 3.15 joins a chain on its first rotation.
-Revoking any token of a chain (``/oauth/logout``,
-``ActingWebTokenManager.revoke_token``) revokes the whole chain, including
-consumed refresh tokens that could otherwise still rotate inside the 60
-seconds.
+Revoking any token of a chain revokes the whole chain, including consumed
+refresh tokens that could otherwise still rotate inside the 60 seconds.
+That applies to ``ActingWebTokenManager.revoke_token`` and, from 3.15, to
+``/oauth/logout`` called with an MCP bearer token, which before 3.15 left
+the token live. ``/oauth/logout`` with an SPA session token is unchanged.
 
 A client that keeps its first refresh token will work for one hour after
 its first refresh, then lose its session. The fix is in the client: store
@@ -196,6 +199,9 @@ changelog. From 3.15:
 - the live ``clientInfo`` handed to tools (``MCPContext.client_info``)
   is found by ``Mcp-Session-Id`` or by the bearer token, so a client that
   sends neither header nor an authenticated ``initialize`` has none;
+- a session entry belongs to the actor whose authenticated request wrote
+  or first used it; an unauthenticated ``initialize`` naming that session
+  cannot replace it while it is in use;
 - names and versions are sanitised (``actingweb.client_text``).
 
 Applications that already sanitise client names can keep doing so.
@@ -206,6 +212,20 @@ Logging
 The peer proxy (``actingweb.aw_proxy``) and the authorize endpoint log a
 summary of request bodies at DEBUG — ``keys=[...] bytes=N`` — never the
 values. Key names of a property write are property names.
+
+Custom database backends
+========================
+
+A backend that implements the attribute protocol itself
+(``actingweb.db.protocols``) must accept two new keyword arguments:
+
+- ``conditional_update_attr(..., ttl_seconds=None)``: when given, the same
+  conditional write sets the row's storage TTL. It must never create a row
+  that does not exist.
+- ``delete_by_chain(..., defer_name=None)``: a backend that deletes row by
+  row deletes the row of that name last; a set-based delete may ignore it.
+
+The DynamoDB and PostgreSQL backends shipped with the library implement both.
 
 PostgreSQL: consumed token rows
 ===============================

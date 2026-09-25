@@ -83,7 +83,14 @@ class TestOAuth2SessionManager:
                 return False
 
             def conditional_update_attr(  # type: ignore
-                self, actor_id, bucket, name, old_data, new_data, timestamp=None
+                self,
+                actor_id,
+                bucket,
+                name,
+                old_data,
+                new_data,
+                timestamp=None,
+                ttl_seconds=None,
             ):
                 key = f"{actor_id}:{bucket}"
                 current = self.storage.get(key, {}).get(name)
@@ -91,7 +98,12 @@ class TestOAuth2SessionManager:
                     return False
                 current["data"] = new_data
                 current["timestamp"] = timestamp
+                if ttl_seconds is not None:
+                    current["ttl_seconds"] = ttl_seconds
                 return True
+
+            def get_attr_strict(self, actor_id, bucket, name):  # type: ignore
+                return self.storage.get(f"{actor_id}:{bucket}", {}).get(name)
 
             def delete_expired(self, now_epoch=None, buckets=None):  # type: ignore
                 import time as _time
@@ -554,7 +566,7 @@ class TestOAuth2SessionManager:
         from actingweb.oauth_session import _REFRESH_TOKEN_BUCKET
 
         # Reset the process-local throttle so this test is deterministic.
-        oauth_session_mod._purge_throttle.last_attempt = 0.0
+        oauth_session_mod._purge_throttle.last_attempt = None
 
         refresh_key = f"{OAUTH2_SYSTEM_ACTOR}:{_REFRESH_TOKEN_BUCKET}"
         self._test_storage.setdefault(refresh_key, {})["expired-rt"] = {

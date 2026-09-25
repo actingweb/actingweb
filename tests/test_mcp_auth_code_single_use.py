@@ -13,7 +13,10 @@ import time
 import pytest
 
 from actingweb.constants import AUTH_CODE_INDEX_BUCKET
-from actingweb.oauth2_server.token_manager import ActingWebTokenManager
+from actingweb.oauth2_server.token_manager import (
+    ActingWebTokenManager,
+    TokenStoreUnavailable,
+)
 from tests.mcp_token_double import MemoryStore, index_actor, make_config
 
 ACTOR = "actor-code"
@@ -90,6 +93,20 @@ def test_code_row_ttl_is_never_restamped() -> None:
     assert tokens is not None
     # The only TTL written for the code row is the one from its creation.
     assert store.ttls[(ACTOR, CODES, code)] == stamped
+
+
+def test_cas_fault_leaves_the_code_exchangeable() -> None:
+    """A swap that faults is not "already used": the exchange errors, and the
+    code still works once the store recovers."""
+    tm, store = _setup()
+    code = tm.create_authorization_code(ACTOR, CLIENT, {"access_token": "g"})
+
+    store.cas_fault = True
+    with pytest.raises(TokenStoreUnavailable):
+        tm.exchange_authorization_code(code, CLIENT)
+    store.cas_fault = False
+
+    assert tm.exchange_authorization_code(code, CLIENT) is not None
 
 
 def test_code_is_never_logged_in_full(caplog: pytest.LogCaptureFixture) -> None:

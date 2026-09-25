@@ -235,3 +235,61 @@ def test_delete_client_still_deletes_when_tokens_cannot_be_listed(
         }
     )
     assert out["error"] == "invalid_client"
+
+
+def test_delete_client_fails_when_nothing_is_confirmed_deleted(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A delete that cannot be confirmed (DynamoDB swallows a failed delete
+    and answers True) must not be reported as success while the client can
+    still authenticate."""
+    import logging
+
+    from actingweb.constants import CLIENT_INDEX_BUCKET, OAUTH2_SYSTEM_ACTOR
+
+    config, store = make_config()
+    server = make_server(config)
+    cid = register(server)["client_id"]
+    owner = store.data(OAUTH2_SYSTEM_ACTOR, CLIENT_INDEX_BUCKET, cid)
+    store.delete_faults |= {
+        (owner, "mcp_clients", cid),
+        (OAUTH2_SYSTEM_ACTOR, CLIENT_INDEX_BUCKET, cid),
+    }
+
+    with (
+        caplog.at_level(logging.ERROR, logger="actingweb.oauth2_server"),
+        mock.patch.object(server.client_registry, "_delete_client_trust_relationship"),
+    ):
+        assert not server.client_registry.delete_client(cid, actor_id=owner)
+    assert "can still authenticate" in caplog.text
+    assert server.client_registry.load_client_strict(cid) is not None
+
+
+def test_delete_client_succeeds_when_its_index_row_is_gone() -> None:
+    """Either row gone disables the client, so one confirmed delete is a
+    successful client deletion."""
+    from actingweb.constants import CLIENT_INDEX_BUCKET, OAUTH2_SYSTEM_ACTOR
+
+    config, store = make_config()
+    server = make_server(config)
+    cid = register(server)["client_id"]
+    owner = store.data(OAUTH2_SYSTEM_ACTOR, CLIENT_INDEX_BUCKET, cid)
+    store.delete_faults.add((owner, "mcp_clients", cid))
+
+    with mock.patch.object(server.client_registry, "_delete_client_trust_relationship"):
+        assert server.client_registry.delete_client(cid, actor_id=owner)
+    assert server.client_registry.load_client_strict(cid) is None
+
+
+def test_revoke_client_tokens_counts_only_confirmed_deletes() -> None:
+    config, store = make_config()
+    tm = ActingWebTokenManager(config)
+    code = tm.create_authorization_code("a1", "mcp_client_x", {"access_token": "g"})
+    tokens = tm.exchange_authorization_code(code, "mcp_client_x")
+    assert tokens
+    store.delete_faults.add(("a1", "mcp_tokens", tokens["access_token"]))
+
+    with pytest.raises(TokenStoreUnavailable, match="could not confirm 1 delete"):
+        tm.revoke_client_tokens("a1", "mcp_client_x")
+    assert tokens["access_token"] in store.names("a1", "mcp_tokens")
+    assert tokens["refresh_token"] not in store.names("a1", "mcp_refresh_tokens")

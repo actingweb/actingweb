@@ -242,6 +242,7 @@ class Attributes:
         old_data: Any | None = None,
         new_data: Any | None = None,
         timestamp: Any | None = None,
+        ttl_seconds: int | None = None,
     ) -> bool:
         """Conditionally update an attribute only if current data matches old_data.
 
@@ -252,9 +253,13 @@ class Attributes:
             old_data: Expected current data value (for comparison)
             new_data: New data to set if current matches old_data
             timestamp: Optional timestamp
+            ttl_seconds: When given, the same write sets the row's storage TTL.
+                Unlike ``set_attr`` it never re-creates a row that is gone.
 
         Returns:
-            True if update succeeded (current matched old_data), False otherwise
+            True if update succeeded (current matched old_data), False otherwise.
+            Both backends also answer False on a fault; a caller that must tell
+            the two apart re-reads with the backend's ``get_attr_strict``.
         """
         if not self.actor_id or not self.bucket or not name:
             return False
@@ -269,6 +274,9 @@ class Attributes:
             old_data=old_data,
             new_data=new_data,
             timestamp=timestamp,
+            # Only when asked for, so a backend (or test double) written
+            # before the keyword existed keeps working for every other caller.
+            **({"ttl_seconds": ttl_seconds} if ttl_seconds is not None else {}),
         )
 
         # Update local cache only if successful

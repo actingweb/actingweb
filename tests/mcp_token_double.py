@@ -17,8 +17,16 @@ it:
 - a bucket named in ``store.raising_buckets`` makes ``get_bucket`` raise
   (the DynamoDB shape: a throttle mid-page propagates);
 - ``store.chain_delete_fault`` makes ``delete_by_chain`` return 0 without
-  deleting (``"zero"``, the PostgreSQL shape) or raise (``"raise"``, the
-  DynamoDB shape).
+  deleting (``"zero"``, the PostgreSQL shape), raise (``"raise"``, the
+  DynamoDB shape), or delete every row but the last and then raise
+  (``"partial"``, a DynamoDB fault part-way through its row-by-row delete;
+  ``defer_name`` puts that row last, so it is the one that survives);
+- ``store.cas_fault`` makes ``conditional_update_attr`` answer False without
+  writing, the shape both backends give a throttle or a dropped connection;
+  ``conditional_update_attr(ttl_seconds=)`` is recorded in ``store.ttls``;
+- ``store.delete_faults`` names ``(actor_id, bucket, name)`` rows whose
+  deletes fail: ``delete_attr_conditional`` answers False and ``delete_attr``
+  answers True (DynamoDB swallows a failed delete), and the row stays.
 
 ``make_config()`` returns a real :class:`~actingweb.config.Config` whose
 ``DbAttribute`` module is swapped for the double, so everything that reaches
@@ -50,8 +58,12 @@ class MemoryStore:
         self.faulty_buckets: set[str] = set()
         # Buckets whose get_bucket raises (DynamoDB mid-page throttle).
         self.raising_buckets: set[str] = set()
-        # "zero" or "raise": how delete_by_chain faults, when set.
+        # "zero", "raise" or "partial": how delete_by_chain faults, when set.
         self.chain_delete_fault: str | None = None
+        # When True, a compare-and-swap answers False without writing.
+        self.cas_fault = False
+        # Rows whose deletes fail (the row stays).
+        self.delete_faults: set[tuple[str, str, str]] = set()
 
     def bucket(self, actor_id: str, bucket: str) -> dict[str, dict[str, Any]]:
         return self.rows.setdefault(f"{actor_id}:{bucket}", {})
@@ -101,8 +113,19 @@ def make_config() -> tuple[Config, MemoryStore]:
             return True
 
         def delete_attr(self, actor_id: str, bucket: str, name: str) -> bool:
+            if (actor_id, bucket, name) in store.delete_faults:
+                return True
             store.rows.get(f"{actor_id}:{bucket}", {}).pop(name, None)
             return True
+
+        def delete_attr_conditional(
+            self, actor_id: str, bucket: str, name: str
+        ) -> bool:
+            if (actor_id, bucket, name) in store.delete_faults:
+                return False
+            return (
+                store.rows.get(f"{actor_id}:{bucket}", {}).pop(name, None) is not None
+            )
 
         def conditional_update_attr(
             self,
@@ -112,7 +135,10 @@ def make_config() -> tuple[Config, MemoryStore]:
             old_data: Any,
             new_data: Any,
             timestamp: Any = None,
+            ttl_seconds: int | None = None,
         ) -> bool:
+            if store.cas_fault:
+                return False
             if store.cas_hook is not None and not store.cas_hook(
                 actor_id, bucket, name
             ):
@@ -121,6 +147,8 @@ def make_config() -> tuple[Config, MemoryStore]:
             if current is None or current.get("data") != old_data:
                 return False
             store.bucket(actor_id, bucket)[name] = {"data": copy.deepcopy(new_data)}
+            if ttl_seconds is not None:
+                store.ttls[(actor_id, bucket, name)] = ttl_seconds
             return True
 
         def delete_bucket(self, actor_id: str, bucket: str) -> bool:
@@ -131,6 +159,7 @@ def make_config() -> tuple[Config, MemoryStore]:
             actor_id: str | None = None,
             buckets: list[str] | None = None,
             chain_id: str | None = None,
+            defer_name: str | None = None,
         ) -> int:
             if store.chain_delete_fault == "raise":
                 raise RuntimeError("throttled deleting chain")
@@ -138,14 +167,23 @@ def make_config() -> tuple[Config, MemoryStore]:
                 return 0
             if not actor_id or not chain_id or not buckets:
                 return 0
-            deleted = 0
+            matches: list[tuple[dict[str, Any], str]] = []
+            deferred: list[tuple[dict[str, Any], str]] = []
             for bucket in buckets:
                 items = store.rows.get(f"{actor_id}:{bucket}", {})
                 for name, rec in list(items.items()):
                     data = rec.get("data") or {}
                     if isinstance(data, dict) and data.get("chain_id") == chain_id:
-                        del items[name]
-                        deleted += 1
+                        (deferred if name == defer_name else matches).append(
+                            (items, name)
+                        )
+            deleted = 0
+            ordered = matches + deferred
+            for i, (items, name) in enumerate(ordered):
+                if store.chain_delete_fault == "partial" and i == len(ordered) - 1:
+                    raise RuntimeError("throttled part-way through the chain")
+                del items[name]
+                deleted += 1
             return deleted
 
         def delete_expired(

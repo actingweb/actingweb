@@ -93,3 +93,83 @@ class TestRotationOnBackend:
             config=tm.config,
         )
         assert index.get_attr(name=first["refresh_token"]) is None
+
+
+@pytest.mark.xdist_group(name="mcp_refresh_rotation_backend")
+class TestBackendKeywordsForSingleUse:
+    """The two keywords 3.15 adds to the attribute protocol, on the real
+    backends: the TTL written by the compare-and-swap itself, and the row a
+    chain delete removes last."""
+
+    def test_conditional_update_sets_the_ttl_and_never_creates_a_row(
+        self, tm: ActingWebTokenManager
+    ) -> None:
+        from actingweb.constants import TTL_CLOCK_SKEW_BUFFER
+        from actingweb.db import get_attribute
+
+        db = get_attribute(tm.config)
+        actor_id = f"cas-{uuid.uuid4().hex[:12]}"
+        bucket = "cas_ttl_probe"
+        db.set_attr(
+            actor_id=actor_id,
+            bucket=bucket,
+            name="row",
+            data={"v": 1},
+            ttl_seconds=3600,
+        )
+        # A TTL already in the past makes the row read as absent on both
+        # backends, which shows the swap wrote it.
+        assert db.conditional_update_attr(
+            actor_id=actor_id,
+            bucket=bucket,
+            name="row",
+            old_data={"v": 1},
+            new_data={"v": 2},
+            ttl_seconds=-TTL_CLOCK_SKEW_BUFFER - 60,
+        )
+        assert db.get_attr_strict(actor_id=actor_id, bucket=bucket, name="row") is None
+
+        assert not db.conditional_update_attr(
+            actor_id=actor_id,
+            bucket=bucket,
+            name="missing",
+            old_data={"v": 1},
+            new_data={"v": 2},
+            ttl_seconds=60,
+        )
+        assert db.get_attr(actor_id=actor_id, bucket=bucket, name="missing") is None
+        db.delete_bucket(actor_id=actor_id, bucket=bucket)
+
+    def test_chain_delete_with_a_deferred_row_deletes_the_whole_chain(
+        self, tm: ActingWebTokenManager
+    ) -> None:
+        from actingweb.db import get_attribute
+
+        db = get_attribute(tm.config)
+        actor_id = f"chain-{uuid.uuid4().hex[:12]}"
+        bucket = "chain_probe"
+        for name in ("a", "b", "c"):
+            db.set_attr(
+                actor_id=actor_id,
+                bucket=bucket,
+                name=name,
+                data={"chain_id": "ch-1"},
+                ttl_seconds=3600,
+            )
+        db.set_attr(
+            actor_id=actor_id,
+            bucket=bucket,
+            name="other",
+            data={"chain_id": "ch-2"},
+            ttl_seconds=3600,
+        )
+
+        deleted = db.delete_by_chain(
+            actor_id=actor_id, buckets=[bucket], chain_id="ch-1", defer_name="b"
+        )
+
+        assert deleted == 3
+        for name in ("a", "b", "c"):
+            assert db.get_attr(actor_id=actor_id, bucket=bucket, name=name) is None
+        assert db.get_attr(actor_id=actor_id, bucket=bucket, name="other") is not None
+        db.delete_bucket(actor_id=actor_id, bucket=bucket)

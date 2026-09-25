@@ -725,19 +725,26 @@ class OAuth2SessionManager:
             return (False, None)
 
         # Atomic compare-and-swap, shared with the MCP token manager. The
-        # winner re-stamps the consumed row to the reuse window so it is
+        # swap also sets the consumed row's TTL to the reuse window so it is
         # purged promptly instead of lingering for the full refresh TTL.
         from .constants import SPA_REFRESH_TOKEN_REUSE_WINDOW
-        from .single_use import consume_once
+        from .single_use import StoreFault, consume_once
 
-        consumed, current = consume_once(
-            self.config,
-            OAUTH2_SYSTEM_ACTOR,
-            _REFRESH_TOKEN_BUCKET,
-            token,
-            token_data,
-            restamp_ttl=SPA_REFRESH_TOKEN_REUSE_WINDOW,
-        )
+        try:
+            consumed, current = consume_once(
+                self.config,
+                OAUTH2_SYSTEM_ACTOR,
+                _REFRESH_TOKEN_BUCKET,
+                token,
+                token_data,
+                consumed_ttl=SPA_REFRESH_TOKEN_REUSE_WINDOW,
+            )
+        except StoreFault as e:
+            # The token is untouched. Answer as for an unreadable token, as
+            # this path always has; the SPA refresh endpoint's own fault
+            # contract is outside this change.
+            logger.error(f"Could not consume refresh token: {e}")
+            return (False, None)
         if consumed:
             logger.debug("Atomically marked refresh token as used")
         return (consumed, current)

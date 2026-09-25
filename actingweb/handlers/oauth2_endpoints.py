@@ -1002,6 +1002,14 @@ class OAuth2EndpointsHandler(BaseHandler):
         Returns:
             Response dict indicating logout success/failure
         """
+        # An MCP access token (the token manager's prefix; SPA session tokens
+        # are hex and never carry it) is revoked in the MCP token store, with
+        # every token of its refresh-token chain. The session manager below
+        # does not know it.
+        token_manager = self.oauth2_server.token_manager
+        if token.startswith(token_manager.token_prefix):
+            return self._handle_mcp_token_logout(token)
+
         try:
             from ..oauth_session import get_oauth2_session_manager
 
@@ -1047,6 +1055,30 @@ class OAuth2EndpointsHandler(BaseHandler):
                 "clear_cookies": ["oauth_token", "oauth_refresh_token", "session_id"],
                 "redirect_url": f"{self.config.proto}{self.config.fqdn}/",
             }
+
+    def _handle_mcp_token_logout(self, token: str) -> dict[str, Any]:
+        """Revoke an MCP access token and its refresh-token chain on logout.
+
+        The endpoint's contract is unchanged: it answers success so the
+        cookies are cleared. A token store fault is logged at ERROR and
+        reported in the message; the presented token itself is removed even
+        then (see ``ActingWebTokenManager.revoke_token``).
+        """
+        from ..oauth2_server.token_manager import TokenStoreUnavailable
+
+        message = "Successfully logged out"
+        try:
+            if not self.oauth2_server.token_manager.revoke_token(token):
+                logger.debug("Logout with an unknown or expired MCP token")
+        except TokenStoreUnavailable as e:
+            logger.error(f"MCP token revocation on logout failed: {e}")
+            message = "Logged out (token revocation failed)"
+        return {
+            "action": "success",
+            "message": message,
+            "clear_cookies": ["oauth_token", "oauth_refresh_token", "session_id"],
+            "redirect_url": f"{self.config.proto}{self.config.fqdn}/",
+        }
 
     def _clear_provider_token_for_actor(self, actor_id: str) -> None:
         """

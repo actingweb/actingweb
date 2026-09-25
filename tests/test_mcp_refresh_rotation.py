@@ -323,7 +323,7 @@ def test_maybe_purge_runs_once_per_interval(
     env: tuple[ActingWebTokenManager, MemoryStore], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     tm, store = env
-    monkeypatch.setattr(tm_mod._mcp_purge_throttle, "last_attempt", 0.0)
+    monkeypatch.setattr(tm_mod._mcp_purge_throttle, "last_attempt", None)
 
     tm.maybe_purge_expired_tokens()
     tm.maybe_purge_expired_tokens()
@@ -337,7 +337,7 @@ def test_maybe_purge_runs_once_per_interval(
     monkeypatch.setattr(
         tm_mod._mcp_purge_throttle,
         "last_attempt",
-        time.time() - MCP_TOKEN_PURGE_INTERVAL - 1,
+        time.monotonic() - MCP_TOKEN_PURGE_INTERVAL - 1,
     )
     tm.maybe_purge_expired_tokens()
     assert len(store.purges) == 2
@@ -481,3 +481,152 @@ def test_theft_revocation_that_deletes_nothing_is_a_fault(
     assert tm.refresh_access_token(first["refresh_token"], CLIENT) is None
     assert second["refresh_token"] not in store.names(ACTOR, REFRESH)
     assert second["access_token"] not in store.names(ACTOR, TOKENS)
+
+
+def test_cas_fault_is_a_store_fault_not_a_dead_token(
+    env: tuple[ActingWebTokenManager, MemoryStore],
+) -> None:
+    """Both backends answer False from the swap on a fault. That must not
+    read as "already used": the token stays, unused, and works once the
+    store recovers."""
+    tm, store = env
+    first = _login(tm)
+
+    store.cas_fault = True
+    with pytest.raises(tm_mod.TokenStoreUnavailable):
+        tm.refresh_access_token(first["refresh_token"], CLIENT)
+    assert first["refresh_token"] in store.names(ACTOR, REFRESH)
+    assert not store.data(ACTOR, REFRESH, first["refresh_token"]).get("used")
+
+    store.cas_fault = False
+    assert tm.refresh_access_token(first["refresh_token"], CLIENT) is not None
+
+
+def test_cas_fault_with_unreadable_store_is_a_store_fault(
+    env: tuple[ActingWebTokenManager, MemoryStore],
+) -> None:
+    tm, store = env
+    first = _login(tm)
+
+    store.cas_fault = True
+    # The loser's strict re-read faults too; the index lookup before the
+    # swap already succeeded, so only the actor's refresh bucket is faulty
+    # from here on.
+    original = tm._consume
+
+    def consume_then_fault(*args: Any, **kwargs: Any) -> Any:
+        store.faulty_buckets.add(REFRESH)
+        return original(*args, **kwargs)
+
+    tm._consume = consume_then_fault  # type: ignore[method-assign]
+    with pytest.raises(tm_mod.TokenStoreUnavailable):
+        tm.refresh_access_token(first["refresh_token"], CLIENT)
+    store.faulty_buckets.clear()
+    assert first["refresh_token"] in store.names(ACTOR, REFRESH)
+
+
+def test_revocation_between_swap_and_mint_is_not_undone(
+    env: tuple[ActingWebTokenManager, MemoryStore],
+) -> None:
+    """The consumed row's TTL is written by the swap itself. A revocation
+    that lands right after the swap stays in force: nothing re-creates the
+    consumed row, so no replay inside the grace window can rotate it."""
+    tm, store = env
+    first = _login(tm)
+    config_db = tm.config.DbAttribute.DbAttribute
+    original = config_db.conditional_update_attr
+
+    def swap_then_revoke(
+        self: Any, actor_id: str, bucket: str, name: str, *a: Any, **k: Any
+    ) -> bool:
+        ok = original(self, actor_id, bucket, name, *a, **k)
+        if ok and bucket == REFRESH:
+            store.rows[f"{actor_id}:{bucket}"].pop(name, None)
+        return ok
+
+    config_db.conditional_update_attr = swap_then_revoke
+    try:
+        tm.refresh_access_token(first["refresh_token"], CLIENT)
+    finally:
+        config_db.conditional_update_attr = original
+
+    assert first["refresh_token"] not in store.names(ACTOR, REFRESH)
+    assert tm.refresh_access_token(first["refresh_token"], CLIENT) is None
+
+
+def test_consumed_row_ttl_is_set_by_the_swap(
+    env: tuple[ActingWebTokenManager, MemoryStore],
+) -> None:
+    tm, store = env
+    first = _login(tm)
+    assert tm.refresh_access_token(first["refresh_token"], CLIENT)
+    assert (
+        store.ttls[(ACTOR, REFRESH, first["refresh_token"])]
+        == MCP_REFRESH_TOKEN_REUSE_WINDOW
+    )
+
+
+def test_revocation_fault_still_removes_the_presented_token_and_evicts(
+    env: tuple[ActingWebTokenManager, MemoryStore],
+) -> None:
+    """When the chain cannot be revoked, the token that was presented still
+    goes, this process forgets it, and the fault is reported."""
+    tm, store = env
+    first = _login(tm)
+    second = tm.refresh_access_token(first["refresh_token"], CLIENT)
+    assert second
+    mcp_mod._token_cache[second["access_token"]] = {"actor_id": ACTOR}
+
+    store.chain_delete_fault = "zero"
+    with pytest.raises(tm_mod.TokenStoreUnavailable):
+        tm.revoke_token(second["access_token"])
+    assert second["access_token"] not in store.names(ACTOR, TOKENS)
+    assert second["access_token"] not in mcp_mod._token_cache
+
+
+def test_a_chain_revoked_concurrently_is_not_a_fault(
+    env: tuple[ActingWebTokenManager, MemoryStore],
+) -> None:
+    """Two revocations of one chain race: the loser deletes nothing, and its
+    anchor row is gone too, so the chain is revoked, not faulted."""
+    tm, store = env
+    first = _login(tm)
+    chain = _chain(store, REFRESH, first["refresh_token"])
+    assert tm._revoke_chain(ACTOR, chain, anchor=(REFRESH, first["refresh_token"]))
+
+    assert tm._revoke_chain(ACTOR, chain, anchor=(REFRESH, first["refresh_token"])) == 0
+
+
+def test_partial_chain_delete_leaves_the_replayed_token_to_retry_from(
+    env: tuple[ActingWebTokenManager, MemoryStore],
+) -> None:
+    """DynamoDB deletes a chain row by row. A fault part-way must not take
+    the replayed token with it, or nothing is left to retry the revocation
+    and the thief's branch lives on."""
+    tm, store = env
+    first = _login(tm)
+    second = tm.refresh_access_token(first["refresh_token"], CLIENT)
+    assert second
+    _set_used(store, first["refresh_token"], 5 * 60)
+
+    store.chain_delete_fault = "partial"
+    with pytest.raises(tm_mod.TokenStoreUnavailable):
+        tm.refresh_access_token(first["refresh_token"], CLIENT)
+    assert first["refresh_token"] in store.names(ACTOR, REFRESH)
+
+    store.chain_delete_fault = None
+    assert tm.refresh_access_token(first["refresh_token"], CLIENT) is None
+    assert first["refresh_token"] not in store.names(ACTOR, REFRESH)
+
+
+def test_unconfirmed_delete_of_the_old_access_token_is_logged(
+    env: tuple[ActingWebTokenManager, MemoryStore],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    tm, store = env
+    first = _login(tm)
+    store.delete_faults.add((ACTOR, TOKENS, first["access_token"]))
+
+    with caplog.at_level(logging.ERROR, logger="actingweb.oauth2_server"):
+        assert tm.refresh_access_token(first["refresh_token"], CLIENT)
+    assert "Could not confirm removal of access token" in caplog.text

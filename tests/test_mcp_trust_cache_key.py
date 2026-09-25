@@ -408,3 +408,31 @@ class TestInvariantCheck(TrustCacheTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestRotationEvictionDuringFill(TrustCacheTestCase):
+    """Drives the real fill in ``authenticate_and_get_actor_cached``: a
+    token-only eviction (refresh-token rotation) that lands while the request
+    is reading storage keeps that token out of the cache, and only that
+    token."""
+
+    def _run_with_eviction_of(self, evicted: str, token: str) -> None:
+        def validate(_self: Any, t: str) -> Any:
+            mcp_mod.MCPHandler.clear_token_from_cache(evicted, actor_wide=False)
+            return TOKENS.get(t)
+
+        with mock.patch.object(FakeOAuth2Server, "validate_mcp_token", validate):
+            self.run_request(token)
+
+    def test_the_rotated_token_is_not_cached(self) -> None:
+        self._run_with_eviction_of("token-A", "token-A")
+        self.assertNotIn("token-A", mcp_mod._token_cache)
+
+    def test_another_tokens_fill_is_unaffected(self) -> None:
+        self._run_with_eviction_of("token-B", "token-A")
+        self.assertIn("token-A", mcp_mod._token_cache)
+
+    def test_a_fill_older_than_a_pruned_eviction_is_refused(self) -> None:
+        seq = mcp_mod._current_token_eviction_seq()
+        with mock.patch.object(mcp_mod, "_token_eviction_pruned_through", seq + 1):
+            self.assertFalse(mcp_mod._token_fill_still_valid("token-A", seq))

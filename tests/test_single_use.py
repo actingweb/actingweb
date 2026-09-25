@@ -7,6 +7,8 @@
 
 import time
 
+import pytest
+
 from actingweb.single_use import PurgeThrottle
 
 
@@ -18,9 +20,20 @@ def test_first_claim_runs_then_throttles() -> None:
 
 def test_claim_runs_again_after_the_interval() -> None:
     throttle = PurgeThrottle()
-    throttle.last_attempt = time.time() - 3601
+    throttle.last_attempt = time.monotonic() - 3601
     assert throttle.claim(3600) is True
     assert throttle.claim(3600) is False
+
+
+def test_a_wall_clock_step_back_does_not_stop_the_purge(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    throttle = PurgeThrottle()
+    assert throttle.claim(3600) is True
+    real = time.monotonic
+    monkeypatch.setattr(time, "time", lambda: 0.0)  # the wall clock jumps back
+    monkeypatch.setattr(time, "monotonic", lambda: real() + 3601)
+    assert throttle.claim(3600) is True
 
 
 def test_throttles_are_independent() -> None:

@@ -122,17 +122,107 @@ def test_token_entry_wins_over_a_session_entry() -> None:
     _initialize(
         {"Authorization": "Bearer aw_victim", "Mcp-Session-Id": "s-v"},
         {"name": "Claude"},
-        actor=mock.Mock(),
+        actor=mock.Mock(id="victim"),
     )
     _initialize({"Mcp-Session-Id": "s-v"}, {"name": "Spoofed"})
     victim = make_mcp_handler(
         {"Authorization": "Bearer aw_victim", "Mcp-Session-Id": "s-v"}
     )
-    assert victim._resolve_live_client_info() == {"name": "Claude"}
-    # Without a token the session entry is all there is.
+    assert victim._resolve_live_client_info("victim") == {"name": "Claude"}
+    # The authenticated initialize also owns the session entry, so the
+    # unauthenticated one could not replace it.
     assert make_mcp_handler({"Mcp-Session-Id": "s-v"})._resolve_live_client_info() == {
-        "name": "Spoofed"
+        "name": "Claude"
     }
+
+
+def _age(key: str, seconds: float) -> None:
+    mcp_mod._mcp_client_info_cache[key]["timestamp"] -= seconds
+
+
+def test_expired_token_entry_does_not_hand_over_to_a_spoofed_session() -> None:
+    """Once the token entry has expired, the lookup falls back to the session
+    entry, which an unauthenticated initialize must not have replaced."""
+    _initialize(
+        {"Authorization": "Bearer aw_victim", "Mcp-Session-Id": "s-v"},
+        {"name": "Claude"},
+        actor=mock.Mock(id="victim"),
+    )
+    token_key = make_mcp_handler(
+        {"Authorization": "Bearer aw_victim"}
+    )._token_client_info_key()
+    assert token_key
+    _age(token_key, 601)
+    _initialize({"Mcp-Session-Id": "s-v"}, {"name": "Spoofed"})
+
+    victim = make_mcp_handler(
+        {"Authorization": "Bearer aw_victim", "Mcp-Session-Id": "s-v"}
+    )
+    assert victim._resolve_live_client_info("victim") == {"name": "Claude"}
+
+
+def test_rotated_token_uses_its_own_session_entry() -> None:
+    """After a refresh the new token has no entry; the session entry the old
+    token's initialize owned still serves the same actor."""
+    _initialize(
+        {"Authorization": "Bearer aw_old", "Mcp-Session-Id": "s-r"},
+        {"name": "Claude"},
+        actor=mock.Mock(id="victim"),
+    )
+    rotated = make_mcp_handler(
+        {"Authorization": "Bearer aw_new", "Mcp-Session-Id": "s-r"}
+    )
+    assert rotated._resolve_live_client_info("victim") == {"name": "Claude"}
+
+
+def test_a_session_entry_owned_by_another_actor_is_ignored() -> None:
+    _initialize(
+        {"Authorization": "Bearer aw_a", "Mcp-Session-Id": "s-x"},
+        {"name": "Claude"},
+        actor=mock.Mock(id="actor-a"),
+    )
+    other = make_mcp_handler({"Authorization": "Bearer aw_b", "Mcp-Session-Id": "s-x"})
+    assert other._resolve_live_client_info("actor-b") is None
+
+
+def test_an_unowned_session_entry_is_claimed_on_first_authenticated_use() -> None:
+    """A client that initialised before signing in keeps its info, and from
+    then on an unauthenticated initialize cannot replace it."""
+    _initialize({"Mcp-Session-Id": "s-c"}, {"name": "Claude"})
+    mine = make_mcp_handler({"Authorization": "Bearer aw_c", "Mcp-Session-Id": "s-c"})
+    assert mine._resolve_live_client_info("actor-c") == {"name": "Claude"}
+
+    _initialize({"Mcp-Session-Id": "s-c"}, {"name": "Spoofed"})
+    assert mine._resolve_live_client_info("actor-c") == {"name": "Claude"}
+
+
+def test_an_active_session_entry_does_not_lapse() -> None:
+    _initialize({"Mcp-Session-Id": "s-l"}, {"name": "Claude"})
+    mine = make_mcp_handler({"Authorization": "Bearer aw_l", "Mcp-Session-Id": "s-l"})
+    assert mine._resolve_live_client_info("actor-l")
+    _age("mcp-session:s-l", 590)
+    assert mine._resolve_live_client_info("actor-l")
+    _age("mcp-session:s-l", 590)
+    assert mine._resolve_live_client_info("actor-l") == {"name": "Claude"}
+
+
+def test_initialize_logs_a_token_store_fault(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from actingweb.oauth2_server.token_manager import TokenStoreUnavailable
+
+    handler = make_mcp_handler({"Authorization": "Bearer aw_f"})
+    with (
+        mock.patch.object(
+            handler,
+            "authenticate_and_get_actor_cached",
+            side_effect=TokenStoreUnavailable("down"),
+        ),
+        caplog.at_level(logging.WARNING, logger="actingweb.handlers.mcp"),
+    ):
+        out = handler._handle_initialize(1, {"clientInfo": {"name": "Claude"}})
+    assert "result" in out
+    assert "Token store unavailable during initialize" in caplog.text
 
 
 def test_every_client_info_string_is_sanitised() -> None:

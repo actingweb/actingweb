@@ -661,3 +661,86 @@ class TestURLConstruction:
 
         call_args = mock_get.call_args
         assert call_args.kwargs["url"] == "https://peer.example.com/path/to/resource"
+
+
+class TestRequestBodyNotLogged:
+    """The four write methods log a summary of the body, never its values."""
+
+    BODY = {"password": "hunter2", "note": "x"}
+
+    def _proxy(self) -> AwProxy:
+        proxy = AwProxy()
+        proxy.trust = {"baseuri": "https://peer.example.com/", "secret": "token123"}
+        return proxy
+
+    @staticmethod
+    def _response() -> Mock:
+        response = Mock()
+        response.status_code = 200
+        response.content = b"{}"
+        response.json.return_value = {}
+        response.headers = {}
+        return response
+
+    def _assert_summary(self, caplog) -> None:
+        lines = [
+            r.getMessage() for r in caplog.records if "with data(" in r.getMessage()
+        ]
+        assert len(lines) == 1
+        assert "keys=[note, password]" in lines[0]
+        assert "bytes=" in lines[0]
+        assert "hunter2" not in caplog.text
+
+    def test_sync_methods(self, caplog):
+        for method, target in (
+            ("create_resource", "post"),
+            ("change_resource", "put"),
+        ):
+            caplog.clear()
+            with (
+                caplog.at_level("DEBUG", logger="actingweb.aw_proxy"),
+                patch(
+                    f"actingweb.aw_proxy.requests.{target}",
+                    return_value=self._response(),
+                ),
+            ):
+                getattr(self._proxy(), method)(path="methods/x", params=self.BODY)
+            self._assert_summary(caplog)
+
+    async def test_async_methods(self, caplog):
+        client = Mock()
+
+        async def call(*_a, **_k):
+            return self._response()
+
+        client.post = call
+        client.put = call
+
+        class _Ctx:
+            async def __aenter__(self):
+                return client
+
+            async def __aexit__(self, *_a):
+                return False
+
+        for method in ("create_resource_async", "change_resource_async"):
+            caplog.clear()
+            with (
+                caplog.at_level("DEBUG", logger="actingweb.aw_proxy"),
+                patch("actingweb.aw_proxy.httpx.AsyncClient", return_value=_Ctx()),
+            ):
+                await getattr(self._proxy(), method)(path="methods/x", params=self.BODY)
+            self._assert_summary(caplog)
+
+    def test_list_body_logs_size_only(self, caplog):
+        with (
+            caplog.at_level("DEBUG", logger="actingweb.aw_proxy"),
+            patch("actingweb.aw_proxy.requests.post", return_value=self._response()),
+        ):
+            self._proxy().create_resource(path="x", params=["hunter2"])
+        line = next(
+            r.getMessage() for r in caplog.records if "with data(" in r.getMessage()
+        )
+        assert "keys=" not in line
+        assert "bytes=" in line
+        assert "hunter2" not in caplog.text

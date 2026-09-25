@@ -23,8 +23,8 @@ class TestSessionKeyPrefersMcpSessionIdHeader:
         key_a = a._get_session_key()
         key_b = b._get_session_key()
         assert key_a != key_b
-        assert "session-A" in key_a
-        assert "session-B" in key_b
+        assert key_a and "session-A" in key_a
+        assert key_b and "session-B" in key_b
 
     def test_header_lookup_is_case_insensitive(self) -> None:
         h_upper = make_mcp_handler({"Mcp-Session-Id": "abc"})
@@ -46,19 +46,24 @@ class TestSessionKeyPrefersMcpSessionIdHeader:
 
 
 class TestSessionKeyFallback:
-    """Without the header, the legacy IP+UA hash still applies."""
+    """Without the header there is no session key.
 
-    def test_no_header_falls_back_to_ipua_hash(self) -> None:
-        h = make_mcp_handler({"User-Agent": "ua-1"})
-        key = h._get_session_key()
-        # Sanity: the fallback path runs (no ``mcp-session:`` prefix)
-        # and returns *some* deterministic string.
-        assert key
-        assert not key.startswith("mcp-session:")
+    The old fallback, ``remote_addr + hash(User-Agent[:50])``, was shared by
+    every client with the same User-Agent prefix (nothing sets
+    ``remote_addr``), so one client's unauthenticated ``initialize`` could
+    name another user's connection. An authenticated request without the
+    header is keyed by its bearer token instead.
+    """
 
-    def test_fallback_is_deterministic_for_same_request(self) -> None:
+    def test_no_header_has_no_session_key(self) -> None:
         h = make_mcp_handler({"User-Agent": "ua-1"})
-        assert h._get_session_key() == h._get_session_key()
+        assert h._get_session_key() is None
+
+    def test_same_user_agent_never_shares_a_key(self) -> None:
+        a = make_mcp_handler({"User-Agent": "ua-1"})
+        b = make_mcp_handler({"User-Agent": "ua-1"})
+        assert a._get_session_key() is None
+        assert b._get_session_key() is None
 
 
 class TestClientInfoCacheIsolation:
@@ -78,8 +83,8 @@ class TestClientInfoCacheIsolation:
         h_a._store_mcp_client_info_temporarily({"name": "Anthropic/ClaudeAI"})
         h_b._store_mcp_client_info_temporarily({"name": "claude-code"})
 
-        info_a = mcp_module.MCPHandler.get_stored_client_info(h_a._get_session_key())
-        info_b = mcp_module.MCPHandler.get_stored_client_info(h_b._get_session_key())
+        info_a = h_a._resolve_live_client_info()
+        info_b = h_b._resolve_live_client_info()
 
         assert info_a == {"name": "Anthropic/ClaudeAI"}
         assert info_b == {"name": "claude-code"}
@@ -100,9 +105,7 @@ class TestClientInfoCacheIsolation:
         second._store_mcp_client_info_temporarily({"name": "claude-code"})
 
         # The first session's cached identity must still be intact.
-        info_first = mcp_module.MCPHandler.get_stored_client_info(
-            first._get_session_key()
-        )
+        info_first = first._resolve_live_client_info()
         assert info_first is not None
         assert info_first["name"] == "Anthropic/ClaudeAI"
 

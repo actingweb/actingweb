@@ -7,6 +7,7 @@ import httpx
 import requests
 
 from actingweb import request_context, trust
+from actingweb.log_summary import summarize_payload
 
 logger = logging.getLogger(__name__)
 
@@ -244,7 +245,11 @@ class AwProxy:
         headers = {**self._bearer_headers(), "Content-Type": "application/json"}
         url = self.trust["baseuri"].strip("/") + "/" + path.strip("/")
         logger.debug(
-            "Creating trust peer resource at (" + url + ") with data(" + str(data) + ")"
+            "Creating trust peer resource at ("
+            + url
+            + ") with data("
+            + summarize_payload(params, encoded_len=len(data))
+            + ")"
         )
         try:
             response = requests.post(
@@ -303,7 +308,11 @@ class AwProxy:
         headers["Content-Type"] = "application/json"
         url = self.trust["baseuri"].strip("/") + "/" + path.strip("/")
         logger.debug(
-            "Changing trust peer resource at (" + url + ") with data(" + str(data) + ")"
+            "Changing trust peer resource at ("
+            + url
+            + ") with data("
+            + summarize_payload(params, encoded_len=len(data))
+            + ")"
         )
         try:
             response = requests.put(
@@ -540,7 +549,7 @@ class AwProxy:
             "Creating trust peer resource async at ("
             + url
             + ") with data("
-            + str(data)
+            + summarize_payload(params, encoded_len=len(data))
             + ")"
         )
         try:
@@ -644,7 +653,7 @@ class AwProxy:
             "Changing trust peer resource async at ("
             + url
             + ") with data("
-            + str(data)
+            + summarize_payload(params, encoded_len=len(data))
             + ")"
         )
         try:

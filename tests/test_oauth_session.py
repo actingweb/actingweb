@@ -554,7 +554,7 @@ class TestOAuth2SessionManager:
         from actingweb.oauth_session import _REFRESH_TOKEN_BUCKET
 
         # Reset the process-local throttle so this test is deterministic.
-        oauth_session_mod._last_purge_attempt = 0.0
+        oauth_session_mod._purge_throttle.last_attempt = 0.0
 
         refresh_key = f"{OAUTH2_SYSTEM_ACTOR}:{_REFRESH_TOKEN_BUCKET}"
         self._test_storage.setdefault(refresh_key, {})["expired-rt"] = {

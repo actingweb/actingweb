@@ -200,6 +200,15 @@ SPA_TOKEN_PURGE_INTERVAL = 3600  # 1 hour
 MCP_AUTH_CODE_TTL = 600  # 10 minutes
 MCP_ACCESS_TOKEN_TTL = 3600  # 1 hour
 MCP_REFRESH_TOKEN_TTL = 2592000  # 30 days
+# MCP refresh tokens are single-use. A consumed token presented again within
+# the grace period rotates again in the same chain (a concurrent request, or a
+# client that dropped the previous rotation). Inside the reuse window it is
+# treated as theft and the chain is revoked; beyond it, as expired. The
+# consumed row is kept, and its storage TTL shortened, for the reuse window.
+MCP_REFRESH_TOKEN_GRACE_PERIOD = 60  # seconds
+MCP_REFRESH_TOKEN_REUSE_WINDOW = 86400 * 2  # 2 days
+# Max frequency of the opportunistic expired MCP token purge, per process.
+MCP_TOKEN_PURGE_INTERVAL = 3600  # 1 hour
 
 # Index entry TTLs (slightly longer than the data they reference)
 # This ensures indexes aren't deleted before the data they point to
@@ -241,6 +250,15 @@ def _validate_ttl_constants() -> None:
     )
     assert MCP_REFRESH_TOKEN_TTL > MCP_ACCESS_TOKEN_TTL, (
         "MCP refresh TTL must exceed access TTL"
+    )
+    assert (
+        MCP_ACCESS_TOKEN_TTL < MCP_REFRESH_TOKEN_REUSE_WINDOW < MCP_REFRESH_TOKEN_TTL
+    ), (
+        "MCP reuse window must outlast an access token yet stay under the "
+        "full refresh TTL"
+    )
+    assert MCP_REFRESH_TOKEN_GRACE_PERIOD < MCP_REFRESH_TOKEN_REUSE_WINDOW, (
+        "MCP grace period must be shorter than the reuse window"
     )
     assert INDEX_TTL_BUFFER > 0, "Index TTL buffer must be positive"
     assert TTL_CLOCK_SKEW_BUFFER > 0, "Clock skew buffer must be positive"

@@ -63,6 +63,13 @@ REST API
 - ``GET /{actor_id}/trust/{relationship}/{peer_id}/permissions``
 - ``DELETE /{actor_id}/trust/{relationship}/{peer_id}/permissions``
 
+**What the list returns.** ``GET /{actor_id}/trust`` lists every
+relationship without its credentials: since 3.15 the rows carry no
+``secret`` and no ``verification_token``. Creator and admin read them from
+``GET /{actor_id}/trust/{relationship}/{peer_id}``. Both routes sanitise the
+client-supplied text fields (``client_name``, ``client_version``,
+``client_platform``, ``desc``).
+
 See also: :doc:`access-control` for the full system.
 
 Trust and Subscriptions Lifecycle

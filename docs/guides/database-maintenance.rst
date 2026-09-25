@@ -32,6 +32,19 @@ management with both **DynamoDB** and **PostgreSQL** backends.
    recommended approach for those. On DynamoDB, native TTL handles all of it
    (including SPA tokens) once enabled.
 
+.. note::
+
+   **MCP tokens are purged the same way since 3.15.** ``/oauth/token`` runs
+   ``ActingWebTokenManager.maybe_purge_expired_tokens()`` — at most once per
+   hour per process — which deletes TTL-expired rows from all seven MCP token
+   buckets (access tokens, refresh tokens, provider tokens, auth codes and
+   their three global indexes) on PostgreSQL. Consumed refresh tokens are
+   re-stamped to a two-day TTL when they rotate, so this purge is what removes
+   them there. On DynamoDB the call is a no-op and native TTL does the work.
+   The scheduled ``cleanup_expired_tokens()`` remains useful for orphaned
+   index entries; it also removes consumed refresh tokens past the reuse
+   window and TTL-expired provider-token rows.
+
 Backend Selection
 -----------------
 
@@ -39,9 +52,9 @@ Choose the appropriate section based on your database backend:
 
 - **DynamoDB**: Use DynamoDB's built-in TTL feature (zero-overhead, automatic) —
   required for all temporary data, including SPA tokens
-- **PostgreSQL**: SPA session tokens are purged automatically by the library;
-  use pg_cron or scheduled cleanup scripts for the remaining temporary data
-  (OAuth sessions, MCP tokens, orphaned index entries)
+- **PostgreSQL**: SPA session tokens and (since 3.15) MCP tokens are purged
+  automatically by the library; use pg_cron or scheduled cleanup scripts for
+  the remaining temporary data (OAuth sessions, orphaned index entries)
 
 DynamoDB Billing Mode for Auto-Created Tables
 ---------------------------------------------

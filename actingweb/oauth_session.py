@@ -18,6 +18,8 @@ import secrets
 import time
 from typing import TYPE_CHECKING, Any, Optional
 
+from .single_use import PurgeThrottle
+
 if TYPE_CHECKING:
     from . import actor as actor_module
     from . import config as config_class
@@ -39,7 +41,7 @@ _REFRESH_TOKEN_BUCKET = "spa_refresh_tokens"
 # (not once globally); the DELETE is cheap and idempotent, so this is fine —
 # operators just see up to N purge log lines per interval. See
 # OAuth2SessionManager.maybe_purge_expired_tokens().
-_last_purge_attempt: float = 0.0
+_purge_throttle = PurgeThrottle()
 
 
 class OAuth2SessionManager:
@@ -722,56 +724,23 @@ class OAuth2SessionManager:
             bucket.delete_attr(name=token)
             return (False, None)
 
-        # Atomically update: only succeed if current data has used=False (or no used field)
-        old_data = token_data.copy()
-        new_data = token_data.copy()
-        new_data["used"] = True
-        new_data["used_at"] = int(time.time())
+        # Atomic compare-and-swap, shared with the MCP token manager. The
+        # winner re-stamps the consumed row to the reuse window so it is
+        # purged promptly instead of lingering for the full refresh TTL.
+        from .constants import SPA_REFRESH_TOKEN_REUSE_WINDOW
+        from .single_use import consume_once
 
-        # Try atomic compare-and-swap
-        success = bucket.conditional_update_attr(
-            name=token, old_data=old_data, new_data=new_data
+        consumed, current = consume_once(
+            self.config,
+            OAUTH2_SYSTEM_ACTOR,
+            _REFRESH_TOKEN_BUCKET,
+            token,
+            token_data,
+            restamp_ttl=SPA_REFRESH_TOKEN_REUSE_WINDOW,
         )
-
-        if success:
+        if consumed:
             logger.debug("Atomically marked refresh token as used")
-            # Now that the token is consumed it only needs to survive long
-            # enough for reuse/theft detection. Shrink its storage TTL from the
-            # full refresh TTL to the (much shorter) reuse window so it is purged
-            # promptly instead of lingering for two weeks. Best-effort: the
-            # conditional update above already secured rotation; if this second
-            # write loses a race the token simply keeps its original TTL (prior
-            # behaviour). The compare-and-swap is the atomic gate — this rewrite
-            # is the winner re-stamping its own row, so it cannot grant rotation
-            # to a second caller. (If a concurrent revoke_token_chain deletes
-            # this row between the CAS and this write, set_attr re-creates it with
-            # used=True and a short TTL; that re-created row can never be rotated
-            # — it is already used — so there is no security impact, and it is
-            # reaped on the next purge cycle.)
-            from .constants import SPA_REFRESH_TOKEN_REUSE_WINDOW
-
-            try:
-                bucket.set_attr(
-                    name=token,
-                    data=new_data,
-                    ttl_seconds=SPA_REFRESH_TOKEN_REUSE_WINDOW,
-                )
-            except Exception as e:  # pragma: no cover - defensive
-                logger.debug(f"Could not shorten used refresh token TTL: {e}")
-            return (True, new_data)
-        else:
-            # Another request beat us to it - token is now used
-            # Re-read to get current state with used_at timestamp
-            # Create fresh bucket instance to bypass cache
-            fresh_bucket = attribute.Attributes(
-                actor_id=OAUTH2_SYSTEM_ACTOR,
-                bucket=_REFRESH_TOKEN_BUCKET,
-                config=self.config,
-            )
-            token_attr = fresh_bucket.get_attr(name=token)
-            if token_attr and "data" in token_attr:
-                return (False, token_attr["data"])
-            return (False, None)
+        return (consumed, current)
 
     def revoke_refresh_token(self, token: str) -> bool:
         """
@@ -1055,15 +1024,12 @@ class OAuth2SessionManager:
         Returns:
             Number of rows deleted (0 when throttled or on DynamoDB).
         """
-        global _last_purge_attempt
         from .constants import SPA_TOKEN_PURGE_INTERVAL
 
-        now = time.time()
-        if now - _last_purge_attempt < SPA_TOKEN_PURGE_INTERVAL:
-            return 0
-        # Claim the slot before doing the work so concurrent callers in this
+        # Claims the slot before doing the work so concurrent callers in this
         # process skip rather than pile on.
-        _last_purge_attempt = now
+        if not _purge_throttle.claim(SPA_TOKEN_PURGE_INTERVAL):
+            return 0
         return self.purge_expired_tokens()
 
 

@@ -25,6 +25,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from ... import request_context, runtime_context
 from ...aw_web_request import AWWebObj
 from ...handlers import bot, factory, mcp, services
+from ...log_summary import summarize_payload
 from .base_integration import BaseActingWebIntegration, default_templates_dir
 
 if TYPE_CHECKING:
@@ -668,7 +669,8 @@ class FastAPIIntegration(BaseActingWebIntegration):
 
                 if mcp_context:
                     self.logger.debug(
-                        f"Using MCP OAuth2 callback handler with context: {mcp_context}"
+                        "Using MCP OAuth2 callback handler with context: "
+                        f"{summarize_payload(mcp_context)}"
                     )
                     # This is an MCP OAuth2 callback
                     return await self._handle_oauth2_endpoint(request, "callback")
@@ -1346,7 +1348,7 @@ class FastAPIIntegration(BaseActingWebIntegration):
 
         # Debug logging for trust endpoint
         if "/trust" in str(request.url.path) and params:
-            self.logger.debug(f"Trust query params: {params}")
+            self.logger.debug(f"Trust query params: {summarize_payload(params)}")
 
         return {
             "method": request.method,
@@ -2038,7 +2040,8 @@ class FastAPIIntegration(BaseActingWebIntegration):
             and webobj.response.template_values
         ):
             self.logger.debug(
-                f"OAuth2 template values found: {webobj.response.template_values}"
+                "OAuth2 template values found: "
+                f"{summarize_payload(webobj.response.template_values)}"
             )
             if self.templates:
                 # This is an HTML template response
@@ -2467,7 +2470,9 @@ class FastAPIIntegration(BaseActingWebIntegration):
                         args.append(relationship)
                         if peerid:
                             args.append(peerid)
-                    self.logger.debug(f"Trust handler args: {args}, kwargs: {kwargs}")
+                    self.logger.debug(
+                        f"Trust handler args: {args}, kwargs: {summarize_payload(kwargs)}"
+                    )
             elif endpoint == "permissions":
                 # Permission query endpoint: /{actor_id}/permissions/{peer_id}
                 if kwargs.get("peer_id"):

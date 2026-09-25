@@ -73,7 +73,7 @@ class OAuth2TestHelper:
 
         client_data = response.json()
         self.client_id = client_data["client_id"]
-        self.client_secret = client_data["client_secret"]
+        self.client_secret = client_data.get("client_secret")
         self.actor_id = client_data.get("actor_id", "_actingweb_oauth2")
 
         return client_data

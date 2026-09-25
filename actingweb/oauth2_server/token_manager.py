@@ -20,8 +20,18 @@ from ..constants import (
     REFRESH_TOKEN_INDEX_BUCKET,
 )
 from ..secret_compare import secret_digest_equals, secret_equals
+from ..single_use import PurgeThrottle
 
 logger = logging.getLogger(__name__)
+
+
+class TokenStoreUnavailable(Exception):
+    """The MCP token store could not be read.
+
+    Raised by token lookups (``validate_access_token``, the refresh grant,
+    revocation) instead of answering "no such token", so a caller can fail
+    closed on a store fault rather than treat it as an invalid token.
+    """
 
 
 def _mask_token(token: str) -> str:
@@ -66,6 +76,7 @@ class ActingWebTokenManager:
         trust_type: str | None = None,
         code_challenge: str | None = None,
         code_challenge_method: str | None = None,
+        redirect_uri: str | None = None,
     ) -> str:
         """
         Create a temporary authorization code for OAuth2 flow.
@@ -74,6 +85,14 @@ class ActingWebTokenManager:
             actor_id: The actor this code is for
             client_id: The MCP client requesting authorization
             provider_token_data: OAuth2 token data from the upstream provider
+            user_email: Email of the authenticated user, returned at exchange
+            trust_type: Trust type established for the client
+            code_challenge: PKCE challenge the code is bound to
+            code_challenge_method: ``S256`` or ``plain``. Exchange validates
+                against exactly this value; an absent method is not
+                defaulted to ``plain`` and fails verification.
+            redirect_uri: The redirect URI the code was issued for. When
+                given, exchange refuses a different one (RFC 6749 §4.1.3).
 
         Returns:
             Authorization code to return to MCP client
@@ -97,6 +116,8 @@ class ActingWebTokenManager:
             "code_challenge": code_challenge,
             "code_challenge_method": code_challenge_method,
         }
+        if redirect_uri:
+            auth_data["redirect_uri"] = redirect_uri
         if user_email:
             auth_data["user_email"] = user_email
         if trust_type:
@@ -115,15 +136,23 @@ class ActingWebTokenManager:
         client_id: str,
         client_secret: str | None = None,
         code_verifier: str | None = None,
+        redirect_uri: str | None = None,
     ) -> dict[str, Any] | None:
         """
         Exchange authorization code for ActingWeb access token.
 
+        A code is single-use, atomically: it is consumed with a
+        compare-and-swap before PKCE is checked, so of two concurrent
+        exchanges exactly one mints tokens, and a wrong verifier burns the
+        code. The code row is deleted on success.
+
         Args:
             code: Authorization code from authorize endpoint
             client_id: MCP client identifier
-            client_secret: MCP client secret (for confidential clients)
+            client_secret: MCP client secret (authenticated by the caller)
             code_verifier: PKCE code verifier (for public clients using PKCE)
+            redirect_uri: The redirect URI of the token request; compared with
+                the one the code was issued for when the code records one
 
         Returns:
             Token response with ActingWeb access token or None if invalid
@@ -131,79 +160,88 @@ class ActingWebTokenManager:
         # Load and validate authorization code
         auth_data = self._load_auth_code(code)
         if not auth_data:
-            logger.warning(f"Invalid authorization code: {code}")
+            logger.warning(f"Invalid authorization code: {_mask_token(code)}")
             return None
+
+        actor_id = auth_data["actor_id"]
 
         # Check if code has expired
         if int(time.time()) > auth_data["expires_at"]:
-            logger.warning(f"Expired authorization code: {code}")
+            logger.warning(f"Expired authorization code: {_mask_token(code)}")
             # Clean up both auth code and Google token data
             if "google_token_key" in auth_data:
-                self._remove_google_token_data(
-                    auth_data["actor_id"], auth_data["google_token_key"]
-                )
-            self._remove_auth_code(code)
-            return None
-
-        # Check if code has been used
-        if auth_data.get("used", False):
-            logger.warning(f"Authorization code already used: {code}")
-            # Clean up both auth code and Google token data
-            if "google_token_key" in auth_data:
-                self._remove_google_token_data(
-                    auth_data["actor_id"], auth_data["google_token_key"]
-                )
+                self._remove_google_token_data(actor_id, auth_data["google_token_key"])
             self._remove_auth_code(code)
             return None
 
         # Validate client
         if auth_data["client_id"] != client_id:
-            logger.warning(f"Client ID mismatch for code {code}")
+            logger.warning(f"Client ID mismatch for code {_mask_token(code)}")
             return None
 
-        # PKCE validation
+        stored_redirect_uri = auth_data.get("redirect_uri")
+        if stored_redirect_uri and stored_redirect_uri != redirect_uri:
+            logger.warning(f"redirect_uri mismatch for code {_mask_token(code)}")
+            return None
+
+        # Consume the code before anything else can use it. A code that is
+        # already used, or that a concurrent exchange consumed first, is
+        # refused; the winner's tokens are left alone.
+        consumed, _current = self._consume(
+            actor_id, self.auth_codes_bucket, code, auth_data, restamp_ttl=None
+        )
+        if not consumed:
+            logger.warning(f"Authorization code already used: {_mask_token(code)}")
+            return None
+
+        # PKCE validation, after the consume: a failed verifier burns the code.
         stored_challenge = auth_data.get("code_challenge")
         stored_method = str(auth_data.get("code_challenge_method"))
 
         if stored_challenge:  # PKCE was used in authorization
-            if not code_verifier:
-                logger.warning(
-                    f"PKCE code_verifier required but not provided for code {code}"
-                )
+            pkce_ok = bool(code_verifier) and self._validate_pkce(
+                code_verifier or "", stored_challenge, stored_method
+            )
+            if not pkce_ok:
+                logger.warning(f"PKCE validation failed for code {_mask_token(code)}")
+                if "google_token_key" in auth_data:
+                    self._remove_google_token_data(
+                        actor_id, auth_data["google_token_key"]
+                    )
+                self._remove_auth_code(code)
                 return None
-
-            # Validate code_verifier against stored challenge
-            if not self._validate_pkce(code_verifier, stored_challenge, stored_method):
-                logger.warning(f"PKCE validation failed for code {code}")
-                return None
-
-        # Mark code as used
-        auth_data["used"] = True
-        self._store_auth_code(auth_data["actor_id"], code, auth_data)
 
         # Load Google token data
         google_token_data = self._load_google_token_data(
-            auth_data["actor_id"], auth_data["google_token_key"]
+            actor_id, auth_data["google_token_key"]
         )
         if not google_token_data:
-            logger.error(f"Failed to load Google token data for auth code {code}")
+            logger.error(
+                f"Failed to load Google token data for auth code {_mask_token(code)}"
+            )
             self._remove_auth_code(code)
             return None
 
+        # Each authorization starts a new refresh-token chain.
+        chain_id = self._new_chain_id()
+
         # Create ActingWeb access token
         access_token = self._create_access_token(
-            auth_data["actor_id"], client_id, google_token_data
+            actor_id, client_id, google_token_data, chain_id=chain_id
         )
 
         # Create refresh token
         refresh_token = self._create_refresh_token(
-            auth_data["actor_id"], client_id, access_token["token_id"]
+            actor_id,
+            client_id,
+            access_token["token"],
+            access_token_id=access_token["token_id"],
+            chain_id=chain_id,
+            google_token_key=access_token.get("google_token_key"),
         )
 
         # Clean up authorization code and Google token data
-        self._remove_google_token_data(
-            auth_data["actor_id"], auth_data["google_token_key"]
-        )
+        self._remove_google_token_data(actor_id, auth_data["google_token_key"])
         self._remove_auth_code(code)
 
         # Return token response
@@ -217,7 +255,7 @@ class ActingWebTokenManager:
             "expires_in": access_token["expires_in"],
             "refresh_token": refresh_token["token"],
             "scope": "mcp",  # MCP scope
-            "actor_id": auth_data["actor_id"],
+            "actor_id": actor_id,
             "email": user_email,
             "trust_type": trust_type,
         }
@@ -233,6 +271,11 @@ class ActingWebTokenManager:
 
         Returns:
             Tuple of (actor_id, client_id, token_data) or None if invalid
+
+        Raises:
+            TokenStoreUnavailable: the token store could not be read. This is
+                not an invalid token; callers should fail closed (the MCP
+                endpoint answers 503).
         """
         if not token.startswith(self.token_prefix):
             return None
@@ -253,16 +296,45 @@ class ActingWebTokenManager:
         self, refresh_token: str, client_id: str, client_secret: str | None = None
     ) -> dict[str, Any] | None:
         """
-        Refresh ActingWeb access token using refresh token.
+        Rotate a refresh token: issue a new access token and a new refresh
+        token, and consume the presented one.
+
+        Refresh tokens are single-use (RFC 9700 §4.14.2). The presented token
+        is consumed with a compare-and-swap; the access token it was issued
+        with is deleted and popped from this process's MCP token cache. A
+        consumed token presented again is judged by how long ago it was used:
+
+        - within ``MCP_REFRESH_TOKEN_GRACE_PERIOD`` (60 s): a concurrent
+          request, or a client that lost the previous response; it rotates
+          again in the same chain and nothing is revoked;
+        - within ``MCP_REFRESH_TOKEN_REUSE_WINDOW`` (2 days): potential theft;
+          every token in the chain is revoked and the grant fails;
+        - beyond the window: expired, not theft; the row is removed and
+          nothing is revoked (storage TTLs lag, so the row can outlive it).
+
+        The grace period is also the recovery contract when minting fails
+        after the consume (a storage fault): the grant errors, the client
+        still holds a consumed token, and a retry within 60 s rotates; a
+        retry after 60 s reads as theft.
+
+        Every rotation stamps a fresh 30-day expiry on the new refresh token,
+        so the lifetime is sliding: 30 days of inactivity ends a chain.
 
         Args:
             refresh_token: Refresh token
-            client_id: MCP client identifier
-            client_secret: Client secret (for confidential clients)
+            client_id: MCP client identifier (must match the token's)
+            client_secret: Client secret (authenticated by the caller)
 
         Returns:
-            New token response or None if invalid
+            New token response, including the new ``refresh_token``, or None
+            if the token is invalid, expired, reused or not the client's.
         """
+        from ..constants import (
+            INDEX_TTL_BUFFER,
+            MCP_REFRESH_TOKEN_GRACE_PERIOD,
+            MCP_REFRESH_TOKEN_REUSE_WINDOW,
+        )
+
         refresh_data = self._load_refresh_token(refresh_token)
         if not refresh_data:
             logger.warning("Invalid refresh token")
@@ -279,32 +351,131 @@ class ActingWebTokenManager:
             logger.warning("Client ID mismatch for refresh token")
             return None
 
-        # Revoke old access token
-        old_token_id = refresh_data.get("access_token_id")
-        if old_token_id:
-            self._revoke_access_token_by_id(old_token_id)
+        actor_id = refresh_data["actor_id"]
+        # A legacy (pre-3.15) record has no chain; the one its rotation starts
+        # is stamped on the consumed row too, so a replay of it is judged
+        # against that chain like any other.
+        chain_id = refresh_data.get("chain_id") or self._new_chain_id()
+        consumed, current = self._consume(
+            actor_id,
+            self.refresh_tokens_bucket,
+            refresh_token,
+            refresh_data,
+            restamp_ttl=MCP_REFRESH_TOKEN_REUSE_WINDOW,
+            stamp=None if refresh_data.get("chain_id") else {"chain_id": chain_id},
+        )
+
+        if consumed:
+            # The global index row only needs to outlive the consumed row.
+            try:
+                from .. import attribute
+
+                attribute.Attributes(
+                    actor_id=OAUTH2_SYSTEM_ACTOR,
+                    bucket=REFRESH_TOKEN_INDEX_BUCKET,
+                    config=self.config,
+                ).set_attr(
+                    name=refresh_token,
+                    data=actor_id,
+                    ttl_seconds=MCP_REFRESH_TOKEN_REUSE_WINDOW + INDEX_TTL_BUFFER,
+                )
+            except Exception as e:
+                logger.debug(f"Could not shorten refresh index TTL: {e}")
+
+            # Revoke the access token this refresh token was issued with.
+            old_access_token = refresh_data.get("access_token")
+            if old_access_token:
+                try:
+                    from ..mcp.invalidation import evict_caches_for_token
+
+                    self._remove_access_token(
+                        old_access_token,
+                        actor_id=actor_id,
+                        google_token_key=refresh_data.get("google_token_key"),
+                    )
+                    evict_caches_for_token(old_access_token, actor_wide=False)
+                except Exception as e:
+                    logger.warning(
+                        f"Could not revoke the previous access token for actor "
+                        f"{actor_id} on refresh: {e}"
+                    )
+            else:
+                logger.debug(
+                    "Legacy refresh token without an access-token reference; "
+                    "rotating into a new chain"
+                )
+        else:
+            if not current:
+                logger.warning("Refresh token vanished during rotation")
+                return None
+            used_at = current.get("used_at")
+            if not used_at:
+                self._remove_refresh_token(refresh_token)
+                return None
+            age = int(time.time()) - int(used_at)
+            if age <= MCP_REFRESH_TOKEN_GRACE_PERIOD:
+                # Rotate in the chain the winner recorded (a legacy record's
+                # new chain lives only on the consumed row).
+                chain_id = current.get("chain_id") or chain_id
+                logger.debug(
+                    f"Refresh token reused {age}s after rotation for actor "
+                    f"{actor_id} (within grace) - rotating again in the same chain"
+                )
+                # Fall through to a full rotation below.
+            elif age <= MCP_REFRESH_TOKEN_REUSE_WINDOW:
+                chain_id = current.get("chain_id")
+                if chain_id:
+                    revoked = self._revoke_chain(actor_id, chain_id)
+                else:
+                    self._remove_refresh_token(refresh_token)
+                    revoked = 1
+                logger.warning(
+                    f"Refresh token {_mask_token(refresh_token)} reused {age}s "
+                    f"after rotation for actor {actor_id} - potential theft, "
+                    f"revoked {revoked} token(s) in its chain"
+                )
+                return None
+            else:
+                logger.debug(
+                    f"Refresh token reused {age}s after rotation for actor "
+                    f"{actor_id} - past the reuse window, treating as expired"
+                )
+                self._remove_refresh_token(refresh_token)
+                return None
 
         # Create new access token without Google token data (refresh flow)
         access_token = self._create_access_token_from_refresh(
-            refresh_data["actor_id"], client_id
+            actor_id, client_id, chain_id=chain_id
         )
-
-        # Update refresh token with new access token reference
-        refresh_data["access_token_id"] = access_token["token_id"]
-        refresh_data["updated_at"] = int(time.time())
-        self._store_refresh_token(refresh_data["actor_id"], refresh_token, refresh_data)
+        new_refresh = self._create_refresh_token(
+            actor_id,
+            client_id,
+            access_token["token"],
+            access_token_id=access_token["token_id"],
+            chain_id=chain_id,
+            google_token_key=None,
+        )
 
         return {
             "access_token": access_token["token"],
             "token_type": "Bearer",
             "expires_in": access_token["expires_in"],
-            "refresh_token": refresh_token,  # Same refresh token
+            "refresh_token": new_refresh["token"],
             "scope": "mcp",
         }
 
     def revoke_token(self, token: str, token_type_hint: str | None = None) -> bool:
         """
-        Revoke an access or refresh token.
+        Revoke an access or refresh token, and the rest of its chain.
+
+        A token that belongs to a refresh-token chain (every token issued
+        since 3.15) revokes every access and refresh token in that chain,
+        consumed ones included (RFC 7009 §2.1: revoking a refresh token
+        invalidates the tokens of the same grant). Without that, a consumed
+        refresh token could still rotate inside the grace period after its
+        successor was revoked. A pre-chain token revokes itself and the one
+        token it is linked to. Cache eviction is per-process (see
+        ``mcp/invalidation.py``).
 
         Args:
             token: Token to revoke
@@ -313,47 +484,198 @@ class ActingWebTokenManager:
         Returns:
             True if token was revoked successfully
         """
+        # Imported lazily, like the other callers in trust.py,
+        # trust_permissions.py and oauth_session.py: MCP is an optional
+        # higher layer and these are the modules it sits above.
+        from ..mcp.invalidation import evict_caches_for_actor, evict_caches_for_token
+
         if token.startswith(self.token_prefix):
             # Access token
             token_data = self._load_access_token(token)
             if token_data:
-                # Imported lazily, like the other callers in trust.py,
-                # trust_permissions.py and oauth_session.py: MCP is an optional
-                # higher layer and these are the modules it sits above.
-                from ..mcp.invalidation import (
-                    evict_caches_for_actor,
-                    evict_caches_for_token,
-                )
-
+                actor_id = token_data.get("actor_id")
+                chain_id = token_data.get("chain_id")
+                if actor_id and chain_id:
+                    self._revoke_chain(actor_id, chain_id)
                 self._remove_access_token(token)
-                # Also revoke associated refresh token
-                token_id = token_data.get("token_id")
-                if token_id:
-                    self._revoke_refresh_tokens_for_access_token(token_id)
                 evict_caches_for_token(token)
                 return True
         else:
             # Might be refresh token
             refresh_data = self._load_refresh_token(token)
             if refresh_data:
-                from ..mcp.invalidation import evict_caches_for_actor
-
-                self._remove_refresh_token(token)
-                # Also revoke associated access token
-                access_token_id = refresh_data.get("access_token_id")
-                if access_token_id:
-                    self._revoke_access_token_by_id(access_token_id)
-                # A refresh token is not itself in the MCP token cache, but the
-                # actor's cached identity should not outlive its revocation.
                 actor_id = refresh_data.get("actor_id")
+                chain_id = refresh_data.get("chain_id")
+                if actor_id and chain_id:
+                    self._revoke_chain(actor_id, chain_id)
+                self._remove_refresh_token(token)
+                access_token = refresh_data.get("access_token")
+                if access_token and actor_id:
+                    self._remove_access_token(
+                        access_token,
+                        actor_id=actor_id,
+                        google_token_key=refresh_data.get("google_token_key"),
+                    )
+                    evict_caches_for_token(access_token)
+                # The actor's cached identity should not outlive its revocation.
                 if actor_id:
                     evict_caches_for_actor(actor_id)
                 return True
 
         return False
 
+    @staticmethod
+    def _new_chain_id() -> str:
+        """A fresh refresh-token chain (family) identifier."""
+        return secrets.token_urlsafe(16)
+
+    def _consume(
+        self,
+        actor_id: str,
+        bucket: str,
+        name: str,
+        record: dict[str, Any],
+        *,
+        restamp_ttl: int | None,
+        stamp: dict[str, Any] | None = None,
+    ) -> tuple[bool, dict[str, Any] | None]:
+        """Atomically mark a single-use record (code or refresh token) used.
+
+        See :func:`actingweb.single_use.consume_once`, shared with the SPA
+        session store.
+        """
+        from ..single_use import consume_once
+
+        return consume_once(
+            self.config,
+            actor_id,
+            bucket,
+            name,
+            record,
+            restamp_ttl=restamp_ttl,
+            stamp=stamp,
+        )
+
+    def _snapshot_bucket(self, actor_id: str, bucket: str) -> dict[str, Any] | None:
+        """All rows of one of the actor's token buckets (one query).
+
+        Returns None when the backend could not be read, in either fault
+        shape: PostgreSQL's ``get_bucket()`` answers ``{}`` (only
+        ``Attributes.loaded`` tells it from an empty bucket), DynamoDB's
+        raises when a page of the Query is throttled.
+        """
+        from .. import attribute
+
+        store = attribute.Attributes(
+            actor_id=actor_id, bucket=bucket, config=self.config
+        )
+        try:
+            rows = store.get_bucket()
+        except Exception as e:
+            logger.warning(f"Could not read bucket {bucket} for actor {actor_id}: {e}")
+            return None
+        if not store.loaded:
+            logger.warning(f"Could not read bucket {bucket} for actor {actor_id}")
+            return None
+        return dict(rows or {})
+
+    def _revoke_chain(self, actor_id: str, chain_id: str) -> int:
+        """Revoke every access and refresh token in one refresh-token chain.
+
+        The actor's two token buckets are read once to find the chain's token
+        names (for the global index rows and the provider-token rows), then
+        the rows are deleted with the backend's ``delete_by_chain``.
+
+        Callers only revoke a chain they know has at least one row (the token
+        they just loaded), so a delete that removes nothing is treated as a
+        fault, not an empty chain. Two revocations of one chain racing (a
+        replay and a logout) break that assumption: the loser deletes nothing
+        and raises, which answers ``server_error`` for a chain that is in fact
+        gone. Accepted; it is rare and fails safe. Otherwise: PostgreSQL's ``delete_by_chain`` answers 0 on an
+        error, DynamoDB's raises. Both raise :class:`TokenStoreUnavailable`
+        here rather than report a revocation that did not happen; the rows
+        stay, so the next presentation of the token tries again. A snapshot
+        that could not be read only skips the index and provider-row cleanup.
+
+        Cache eviction is **per-process**: this process forgets the actor's
+        cached tokens and wrapper at once, but another worker or container
+        keeps serving a deleted access token from its own MCP cache for up to
+        its cache TTL (300 s). See
+        ``thoughts/todo/mcp-cache-lifecycle-and-revocation.md``.
+
+        Returns:
+            Number of token rows deleted from the actor's buckets.
+        """
+        from .. import attribute
+        from ..db import get_attribute
+        from ..mcp.invalidation import evict_caches_for_actor
+
+        # A bucket that cannot be read (either backend's fault shape) yields
+        # no names: the chain's actor rows are still deleted below, and the
+        # index rows it could not enumerate are cleaned by the lookups that
+        # find them stale, or expire.
+        access_names: list[str] = []
+        provider_keys: list[str] = []
+        access_rows = self._snapshot_bucket(actor_id, self.tokens_bucket) or {}
+        for name, attr in access_rows.items():
+            data = (attr or {}).get("data")
+            if isinstance(data, dict) and data.get("chain_id") == chain_id:
+                access_names.append(name)
+                if data.get("google_token_key"):
+                    provider_keys.append(data["google_token_key"])
+        refresh_names: list[str] = []
+        refresh_rows = self._snapshot_bucket(actor_id, self.refresh_tokens_bucket) or {}
+        for name, attr in refresh_rows.items():
+            data = (attr or {}).get("data")
+            if isinstance(data, dict) and data.get("chain_id") == chain_id:
+                refresh_names.append(name)
+
+        try:
+            revoked = get_attribute(self.config).delete_by_chain(
+                actor_id=actor_id,
+                buckets=[self.tokens_bucket, self.refresh_tokens_bucket],
+                chain_id=chain_id,
+            )
+        except Exception as e:
+            raise TokenStoreUnavailable(
+                f"Could not revoke token chain for actor {actor_id}"
+            ) from e
+        if not revoked:
+            logger.error(
+                f"Revoking token chain for actor {actor_id} deleted nothing; "
+                f"treating it as a store fault"
+            )
+            raise TokenStoreUnavailable(
+                f"Token chain revocation for actor {actor_id} deleted nothing"
+            )
+
+        access_index = attribute.Attributes(
+            actor_id=OAUTH2_SYSTEM_ACTOR,
+            bucket=ACCESS_TOKEN_INDEX_BUCKET,
+            config=self.config,
+        )
+        for name in access_names:
+            access_index.delete_attr(name=name)
+        refresh_index = attribute.Attributes(
+            actor_id=OAUTH2_SYSTEM_ACTOR,
+            bucket=REFRESH_TOKEN_INDEX_BUCKET,
+            config=self.config,
+        )
+        for name in refresh_names:
+            refresh_index.delete_attr(name=name)
+        for key in provider_keys:
+            self._remove_google_token_data(actor_id, key)
+
+        # Pops every cached token of the actor too.
+        evict_caches_for_actor(actor_id)
+        return revoked
+
     def _create_access_token(
-        self, actor_id: str, client_id: str, provider_token_data: dict[str, Any]
+        self,
+        actor_id: str,
+        client_id: str,
+        provider_token_data: dict[str, Any],
+        chain_id: str | None = None,
     ) -> dict[str, Any]:
         """Create an ActingWeb access token."""
         token_id = secrets.token_hex(16)
@@ -374,12 +696,14 @@ class ActingWebTokenManager:
             "scope": "mcp",
             "google_token_key": google_token_key,  # Reference to stored Google data
         }
+        if chain_id:
+            token_data["chain_id"] = chain_id
 
         self._store_access_token(actor_id, token, token_data)
         return token_data
 
     def _create_access_token_from_refresh(
-        self, actor_id: str, client_id: str
+        self, actor_id: str, client_id: str, chain_id: str | None = None
     ) -> dict[str, Any]:
         """Create an ActingWeb access token from refresh token (no Google token data needed)."""
         token_id = secrets.token_hex(16)
@@ -396,21 +720,41 @@ class ActingWebTokenManager:
             "scope": "mcp",
             # No Google token data needed for refresh flow
         }
+        if chain_id:
+            token_data["chain_id"] = chain_id
 
         self._store_access_token(actor_id, token, token_data)
         return token_data
 
     def _create_refresh_token(
-        self, actor_id: str, client_id: str, access_token_id: str
+        self,
+        actor_id: str,
+        client_id: str,
+        access_token: str,
+        *,
+        access_token_id: str | None = None,
+        chain_id: str | None = None,
+        google_token_key: str | None = None,
     ) -> dict[str, Any]:
-        """Create an ActingWeb refresh token."""
+        """Create an ActingWeb refresh token.
+
+        The record carries the access token **string** it was issued with,
+        so rotation and revocation delete that token directly, and the
+        provider-token row the access token owns (``google_token_key``,
+        ``None`` for refresh-minted tokens).
+        """
         token = f"rt_{secrets.token_urlsafe(32)}"
 
-        refresh_data = {
+        refresh_data: dict[str, Any] = {
             "token": token,
             "actor_id": actor_id,
             "client_id": client_id,
+            "access_token": access_token,
+            # Kept for one release for readers of the old record shape.
             "access_token_id": access_token_id,
+            "chain_id": chain_id or self._new_chain_id(),
+            "google_token_key": google_token_key,
+            "used": False,
             "created_at": int(time.time()),
             "expires_at": int(time.time()) + self.refresh_token_expires_in,
         }
@@ -479,12 +823,14 @@ class ActingWebTokenManager:
             # Look up which actor has this code
             found_actor_data = index_bucket.get_attr(name=code)
             if not found_actor_data or "data" not in found_actor_data:
-                logger.debug(f"Auth code {code} not found in global index")
+                logger.debug(f"Auth code {_mask_token(code)} not found in global index")
                 return None
 
             found_actor_id = found_actor_data["data"]
             if not found_actor_id:
-                logger.debug(f"Auth code {code} has no actor ID in global index")
+                logger.debug(
+                    f"Auth code {_mask_token(code)} has no actor ID in global index"
+                )
                 return None
 
             # Load the actual auth code data from private attributes
@@ -497,7 +843,7 @@ class ActingWebTokenManager:
 
             if not auth_attr or "data" not in auth_attr:
                 logger.warning(
-                    f"Auth code {code} found in index but not in actor {found_actor_id}"
+                    f"Auth code {_mask_token(code)} found in index but not in actor {found_actor_id}"
                 )
                 # Clean up the stale index entry
                 index_bucket.delete_attr(name=code)
@@ -505,14 +851,16 @@ class ActingWebTokenManager:
 
             auth_data = auth_attr["data"]
             if isinstance(auth_data, dict):
-                logger.debug(f"Found auth code {code} in actor {found_actor_id}")
+                logger.debug(
+                    f"Found auth code {_mask_token(code)} in actor {found_actor_id}"
+                )
                 return auth_data
             else:
-                logger.warning(f"Invalid auth code data format for {code}")
+                logger.warning(f"Invalid auth code data format for {_mask_token(code)}")
                 return None
 
         except Exception as e:
-            logger.error(f"Error searching for auth code {code}: {e}")
+            logger.error(f"Error searching for auth code {_mask_token(code)}: {e}")
             return None
 
     def _remove_auth_code(self, code: str) -> None:
@@ -537,14 +885,16 @@ class ActingWebTokenManager:
                     config=self.config,
                 )
                 auth_bucket.delete_attr(name=code)
-                logger.debug(f"Removed auth code {code} from actor {found_actor_id}")
+                logger.debug(
+                    f"Removed auth code {_mask_token(code)} from actor {found_actor_id}"
+                )
 
             # Remove from global index
             index_bucket.delete_attr(name=code)
-            logger.debug(f"Removed auth code {code} from global index")
+            logger.debug(f"Removed auth code {_mask_token(code)} from global index")
 
         except Exception as e:
-            logger.error(f"Error removing auth code {code}: {e}")
+            logger.error(f"Error removing auth code {_mask_token(code)}: {e}")
 
     def _store_google_token_data(
         self, actor_id: str, token_key: str, google_token_data: dict[str, Any]
@@ -563,7 +913,7 @@ class ActingWebTokenManager:
                 name=token_key, data=google_token_data, ttl_seconds=MCP_ACCESS_TOKEN_TTL
             )
             logger.debug(
-                f"Stored Google token data for actor {actor_id} with key {token_key}"
+                f"Stored Google token data for actor {actor_id} with key {_mask_token(token_key)}"
             )
 
         except Exception as e:
@@ -584,7 +934,9 @@ class ActingWebTokenManager:
             token_attr = google_bucket.get_attr(name=token_key)
 
             if not token_attr or "data" not in token_attr:
-                logger.warning(f"Google token data not found for key {token_key}")
+                logger.warning(
+                    f"Google token data not found for key {_mask_token(token_key)}"
+                )
                 return None
 
             token_data = token_attr["data"]
@@ -592,7 +944,7 @@ class ActingWebTokenManager:
 
         except Exception as e:
             logger.error(
-                f"Error loading Google token data for actor {actor_id}, key {token_key}: {e}"
+                f"Error loading Google token data for actor {actor_id}, key {_mask_token(token_key)}: {e}"
             )
             return None
 
@@ -607,11 +959,11 @@ class ActingWebTokenManager:
             )
             google_bucket.delete_attr(name=token_key)
             logger.debug(
-                f"Removed Google token data for actor {actor_id} with key {token_key}"
+                f"Removed Google token data for actor {actor_id} with key {_mask_token(token_key)}"
             )
         except Exception as e:
             logger.error(
-                f"Error removing Google token data for actor {actor_id}, key {token_key}: {e}"
+                f"Error removing Google token data for actor {actor_id}, key {_mask_token(token_key)}: {e}"
             )
 
     def _store_access_token(
@@ -655,126 +1007,127 @@ class ActingWebTokenManager:
         # Search through actors for the token
         return self._search_token_in_actors(token)
 
-    def _search_token_in_actors(self, token: str) -> dict[str, Any] | None:
-        """Search for token across actors."""
+    def _strict_read(self, actor_id: str, bucket: str, name: str) -> Any:
+        """Point-read one row, telling absence from a backend fault.
+
+        Returns the stored ``data``, or None when the row is absent or
+        expired. Raises :class:`TokenStoreUnavailable` when the backend
+        could not be read: ``Attributes.get_attr`` would answer None for
+        that too, which reads as "no such token".
+        """
+        from ..db import get_attribute
+
         try:
-            # Use the system actor to store a global index of access tokens
+            row = get_attribute(self.config).get_attr_strict(
+                actor_id=actor_id, bucket=bucket, name=name
+            )
+        except Exception as e:
+            raise TokenStoreUnavailable(
+                f"Could not read {bucket} for actor {actor_id}"
+            ) from e
+        if not row or "data" not in row:
+            return None
+        return row["data"]
+
+    def _search_indexed_token(
+        self, token: str, index_bucket_name: str, bucket: str, kind: str
+    ) -> dict[str, Any] | None:
+        """Resolve a token through its global index to the actor's row.
+
+        None means the token does not exist (absent, stale index row,
+        malformed). A store fault raises :class:`TokenStoreUnavailable`.
+        """
+        found_actor_id = self._strict_read(
+            OAUTH2_SYSTEM_ACTOR, index_bucket_name, token
+        )
+        if not found_actor_id:
+            logger.debug(f"{kind} {_mask_token(token)} not found in global index")
+            return None
+
+        token_data = self._strict_read(str(found_actor_id), bucket, token)
+        if token_data is None:
+            logger.warning(
+                f"{kind} {_mask_token(token)} found in index but not in actor "
+                f"{found_actor_id}"
+            )
+            # Clean up the stale index entry
+            try:
+                from .. import attribute
+
+                attribute.Attributes(
+                    actor_id=OAUTH2_SYSTEM_ACTOR,
+                    bucket=index_bucket_name,
+                    config=self.config,
+                ).delete_attr(name=token)
+            except Exception as e:
+                logger.debug(f"Could not remove stale index row: {e}")
+            return None
+
+        if not isinstance(token_data, dict):
+            logger.warning(
+                f"Invalid {kind.lower()} data format for {_mask_token(token)}"
+            )
+            return None
+        logger.debug(
+            f"Found {kind.lower()} {_mask_token(token)} in actor {found_actor_id}"
+        )
+        return token_data
+
+    def _search_token_in_actors(self, token: str) -> dict[str, Any] | None:
+        """Search for an access token across actors.
+
+        Raises:
+            TokenStoreUnavailable: the token store could not be read.
+        """
+        return self._search_indexed_token(
+            token, ACCESS_TOKEN_INDEX_BUCKET, self.tokens_bucket, "Access token"
+        )
+
+    def _search_refresh_token_in_actors(self, token: str) -> dict[str, Any] | None:
+        """Search for a refresh token across actors.
+
+        Raises:
+            TokenStoreUnavailable: the token store could not be read.
+        """
+        return self._search_indexed_token(
+            token,
+            REFRESH_TOKEN_INDEX_BUCKET,
+            self.refresh_tokens_bucket,
+            "Refresh token",
+        )
+
+    def _remove_access_token(
+        self,
+        token: str,
+        *,
+        actor_id: str | None = None,
+        google_token_key: str | None = None,
+    ) -> None:
+        """Remove access token.
+
+        With ``actor_id`` the owner is known (rotation, revocation from a
+        refresh record): the row, its index row and, when
+        ``google_token_key`` is given, its provider-token row are deleted
+        directly without re-loading the token. Without it, the token is
+        looked up through the global index first.
+        """
+        if actor_id:
             from .. import attribute
 
-            # Create a global index bucket for access tokens
-            index_bucket = attribute.Attributes(
+            attribute.Attributes(
+                actor_id=actor_id, bucket=self.tokens_bucket, config=self.config
+            ).delete_attr(name=token)
+            if google_token_key:
+                self._remove_google_token_data(actor_id, google_token_key)
+            attribute.Attributes(
                 actor_id=OAUTH2_SYSTEM_ACTOR,
                 bucket=ACCESS_TOKEN_INDEX_BUCKET,
                 config=self.config,
+            ).delete_attr(name=token)
+            logger.debug(
+                f"Removed access token {_mask_token(token)} from actor {actor_id}"
             )
-
-            # Look up which actor has this token
-            found_actor_data = index_bucket.get_attr(name=token)
-            if not found_actor_data or "data" not in found_actor_data:
-                logger.debug(
-                    f"Access token {_mask_token(token)} not found in global index"
-                )
-                return None
-
-            found_actor_id = found_actor_data["data"]
-            if not found_actor_id:
-                logger.debug(
-                    f"Access token {_mask_token(token)} has no actor ID in global index"
-                )
-                return None
-
-            # Load the actual token data from private attributes
-            tokens_bucket = attribute.Attributes(
-                actor_id=found_actor_id, bucket=self.tokens_bucket, config=self.config
-            )
-            token_attr = tokens_bucket.get_attr(name=token)
-
-            if not token_attr or "data" not in token_attr:
-                logger.warning(
-                    f"Access token {_mask_token(token)} found in index but not in actor {found_actor_id}"
-                )
-                # Clean up the stale index entry
-                index_bucket.delete_attr(name=token)
-                return None
-
-            token_data = token_attr["data"]
-            if isinstance(token_data, dict):
-                logger.debug(
-                    f"Found access token {_mask_token(token)} in actor {found_actor_id}"
-                )
-                return token_data
-            else:
-                logger.warning(
-                    f"Invalid access token data format for {_mask_token(token)}"
-                )
-                return None
-
-        except Exception as e:
-            logger.error(f"Error searching for access token {_mask_token(token)}: {e}")
-            return None
-
-    def _search_refresh_token_in_actors(self, token: str) -> dict[str, Any] | None:
-        """Search for refresh token across actors."""
-        try:
-            # Use the system actor to store a global index of refresh tokens
-            from .. import attribute
-
-            # Create a global index bucket for refresh tokens
-            index_bucket = attribute.Attributes(
-                actor_id=OAUTH2_SYSTEM_ACTOR,
-                bucket=REFRESH_TOKEN_INDEX_BUCKET,
-                config=self.config,
-            )
-
-            # Look up which actor has this token
-            found_actor_data = index_bucket.get_attr(name=token)
-            if not found_actor_data or "data" not in found_actor_data:
-                logger.debug(
-                    f"Refresh token {_mask_token(token)} not found in global index"
-                )
-                return None
-
-            found_actor_id = found_actor_data["data"]
-            if not found_actor_id:
-                logger.debug(
-                    f"Refresh token {_mask_token(token)} has no actor ID in global index"
-                )
-                return None
-
-            # Load the actual token data from private attributes
-            refresh_bucket = attribute.Attributes(
-                actor_id=found_actor_id,
-                bucket=self.refresh_tokens_bucket,
-                config=self.config,
-            )
-            token_attr = refresh_bucket.get_attr(name=token)
-
-            if not token_attr or "data" not in token_attr:
-                logger.warning(
-                    f"Refresh token {_mask_token(token)} found in index but not in actor {found_actor_id}"
-                )
-                # Clean up the stale index entry
-                index_bucket.delete_attr(name=token)
-                return None
-
-            token_data = token_attr["data"]
-            if isinstance(token_data, dict):
-                logger.debug(
-                    f"Found refresh token {_mask_token(token)} in actor {found_actor_id}"
-                )
-                return token_data
-            else:
-                logger.warning(
-                    f"Invalid refresh token data format for {_mask_token(token)}"
-                )
-                return None
-
-        except Exception as e:
-            logger.error(f"Error searching for refresh token {_mask_token(token)}: {e}")
-            return None
-
-    def _remove_access_token(self, token: str) -> None:
-        """Remove access token."""
+            return
         try:
             # First load token data to get Google token key
             token_data = self._load_access_token(token)
@@ -890,53 +1243,6 @@ class ActingWebTokenManager:
 
         except Exception as e:
             logger.error(f"Error removing refresh token {_mask_token(token)}: {e}")
-
-    def _revoke_access_token_by_id(self, token_id: str) -> None:
-        """Revoke access token by ID."""
-        try:
-            # Search through the access token index to find tokens with this ID
-            from .. import attribute
-
-            # We need to search through all access tokens to find the one with this token_id
-            # This is inefficient but necessary given the current storage structure
-            attribute.Attributes(
-                actor_id=OAUTH2_SYSTEM_ACTOR,
-                bucket=ACCESS_TOKEN_INDEX_BUCKET,
-                config=self.config,
-            )
-
-            # Get all tokens from the index (this could be optimized with a reverse index)
-            # For now, we'll search through actors' tokens
-            logger.debug(f"Attempting to revoke access token with ID: {token_id}")
-
-            # Since we don't have a reverse index by token_id, we'll need to search
-            # This is a limitation of the current design - in production you'd want a proper index
-            logger.warning(
-                f"Access token revocation by ID {token_id} requires full search - not implemented for efficiency"
-            )
-
-        except Exception as e:
-            logger.error(f"Error revoking access token by ID {token_id}: {e}")
-
-    def _revoke_refresh_tokens_for_access_token(self, token_id: str) -> None:
-        """Revoke refresh tokens associated with access token."""
-        try:
-            # Search through refresh tokens to find ones referencing this access token ID
-
-            logger.debug(
-                f"Attempting to revoke refresh tokens for access token ID: {token_id}"
-            )
-
-            # Similar to _revoke_access_token_by_id, this requires searching through all refresh tokens
-            # This is a limitation of the current design - in production you'd want proper indexing
-            logger.warning(
-                f"Refresh token revocation for access token ID {token_id} requires full search - not implemented for efficiency"
-            )
-
-        except Exception as e:
-            logger.error(
-                f"Error revoking refresh tokens for access token ID {token_id}: {e}"
-            )
 
     def _validate_pkce(
         self, code_verifier: str, code_challenge: str, code_challenge_method: str
@@ -1056,17 +1362,20 @@ class ActingWebTokenManager:
 
         Returns:
             Number of tokens revoked (access + refresh tokens)
+
+        Raises:
+            TokenStoreUnavailable: one of the two token buckets could not be
+                read, so some of the client's tokens may be left. Whatever
+                could be read is revoked first.
         """
         revoked_count = 0
+        unreadable: list[str] = []
 
         try:
-            from .. import attribute
-
             # Revoke all access tokens for this client
-            tokens_bucket = attribute.Attributes(
-                actor_id=actor_id, bucket=self.tokens_bucket, config=self.config
-            )
-            access_tokens_data = tokens_bucket.get_bucket()
+            access_tokens_data = self._snapshot_bucket(actor_id, self.tokens_bucket)
+            if access_tokens_data is None:
+                unreadable.append(self.tokens_bucket)
 
             if access_tokens_data:
                 for token_name, token_attr in access_tokens_data.items():
@@ -1080,14 +1389,15 @@ class ActingWebTokenManager:
                             self._remove_access_token(token_name)
                             revoked_count += 1
                             logger.debug(
-                                f"Revoked access token {token_name} for client {client_id}"
+                                f"Revoked access token {_mask_token(token_name)} for client {client_id}"
                             )
 
             # Revoke all refresh tokens for this client
-            refresh_bucket = attribute.Attributes(
-                actor_id=actor_id, bucket=self.refresh_tokens_bucket, config=self.config
+            refresh_tokens_data = self._snapshot_bucket(
+                actor_id, self.refresh_tokens_bucket
             )
-            refresh_tokens_data = refresh_bucket.get_bucket()
+            if refresh_tokens_data is None:
+                unreadable.append(self.refresh_tokens_bucket)
 
             if refresh_tokens_data:
                 for token_name, token_attr in refresh_tokens_data.items():
@@ -1101,7 +1411,7 @@ class ActingWebTokenManager:
                             self._remove_refresh_token(token_name)
                             revoked_count += 1
                             logger.debug(
-                                f"Revoked refresh token {token_name} for client {client_id}"
+                                f"Revoked refresh token {_mask_token(token_name)} for client {client_id}"
                             )
 
             if revoked_count > 0:
@@ -1114,6 +1424,11 @@ class ActingWebTokenManager:
         except Exception as e:
             logger.error(f"Error revoking tokens for client {client_id}: {e}")
 
+        if unreadable:
+            raise TokenStoreUnavailable(
+                f"Could not read {', '.join(unreadable)} for actor {actor_id}; "
+                f"revoked {revoked_count} token(s) of client {client_id}"
+            )
         return revoked_count
 
     def cleanup_expired_tokens(self) -> dict[str, int]:
@@ -1138,8 +1453,15 @@ class ActingWebTokenManager:
             - refresh_tokens: Number of expired refresh tokens removed
             - auth_codes: Number of expired auth codes removed
             - index_entries: Number of orphaned index entries removed
+            - provider_tokens: Number of TTL-expired provider-token rows
+              removed (always 0 on DynamoDB, where native TTL removes them)
+
+        A consumed refresh token counts as expired once it is past
+        ``MCP_REFRESH_TOKEN_REUSE_WINDOW``.
         """
         from .. import attribute
+        from ..constants import MCP_REFRESH_TOKEN_REUSE_WINDOW
+        from ..db import get_attribute
 
         current_time = int(time.time())
         cleaned: dict[str, int] = {
@@ -1195,7 +1517,14 @@ class ActingWebTokenManager:
                 if not token_data:
                     refresh_index.delete_attr(name=token)
                     cleaned["index_entries"] += 1
-                elif current_time > token_data.get("expires_at", 0):
+                elif current_time > token_data.get("expires_at", 0) or (
+                    token_data.get("used")
+                    and int(token_data.get("used_at") or 0)
+                    + MCP_REFRESH_TOKEN_REUSE_WINDOW
+                    < current_time
+                ):
+                    # Expired, or consumed and past the reuse window: a used
+                    # refresh token only exists for reuse detection.
                     self._remove_refresh_token(token)
                     cleaned["refresh_tokens"] += 1
 
@@ -1222,12 +1551,71 @@ class ActingWebTokenManager:
                     self._remove_auth_code(code)
                     cleaned["auth_codes"] += 1
 
+        # Provider-token rows have no index to walk; they are swept by their
+        # storage TTL (a no-op on DynamoDB, where native TTL removes them).
+        try:
+            cleaned["provider_tokens"] = get_attribute(self.config).delete_expired(
+                buckets=[self.google_tokens_bucket]
+            )
+        except Exception as e:
+            logger.warning(f"Provider-token sweep failed: {e}")
+            cleaned["provider_tokens"] = 0
+
         total = sum(cleaned.values())
         if total > 0:
             logger.info(f"Cleanup complete: {cleaned}")
 
         return cleaned
 
+    def purge_expired_tokens(self) -> int:
+        """Delete TTL-expired rows from every MCP token bucket.
+
+        Covers the actor buckets (access tokens, refresh tokens, provider
+        tokens, auth codes) and the three global indexes. One set-based delete
+        on PostgreSQL; on DynamoDB it returns 0 and native TTL on the
+        attributes table does the work.
+
+        Returns:
+            Number of rows deleted.
+        """
+        from ..db import get_attribute
+
+        try:
+            return get_attribute(self.config).delete_expired(
+                buckets=[
+                    self.tokens_bucket,
+                    self.refresh_tokens_bucket,
+                    self.google_tokens_bucket,
+                    self.auth_codes_bucket,
+                    ACCESS_TOKEN_INDEX_BUCKET,
+                    REFRESH_TOKEN_INDEX_BUCKET,
+                    AUTH_CODE_INDEX_BUCKET,
+                ]
+            )
+        except Exception as e:
+            logger.warning(f"MCP token purge failed: {e}")
+            return 0
+
+    def maybe_purge_expired_tokens(self) -> int:
+        """Run :meth:`purge_expired_tokens` at most once per
+        ``MCP_TOKEN_PURGE_INTERVAL`` per process.
+
+        Called from the token endpoint, so consumed and expired token rows
+        are reaped on PostgreSQL without a scheduled job. Lock-free: two
+        threads racing past the throttle both run an idempotent delete.
+
+        Returns:
+            Number of rows deleted (0 when throttled or on DynamoDB).
+        """
+        from ..constants import MCP_TOKEN_PURGE_INTERVAL
+
+        if not _mcp_purge_throttle.claim(MCP_TOKEN_PURGE_INTERVAL):
+            return 0
+        return self.purge_expired_tokens()
+
+
+# When this process last ran the opportunistic MCP token purge.
+_mcp_purge_throttle = PurgeThrottle()
 
 # Global token manager
 _token_manager: ActingWebTokenManager | None = None

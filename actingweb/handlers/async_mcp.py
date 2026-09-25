@@ -15,6 +15,7 @@ from actingweb.handlers.mcp import (
     format_call_tool_result,
     mcp_www_authenticate,
 )
+from actingweb.oauth2_server.token_manager import TokenStoreUnavailable
 
 logger = logging.getLogger(__name__)
 
@@ -99,8 +100,13 @@ class AsyncMCPHandler(MCPHandler):
             elif method == "ping":
                 return self._handle_ping(request_id, params)
 
-            # All other methods require authentication
-            actor = self.authenticate_and_get_actor_cached()
+            # All other methods require authentication. A token-store fault
+            # is 503, not 401 and not the generic -32603 below (whose text
+            # would carry the fault's actor id and bucket name).
+            try:
+                actor = self.authenticate_and_get_actor_cached()
+            except TokenStoreUnavailable:
+                return self._token_store_unavailable_response(request_id)
             if not actor:
                 # Set proper HTTP 401 response headers for framework-agnostic handling
                 base_url = f"{self.config.proto}{self.config.fqdn}"

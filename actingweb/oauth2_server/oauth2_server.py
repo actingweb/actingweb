@@ -7,20 +7,23 @@ to Google OAuth2.
 """
 
 import logging
+import re
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlencode
 
 from ..oauth2 import create_oauth2_authenticator
+from ..secret_compare import secret_equals
 from .client_registry import get_mcp_client_registry
 from .state_manager import get_oauth2_state_manager
 from .token_manager import get_actingweb_token_manager
 
 if TYPE_CHECKING:
     from .. import config as config_class
-    from ..actor import Actor
-    from ..interface.actor_interface import ActorInterface
 
 logger = logging.getLogger(__name__)
+
+# RFC 7636 §4.2: a code_challenge is 43-128 unreserved characters.
+_PKCE_CHALLENGE_RE = re.compile(r"[A-Za-z0-9._~-]{43,128}")
 
 
 class ActingWebOAuth2Server:
@@ -132,8 +135,8 @@ class ActingWebOAuth2Server:
             response_type = params.get("response_type", "code")
             params.get("scope", "")
             state = params.get("state", "")
-            code_challenge = params.get("code_challenge")
-            code_challenge_method = params.get("code_challenge_method", "plain")
+            code_challenge = params.get("code_challenge") or None
+            code_challenge_method = params.get("code_challenge_method") or None
 
             # Validate required parameters
             if not client_id:
@@ -158,15 +161,21 @@ class ActingWebOAuth2Server:
             if not self.client_registry.validate_redirect_uri(client_id, redirect_uri):
                 return self._error_response("invalid_request", "Invalid redirect_uri")
 
-            # PKCE validation
+            # PKCE validation. This authorize path binds S256 only, as the
+            # metadata advertises; an absent method is refused rather than
+            # defaulted to plain (RFC 7636 §4.3). Exchange still accepts a
+            # stored "plain" challenge created directly through
+            # TokenManager.create_authorization_code.
             if code_challenge:
-                if code_challenge_method not in ["plain", "S256"]:
+                if code_challenge_method != "S256":
                     return self._error_response(
-                        "invalid_request", "Unsupported code_challenge_method"
+                        "invalid_request",
+                        "code_challenge_method must be S256; plain is not accepted",
                     )
-                if code_challenge_method == "S256" and len(code_challenge) < 43:
+                if not _PKCE_CHALLENGE_RE.fullmatch(str(code_challenge)):
                     return self._error_response(
-                        "invalid_request", "code_challenge too short for S256"
+                        "invalid_request",
+                        "code_challenge must be 43-128 characters of [A-Za-z0-9._~-]",
                     )
             elif client_data.get("token_endpoint_auth_method") == "none":
                 # For public clients (auth method "none"), PKCE is required
@@ -181,6 +190,8 @@ class ActingWebOAuth2Server:
                     "client_id": client_id,
                     "redirect_uri": redirect_uri,
                     "state": state,
+                    "code_challenge": code_challenge,
+                    "code_challenge_method": code_challenge_method,
                     "client_name": client_data.get("client_name", "MCP Client"),
                 }
 
@@ -417,6 +428,7 @@ class ActingWebOAuth2Server:
                 trust_type=trust_type,
                 code_challenge=code_challenge,
                 code_challenge_method=code_challenge_method,
+                redirect_uri=redirect_uri,
             )
 
             # Build redirect URL back to MCP client
@@ -430,8 +442,11 @@ class ActingWebOAuth2Server:
                 f"OAuth2 authorization completed for client {client_id}, user {email}"
             )
 
-            # Store MCP client info if available from initialization
-            self._store_mcp_client_info_in_trust(actor_obj, client_id)
+            # The trust row is named by the client's first authenticated
+            # initialize (handlers/mcp.py), not here: this callback is a
+            # browser redirect with nothing linking it to an MCP session, and
+            # picking a recent unauthenticated initialize from the cache wrote
+            # one user's client name into another user's trust row.
 
             return {"action": "redirect", "url": callback_url}
 
@@ -467,6 +482,52 @@ class ActingWebOAuth2Server:
             logger.error(f"Token request error: {e}")
             return self._error_response("server_error", "Internal server error")
 
+    def _authenticate_client(
+        self, client_id: str, client_secret: str | None
+    ) -> dict[str, Any] | None:
+        """Authenticate a client at the token endpoint. Fails closed.
+
+        ``MCPClientRegistry.validate_client`` is a lookup that compares a
+        secret only when one is passed; the authorize endpoint and the SDK
+        rely on that. The grants need the stricter rule, so it lives here:
+
+        - an unknown ``client_id`` is refused;
+        - a public client (``token_endpoint_auth_method`` ``none``) is
+          accepted whatever secret it presents, and the secret is ignored
+          (RFC 6749 §2.3: sending one does not make it confidential); its
+          proof is PKCE on the code grant and a single-use, client-bound
+          refresh token on the refresh grant;
+        - any other client must present a non-empty secret equal to the
+          stored one.
+
+        The client is read strictly: a store fault raises
+        ``TokenStoreUnavailable`` (answered as ``server_error``) instead of
+        reading as an unknown client, which would be 401 ``invalid_client``.
+
+        Returns:
+            The client record, or None when authentication fails.
+        """
+        return self._check_client_credentials(
+            self.client_registry.load_client_strict(client_id), client_id, client_secret
+        )
+
+    @staticmethod
+    def _check_client_credentials(
+        client: dict[str, Any] | None, client_id: str, client_secret: str | None
+    ) -> dict[str, Any] | None:
+        """The rule of :meth:`_authenticate_client` on an already-loaded record."""
+        if not client:
+            return None
+        if client.get("token_endpoint_auth_method") == "none":
+            return client
+        if not client_secret:
+            logger.warning(f"Client {client_id} presented no client secret")
+            return None
+        if not secret_equals(client.get("client_secret"), client_secret):
+            logger.warning(f"Invalid client secret for client {client_id}")
+            return None
+        return client
+
     def _handle_authorization_code_grant(
         self, params: dict[str, Any]
     ) -> dict[str, Any]:
@@ -485,18 +546,11 @@ class ActingWebOAuth2Server:
         if not redirect_uri:
             return self._error_response("invalid_request", "redirect_uri is required")
 
-        # Validate client credentials (allow both secret-based and PKCE-based auth)
-        client_data = self.client_registry.validate_client(client_id, client_secret)
+        # Confidential clients prove themselves with their secret; public
+        # clients ("none") with the PKCE verifier checked below.
+        client_data = self._authenticate_client(client_id, client_secret)
         if not client_data:
-            # For PKCE clients, allow validation without client_secret
-            client_data = self.client_registry.validate_client(client_id)
-            if (
-                not client_data
-                or client_data.get("token_endpoint_auth_method") != "none"
-            ):
-                return self._error_response(
-                    "invalid_client", "Invalid client credentials"
-                )
+            return self._error_response("invalid_client", "Invalid client credentials")
 
         # PKCE validation for public clients
         if client_data.get("token_endpoint_auth_method") == "none":
@@ -511,6 +565,7 @@ class ActingWebOAuth2Server:
             client_id=client_id,
             client_secret=client_secret,
             code_verifier=code_verifier,
+            redirect_uri=redirect_uri,
         )
 
         if not token_response:
@@ -534,8 +589,10 @@ class ActingWebOAuth2Server:
         if not client_id:
             return self._error_response("invalid_request", "client_id is required")
 
-        # Validate client credentials
-        client_data = self.client_registry.validate_client(client_id, client_secret)
+        # Confidential clients must present their secret. A public client
+        # ("none") is bound by the refresh token's client_id and by rotation:
+        # each refresh token is single-use.
+        client_data = self._authenticate_client(client_id, client_secret)
         if not client_data:
             return self._error_response("invalid_client", "Invalid client credentials")
 
@@ -565,11 +622,21 @@ class ActingWebOAuth2Server:
         if not client_id:
             return self._error_response("invalid_request", "client_id is required")
 
+        # Look the client up first so a public client is told it may not use
+        # this grant, rather than that it forgot a secret it never had.
+        registered = self.client_registry.load_client_strict(client_id)
+        if registered and registered.get("token_endpoint_auth_method") == "none":
+            return self._error_response(
+                "unauthorized_client",
+                "Public clients may not use the client_credentials grant",
+            )
+
         if not client_secret:
             return self._error_response("invalid_request", "client_secret is required")
 
-        # Validate client credentials
-        client_data = self.client_registry.validate_client(client_id, client_secret)
+        client_data = self._check_client_credentials(
+            registered, client_id, client_secret
+        )
         if not client_data:
             return self._error_response("invalid_client", "Invalid client credentials")
 
@@ -648,6 +715,9 @@ class ActingWebOAuth2Server:
 
         Returns:
             Tuple of (actor_id, client_id, token_data) or None if invalid
+
+        Raises:
+            TokenStoreUnavailable: the token store could not be read.
         """
         return self.token_manager.validate_access_token(token)
 
@@ -829,130 +899,6 @@ class ActingWebOAuth2Server:
 
             logger.error(f"Full traceback: {traceback.format_exc()}")
             return ""
-
-    def _store_mcp_client_info_in_trust(
-        self, actor_obj: "Actor", client_id: str
-    ) -> None:
-        """Store MCP client info in the trust relationship for the OAuth2 client."""
-        try:
-            import time
-
-            from ..handlers.mcp import _mcp_client_info_cache
-
-            # Search through all cached client info to find match for this client
-            # This is a fallback approach since we don't have request context here
-            client_info = None
-
-            # Try to find client info in the cache (there should only be one recent entry)
-            current_time = time.time()
-            for _session_key, data in _mcp_client_info_cache.items():
-                if current_time - data["timestamp"] < 600:  # Within 10 minutes
-                    client_info = data["client_info"]
-                    break
-
-            if client_info and actor_obj:
-                # Store client metadata in trust relationship (new approach)
-                from ..interface.actor_interface import ActorInterface
-
-                registry = getattr(self.config, "service_registry", None)
-                actor_interface = ActorInterface(actor_obj, service_registry=registry)
-                client_name = client_info.get("name", "mcp_client")
-
-                # Update trust relationship with client metadata instead of actor properties
-                self._update_trust_with_client_info_oauth(
-                    actor_interface, client_id, client_info
-                )
-
-                logger.info(
-                    f"Stored MCP client info in trust relationship for actor {actor_obj.id}, client {client_name}"
-                )
-
-        except Exception as e:
-            logger.debug(f"Could not store MCP client info: {e}")
-            # This is not critical, so we don't raise the exception
-
-    def _update_trust_with_client_info_oauth(
-        self,
-        actor_interface: "ActorInterface",
-        client_id: str,
-        client_info: dict[str, Any],
-    ) -> None:
-        """
-        Update trust relationship with MCP client metadata for OAuth2 server context.
-
-        Args:
-            actor_interface: ActorInterface instance
-            client_id: OAuth2 client ID to find the trust relationship
-            client_info: Client metadata to store in trust relationship
-        """
-        try:
-            # Find the trust relationship for this OAuth2 client
-            # Look for trust relationship with this client_id as oauth_client_id
-            all_trusts = actor_interface.trust.relationships
-            target_trust = None
-
-            for trust in all_trusts:
-                if (
-                    getattr(trust, "oauth_client_id", None) == client_id
-                    or getattr(trust, "peer_identifier", "") == client_id
-                ):
-                    target_trust = trust
-                    break
-
-            if not target_trust:
-                logger.debug(
-                    f"No trust relationship found for OAuth2 client {client_id}"
-                )
-                return
-
-            # Extract client metadata
-            client_name = client_info.get("name", "MCP Client")
-            client_version = client_info.get("version")
-            client_platform = None
-
-            # Try to extract platform from implementation
-            if "implementation" in client_info:
-                impl = client_info["implementation"]
-                if isinstance(impl, dict):
-                    client_platform = (
-                        f"{impl.get('name', 'Unknown')} {impl.get('version', '')}"
-                    )
-
-            # Check if client info has actually changed before updating
-            existing_name = getattr(target_trust, "client_name", None)
-            existing_version = getattr(target_trust, "client_version", None)
-            existing_platform = getattr(target_trust, "client_platform", None)
-
-            # Skip update if client info hasn't changed
-            if (
-                existing_name == client_name
-                and existing_version == client_version
-                and existing_platform == client_platform
-            ):
-                return
-
-            # Update the trust relationship
-            from .. import actor as actor_module
-
-            core_actor = actor_module.Actor(actor_interface.id, config=self.config)
-            if core_actor.actor:
-                success = core_actor.modify_trust_and_notify(
-                    peerid=target_trust.peerid,
-                    client_name=client_name,
-                    client_version=client_version,
-                    client_platform=client_platform,
-                )
-                if success:
-                    logger.info(
-                        f"Updated trust relationship {target_trust.peerid} with OAuth2 client info: {client_name}"
-                    )
-                else:
-                    logger.warning(
-                        f"Failed to update trust relationship {target_trust.peerid} with OAuth2 client info"
-                    )
-
-        except Exception as e:
-            logger.debug(f"Could not update trust with OAuth2 client info: {e}")
 
     def _error_response(self, error: str, description: str) -> dict[str, Any]:
         """Create OAuth2 error response."""

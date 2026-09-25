@@ -1,7 +1,9 @@
 import json
 import logging
+from typing import Any
 
 from actingweb import auth
+from actingweb.client_text import sanitize_client_name, sanitize_label
 from actingweb.handlers import base_handler
 from actingweb.permission_evaluator import PermissionResult, get_permission_evaluator
 
@@ -40,6 +42,44 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+# Fields of a trust row that are bearer credentials. The list route never
+# returns them; the per-relationship GET does (see TrustPeerHandler.get).
+_TRUST_LIST_CREDENTIAL_FIELDS = ("secret", "verification_token")
+
+
+def _sanitize_trust_text(row: dict[str, Any]) -> dict[str, Any]:
+    """Sanitise the client-supplied text fields of a trust row copy.
+
+    ``client_name`` and ``client_version`` come from MCP clients and
+    registrations, ``desc`` from users and peers. Rows written before 3.15
+    were stored raw, so both trust GET routes sanitise on the way out.
+    ``desc`` is stripped but never capped: users edit it.
+    """
+    for key in ("client_name", "client_version"):
+        if isinstance(row.get(key), str):
+            row[key] = sanitize_client_name(row[key])
+    if isinstance(row.get("client_platform"), str):
+        row["client_platform"] = sanitize_client_name(
+            row["client_platform"], max_len=200
+        )
+    if isinstance(row.get("desc"), str):
+        row["desc"] = sanitize_label(row["desc"])
+    return row
+
+
+def _public_trust_row(row: Any) -> Any:
+    """Return ``row`` without its credential fields, for the trust list.
+
+    A dict is copied so the caller's row (shared with ``auth.py``, the proxy
+    and peer verification) keeps its secret; its client-supplied text is
+    sanitised. Anything else is returned as is.
+    """
+    if not isinstance(row, dict):
+        return row
+    return _sanitize_trust_text(
+        {k: v for k, v in row.items() if k not in _TRUST_LIST_CREDENTIAL_FIELDS}
+    )
+
 
 # Handling requests to trust/
 class TrustHandler(base_handler.BaseHandler):
@@ -71,7 +111,10 @@ class TrustHandler(base_handler.BaseHandler):
         # Return empty array with 200 OK when no relationships exist (SPA-friendly, spec v1.2)
         if not pairs:
             pairs = []
-        out = json.dumps(pairs)
+        # The list never carries peer credentials: a browser session or SPA
+        # cache must not hold every peer's bearer secret. The per-relationship
+        # GET still returns them to creator and admin.
+        out = json.dumps([_public_trust_row(row) for row in pairs])
         self.response.write(out)
         self.response.headers["Content-Type"] = "application/json"
         self.response.set_status(200, "Ok")
@@ -465,6 +508,15 @@ class TrustPeerHandler(base_handler.BaseHandler):
                 self.response.set_status(403, "Trust relationship not approved")
             return
 
+        # Unlike the list route, this response keeps ``secret`` and
+        # ``verification_token``: the spec says the shared secret SHOULD be
+        # readable here by creator and admin (actingweb-spec.rst, "Reading
+        # Trust Relationship Data"), and peer verification reads
+        # ``verification_token`` from this route (Actor.create_verified_trust,
+        # actor.py). Do not strip them here. Client-supplied text is
+        # sanitised as on the list route.
+        if isinstance(my_trust, dict):
+            my_trust = _sanitize_trust_text(dict(my_trust))
         out = json.dumps(my_trust)
         self.response.write(out)
         self.response.headers["Content-Type"] = "application/json"

@@ -1144,23 +1144,29 @@ The application provides an OAuth2 client generation endpoint:
         client_name = body.get("client_name", "AI Assistant Connector")
         trust_type = body.get("trust_type", "mcp_client")
         
-        # Dynamic client registration data (RFC 7591)
+        # Dynamic client registration data (RFC 7591). A public client
+        # (token_endpoint_auth_method "none") gets no secret and must use PKCE.
         registration_data = {
             "client_name": client_name,
             "grant_types": ["authorization_code", "refresh_token"],
             "response_types": ["code"],
             "scope": "mcp",
             "trust_type": trust_type,
+            "token_endpoint_auth_method": body.get(
+                "token_endpoint_auth_method", "client_secret_post"
+            ),
         }
         
-        # Register client
+        # Register client (ValueError -> 400 invalid_client_metadata)
         client_registry = MCPClientRegistry(app.get_config())
         client_data = client_registry.register_client(actor_id, registration_data)
         
         return JSONResponse(content={
             "client_id": client_data["client_id"],
-            "client_secret": client_data["client_secret"],
-            "client_name": client_name,
+            # Absent for a public client
+            "client_secret": client_data.get("client_secret"),
+            # Sanitised by the registry; use this, not the request's value
+            "client_name": client_data["client_name"],
             "trust_type": trust_type,
             "created_at": client_data.get("created_at")
         })

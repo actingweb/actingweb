@@ -410,6 +410,14 @@ class TrustManager:
             - With client_id: creates "oauth2:email_at_domain:client_id" peer IDs
             - Without client_id: uses legacy "oauth2:email_at_domain" format
         """
+        # Client metadata is client-supplied text (a DCR body, a User-Agent);
+        # it lands on the trust row and in its default description.
+        from ..client_text import sanitize_client_name
+
+        client_name = sanitize_client_name(client_name) or None
+        client_version = sanitize_client_name(client_version) or None
+        client_platform = sanitize_client_name(client_platform, max_len=200) or None
+
         if not email:
             return False
 

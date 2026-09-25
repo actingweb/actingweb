@@ -219,6 +219,34 @@ class TestMCPOAuth2TokenExchange:
         )
 
         assert response.status_code in [400, 401]
+        assert response.json()["error"] == "invalid_client"
+
+    def test_register_public_client_gets_no_secret(self, http_client, base_url):
+        """A ``none`` registration is a public client: 201 and no secret."""
+        response = http_client.post(
+            f"{base_url}/oauth/register",
+            json={
+                "client_name": "Public Test\nClient\u202e",
+                "redirect_uris": ["http://localhost:3000/callback"],
+                "token_endpoint_auth_method": "none",
+            },
+            headers={"Content-Type": "application/json"},
+        )
+        assert response.status_code == 201, response.text
+        data = response.json()
+        assert data["token_endpoint_auth_method"] == "none"
+        assert "client_secret" not in data
+        # Client-supplied name sanitised before it is stored or returned
+        assert data["client_name"] == "Public Test Client"
+
+        # Public clients may not use client_credentials
+        response = http_client.post(
+            f"{base_url}/oauth/token",
+            data={"grant_type": "client_credentials", "client_id": data["client_id"]},
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        assert response.status_code == 400
+        assert response.json()["error"] == "unauthorized_client"
 
     def test_token_request_missing_grant_type(
         self, http_client, base_url, registered_client

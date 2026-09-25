@@ -123,6 +123,17 @@ class Attributes:
                 self._bucket_loaded = True
         return self.data
 
+    @property
+    def loaded(self) -> bool:
+        """True once :meth:`get_bucket` got an answer from the backend.
+
+        ``get_bucket()`` returns ``{}`` both for an empty bucket and after a
+        backend fault. Check this after calling it to tell them apart: an
+        empty bucket leaves ``loaded`` True, a faulted read leaves it False
+        (as it is before any read).
+        """
+        return self._bucket_loaded
+
     def get_attr(self, name: str | None = None) -> dict[str, Any] | None:
         """Retrieves a single attribute.
 

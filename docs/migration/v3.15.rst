@@ -1,0 +1,216 @@
+===========================
+Migrating to ActingWeb 3.15
+===========================
+
+.. warning::
+
+   This guide shows the API **as it evolved across this migration**. Where
+   a block demonstrates the *previous* pattern, it must not be copied into
+   new code; see :doc:`../guides/index` for the current API.
+
+Start here
+==========
+
+3.15 is a security release for the MCP OAuth2 server and the trust API.
+Most applications need to check only the first three items:
+
+1. **The trust list no longer returns credentials.** If anything reads
+   ``secret`` or ``verification_token`` from ``GET /{actor_id}/trust``,
+   read them from ``GET /{actor_id}/trust/{relationship}/{peerid}``.
+2. **MCP refresh tokens are single-use.** Every refresh returns a new
+   refresh token; clients must store it.
+3. **Connectors added before 3.15 as public clients** (Codex and ChatGPT
+   were seen doing this) must be removed and added again once.
+4. **Custom authorize templates** must keep the two hidden PKCE inputs.
+5. **Code that validates MCP tokens itself** should handle
+   ``TokenStoreUnavailable``, and code reading ``Attributes._bucket_loaded``
+   should use ``Attributes.loaded``.
+6. **Loggers you quieted to hide request bodies** can be restored.
+7. **PostgreSQL operators**: consumed token rows are purged by the token
+   endpoint; nothing to schedule.
+
+The trust list omits credentials
+================================
+
+``GET /{actor_id}/trust`` returned every relationship's ``secret`` — the
+peer's bearer credential — and ``verification_token``. A browser or SPA that
+fetched the list held every peer's secret. From 3.15 the list omits both.
+
+The per-relationship route is unchanged and still returns both to creator
+and admin; the protocol spec says the shared secret SHOULD be readable
+there, and peer verification reads ``verification_token`` from it:
+
+.. code-block:: python
+
+   # Before: read the secret from the list
+   rows = requests.get(f"{actor_url}/trust", auth=creator).json()
+   secret = rows[0]["secret"]            # KeyError from 3.15
+
+   # From 3.15: read it from the relationship URI
+   rel = requests.get(
+       f"{actor_url}/trust/{rows[0]['relationship']}/{rows[0]['peerid']}",
+       auth=creator,
+   ).json()
+   secret = rel["secret"]
+
+In-process code is not affected: ``Actor.get_trust_relationships()`` and
+``TrustRelationship.to_dict()`` still return full rows.
+
+Both trust GET routes also sanitise ``client_name``, ``client_version``,
+``client_platform`` and ``desc`` on the way out (control and format
+characters removed, whitespace collapsed; ``desc`` is never shortened).
+
+MCP refresh tokens are single-use
+=================================
+
+Every ``grant_type=refresh_token`` response carries a **new**
+``refresh_token``, and the one presented is consumed. The access token it
+was issued with is revoked.
+
+- A consumed token presented again **within 60 seconds** rotates again.
+  This covers a retried request and a client that lost the response.
+- Within **two days** it is treated as theft: every access and refresh
+  token descended from the same sign-in is revoked, and the grant answers
+  ``invalid_grant``.
+- After two days it answers ``invalid_grant`` without revoking anything.
+- If the store fails during a theft revocation, the grant answers
+  ``server_error`` and the chain is revoked on the next presentation.
+
+A refresh token issued before 3.15 joins a chain on its first rotation.
+Revoking any token of a chain (``/oauth/logout``,
+``ActingWebTokenManager.revoke_token``) revokes the whole chain, including
+consumed refresh tokens that could otherwise still rotate inside the 60
+seconds.
+
+A client that keeps its first refresh token will work for one hour after
+its first refresh, then lose its session. The fix is in the client: store
+the ``refresh_token`` from every response, as RFC 6749 §6 allows a server to
+require. The symptom is "the connector asks me to log in again about an
+hour after connecting"
+(:doc:`../guides/troubleshooting`).
+
+Authorization codes are single-use atomically: of two concurrent
+exchanges, one gets tokens, and a wrong PKCE verifier burns the code.
+
+Revocation is per process
+-------------------------
+
+Revoking a token clears it from the MCP token cache of the process that
+revoked it. Another worker or Lambda container may keep honouring a revoked
+access token from its own cache for up to 300 seconds. This was true of
+revocation before 3.15 as well; it now also applies to rotation.
+
+Reconnect public-client connectors registered before 3.15
+=========================================================
+
+Before 3.15, dynamic client registration ignored
+``token_endpoint_auth_method: none`` and registered every client as
+confidential with a secret. Public clients that never send that secret
+(Codex was seen doing this on refresh) then fail every refresh with
+``invalid_client``.
+
+3.15 registers them correctly, but **existing registrations are not
+changed**. Users with such a connector remove it and add it again once; the
+client registers afresh. New connections need nothing.
+
+A public client now gets no ``client_secret``, must send a PKCE
+``S256`` challenge, and may not use ``client_credentials``. Confidential
+registrations gain ``client_secret_expires_at: 0``. An unknown
+``token_endpoint_auth_method`` is refused with ``invalid_client_metadata``.
+
+Code that registers clients through
+``OAuth2ClientManager.create_client`` or reads the registration response
+should read ``client_secret`` with ``.get()``:
+
+.. code-block:: python
+
+   client = manager.create_client("My agent", token_endpoint_auth_method="none")
+   secret = client.get("client_secret")   # None for a public client
+
+Custom authorize templates keep the PKCE inputs
+===============================================
+
+``/oauth/authorize`` now binds the client's PKCE challenge to the code,
+accepts ``S256`` only, and carries the challenge from the form back in two
+hidden inputs. The bundled ``aw-oauth-authorization-form.html`` has them.
+A custom template must keep:
+
+.. code-block:: html
+
+   <input type="hidden" name="code_challenge" value="{{ code_challenge|default('') }}">
+   <input type="hidden" name="code_challenge_method" value="{{ code_challenge_method|default('') }}">
+
+Without them, a public client is refused at the form POST, and a
+confidential client gets an unbound code as before.
+
+The token endpoint's errors
+===========================
+
+``/oauth/token`` now returns the real OAuth error code: ``invalid_grant``
+for a dead refresh token or code, ``unsupported_grant_type``,
+``unauthorized_client``. Before, all of them arrived as
+``invalid_request``. Clients that matched on ``invalid_request`` to detect
+an expired session should match ``invalid_grant``.
+
+Token-store faults and ``Attributes.loaded``
+============================================
+
+The MCP token lookups now tell "no such token" from "the store could not
+be read". On a store fault:
+
+- ``GET /mcp`` and ``POST /mcp`` answer **503** with ``Retry-After: 5``
+  instead of 401 (tokens already in the process cache keep working);
+- ``/oauth/token`` answers 500 ``server_error`` instead of
+  ``invalid_grant`` or 401 ``invalid_client`` (the client registration is
+  read strictly too), so the client keeps its refresh token and its
+  registration;
+- ``validate_access_token`` and ``validate_mcp_token`` raise
+  ``actingweb.oauth2_server.TokenStoreUnavailable``.
+
+Middleware that calls them to guard ``/mcp`` should fail closed:
+
+.. code-block:: python
+
+   from actingweb.oauth2_server import TokenStoreUnavailable
+
+   try:
+       result = oauth2_server.validate_mcp_token(token)
+   except TokenStoreUnavailable:
+       return service_unavailable(retry_after=5)
+   if result is None:
+       ...  # invalid token: let ActingWeb answer 401
+
+``Attributes.get_bucket()`` returns ``{}`` both for an empty bucket and
+after a failed read. ``Attributes.loaded`` is ``True`` only when the backend
+answered; use it instead of the private ``_bucket_loaded``.
+
+MCP client information
+======================
+
+An MCP client's ``initialize`` is unauthenticated. Before 3.15 its
+``clientInfo`` could be attached to another user's connection; see the
+changelog. From 3.15:
+
+- the client's trust row is named by its first **authenticated**
+  ``initialize``, not at sign-in;
+- the live ``clientInfo`` handed to tools (``MCPContext.client_info``)
+  is found by ``Mcp-Session-Id`` or by the bearer token, so a client that
+  sends neither header nor an authenticated ``initialize`` has none;
+- names and versions are sanitised (``actingweb.client_text``).
+
+Applications that already sanitise client names can keep doing so.
+
+Logging
+=======
+
+The peer proxy (``actingweb.aw_proxy``) and the authorize endpoint log a
+summary of request bodies at DEBUG — ``keys=[...] bytes=N`` — never the
+values. Key names of a property write are property names.
+
+PostgreSQL: consumed token rows
+===============================
+
+Consumed and expired MCP token rows are deleted by a purge the token
+endpoint runs at most once an hour per process; nothing needs scheduling.
+On DynamoDB, native TTL on the attributes table does the same (see
+:doc:`../guides/database-maintenance`).

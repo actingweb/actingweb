@@ -25,6 +25,12 @@ Local Setup
 Development Workflow
 ====================
 
+The maintained contract for checks, CI policy, changelog and release lives in
+the ``## Workflow`` section of ``CLAUDE.md`` (read by the agent slash commands;
+per-command addenda under ``.claude/workflow/``). Development notes, plans and
+verifications are checked in under ``thoughts/`` (see ``thoughts/README.md``).
+The steps below are the human summary of the same process.
+
 1. Create a feature branch; keep changes focused.
 2. Run ruff, black, mypy, and pytest locally; ensure coverage ≥ 80%.
 3. Update docs under docs/ for user‑visible behavior; put contributor‑only notes here in CONTRIBUTING.rst.

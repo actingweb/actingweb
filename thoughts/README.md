@@ -8,18 +8,27 @@ Kind never changes — a plan is a plan forever. Status changes constantly. Enco
 status as a location means every state change is a file move, and every file move
 breaks the links pointing at it.
 
-## The six directories
+The `actingweb_mcp` consumer repo (`../actingweb_mcp/thoughts/README.md`)
+follows the same convention with two deliberate differences: this repo has an
+`inbound/` directory for untriaged external reports, and it identifies todos by
+filename only, where that repo keeps stable numbers in `todo/INDEX.md`.
+Everything else should read the same; other divergence is drift. The workflow
+commands read the table below and ask before creating a directory it does not
+list.
+
+## The seven directories
 
 | Directory | Holds | Dated? | Written by |
 | --- | --- | --- | --- |
-| `research/` | What we found out — investigation, measurement, analysis | yes | `/research_codebase` |
+| `features/` | What we want to achieve — outcome, user experience, success measures, hypothesis | yes | `/plan_feature` |
+| `research/` | What we found out — investigation, measurement, analysis, bug investigations, inbound triage | yes | `/research_codebase`, `/fix_bug` |
 | `plans/` | What we intend to do — phased implementation plans | yes | `/create_plan` |
 | `verifications/` | Evidence a plan actually landed | yes | `/verify_implementation` |
 | `reference/` | Durable knowledge — patterns, architecture, protocol flows | no | by hand |
 | `todo/` | Known work not yet scheduled | no | by hand |
 | `inbound/` | Reports from outside this repo, not yet triaged | no | whoever files one |
 
-Nothing else. If a document doesn't fit one of these six, it is probably a
+Nothing else. If a document doesn't fit one of these seven, it is probably a
 `research/` note.
 
 ### Dated vs undated is not cosmetic
@@ -30,8 +39,8 @@ Nothing else. If a document doesn't fit one of these six, it is probably a
   when it stops being true. A date in the filename would become a lie the first
   time you update it.
 
-`research/`, `plans/` and `verifications/` are snapshots. `reference/`,
-`todo/` and `inbound/` are living.
+`features/`, `research/`, `plans/` and `verifications/` are snapshots.
+`reference/`, `todo/` and `inbound/` are living.
 
 ### Same slug = same thread of work
 
@@ -166,6 +175,7 @@ point.
 **Tool-driven loop** — the `/` commands already implement this:
 
 ```
+/plan_feature           → features/YYYY-MM-DD-slug.md    (no status: only plans carry one)
 /research_codebase      → research/YYYY-MM-DD-slug.md
 /create_plan            → plans/YYYY-MM-DD-slug.md      (status: proposed)
         ↓ implementation starts                          (status: active)
@@ -173,7 +183,13 @@ point.
 /verify_implementation  → verifications/YYYY-MM-DD-slug.md
         ↓                                                (status: done + verified:)
 /iterate_plan           → amends the plan in place
+/fix_bug                → research/YYYY-MM-DD-slug.md   (root-cause record; also a
+                          Post-Verification entry in the plan it belongs to)
 ```
+
+`/plan_feature` mints the slug; it names the outcome, not the implementation.
+An inbound report that turns out to need a plan gets its own dated
+`research/` note first (the triage record), and the plan reuses that slug.
 
 **By hand:**
 
@@ -186,6 +202,8 @@ point.
 - Investigated something and wrote it up → `research/`, even if no plan follows.
 - A report arrived from outside the repo → it lands in `inbound/`; triage it,
   file what survives verification, then delete the file.
+- The desired outcome changes → a *new* `features/` document; the old one stays
+  as the record of what we wanted then.
 
 **Rule of thumb:** if you'd want to read it in a year, it's `reference/`. If it
 only makes sense next to a date, it's `research/`. If it's a promise, it's

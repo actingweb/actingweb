@@ -2,22 +2,23 @@
 
 Items from the consumer's audit of the MCP endpoint against Anthropic's
 connector requirements that are real but have no live failure behind them.
-Each was checked against the tree at `2d5eaa4`; none is scheduled. The items
+Each was checked against the tree at `2d5eaa4`; line references re-checked
+against `release/3.15.0-mcp-oauth-hardening` on 2026-09-25. None is scheduled. The items
 with a live failure (public clients, PKCE binding, refresh rotation, error
 codes) went into `thoughts/plans/2026-09-25-mcp-oauth-hardening-and-credential-exposure.md`.
 
 ## OAuth server
 
 - **Redirect URIs are exact-match only.** `validate_redirect_uri` is
-  `redirect_uri in registered_uris` (`actingweb/oauth2_server/client_registry.py:150-166`).
+  `redirect_uri in registered_uris` (`actingweb/oauth2_server/client_registry.py:179-195`).
   RFC 8252 §7.3 asks that native clients registering a loopback URI
   (`http://127.0.0.1:<port>/...`, `http://[::1]:<port>/...`) be matched
   ignoring the port. Decide whether to apply that only to loopback hosts
   (the RFC's scope) and never to `localhost` by name.
 - **No RFC 8707 `resource` / audience binding.** Neither the authorize params
-  (`handlers/oauth2_endpoints.py:212-246`) nor the token params (`:325-333`)
+  (`handlers/oauth2_endpoints.py:213-265`) nor the token params (`:343-352`)
   read `resource`, and no token record carries an audience
-  (`oauth2_server/token_manager.py:355-401`). Every ActingWeb access token is
+  (`oauth2_server/token_manager.py:676-735`). Every ActingWeb access token is
   already bound to one actor and one client; the missing piece is refusing a
   token minted for one resource server at another, which only matters once a
   deployment fronts more than one resource with one authorization server.
@@ -27,10 +28,17 @@ codes) went into `thoughts/plans/2026-09-25-mcp-oauth-hardening-and-credential-e
   client's metadata URL with caching, and interacts with the DCR retention
   todo (`dcr-registrations-and-client-trust-rows-never-expire.md`), since
   CIMD clients would not create registrations at all.
+- **A confidential client that sends no PKCE challenge gets an unbound
+  code.** Since 3.15 the built-in authorize pages bind a challenge when one
+  is sent and require one from a public client, but a confidential client
+  may still omit it (`oauth2_server/oauth2_server.py`, the PKCE block in
+  `handle_authorization_request`). Its code is guarded by its client secret,
+  as before. Requiring PKCE for every client (OAuth 2.1) would break any
+  confidential client that does not send one; check the connectors first.
 - **`/.well-known/openid-configuration` answers 404.** The integrations
   register `oauth-authorization-server` and `oauth-protected-resource[/mcp]`
   only (`interface/integrations/flask_integration.py:280-305`,
-  `fastapi_integration.py:891-899`). ChatGPT probes it several times per
+  `fastapi_integration.py:892-900`). ChatGPT probes it several times per
   connect and moves on. Either serve the same document there or leave it and
   say so in `docs/guides/oauth2-setup.rst`.
 
@@ -52,12 +60,15 @@ codes) went into `thoughts/plans/2026-09-25-mcp-oauth-hardening-and-credential-e
 - **Shared registrations flip the Connections card name.** claude.ai and
   Claude Code on one account use one client id, and the ChatGPT desktop
   app's Codex uses the Codex CLI's. `_update_trust_with_client_info`
-  (`handlers/mcp.py:2608-2680`) skips the write only when nothing changed,
+  (`handlers/mcp.py:2640-2720`) skips the write only when nothing changed,
   so two clients alternating on one trust row rewrite `client_name` each
-  time. Keep the first name seen, or record every name seen.
+  time. Keep the first name seen, or record every name seen. (3.15 closed
+  the cross-user variant, where an unauthenticated `initialize` named
+  another user's row, and sanitises the name; last-writer-wins within one
+  user's row is what remains.)
 - **No post-authentication hook carries the actor to app code.** The
   consumer's middleware validates the bearer a second time
-  (`handlers/mcp.py:2081-2086` is where the library does it) because nothing
+  (`handlers/mcp.py:2110-2115` is where the library does it) because nothing
   hands the resolved actor to the app before dispatch. A hook there would
   also let `actingweb_mcp` drop its `require_mcp_auth_for_init` sniffing
   (see `mcp-2026-07-28-dual-era-support.md`, "Downstream consumers to

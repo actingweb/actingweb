@@ -66,6 +66,20 @@ when?** That is unknown and unverifiable from public sources as of 2026-08-13.
    since the library chose to hand-roll; if that decision is revisited, decide
    both together rather than twice.
 
+### Sightings against the trigger list
+
+- **2026-09-23, Claude Code CLI 2.1.280 (`claude -p` / `claude mcp login`,
+  origin `ua:claude-code/2.1.280 (sdk-cli)`)** against a local server on
+  3.14.7: the library's own escalation fired — five rejections of
+  `2026-07-28` from one origin inside 300 s — and the connection then
+  succeeded (`Stored MCP client info: claude-code`, trust row updated). So
+  the CLI retried more than once before falling back to `initialize`, which
+  is trigger 2's shape but not its meaning: it did fall back. One CLI build,
+  one day, one data point. Reported by the `actingweb_mcp` project
+  (connector-alignment plan, Phase 6 verification); claude.ai and ChatGPT in
+  the same sessions fell back after one rejection. Not grounds to act; the
+  first sighting on record of any client not falling back on the first try.
+
 ## Do NOT pick it up merely because
 
 - The spec is published. It has been since 2026-07-28 and changed nothing for us.

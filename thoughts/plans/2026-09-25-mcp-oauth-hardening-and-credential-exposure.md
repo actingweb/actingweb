@@ -148,6 +148,10 @@ Phase 1's chain-revocation fault path.
 
   Eviction runs in a `finally`. `/oauth/logout` with an MCP token now
   reaches `revoke_token`. Iterations 17 and 18.
+  **[Updated 2026-09-26]** A faulted revocation keeps the presented token
+  (Iteration 20), and `/oauth/logout` answers that fault with 503 and
+  `Retry-After` so the client retries (Iteration 22, the owner's choice over
+  a `revoked` mark).
 - **Authorization codes become single-use atomically; nothing more.**
   `exchange_authorization_code` today reads `used`, validates PKCE, then
   writes `used = True`; two concurrent exchanges both mint tokens. It now
@@ -1108,7 +1112,9 @@ Notes (2026-09-25):
   path is unaffected (`plain` still exchanges, no `redirect_uri` stored);
   users with Codex/ChatGPT connectors added before the upgrade reconnect
   once. **[Updated 2026-09-25]** Also: `/oauth/logout` called with an MCP
-  bearer token now revokes that token's whole chain (Iteration 18); a custom
+  bearer token now revokes that token's whole chain (Iteration 18), and
+  answers 503 with `Retry-After` when the store faults: the consumer's MCP
+  clients should retry a 503 logout (Iteration 22); a custom
   attribute backend, if the consumer has one, must accept
   `conditional_update_attr(ttl_seconds=)` and `delete_by_chain(defer_name=)`.
 
@@ -1871,6 +1877,95 @@ claim. Five tests fail on `6748937` and pass now:
 - Full tier, PostgreSQL: 3564 passed, 140 skipped, 2 failed. The failures are
   the benchmark subscription tests already filed in
   `benchmark-subscription-tests-pass-url-to-boolean-callback.md`.
+- `sphinx-build -W`: clean.
+
+### 2026-09-26, after verification thoughts/verifications/2026-09-26-mcp-oauth-hardening-and-credential-exposure.md
+
+The owner's decisions on the fourth verification:
+- issue 1: option (b), 503 with `Retry-After`;
+- issue 2: fix;
+- issue 3: fix the message;
+- issue 4: add tests;
+- issue 5: evict the client's access tokens on client deletion.
+
+Root causes and regression tests:
+`thoughts/research/2026-09-26-mcp-oauth-hardening-verification-fixes-4.md`.
+
+#### 22. A faulted MCP logout answers 503 with Retry-After, and the kept token stays reachable
+
+**Category**: Decision changed (fourth verification issue 1, the owner's
+option b) and bug fix (issue 2)
+
+**What changed**:
+- `_handle_mcp_token_logout` returns the action `retry` on
+  `TokenStoreUnavailable`. `_handle_logout_request` answers it with
+  **503**, `Retry-After: 5` and `{"success": false, "error":
+  "temporarily_unavailable", ...}`, and clears no cookies. Before, it
+  answered 200 "Logged out (token revocation failed)", which no client
+  retries. The token stays valid until the retry completes; options (a), a
+  `revoked` mark, and (c), accept, were not taken. Both integrations already
+  pass the handler's status and headers through (`fastapi_integration.py`
+  merges `webobj.response.headers`; Flask copies status and headers).
+- `_remove_access_token(actor_id=...)` and `_remove_refresh_token_row` keep
+  the index row (and the provider row) when the actor row's delete is
+  unconfirmed. Before, they deleted the index row anyway, so a retry could
+  not resolve the token and logout then said "Successfully logged out"
+  while the row lingered.
+
+**Files affected**:
+- `actingweb/handlers/oauth2_endpoints.py`: the `retry` action, 503 and
+  `Retry-After`; the `_handle_mcp_token_logout` docstring
+- `actingweb/oauth2_server/token_manager.py`: the two remove helpers
+  return early on an unconfirmed delete
+- `CHANGELOG.rst`, `docs/migration/v3.15.rst`: 503 and the retry
+- Tests:
+  - `tests/test_oauth2_logout_mcp_tokens.py`:
+    `test_logout_after_a_revocation_fault_can_be_retried` asserts 503,
+    `Retry-After` and the retry; new route tests for FastAPI and Flask
+  - `tests/test_mcp_refresh_rotation.py`:
+    `test_unconfirmed_delete_of_a_chainless_token_is_not_reported_revoked`
+    now retries
+
+#### 23. FastAPI cookie logout reports a handler failure; route tests; client deletion clears the cache
+
+**Category**: Bug fix and tests (fourth verification issues 3, 4 and 5)
+
+**What changed**:
+- `_logout_message` becomes `_logout_outcome(handler_response) ->
+  (success, message)`. A handler status of 400 or more, or an `error` body,
+  is a failure: `success: false` with the handler's message or error
+  description. The web UI branch uses both values.
+- Route-level tests through `TestClient` (FastAPI) and the Flask test
+  client:
+  - 503 and `Retry-After` pass through on both frameworks;
+  - success is still 200;
+  - the cookie branch reports a failed revocation and a handler 500.
+
+  The cookie branch still clears only `oauth_token`. That predates this plan
+  and the owner asked for tests only.
+- `revoke_client_tokens` evicts each access token from this process's MCP
+  token cache (`evict_caches_for_token`), confirmed delete or not, so a
+  deleted client's cached token stops authenticating on that worker.
+
+**Files affected**:
+- `actingweb/interface/integrations/fastapi_integration.py`:
+  `_logout_outcome`
+- `actingweb/oauth2_server/token_manager.py`: `revoke_client_tokens`
+- `CHANGELOG.rst`: the client-deletion entry names the cache eviction
+- `tests/test_oauth2_logout_mcp_tokens.py`, `tests/test_mcp_token_store_faults.py`
+
+**Rationale**: seven tests fail on `9e70e47` and pass now (listed in the
+research note).
+
+**Checks for the batch**:
+- Fast tier: ruff, format and pyright clean; unit tests 2702 passed, 23
+  skipped.
+- Full tier, DynamoDB: 3681 passed, 31 skipped, 3 errors. All three are
+  DynamoDB Local "waiting for a lock" teardown errors in
+  `test_hot_path_n_plus_one.py` and `test_bulk_list_update_handles.py`;
+  run on their own, both files pass (31 passed).
+- Full tier, PostgreSQL: 3570 passed, 140 skipped, 2 failed. The failures are
+  the benchmark subscription tests already filed.
 - `sphinx-build -W`: clean.
 
 ## Evaluation Notes

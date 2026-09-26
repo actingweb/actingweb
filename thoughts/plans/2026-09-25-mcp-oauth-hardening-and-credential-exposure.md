@@ -1153,6 +1153,16 @@ Notes (2026-09-25):
 
 ### Implementation Status: Not Started
 
+**[Updated 2026-09-26]** Sequencing changed. The hardening work (Phases 1–3,
+Iterations 1–24) merges to `master` first through an ordinary PR with no
+version bump, so the branch stops growing after five verifications. The
+successor rule from
+`thoughts/research/2026-09-26-spa-refresh-reuse-after-dropped-rotation.md`
+(a dropped rotation is not theft; both ladders) gets its own plan and PR
+and lands before `3.15.0rc1`, because it changes the rotation contract the
+rc connector pass validates. The rc release PR, with the bump, follows
+that. The rest of this phase is unchanged.
+
 ---
 
 ## Iterations

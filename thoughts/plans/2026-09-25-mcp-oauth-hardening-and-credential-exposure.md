@@ -1756,6 +1756,123 @@ tier).
   `benchmark-subscription-tests-pass-url-to-boolean-callback.md`.
 - `sphinx-build -W`: clean.
 
+### 2026-09-26, after verification thoughts/verifications/2026-09-25-mcp-oauth-hardening-and-credential-exposure-3.md
+
+The owner asked for all eight issues of the third verification to be fixed.
+Numbering continues. Root causes and regression tests:
+`thoughts/research/2026-09-26-mcp-oauth-hardening-verification-fixes-3.md`.
+
+#### 20. A revocation that faults keeps the presented token for the retry, and never reports an unconfirmed delete as done
+
+**Category**: Bug fix (third verification issues 1 and 2; a regression from
+Iteration 17)
+
+**What changed**:
+- When `_revoke_chain` raises, `revoke_token` evicts this process's cache
+  (the token, and for a refresh token also its access token and the actor)
+  and re-raises, leaving the presented token's row in place. Iteration 17
+  deleted that row in a `finally`, which removed the anchor that
+  `defer_name` had just kept for the retry. A logout that hit a store fault
+  therefore left the chain's refresh token live with nothing able to revoke
+  it.
+- After a successful chain revocation, or for a chainless (pre-3.15) token,
+  the presented token is deleted through its known owner and the delete is
+  confirmed. A refresh token's linked access token is deleted first and the
+  presented token last. An unconfirmed delete raises `TokenStoreUnavailable`
+  rather than returning True, so `/oauth/logout` answers "Logged out (token
+  revocation failed)", not "Successfully logged out".
+- The docstrings of `revoke_token` and `_handle_mcp_token_logout` describe
+  the retry contract.
+
+**Files affected**:
+- `actingweb/oauth2_server/token_manager.py`: `revoke_token`
+- `actingweb/handlers/oauth2_endpoints.py`: `_handle_mcp_token_logout`
+  docstring
+- `tests/test_mcp_refresh_rotation.py`:
+  `test_revocation_fault_still_removes_the_presented_token_and_evicts` is
+  replaced by `test_revocation_fault_keeps_the_presented_token_to_retry_from`
+  (parametrized over the zero, raise and partial chain-delete faults), and
+  there are two new tests
+- `tests/test_oauth2_logout_mcp_tokens.py`: the fault test becomes
+  `test_logout_after_a_revocation_fault_can_be_retried`
+
+**Rationale**: the two safeguards of Iteration 17 worked against each other
+in `revoke_token`, which both reviewers of the third verification found
+independently. Six tests fail on `6748937` and pass now.
+
+#### 21. The Lows of the third verification
+
+**Category**: Verification fix (third verification issues 3–8)
+
+**What changed**:
+- **Issue 3:** `revoke_client_tokens` loops over the two buckets with a
+  per-token `try`. A token whose revocation raises is counted as unconfirmed
+  and logged at ERROR. The rest are still revoked, and the final
+  `TokenStoreUnavailable` names the count. The broad `except` around both
+  loops, which swallowed a mid-loop failure and returned a partial count, is
+  gone.
+- **Issue 4:** a fresh owned client-info entry is replaced only by a write
+  from the same owner. Another actor's authenticated `initialize` naming the
+  session no longer blanks the owner's entry.
+- **Issue 5:** `_claim_client_info` moves the entry to the newest end of the
+  cache, so the size bound (which evicts in insertion order) evicts idle
+  entries before one in use.
+- **Issue 6:** the changelog's consume-fault sentence names MCP and says the
+  SPA endpoint still answers 401. The changelog and the migration guide
+  describe the logout retry after a failed revocation.
+- **Issue 7:** every consume writes a random `consume_id`. When the swap
+  answers False and the strict re-read finds this call's own `consume_id`,
+  the write landed but its response was lost. That counts as a successful
+  consume (logged at WARNING) instead of burning the code as "already
+  used". A competing consume carries another id and is still refused.
+- **Issue 8:**
+  - The docstring of `test_revocation_between_swap_and_mint_is_not_undone`
+    names the accepted residual.
+  - The `StoreFault` ERROR line carries the actor and a masked record name.
+  - The FastAPI cookie logout passes a failure message through
+    (`_logout_message`) instead of always saying "Logged out successfully".
+
+**Files affected**:
+- `actingweb/oauth2_server/token_manager.py`: `revoke_client_tokens`
+- `actingweb/handlers/mcp.py`: `_cache_client_info`, `_claim_client_info`,
+  the `_resolve_live_client_info` docstring
+- `actingweb/single_use.py`: `consume_id`, the lost-response branch, `_mask`
+- `actingweb/interface/integrations/fastapi_integration.py`:
+  `_logout_message`
+- `CHANGELOG.rst`, `docs/migration/v3.15.rst`
+- `tests/mcp_token_double.py`: `cas_lost_response`
+- Tests:
+  - `tests/test_mcp_token_store_faults.py`,
+    `tests/test_mcp_client_info_cache.py`,
+    `tests/test_mcp_auth_code_single_use.py`,
+    `tests/test_oauth2_logout_mcp_tokens.py`: new tests
+  - `tests/test_mcp_refresh_rotation.py`: the docstring
+
+**Rationale**: every item is small and on a fault path or a documented
+claim. Five tests fail on `6748937` and pass now:
+- `test_revoke_client_tokens_counts_a_raising_delete_and_goes_on`
+- `test_another_actors_authenticated_initialize_cannot_replace_an_owned_entry`
+- `test_an_entry_in_use_survives_the_size_bound`
+- `test_a_swap_whose_response_was_lost_still_exchanges_the_code`
+- `test_fastapi_cookie_logout_passes_a_failure_message_through`
+
+`test_a_competing_consume_is_still_refused` pins the unchanged race rule.
+
+**Docs for the batch**:
+- `CHANGELOG.rst`: the rotation SECURITY entry scopes the consume-fault rule
+  to MCP (the SPA endpoint answers 401) and describes the logout retry after
+  a failed revocation.
+- `docs/migration/v3.15.rst`: the logout retry.
+
+**Checks**:
+- Fast tier: ruff, format and pyright clean; unit tests 2696 passed, 23
+  skipped.
+- Full tier, DynamoDB: 3675 passed, 31 skipped, 0 errors.
+- Full tier, PostgreSQL: 3564 passed, 140 skipped, 2 failed. The failures are
+  the benchmark subscription tests already filed in
+  `benchmark-subscription-tests-pass-url-to-boolean-callback.md`.
+- `sphinx-build -W`: clean.
+
 ## Evaluation Notes
 
 Five evaluators (architecture, security, scalability, usability, tests and

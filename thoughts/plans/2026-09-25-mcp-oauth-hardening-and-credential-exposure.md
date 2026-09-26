@@ -258,6 +258,23 @@ Phase 1's chain-revocation fault path.
   registration strictly (`MCPClientRegistry.load_client_strict`): a fault
   there answered 401 `invalid_client` before the token lookup could raise.
   The FastAPI `AsyncMCPHandler` answers the 503 too. Iterations 2 and 1.
+- **[Added 2026-09-26] Revocation removes the index row first; only a chain
+  fault keeps a token alive.** Every token lookup resolves through the
+  global index row, so deleting it is the revocation as far as any worker
+  is concerned. `_remove_access_token(actor_id=...)` and
+  `_remove_refresh_token_row` delete the index row unconditionally, then
+  confirm the actor row; an unconfirmed actor row is cleanup (TTL or the
+  purge) and is reported, never a reason to keep the token reachable. The
+  one deliberate exception is a fault while revoking a token's *chain*:
+  the presented token is kept whole as the handle to the chain, and
+  `/oauth/logout` answers 503 with `Retry-After` so the client presents it
+  again. This settles the question Iterations 17, 20 and 22 each answered
+  differently, by stating the property instead of a mechanism; it is pinned
+  per revocation path by
+  `tests/test_mcp_refresh_rotation.py::TestAnUnconfirmedDeleteStillRevokes`.
+  Behaviour that only one caller wants belongs in that caller, never in a
+  shared helper (the cause of the Iteration 17 and 22 regressions).
+  Iteration 24.
 - **`Attributes.loaded` is public.** Consumers stop reading
   `_bucket_loaded`; `_revoke_chain` uses it.
 
@@ -1966,6 +1983,71 @@ research note).
   run on their own, both files pass (31 passed).
 - Full tier, PostgreSQL: 3570 passed, 140 skipped, 2 failed. The failures are
   the benchmark subscription tests already filed.
+- `sphinx-build -W`: clean.
+
+### 2026-09-26, after verification thoughts/verifications/2026-09-26-mcp-oauth-hardening-and-credential-exposure-2.md
+
+The fifth verification found a High regression from Iteration 22, the
+fourth time the revocation fault path had been re-answered. The owner
+agreed to settle it by stating the invariant (see the `[Added 2026-09-26]`
+decision), fix only the High and Medium items, file the Lows, and close the
+loop on the next run that has no High or Medium and no regression. Root
+causes: `thoughts/research/2026-09-26-mcp-oauth-hardening-verification-fixes-5.md`.
+
+#### 24. Revocation deletes the index row first; the property is pinned per path
+
+**Category**: Bug fix and decision (fifth verification issues 1–4)
+
+**What changed**:
+- `_remove_access_token(actor_id=...)` and `_remove_refresh_token_row`
+  delete the index row (and, for access tokens, the provider row) first and
+  unconditionally, then confirm the actor row. An unconfirmed actor row is
+  reported (the helper returns False, logs at ERROR) but the token is
+  already dead on every worker. This reverts Iteration 22's "keep the index
+  row for a retry", which had regressed rotation and client deletion.
+- `revoke_token`'s refresh branch removes both the linked access token and
+  the presented refresh token whatever the other's outcome. Its docstring
+  states the two fault outcomes: a chain fault keeps the presented token as
+  the handle (the owner's 503 decision stands); an unconfirmed single delete
+  leaves a dead token whose retry only confirms.
+- `_handle_logout_request` clears this process's MCP token cache on the
+  `retry` outcome too, so a fault before `revoke_token` could evict does not
+  leave a cached token serving for 300 s after a 503.
+- New `TestAnUnconfirmedDeleteStillRevokes` pins the property, not the
+  mechanism, for rotation, `revoke_token` (access and refresh) and client
+  deletion.
+- The four Lows (5–8) are filed in
+  `thoughts/todo/mcp-logout-fault-path-followups.md`.
+
+**Files affected**:
+- `actingweb/oauth2_server/token_manager.py`: the two remove helpers,
+  `revoke_token`
+- `actingweb/handlers/oauth2_endpoints.py`: cache clearing on `retry`, the
+  `_handle_mcp_token_logout` docstring
+- `CHANGELOG.rst`, `docs/migration/v3.15.rst`: the invariant replaces the
+  "kept, stays valid until retry" wording
+- `tests/test_mcp_refresh_rotation.py`: the property class; two existing
+  tests now assert the token is dead
+- `tests/test_oauth2_logout_mcp_tokens.py`: the cache-eviction test
+- `thoughts/todo/mcp-logout-fault-path-followups.md` (new), `INDEX.md` row
+
+**Rationale**: five tests fail on `fade3da` and pass now:
+`TestAnUnconfirmedDeleteStillRevokes::test_rotation`,
+`::test_client_deletion`,
+`test_unconfirmed_delete_of_the_old_access_token_is_logged`,
+`test_unconfirmed_delete_of_a_chainless_token_is_not_reported_revoked`, and
+`test_a_lookup_fault_on_logout_still_evicts_the_cached_token`. The two
+`revoke_token` property tests pass on both versions (a chain delete removes
+the row before the faulted delete runs) and stand as coverage.
+
+**Checks for the batch**:
+- Fast tier: ruff, format and pyright clean; unit tests 2707 passed, 23
+  skipped.
+- Full tier, DynamoDB: 3686 passed, 31 skipped, 1 error: the DynamoDB Local
+  "waiting for a lock" teardown flake in `test_bulk_list_update_handles.py`,
+  which passes on its own (20 passed).
+- Full tier, PostgreSQL: 3575 passed, 140 skipped, 2 failed: the benchmark
+  subscription tests already filed.
 - `sphinx-build -W`: clean.
 
 ## Evaluation Notes

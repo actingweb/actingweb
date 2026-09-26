@@ -7,6 +7,7 @@ in the same chain, inside the reuse window it revokes the chain, and beyond
 the window it reads as expired.
 """
 
+import contextlib
 import logging
 import time
 from typing import Any
@@ -635,14 +636,15 @@ def test_unconfirmed_delete_of_a_chainless_token_is_not_reported_revoked(
 
     with pytest.raises(tm_mod.TokenStoreUnavailable):
         tm.revoke_token(legacy)
-    assert legacy in store.names(ACTOR, TOKENS)
-    # Still reachable through its index row, so presenting it again retries.
-    assert index_actor(store, ACCESS_TOKEN_INDEX_BUCKET, legacy) == ACTOR
-
-    store.delete_faults.clear()
-    assert tm.revoke_token(legacy) is True
-    assert legacy not in store.names(ACTOR, TOKENS)
+    # The index row went first, so the token is dead everywhere; the actor
+    # row it left behind is cleanup.
     assert index_actor(store, ACCESS_TOKEN_INDEX_BUCKET, legacy) is None
+    assert tm.validate_access_token(legacy) is None
+    assert legacy in store.names(ACTOR, TOKENS)
+
+    # Presenting it again only confirms.
+    store.delete_faults.clear()
+    assert tm.revoke_token(legacy) is False
 
 
 def test_a_chain_revoked_concurrently_is_not_a_fault(
@@ -691,3 +693,60 @@ def test_unconfirmed_delete_of_the_old_access_token_is_logged(
     with caplog.at_level(logging.ERROR, logger="actingweb.oauth2_server"):
         assert tm.refresh_access_token(first["refresh_token"], CLIENT)
     assert "Could not confirm removal of access token" in caplog.text
+    # And the rotated-out token is dead regardless.
+    assert tm.validate_access_token(first["access_token"]) is None
+
+
+class TestAnUnconfirmedDeleteStillRevokes:
+    """The invariant behind every revocation path: a token's index row goes
+    first, so a store fault that leaves the actor row behind never leaves
+    the token usable. Pinned per path, whatever each path does otherwise:
+    a path may raise (the fault is reported) or not (a chain delete removed
+    the row before the faulted delete ran); only the property matters."""
+
+    def _pair(self, tm: ActingWebTokenManager) -> tuple[dict[str, Any], dict[str, Any]]:
+        first = _login(tm)
+        second = tm.refresh_access_token(first["refresh_token"], CLIENT)
+        assert second
+        return first, second
+
+    def test_rotation(self, env: tuple[ActingWebTokenManager, MemoryStore]) -> None:
+        tm, store = env
+        first = _login(tm)
+        store.delete_faults.add((ACTOR, TOKENS, first["access_token"]))
+        assert tm.refresh_access_token(first["refresh_token"], CLIENT)
+        assert tm.validate_access_token(first["access_token"]) is None
+
+    def test_revoke_access_token(
+        self, env: tuple[ActingWebTokenManager, MemoryStore]
+    ) -> None:
+        tm, store = env
+        _first, second = self._pair(tm)
+        store.delete_faults.add((ACTOR, TOKENS, second["access_token"]))
+        with contextlib.suppress(tm_mod.TokenStoreUnavailable):
+            tm.revoke_token(second["access_token"])
+        assert tm.validate_access_token(second["access_token"]) is None
+
+    def test_revoke_refresh_token(
+        self, env: tuple[ActingWebTokenManager, MemoryStore]
+    ) -> None:
+        tm, store = env
+        _first, second = self._pair(tm)
+        store.delete_faults.add((ACTOR, REFRESH, second["refresh_token"]))
+        store.delete_faults.add((ACTOR, TOKENS, second["access_token"]))
+        with contextlib.suppress(tm_mod.TokenStoreUnavailable):
+            tm.revoke_token(second["refresh_token"])
+        assert tm.validate_access_token(second["access_token"]) is None
+        assert tm.refresh_access_token(second["refresh_token"], CLIENT) is None
+
+    def test_client_deletion(
+        self, env: tuple[ActingWebTokenManager, MemoryStore]
+    ) -> None:
+        tm, store = env
+        _first, second = self._pair(tm)
+        store.delete_faults.add((ACTOR, TOKENS, second["access_token"]))
+        store.delete_faults.add((ACTOR, REFRESH, second["refresh_token"]))
+        with contextlib.suppress(tm_mod.TokenStoreUnavailable):
+            tm.revoke_client_tokens(ACTOR, CLIENT)
+        assert tm.validate_access_token(second["access_token"]) is None
+        assert tm.refresh_access_token(second["refresh_token"], CLIENT) is None

@@ -79,11 +79,16 @@ SECURITY
   than report the chain revoked. A store fault while an MCP refresh token or
   an authorization code is being consumed answers ``server_error`` and
   leaves it usable; it is never read as "already used" (the SPA refresh
-  endpoint still answers 401 on such a fault). A revocation that faults
-  leaves the token in place, and ``/oauth/logout`` answers **503** with
-  ``Retry-After: 5`` and clears no cookies, so the client logs out again
-  with the same token and the revocation completes; until then the token
-  stays valid. Revoking an MCP token
+  endpoint still answers 401 on such a fault). Revocation removes a
+  token's index row first, unconditionally, so a token being revoked is
+  unusable on every worker at once even when the store then faults; what a
+  fault leaves behind is cleanup (the actor row, reaped by TTL or the
+  purge). ``/oauth/logout`` answers such a fault with **503** and
+  ``Retry-After: 5``, clearing no cookies, so the client logs out again and
+  confirms. The one case a token survives a fault is when its **chain**
+  could not be revoked: the presented token is then kept as the handle to
+  the chain and stays valid until the client logs out again with it, which
+  revokes the chain. Revoking an MCP token
   (``/oauth/logout`` with an MCP bearer token, or ``revoke_token``) revokes
   every token in its chain, consumed ones included, so a consumed refresh
   token cannot rotate after its successor was revoked. **Behavior change:**

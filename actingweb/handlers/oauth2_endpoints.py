@@ -920,8 +920,10 @@ class OAuth2EndpointsHandler(BaseHandler):
                         "redirect_url": f"{self.config.proto}{self.config.fqdn}/",
                     }
 
-                # Clear MCP token cache if the token was cached there
-                if token and response.get("action") == "success":
+                # Clear MCP token cache if the token was cached there. On a
+                # retry too: the store fault may have hit before revoke_token
+                # could evict, and a cached token must not outlive a logout.
+                if token and response.get("action") in ("success", "retry"):
                     try:
                         from .mcp import MCPHandler
 
@@ -1074,11 +1076,12 @@ class OAuth2EndpointsHandler(BaseHandler):
         """Revoke an MCP access token and its refresh-token chain on logout.
 
         On success the endpoint answers as it always has (success, cookies
-        cleared). On a token store fault the token is left in the store (see
-        ``ActingWebTokenManager.revoke_token``) and the action is ``retry``,
-        which :meth:`_handle_logout_request` answers with 503 and
-        ``Retry-After``, so the client presents the token again and the
-        revocation completes.
+        cleared). On a token store fault the action is ``retry``, which
+        :meth:`_handle_logout_request` answers with 503 and ``Retry-After``,
+        so the client presents the token again. What the retry finds depends
+        on where the fault hit (see ``ActingWebTokenManager.revoke_token``):
+        a chain that could not be revoked is revoked then; a token whose row
+        delete was unconfirmed is already dead and the retry confirms it.
         """
         from ..oauth2_server.token_manager import TokenStoreUnavailable
 

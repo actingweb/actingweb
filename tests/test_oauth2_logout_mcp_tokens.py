@@ -83,6 +83,32 @@ def test_logout_after_a_revocation_fault_can_be_retried() -> None:
     assert second["refresh_token"] not in store.names(ACTOR, REFRESH)
 
 
+def test_a_lookup_fault_on_logout_still_evicts_the_cached_token() -> None:
+    """When the fault hits before revoke_token can evict, the logout handler
+    clears this process's cache itself; a cached token must not outlive a
+    logout that answered 503."""
+    from actingweb.constants import ACCESS_TOKEN_INDEX_BUCKET
+    from actingweb.handlers import mcp as mcp_mod
+
+    server, store, _first, second = _rotated()
+    mcp_mod._token_cache[second["access_token"]] = {"actor_id": ACTOR}
+    store.faulty_buckets.add(ACCESS_TOKEN_INDEX_BUCKET)
+    try:
+        handler = make_handler(
+            server,
+            headers={
+                "Authorization": f"Bearer {second['access_token']}",
+                "Accept": "application/json",
+            },
+        )
+        out = handler._handle_logout_request("POST")
+        assert out["error"] == "temporarily_unavailable"
+        assert second["access_token"] not in mcp_mod._token_cache
+    finally:
+        store.faulty_buckets.clear()
+        mcp_mod._token_cache.pop(second["access_token"], None)
+
+
 def test_a_session_token_still_goes_to_the_session_store() -> None:
     server, _store, _first, _second = _rotated()
     session_manager = mock.MagicMock()

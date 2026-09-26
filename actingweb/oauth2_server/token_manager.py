@@ -501,12 +501,19 @@ class ActingWebTokenManager:
         rotation. A pre-chain refresh token revokes itself. Cache eviction is
         per-process (see ``mcp/invalidation.py``).
 
-        On a fault nothing is reported as revoked: when the chain cannot be
-        revoked, or a delete of the presented token (or its linked access
-        token) cannot be confirmed, :class:`TokenStoreUnavailable` is raised
-        and the presented token's row is left in place, so presenting it
-        again retries the whole revocation. This process's cache forgets it
-        either way.
+        On a fault nothing is reported as revoked; what is left behind
+        depends on where the fault hit:
+
+        - the chain could not be revoked: the presented token is kept whole,
+          as the handle to the rest of its chain, and stays valid until it is
+          presented again, which retries the whole revocation;
+        - a single row's delete could not be confirmed: its index row is
+          already gone, so the token is dead on every worker; the leftover
+          actor row is cleanup, and presenting the token again only confirms
+          ("unknown", answered as revoked).
+
+        Either way :class:`TokenStoreUnavailable` is raised and this
+        process's cache forgets the token.
 
         Args:
             token: Token to revoke
@@ -515,7 +522,7 @@ class ActingWebTokenManager:
         Raises:
             TokenStoreUnavailable: the token could not be looked up, its
                 chain could not be revoked, or a delete could not be
-                confirmed. The presented token is kept for a retry.
+                confirmed (see above for what each leaves behind).
 
         Returns:
             True if token was revoked successfully
@@ -580,11 +587,11 @@ class ActingWebTokenManager:
                             evict_caches_for_token(access_token)
                         evict_caches_for_actor(actor_id)
                         raise
-                # The linked access token first, the presented token last: if
-                # either delete is unconfirmed the presented token is still
-                # there to retry with.
+                # Both the linked access token and the presented token are
+                # removed whatever the other's outcome: each delete drops the
+                # index row first, so both are dead even when a row's delete
+                # is unconfirmed.
                 access_gone = True
-                gone = False
                 if access_token and actor_id:
                     access_gone = self._remove_access_token(
                         access_token,
@@ -592,12 +599,11 @@ class ActingWebTokenManager:
                         google_token_key=refresh_data.get("google_token_key"),
                     )
                     evict_caches_for_token(access_token)
-                if access_gone:
-                    if actor_id:
-                        gone = self._remove_refresh_token_row(actor_id, token)
-                    else:
-                        self._remove_refresh_token(token)
-                        gone = True
+                if actor_id:
+                    gone = self._remove_refresh_token_row(actor_id, token)
+                else:
+                    self._remove_refresh_token(token)
+                    gone = True
                 # The actor's cached identity should not outlive its
                 # revocation.
                 if actor_id:
@@ -1224,32 +1230,37 @@ class ActingWebTokenManager:
         confirmed (:func:`actingweb.single_use.delete_confirmed`). Without it,
         the token is looked up through the global index first.
 
+        The index row goes first, unconditionally: every lookup resolves a
+        token through it, so once it is gone the token is unusable on every
+        worker, whatever happens to the rows below. The actor row's delete
+        is then confirmed; when it is not, the token is already dead and the
+        leftover row is cleanup (reaped by TTL or the PostgreSQL purge), but
+        the caller is told so it can report the fault.
+
         Returns:
-            With ``actor_id``: whether the actor row is confirmed gone. An
-            unconfirmed delete is logged at ERROR and leaves the index and
-            provider rows, so the token stays reachable for a retry. Without
-            it: False only when the removal raised.
+            With ``actor_id``: whether the actor row is confirmed gone (an
+            unconfirmed delete is logged at ERROR). Without it: False only
+            when the removal raised.
         """
         if actor_id:
             from .. import attribute
             from ..single_use import delete_confirmed
 
-            gone = delete_confirmed(self.config, actor_id, self.tokens_bucket, token)
-            if not gone:
-                # Keep the index and provider rows: the token must stay
-                # reachable so presenting it again retries the removal.
-                logger.error(
-                    f"Could not confirm removal of access token "
-                    f"{_mask_token(token)} for actor {actor_id}"
-                )
-                return False
-            if google_token_key:
-                self._remove_google_token_data(actor_id, google_token_key)
             attribute.Attributes(
                 actor_id=OAUTH2_SYSTEM_ACTOR,
                 bucket=ACCESS_TOKEN_INDEX_BUCKET,
                 config=self.config,
             ).delete_attr(name=token)
+            if google_token_key:
+                self._remove_google_token_data(actor_id, google_token_key)
+            gone = delete_confirmed(self.config, actor_id, self.tokens_bucket, token)
+            if not gone:
+                logger.error(
+                    f"Could not confirm removal of access token "
+                    f"{_mask_token(token)} for actor {actor_id}; its index row is "
+                    f"gone, so it no longer validates"
+                )
+                return False
             logger.debug(
                 f"Removed access token {_mask_token(token)} from actor {actor_id}"
             )
@@ -1340,28 +1351,29 @@ class ActingWebTokenManager:
     def _remove_refresh_token_row(self, actor_id: str, token: str) -> bool:
         """Remove a refresh token whose owner is known, confirming the delete.
 
-        Returns whether the actor row is confirmed gone. The index row is
-        removed only then: while the row may still be there, the token must
-        stay reachable so presenting it again retries the removal.
+        The index row goes first, unconditionally, so the token cannot be
+        presented again anywhere (see :meth:`_remove_access_token`). Returns
+        whether the actor row is confirmed gone; when not, the leftover row
+        is cleanup and the caller reports the fault.
         """
         from .. import attribute
         from ..single_use import delete_confirmed
 
+        attribute.Attributes(
+            actor_id=OAUTH2_SYSTEM_ACTOR,
+            bucket=REFRESH_TOKEN_INDEX_BUCKET,
+            config=self.config,
+        ).delete_attr(name=token)
         gone = delete_confirmed(
             self.config, actor_id, self.refresh_tokens_bucket, token
         )
         if not gone:
             logger.error(
                 f"Could not confirm removal of refresh token "
-                f"{_mask_token(token)} for actor {actor_id}"
+                f"{_mask_token(token)} for actor {actor_id}; its index row is "
+                f"gone, so it no longer rotates"
             )
-            return False
-        attribute.Attributes(
-            actor_id=OAUTH2_SYSTEM_ACTOR,
-            bucket=REFRESH_TOKEN_INDEX_BUCKET,
-            config=self.config,
-        ).delete_attr(name=token)
-        return True
+        return gone
 
     def _remove_refresh_token(self, token: str) -> None:
         """Remove refresh token."""

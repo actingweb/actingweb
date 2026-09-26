@@ -85,10 +85,12 @@ That applies to ``ActingWebTokenManager.revoke_token`` and, from 3.15, to
 ``/oauth/logout`` called with an MCP bearer token, which before 3.15 left
 the token live. ``/oauth/logout`` with an SPA session token is unchanged.
 If the store fails during the revocation, logout answers **503** with
-``Retry-After: 5`` and clears no cookies. The token is kept, and stays
-valid, until the client logs out again with it, which completes the
-revocation; a client should retry a 503 logout. ``revoke_token`` raises
-``TokenStoreUnavailable`` in that case.
+``Retry-After: 5`` and clears no cookies, and ``revoke_token`` raises
+``TokenStoreUnavailable``; a client should retry a 503 logout. The token's
+index row is removed first, so the token is already unusable everywhere and
+the retry confirms it. The exception is a fault while revoking the token's
+*chain*: the presented token is then kept as the handle to the chain, and
+stays valid until the retry, which revokes the chain.
 
 A client that keeps its first refresh token will work for one hour after
 its first refresh, then lose its session. The fix is in the client: store

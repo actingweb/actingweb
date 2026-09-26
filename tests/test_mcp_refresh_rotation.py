@@ -636,6 +636,13 @@ def test_unconfirmed_delete_of_a_chainless_token_is_not_reported_revoked(
     with pytest.raises(tm_mod.TokenStoreUnavailable):
         tm.revoke_token(legacy)
     assert legacy in store.names(ACTOR, TOKENS)
+    # Still reachable through its index row, so presenting it again retries.
+    assert index_actor(store, ACCESS_TOKEN_INDEX_BUCKET, legacy) == ACTOR
+
+    store.delete_faults.clear()
+    assert tm.revoke_token(legacy) is True
+    assert legacy not in store.names(ACTOR, TOKENS)
+    assert index_actor(store, ACCESS_TOKEN_INDEX_BUCKET, legacy) is None
 
 
 def test_a_chain_revoked_concurrently_is_not_a_fault(

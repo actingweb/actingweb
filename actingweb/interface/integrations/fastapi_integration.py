@@ -34,21 +34,30 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def _logout_message(handler_response: Any) -> str:
-    """The message for the web UI's logout response.
+def _logout_outcome(handler_response: Any) -> tuple[bool, str]:
+    """``(success, message)`` for the web UI's logout response.
 
-    "Logged out successfully" unless the logout handler reported something
-    else (a revocation that failed), which is passed through so the caller
-    does not claim a revocation that did not happen.
+    The web UI branch builds its own response, so it reads the logout
+    handler's: a status of 400 or more, or a body with ``error``, is a
+    failure (the handler's message, or its error description); a success
+    whose message is not the plain one (a revocation that failed) passes
+    that message through. Anything unreadable is treated as success, as
+    this branch always did.
     """
-    default = "Logged out successfully"
+    default = (True, "Logged out successfully")
     try:
         body = json.loads(bytes(handler_response.body))
     except Exception:
         return default
-    message = body.get("message") if isinstance(body, dict) else None
+    if not isinstance(body, dict):
+        return default
+    message = body.get("message")
+    status = getattr(handler_response, "status_code", 200) or 200
+    if status >= 400 or body.get("error"):
+        text = message or body.get("error_description") or "Logout failed"
+        return (False, str(text))
     if isinstance(message, str) and message and message != "Successfully logged out":
-        return message
+        return (True, message)
     return default
 
 
@@ -788,10 +797,11 @@ class FastAPIIntegration(BaseActingWebIntegration):
                 handler_response = await self._handle_oauth2_endpoint(request, "logout")
 
                 if is_ajax:
+                    success, message = _logout_outcome(handler_response)
                     response = JSONResponse(
                         {
-                            "success": True,
-                            "message": _logout_message(handler_response),
+                            "success": success,
+                            "message": message,
                             "redirect_url": "/",
                         },
                         headers=get_spa_cors_headers(),

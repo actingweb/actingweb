@@ -1225,9 +1225,10 @@ class ActingWebTokenManager:
         the token is looked up through the global index first.
 
         Returns:
-            With ``actor_id``: whether the actor row is confirmed gone (an
-            unconfirmed delete is logged at ERROR). Without it: False only
-            when the removal raised.
+            With ``actor_id``: whether the actor row is confirmed gone. An
+            unconfirmed delete is logged at ERROR and leaves the index and
+            provider rows, so the token stays reachable for a retry. Without
+            it: False only when the removal raised.
         """
         if actor_id:
             from .. import attribute
@@ -1235,10 +1236,13 @@ class ActingWebTokenManager:
 
             gone = delete_confirmed(self.config, actor_id, self.tokens_bucket, token)
             if not gone:
+                # Keep the index and provider rows: the token must stay
+                # reachable so presenting it again retries the removal.
                 logger.error(
                     f"Could not confirm removal of access token "
                     f"{_mask_token(token)} for actor {actor_id}"
                 )
+                return False
             if google_token_key:
                 self._remove_google_token_data(actor_id, google_token_key)
             attribute.Attributes(
@@ -1249,7 +1253,7 @@ class ActingWebTokenManager:
             logger.debug(
                 f"Removed access token {_mask_token(token)} from actor {actor_id}"
             )
-            return gone
+            return True
         try:
             # First load token data to get Google token key
             token_data = self._load_access_token(token)
@@ -1336,8 +1340,9 @@ class ActingWebTokenManager:
     def _remove_refresh_token_row(self, actor_id: str, token: str) -> bool:
         """Remove a refresh token whose owner is known, confirming the delete.
 
-        Returns whether the actor row is confirmed gone; the index row is
-        removed either way (a stale index row only resolves to "absent").
+        Returns whether the actor row is confirmed gone. The index row is
+        removed only then: while the row may still be there, the token must
+        stay reachable so presenting it again retries the removal.
         """
         from .. import attribute
         from ..single_use import delete_confirmed
@@ -1350,12 +1355,13 @@ class ActingWebTokenManager:
                 f"Could not confirm removal of refresh token "
                 f"{_mask_token(token)} for actor {actor_id}"
             )
+            return False
         attribute.Attributes(
             actor_id=OAUTH2_SYSTEM_ACTOR,
             bucket=REFRESH_TOKEN_INDEX_BUCKET,
             config=self.config,
         ).delete_attr(name=token)
-        return gone
+        return True
 
     def _remove_refresh_token(self, token: str) -> None:
         """Remove refresh token."""
@@ -1521,10 +1527,17 @@ class ActingWebTokenManager:
         unreadable: list[str] = []
         unconfirmed = 0
 
+        from ..mcp.invalidation import evict_caches_for_token
+
         def remove_access(name: str, data: dict[str, Any]) -> bool:
-            return self._remove_access_token(
+            removed = self._remove_access_token(
                 name, actor_id=actor_id, google_token_key=data.get("google_token_key")
             )
+            # Evict either way: a token of a deleted client must not keep
+            # authenticating from this process's cache (per process; see
+            # revoke_token).
+            evict_caches_for_token(name)
+            return removed
 
         def remove_refresh(name: str, _data: dict[str, Any]) -> bool:
             return self._remove_refresh_token_row(actor_id, name)

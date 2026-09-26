@@ -948,6 +948,20 @@ class OAuth2EndpointsHandler(BaseHandler):
                     "redirect_url": f"{self.config.proto}{self.config.fqdn}/",
                 }
 
+            if response["action"] == "retry":
+                # An MCP token whose revocation hit a store fault: it is kept
+                # so presenting it again retries. A 200 would tell the client
+                # it is done, so answer 503 with Retry-After and clear no
+                # cookies (the client needs its token for the retry).
+                self.response.headers["Retry-After"] = "5"
+                self.response.set_status(503, "Service Unavailable")
+                return {
+                    "success": False,
+                    "error": "temporarily_unavailable",
+                    "message": response["message"],
+                    "method": method,
+                }
+
             if response["action"] == "success":
                 # Clear cookies
                 self.response.set_status(200)
@@ -1059,24 +1073,27 @@ class OAuth2EndpointsHandler(BaseHandler):
     def _handle_mcp_token_logout(self, token: str) -> dict[str, Any]:
         """Revoke an MCP access token and its refresh-token chain on logout.
 
-        The endpoint's contract is unchanged: it answers success so the
-        cookies are cleared. A token store fault is logged at ERROR and
-        reported in the message. The token is then left in the store (see
-        ``ActingWebTokenManager.revoke_token``), so logging out again with it
-        retries the revocation.
+        On success the endpoint answers as it always has (success, cookies
+        cleared). On a token store fault the token is left in the store (see
+        ``ActingWebTokenManager.revoke_token``) and the action is ``retry``,
+        which :meth:`_handle_logout_request` answers with 503 and
+        ``Retry-After``, so the client presents the token again and the
+        revocation completes.
         """
         from ..oauth2_server.token_manager import TokenStoreUnavailable
 
-        message = "Successfully logged out"
         try:
             if not self.oauth2_server.token_manager.revoke_token(token):
                 logger.debug("Logout with an unknown or expired MCP token")
         except TokenStoreUnavailable as e:
             logger.error(f"MCP token revocation on logout failed: {e}")
-            message = "Logged out (token revocation failed)"
+            return {
+                "action": "retry",
+                "message": "Token store temporarily unavailable; retry the logout",
+            }
         return {
             "action": "success",
-            "message": message,
+            "message": "Successfully logged out",
             "clear_cookies": ["oauth_token", "oauth_refresh_token", "session_id"],
             "redirect_url": f"{self.config.proto}{self.config.fqdn}/",
         }

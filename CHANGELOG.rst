@@ -79,9 +79,11 @@ SECURITY
   than report the chain revoked. A store fault while an MCP refresh token or
   an authorization code is being consumed answers ``server_error`` and
   leaves it usable; it is never read as "already used" (the SPA refresh
-  endpoint still answers 401 on such a fault). A revocation that faults is
-  reported as failed and leaves the token in place, so presenting it again
-  (another ``/oauth/logout``) retries the revocation. Revoking an MCP token
+  endpoint still answers 401 on such a fault). A revocation that faults
+  leaves the token in place, and ``/oauth/logout`` answers **503** with
+  ``Retry-After: 5`` and clears no cookies, so the client logs out again
+  with the same token and the revocation completes; until then the token
+  stays valid. Revoking an MCP token
   (``/oauth/logout`` with an MCP bearer token, or ``revoke_token``) revokes
   every token in its chain, consumed ones included, so a consumed refresh
   token cannot rotate after its successor was revoked. **Behavior change:**
@@ -232,7 +234,9 @@ FIXED
   nothing and logged "Revoked 0 tokens". It now raises
   ``TokenStoreUnavailable`` after revoking what it could read, and counts
   only deletes it could confirm (DynamoDB reports a failed delete as a
-  success). ``delete_client`` still deletes the client, which is what
+  success). Each revoked access token is also dropped from this process's
+  MCP token cache (other workers keep theirs up to 300 seconds).
+  ``delete_client`` still deletes the client, which is what
   disables its refresh tokens, and logs at ERROR that unrevoked access
   tokens expire within an hour. **Behavior change:** it confirms the client
   row and its index row are gone, and answers ``False`` when neither is,

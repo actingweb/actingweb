@@ -56,15 +56,24 @@ def test_logout_revokes_the_mcp_token_and_its_chain() -> None:
 
 
 def test_logout_after_a_revocation_fault_can_be_retried() -> None:
-    """A fault is reported, and the token is kept so that logging out again
-    with it revokes the chain, the live refresh token included."""
+    """A fault answers 503 with Retry-After and keeps the token, so logging
+    out again with it revokes the chain, the live refresh token included."""
     server, store, _first, second = _rotated()
     store.chain_delete_fault = "zero"
 
-    out = _logout(server, second["access_token"])
+    handler = make_handler(
+        server,
+        headers={
+            "Authorization": f"Bearer {second['access_token']}",
+            "Accept": "application/json",
+        },
+    )
+    out = handler._handle_logout_request("POST")
 
-    assert out["success"] is True
-    assert out["message"] == "Logged out (token revocation failed)"
+    assert out["success"] is False
+    assert out["error"] == "temporarily_unavailable"
+    assert handler.response.status_code == 503
+    assert handler.response.headers["Retry-After"] == "5"
     assert second["refresh_token"] in store.names(ACTOR, REFRESH)
 
     store.chain_delete_fault = None
@@ -95,16 +104,135 @@ def test_sdk_logout_does_not_claim_success_on_a_fault() -> None:
     assert out["message"] == "Logged out (with errors)"
 
 
-def test_fastapi_cookie_logout_passes_a_failure_message_through() -> None:
-    """The web UI branch of the FastAPI logout route builds its own response;
-    it must not say "Logged out successfully" over a failed revocation."""
+def _aw_app() -> Any:
+    from actingweb.interface import ActingWebApp
+
+    return ActingWebApp(
+        aw_type="urn:actingweb:test",
+        database="dynamodb",
+        fqdn="test.example.com",
+        proto="https://",
+    ).with_web_ui(enable=True)
+
+
+def _fastapi_client() -> Any:
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    app = FastAPI()
+    _aw_app().integrate_fastapi(app)
+    return TestClient(app)
+
+
+def _flask_client() -> Any:
+    from flask import Flask
+
+    app = Flask(__name__)
+    _aw_app().integrate_flask(app)
+    return app.test_client()
+
+
+RETRY = {
+    "action": "retry",
+    "message": "Token store temporarily unavailable; retry the logout",
+}
+BEARER = {"Authorization": "Bearer aw_route_token_0123456789"}
+
+
+def _patched_logout(outcome: dict[str, Any]) -> Any:
+    return mock.patch(
+        "actingweb.handlers.oauth2_endpoints.OAuth2EndpointsHandler."
+        "_handle_provider_token_logout",
+        return_value=outcome,
+    )
+
+
+def test_faulted_bearer_logout_is_503_with_retry_after_on_fastapi() -> None:
+    """A 200 would tell the client it is done; the token was kept for a
+    retry, so the route says to retry."""
+    with _patched_logout(RETRY):
+        resp = _fastapi_client().post("/oauth/logout", headers=BEARER)
+    assert resp.status_code == 503
+    assert resp.headers["Retry-After"] == "5"
+    assert resp.json()["error"] == "temporarily_unavailable"
+    assert "set-cookie" not in resp.headers
+
+
+def test_faulted_bearer_logout_is_503_with_retry_after_on_flask() -> None:
+    with _patched_logout(RETRY):
+        resp = _flask_client().post("/oauth/logout", headers=BEARER)
+    assert resp.status_code == 503
+    assert resp.headers["Retry-After"] == "5"
+    assert resp.get_json()["error"] == "temporarily_unavailable"
+
+
+def test_bearer_logout_success_is_still_200_on_fastapi() -> None:
+    ok = {
+        "action": "success",
+        "message": "Successfully logged out",
+        "clear_cookies": ["oauth_token"],
+        "redirect_url": "https://test.example.com/",
+    }
+    with _patched_logout(ok):
+        resp = _fastapi_client().post("/oauth/logout", headers=BEARER)
+    assert resp.status_code == 200
+    assert resp.json()["success"] is True
+
+
+def test_fastapi_cookie_logout_reports_a_failed_revocation() -> None:
+    """The web UI branch builds its own response from the handler's."""
+    failed = {
+        "action": "success",
+        "message": "Logged out (token revocation failed)",
+        "clear_cookies": ["oauth_token"],
+        "redirect_url": "https://test.example.com/",
+    }
+    client = _fastapi_client()
+    client.cookies.set("oauth_token", "0123456789abcdef")
+    with _patched_logout(failed):
+        resp = client.post(
+            "/oauth/logout", headers={"Content-Type": "application/json"}
+        )
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "success": True,
+        "message": "Logged out (token revocation failed)",
+        "redirect_url": "/",
+    }
+
+
+def test_fastapi_cookie_logout_reports_a_handler_failure() -> None:
+    client = _fastapi_client()
+    client.cookies.set("oauth_token", "0123456789abcdef")
+    with mock.patch(
+        "actingweb.handlers.oauth2_endpoints.OAuth2EndpointsHandler."
+        "_handle_logout_request",
+        autospec=True,
+        side_effect=lambda self, method="GET": self.error_response(
+            500, "Internal server error during logout"
+        ),
+    ):
+        resp = client.post(
+            "/oauth/logout", headers={"Content-Type": "application/json"}
+        )
+    body = resp.json()
+    assert body["success"] is False
+    assert body["message"] != "Logged out successfully"
+
+
+def test_logout_outcome_helper() -> None:
     from fastapi.responses import JSONResponse
 
-    from actingweb.interface.integrations.fastapi_integration import _logout_message
+    from actingweb.interface.integrations.fastapi_integration import _logout_outcome
 
-    failed = JSONResponse({"message": "Logged out (token revocation failed)"})
-    ok = JSONResponse({"message": "Successfully logged out"})
-
-    assert _logout_message(failed) == "Logged out (token revocation failed)"
-    assert _logout_message(ok) == "Logged out successfully"
-    assert _logout_message(object()) == "Logged out successfully"
+    assert _logout_outcome(
+        JSONResponse({"message": "Logged out (token revocation failed)"})
+    ) == (True, "Logged out (token revocation failed)")
+    assert _logout_outcome(JSONResponse({"message": "Successfully logged out"})) == (
+        True,
+        "Logged out successfully",
+    )
+    assert _logout_outcome(
+        JSONResponse({"error": "server_error", "error_description": "x"}, 500)
+    ) == (False, "x")
+    assert _logout_outcome(object()) == (True, "Logged out successfully")

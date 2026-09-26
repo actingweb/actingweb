@@ -316,3 +316,21 @@ def test_revoke_client_tokens_counts_a_raising_delete_and_goes_on() -> None:
     finally:
         tm._remove_access_token = real  # type: ignore[method-assign]
     assert tokens["refresh_token"] not in store.names("a1", "mcp_refresh_tokens")
+
+
+def test_revoke_client_tokens_evicts_the_access_tokens_from_the_cache() -> None:
+    """A deleted client's access token must not keep authenticating from
+    this process's MCP token cache."""
+    from actingweb.handlers import mcp as mcp_mod
+
+    config, _store = make_config()
+    tm = ActingWebTokenManager(config)
+    code = tm.create_authorization_code("a1", "mcp_client_x", {"access_token": "g"})
+    tokens = tm.exchange_authorization_code(code, "mcp_client_x")
+    assert tokens
+    mcp_mod._token_cache[tokens["access_token"]] = {"actor_id": "a1"}
+    try:
+        assert tm.revoke_client_tokens("a1", "mcp_client_x") == 2
+        assert tokens["access_token"] not in mcp_mod._token_cache
+    finally:
+        mcp_mod._token_cache.pop(tokens["access_token"], None)

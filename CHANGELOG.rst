@@ -76,9 +76,12 @@ SECURITY
   first rotation and is covered from then on. If the store cannot complete
   a theft revocation, the grant answers ``server_error`` and leaves the
   replayed token in place for the next presentation to retry from, rather
-  than report the chain revoked. A store fault while a refresh token or an
-  authorization code is being consumed answers ``server_error`` and leaves
-  it usable; it is never read as "already used". Revoking an MCP token
+  than report the chain revoked. A store fault while an MCP refresh token or
+  an authorization code is being consumed answers ``server_error`` and
+  leaves it usable; it is never read as "already used" (the SPA refresh
+  endpoint still answers 401 on such a fault). A revocation that faults is
+  reported as failed and leaves the token in place, so presenting it again
+  (another ``/oauth/logout``) retries the revocation. Revoking an MCP token
   (``/oauth/logout`` with an MCP bearer token, or ``revoke_token``) revokes
   every token in its chain, consumed ones included, so a consumed refresh
   token cannot rotate after its successor was revoked. **Behavior change:**

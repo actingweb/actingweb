@@ -84,6 +84,9 @@ refresh tokens that could otherwise still rotate inside the 60 seconds.
 That applies to ``ActingWebTokenManager.revoke_token`` and, from 3.15, to
 ``/oauth/logout`` called with an MCP bearer token, which before 3.15 left
 the token live. ``/oauth/logout`` with an SPA session token is unchanged.
+If the store fails during the revocation, logout answers "Logged out
+(token revocation failed)" and keeps the token, so logging out again with it
+retries; ``revoke_token`` raises ``TokenStoreUnavailable``.
 
 A client that keeps its first refresh token will work for one hour after
 its first refresh, then lose its session. The fix is in the client: store

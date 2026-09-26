@@ -501,16 +501,21 @@ class ActingWebTokenManager:
         rotation. A pre-chain refresh token revokes itself. Cache eviction is
         per-process (see ``mcp/invalidation.py``).
 
-        The presented token is removed even when revoking its chain faults.
+        On a fault nothing is reported as revoked: when the chain cannot be
+        revoked, or a delete of the presented token (or its linked access
+        token) cannot be confirmed, :class:`TokenStoreUnavailable` is raised
+        and the presented token's row is left in place, so presenting it
+        again retries the whole revocation. This process's cache forgets it
+        either way.
 
         Args:
             token: Token to revoke
             token_type_hint: "access_token" or "refresh_token"
 
         Raises:
-            TokenStoreUnavailable: the token could not be looked up, or its
-                chain could not be revoked (the presented token itself has
-                been removed).
+            TokenStoreUnavailable: the token could not be looked up, its
+                chain could not be revoked, or a delete could not be
+                confirmed. The presented token is kept for a retry.
 
         Returns:
             True if token was revoked successfully
@@ -526,25 +531,33 @@ class ActingWebTokenManager:
             if token_data:
                 actor_id = token_data.get("actor_id")
                 chain_id = token_data.get("chain_id")
-                try:
-                    if actor_id and chain_id:
+                if actor_id and chain_id:
+                    try:
                         self._revoke_chain(
                             actor_id, chain_id, anchor=(self.tokens_bucket, token)
                         )
-                finally:
-                    # The presented token goes even when its chain could not
-                    # be revoked; the fault still propagates. With the owner
-                    # known, the delete skips the index read (which a fault
-                    # would fail) and is confirmed.
-                    if actor_id:
-                        self._remove_access_token(
-                            token,
-                            actor_id=actor_id,
-                            google_token_key=token_data.get("google_token_key"),
-                        )
-                    else:
-                        self._remove_access_token(token)
-                    evict_caches_for_token(token)
+                    except TokenStoreUnavailable:
+                        # Keep the row: it is the anchor the next
+                        # presentation retries the revocation from.
+                        evict_caches_for_token(token)
+                        raise
+                if actor_id:
+                    # With the owner known the delete skips the index read and
+                    # is confirmed; after a chain revocation it only cleans up
+                    # what the snapshot could not name.
+                    gone = self._remove_access_token(
+                        token,
+                        actor_id=actor_id,
+                        google_token_key=token_data.get("google_token_key"),
+                    )
+                else:
+                    gone = self._remove_access_token(token)
+                evict_caches_for_token(token)
+                if not gone:
+                    raise TokenStoreUnavailable(
+                        f"Could not confirm revocation of access token "
+                        f"{_mask_token(token)}"
+                    )
                 return True
         else:
             # Might be refresh token
@@ -552,33 +565,48 @@ class ActingWebTokenManager:
             if refresh_data:
                 actor_id = refresh_data.get("actor_id")
                 chain_id = refresh_data.get("chain_id")
-                try:
-                    if actor_id and chain_id:
+                access_token = refresh_data.get("access_token")
+                if actor_id and chain_id:
+                    try:
                         self._revoke_chain(
                             actor_id,
                             chain_id,
                             anchor=(self.refresh_tokens_bucket, token),
                         )
-                finally:
-                    # The presented token and its access token go even when
-                    # the chain could not be revoked; the fault still
-                    # propagates.
+                    except TokenStoreUnavailable:
+                        # Keep the row for the retry; forget what this
+                        # process cached.
+                        if access_token:
+                            evict_caches_for_token(access_token)
+                        evict_caches_for_actor(actor_id)
+                        raise
+                # The linked access token first, the presented token last: if
+                # either delete is unconfirmed the presented token is still
+                # there to retry with.
+                access_gone = True
+                gone = False
+                if access_token and actor_id:
+                    access_gone = self._remove_access_token(
+                        access_token,
+                        actor_id=actor_id,
+                        google_token_key=refresh_data.get("google_token_key"),
+                    )
+                    evict_caches_for_token(access_token)
+                if access_gone:
                     if actor_id:
-                        self._remove_refresh_token_row(actor_id, token)
+                        gone = self._remove_refresh_token_row(actor_id, token)
                     else:
                         self._remove_refresh_token(token)
-                    access_token = refresh_data.get("access_token")
-                    if access_token and actor_id:
-                        self._remove_access_token(
-                            access_token,
-                            actor_id=actor_id,
-                            google_token_key=refresh_data.get("google_token_key"),
-                        )
-                        evict_caches_for_token(access_token)
-                    # The actor's cached identity should not outlive its
-                    # revocation.
-                    if actor_id:
-                        evict_caches_for_actor(actor_id)
+                        gone = True
+                # The actor's cached identity should not outlive its
+                # revocation.
+                if actor_id:
+                    evict_caches_for_actor(actor_id)
+                if not access_gone or not gone:
+                    raise TokenStoreUnavailable(
+                        f"Could not confirm revocation of refresh token "
+                        f"{_mask_token(token)}"
+                    )
                 return True
 
         return False
@@ -1493,66 +1521,54 @@ class ActingWebTokenManager:
         unreadable: list[str] = []
         unconfirmed = 0
 
-        try:
-            # Revoke all access tokens for this client
-            access_tokens_data = self._snapshot_bucket(actor_id, self.tokens_bucket)
-            if access_tokens_data is None:
-                unreadable.append(self.tokens_bucket)
-
-            if access_tokens_data:
-                for token_name, token_attr in access_tokens_data.items():
-                    if token_attr and "data" in token_attr:
-                        token_data = token_attr["data"]
-                        if (
-                            isinstance(token_data, dict)
-                            and token_data.get("client_id") == client_id
-                        ):
-                            # Revoke this access token
-                            if not self._remove_access_token(
-                                token_name,
-                                actor_id=actor_id,
-                                google_token_key=token_data.get("google_token_key"),
-                            ):
-                                unconfirmed += 1
-                                continue
-                            revoked_count += 1
-                            logger.debug(
-                                f"Revoked access token {_mask_token(token_name)} for client {client_id}"
-                            )
-
-            # Revoke all refresh tokens for this client
-            refresh_tokens_data = self._snapshot_bucket(
-                actor_id, self.refresh_tokens_bucket
+        def remove_access(name: str, data: dict[str, Any]) -> bool:
+            return self._remove_access_token(
+                name, actor_id=actor_id, google_token_key=data.get("google_token_key")
             )
-            if refresh_tokens_data is None:
-                unreadable.append(self.refresh_tokens_bucket)
 
-            if refresh_tokens_data:
-                for token_name, token_attr in refresh_tokens_data.items():
-                    if token_attr and "data" in token_attr:
-                        token_data = token_attr["data"]
-                        if (
-                            isinstance(token_data, dict)
-                            and token_data.get("client_id") == client_id
-                        ):
-                            # Revoke this refresh token
-                            if not self._remove_refresh_token_row(actor_id, token_name):
-                                unconfirmed += 1
-                                continue
-                            revoked_count += 1
-                            logger.debug(
-                                f"Revoked refresh token {_mask_token(token_name)} for client {client_id}"
-                            )
+        def remove_refresh(name: str, _data: dict[str, Any]) -> bool:
+            return self._remove_refresh_token_row(actor_id, name)
 
-            if revoked_count > 0:
-                logger.info(
-                    f"Revoked {revoked_count} tokens for client {client_id} in actor {actor_id}"
+        for bucket, kind, remove in (
+            (self.tokens_bucket, "access", remove_access),
+            (self.refresh_tokens_bucket, "refresh", remove_refresh),
+        ):
+            rows = self._snapshot_bucket(actor_id, bucket)
+            if rows is None:
+                unreadable.append(bucket)
+                continue
+            for token_name, token_attr in rows.items():
+                token_data = (token_attr or {}).get("data")
+                if not (
+                    isinstance(token_data, dict)
+                    and token_data.get("client_id") == client_id
+                ):
+                    continue
+                # One token's failure is counted, never allowed to stop the
+                # rest or to be swallowed.
+                try:
+                    removed = remove(token_name, token_data)
+                except Exception as e:
+                    logger.error(
+                        f"Error revoking {kind} token {_mask_token(token_name)} "
+                        f"for client {client_id}: {e}"
+                    )
+                    removed = False
+                if not removed:
+                    unconfirmed += 1
+                    continue
+                revoked_count += 1
+                logger.debug(
+                    f"Revoked {kind} token {_mask_token(token_name)} for client "
+                    f"{client_id}"
                 )
-            else:
-                logger.debug(f"No tokens found to revoke for client {client_id}")
 
-        except Exception as e:
-            logger.error(f"Error revoking tokens for client {client_id}: {e}")
+        if revoked_count > 0:
+            logger.info(
+                f"Revoked {revoked_count} tokens for client {client_id} in actor {actor_id}"
+            )
+        else:
+            logger.debug(f"No tokens found to revoke for client {client_id}")
 
         if unreadable or unconfirmed:
             problems = [f"could not read {bucket}" for bucket in unreadable]

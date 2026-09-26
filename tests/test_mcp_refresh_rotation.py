@@ -529,8 +529,10 @@ def test_revocation_between_swap_and_mint_is_not_undone(
     env: tuple[ActingWebTokenManager, MemoryStore],
 ) -> None:
     """The consumed row's TTL is written by the swap itself. A revocation
-    that lands right after the swap stays in force: nothing re-creates the
-    consumed row, so no replay inside the grace window can rotate it."""
+    that lands right after the swap is not undone: nothing re-creates the
+    consumed row, so no replay inside the grace window can rotate it. The
+    winning request itself still mints its pair (an accepted residual that
+    needs a transaction to close); this test does not assert on that."""
     tm, store = env
     first = _login(tm)
     config_db = tm.config.DbAttribute.DbAttribute
@@ -566,22 +568,74 @@ def test_consumed_row_ttl_is_set_by_the_swap(
     )
 
 
-def test_revocation_fault_still_removes_the_presented_token_and_evicts(
-    env: tuple[ActingWebTokenManager, MemoryStore],
+@pytest.mark.parametrize("fault", ["zero", "raise", "partial"])
+def test_revocation_fault_keeps_the_presented_token_to_retry_from(
+    env: tuple[ActingWebTokenManager, MemoryStore], fault: str
 ) -> None:
-    """When the chain cannot be revoked, the token that was presented still
-    goes, this process forgets it, and the fault is reported."""
+    """When the chain cannot be revoked, the fault is reported, this process
+    forgets the token, and its row stays: presenting it again revokes the
+    whole chain, the live refresh token included."""
     tm, store = env
     first = _login(tm)
     second = tm.refresh_access_token(first["refresh_token"], CLIENT)
     assert second
     mcp_mod._token_cache[second["access_token"]] = {"actor_id": ACTOR}
 
-    store.chain_delete_fault = "zero"
+    store.chain_delete_fault = fault
     with pytest.raises(tm_mod.TokenStoreUnavailable):
         tm.revoke_token(second["access_token"])
-    assert second["access_token"] not in store.names(ACTOR, TOKENS)
     assert second["access_token"] not in mcp_mod._token_cache
+    assert second["access_token"] in store.names(ACTOR, TOKENS)
+
+    store.chain_delete_fault = None
+    assert tm.revoke_token(second["access_token"])
+    assert second["access_token"] not in store.names(ACTOR, TOKENS)
+    assert second["refresh_token"] not in store.names(ACTOR, REFRESH)
+
+
+def test_refresh_token_revocation_fault_keeps_it_to_retry_from(
+    env: tuple[ActingWebTokenManager, MemoryStore],
+) -> None:
+    tm, store = env
+    first = _login(tm)
+    second = tm.refresh_access_token(first["refresh_token"], CLIENT)
+    assert second
+
+    store.chain_delete_fault = "zero"
+    with pytest.raises(tm_mod.TokenStoreUnavailable):
+        tm.revoke_token(second["refresh_token"])
+    assert second["refresh_token"] in store.names(ACTOR, REFRESH)
+
+    store.chain_delete_fault = None
+    assert tm.revoke_token(second["refresh_token"])
+    assert second["refresh_token"] not in store.names(ACTOR, REFRESH)
+    assert second["access_token"] not in store.names(ACTOR, TOKENS)
+
+
+def test_unconfirmed_delete_of_a_chainless_token_is_not_reported_revoked(
+    env: tuple[ActingWebTokenManager, MemoryStore],
+) -> None:
+    """A pre-3.15 access token has no chain; if its delete cannot be
+    confirmed, revoke_token must not answer True."""
+    tm, store = env
+    legacy = "aw_legacy_access_token_value_0123456789"
+    now = int(time.time())
+    tm._store_access_token(
+        ACTOR,
+        legacy,
+        {
+            "token": legacy,
+            "actor_id": ACTOR,
+            "client_id": CLIENT,
+            "created_at": now,
+            "expires_at": now + 3600,
+        },
+    )
+    store.delete_faults.add((ACTOR, TOKENS, legacy))
+
+    with pytest.raises(tm_mod.TokenStoreUnavailable):
+        tm.revoke_token(legacy)
+    assert legacy in store.names(ACTOR, TOKENS)
 
 
 def test_a_chain_revoked_concurrently_is_not_a_fault(

@@ -278,3 +278,38 @@ def test_concurrent_initializes_do_not_corrupt_the_cache(
         sys.setswitchinterval(old_interval)
     assert errors == []
     assert len(mcp_mod._mcp_client_info_cache) <= 50
+
+
+def test_another_actors_authenticated_initialize_cannot_replace_an_owned_entry() -> (
+    None
+):
+    _initialize(
+        {"Authorization": "Bearer aw_a2", "Mcp-Session-Id": "s-o"},
+        {"name": "Claude"},
+        actor=mock.Mock(id="actor-a"),
+    )
+    _initialize(
+        {"Authorization": "Bearer aw_b2", "Mcp-Session-Id": "s-o"},
+        {"name": "Other"},
+        actor=mock.Mock(id="actor-b"),
+    )
+    rotated = make_mcp_handler(
+        {"Authorization": "Bearer aw_a3", "Mcp-Session-Id": "s-o"}
+    )
+    assert rotated._resolve_live_client_info("actor-a") == {"name": "Claude"}
+
+
+def test_an_entry_in_use_survives_the_size_bound(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(mcp_mod, "MCP_CLIENT_INFO_CACHE_MAX", 3)
+    _initialize({"Mcp-Session-Id": "s-keep"}, {"name": "Claude"})
+    mine = make_mcp_handler(
+        {"Authorization": "Bearer aw_k", "Mcp-Session-Id": "s-keep"}
+    )
+    for i in range(2):
+        _initialize({"Mcp-Session-Id": f"s-{i}"}, {"name": str(i)})
+    assert mine._resolve_live_client_info("actor-k")  # use moves it to the end
+    for i in range(2, 4):
+        _initialize({"Mcp-Session-Id": f"s-{i}"}, {"name": str(i)})
+    assert mine._resolve_live_client_info("actor-k") == {"name": "Claude"}

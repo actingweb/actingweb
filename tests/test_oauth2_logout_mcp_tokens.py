@@ -55,7 +55,9 @@ def test_logout_revokes_the_mcp_token_and_its_chain() -> None:
     )
 
 
-def test_logout_reports_a_revocation_fault_and_still_drops_the_token() -> None:
+def test_logout_after_a_revocation_fault_can_be_retried() -> None:
+    """A fault is reported, and the token is kept so that logging out again
+    with it revokes the chain, the live refresh token included."""
     server, store, _first, second = _rotated()
     store.chain_delete_fault = "zero"
 
@@ -63,7 +65,13 @@ def test_logout_reports_a_revocation_fault_and_still_drops_the_token() -> None:
 
     assert out["success"] is True
     assert out["message"] == "Logged out (token revocation failed)"
+    assert second["refresh_token"] in store.names(ACTOR, REFRESH)
+
+    store.chain_delete_fault = None
+    out = _logout(server, second["access_token"])
+    assert out["message"] == "Successfully logged out"
     assert second["access_token"] not in store.names(ACTOR, TOKENS)
+    assert second["refresh_token"] not in store.names(ACTOR, REFRESH)
 
 
 def test_a_session_token_still_goes_to_the_session_store() -> None:
@@ -85,3 +93,18 @@ def test_sdk_logout_does_not_claim_success_on_a_fault() -> None:
     out = server.handle_logout_request(second["access_token"])
 
     assert out["message"] == "Logged out (with errors)"
+
+
+def test_fastapi_cookie_logout_passes_a_failure_message_through() -> None:
+    """The web UI branch of the FastAPI logout route builds its own response;
+    it must not say "Logged out successfully" over a failed revocation."""
+    from fastapi.responses import JSONResponse
+
+    from actingweb.interface.integrations.fastapi_integration import _logout_message
+
+    failed = JSONResponse({"message": "Logged out (token revocation failed)"})
+    ok = JSONResponse({"message": "Successfully logged out"})
+
+    assert _logout_message(failed) == "Logged out (token revocation failed)"
+    assert _logout_message(ok) == "Logged out successfully"
+    assert _logout_message(object()) == "Logged out successfully"

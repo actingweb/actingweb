@@ -109,6 +109,34 @@ def test_cas_fault_leaves_the_code_exchangeable() -> None:
     assert tm.exchange_authorization_code(code, CLIENT) is not None
 
 
+def test_a_swap_whose_response_was_lost_still_exchanges_the_code() -> None:
+    """The swap landed but the backend answered False (a lost response):
+    the exchange recognises its own write instead of burning the code."""
+    tm, store = _setup()
+    code = tm.create_authorization_code(ACTOR, CLIENT, {"access_token": "g"})
+
+    store.cas_lost_response = True
+    tokens = tm.exchange_authorization_code(code, CLIENT)
+    store.cas_lost_response = False
+
+    assert tokens is not None
+    assert tm.exchange_authorization_code(code, CLIENT) is None
+
+
+def test_a_competing_consume_is_still_refused() -> None:
+    """Another caller's write carries another consume id: still a loss."""
+    tm, store = _setup()
+    code = tm.create_authorization_code(ACTOR, CLIENT, {"access_token": "g"})
+    row = store.bucket(ACTOR, CODES)[code]["data"]
+    loaded = dict(row)
+    row.update({"used": True, "used_at": int(time.time()), "consume_id": "other"})
+
+    consumed, current = tm._consume(ACTOR, CODES, code, loaded, consumed_ttl=None)
+
+    assert consumed is False
+    assert current is not None and current["consume_id"] == "other"
+
+
 def test_code_is_never_logged_in_full(caplog: pytest.LogCaptureFixture) -> None:
     tm, _ = _setup()
     code = tm.create_authorization_code(ACTOR, CLIENT, {"access_token": "g"})

@@ -293,3 +293,26 @@ def test_revoke_client_tokens_counts_only_confirmed_deletes() -> None:
         tm.revoke_client_tokens("a1", "mcp_client_x")
     assert tokens["access_token"] in store.names("a1", "mcp_tokens")
     assert tokens["refresh_token"] not in store.names("a1", "mcp_refresh_tokens")
+
+
+def test_revoke_client_tokens_counts_a_raising_delete_and_goes_on() -> None:
+    """One token whose revocation raises is counted as unconfirmed; the
+    client's other tokens are still revoked and the fault is reported."""
+    config, store = make_config()
+    tm = ActingWebTokenManager(config)
+    code = tm.create_authorization_code("a1", "mcp_client_x", {"access_token": "g"})
+    tokens = tm.exchange_authorization_code(code, "mcp_client_x")
+    assert tokens
+
+    real = tm._remove_access_token
+
+    def raising(*args: Any, **kwargs: Any) -> bool:
+        raise RuntimeError("index row delete failed")
+
+    tm._remove_access_token = raising  # type: ignore[method-assign]
+    try:
+        with pytest.raises(TokenStoreUnavailable, match="could not confirm 1 delete"):
+            tm.revoke_client_tokens("a1", "mcp_client_x")
+    finally:
+        tm._remove_access_token = real  # type: ignore[method-assign]
+    assert tokens["refresh_token"] not in store.names("a1", "mcp_refresh_tokens")

@@ -23,6 +23,8 @@ it:
   ``defer_name`` puts that row last, so it is the one that survives);
 - ``store.cas_fault`` makes ``conditional_update_attr`` answer False without
   writing, the shape both backends give a throttle or a dropped connection;
+  ``store.cas_lost_response`` makes it write and still answer False (the
+  write landed, the response was lost);
   ``conditional_update_attr(ttl_seconds=)`` is recorded in ``store.ttls``;
 - ``store.delete_faults`` names ``(actor_id, bucket, name)`` rows whose
   deletes fail: ``delete_attr_conditional`` answers False and ``delete_attr``
@@ -62,6 +64,8 @@ class MemoryStore:
         self.chain_delete_fault: str | None = None
         # When True, a compare-and-swap answers False without writing.
         self.cas_fault = False
+        # When True, a compare-and-swap writes and then answers False.
+        self.cas_lost_response = False
         # Rows whose deletes fail (the row stays).
         self.delete_faults: set[tuple[str, str, str]] = set()
 
@@ -149,7 +153,7 @@ def make_config() -> tuple[Config, MemoryStore]:
             store.bucket(actor_id, bucket)[name] = {"data": copy.deepcopy(new_data)}
             if ttl_seconds is not None:
                 store.ttls[(actor_id, bucket, name)] = ttl_seconds
-            return True
+            return not store.cas_lost_response
 
         def delete_bucket(self, actor_id: str, bucket: str) -> bool:
             return store.rows.pop(f"{actor_id}:{bucket}", None) is not None

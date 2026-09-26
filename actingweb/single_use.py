@@ -11,6 +11,7 @@ Internal: not part of the public API.
 
 import copy
 import logging
+import secrets
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -89,6 +90,9 @@ def consume_once(
     new_data.update(stamp or {})
     new_data["used"] = True
     new_data["used_at"] = int(time.time())
+    # Identifies this call's write: a swap that landed but whose response
+    # was lost (both backends answer False then) is recognised as ours.
+    new_data["consume_id"] = secrets.token_hex(8)
 
     if store.conditional_update_attr(
         name=name, old_data=old_data, new_data=new_data, ttl_seconds=consumed_ttl
@@ -106,13 +110,27 @@ def consume_once(
     current = row.get("data") if isinstance(row, dict) else None
     if not isinstance(current, dict):
         return (False, None)
+    if current.get("consume_id") == new_data["consume_id"]:
+        logger.warning(
+            f"Compare-and-swap in {bucket} for actor {actor_id} reported failure "
+            f"but its write landed; treating the consume as ours"
+        )
+        return (True, current)
     if not current.get("used"):
         logger.error(
-            f"Compare-and-swap in {bucket} failed with no competing consume; "
-            f"treating it as a store fault"
+            f"Compare-and-swap in {bucket} for actor {actor_id} (record "
+            f"{_mask(name)}) failed with no competing consume; treating it as a "
+            f"store fault"
         )
         raise StoreFault(f"Consume in {bucket} failed without a competing write")
     return (False, current)
+
+
+def _mask(name: str) -> str:
+    """The first eight characters of a token or code name, for logs."""
+    if not name or len(name) < 8:
+        return "***"
+    return f"{name[:8]}..."
 
 
 def delete_confirmed(

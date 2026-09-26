@@ -1061,8 +1061,9 @@ class OAuth2EndpointsHandler(BaseHandler):
 
         The endpoint's contract is unchanged: it answers success so the
         cookies are cleared. A token store fault is logged at ERROR and
-        reported in the message; the presented token itself is removed even
-        then (see ``ActingWebTokenManager.revoke_token``).
+        reported in the message. The token is then left in the store (see
+        ``ActingWebTokenManager.revoke_token``), so logging out again with it
+        retries the revocation.
         """
         from ..oauth2_server.token_manager import TokenStoreUnavailable
 

@@ -34,6 +34,24 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _logout_message(handler_response: Any) -> str:
+    """The message for the web UI's logout response.
+
+    "Logged out successfully" unless the logout handler reported something
+    else (a revocation that failed), which is passed through so the caller
+    does not claim a revocation that did not happen.
+    """
+    default = "Logged out successfully"
+    try:
+        body = json.loads(bytes(handler_response.body))
+    except Exception:
+        return default
+    message = body.get("message") if isinstance(body, dict) else None
+    if isinstance(message, str) and message and message != "Successfully logged out":
+        return message
+    return default
+
+
 # Pydantic Models for Type Safety
 
 
@@ -767,13 +785,13 @@ class FastAPIIntegration(BaseActingWebIntegration):
             if oauth_cookie:
                 self.logger.info("Logout: Clearing web UI session")
                 # Delegate to handler for session token revocation
-                await self._handle_oauth2_endpoint(request, "logout")
+                handler_response = await self._handle_oauth2_endpoint(request, "logout")
 
                 if is_ajax:
                     response = JSONResponse(
                         {
                             "success": True,
-                            "message": "Logged out successfully",
+                            "message": _logout_message(handler_response),
                             "redirect_url": "/",
                         },
                         headers=get_spa_cors_headers(),

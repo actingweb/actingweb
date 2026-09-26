@@ -2179,8 +2179,9 @@ class MCPHandler(BaseHandler):
           rotation, when the new token has no entry of its own;
         - an entry owned by another actor is ignored;
         - an unowned entry (an unauthenticated ``initialize``) is claimed for
-          this actor on first use. From then on no unauthenticated
-          ``initialize`` naming the session can replace it while it is fresh.
+          this actor on first use. From then on no ``initialize`` but its
+          owner's can replace it while it is fresh, and each use moves it to
+          the newest end of the size-bound eviction order.
 
         Residual: once an entry has expired (ten minutes without use), an
         unauthenticated ``initialize`` that knows the session id can seed a
@@ -2895,10 +2896,10 @@ class MCPHandler(BaseHandler):
     ) -> None:
         """Insert into the bounded, age-pruned client-info cache.
 
-        ``owner`` is the actor of an authenticated ``initialize``. An unowned
-        write never replaces a fresh owned entry: an unauthenticated
-        ``initialize`` naming another client's session cannot overwrite what
-        that client's authenticated one recorded.
+        ``owner`` is the actor of an authenticated ``initialize``. A fresh
+        owned entry is replaced only by a write from the same owner: neither
+        an unauthenticated ``initialize`` nor another actor's authenticated
+        one naming that session can overwrite what its owner recorded.
         """
         global _mcp_client_info_cache
 
@@ -2906,9 +2907,9 @@ class MCPHandler(BaseHandler):
         with _mcp_client_info_lock:
             existing = _mcp_client_info_cache.get(key)
             if (
-                owner is None
-                and existing is not None
+                existing is not None
                 and existing.get("owner")
+                and existing.get("owner") != owner
                 and current_time - existing["timestamp"] < 600
             ):
                 return
@@ -2980,6 +2981,10 @@ class MCPHandler(BaseHandler):
                 return None
             data["owner"] = actor_id
             data["timestamp"] = now
+            # Move it to the newest end: the size bound evicts in insertion
+            # order, and an entry in use must not be the first to go.
+            _mcp_client_info_cache.pop(key)
+            _mcp_client_info_cache[key] = data
             return data["client_info"]
 
     @classmethod

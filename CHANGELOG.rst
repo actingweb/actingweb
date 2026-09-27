@@ -247,6 +247,18 @@ FIXED
   row and its index row are gone, and answers ``False`` when neither is,
   instead of reporting success for a client that can still authenticate.
 
+- **An expired SPA refresh token could revoke its whole chain.** The SPA
+  token store checked whether a presented refresh token was already used
+  before checking whether it had expired. A consumed token presented after
+  its own ``expires_at``, but inside the two-day reuse window, therefore
+  reached the reuse ladder, was read as theft, and revoked its chain,
+  logging out the device holding the current token. The store now checks
+  expiry first, as the MCP token store already did: such a token answers
+  401 "Invalid or expired refresh_token" and its row is removed.
+  **Behavior change:** a consumed SPA refresh token replayed after its own
+  expiry is no longer treated as theft; it is refused without revoking the
+  chain.
+
 v3.14.7: September 14, 2026
 ----------------------------
 

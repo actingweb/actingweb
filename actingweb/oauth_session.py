@@ -713,16 +713,17 @@ class OAuth2SessionManager:
 
         token_data = token_attr["data"]
 
-        # Check if already used
-        if token_data.get("used"):
-            return (False, token_data)
-
-        # Check expiration
+        # Expiry before "used", as the MCP store checks: a used row past its
+        # own expiry reads as expired and never reaches the reuse ladder,
+        # where a reuse would be answered as theft and revoke the chain.
         expires_at = token_data.get("expires_at", 0)
         if int(time.time()) > expires_at:
             # Token expired, clean it up
             bucket.delete_attr(name=token)
             return (False, None)
+
+        if token_data.get("used"):
+            return (False, token_data)
 
         # Atomic compare-and-swap, shared with the MCP token manager. The
         # swap also sets the consumed row's TTL to the reuse window so it is

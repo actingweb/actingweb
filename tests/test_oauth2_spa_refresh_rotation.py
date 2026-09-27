@@ -1,5 +1,8 @@
 """Tests for refresh-token rotation grace/theft handling on /oauth/spa/token.
 
+The handler runs on ``tests.mcp_token_double``, a real Config over an
+in-memory store with fault hooks, shared with the MCP rotation tests.
+
 Covers ``OAuth2SPAHandler._handle_refresh_token``:
 
 - Reuse of an already-used refresh token *within* the grace window issues a
@@ -13,7 +16,7 @@ Covers ``OAuth2SPAHandler._handle_refresh_token``:
 
 import json
 import time
-from unittest.mock import MagicMock
+from typing import Any
 
 from actingweb.aw_web_request import AWWebObj
 from actingweb.config import Config
@@ -29,77 +32,13 @@ from actingweb.oauth_session import (
     _REFRESH_TOKEN_BUCKET,
     get_oauth2_session_manager,
 )
+from tests.mcp_token_double import make_config
 
 
-def _make_config() -> tuple[Config, dict]:
-    config = MagicMock(spec=Config)
-    config.new_token = MagicMock(side_effect=lambda: f"aw-access-{time.time_ns()}")
-
-    storage: dict = {}
-
-    class MockDbAttribute:
-        def __init__(self):  # type: ignore
-            self.storage = storage
-
-        def get_bucket(self, actor_id, bucket):  # type: ignore
-            return self.storage.get(f"{actor_id}:{bucket}", {})
-
-        def get_attr(self, actor_id, bucket, name):  # type: ignore
-            return self.storage.get(f"{actor_id}:{bucket}", {}).get(name)
-
-        def set_attr(
-            self, actor_id, bucket, name, data, timestamp=None, ttl_seconds=None
-        ):  # type: ignore
-            self.storage.setdefault(f"{actor_id}:{bucket}", {})[name] = {"data": data}
-            return True
-
-        def delete_attr(self, actor_id, bucket, name):  # type: ignore
-            key = f"{actor_id}:{bucket}"
-            if key in self.storage and name in self.storage[key]:
-                del self.storage[key][name]
-                return True
-            return False
-
-        def conditional_update_attr(
-            self,
-            actor_id,
-            bucket,
-            name,
-            old_data,
-            new_data,
-            timestamp=None,
-            ttl_seconds=None,
-        ):  # type: ignore
-            key = f"{actor_id}:{bucket}"
-            current = self.storage.get(key, {}).get(name)
-            if current is None or current.get("data") != old_data:
-                return False
-            self.storage[key][name] = {"data": new_data}
-            return True
-
-        def get_attr_strict(self, actor_id, bucket, name):  # type: ignore
-            return self.storage.get(f"{actor_id}:{bucket}", {}).get(name)
-
-        def delete_bucket(self, actor_id, bucket):  # type: ignore
-            return self.storage.pop(f"{actor_id}:{bucket}", None) is not None
-
-        def delete_by_chain(self, actor_id=None, buckets=None, chain_id=None):  # type: ignore
-            if not actor_id or not chain_id or not buckets:
-                return 0
-            deleted = 0
-            for bucket in buckets:
-                items = self.storage.get(f"{actor_id}:{bucket}", {})
-                for name, rec in list(items.items()):
-                    data = rec.get("data") or {}
-                    if isinstance(data, dict) and data.get("chain_id") == chain_id:
-                        del items[name]
-                        deleted += 1
-            return deleted
-
-    db_mod = MagicMock()
-    db_mod.DbAttribute = MockDbAttribute
-    config.DbAttribute = db_mod
-    return config, storage
+def _make_config() -> tuple[Config, dict[str, dict[str, Any]]]:
+    """A real Config on the shared in-memory store; returns its rows."""
+    config, store = make_config()
+    return config, store.rows
 
 
 def _handler(config) -> OAuth2SPAHandler:
@@ -259,3 +198,26 @@ def test_legacy_chainless_reuse_revokes_only_the_presented_token():
     # Only the presented legacy token was revoked.
     assert token not in storage.get(key, {})
     assert other in storage.get(key, {})
+
+
+def test_a_used_token_past_its_expiry_is_expired_not_theft():
+    """A consumed token presented after its own ``expires_at`` reads as
+    expired (401, row removed) and never reaches the reuse ladder, so its
+    chain is not revoked. The MCP store checks in the same order."""
+    config, storage = _make_config()
+    actor_id = "expired-actor"
+    token, chain_id = _seed_used_token(
+        config, storage, actor_id, used_seconds_ago=GRACE_PERIOD_EXTENDED + 30
+    )
+    key = f"{OAUTH2_SYSTEM_ACTOR}:{_REFRESH_TOKEN_BUCKET}"
+    storage[key][token]["data"]["expires_at"] = int(time.time()) - 1
+    mgr = get_oauth2_session_manager(config)
+    live = mgr.create_refresh_token(actor_id, "user@example.com", chain_id=chain_id)
+
+    handler = _handler(config)
+    result = handler._handle_refresh_token({"refresh_token": token}, "json")
+
+    assert result.get("status_code") == 401
+    assert "expired" in result.get("message", "").lower()
+    assert token not in storage[key]
+    assert mgr.validate_refresh_token(live) is not None

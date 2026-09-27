@@ -9,12 +9,12 @@ together because they are one decision: whether the fail-closed-but-
 retryable contract the MCP paths got in 3.15 (`TokenStoreUnavailable` →
 503 + `Retry-After`) applies to the SPA ladder and the auth-code lookup too.
 
-**Natural home:** items 1 and 2 touch exactly the functions
-`thoughts/plans/2026-09-26-spa-refresh-reuse-after-dropped-rotation.md`
-Phase 2 rewrites, and that phase moves the SPA tests onto
-`tests/mcp_token_double.py`, which already injects `cas_fault` and
-`chain_delete_fault`. The owner decides at that plan's approval whether
-Phase 2 absorbs them; if not, they stay here.
+**Natural home:** the SPA ladder in `handlers/oauth2_spa.py` and
+`oauth_session.py`. The dropped-rotation plan that was to rewrite those
+functions was superseded on 2026-09-27; its successor
+(`thoughts/plans/2026-09-27-refresh-grace-setting.md`) only touches the
+grace tier, so these stay here. The SPA tests now run on
+`tests/mcp_token_double.py`, which has the fault hooks they need.
 
 ## Items
 

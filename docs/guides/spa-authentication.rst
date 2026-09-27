@@ -691,6 +691,9 @@ ActingWeb implements refresh token rotation for enhanced security:
 - Within the grace window a reuse is treated as a benign concurrent/dropped
   rotation and still returns a fresh refresh token, so a client that lost a
   prior rotation recovers instead of being locked out.
+- The grace window is 60 seconds by default and is set per deployment with
+  ``ActingWebApp.with_refresh_token_grace(seconds)``, from 0 to 60. The same
+  value applies to MCP refresh tokens. See `Choosing the grace period`_.
 
 .. code-block:: javascript
 
@@ -716,6 +719,90 @@ ActingWeb implements refresh token rotation for enhanced security:
            redirectToLogin();
        }
    }
+
+.. _spa-refresh-grace:
+
+Choosing the grace period
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+   app = ActingWebApp(...).with_refresh_token_grace(30)
+
+The grace period is how long after a refresh token is consumed that
+presenting it again still rotates, instead of counting as theft. The default
+and the ceiling are 60 seconds (Okta's maximum for the same setting); a
+value outside 0 to 60, or one that is not an integer, raises ``ValueError``
+wherever it is set.
+
+The grace period has a cost. Inside it, whoever presents the consumed token
+receives a new branch of the rotation family. A thief who replays a copied
+token inside the grace window and the legitimate client then both hold
+working branches, and neither is flagged unless one of them later replays
+one of its own consumed tokens. A shorter grace honours a copied token for
+less time.
+
+``0`` means no grace: every reuse of a consumed token inside the two-day
+reuse window is answered as theft and its chain revoked (a reuse after that,
+or after the token's own expiry, is answered as expired, and a token issued
+before rotation families existed revokes only itself). That includes two
+tabs or windows refreshing the same token at the same moment, and a client
+retrying after a refresh failed on a storage fault (the server answered an
+error after consuming the token); both are signed out. When two requests
+present the same token at once, the one that consumed it may keep the new
+tokens it is issued: they survive if they are created after the other
+request revoked the chain, and are revoked with it if created before. So
+``0`` stops a later replay, not reliably a simultaneous one. Use ``0`` only
+with a client that single-flights its refreshes.
+
+The grace period does not cover a client that loses a refresh response and
+retries minutes later (a laptop that went to sleep mid-request): no value up
+to 60 seconds reaches that far, and a longer one would widen the window a
+copied token is honoured in. That case is the client's to prevent; see the
+next section.
+
+A token's own expiry comes first: a consumed refresh token presented after
+its ``expires_at`` is refused as expired, even inside the grace period. So a
+client that refreshes in the last moments of a refresh token's lifetime and
+loses the response is not rescued by a retry; it signs in again. Each
+rotation issues a refresh token with a fresh lifetime, so this only affects
+a client that has not refreshed for almost the whole lifetime.
+
+.. _spa-refresh-reliably:
+
+Refreshing reliably on native and mobile clients
+------------------------------------------------
+
+A refresh consumes the token it presents. If the device never receives the
+response, the client still holds the consumed token, and presenting it again
+after the grace period reads as theft: the rotation family is revoked and the
+user must sign in again. Browsers rarely lose a response; native and mobile
+apps do, when the device sleeps or the app is suspended with a refresh in
+flight. A client that follows these rules avoids the lockout:
+
+1. **Never start a refresh the device may not see answered.** On macOS, do
+   not refresh during a dark wake (Power Nap), and stop starting refreshes
+   once the app is told the system will sleep. On iOS and Android, do not
+   start one while the app is being suspended.
+2. **Hold the device awake for an in-flight refresh**, so the response
+   arrives before sleep: on macOS ``ProcessInfo.beginActivity`` or an IOKit
+   power assertion, on iOS ``beginBackgroundTask``.
+3. **Keep the old token on an ambiguous failure, but do not count on
+   retrying it.** A retry inside the grace period (at most 60 seconds)
+   rotates again; a retry after a sleep is the reuse the server answers as
+   theft. Rules 1 and 2 are the fix; the retry is not.
+4. **One refresh in flight per token**, across tabs and windows as well (a
+   lock, or a ``BroadcastChannel``), as in the single-flight example under
+   `Troubleshooting`_.
+5. **Store the new pair before using it; a failed store is a failed
+   refresh.** A client that adopts the new tokens but fails to persist the
+   new refresh token (a Keychain or storage write that fails) keeps the
+   consumed one as its stored token, and its next refresh is theft.
+6. **Give the refresh request a timeout**, so a request parked across a
+   sleep fails on the client instead of hanging. Together with rule 1 it
+   lets the client start over cleanly after wake.
+7. **Treat a 401 on refresh as final**: clear the session and send the user
+   to sign in. Do not retry the same token.
 
 Mobile App Authentication
 -------------------------
@@ -1477,7 +1564,8 @@ ActingWeb handles concurrent refresh requests gracefully using atomic compare-an
 operations. When multiple requests attempt to use the same refresh token simultaneously:
 
 - Only the first request succeeds in marking the token as used
-- Subsequent requests **within the grace window** (up to ~60 seconds) receive a
+- Subsequent requests **within the grace window** (60 seconds by default; see
+  `Choosing the grace period`_) receive a
   full rotation — new access *and* refresh tokens — without error. This also
   covers a client that dropped a prior rotation (e.g. a mobile WebView suspended
   before it persisted the rotated token): it recovers instead of being locked out.
@@ -1514,9 +1602,11 @@ degrades to a login screen rather than a blank page:
 If you see this error AND the session is revoked (401 on subsequent requests), it indicates:
 
 - A reused refresh token was presented well after it was first used (beyond the
-  grace window) — genuine theft, or a client that forked its own rotation lineage
+  grace window) — genuine theft, a client that forked its own rotation lineage
   by issuing concurrent/uncoordinated refreshes (see the single-flight best
-  practice above)
+  practice above), or a client that lost a refresh response to sleep or
+  suspension, or failed to store the new token (see `Refreshing reliably on
+  native and mobile clients`_)
 - Only the affected rotation family is revoked; the user re-authenticates that
   session. Other devices/sessions continue working.
 - Treat the 401 as "session expired": route to the login screen. Do not leave the

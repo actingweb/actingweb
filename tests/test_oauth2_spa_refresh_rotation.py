@@ -18,16 +18,15 @@ import json
 import time
 from typing import Any
 
+import pytest
+
 from actingweb.aw_web_request import AWWebObj
 from actingweb.config import Config
 from actingweb.constants import (
     OAUTH2_SYSTEM_ACTOR,
     SPA_REFRESH_TOKEN_REUSE_WINDOW,
 )
-from actingweb.handlers.oauth2_spa import (
-    GRACE_PERIOD_EXTENDED,
-    OAuth2SPAHandler,
-)
+from actingweb.handlers.oauth2_spa import OAuth2SPAHandler
 from actingweb.oauth_session import (
     _REFRESH_TOKEN_BUCKET,
     get_oauth2_session_manager,
@@ -71,7 +70,10 @@ def test_reuse_within_grace_window_issues_full_rotation():
     config, storage = _make_config()
     actor_id = "grace-actor"
     token, chain_id = _seed_used_token(
-        config, storage, actor_id, used_seconds_ago=GRACE_PERIOD_EXTENDED - 5
+        config,
+        storage,
+        actor_id,
+        used_seconds_ago=config.refresh_token_grace_period - 5,
     )
 
     handler = _handler(config)
@@ -113,7 +115,10 @@ def test_reuse_beyond_grace_window_revokes_only_the_chain():
     sibling_chain = mgr.validate_refresh_token(sibling)["chain_id"]  # type: ignore[index]
 
     token, chain_id = _seed_used_token(
-        config, storage, actor_id, used_seconds_ago=GRACE_PERIOD_EXTENDED + 30
+        config,
+        storage,
+        actor_id,
+        used_seconds_ago=config.refresh_token_grace_period + 30,
     )
 
     handler = _handler(config)
@@ -181,7 +186,7 @@ def test_legacy_chainless_reuse_revokes_only_the_presented_token():
             "created_at": int(time.time()) - 1000,
             "expires_at": int(time.time()) + 100000,
             "used": True,
-            "used_at": int(time.time()) - (GRACE_PERIOD_EXTENDED + 30),
+            "used_at": int(time.time()) - (config.refresh_token_grace_period + 30),
             # no chain_id
         }
     }
@@ -207,7 +212,10 @@ def test_a_used_token_past_its_expiry_is_expired_not_theft():
     config, storage = _make_config()
     actor_id = "expired-actor"
     token, chain_id = _seed_used_token(
-        config, storage, actor_id, used_seconds_ago=GRACE_PERIOD_EXTENDED + 30
+        config,
+        storage,
+        actor_id,
+        used_seconds_ago=config.refresh_token_grace_period + 30,
     )
     key = f"{OAUTH2_SYSTEM_ACTOR}:{_REFRESH_TOKEN_BUCKET}"
     storage[key][token]["data"]["expires_at"] = int(time.time()) - 1
@@ -221,3 +229,55 @@ def test_a_used_token_past_its_expiry_is_expired_not_theft():
     assert "expired" in result.get("message", "").lower()
     assert token not in storage[key]
     assert mgr.validate_refresh_token(live) is not None
+
+
+@pytest.mark.parametrize(
+    ("grace", "used_seconds_ago", "rotates"),
+    [
+        (20, 15, True),
+        (20, 40, False),
+        (0, 5, False),
+        (0, 0, False),
+        (None, 30, True),
+        (None, 90, False),
+    ],
+    ids=[
+        "grace20-15s",
+        "grace20-40s",
+        "grace0-5s",
+        "grace0-same-second",
+        "default-30s",
+        "default-90s",
+    ],
+)
+def test_the_configured_grace_decides_rotation_or_theft(
+    grace: int | None, used_seconds_ago: int, rotates: bool
+) -> None:
+    """The ladder reads ``config.refresh_token_grace_period``: inside it a
+    reuse rotates in the same chain; past it the chain is revoked. ``None``
+    leaves the default (60 s). Grace 0 means no grace, so a reuse in the
+    same second is theft too."""
+    config, storage = _make_config()
+    if grace is not None:
+        config.refresh_token_grace_period = grace
+    actor_id = "grace-setting-actor"
+    token, chain_id = _seed_used_token(
+        config, storage, actor_id, used_seconds_ago=used_seconds_ago
+    )
+    mgr = get_oauth2_session_manager(config)
+    live = mgr.create_refresh_token(actor_id, "user@example.com", chain_id=chain_id)
+
+    handler = _handler(config)
+    result = handler._handle_refresh_token({"refresh_token": token}, "json")
+
+    if rotates:
+        assert result.get("success") is True
+        new_refresh = result.get("refresh_token")
+        assert new_refresh and new_refresh != token
+        new_data = mgr.validate_refresh_token(new_refresh)
+        assert new_data is not None and new_data["chain_id"] == chain_id
+        assert mgr.validate_refresh_token(live) is not None
+    else:
+        assert result.get("status_code") == 401
+        assert "revoked" in result.get("message", "").lower()
+        assert mgr.validate_refresh_token(live) is None

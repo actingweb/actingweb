@@ -13,12 +13,73 @@ import copy
 import logging
 import secrets
 import time
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
+
+from .constants import REFRESH_TOKEN_GRACE_DEFAULT, REFRESH_TOKEN_GRACE_MAX
 
 if TYPE_CHECKING:
     from . import config as config_class
 
 logger = logging.getLogger(__name__)
+
+
+def validate_refresh_token_grace(value: object) -> int:
+    """Return ``value`` if it is a valid refresh-token grace period.
+
+    Raises:
+        ValueError: ``value`` is not an integer from 0 to
+            ``REFRESH_TOKEN_GRACE_MAX``. A ``bool`` is refused, not read as
+            0 or 1.
+    """
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or not 0 <= value <= REFRESH_TOKEN_GRACE_MAX
+    ):
+        raise ValueError(
+            f"Refresh token grace period must be an integer from 0 to "
+            f"{REFRESH_TOKEN_GRACE_MAX} seconds, got {value!r}"
+        )
+    return value
+
+
+def refresh_token_grace(config: "config_class.Config") -> int:
+    """The grace period a refresh ladder applies, in seconds.
+
+    ``Config.refresh_token_grace_period`` is a validating property, so a
+    real ``Config`` always holds a valid value. This is defence in depth for
+    any other config object: a value outside ``[0,
+    REFRESH_TOKEN_GRACE_MAX]`` is clamped and a non-integer falls back to the
+    default, instead of disabling reuse detection or failing the request.
+    """
+    value = getattr(config, "refresh_token_grace_period", REFRESH_TOKEN_GRACE_DEFAULT)
+    if isinstance(value, bool) or not isinstance(value, int):
+        logger.warning(
+            f"refresh_token_grace_period is not an integer ({value!r}); "
+            f"using {REFRESH_TOKEN_GRACE_DEFAULT} s"
+        )
+        return REFRESH_TOKEN_GRACE_DEFAULT
+    return min(max(value, 0), REFRESH_TOKEN_GRACE_MAX)
+
+
+def classify_reuse(
+    age: int, grace: int, reuse_window: int
+) -> Literal["grace", "theft", "expired"]:
+    """Judge a consumed refresh token presented again ``age`` seconds after
+    it was consumed.
+
+    - ``"grace"``: within a non-zero grace period; rotate again in the same
+      chain. A grace of 0 is no grace at all, so a reuse in the same second
+      (age 0, or negative from clock skew between workers) is theft.
+    - ``"theft"``: within the reuse window; revoke the chain.
+    - ``"expired"``: past the window; refuse without revoking (the row only
+      outlived it because storage TTLs lag).
+    """
+    if grace > 0 and age <= grace:
+        return "grace"
+    if age <= reuse_window:
+        return "theft"
+    return "expired"
 
 
 class StoreFault(Exception):

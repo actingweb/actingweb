@@ -44,6 +44,7 @@ Runtime Switches
 - ``force_email_prop_as_creator``: Copy ``email`` property to ``creator``.
 - ``mcp``: Include MCP capability; toggle via ``with_mcp()``.
 - ``sync_subscription_callbacks``: Force synchronous subscription callbacks (``with_sync_callbacks()``). **Required for Lambda/serverless deployments** where async fire-and-forget callbacks may be lost when the function freezes. Affects both diff callbacks and resync callbacks. Do NOT enable in local/container deployments to avoid blocking and self-deadlock. See :doc:`deployment` for details.
+- ``refresh_token_grace_period``: Seconds after a refresh token is consumed during which presenting it again rotates again instead of counting as theft (``with_refresh_token_grace(seconds)``). Applies to the SPA (``/oauth/spa/token``) and MCP (``/oauth/token``) refresh grants. Default and maximum 60, minimum 0; a value outside that range, or one that is not an integer, raises ``ValueError`` wherever it is set (builder, ``Config(...)``, or assignment). Set it with the builder: a value assigned on the Config survives only while the builder method is not called; after a builder call the builder's value wins. A lower value narrows the window in which a copied token is honoured; ``0`` means no grace: every reuse inside the reuse window is answered as theft, which also signs out a client's own concurrent duplicate refresh and a retry after a storage fault, while a request presented at the same moment may still keep its new tokens. See :ref:`spa-refresh-grace`.
 
 Browser Redirect Behavior
 -------------------------

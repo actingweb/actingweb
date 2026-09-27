@@ -29,8 +29,9 @@ import time
 from typing import TYPE_CHECKING, Any, Optional
 from urllib.parse import urlparse
 
-from ..constants import SPA_REFRESH_TOKEN_REUSE_WINDOW
+from ..constants import REFRESH_TOKEN_GRACE_DEFAULT, SPA_REFRESH_TOKEN_REUSE_WINDOW
 from ..secret_compare import secret_digest_equals, secret_equals
+from ..single_use import classify_reuse, refresh_token_grace
 from .base_handler import BaseHandler
 from .oauth2_utils import normalize_user_info
 
@@ -47,11 +48,14 @@ PKCE_VERIFIER_CHARSET = (
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~"
 )
 
-# Token refresh grace period constants (in seconds)
-# These handle concurrent refresh token requests from SPAs
+# Token refresh grace period (in seconds). The grace a deployment runs with is
+# Config.refresh_token_grace_period (ActingWebApp.with_refresh_token_grace()),
+# read through single_use.refresh_token_grace(). GRACE_PERIOD_EXTENDED keeps
+# the default's old name and is not read by the ladder. Inside the grace,
+# GRACE_PERIOD_IMMEDIATE only picks the log line.
 GRACE_PERIOD_IMMEDIATE = 10  # Normal concurrent requests (common in SPAs)
-GRACE_PERIOD_EXTENDED = 60  # Network delays or slow processing
-# Reuse within (GRACE_PERIOD_EXTENDED, SPA_REFRESH_TOKEN_REUSE_WINDOW] is treated
+GRACE_PERIOD_EXTENDED = REFRESH_TOKEN_GRACE_DEFAULT
+# Reuse within (grace, SPA_REFRESH_TOKEN_REUSE_WINDOW] is treated
 # as potential theft (chain revoked); beyond that horizon a reused token is
 # treated as expired (the row is only still present because the purge lagged).
 
@@ -634,10 +638,12 @@ class OAuth2SPAHandler(BaseHandler):
         if not actor_id:
             return self._json_error(401, "Invalid refresh token data")
 
-        # If token was already used, apply a grace window before treating the
-        # reuse as theft:
-        #   0 - GRACE_PERIOD_EXTENDED: benign reuse -> FULL rotation (same chain)
-        #   > GRACE_PERIOD_EXTENDED:   potential theft -> revoke the chain
+        # If token was already used, classify the reuse (single_use.
+        # classify_reuse, shared with the MCP ladder; grace =
+        # config.refresh_token_grace_period, 0 meaning no grace):
+        #   within a non-zero grace: benign reuse -> FULL rotation (same chain)
+        #   within the reuse window: potential theft -> revoke the chain
+        #   past the window:         expired -> refuse, no revocation
         #
         # Within the grace window the reuse is either a genuine concurrent /
         # duplicate request, or a client that dropped its previous rotation
@@ -658,20 +664,27 @@ class OAuth2SPAHandler(BaseHandler):
         if not success:
             used_at = token_data.get("used_at", 0)
             time_since_use = int(time.time()) - used_at
+            verdict = classify_reuse(
+                time_since_use,
+                refresh_token_grace(self.config),
+                SPA_REFRESH_TOKEN_REUSE_WINDOW,
+            )
 
-            if time_since_use <= GRACE_PERIOD_IMMEDIATE:
-                logger.debug(
-                    f"Refresh token reuse within {time_since_use}s for actor {actor_id} "
-                    f"(concurrent request) - issuing new tokens with rotation"
-                )
+            if verdict == "grace":
+                if time_since_use <= GRACE_PERIOD_IMMEDIATE:
+                    logger.debug(
+                        f"Refresh token reuse within {time_since_use}s for actor "
+                        f"{actor_id} (concurrent request) - issuing new tokens with "
+                        f"rotation"
+                    )
+                else:
+                    logger.info(
+                        f"Refresh token reuse after {time_since_use}s for actor "
+                        f"{actor_id} (delayed or dropped-rotation request) - issuing "
+                        f"new tokens with rotation"
+                    )
                 # Fall through to full rotation below.
-            elif time_since_use <= GRACE_PERIOD_EXTENDED:
-                logger.info(
-                    f"Refresh token reuse after {time_since_use}s for actor {actor_id} "
-                    f"(delayed or dropped-rotation request) - issuing new tokens with rotation"
-                )
-                # Fall through to full rotation below.
-            elif time_since_use > SPA_REFRESH_TOKEN_REUSE_WINDOW:
+            elif verdict == "expired":
                 # Past the reuse-detection horizon. On rotation the consumed
                 # token's storage TTL was shortened to this window, so it should
                 # already be purged; we only still see it because the purge is

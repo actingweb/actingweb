@@ -72,11 +72,14 @@ SECURITY
   within 60 seconds rotates again (a retry or a lost response); within two
   days it is treated as theft, every token in its chain is revoked and the
   grant answers ``invalid_grant``; after that it answers ``invalid_grant``
-  without revoking. A refresh token issued before 3.15 joins a chain on its
-  first rotation and is covered from then on. If the store cannot complete
-  a theft revocation, the grant answers ``server_error`` and leaves the
-  replayed token in place for the next presentation to retry from, rather
-  than report the chain revoked. A store fault while an MCP refresh token or
+  without revoking. The 60 seconds is the default grace period, shared with
+  the SPA refresh grant and configurable downwards with
+  ``with_refresh_token_grace()`` (see ADDED). A refresh token issued before
+  3.15 joins a chain on its first rotation and is covered from then on. If
+  the store cannot complete a theft revocation, the grant answers
+  ``server_error`` and leaves the replayed token in place for the next
+  presentation to retry from, rather than report the chain revoked.
+  A store fault while an MCP refresh token or
   an authorization code is being consumed answers ``server_error`` and
   leaves it usable; it is never read as "already used" (the SPA refresh
   endpoint still answers 401 on such a fault). Revocation removes a
@@ -202,6 +205,35 @@ CHANGED
   sections are folded into it without loss. ``thoughts/`` gains a
   ``features/`` directory for ``/plan_feature`` documents, matching the
   ``actingweb_mcp`` repository. No library code changes.
+
+ADDED
+~~~~~
+
+- **The refresh-token grace period is a deployment setting.**
+  ``ActingWebApp.with_refresh_token_grace(seconds)`` sets
+  ``Config.refresh_token_grace_period``, the time after a refresh token is
+  consumed during which presenting it again rotates again instead of
+  counting as theft. It applies to both the SPA (``/oauth/spa/token``) and
+  the MCP (``/oauth/token``) refresh grants, which both hard-coded 60
+  seconds. The default stays 60 seconds, which is also the ceiling (Okta's
+  maximum for the same setting); a value outside 0 to 60, or one that is not
+  an integer, raises ``ValueError`` wherever it is set: the builder,
+  ``Config(...)``, or an assignment to the attribute. A lower value narrows
+  the window in which a copied token yields a new branch of its chain, which
+  reuse detection flags only if that branch later replays one of its own
+  consumed tokens. ``0`` means no grace: every reuse of a consumed token
+  inside the two-day reuse window is answered as theft and its chain
+  revoked, which also signs out a client's own concurrent duplicate refresh
+  and a client retrying after a refresh failed on a storage fault. Of two
+  requests presenting the same token at once, the one that consumed it may
+  keep its new tokens, depending on whether it creates them before or after
+  the other revokes the chain, so ``0`` stops a later replay, not reliably
+  a simultaneous one; use it only with clients that single-flight their
+  refreshes. No value covers a client that loses a
+  refresh response across a device sleep: the SPA guide gains "Refreshing
+  reliably on native and mobile clients", which describes how a client
+  avoids that lockout, and the troubleshooting guide gains the symptom.
+  Deployments that do not call the method behave as before.
 
 FIXED
 ~~~~~

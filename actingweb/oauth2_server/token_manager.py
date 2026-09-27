@@ -312,9 +312,11 @@ class ActingWebTokenManager:
         with is deleted and popped from this process's MCP token cache. A
         consumed token presented again is judged by how long ago it was used:
 
-        - within ``MCP_REFRESH_TOKEN_GRACE_PERIOD`` (60 s): a concurrent
-          request, or a client that lost the previous response; it rotates
-          again in the same chain and nothing is revoked;
+        - within the grace period (``Config.refresh_token_grace_period``,
+          set with ``ActingWebApp.with_refresh_token_grace()``; default
+          60 s; 0 means no grace, so even a same-second reuse is theft): a
+          concurrent request, or a client that lost the previous response;
+          it rotates again in the same chain and nothing is revoked;
         - within ``MCP_REFRESH_TOKEN_REUSE_WINDOW`` (2 days): potential theft;
           every token in the chain is revoked and the grant fails;
         - beyond the window: expired, not theft; the row is removed and
@@ -322,8 +324,8 @@ class ActingWebTokenManager:
 
         The grace period is also the recovery contract when minting fails
         after the consume (a storage fault): the grant errors, the client
-        still holds a consumed token, and a retry within 60 s rotates; a
-        retry after 60 s reads as theft.
+        still holds a consumed token, and a retry within the grace period
+        rotates; a retry after it reads as theft.
 
         Every rotation stamps a fresh 30-day expiry on the new refresh token,
         so the lifetime is sliding: 30 days of inactivity ends a chain.
@@ -342,11 +344,8 @@ class ActingWebTokenManager:
                 could not be confirmed either way, or a theft revocation
                 could not be completed. The token is left for a retry.
         """
-        from ..constants import (
-            INDEX_TTL_BUFFER,
-            MCP_REFRESH_TOKEN_GRACE_PERIOD,
-            MCP_REFRESH_TOKEN_REUSE_WINDOW,
-        )
+        from ..constants import INDEX_TTL_BUFFER, MCP_REFRESH_TOKEN_REUSE_WINDOW
+        from ..single_use import classify_reuse, refresh_token_grace
 
         refresh_data = self._load_refresh_token(refresh_token)
         if not refresh_data:
@@ -431,7 +430,10 @@ class ActingWebTokenManager:
                 )
                 return None
             age = int(time.time()) - int(used_at)
-            if age <= MCP_REFRESH_TOKEN_GRACE_PERIOD:
+            verdict = classify_reuse(
+                age, refresh_token_grace(self.config), MCP_REFRESH_TOKEN_REUSE_WINDOW
+            )
+            if verdict == "grace":
                 # Rotate in the chain the winner recorded (a legacy record's
                 # new chain lives only on the consumed row).
                 chain_id = current.get("chain_id") or chain_id
@@ -440,7 +442,7 @@ class ActingWebTokenManager:
                     f"{actor_id} (within grace) - rotating again in the same chain"
                 )
                 # Fall through to a full rotation below.
-            elif age <= MCP_REFRESH_TOKEN_REUSE_WINDOW:
+            elif verdict == "theft":
                 chain_id = current.get("chain_id")
                 if chain_id:
                     revoked = self._revoke_chain(

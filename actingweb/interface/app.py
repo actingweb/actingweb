@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 
 from .. import __version__
 from ..config import Config
+from ..single_use import validate_refresh_token_grace
 from ..subscription_config import SubscriptionProcessingConfig
 from .hooks import HookMetadata, HookRegistry
 
@@ -72,6 +73,9 @@ class ActingWebApp:
         self._mcp_server_name = "actingweb"
         self._mcp_instructions: str | None = None
         self._sync_subscription_callbacks = False  # Async by default
+        # None means "not set via the builder": Config's default, or a value
+        # assigned on the Config, stays authoritative.
+        self._refresh_token_grace_period: int | None = None
         self._thread_pool_workers = (
             10  # Default thread pool size for FastAPI integration
         )
@@ -204,6 +208,11 @@ class ActingWebApp:
             self._config.sync_subscription_callbacks = self._sync_subscription_callbacks
             # Warn if running in Lambda without sync callbacks enabled
             self._warn_lambda_async_callbacks()
+        # Refresh-token grace period (both refresh ladders). Only a value the
+        # builder was given: without a builder call, a value assigned on the
+        # Config survives; after one, the builder's value wins.
+        if self._refresh_token_grace_period is not None:
+            self._config.refresh_token_grace_period = self._refresh_token_grace_period
         # Peer profile caching configuration
         if hasattr(self, "_peer_profile_attributes"):
             self._config.peer_profile_attributes = self._peer_profile_attributes
@@ -549,6 +558,47 @@ class ActingWebApp:
             Self for method chaining.
         """
         self._sync_subscription_callbacks = enable
+        self._apply_runtime_changes_to_config()
+        return self
+
+    def with_refresh_token_grace(self, seconds: int) -> "ActingWebApp":
+        """Set the refresh-token grace period, in seconds.
+
+        Refresh tokens are single-use. A consumed refresh token presented
+        again within the grace period rotates again in the same chain (a
+        concurrent request, or a client that lost the previous response);
+        presented later, it is treated as theft and its chain is revoked.
+        The setting applies to both the SPA (``/oauth/spa/token``) and the
+        MCP (``/oauth/token``) refresh grants.
+
+        The default is 60 seconds, which is also the ceiling. A lower value
+        only narrows the grace: inside it, whoever presents a consumed
+        token gets a new branch of the chain, which reuse detection flags
+        only if that branch later replays one of its own consumed tokens,
+        so a shorter grace honours a copied token for less time.
+
+        ``0`` means no grace: every reuse of a consumed token inside the
+        two-day reuse window is answered as theft and its chain revoked (a
+        reuse after that, or after the token's own expiry, is answered as
+        expired). That includes two tabs or windows refreshing the same
+        token at once, and a client retrying after a refresh failed on a
+        storage fault; both are signed out. When two requests present the
+        same token at once, the one that consumed it may keep the tokens it
+        is issued: they survive if they are created after the other request
+        revoked the chain, and are revoked with it if created before. So
+        ``0`` stops a later replay, not reliably a simultaneous one.
+
+        Args:
+            seconds: Grace period in seconds, from 0 to 60.
+
+        Returns:
+            Self for method chaining.
+
+        Raises:
+            ValueError: If ``seconds`` is not an integer from 0 to 60 (a
+                ``bool`` is refused).
+        """
+        self._refresh_token_grace_period = validate_refresh_token_grace(seconds)
         self._apply_runtime_changes_to_config()
         return self
 
@@ -1306,6 +1356,10 @@ class ActingWebApp:
                 self._config.indexed_properties = self._indexed_properties
             if self._use_lookup_table is not None:
                 self._config.use_lookup_table = self._use_lookup_table
+            if self._refresh_token_grace_period is not None:
+                self._config.refresh_token_grace_period = (
+                    self._refresh_token_grace_period
+                )
             # Populate multi-provider OAuth config on initial creation
             named = {k: dict(v) for k, v in self._oauth_configs.items() if k}
             if named:

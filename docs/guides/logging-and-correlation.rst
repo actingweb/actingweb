@@ -145,6 +145,14 @@ Example from ``actingweb.aw_proxy``::
 
     DEBUG actingweb.aw_proxy:aw_proxy.py:113 Peer request correlation: new_id=fa5959b7... parent_id=a1b2c3d4...
 
+Request bodies sent to a peer are logged as a summary — the sorted key names
+(at most 20) and the serialised size — never their values (since 3.15)::
+
+    DEBUG actingweb.aw_proxy:aw_proxy.py:251 Creating trust peer resource at (https://peer.example.com/abc/methods/notify) with data(keys=[message, priority] bytes=42)
+
+Key names of a ``/properties`` write are the property names. The MCP
+authorize endpoint and the FastAPI trust routes use the same summary.
+
 Grepping Logs
 =============
 

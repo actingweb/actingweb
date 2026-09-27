@@ -306,3 +306,25 @@ class TestCacheFillCannotOutraceEviction:
         before = mcp_module._current_cache_generation()
         mcp_module.MCPHandler.clear_token_from_cache("a-token-never-cached")
         assert mcp_module._current_cache_generation() != before
+
+
+class TestTokenOnlyEviction:
+    """Rotation pops one access token (``actor_wide=False``). It must stop an
+    in-flight fill of *that* token, without cancelling every other request's
+    fills the way the global generation does."""
+
+    def test_token_only_eviction_leaves_the_global_generation_alone(self) -> None:
+        before = mcp_module._current_cache_generation()
+        mcp_module.MCPHandler.clear_token_from_cache("aw_rotated", actor_wide=False)
+        assert mcp_module._current_cache_generation() == before
+
+    def test_a_fill_of_the_rotated_token_is_refused(self) -> None:
+        seq = mcp_module._current_token_eviction_seq()
+        mcp_module.MCPHandler.clear_token_from_cache("aw_rotated_2", actor_wide=False)
+        assert mcp_module._token_fill_still_valid("aw_rotated_2", seq) is False
+        assert mcp_module._token_fill_still_valid("aw_other", seq) is True
+
+    def test_a_fill_snapshotted_after_the_eviction_is_allowed(self) -> None:
+        mcp_module.MCPHandler.clear_token_from_cache("aw_rotated_3", actor_wide=False)
+        seq = mcp_module._current_token_eviction_seq()
+        assert mcp_module._token_fill_still_valid("aw_rotated_3", seq) is True

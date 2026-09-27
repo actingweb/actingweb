@@ -105,6 +105,39 @@ MCP client rejects a tool with "has an output schema but did not return structur
   is logged once per tool per process, so check the log from around process
   start rather than only the moment you reproduce it.
 
+MCP connector asks to log in again about an hour after connecting
+------------------------------------------------------------------
+
+- **Symptom**: From 3.15, an MCP client connects, works for about an hour,
+  then its refresh fails with ``invalid_grant`` and the user must sign in
+  again. The server logs a WARNING "Refresh token ... reused ... potential
+  theft".
+- **Cause**: MCP refresh tokens are single-use since 3.15. Every refresh
+  returns a new ``refresh_token``. A client that keeps presenting its first
+  one gets one refresh, and the replay an hour later is treated as token
+  theft: the whole chain is revoked.
+- **Fix**: The client must store the ``refresh_token`` from every token
+  response. A replay within 60 seconds is tolerated (a retry or lost
+  response), so the problem is a client that never persists the new token.
+  See :doc:`../migration/v3.15`.
+
+Public MCP client (Codex, ChatGPT) fails every refresh with ``invalid_client``
+------------------------------------------------------------------------------
+
+- **Cause**: The connector was registered before 3.15, when registration
+  ignored ``token_endpoint_auth_method: none`` and stored every client as
+  confidential. The client never sends the secret it was issued.
+- **Fix**: Remove the connector and add it again; it registers as a public
+  client.
+
+``/mcp`` answers 503 with ``Retry-After``
+-----------------------------------------
+
+- **Cause**: The MCP token store could not be read (a DynamoDB throttle, a
+  lost database connection). Since 3.15 this is not reported as an invalid
+  token. Tokens already in the process cache keep working.
+- **Fix**: Check the database; the client retries on its own.
+
 Property changes not visible in Web UI
 --------------------------------------
 

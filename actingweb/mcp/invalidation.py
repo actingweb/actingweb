@@ -28,8 +28,13 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-def evict_caches_for_token(token: str) -> bool:
-    """Drop MCP cache state keyed by ``token``. True if something was cached."""
+def evict_caches_for_token(token: str, actor_wide: bool = True) -> bool:
+    """Drop MCP cache state keyed by ``token``. True if something was cached.
+
+    ``actor_wide=False`` pops only the token entry (refresh-token rotation);
+    the default also evicts the owning actor's cached wrapper and trust
+    entries, which revocation needs.
+    """
     if not token:
         return False
     try:
@@ -38,7 +43,7 @@ def evict_caches_for_token(token: str) -> bool:
         logger.debug("MCP handler unavailable; skipping token cache eviction")
         return False
     try:
-        return bool(MCPHandler.clear_token_from_cache(token))
+        return bool(MCPHandler.clear_token_from_cache(token, actor_wide=actor_wide))
     except Exception:  # pragma: no cover - eviction must never fail revocation
         logger.warning("Failed to evict MCP token cache entry", exc_info=True)
         return False

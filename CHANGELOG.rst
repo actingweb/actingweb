@@ -5,8 +5,192 @@ CHANGELOG
 Unreleased
 ----------
 
+SECURITY
+~~~~~~~~
+
+- **Peer-proxy DEBUG logs no longer contain the request body.**
+  ``AwProxy.create_resource``, ``change_resource`` and their async twins
+  logged the full JSON body of every remote-method call, property write and
+  action sent to a peer at DEBUG, so user- and agent-supplied values reached
+  the logs verbatim. Those four lines, the ``/oauth/authorize`` parameter
+  and server-response lines, and the FastAPI trust-parameter lines now log a
+  summary: the sorted key names (at most 20) and the serialised byte length.
+  Key names of a ``/properties`` write are the property names; keep the
+  ``actingweb.aw_proxy`` logger above DEBUG if those are sensitive. A
+  consumer that quieted ``actingweb.aw_proxy`` to hide bodies can drop that
+  override. ``OAuth2ClientManager.regenerate_client_secret`` also stopped
+  logging the new and stored secret when its read-back check fails.
+
+- **The async reciprocal-trust request logged the new trust secret at
+  INFO.** ``Actor.create_reciprocal_trust_async`` logged its whole request
+  body, which carries the relationship's ``secret`` and
+  ``verification_token``, at INFO, so both reached production logs at the
+  default level. It now logs the same key-name summary as the proxy. The
+  subscription-create and subscription-callback bodies and the peer-info
+  responses in ``actor.py`` (DEBUG) are summarised too. The MCP token
+  manager masked authorization codes only in the exchange: the code lookup
+  and removal helpers, the provider-token rows (whose names embed the code)
+  and client-token revocation logged live codes and tokens in full at
+  DEBUG, WARNING and ERROR; they now log the first eight characters. The
+  FastAPI integration's DEBUG lines for the decrypted MCP OAuth state and the
+  authorize template values log a summary. Key names in every summary are
+  sanitised and capped at 64 characters, because a peer chooses them. Check
+  retained logs from
+  deployments running INFO or lower for ``Requesting trust relationship
+  async``.
+
+- **``GET /{actor_id}/trust`` no longer returns peer credentials.** Every
+  row of the trust list carried the relationship's ``secret`` (the peer's
+  bearer credential) and ``verification_token``, so a browser session or SPA
+  cache that fetched the list held every peer's secret. **Behavior change:**
+  the list omits both fields; the per-relationship
+  ``GET /{actor_id}/trust/{relationship}/{peerid}`` still returns them to
+  creator and admin, as the protocol spec requires. Code that read
+  ``secret`` from the list must read the relationship URI instead.
+
+- **PKCE is now bound on the library's own MCP authorize paths.**
+  ``GET`` and ``POST /oauth/authorize`` never read ``code_challenge``, so an
+  authorization code issued through the provider sign-in buttons or the
+  email form was not bound to the client's verifier, and a public client's
+  code could be exchanged without one. Both paths now read the challenge,
+  echo it through the form and the provider state, and store it with the
+  ``redirect_uri`` on the code; exchange verifies the verifier and refuses a
+  different ``redirect_uri``. **Behavior change:** these paths accept
+  ``code_challenge_method=S256`` only; ``plain``, or a challenge without a
+  method, is ``invalid_request``, and the challenge must be 43–128
+  unreserved characters. Exchange still accepts a ``plain`` challenge that
+  was stored explicitly through ``create_authorization_code``. A custom
+  ``aw-oauth-authorization-form.html`` must keep the two hidden inputs
+  ``code_challenge`` and ``code_challenge_method``.
+
+- **MCP refresh tokens rotate and are single-use; authorization codes are
+  single-use atomically.** A refresh returned the same refresh token
+  forever, and the step meant to revoke the previous access token was a
+  no-op that logged a WARNING on every refresh. **Behavior change:** each
+  refresh returns a new ``refresh_token`` and consumes the presented one;
+  the previous access token is revoked. A consumed token presented again
+  within 60 seconds rotates again (a retry or a lost response); within two
+  days it is treated as theft, every token in its chain is revoked and the
+  grant answers ``invalid_grant``; after that it answers ``invalid_grant``
+  without revoking. A refresh token issued before 3.15 joins a chain on its
+  first rotation and is covered from then on. If the store cannot complete
+  a theft revocation, the grant answers ``server_error`` and leaves the
+  replayed token in place for the next presentation to retry from, rather
+  than report the chain revoked. A store fault while an MCP refresh token or
+  an authorization code is being consumed answers ``server_error`` and
+  leaves it usable; it is never read as "already used" (the SPA refresh
+  endpoint still answers 401 on such a fault). Revocation removes a
+  token's index row first, unconditionally, so a token being revoked is
+  unusable on every worker at once even when the store then faults; what a
+  fault leaves behind is cleanup (the actor row, reaped by TTL or the
+  purge). ``/oauth/logout`` answers such a fault with **503** and
+  ``Retry-After: 5``, clearing no cookies, so the client logs out again and
+  confirms. The one case a token survives a fault is when its **chain**
+  could not be revoked: the presented token is then kept as the handle to
+  the chain and stays valid until the client logs out again with it, which
+  revokes the chain. Revoking an MCP token
+  (``/oauth/logout`` with an MCP bearer token, or ``revoke_token``) revokes
+  every token in its chain, consumed ones included, so a consumed refresh
+  token cannot rotate after its successor was revoked. **Behavior change:**
+  ``/oauth/logout`` with an MCP bearer token now revokes it in the MCP
+  token store; before, the route knew only the SPA session store and the
+  MCP token and its chain stayed live. SPA session tokens keep their
+  existing logout path. MCP clients must store the refresh token from every
+  response. Revocation clears this process's MCP token cache only: another
+  worker or container may honour a revoked access token from its own cache
+  for up to 300 seconds. Two concurrent exchanges of one authorization code
+  now mint exactly one token pair, and a wrong PKCE verifier burns the code.
+
+- **An unauthenticated MCP ``initialize`` could name another user's
+  connection.** ``initialize`` cached ``clientInfo`` under the client's
+  ``Mcp-Session-Id`` or, without one, under a key shared by every client
+  with the same User-Agent prefix; the OAuth callback then copied the most
+  recent cached entry, whatever its key, into the trust row of whoever had
+  just signed in, and the web OAuth callback read the shared key too. So
+  anyone could put text into another user's trust row (``client_name``,
+  ``client_version``, the default ``desc``) and into the live ``clientInfo``
+  handed to their tools. The callbacks no longer write client info; the
+  trust row is named by the client's authenticated ``initialize``. The cache
+  is keyed only by ``Mcp-Session-Id`` or, after authentication, by the
+  bearer token, is bounded and thread-safe, and a request that carries a
+  bearer token reads its token entry first, since the session id is chosen
+  by the client. A session entry belongs to the actor whose authenticated
+  ``initialize`` wrote it (or whose request first used it): an
+  unauthenticated ``initialize`` cannot replace it while it is in use, and
+  another actor's request ignores it. Every string in the cached ``clientInfo`` is sanitised, not
+  only the name and version: ``title`` is capped like the name, and other
+  strings, nested ones included, at 200 characters. **Behavior change:** a request without
+  ``Mcp-Session-Id`` gets no cached ``clientInfo`` until the client sends an
+  authenticated ``initialize``.
+
+- **Client-supplied names are sanitised.** ``clientInfo`` name and version,
+  the dynamic-registration ``client_name`` and the User-Agent used as
+  ``client_platform`` reached trust rows, logs and applications raw; a name
+  carrying newlines added lines to text an LLM reads. They are now stripped
+  of control and format characters (U+200C and U+200D kept), whitespace is
+  collapsed, and names are capped at 80 characters (platform at 200) before
+  they are stored, logged or returned. **Behavior change:** both trust GET
+  routes apply the same rule on the way out, to rows stored before 3.15,
+  and strip (never cap) ``desc`` — for every trust row, peers' included.
+  The rule is ``actingweb.client_text``.
+
 CHANGED
 ~~~~~~~
+
+- **Breaking: ``secret`` and ``verification_token`` are no longer in the
+  ``GET /{actor_id}/trust`` response.** See SECURITY. The protocol spec's
+  list example is updated; read credentials from the relationship URI.
+
+- **Breaking: MCP refresh tokens are single-use.** A client that keeps
+  presenting its first refresh token works once, then reads as theft and
+  loses its chain. See SECURITY and the migration guide.
+
+- **Public MCP clients are supported.** Dynamic registration honours
+  ``token_endpoint_auth_method: none``: the client gets no
+  ``client_secret``, must use PKCE, may refresh without a secret, and is
+  refused the ``client_credentials`` grant with ``unauthorized_client``.
+  Confidential registrations now include ``client_secret_expires_at: 0``.
+  An unknown auth method is refused with ``invalid_client_metadata``
+  (RFC 7591), as is a ``client_name`` that is empty after sanitising.
+  ``OAuth2ClientManager.create_client(token_endpoint_auth_method="none")``
+  creates one; ``regenerate_client_secret`` raises ``ValueError`` for it.
+
+- **A token-store fault answers 503 on ``/mcp``, not 401.** The MCP token
+  lookups read the store strictly and raise the new
+  ``actingweb.oauth2_server.TokenStoreUnavailable`` when it cannot be read;
+  before, a throttle or connection error read as "no such token".
+  **Behavior change:** ``GET /mcp`` and the JSON-RPC ``POST /mcp`` answer
+  503 with ``Retry-After: 5`` during a store outage (cached tokens keep
+  working), with both the Flask and the FastAPI integration; ``/oauth/token``
+  answers 500 ``server_error`` rather than ``invalid_grant`` or 401
+  ``invalid_client`` (the client registration is read strictly too), so
+  clients keep their refresh token and their registration.
+  ``validate_access_token`` and ``validate_mcp_token`` raise it; callers
+  that guard ``/mcp`` should fail closed on it.
+
+- **``Attributes.loaded``** tells an empty bucket from a failed read after
+  ``get_bucket()``, which returns ``{}`` for both. Use it instead of the
+  private ``_bucket_loaded``.
+
+- **``/oauth/token`` runs a throttled purge of expired MCP token rows**
+  (at most once an hour per process, before the grant so a slow purge never
+  delays a rotated token's response; PostgreSQL only, DynamoDB relies on
+  native TTL). ``cleanup_expired_tokens()`` also sweeps provider-token
+  rows, and its result gains a ``provider_tokens`` count; the actor rows of
+  expired and consumed tokens are removed by that purge (PostgreSQL) or by
+  native TTL (DynamoDB).
+
+- **Additive keyword arguments:** ``create_authorization_code(redirect_uri=)``,
+  ``exchange_authorization_code(redirect_uri=)``,
+  ``MCPHandler.clear_token_from_cache(actor_wide=)`` and
+  ``evict_caches_for_token(actor_wide=)``. The attribute backend protocol
+  gains ``conditional_update_attr(ttl_seconds=)`` (the same conditional
+  write sets the row's TTL, never re-creating a deleted row) and
+  ``delete_by_chain(defer_name=)`` (a row-by-row backend deletes that row
+  last); both built-in backends implement them, and a custom backend must
+  accept them. New constants
+  ``MCP_REFRESH_TOKEN_GRACE_PERIOD`` (60), ``MCP_REFRESH_TOKEN_REUSE_WINDOW``
+  (two days) and ``MCP_TOKEN_PURGE_INTERVAL`` (one hour).
 
 - **The agent workflow instructions in ``CLAUDE.md`` now follow the shared
   contract the slash commands read**: one ``## Workflow`` section listing the
@@ -18,6 +202,50 @@ CHANGED
   sections are folded into it without loss. ``thoughts/`` gains a
   ``features/`` directory for ``/plan_feature`` documents, matching the
   ``actingweb_mcp`` repository. No library code changes.
+
+FIXED
+~~~~~
+
+- **Codex and other public MCP clients failed every refresh with
+  ``invalid_client``.** Registration ignored ``token_endpoint_auth_method:
+  none`` and issued a secret, and the token endpoint turned an absent secret
+  into ``""``, which the refresh grant compared and rejected. Fixed by the
+  public-client support above. **Connectors registered before 3.15 stay
+  confidential clients** and keep failing refresh until they are removed
+  and added again, which registers them afresh.
+
+- **``/oauth/token`` reported every 400 as ``invalid_request``.** The error
+  body was rebuilt from the status, so ``invalid_grant`` (a dead refresh
+  token), ``unsupported_grant_type`` and ``unauthorized_client`` reached
+  clients as ``invalid_request``. The body now carries the server's error
+  code (RFC 6749 §5.2).
+
+- **The scheduled MCP token cleanup deleted live index rows on a store
+  fault.** ``cleanup_expired_tokens()`` read each indexed token through a
+  lookup that answered "absent" when the store could not be read, and then
+  removed the index row, orphaning a valid token until it expired. The
+  lookup now raises ``TokenStoreUnavailable`` on a fault, so the scheduled
+  job fails loudly and removes nothing it could not read; rerun it.
+
+- **HTTP Basic client credentials were ignored when the body also carried
+  ``client_id``.** The ``Authorization: Basic`` header is now read whenever
+  present and form-urldecoded (RFC 6749 §2.3.1). A body ``client_id`` or
+  ``client_secret`` that differs from the header's is ``invalid_request``;
+  identical values in both places are accepted.
+
+- **Deleting an MCP client could silently leave its tokens.**
+  ``revoke_client_tokens`` read the client's token buckets with a read that
+  answers "empty" on a store fault, so a delete during a throttle revoked
+  nothing and logged "Revoked 0 tokens". It now raises
+  ``TokenStoreUnavailable`` after revoking what it could read, and counts
+  only deletes it could confirm (DynamoDB reports a failed delete as a
+  success). Each revoked access token is also dropped from this process's
+  MCP token cache (other workers keep theirs up to 300 seconds).
+  ``delete_client`` still deletes the client, which is what
+  disables its refresh tokens, and logs at ERROR that unrevoked access
+  tokens expire within an hour. **Behavior change:** it confirms the client
+  row and its index row are gone, and answers ``False`` when neither is,
+  instead of reporting success for a client that can still authenticate.
 
 v3.14.7: September 14, 2026
 ----------------------------

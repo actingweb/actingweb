@@ -507,6 +507,7 @@ class DbAttribute:
         old_data: Any = None,
         new_data: Any = None,
         timestamp: datetime | None = None,
+        ttl_seconds: int | None = None,
     ) -> bool:
         """
         Conditionally update an attribute only if current data matches old_data.
@@ -520,6 +521,8 @@ class DbAttribute:
             old_data: Expected current data value (for comparison)
             new_data: New data to set if current matches old_data
             timestamp: Optional timestamp
+            ttl_seconds: When given, the same UPDATE sets ``ttl_timestamp``
+                (plus the clock-skew buffer, as ``set_attr`` does)
 
         Returns:
             True if update succeeded (current matched old_data), False otherwise
@@ -535,6 +538,14 @@ class DbAttribute:
         new_data = sanitize_json_data(new_data, log_source="attribute")
         old_data = sanitize_json_data(old_data, log_source="attribute")
 
+        ttl_sql = ""
+        ttl_params: tuple[Any, ...] = ()
+        if ttl_seconds is not None:
+            from actingweb.constants import TTL_CLOCK_SKEW_BUFFER
+
+            ttl_sql = ", ttl_timestamp = %s"
+            ttl_params = (int(time.time()) + ttl_seconds + TTL_CLOCK_SKEW_BUFFER,)
+
         try:
             with get_connection() as conn:
                 with conn.cursor() as cur:
@@ -542,15 +553,16 @@ class DbAttribute:
                     # Use JSONB comparison for reliability - PostgreSQL normalizes JSONB values
                     # so key ordering and whitespace differences don't affect equality
                     cur.execute(
-                        """
+                        f"""
                         UPDATE attributes
-                        SET data = %s::jsonb, timestamp = %s
+                        SET data = %s::jsonb, timestamp = %s{ttl_sql}
                         WHERE id = %s AND bucket_name = %s AND bucket = %s
                           AND data = %s::jsonb
                         """,
                         (
                             json.dumps(new_data),
                             timestamp,
+                            *ttl_params,
                             actor_id,
                             bucket_name,
                             bucket,
@@ -648,6 +660,7 @@ class DbAttribute:
         actor_id: str | None = None,
         buckets: list[str] | None = None,
         chain_id: str | None = None,
+        defer_name: str | None = None,
     ) -> int:
         """
         Delete attributes whose stored ``data->>'chain_id'`` matches ``chain_id``.
@@ -661,6 +674,8 @@ class DbAttribute:
             actor_id: Storage partition id (the system actor the tokens live under).
             buckets: Bucket whitelist (the SPA access + refresh token buckets).
             chain_id: The refresh-token family identifier to delete.
+            defer_name: Ignored: the single DELETE is atomic, so no row can be
+                left half-way.
 
         Returns:
             Number of rows deleted.

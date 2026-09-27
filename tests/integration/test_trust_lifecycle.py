@@ -96,6 +96,19 @@ class TestTrustLifecycle:
         assert response.status_code == 200
         # Verify secret exists in response
         assert "secret" in response.json()
+        assert "verification_token" in response.json()
+
+        # The list route never carries peer credentials
+        response = requests.get(
+            f"{actor1['url']}/trust",
+            auth=(actor1["creator"], actor1["passphrase"]),
+        )
+        assert response.status_code == 200
+        rows = response.json()
+        assert rows
+        for row in rows:
+            assert "secret" not in row
+            assert "verification_token" not in row
 
         # Actor2 should have received the trust request - approve it from actor2's side
         response = requests.put(

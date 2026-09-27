@@ -56,15 +56,18 @@ class OAuth2ClientManager:
             >>> print(f"Client ID: {client['client_id']}")
         """
         try:
-            # Prepare registration data following RFC 7591
+            # Prepare registration data following RFC 7591. The auth method
+            # is passed explicitly so the registry validates it: "none" makes
+            # a public client (no secret, PKCE required at authorize).
+            auth_method = kwargs.pop("token_endpoint_auth_method", None)
             registration_data = {
                 "client_name": client_name,
                 "grant_types": ["authorization_code", "refresh_token"],
                 "response_types": ["code"],
                 "scope": "mcp",
-                "token_endpoint_auth_method": "client_secret_post",
                 "trust_type": trust_type,
                 **kwargs,
+                "token_endpoint_auth_method": auth_method or "client_secret_post",
             }
 
             logger.info(
@@ -229,6 +232,13 @@ class OAuth2ClientManager:
                 )
                 return None
 
+            # A public client has no secret to regenerate.
+            if client_data.get("token_endpoint_auth_method") == "none":
+                raise ValueError(
+                    f"OAuth2 client {client_id} is a public client "
+                    "(token_endpoint_auth_method 'none') and has no secret"
+                )
+
             # Only allow regeneration for custom clients (those starting with mcp_)
             if not client_id.startswith("mcp_"):
                 logger.error(
@@ -259,9 +269,6 @@ class OAuth2ClientManager:
                 logger.error(
                     f"OAuth2 client secret regeneration failed - stored secret does not match for {client_id}"
                 )
-                logger.error(
-                    f"Expected: {new_client_secret}, Got: {verify_client_data.get('client_secret') if verify_client_data else 'None'}"
-                )
                 return None
 
             # Return updated client data with formatted timestamp
@@ -272,6 +279,8 @@ class OAuth2ClientManager:
 
             return client_data
 
+        except ValueError:
+            raise
         except Exception as e:
             logger.error(
                 f"Error regenerating OAuth2 client secret for {client_id}: {e}"

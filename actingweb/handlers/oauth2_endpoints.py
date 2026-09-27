@@ -24,6 +24,7 @@ import logging
 from typing import TYPE_CHECKING, Any, Optional
 
 # MCP protocol version constants (single source of truth)
+from ..log_summary import summarize_payload
 from ..mcp.protocol import LATEST_PROTOCOL_VERSION, SUPPORTED_PROTOCOL_VERSIONS
 from .base_handler import BaseHandler
 
@@ -180,7 +181,8 @@ class OAuth2EndpointsHandler(BaseHandler):
                 return client_response
 
             except ValueError as e:
-                return self.error_response(400, str(e))
+                # RFC 7591 §3.2.2
+                return self._token_error(400, "invalid_client_metadata", str(e))
             except Exception as e:
                 logger.error(f"Client registration failed: {e}")
                 return self.error_response(500, "Client registration failed")
@@ -215,6 +217,12 @@ class OAuth2EndpointsHandler(BaseHandler):
                     "response_type": self.request.get("response_type") or "",
                     "scope": self.request.get("scope") or "",
                     "state": self.request.get("state") or "",
+                    # PKCE (RFC 7636). AWWebObj.get returns "" for an absent
+                    # parameter; absent is None so the server can tell.
+                    "code_challenge": self.request.get("code_challenge") or None,
+                    "code_challenge_method": (
+                        self.request.get("code_challenge_method") or None
+                    ),
                 }
             else:  # POST
                 # Parse form data for POST
@@ -243,11 +251,18 @@ class OAuth2EndpointsHandler(BaseHandler):
                     "provider": form_data.get("provider", [""])[
                         0
                     ],  # OAuth provider (google/github)
+                    # PKCE, carried back by the form's hidden inputs
+                    "code_challenge": form_data.get("code_challenge", [""])[0] or None,
+                    "code_challenge_method": form_data.get(
+                        "code_challenge_method", [""]
+                    )[0]
+                    or None,
                 }
 
             # Debug logging for MCP OAuth2 flow
             logger.debug(
-                f"OAuth2 authorization {method} request with params: {dict(params)}"
+                f"OAuth2 authorization {method} request with params: "
+                f"{summarize_payload(params)}"
             )
 
             # Handle using OAuth2 server
@@ -255,7 +270,10 @@ class OAuth2EndpointsHandler(BaseHandler):
                 params, method
             )
 
-            logger.debug(f"OAuth2 server response: {server_response}")
+            logger.debug(
+                f"OAuth2 server response: action={server_response.get('action')} "
+                f"{summarize_payload(server_response)}"
+            )
 
             if server_response.get("action") == "show_form":
                 # Show email form (preserve existing UX)
@@ -321,51 +339,91 @@ class OAuth2EndpointsHandler(BaseHandler):
             # Debug: log received form data keys only (never log body content which contains secrets)
             logger.debug(f"Token request form data keys: {list(form_data.keys())}")
 
-            # Extract parameters (parse_qs returns lists)
-            params = {
+            # Extract parameters (parse_qs returns lists). An absent or empty
+            # secret is None, never "": the grants treat None as "no secret".
+            params: dict[str, Any] = {
                 "grant_type": form_data.get("grant_type", [""])[0],
                 "code": form_data.get("code", [""])[0],
                 "refresh_token": form_data.get("refresh_token", [""])[0],
                 "redirect_uri": form_data.get("redirect_uri", [""])[0],
                 "client_id": form_data.get("client_id", [""])[0],
-                "client_secret": form_data.get("client_secret", [""])[0],
+                "client_secret": form_data.get("client_secret", [None])[0] or None,
                 "code_verifier": form_data.get("code_verifier", [""])[0],
             }
 
-            # Check for client_id in Authorization header if not in form data
-            if not params["client_id"]:
-                if not self.request.headers:
-                    return self.error_response(
-                        400, "invalid_request: No Authorization headsers"
-                    )
-                auth_header = self.request.headers.get(
-                    "Authorization", ""
-                ) or self.request.headers.get("authorization", "")
-                if auth_header.startswith("Basic "):
-                    try:
-                        import base64
+            # client_secret_basic: parse the Authorization header whenever it
+            # is present, not only when the body lacks client_id. A body
+            # client_id or client_secret that disagrees with the header's is
+            # refused (RFC 6749 §2.3.1: one method per request); identical
+            # duplicates are tolerated.
+            headers = self.request.headers or {}
+            auth_header = headers.get("Authorization", "") or headers.get(
+                "authorization", ""
+            )
+            if auth_header.startswith("Basic "):
+                header_client_id: str | None = None
+                header_secret: str | None = None
+                try:
+                    import base64
+                    from urllib.parse import unquote_plus
 
-                        encoded_creds = auth_header[6:]  # Remove "Basic "
-                        decoded_creds = base64.b64decode(encoded_creds).decode("utf-8")
-                        if ":" in decoded_creds:
-                            client_id, client_secret = decoded_creds.split(":", 1)
-                            params["client_id"] = client_id
-                            if not params["client_secret"]:
-                                params["client_secret"] = client_secret
-                            logger.debug(
-                                f"Extracted client_id from Authorization header: {client_id}"
-                            )
-                    except Exception as e:
-                        logger.warning(f"Failed to parse Authorization header: {e}")
+                    decoded_creds = base64.b64decode(auth_header[6:]).decode("utf-8")
+                    if ":" in decoded_creds:
+                        raw_id, raw_secret = decoded_creds.split(":", 1)
+                        # RFC 6749 §2.3.1: form-urlencoded before base64
+                        header_client_id = unquote_plus(raw_id)
+                        header_secret = unquote_plus(raw_secret) or None
+                except Exception as e:
+                    logger.warning(f"Failed to parse Authorization header: {e}")
+                if header_client_id:
+                    if params["client_id"] and params["client_id"] != header_client_id:
+                        return self._token_error(
+                            400,
+                            "invalid_request",
+                            "client_id in the body does not match the "
+                            "Authorization header",
+                        )
+                    if (
+                        params["client_secret"]
+                        and header_secret
+                        and params["client_secret"] != header_secret
+                    ):
+                        return self._token_error(
+                            400,
+                            "invalid_request",
+                            "client_secret in the body does not match the "
+                            "Authorization header",
+                        )
+                    params["client_id"] = header_client_id
+                    if not params["client_secret"]:
+                        params["client_secret"] = header_secret
+                    logger.debug(
+                        f"Read client credentials from Authorization header: "
+                        f"{header_client_id}"
+                    )
+
+            # Expired MCP token rows are purged at most once per interval per
+            # process (PostgreSQL; DynamoDB relies on native TTL). Before the
+            # grant, not after: a slow first purge (a backlog, a cold start)
+            # must never hold back a response whose refresh token was already
+            # consumed, or the client's retry would read as theft. Never let
+            # housekeeping fail the grant.
+            try:
+                self.oauth2_server.token_manager.maybe_purge_expired_tokens()
+            except Exception as e:
+                logger.debug(f"MCP token purge skipped: {e}")
 
             # Handle using OAuth2 server
             token_response = self.oauth2_server.handle_token_request(params)
 
             if "error" in token_response:
-                error = token_response.get("error", "server_error")
-                description = token_response.get("error_description", "Unknown error")
+                error = str(token_response.get("error", "server_error"))
+                description = str(
+                    token_response.get("error_description", "Unknown error")
+                )
 
-                # Map to appropriate HTTP status codes
+                # Map to appropriate HTTP status codes; the body keeps the
+                # server's own error code (RFC 6749 §5.2).
                 if error in ["invalid_client"]:
                     status = 401
                     # RFC 6749 Section 5.2: MUST include WWW-Authenticate for 401
@@ -380,12 +438,15 @@ class OAuth2EndpointsHandler(BaseHandler):
                     "invalid_request",
                     "invalid_grant",
                     "unsupported_grant_type",
+                    "unauthorized_client",
+                    "invalid_scope",
                 ]:
                     status = 400
                 else:
                     status = 500
+                    error = "server_error"
 
-                return self.error_response(status, f"{error}: {description}")
+                return self._token_error(status, error, description)
 
             logger.debug(
                 f"Token request successful for client {params.get('client_id', 'unknown')}"
@@ -656,6 +717,11 @@ class OAuth2EndpointsHandler(BaseHandler):
                             "trust_type": default_trust_type,
                             "flow_type": "mcp_oauth2",
                             "provider": prov_name,
+                            # PKCE binds the code the callback issues
+                            "code_challenge": form_data.get("code_challenge"),
+                            "code_challenge_method": form_data.get(
+                                "code_challenge_method"
+                            ),
                         }
                         encrypted_state = oauth2_server.state_manager.create_state(
                             mcp_context
@@ -708,10 +774,9 @@ class OAuth2EndpointsHandler(BaseHandler):
                 "state": form_data.get("state", ""),
                 "response_type": form_data.get("response_type", "code"),  # OAuth2 PKCE
                 "scope": form_data.get("scope", ""),  # OAuth2 scope
-                "code_challenge": form_data.get("code_challenge", ""),  # OAuth2 PKCE
-                "code_challenge_method": form_data.get(
-                    "code_challenge_method", ""
-                ),  # OAuth2 PKCE
+                "code_challenge": form_data.get("code_challenge") or "",  # PKCE
+                "code_challenge_method": form_data.get("code_challenge_method")
+                or "",  # PKCE
                 "client_name": form_data.get("client_name", "MCP Client"),
                 "form_action": "/oauth/authorize",
                 "form_method": "POST",
@@ -731,6 +796,8 @@ class OAuth2EndpointsHandler(BaseHandler):
                 "client_id": form_data.get("client_id", ""),
                 "redirect_uri": form_data.get("redirect_uri", ""),
                 "state": form_data.get("state", ""),
+                "code_challenge": form_data.get("code_challenge") or "",
+                "code_challenge_method": form_data.get("code_challenge_method") or "",
                 "client_name": form_data.get("client_name", "MCP Client"),
                 "form_action": "/oauth/authorize",
                 "form_method": "POST",
@@ -853,8 +920,10 @@ class OAuth2EndpointsHandler(BaseHandler):
                         "redirect_url": f"{self.config.proto}{self.config.fqdn}/",
                     }
 
-                # Clear MCP token cache if the token was cached there
-                if token and response.get("action") == "success":
+                # Clear MCP token cache if the token was cached there. On a
+                # retry too: the store fault may have hit before revoke_token
+                # could evict, and a cached token must not outlive a logout.
+                if token and response.get("action") in ("success", "retry"):
                     try:
                         from .mcp import MCPHandler
 
@@ -879,6 +948,20 @@ class OAuth2EndpointsHandler(BaseHandler):
                         "session_id",
                     ],
                     "redirect_url": f"{self.config.proto}{self.config.fqdn}/",
+                }
+
+            if response["action"] == "retry":
+                # An MCP token whose revocation hit a store fault: it is kept
+                # so presenting it again retries. A 200 would tell the client
+                # it is done, so answer 503 with Retry-After and clear no
+                # cookies (the client needs its token for the retry).
+                self.response.headers["Retry-After"] = "5"
+                self.response.set_status(503, "Service Unavailable")
+                return {
+                    "success": False,
+                    "error": "temporarily_unavailable",
+                    "message": response["message"],
+                    "method": method,
                 }
 
             if response["action"] == "success":
@@ -935,6 +1018,14 @@ class OAuth2EndpointsHandler(BaseHandler):
         Returns:
             Response dict indicating logout success/failure
         """
+        # An MCP access token (the token manager's prefix; SPA session tokens
+        # are hex and never carry it) is revoked in the MCP token store, with
+        # every token of its refresh-token chain. The session manager below
+        # does not know it.
+        token_manager = self.oauth2_server.token_manager
+        if token.startswith(token_manager.token_prefix):
+            return self._handle_mcp_token_logout(token)
+
         try:
             from ..oauth_session import get_oauth2_session_manager
 
@@ -981,6 +1072,35 @@ class OAuth2EndpointsHandler(BaseHandler):
                 "redirect_url": f"{self.config.proto}{self.config.fqdn}/",
             }
 
+    def _handle_mcp_token_logout(self, token: str) -> dict[str, Any]:
+        """Revoke an MCP access token and its refresh-token chain on logout.
+
+        On success the endpoint answers as it always has (success, cookies
+        cleared). On a token store fault the action is ``retry``, which
+        :meth:`_handle_logout_request` answers with 503 and ``Retry-After``,
+        so the client presents the token again. What the retry finds depends
+        on where the fault hit (see ``ActingWebTokenManager.revoke_token``):
+        a chain that could not be revoked is revoked then; a token whose row
+        delete was unconfirmed is already dead and the retry confirms it.
+        """
+        from ..oauth2_server.token_manager import TokenStoreUnavailable
+
+        try:
+            if not self.oauth2_server.token_manager.revoke_token(token):
+                logger.debug("Logout with an unknown or expired MCP token")
+        except TokenStoreUnavailable as e:
+            logger.error(f"MCP token revocation on logout failed: {e}")
+            return {
+                "action": "retry",
+                "message": "Token store temporarily unavailable; retry the logout",
+            }
+        return {
+            "action": "success",
+            "message": "Successfully logged out",
+            "clear_cookies": ["oauth_token", "oauth_refresh_token", "session_id"],
+            "redirect_url": f"{self.config.proto}{self.config.fqdn}/",
+        }
+
     def _clear_provider_token_for_actor(self, actor_id: str) -> None:
         """
         Clear the stored OAuth provider token from the actor store on logout.
@@ -1018,6 +1138,15 @@ class OAuth2EndpointsHandler(BaseHandler):
                 logger.debug(f"No provider token to clear for actor {actor_id}")
         except Exception as e:
             logger.debug(f"Clearing provider token for actor {actor_id}: {e}")
+
+    def _token_error(
+        self, status_code: int, error: str, description: str
+    ) -> dict[str, Any]:
+        """OAuth2 error body with an explicit error code (RFC 6749 §5.2,
+        RFC 7591 §3.2.2), unlike :meth:`error_response`, which derives the code
+        from the status."""
+        self.response.set_status(status_code)
+        return {"error": error, "error_description": description}
 
     def error_response(self, status_code: int, message: str) -> dict[str, Any]:
         """Create OAuth2 error response."""

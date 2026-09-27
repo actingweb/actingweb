@@ -11,6 +11,7 @@ ActingWeb server supports MCP (and thus all actors can be accessed via MCP), or
 MCP is not available at all.
 """
 
+import hashlib
 import json
 import logging
 import re
@@ -20,10 +21,58 @@ from typing import Any
 
 # Global cache for MCP client info during session establishment
 _mcp_client_info_cache: dict[str, dict[str, Any]] = {}
+# Upper bound on cached clientInfo entries; oldest are evicted first.
+MCP_CLIENT_INFO_CACHE_MAX = 1000
+# Guards every read and write of _mcp_client_info_cache: the pruning
+# iterates it, and threaded servers run initializes concurrently.
+_mcp_client_info_lock = threading.Lock()
+
+# clientInfo fields that name the client; capped like a trust row's name.
+_CLIENT_INFO_NAME_FIELDS = ("name", "version", "title")
+# Any other string (a URL, an implementation name) gets a looser cap.
+_CLIENT_INFO_OTHER_MAX_LEN = 200
+
+
+def _sanitize_client_info_value(value: Any, depth: int = 0) -> Any:
+    """Sanitise every string inside a clientInfo value, nested included."""
+    if isinstance(value, str):
+        return sanitize_client_name(value, max_len=_CLIENT_INFO_OTHER_MAX_LEN)
+    if depth >= 3:
+        return None
+    if isinstance(value, dict):
+        return {
+            sanitize_client_name(str(k), max_len=64): _sanitize_client_info_value(
+                v, depth + 1
+            )
+            for k, v in value.items()
+        }
+    if isinstance(value, list):
+        return [_sanitize_client_info_value(v, depth + 1) for v in value]
+    return value
+
+
+def _sanitized_client_info(client_info: dict[str, Any]) -> dict[str, Any]:
+    """A copy of ``clientInfo`` with every string in it sanitised.
+
+    ``clientInfo`` arrives in an unauthenticated ``initialize`` and reaches
+    applications through ``MCPContext.client_info``, often rendered into
+    text an LLM reads. ``name`` (always present), ``version`` and ``title``
+    are capped like a trust row's client name; every other string, nested
+    ones included (``implementation``, ``icons``), is stripped the same way
+    with a looser cap. Nesting deeper than three levels is dropped.
+    """
+    info: dict[str, Any] = _sanitize_client_info_value(client_info)
+    info["name"] = sanitize_client_name(client_info.get("name"))
+    for field in _CLIENT_INFO_NAME_FIELDS[1:]:
+        if field in client_info:
+            info[field] = sanitize_client_name(client_info.get(field))
+    return info
+
 
 # Imports after MCP availability check
 from .. import __version__, aw_web_request  # noqa: E402
 from .. import config as config_class  # noqa: E402
+from ..client_text import sanitize_client_name  # noqa: E402
 from ..interface.actor_interface import ActorInterface  # noqa: E402
 from ..interface.hooks import HookRegistry  # noqa: E402
 from ..mcp.protocol import (  # noqa: E402
@@ -35,6 +84,7 @@ from ..mcp.protocol import (  # noqa: E402
     supports_structured_content,
     unsupported_version_message,
 )
+from ..oauth2_server.token_manager import TokenStoreUnavailable  # noqa: E402
 from ..runtime_context import RuntimeContext  # noqa: E402
 from .base_handler import BaseHandler  # noqa: E402
 
@@ -242,6 +292,54 @@ def _bump_cache_generation() -> None:
     global _cache_generation
     with _cache_generation_lock:
         _cache_generation += 1
+
+
+# Token-only evictions (refresh-token rotation replacing one access token)
+# do not move the global generation: that would cancel every in-flight fill
+# in the process once per refresh of any client. They record the evicted
+# token instead, and only a fill of that token is refused. Entries are kept
+# long enough to outlive any storage read and then pruned.
+_token_eviction_seq = 0
+_token_evictions: dict[str, tuple[int, float]] = {}
+_TOKEN_EVICTION_KEEP_SECONDS = 120
+# The highest sequence number pruned so far. A fill that snapshotted before
+# it may have missed a pruned eviction of its own token (a storage read that
+# stalled past the keep time), so it is refused; the next request re-reads.
+_token_eviction_pruned_through = 0
+
+
+def _current_token_eviction_seq() -> int:
+    return _token_eviction_seq
+
+
+def _record_token_eviction(token: str) -> None:
+    global _token_eviction_seq, _token_eviction_pruned_through
+    now = time.time()
+    with _cache_generation_lock:
+        _token_eviction_seq += 1
+        _token_evictions[token] = (_token_eviction_seq, now)
+        stale = [
+            (t, seq)
+            for t, (seq, at) in _token_evictions.items()
+            if now - at > _TOKEN_EVICTION_KEEP_SECONDS
+        ]
+        for t, seq in stale:
+            del _token_evictions[t]
+            _token_eviction_pruned_through = max(_token_eviction_pruned_through, seq)
+
+
+def _token_fill_still_valid(token: str, seq_at_read: int | None) -> bool:
+    """False when ``token`` alone was evicted while this request read it.
+
+    Also False when the read began before an eviction record that has since
+    been pruned: that record may have been this token's.
+    """
+    if seq_at_read is None:
+        return True
+    if seq_at_read < _token_eviction_pruned_through:
+        return False
+    entry = _token_evictions.get(token)
+    return entry is None or entry[0] <= seq_at_read
 
 
 def _cache_fill_still_valid(generation_at_read: int | None) -> bool:
@@ -715,7 +813,11 @@ class MCPHandler(BaseHandler):
         if not self.config.mcp:
             return self._mcp_disabled_response()
         try:
-            if not self.authenticate_and_get_actor_cached():
+            try:
+                authenticated = self.authenticate_and_get_actor_cached()
+            except TokenStoreUnavailable:
+                return self._token_store_unavailable_response()
+            if not authenticated:
                 base_url = f"{self.config.proto}{self.config.fqdn}"
                 self.response.headers["WWW-Authenticate"] = mcp_www_authenticate(
                     base_url
@@ -842,7 +944,10 @@ class MCPHandler(BaseHandler):
                 return self._handle_ping(request_id, params)
 
             # All other methods require authentication
-            actor = self.authenticate_and_get_actor_cached()
+            try:
+                actor = self.authenticate_and_get_actor_cached()
+            except TokenStoreUnavailable:
+                return self._token_store_unavailable_response(request_id)
             if not actor:
                 # Set proper HTTP 401 response headers for framework-agnostic handling
                 base_url = f"{self.config.proto}{self.config.fqdn}"
@@ -909,24 +1014,45 @@ class MCPHandler(BaseHandler):
         self._negotiated_version = negotiated_version
 
         # Store client info for later use during OAuth2 authentication
-        client_info = params.get("clientInfo", {})
-        if client_info:
-            # Store in a global cache keyed by IP or other identifier
-            # This will be retrieved during OAuth2 flow to store permanently
+        raw_client_info = params.get("clientInfo", {})
+        if raw_client_info and isinstance(raw_client_info, dict):
+            # clientInfo is unauthenticated, client-supplied text: sanitise it
+            # before it is cached, logged or written anywhere.
+            client_info = _sanitized_client_info(raw_client_info)
+            # Cached under the client's Mcp-Session-Id, which the client
+            # chooses; lookups prefer the token key below, which is tied to a
+            # credential.
             self._store_mcp_client_info_temporarily(client_info)
-            logger.info(f"Stored MCP client info: {client_info['name']}")
+            logger.info(f"MCP client initialize: {client_info.get('name', '')}")
 
-            # ALSO try to store immediately if we have an authenticated actor
+            # On an authenticated initialize, name the trust row and cache
+            # the info under the bearer token as well.
             try:
-                # Check if this is an authenticated request (for re-initialization)
                 actor = self.authenticate_and_get_actor_cached()
                 if actor:
                     logger.debug(
                         "Found authenticated actor during initialize, storing client info in trust relationship"
                     )
+                    owner = getattr(actor, "id", None)
+                    token_key = self._token_client_info_key()
+                    if token_key:
+                        self._cache_client_info(token_key, client_info, owner=owner)
+                    session_key = self._get_session_key()
+                    if session_key and owner:
+                        self._cache_client_info(session_key, client_info, owner=owner)
                     self._update_trust_with_client_info(actor, client_info)
-            except Exception:
-                pass
+            except TokenStoreUnavailable as e:
+                # initialize itself does not need the token store; the trust
+                # row is named on the client's next authenticated initialize.
+                logger.warning(
+                    f"Token store unavailable during initialize; client info "
+                    f"not recorded: {e}"
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Could not record client info on initialize: "
+                    f"{type(e).__name__}: {e}"
+                )
 
         # Build capabilities based on what's actually available
         capabilities: dict[str, Any] = {}
@@ -1036,7 +1162,6 @@ class MCPHandler(BaseHandler):
 
     def _handle_tools_list(self, request_id: Any, actor: Any) -> dict[str, Any]:
         """Handle MCP tools/list request with permission filtering and client filtering."""
-        global _mcp_client_info_cache
         tools = []
 
         if self.hooks:
@@ -1089,31 +1214,30 @@ class MCPHandler(BaseHandler):
                         client_type = "universal"
                     # Client type detected (no logging needed for routine operation)
                 else:
-                    # Fallback: Check global client info cache like the other handler does
-                    session_key = self._get_session_key()
-                    if session_key in _mcp_client_info_cache:
-                        cached_info = _mcp_client_info_cache[session_key]
-                        if cached_info and "client_info" in cached_info:
-                            fallback_client_info = cached_info["client_info"]
-                            if fallback_client_info.get("name"):
-                                client_name = fallback_client_info["name"].lower()
-                                if any(
-                                    pattern in client_name
-                                    for pattern in ["openai", "chatgpt", "gpt"]
-                                ):
-                                    client_type = "chatgpt"
-                                elif any(
-                                    pattern in client_name
-                                    for pattern in ["claude", "anthropic"]
-                                ):
-                                    client_type = "claude"
-                                elif "cursor" in client_name:
-                                    client_type = "cursor"
-                                elif "mcp-inspector" in client_name:
-                                    client_type = "mcp_inspector"
-                                else:
-                                    client_type = "universal"
-                                # Client type detected (no logging needed for routine operation)
+                    # Fallback: this client's own live clientInfo, if cached
+                    fallback_client_info = self._resolve_live_client_info(
+                        getattr(actor, "id", None)
+                    )
+                    if fallback_client_info:
+                        if fallback_client_info.get("name"):
+                            client_name = fallback_client_info["name"].lower()
+                            if any(
+                                pattern in client_name
+                                for pattern in ["openai", "chatgpt", "gpt"]
+                            ):
+                                client_type = "chatgpt"
+                            elif any(
+                                pattern in client_name
+                                for pattern in ["claude", "anthropic"]
+                            ):
+                                client_type = "claude"
+                            elif "cursor" in client_name:
+                                client_type = "cursor"
+                            elif "mcp-inspector" in client_name:
+                                client_type = "mcp_inspector"
+                            else:
+                                client_type = "universal"
+                            # Client type detected (no logging needed for routine operation)
 
                     if not client_type:
                         client_type = "universal"
@@ -1242,21 +1366,20 @@ class MCPHandler(BaseHandler):
 
             # Fallback: Check global client info cache if trust relationship doesn't have client info yet
             if not client_info:
-                session_key = self._get_session_key()
-                if session_key in _mcp_client_info_cache:
-                    cached_info = _mcp_client_info_cache[session_key]
-                    if cached_info and "client_info" in cached_info:
-                        fallback_client_info = cached_info["client_info"]
-                        if fallback_client_info.get("name"):
-                            client_info = {
-                                "name": fallback_client_info["name"],
-                                "version": fallback_client_info.get("version", ""),
-                                "platform": "",
-                                "type": "mcp",
-                            }
-                            logger.debug(
-                                f"Using fallback client info from cache: {client_info}"
-                            )
+                fallback_client_info = self._resolve_live_client_info(
+                    getattr(actor, "id", None)
+                )
+                if fallback_client_info:
+                    if fallback_client_info.get("name"):
+                        client_info = {
+                            "name": fallback_client_info["name"],
+                            "version": fallback_client_info.get("version", ""),
+                            "platform": "",
+                            "type": "mcp",
+                        }
+                        logger.debug(
+                            f"Using fallback client info from cache: {client_info}"
+                        )
 
             if client_info and client_info.get("name"):
                 client_name = client_info["name"].lower()
@@ -2019,11 +2142,8 @@ class MCPHandler(BaseHandler):
 
         Callers should treat ``None`` as "this transport doesn't expose a
         per-connection id; the transport-level guard is inactive — use the
-        client-id guard alone." We deliberately do NOT fall back to
-        ``_get_session_key()``: that returns an in-process cache key
-        (``<client_ip>:<hash(UA)>``), not a real per-connection identifier,
-        and degenerates to the placeholder ``"unknown:0"`` when the request
-        carries no ``Mcp-Session-Id``, no ``remote_addr`` and no ``User-Agent``.
+        client-id guard alone." There is no fallback: without the header
+        there is no per-connection identifier to return.
         """
         try:
             headers = getattr(self.request, "headers", None)
@@ -2042,17 +2162,42 @@ class MCPHandler(BaseHandler):
             logger.debug("Mcp-Session-Id header lookup failed", exc_info=True)
         return None
 
-    def _resolve_live_client_info(self) -> dict[str, Any] | None:
-        """Live ``clientInfo`` from the current session's ``initialize``, if cached."""
-        try:
-            session_key = self._get_session_key()
-        except Exception:
-            logger.debug(
-                "_get_session_key() failed in live client_info resolution",
-                exc_info=True,
-            )
+    def _resolve_live_client_info(
+        self, actor_id: str | None = None
+    ) -> dict[str, Any] | None:
+        """Live ``clientInfo`` of this client's ``initialize``, if cached.
+
+        Looked up by this request's bearer token first, then by its
+        ``Mcp-Session-Id``. The token key is tied to a credential; the session
+        id is chosen by the client, so on an authenticated request
+        (``actor_id`` given) a session entry is trusted only as far as its
+        owner:
+
+        - an entry an authenticated ``initialize`` of this actor wrote (or
+          that this actor claimed) is used, and its age is reset, so an active
+          session keeps it past the ten-minute expiry and across token
+          rotation, when the new token has no entry of its own;
+        - an entry owned by another actor is ignored;
+        - an unowned entry (an unauthenticated ``initialize``) is claimed for
+          this actor on first use. From then on no ``initialize`` but its
+          owner's can replace it while it is fresh, and each use moves it to
+          the newest end of the size-bound eviction order.
+
+        Residual: once an entry has expired (ten minutes without use), an
+        unauthenticated ``initialize`` that knows the session id can seed a
+        new one before the victim's next request claims it.
+        """
+        token_key = self._token_client_info_key()
+        if token_key:
+            info = MCPHandler.get_stored_client_info(token_key)
+            if info:
+                return info
+        session_key = self._get_session_key()
+        if not session_key:
             return None
-        return MCPHandler.get_stored_client_info(session_key)
+        if actor_id is None:
+            return MCPHandler.get_stored_client_info(session_key)
+        return MCPHandler._claim_client_info(session_key, actor_id)
 
     def authenticate_and_get_actor_cached(self) -> Any:
         """
@@ -2136,7 +2281,7 @@ class MCPHandler(BaseHandler):
                             else "",
                             token_data=token_data,
                             transport_session_id=self._resolve_transport_session_id(),
-                            client_info=self._resolve_live_client_info(),
+                            client_info=self._resolve_live_client_info(actor_id),
                         )
 
                         # Log cache performance periodically
@@ -2169,6 +2314,7 @@ class MCPHandler(BaseHandler):
             # If a revocation lands while we are reading, none of what we read
             # gets cached — see the comment on _cache_generation.
             generation_at_read = _current_cache_generation()
+            token_seq_at_read = _current_token_eviction_seq()
 
             # Validate ActingWeb token (not Google token)
             token_validation = oauth2_server.validate_mcp_token(bearer_token)
@@ -2179,7 +2325,9 @@ class MCPHandler(BaseHandler):
             actor_id, client_id, token_data = token_validation
 
             # Cache token validation result
-            if _cache_fill_still_valid(generation_at_read):
+            if _cache_fill_still_valid(generation_at_read) and _token_fill_still_valid(
+                bearer_token, token_seq_at_read
+            ):
                 _token_cache[bearer_token] = {
                     "actor_id": actor_id,
                     "client_id": client_id,
@@ -2217,7 +2365,7 @@ class MCPHandler(BaseHandler):
                 peer_id=trust_relationship.peerid if trust_relationship else "",
                 token_data=token_data,
                 transport_session_id=self._resolve_transport_session_id(),
-                client_info=self._resolve_live_client_info(),
+                client_info=self._resolve_live_client_info(actor_id),
             )
 
             logger.debug(
@@ -2225,6 +2373,10 @@ class MCPHandler(BaseHandler):
             )
             return actor_interface
 
+        except TokenStoreUnavailable:
+            # A store fault is not an invalid token: the callers answer 503
+            # so a consumer's guard fails closed and the client retries.
+            raise
         except Exception as e:
             logger.error(f"Error during ActingWeb token authentication: {e}")
             return None
@@ -2630,9 +2782,10 @@ class MCPHandler(BaseHandler):
 
             peer_id = mcp_context.peer_id
 
-            # Extract client metadata from client_info
-            client_name = client_info.get("name", "MCP Client")
-            client_version = client_info.get("version")
+            # Extract client metadata from client_info. Client-supplied text:
+            # sanitised before it reaches the trust row.
+            client_name = sanitize_client_name(client_info.get("name")) or "MCP Client"
+            client_version = sanitize_client_name(client_info.get("version")) or None
 
             # Get platform info from User-Agent or client info
             client_platform = None
@@ -2644,6 +2797,7 @@ class MCPHandler(BaseHandler):
                     client_platform = (
                         f"{impl.get('name', 'Unknown')} {impl.get('version', '')}"
                     )
+            client_platform = sanitize_client_name(client_platform, max_len=200) or None
 
             # Check if client info has actually changed before updating
             trust_rel = mcp_context.trust_relationship
@@ -2710,76 +2864,144 @@ class MCPHandler(BaseHandler):
             logger.error(f"Could not update trust with client info: {e}")
             # Non-critical, don't raise exception
 
+    def _token_store_unavailable_response(
+        self, request_id: Any = None
+    ) -> dict[str, Any]:
+        """503 for a token-store fault during authentication.
+
+        A 401 here would tell the client its token is invalid (it would
+        re-authenticate against the same broken store) and would let a
+        consumer's own guard read the fault as "not our user".
+        """
+        logger.warning("MCP token store unavailable during authentication")
+        self.response.headers["Retry-After"] = "5"
+        self.response.set_status(503, "Service Unavailable")
+        return self._create_jsonrpc_error(
+            request_id, -32603, "Token store temporarily unavailable; retry"
+        )
+
     def _store_mcp_client_info_temporarily(self, client_info: dict[str, Any]) -> None:
-        """Store MCP client info temporarily until OAuth2 authentication completes."""
+        """Cache an unauthenticated ``initialize``'s clientInfo for this session.
+
+        Only under the client's ``Mcp-Session-Id``: without one there is no
+        key that belongs to this client alone, and nothing is cached.
+        """
+        session_key = self._get_session_key()
+        if session_key:
+            self._cache_client_info(session_key, client_info)
+
+    @staticmethod
+    def _cache_client_info(
+        key: str, client_info: dict[str, Any], owner: str | None = None
+    ) -> None:
+        """Insert into the bounded, age-pruned client-info cache.
+
+        ``owner`` is the actor of an authenticated ``initialize``. A fresh
+        owned entry is replaced only by a write from the same owner: neither
+        an unauthenticated ``initialize`` nor another actor's authenticated
+        one naming that session can overwrite what its owner recorded.
+        """
         global _mcp_client_info_cache
 
-        # Use client IP and user agent as session key
-        session_key = self._get_session_key()
-        _mcp_client_info_cache[session_key] = {
-            "client_info": client_info,
-            "timestamp": time.time(),
-        }
-
-        # Clean up old entries (older than 10 minutes)
         current_time = time.time()
-        expired_keys = [
-            key
-            for key, data in _mcp_client_info_cache.items()
-            if current_time - data["timestamp"] > 600
-        ]
-        for key in expired_keys:
-            del _mcp_client_info_cache[key]
+        with _mcp_client_info_lock:
+            existing = _mcp_client_info_cache.get(key)
+            if (
+                existing is not None
+                and existing.get("owner")
+                and existing.get("owner") != owner
+                and current_time - existing["timestamp"] < 600
+            ):
+                return
+            _mcp_client_info_cache.pop(key, None)
+            _mcp_client_info_cache[key] = {
+                "client_info": client_info,
+                "timestamp": current_time,
+                "owner": owner,
+            }
 
-    def _get_session_key(self) -> str:
-        """Generate a session key for the in-memory client_info cache.
+            # Clean up old entries (older than 10 minutes), then bound the
+            # size; dict order is insertion order, so the first keys are the
+            # oldest.
+            expired_keys = [
+                k
+                for k, data in _mcp_client_info_cache.items()
+                if current_time - data["timestamp"] > 600
+            ]
+            for k in expired_keys:
+                del _mcp_client_info_cache[k]
+            while len(_mcp_client_info_cache) > MCP_CLIENT_INFO_CACHE_MAX:
+                del _mcp_client_info_cache[next(iter(_mcp_client_info_cache))]
 
-        Prefers the MCP HTTP-streamable spec's ``Mcp-Session-Id`` header,
-        which is the canonical per-MCP-connection identifier and is
-        distinct across concurrent sessions that share one OAuth2
-        credential. Falls back to ``client_ip + user_agent[:50]`` hash
-        only when the header is genuinely absent.
+    def _get_session_key(self) -> str | None:
+        """Cache key for this MCP connection's clientInfo, or None.
 
-        Why this matters: the same key stores ``client_info`` at
-        ``initialize`` time and looks it up on every subsequent request.
-        The pure IP+UA fallback collided when two clients on one
-        credential happened to share IP plus the first 50 chars of UA
-        (e.g. both proxied through the same backend), so a second
-        client's ``initialize`` silently overwrote the first client's
-        cached identity — the symptom captured as eval round-11
-        Finding X.
+        ``mcp-session:<Mcp-Session-Id>`` when the client sends the MCP
+        HTTP-streamable session header, which is per connection and distinct
+        across concurrent sessions sharing one credential. None otherwise.
+
+        There is deliberately no fallback. The old one,
+        ``remote_addr + hash(User-Agent[:50])``, was shared by every client
+        with the same User-Agent prefix (nothing sets ``remote_addr``), so an
+        unauthenticated ``initialize`` could supply another user's client
+        name. An authenticated request without the header is keyed by its
+        token instead (:meth:`_token_client_info_key`).
         """
-        try:
-            headers = getattr(self.request, "headers", None)
-            if headers is not None:
-                session_id = headers.get("Mcp-Session-Id")
-                if not session_id and isinstance(headers, dict):
-                    for k, v in headers.items():
-                        if isinstance(k, str) and k.lower() == "mcp-session-id":
-                            session_id = v
-                            break
-                if session_id:
-                    return f"mcp-session:{session_id}"
-        except Exception:
-            logger.debug("Mcp-Session-Id header lookup failed", exc_info=True)
-        client_ip = getattr(self.request, "remote_addr", "unknown")
-        user_agent = getattr(self.request, "headers", {}).get("User-Agent", "")[:50]
-        return f"{client_ip}:{hash(user_agent)}"
+        session_id = self._resolve_transport_session_id()
+        if session_id:
+            return f"mcp-session:{session_id}"
+        return None
+
+    def _token_client_info_key(self) -> str | None:
+        """Cache key derived from this request's bearer token, or None."""
+        auth_header = self.get_auth_header()
+        if not auth_header or not auth_header.startswith("Bearer "):
+            return None
+        digest = hashlib.sha256(auth_header[7:].encode("utf-8")).hexdigest()
+        return f"token:{digest[:32]}"
+
+    @staticmethod
+    def _claim_client_info(key: str, actor_id: str) -> dict[str, Any] | None:
+        """A session entry for an authenticated request of ``actor_id``.
+
+        See :meth:`_resolve_live_client_info`: owned by this actor, or
+        unowned and claimed now; its age is reset. None when absent, expired
+        or owned by another actor.
+        """
+        with _mcp_client_info_lock:
+            data = _mcp_client_info_cache.get(key)
+            if data is None:
+                return None
+            now = time.time()
+            if now - data["timestamp"] >= 600:
+                _mcp_client_info_cache.pop(key, None)
+                return None
+            owner = data.get("owner")
+            if owner is not None and owner != actor_id:
+                return None
+            data["owner"] = actor_id
+            data["timestamp"] = now
+            # Move it to the newest end: the size bound evicts in insertion
+            # order, and an entry in use must not be the first to go.
+            _mcp_client_info_cache.pop(key)
+            _mcp_client_info_cache[key] = data
+            return data["client_info"]
 
     @classmethod
     def get_stored_client_info(cls, session_key: str) -> dict[str, Any] | None:
         """Retrieve stored client info for a session key."""
         global _mcp_client_info_cache
-        if session_key in _mcp_client_info_cache:
-            data = _mcp_client_info_cache[session_key]
+        with _mcp_client_info_lock:
+            data = _mcp_client_info_cache.get(session_key)
+            if data is None:
+                return None
             if time.time() - data["timestamp"] < 600:  # 10 minutes
                 return data["client_info"]
-            else:
-                del _mcp_client_info_cache[session_key]
+            _mcp_client_info_cache.pop(session_key, None)
         return None
 
     @classmethod
-    def clear_token_from_cache(cls, token: str) -> bool:
+    def clear_token_from_cache(cls, token: str, actor_wide: bool = True) -> bool:
         """
         Clear a specific token from the MCP authentication cache.
 
@@ -2788,6 +3010,11 @@ class MCPHandler(BaseHandler):
 
         Args:
             token: The token to remove from cache
+            actor_wide: When True (revocation, logout), also evict the owning
+                actor's wrapper and trust entries. Refresh-token rotation
+                passes False: the actor's authorization did not change, only
+                one access token was replaced, and evicting the actor would
+                make every hourly refresh a cold path for every client on it.
 
         Returns:
             True if token was found and removed, False if not found in cache
@@ -2795,6 +3022,13 @@ class MCPHandler(BaseHandler):
         global _token_cache, _actor_cache, _trust_cache
 
         token_found = False
+
+        if not actor_wide:
+            token_found = _token_cache.pop(token, None) is not None
+            # An in-flight authentication must not re-cache what it read just
+            # before the delete; only a fill of this token is refused.
+            _record_token_eviction(token)
+            return token_found
 
         # Remove token from cache
         if token in _token_cache:

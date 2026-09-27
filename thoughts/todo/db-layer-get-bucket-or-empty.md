@@ -1,4 +1,4 @@
-# Five DB-layer `get_bucket(...) or {}` sites fold a fault into "empty"
+# Six `get_bucket(...)` sites fold a fault into "empty"
 
 Deferred from 3.14.4
 (`thoughts/plans/2026-09-02-identifier-matching-and-metadata-fidelity.md`,
@@ -10,6 +10,14 @@ for a caught fault. Verified at the 3.14.4 tree.
 - `actingweb/callback_processor.py:547`
 - `actingweb/remote_storage.py:200` and `:297`
 - `actingweb/fanout.py:256`
+- `actingweb/oauth2_server/client_registry.py:272` (`list_clients_for_actor`,
+  added 2026-09-27 from the PR #148 review). One layer up: it reads through
+  `Attributes.get_bucket()`, which reports a backend fault as an empty
+  bucket and exposes the difference only as `Attributes.loaded` (3.15).
+  `if not bucket_data: return []` therefore reports "no clients" on a
+  fault. Its only caller is `OAuthClientManager.list_clients` (display),
+  so nothing acts on the empty answer today; the fix is `store.loaded`, as
+  `ActingWebTokenManager._snapshot_bucket` does.
 
 Each reads `db.get_bucket() or {}` and proceeds as if the bucket were empty
 when it could not be read. Not a regression — before 3.14.4 `None` already

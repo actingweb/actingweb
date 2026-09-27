@@ -62,6 +62,7 @@ Feature-specific tests that logically belong together.
 | `devtest_attributes_flow` | DevTest attributes operations | test_devtest_attributes_flow.py |
 | `mcp_integration` | MCP (Model Context Protocol) integration tests | test_mcp_integration.py |
 | `oauth2_integration` | OAuth2 authentication and token flow | test_oauth2_integration.py |
+| `mcp_refresh_rotation_backend` | MCP refresh-token rotation, reuse detection and the 3.15 backend protocol keywords on the real backends | test_mcp_refresh_rotation_backend.py |
 | `www_templates` | Web UI template rendering | test_www_templates.py |
 | `flask_integration` | Flask framework integration | test_flask_integration.py |
 | `fastapi_integration` | FastAPI framework integration | test_fastapi_integration.py |

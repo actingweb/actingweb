@@ -19,6 +19,7 @@ Contents
 .. toctree::
    :maxdepth: 2
 
+   v3.15
    v3.14
    v3.13
    v3.11
@@ -29,6 +30,14 @@ Contents
 
 Version Migrations
 ==================
+
+**v3.15 Migration**
+   Guide for upgrading to ActingWeb 3.15, a security release for the MCP
+   OAuth2 server and the trust API. The trust list stops returning peer
+   secrets, MCP refresh tokens become single-use, public MCP clients (such
+   as Codex) work, and PKCE is enforced on the built-in sign-in pages.
+   Connectors added before 3.15 as public clients need to be removed and
+   added again once.
 
 **v3.14 Migration**
    Guide for upgrading to ActingWeb 3.14. Property lists are faster and

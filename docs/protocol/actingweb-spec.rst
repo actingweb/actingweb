@@ -1491,6 +1491,10 @@ relationship, but give the same output. If no relationships exist, a 200 OK
 with an empty array ``[]`` MUST be returned. A 404 Not Found MUST only be
 returned when a specific trust relationship (by peer ID) does not exist.
 
+The list response MUST NOT include the shared secret or the verification
+token; those are read from the individual relationship URI (see Reading
+Trust Relationship Data).
+
 ::
 
   Example:
@@ -1502,7 +1506,6 @@ returned when a specific trust relationship (by peer ID) does not exist.
 
   [
   {
-    "secret": "ecb8a519288db1498a9b04706fc19e52abd3e0c0",
     "verified": false,
     "peerid": "e41f4aae-4dee-10d0-b725-0af0a413bcf2",
     "relationship": "friend",
@@ -1515,7 +1518,6 @@ returned when a specific trust relationship (by peer ID) does not exist.
     "approved": false
   },
   {
-    "secret": "8f4e4e86f249599c4be21aa4445065d4e6905cd4",
     "verified": true,
     "peerid": "testid",
     "relationship": "friend",

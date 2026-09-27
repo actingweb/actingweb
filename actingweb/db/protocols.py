@@ -1151,6 +1151,7 @@ class DbAttributeProtocol(Protocol):
         old_data: Any = None,
         new_data: Any = None,
         timestamp: datetime | None = None,
+        ttl_seconds: int | None = None,
     ) -> bool:
         """
         Conditionally update an attribute only if current data matches old_data.
@@ -1164,9 +1165,13 @@ class DbAttributeProtocol(Protocol):
             old_data: Expected current data value (for comparison)
             new_data: New data to set if current matches old_data
             timestamp: Optional timestamp
+            ttl_seconds: When given, the same write sets the row's storage
+                TTL (as ``set_attr`` does). Never an upsert: a row that is
+                gone stays gone.
 
         Returns:
             True if update succeeded (current matched old_data), False otherwise
+            (a mismatch, a missing row, or a backend fault)
         """
         ...
 
@@ -1211,6 +1216,7 @@ class DbAttributeProtocol(Protocol):
         actor_id: str | None = None,
         buckets: list[str] | None = None,
         chain_id: str | None = None,
+        defer_name: str | None = None,
     ) -> int:
         """
         Delete attributes whose stored ``data['chain_id']`` matches ``chain_id``.
@@ -1223,6 +1229,10 @@ class DbAttributeProtocol(Protocol):
             actor_id: Storage partition id the tokens live under.
             buckets: Bucket names to search.
             chain_id: The chain/family identifier to delete.
+            defer_name: A row name to delete last. A backend that deletes row
+                by row (DynamoDB) removes it only after every other row, so a
+                fault part-way leaves it in place; a set-based delete
+                (PostgreSQL) is atomic and ignores it.
 
         Returns:
             Number of rows deleted.

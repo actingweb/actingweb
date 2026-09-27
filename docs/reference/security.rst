@@ -53,7 +53,21 @@ OAuth2
 - Expect 401 at protected endpoints with a proper `WWW-Authenticate` header.
 - When multiple providers are configured, 401 redirects go to the factory login page (not directly to a provider) to let the user choose.
 - **SPA/mobile session tokens** (``/oauth/spa/token``) use single-use rotating refresh tokens with reuse detection. A reuse beyond the ~60s concurrency grace window revokes only the offending **rotation family** (the lineage from one login), not all of the actor's tokens — so one stale/leaked token can't log the user out everywhere. Within the grace window a reuse still gets a full rotation, so a client that dropped a rotation recovers. Clients should single-flight refreshes and treat a ``401`` as "session expired" (route to login), never leaving a blank page. See :doc:`../guides/spa-authentication`.
+- **MCP refresh tokens** (``/oauth/token``) rotate the same way since 3.15: single-use, a 60-second grace in which a replay rotates again, a two-day window in which a replay revokes the chain and answers ``400 invalid_grant`` (the SPA endpoint answers 401; the MCP endpoint follows RFC 6749 §5.2). Authorization codes are single-use atomically, and the built-in authorize pages require PKCE ``S256``. Public MCP clients (``token_endpoint_auth_method: none``) are supported and must use PKCE.
+- **Revocation is per process**: rotating or revoking an MCP token clears the MCP cache of the process that did it; other workers or containers may honour a revoked access token for up to 300 seconds from their own cache.
+- **A token-store fault fails closed**: ``/mcp`` answers 503 rather than treating an unreadable store as an invalid token, and ``validate_mcp_token`` raises ``TokenStoreUnavailable``.
 - **Used refresh tokens** are retained only for a short reuse-detection window (``SPA_REFRESH_TOKEN_REUSE_WINDOW``, 2 days) and purged automatically; ensure DynamoDB TTL is enabled on the attributes table (PostgreSQL purges itself). See :doc:`../guides/database-maintenance`.
+
+Trust API and client-supplied text
+----------------------------------
+
+- ``GET /{actor_id}/trust`` never returns ``secret`` or ``verification_token``; the per-relationship GET returns them to creator and admin only.
+- MCP ``clientInfo``, registration ``client_name`` and User-Agents are client-supplied and unauthenticated. ActingWeb sanitises them (``actingweb.client_text``) before storing, logging or returning them, and the trust GET routes sanitise ``desc`` too. Treat them as untrusted text anyway when you render them, especially into LLM context.
+
+Logging
+-------
+
+- The peer proxy (``actingweb.aw_proxy``), the MCP authorize endpoint and the FastAPI trust routes log request bodies as a summary (``keys=[...] bytes=N``), never their values. Key names of a property write are property names; keep ``actingweb.aw_proxy`` above DEBUG in production if those are sensitive.
 
 Mobile OAuth2
 -------------

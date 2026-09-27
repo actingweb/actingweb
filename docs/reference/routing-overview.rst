@@ -217,6 +217,38 @@ OAuth Provider Endpoints
     exchange (Apple-on-Android, GitHub mobile). ``apple_mobile_ticket`` is a
     backward-compatible alias.
 
+MCP OAuth2 Server Endpoints
+===========================
+
+ActingWeb is the OAuth2 authorization server for MCP clients (enabled with
+``with_mcp()``). Errors follow RFC 6749 §5.2 and RFC 7591 §3.2.2: the body is
+``{"error": <code>, "error_description": ...}`` with the real code.
+
+- ``POST /oauth/register`` — dynamic client registration (RFC 7591). 201 on
+  success. ``token_endpoint_auth_method`` may be ``none`` (public client, no
+  ``client_secret`` in the response), ``client_secret_post`` (default) or
+  ``client_secret_basic`` (the response carries ``client_secret`` and
+  ``client_secret_expires_at: 0``). Anything else, or a ``client_name`` that
+  is empty after sanitising, is 400 ``invalid_client_metadata``.
+- ``GET /oauth/authorize`` — shows the sign-in form; ``POST
+  /oauth/authorize`` — the form submission, which redirects to the chosen
+  provider. ``code_challenge`` with ``code_challenge_method=S256`` binds the
+  code; ``plain`` or a missing method is 400 ``invalid_request``, and a
+  public client must send a challenge. Errors on this endpoint are
+  pre-redirect validation failures.
+- ``POST /oauth/token`` — ``authorization_code``, ``refresh_token`` and
+  ``client_credentials`` grants. Client credentials in the body or an
+  ``Authorization: Basic`` header (a body ``client_id`` that differs from the
+  header's is ``invalid_request``). Errors: 400 ``invalid_request``,
+  ``invalid_grant`` (dead, expired, reused or foreign code or refresh
+  token), ``unsupported_grant_type``, ``unauthorized_client`` (a public
+  client asking for ``client_credentials``), ``invalid_scope``; 401
+  ``invalid_client`` with ``WWW-Authenticate``; 500 ``server_error``
+  (including a token-store fault). Every refresh returns a new
+  ``refresh_token``; the presented one is single-use.
+- ``/mcp`` answers 401 ``invalid_token`` without a valid bearer token and 503
+  with ``Retry-After`` when the token store cannot be read.
+
 Notes
 =====
 

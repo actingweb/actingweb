@@ -12,6 +12,7 @@ from actingweb.constants import (
     DEFAULT_CREATOR,
 )
 from actingweb.db import get_actor, get_actor_list, get_subscription_suspension
+from actingweb.log_summary import summarize_payload
 from actingweb.permission_evaluator import PermissionResult, get_permission_evaluator
 from actingweb.property_list import ListCorruptionError
 from actingweb.secret_compare import secret_digest_equals, secret_equals
@@ -142,7 +143,8 @@ class Actor:
                     "data": json.loads(response.content.decode("utf-8", "ignore")),
                 }
                 logger.debug(
-                    f"Got peer info from url({url}) with body({response.content})"
+                    f"Got peer info from url({url}) with body("
+                    f"{summarize_payload(res['data'], encoded_len=len(response.content))})"
                 )
                 return res
             except (TypeError, ValueError, KeyError) as e:
@@ -194,7 +196,8 @@ class Actor:
                     "data": response.json(),
                 }
                 logger.debug(
-                    f"Got peer info async from url({url}) with body({response.content})"
+                    f"Got peer info async from url({url}) with body("
+                    f"{summarize_payload(res['data'], encoded_len=len(response.content))})"
                 )
                 return res
         except (TypeError, ValueError, KeyError) as e:
@@ -1156,8 +1159,10 @@ class Actor:
 
         requrl = url + "/trust/" + relationship
         data = json.dumps(params)
+        # The body carries the new trust secret and verification token.
         logger.info(
-            f"Requesting trust relationship async from peer at ({requrl}) with data({data})"
+            f"Requesting trust relationship async from peer at ({requrl}) with "
+            f"data({summarize_payload(params, encoded_len=len(data))})"
         )
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
@@ -1553,7 +1558,7 @@ class Actor:
                 "Creating remote subscription at url("
                 + requrl
                 + ") with body ("
-                + str(data)
+                + summarize_payload(params, encoded_len=len(data))
                 + ")"
             )
             response = requests.post(
@@ -1572,7 +1577,7 @@ class Actor:
                 "Created remote subscription at url("
                 + requrl
                 + ") and got JSON response ("
-                + str(response.content)
+                + summarize_payload(response.content)
                 + ")"
             )
             content_str = (
@@ -1851,7 +1856,7 @@ class Actor:
                     "Doing sync callback on subscription at url("
                     + requrl
                     + ") with body("
-                    + str(data)
+                    + summarize_payload(params, encoded_len=len(data))
                     + ")"
                 )
                 response = requests.post(
@@ -1908,7 +1913,7 @@ class Actor:
                     "Doing async callback on subscription at url("
                     + requrl
                     + ") with body("
-                    + str(data)
+                    + summarize_payload(params, encoded_len=len(data))
                     + ")"
                 )
                 async with httpx.AsyncClient(

@@ -25,12 +25,40 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from ... import request_context, runtime_context
 from ...aw_web_request import AWWebObj
 from ...handlers import bot, factory, mcp, services
+from ...log_summary import summarize_payload
 from .base_integration import BaseActingWebIntegration, default_templates_dir
 
 if TYPE_CHECKING:
     from ..app import ActingWebApp
 
 logger = logging.getLogger(__name__)
+
+
+def _logout_outcome(handler_response: Any) -> tuple[bool, str]:
+    """``(success, message)`` for the web UI's logout response.
+
+    The web UI branch builds its own response, so it reads the logout
+    handler's: a status of 400 or more, or a body with ``error``, is a
+    failure (the handler's message, or its error description); a success
+    whose message is not the plain one (a revocation that failed) passes
+    that message through. Anything unreadable is treated as success, as
+    this branch always did.
+    """
+    default = (True, "Logged out successfully")
+    try:
+        body = json.loads(bytes(handler_response.body))
+    except Exception:
+        return default
+    if not isinstance(body, dict):
+        return default
+    message = body.get("message")
+    status = getattr(handler_response, "status_code", 200) or 200
+    if status >= 400 or body.get("error"):
+        text = message or body.get("error_description") or "Logout failed"
+        return (False, str(text))
+    if isinstance(message, str) and message and message != "Successfully logged out":
+        return (True, message)
+    return default
 
 
 # Pydantic Models for Type Safety
@@ -668,7 +696,8 @@ class FastAPIIntegration(BaseActingWebIntegration):
 
                 if mcp_context:
                     self.logger.debug(
-                        f"Using MCP OAuth2 callback handler with context: {mcp_context}"
+                        "Using MCP OAuth2 callback handler with context: "
+                        f"{summarize_payload(mcp_context)}"
                     )
                     # This is an MCP OAuth2 callback
                     return await self._handle_oauth2_endpoint(request, "callback")
@@ -765,13 +794,14 @@ class FastAPIIntegration(BaseActingWebIntegration):
             if oauth_cookie:
                 self.logger.info("Logout: Clearing web UI session")
                 # Delegate to handler for session token revocation
-                await self._handle_oauth2_endpoint(request, "logout")
+                handler_response = await self._handle_oauth2_endpoint(request, "logout")
 
                 if is_ajax:
+                    success, message = _logout_outcome(handler_response)
                     response = JSONResponse(
                         {
-                            "success": True,
-                            "message": "Logged out successfully",
+                            "success": success,
+                            "message": message,
                             "redirect_url": "/",
                         },
                         headers=get_spa_cors_headers(),
@@ -1346,7 +1376,7 @@ class FastAPIIntegration(BaseActingWebIntegration):
 
         # Debug logging for trust endpoint
         if "/trust" in str(request.url.path) and params:
-            self.logger.debug(f"Trust query params: {params}")
+            self.logger.debug(f"Trust query params: {summarize_payload(params)}")
 
         return {
             "method": request.method,
@@ -2038,7 +2068,8 @@ class FastAPIIntegration(BaseActingWebIntegration):
             and webobj.response.template_values
         ):
             self.logger.debug(
-                f"OAuth2 template values found: {webobj.response.template_values}"
+                "OAuth2 template values found: "
+                f"{summarize_payload(webobj.response.template_values)}"
             )
             if self.templates:
                 # This is an HTML template response
@@ -2467,7 +2498,9 @@ class FastAPIIntegration(BaseActingWebIntegration):
                         args.append(relationship)
                         if peerid:
                             args.append(peerid)
-                    self.logger.debug(f"Trust handler args: {args}, kwargs: {kwargs}")
+                    self.logger.debug(
+                        f"Trust handler args: {args}, kwargs: {summarize_payload(kwargs)}"
+                    )
             elif endpoint == "permissions":
                 # Permission query endpoint: /{actor_id}/permissions/{peer_id}
                 if kwargs.get("peer_id"):

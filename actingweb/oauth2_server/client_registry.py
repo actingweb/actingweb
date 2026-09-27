@@ -13,10 +13,20 @@ from typing import Any
 
 from .. import attribute
 from .. import config as config_class
+from ..client_text import sanitize_client_name
 from ..constants import CLIENT_INDEX_BUCKET, OAUTH2_SYSTEM_ACTOR
 from ..secret_compare import secret_equals
 
 logger = logging.getLogger(__name__)
+
+# token_endpoint_auth_method values accepted at registration. "none" is a
+# public client; the two secret transports are both accepted for any
+# confidential client at the token endpoint.
+SUPPORTED_TOKEN_ENDPOINT_AUTH_METHODS = (
+    "none",
+    "client_secret_post",
+    "client_secret_basic",
+)
 
 
 class MCPClientRegistry:
@@ -45,17 +55,42 @@ class MCPClientRegistry:
             actor_id: The actor this client will be associated with
             registration_data: Client registration request data
 
-        Returns:
-            Client registration response per RFC 7591
-        """
-        # Generate client credentials
-        client_id = f"mcp_{secrets.token_hex(16)}"
-        client_secret = secrets.token_urlsafe(32)
+        ``token_endpoint_auth_method`` may be ``none`` (a public client: no
+        secret is issued, PKCE is required at authorize, and it may refresh
+        without a secret), ``client_secret_post`` (the default) or
+        ``client_secret_basic``; anything else raises ``ValueError``, which
+        the registration endpoint answers as ``invalid_client_metadata``.
+        ``client_name`` is sanitised (``actingweb.client_text``).
 
-        # Validate required fields
-        client_name = registration_data.get("client_name")
+        Returns:
+            Client registration response per RFC 7591. ``client_secret`` and
+            ``client_secret_expires_at`` (0) are present only for a
+            confidential client.
+        """
+        # Validate required fields. The name is client-supplied and
+        # unauthenticated; it names the client's trust row and is rendered by
+        # applications, so it is sanitised before it is stored or returned.
+        client_name = sanitize_client_name(registration_data.get("client_name"))
         if not client_name:
             raise ValueError("client_name is required")
+
+        # RFC 7591 §2: absent means client_secret_basic in the RFC, but this
+        # registry has always defaulted to client_secret_post and both are
+        # accepted as the transport for any confidential client. "none" makes
+        # a public client: no secret is issued and PKCE is its proof.
+        auth_method = (
+            registration_data.get("token_endpoint_auth_method") or "client_secret_post"
+        )
+        if auth_method not in SUPPORTED_TOKEN_ENDPOINT_AUTH_METHODS:
+            raise ValueError(
+                "token_endpoint_auth_method must be one of "
+                + ", ".join(SUPPORTED_TOKEN_ENDPOINT_AUTH_METHODS)
+            )
+        is_public = auth_method == "none"
+
+        # Generate client credentials
+        client_id = f"mcp_{secrets.token_hex(16)}"
+        client_secret: str | None = None if is_public else secrets.token_urlsafe(32)
 
         # Prepare client data
         client_data = {
@@ -65,7 +100,7 @@ class MCPClientRegistry:
             "redirect_uris": registration_data.get("redirect_uris", []),
             "grant_types": ["authorization_code", "refresh_token"],
             "response_types": ["code"],
-            "token_endpoint_auth_method": "client_secret_post",
+            "token_endpoint_auth_method": auth_method,
             "trust_type": registration_data.get("trust_type", "mcp_client"),
             "created_at": int(time.time()),
             "actor_id": actor_id,
@@ -88,9 +123,8 @@ class MCPClientRegistry:
 
         # Return registration response
         base_url = f"{self.config.proto}{self.config.fqdn}"
-        response = {
+        response: dict[str, Any] = {
             "client_id": client_id,
-            "client_secret": client_secret,
             "client_name": client_name,
             "redirect_uris": client_data["redirect_uris"],
             "grant_types": client_data["grant_types"],
@@ -105,6 +139,10 @@ class MCPClientRegistry:
             "token_endpoint": f"{base_url}/oauth/token",
             "issuer": base_url,
         }
+        if client_secret is not None:
+            # RFC 7591 §3.2.1: REQUIRED when a secret is issued; 0 = never.
+            response["client_secret"] = client_secret
+            response["client_secret_expires_at"] = 0
 
         logger.debug(f"Registered MCP client {client_id} for actor {actor_id}")
         return response
@@ -146,6 +184,42 @@ class MCPClientRegistry:
                     )
 
         return client_data
+
+    def load_client_strict(self, client_id: str) -> dict[str, Any] | None:
+        """Load a client record, telling absence from a store fault.
+
+        For the token endpoint, where "no such client" is answered with 401
+        ``invalid_client`` and a client may drop its registration on it. The
+        other lookups (authorize, the callback filter, the SDK) keep
+        :meth:`validate_client`'s fail-as-absent read.
+
+        Returns:
+            The client record, or None when the client does not exist.
+
+        Raises:
+            TokenStoreUnavailable: the client index or the client row could
+                not be read.
+        """
+        from ..db import get_attribute
+        from .token_manager import TokenStoreUnavailable
+
+        db = get_attribute(self.config)
+        try:
+            index_row = db.get_attr_strict(
+                actor_id=OAUTH2_SYSTEM_ACTOR, bucket=CLIENT_INDEX_BUCKET, name=client_id
+            )
+            actor_id = index_row.get("data") if index_row else None
+            if not actor_id:
+                return None
+            client_row = db.get_attr_strict(
+                actor_id=actor_id, bucket=self.clients_bucket, name=client_id
+            )
+        except Exception as e:
+            raise TokenStoreUnavailable(
+                f"Could not read client {client_id} from the store"
+            ) from e
+        client_data = client_row.get("data") if client_row else None
+        return client_data if isinstance(client_data, dict) else None
 
     def validate_redirect_uri(self, client_id: str, redirect_uri: str) -> bool:
         """
@@ -256,29 +330,51 @@ class MCPClientRegistry:
                 )
 
             # Revoke all tokens for this client to terminate access immediately
-            from .token_manager import get_actingweb_token_manager
+            from .token_manager import (
+                TokenStoreUnavailable,
+                get_actingweb_token_manager,
+            )
 
             token_manager = get_actingweb_token_manager(self.config)
-            revoked_count = token_manager.revoke_client_tokens(actor_id, client_id)
-            logger.info(f"Revoked {revoked_count} tokens for client {client_id}")
-
-            # Delete from actor's bucket
-            bucket = attribute.Attributes(
-                actor_id=actor_id, bucket="mcp_clients", config=self.config
-            )
-            bucket.delete_attr(name=client_id)
-
-            # Delete from global index
             try:
-                global_bucket = attribute.Attributes(
-                    actor_id=OAUTH2_SYSTEM_ACTOR,
-                    bucket=CLIENT_INDEX_BUCKET,
-                    config=self.config,
+                revoked_count = token_manager.revoke_client_tokens(actor_id, client_id)
+                logger.info(f"Revoked {revoked_count} tokens for client {client_id}")
+            except TokenStoreUnavailable as e:
+                # Deleting the client below is what stops its refresh tokens
+                # (the grants cannot authenticate it any more), so go on; an
+                # access token that was not revoked lives out its TTL (1 h).
+                logger.error(
+                    f"Deleting client {client_id}: could not list all of its "
+                    f"tokens ({e}); deleting the client anyway, which disables "
+                    f"its refresh tokens; unrevoked access tokens expire within "
+                    f"an hour"
                 )
-                global_bucket.delete_attr(name=client_id)
-            except Exception as e:
+
+            # Delete the client row and its index row, confirming each: the
+            # token endpoint needs both to authenticate the client, so either
+            # one gone disables it. A plain delete cannot be trusted to report
+            # a fault (DynamoDB swallows it), and the outage that stopped the
+            # token listing above usually fails these too.
+            from ..single_use import delete_confirmed
+
+            row_gone = delete_confirmed(
+                self.config, actor_id, self.clients_bucket, client_id
+            )
+            index_gone = delete_confirmed(
+                self.config, OAUTH2_SYSTEM_ACTOR, CLIENT_INDEX_BUCKET, client_id
+            )
+            if not row_gone and not index_gone:
+                logger.error(
+                    f"Could not delete OAuth2 client {client_id} for actor "
+                    f"{actor_id}: neither its row nor its index row is confirmed "
+                    f"gone, so it can still authenticate"
+                )
+                return False
+            if not (row_gone and index_gone):
                 logger.warning(
-                    f"Failed to remove client {client_id} from global index: {e}"
+                    f"OAuth2 client {client_id}: only its "
+                    f"{'row' if row_gone else 'index row'} is confirmed deleted; "
+                    f"that is enough to disable it"
                 )
 
             # Delete corresponding trust relationship

@@ -240,6 +240,7 @@ class DbAttribute:
         old_data=None,
         new_data=None,
         timestamp=None,
+        ttl_seconds=None,
     ):  # type: ignore[misc]
         """Conditionally update an attribute only if current data matches old_data.
 
@@ -256,6 +257,9 @@ class DbAttribute:
             old_data: Expected current data value (for comparison)
             new_data: New data to set if current matches old_data
             timestamp: Optional timestamp
+            ttl_seconds: When given, the same conditional update sets
+                ``ttl_timestamp`` (plus the clock-skew buffer, as ``set_attr``
+                does)
 
         Returns:
             True if update succeeded (current matched old_data), False otherwise
@@ -300,6 +304,14 @@ class DbAttribute:
             actions: Sequence[object] = [Attribute.data.set(new_data)]
             if timestamp:
                 actions = list(actions) + [Attribute.timestamp.set(timestamp)]
+            if ttl_seconds is not None:
+                from ...constants import TTL_CLOCK_SKEW_BUFFER
+
+                actions = list(actions) + [
+                    Attribute.ttl_timestamp.set(
+                        int(time.time()) + ttl_seconds + TTL_CLOCK_SKEW_BUFFER
+                    )
+                ]
 
             item.update(
                 actions=actions,  # type: ignore[arg-type]
@@ -362,7 +374,7 @@ class DbAttribute:
         return 0
 
     @staticmethod
-    def delete_by_chain(actor_id=None, buckets=None, chain_id=None):  # type: ignore[misc]
+    def delete_by_chain(actor_id=None, buckets=None, chain_id=None, defer_name=None):  # type: ignore[misc]
         """Delete attributes whose stored ``data['chain_id']`` matches chain_id.
 
         Backs refresh-token family (chain) revocation. DynamoDB has no secondary
@@ -376,6 +388,9 @@ class DbAttribute:
             actor_id: Storage partition id (the system actor the tokens live under).
             buckets: Bucket whitelist (the SPA access + refresh token buckets).
             chain_id: The refresh-token family identifier to delete.
+            defer_name: A row name deleted after every other matching row, so
+                a fault part-way (items are deleted one by one) leaves it in
+                place for the caller to retry from.
 
         Returns:
             Number of items deleted.
@@ -383,6 +398,7 @@ class DbAttribute:
         if not actor_id or not chain_id or not buckets:
             return 0
         deleted = 0
+        deferred = []
         for bucket in buckets:
             try:
                 query = Attribute.query(
@@ -399,8 +415,14 @@ class DbAttribute:
                     and isinstance(data, dict)
                     and data.get("chain_id") == chain_id
                 ):
+                    if defer_name is not None and t.name == defer_name:
+                        deferred.append(t)
+                        continue
                     t.delete()
                     deleted += 1
+        for t in deferred:
+            t.delete()
+            deleted += 1
         return deleted
 
     def __init__(self):

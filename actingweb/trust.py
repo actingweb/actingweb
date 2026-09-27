@@ -119,10 +119,11 @@ class Trust:
                 from .oauth2_server.client_registry import get_mcp_client_registry
 
                 registry = get_mcp_client_registry(self.config)
-                registry.delete_client(oauth2_client_id, actor_id=self.actor_id)
-                logger.info(
-                    f"Deleted OAuth2 client {oauth2_client_id} as part of trust deletion"
-                )
+                if registry.delete_client(oauth2_client_id, actor_id=self.actor_id):
+                    logger.info(
+                        f"Deleted OAuth2 client {oauth2_client_id} as part of trust "
+                        f"deletion"
+                    )
             except Exception as e:
                 logger.error(f"Error deleting OAuth2 client during trust deletion: {e}")
                 # Continue even if client deletion fails

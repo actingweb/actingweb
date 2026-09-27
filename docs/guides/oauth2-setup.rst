@@ -60,7 +60,8 @@ Applications use the ``OAuth2ClientManager`` to create and manage OAuth2 clients
     )
     
     print(f"Client ID: {client_data['client_id']}")
-    print(f"Client Secret: {client_data['client_secret']}")
+    # No secret for a public client (token_endpoint_auth_method="none")
+    print(f"Client Secret: {client_data.get('client_secret')}")
 
 The created client includes:
 
@@ -158,6 +159,27 @@ The system distinguishes between client types:
     - Reserved for ActingWeb framework use
     - Limited management operations
     - Cannot generate access tokens via client manager
+
+Custom clients are either confidential or public, set by
+``token_endpoint_auth_method`` at registration (dynamic registration or
+``create_client(token_endpoint_auth_method=...)``):
+
+**Confidential** (``client_secret_post``, the default, or ``client_secret_basic``)
+    - Issued a ``client_secret`` (``client_secret_expires_at: 0``, it does
+      not expire); either transport is accepted at the token endpoint
+    - Must present the secret on every grant
+    - May use ``client_credentials``
+
+**Public** (``none``)
+    - Issued no secret; ``regenerate_client_secret`` refuses it
+    - Must send a PKCE ``S256`` challenge at ``/oauth/authorize`` and the
+      verifier at code exchange
+    - Refreshes without a secret, bound by the refresh token's client and
+      its single use
+    - Refused ``client_credentials`` with ``unauthorized_client``
+
+Clients registered before 3.15 were stored as confidential whatever they
+asked for; a public client registered then must register again.
 
 Trust Integration
 -----------------
@@ -309,6 +331,17 @@ Security Considerations
 2. **Access Tokens**: Short-lived, use HTTPS for transmission
 3. **Actor Validation**: Always validate actor ownership before operations
 4. **Scope Limiting**: Use minimal required scopes
+5. **PKCE**: the built-in authorize pages accept ``S256`` only and bind the
+   challenge and ``redirect_uri`` to the code; codes are single-use.
+6. **Refresh-token rotation**: every refresh returns a new refresh token and
+   consumes the old one. A consumed token replayed within 60 seconds rotates
+   again, so a client that lost a response recovers; the cost is that a
+   thief replaying inside those 60 seconds also gets a working branch, and
+   neither branch is flagged afterwards. Replayed later (up to two days) it
+   revokes the whole chain.
+7. **Revocation is per process**: revoking a token clears this process's MCP
+   cache; another worker may accept a revoked access token from its own cache
+   for up to 300 seconds.
 
 .. code-block:: python
 
@@ -344,7 +377,7 @@ FastAPI Integration
     ):
         try:
             client = client_manager.create_client(client_name)
-            return {"client_id": client["client_id"], "client_secret": client["client_secret"]}
+            return {"client_id": client["client_id"], "client_secret": client.get("client_secret")}
         except Exception as e:
             raise HTTPException(status_code=400, detail=str(e))
 
@@ -386,7 +419,7 @@ For MCP (Model Context Protocol) applications:
             return {
                 "client_credentials": {
                     "client_id": client['client_id'],
-                    "client_secret": client['client_secret']
+                    "client_secret": client.get('client_secret')
                 },
                 "access_token": token['access_token'],
                 "expires_in": token['expires_in']

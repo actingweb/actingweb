@@ -671,6 +671,9 @@ class OAuth2SPAHandler(BaseHandler):
             )
 
             if verdict == "grace":
+                # Only the log line depends on GRACE_PERIOD_IMMEDIATE; the
+                # grace/theft boundary is the configured grace. With a grace
+                # of 10 s or less every grace verdict takes the first branch.
                 if time_since_use <= GRACE_PERIOD_IMMEDIATE:
                     logger.debug(
                         f"Refresh token reuse within {time_since_use}s for actor "

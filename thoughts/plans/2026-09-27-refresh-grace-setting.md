@@ -739,3 +739,23 @@ exactly-true guarantee wording. No code behaviour changed.
     `tests/test_bulk_list_update_handles.py`, which passes when run alone.
   - PostgreSQL: 3633 passed, 140 skipped.
   - sphinx `-W`: build succeeded.
+
+### 2026-09-27, after the PR #149 review
+
+#### 14. Log-split comment and a covered concurrent-reuse branch
+
+**Category**: Verification fix (PR review)
+
+**What changed**:
+- **Log-split comment.** The PR's Claude review asked for a comment in the
+  SPA ladder: only the log line depends on `GRACE_PERIOD_IMMEDIATE`, and
+  with a grace of 10 s or less every grace verdict takes the "concurrent
+  request" line.
+- **Coverage.** Codecov reported that line (`oauth2_spa.py:675`, the
+  debug log for a reuse within 10 s) as uncovered. Both ladder
+  parametrizations gain `default-5s` (rotates), which covers it.
+
+**Files affected**: `actingweb/handlers/oauth2_spa.py`,
+`tests/test_oauth2_spa_refresh_rotation.py`, `tests/test_mcp_refresh_rotation.py`
+
+**Rationale**: review feedback and patch coverage. No behaviour change.

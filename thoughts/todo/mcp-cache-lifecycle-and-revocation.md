@@ -114,6 +114,14 @@ pattern), but worth a `docs/quickstart/configuration.rst` note if someone asks,
 and worth namespacing by config identity if multi-app-per-process ever becomes
 supported.
 
+The same shape, noted 2026-09-27 from the PR #148 review: the opportunistic
+token-purge throttles are module globals too (`oauth_session.py`
+`_purge_throttle`, `oauth2_server/token_manager.py` `_mcp_purge_throttle`,
+both `single_use.PurgeThrottle`). Two apps in one process share one
+`last_attempt`, so one app's token-endpoint traffic can starve the other's
+purge. Harmless on DynamoDB (native TTL reaps anyway); on PostgreSQL the
+purge is the only reaper. Same trigger, same fix: scope by config.
+
 ## 7. Sync/async `resources/read` result-formatting divergence
 
 Not a permission-decision bug. For a **successful** `resources/read` on a

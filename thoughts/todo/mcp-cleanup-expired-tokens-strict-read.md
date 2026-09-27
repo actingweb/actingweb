@@ -22,6 +22,11 @@ that read:
   fault ends the sweep (by design since 3.15: it must not delete index rows
   it could not read, but it should skip the row and continue).
 
+Also (PR #148 review, 2026-09-27): the three `get_bucket()` index reads in
+the sweep check truthiness, not `Attributes.loaded`, so a bucket that could
+not be read looks empty and the sweep silently no-ops for that index.
+`_snapshot_bucket` in the same file shows the check to use.
+
 ## Why it is not urgent
 
 The orphaned actor rows are reaped anyway: on PostgreSQL by the throttled

@@ -3,8 +3,9 @@
 **Status:** Open. Filed 2026-09-26 from
 `thoughts/verifications/2026-09-26-mcp-oauth-hardening-and-credential-exposure-2.md`
 (issues 5–8), after the owner chose to close the 3.15 verify/iterate loop on
-"no High or Medium and no regression". None blocks `3.15.0rc1`.
-**Severity:** Low, all four.
+"no High or Medium and no regression"; item 5 added 2026-09-27 from the
+Claude code review of PR #148. None blocks `3.15.0rc1`.
+**Severity:** Low, all five.
 
 ## Items
 
@@ -33,6 +34,21 @@
    `test_fastapi_cookie_logout_reports_a_handler_failure` asserts no status.
    Add one route test with a real token manager and an injected delete
    fault, including the cookie-plus-bearer case.
+
+5. **`OAuth2Server.handle_logout_request` answers `action: success` on a
+   store fault.** The SDK-level method (`oauth2_server/oauth2_server.py`,
+   `handle_logout_request`) catches every exception from `revoke_token`,
+   including `TokenStoreUnavailable`, and returns `action: "success"` with
+   the message changed to "Logged out (with errors)" (the owner's fourth-run
+   decision was to fix the message). No library route calls it: `/oauth/logout`
+   goes through `handlers/oauth2_endpoints.py`'s `_handle_mcp_token_logout`,
+   which answers `retry` → 503. A direct SDK caller that branches on `action`
+   clears cookies over a revocation that did not happen. Map
+   `TokenStoreUnavailable` to `action: "retry"` there too, and extend
+   `tests/test_oauth2_logout_mcp_tokens.py::test_sdk_logout_does_not_claim_success_on_a_fault`,
+   which today pins only the message, to assert `action`. The changelog and
+   `docs/migration/v3.15.rst` scope the 503 to `/oauth/logout` and
+   `revoke_token`, so no doc claims this today.
 
 ## Related
 

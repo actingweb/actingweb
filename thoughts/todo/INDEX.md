@@ -76,7 +76,6 @@ neglected work.
 | [A `prop#`/`list#` key-prefix scheme](prop-list-key-prefix-scheme.md) | Also the **next major version bump**. Raises or removes the 1 MB per-partition DynamoDB Query ceiling — the consumer's largest list measured at 964 KB in one page, 94% of the limit — and is the only place the remaining out-of-band payload problem and the attribute composite-key collision can be fixed. Sequence after the legacy-GSI removal so the scheme is designed against the final lookup-table-only shape |
 | [Dual-era MCP support](mcp-2026-07-28-dual-era-support.md) | A client we serve going **modern-only**. A dual-era client needs nothing from us, so "supports 2026-07-28" is not the signal — a *sustained* stream of 400/`-32600` from one origin is, and the library now fires that criterion itself. Also blocked-adjacent: `actingweb_mcp`'s `require_mcp_auth_for_init` middleware silently becomes a no-op under the modern revision |
 | [AI agent discoverability follow-ups](ai-agent-discoverability-followups.md) | Resources this environment does not have: a Context7 account, a real OAuth2 provider and MCP client, a throwaway consumer repo |
-| [`demo.actingweb.io` OAuth login unverified](demo-live-oauth-login-unverified.md) | A browser and a Google account. Tick the box in the demo consolidation plan's Phase 5 and delete the file when done |
 
 ## 4. Registers — deferred items, not schedulable work
 

@@ -625,9 +625,17 @@ class OAuth2SPAHandler(BaseHandler):
 
         session_manager = get_oauth2_session_manager(self.config)
 
+        from ..oauth2_server.token_manager import TokenStoreUnavailable
+
         # Atomically check and mark token as used (race-free)
         # This ensures only one concurrent request can successfully use the token
-        success, token_data = session_manager.try_mark_refresh_token_used(refresh_token)
+        try:
+            success, token_data = session_manager.try_mark_refresh_token_used(
+                refresh_token
+            )
+        except TokenStoreUnavailable as e:
+            logger.error(f"Refresh token store unavailable: {e}")
+            return self._store_unavailable()
 
         if not token_data:
             return self._json_error(401, "Invalid or expired refresh_token")
@@ -739,9 +747,15 @@ class OAuth2SPAHandler(BaseHandler):
         new_access_token = self._generate_actingweb_token(
             actor_id, identifier or "", chain_id=chain_id
         )
-        new_refresh_token = session_manager.create_refresh_token(
-            actor_id, identifier, chain_id=chain_id
-        )
+        try:
+            new_refresh_token = session_manager.create_refresh_token(
+                actor_id, identifier, chain_id=chain_id
+            )
+        except TokenStoreUnavailable as e:
+            # The presented token is already consumed; a retry inside the
+            # grace period rotates again in the same chain.
+            logger.error(f"Could not store the rotated refresh token: {e}")
+            return self._store_unavailable()
 
         expires_in = 3600  # 1 hour for access token
         refresh_expires_in = 86400 * 14  # 2 weeks for refresh token
@@ -1735,6 +1749,16 @@ class OAuth2SPAHandler(BaseHandler):
                 logger.debug(f"No provider token to clear for actor {actor_id}")
         except Exception as e:
             logger.debug(f"Clearing provider token for actor {actor_id}: {e}")
+
+    def _store_unavailable(self) -> dict[str, Any]:
+        """503 with ``Retry-After`` for a token-store fault on the refresh
+        grant, as the MCP token endpoint answers. A 401 would tell the client
+        its token is invalid, and a client following the SPA guide treats a
+        401 on refresh as final and signs the user out."""
+        result = self._json_error(503, "Token store temporarily unavailable; retry")
+        if self.response:
+            self.response.headers["Retry-After"] = "5"
+        return result
 
     def _json_error(self, status_code: int, message: str) -> dict[str, Any]:
         """Create JSON error response."""

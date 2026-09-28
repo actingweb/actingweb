@@ -31,13 +31,22 @@ from actingweb.oauth_session import (
     _REFRESH_TOKEN_BUCKET,
     get_oauth2_session_manager,
 )
-from tests.mcp_token_double import make_config
+from tests.mcp_token_double import MemoryStore, make_config
+
+_STORES: dict[int, MemoryStore] = {}
 
 
 def _make_config() -> tuple[Config, dict[str, dict[str, Any]]]:
     """A real Config on the shared in-memory store; returns its rows."""
     config, store = make_config()
+    _STORES[id(config)] = store
     return config, store.rows
+
+
+def storage_store(config: Config) -> MemoryStore:
+    """The MemoryStore behind a config from :func:`_make_config`, for its
+    fault hooks."""
+    return _STORES[id(config)]
 
 
 def _handler(config) -> OAuth2SPAHandler:
@@ -283,3 +292,83 @@ def test_the_configured_grace_decides_rotation_or_theft(
         assert result.get("status_code") == 401
         assert "revoked" in result.get("message", "").lower()
         assert mgr.validate_refresh_token(live) is None
+
+
+def _refresh(config, token: str) -> tuple[dict[str, Any], OAuth2SPAHandler]:
+    handler = _handler(config)
+    result = handler._handle_refresh_token({"refresh_token": token}, "json")
+    return result, handler
+
+
+def _assert_retryable_503(result: dict[str, Any], handler: OAuth2SPAHandler) -> None:
+    assert result.get("status_code") == 503
+    assert handler.response is not None
+    assert handler.response.status_code == 503
+    assert handler.response.headers.get("Retry-After") == "5"
+
+
+def test_a_read_fault_answers_503_and_leaves_the_token_usable():
+    """A store that cannot be read must not answer 401 "invalid or expired":
+    a client following the guide treats that as final and signs out."""
+    config, _ = _make_config()
+    store = storage_store(config)
+    mgr = get_oauth2_session_manager(config)
+    token = mgr.create_refresh_token("fault-actor", "user@example.com")
+
+    store.faulty_buckets.add(_REFRESH_TOKEN_BUCKET)
+    result, handler = _refresh(config, token)
+    _assert_retryable_503(result, handler)
+
+    store.faulty_buckets.clear()
+    result, _ = _refresh(config, token)
+    assert result.get("success") is True
+
+
+def test_a_consume_fault_answers_503_and_leaves_the_token_unused():
+    config, storage = _make_config()
+    store = storage_store(config)
+    mgr = get_oauth2_session_manager(config)
+    token = mgr.create_refresh_token("fault-actor", "user@example.com")
+
+    store.cas_fault = True
+    result, handler = _refresh(config, token)
+    _assert_retryable_503(result, handler)
+    key = f"{OAUTH2_SYSTEM_ACTOR}:{_REFRESH_TOKEN_BUCKET}"
+    assert not storage[key][token]["data"].get("used")
+
+    store.cas_fault = False
+    result, _ = _refresh(config, token)
+    assert result.get("success") is True
+
+
+def test_a_mint_fault_after_the_consume_answers_503_and_a_prompt_retry_rotates():
+    """The token is consumed but its successor could not be stored. The
+    client gets a retryable 503, and its retry inside the grace period
+    rotates in the same chain."""
+    config, _ = _make_config()
+    store = storage_store(config)
+    mgr = get_oauth2_session_manager(config)
+    token = mgr.create_refresh_token("fault-actor", "user@example.com")
+
+    store.write_faults.add(_REFRESH_TOKEN_BUCKET)
+    result, handler = _refresh(config, token)
+    _assert_retryable_503(result, handler)
+
+    store.write_faults.clear()
+    result, _ = _refresh(config, token)
+    assert result.get("success") is True
+    assert result.get("refresh_token")
+
+
+def test_create_refresh_token_raises_when_the_write_is_not_stored():
+    """A token that was never stored must not be handed out: the client's
+    next refresh would get a final 401."""
+    from actingweb.oauth2_server.token_manager import TokenStoreUnavailable
+
+    config, _ = _make_config()
+    store = storage_store(config)
+    store.write_faults.add(_REFRESH_TOKEN_BUCKET)
+    with pytest.raises(TokenStoreUnavailable):
+        get_oauth2_session_manager(config).create_refresh_token(
+            "fault-actor", "user@example.com"
+        )

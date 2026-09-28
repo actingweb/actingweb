@@ -581,8 +581,8 @@ class ActingWebApp:
         two-day reuse window is answered as theft and its chain revoked (a
         reuse after that, or after the token's own expiry, is answered as
         expired). That includes two tabs or windows refreshing the same
-        token at once, and a client retrying after a refresh failed on a
-        storage fault; both are signed out. When two requests present the
+        token at once, and a client retrying a refresh that consumed its
+        token but failed to store the new one (a 503); both are signed out. When two requests present the
         same token at once, the one that consumed it may keep the tokens it
         is issued: they survive if they are created after the other request
         revoked the chain, and are revoked with it if created before. So

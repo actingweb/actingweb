@@ -29,11 +29,14 @@ Most applications need to check only the first three items:
 7. **PostgreSQL operators**: consumed token rows are purged by the token
    endpoint; nothing to schedule.
 8. **SPA and native clients**: the refresh-token grace period is now a
-   setting (default unchanged at 60 seconds), an SPA refresh token presented
-   after its own expiry is refused as expired instead of revoking its
-   chain, and the SPA guide gains how a native client avoids losing a
-   refresh response to sleep. Nothing to change unless you want a shorter
-   grace.
+   setting (default unchanged at 60 seconds), a store fault on the SPA
+   refresh grant answers 503 with ``Retry-After`` instead of 401, an SPA
+   refresh token presented after its own expiry is refused as expired
+   instead of revoking its chain, and the SPA guide gains how a native
+   client avoids losing a refresh response to sleep. A client should retry
+   a 503 rather than sign out; code calling ``try_mark_refresh_token_used``
+   or ``create_refresh_token`` directly should catch
+   ``TokenStoreUnavailable``.
 
 The trust list omits credentials
 ================================
@@ -138,9 +141,22 @@ to 60, or one that is not an integer, raises ``ValueError`` wherever it is
 set: the builder, ``Config(...)``, or an assignment to
 ``Config.refresh_token_grace_period``. A lower value narrows the window in
 which a copied token is honoured. ``0`` means no grace, which also signs out
-a client's own concurrent duplicate refresh and a retry after a storage
-fault; see :ref:`spa-refresh-grace` for what it does and does not
+a client's own concurrent duplicate refresh and a retry of a refresh that
+consumed its token but failed to store the new one; see :ref:`spa-refresh-grace` for what it does and does not
 guarantee. Applications that do not call the method need no change.
+
+**A store fault on the SPA refresh grant answers 503.** When the token
+store cannot be read, cannot confirm the consume, or cannot store the new
+refresh token, ``/oauth/spa/token`` answers **503** with ``Retry-After: 5``
+and "Token store temporarily unavailable; retry", as ``/oauth/token`` does.
+Before 3.15 it answered 401 "Invalid or expired refresh_token", which a
+client treating 401 as final turned into a sign-out. A client should keep
+its token and retry after ``Retry-After`` seconds.
+``OAuth2SessionManager.try_mark_refresh_token_used`` and
+``create_refresh_token`` now raise ``TokenStoreUnavailable``
+(``actingweb.oauth2_server.token_manager``) on a store fault, instead of
+answering "unknown token" or returning a token that was never stored; code
+that calls them directly should catch it.
 
 **An expired SPA refresh token is not theft.** A consumed SPA refresh token
 presented after its own ``expires_at`` answers ``401`` "Invalid or expired

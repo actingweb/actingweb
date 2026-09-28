@@ -575,6 +575,9 @@ class OAuth2SessionManager:
 
         Returns:
             The new refresh token
+
+        Raises:
+            TokenStoreUnavailable: the token could not be stored.
         """
         from . import attribute
         from .constants import OAUTH2_SYSTEM_ACTOR, SPA_REFRESH_TOKEN_TTL
@@ -596,7 +599,16 @@ class OAuth2SessionManager:
             bucket=_REFRESH_TOKEN_BUCKET,
             config=self.config,
         )
-        bucket.set_attr(name=refresh_token, data=token_data, ttl_seconds=effective_ttl)
+        if not bucket.set_attr(
+            name=refresh_token, data=token_data, ttl_seconds=effective_ttl
+        ):
+            # Never hand out a token that was not stored: its first refresh
+            # would be answered 401, which a client treats as final.
+            from .oauth2_server.token_manager import TokenStoreUnavailable
+
+            raise TokenStoreUnavailable(
+                f"Could not store a refresh token for actor {actor_id}"
+            )
 
         logger.debug(f"Created refresh token for actor {actor_id}")
         return refresh_token
@@ -694,9 +706,16 @@ class OAuth2SessionManager:
             - (True, token_data) if token was unused and successfully marked
             - (False, token_data) if token was already used (includes used_at timestamp)
             - (False, None) if token doesn't exist or is expired
+
+        Raises:
+            TokenStoreUnavailable: the token could not be read, or the consume
+                could not be confirmed either way. The token is untouched, so
+                the caller answers "retry" (503), never "invalid".
         """
         from . import attribute
         from .constants import OAUTH2_SYSTEM_ACTOR
+        from .db import get_attribute
+        from .oauth2_server.token_manager import TokenStoreUnavailable
 
         if not token:
             return (False, None)
@@ -706,7 +725,16 @@ class OAuth2SessionManager:
             bucket=_REFRESH_TOKEN_BUCKET,
             config=self.config,
         )
-        token_attr = bucket.get_attr(name=token)
+        # A strict read: the plain one answers None on a store fault, which
+        # would read as "invalid or expired" and sign the client out.
+        try:
+            token_attr = get_attribute(self.config).get_attr_strict(
+                actor_id=OAUTH2_SYSTEM_ACTOR, bucket=_REFRESH_TOKEN_BUCKET, name=token
+            )
+        except Exception as e:
+            raise TokenStoreUnavailable(
+                f"Could not read {_REFRESH_TOKEN_BUCKET}"
+            ) from e
 
         if not token_attr or "data" not in token_attr:
             return (False, None)
@@ -741,11 +769,9 @@ class OAuth2SessionManager:
                 consumed_ttl=SPA_REFRESH_TOKEN_REUSE_WINDOW,
             )
         except StoreFault as e:
-            # The token is untouched. Answer as for an unreadable token, as
-            # this path always has; the SPA refresh endpoint's own fault
-            # contract is outside this change.
+            # The token is untouched; the caller answers "retry".
             logger.error(f"Could not consume refresh token: {e}")
-            return (False, None)
+            raise TokenStoreUnavailable(str(e)) from e
         if consumed:
             logger.debug("Atomically marked refresh token as used")
         return (consumed, current)

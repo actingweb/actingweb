@@ -600,7 +600,8 @@ refresh grant:
 A lower value honours a copied refresh token for less time. ``0`` means no
 grace: every replay inside the two-day reuse window is answered as theft and
 its chain revoked, including a client's own duplicate request and a retry
-after a server-side storage fault; a request presented at the same moment
+of a refresh that consumed its token but failed to store the new one; a
+request presented at the same moment
 as the one that consumed the token may still keep its new tokens. See
 :ref:`spa-refresh-grace` for the trade-off and :ref:`spa-refresh-reliably`
 for what a client does so it never needs a longer grace.

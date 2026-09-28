@@ -68,6 +68,8 @@ class MemoryStore:
         self.cas_lost_response = False
         # Rows whose deletes fail (the row stays).
         self.delete_faults: set[tuple[str, str, str]] = set()
+        # Buckets whose set_attr answers False without writing.
+        self.write_faults: set[str] = set()
 
     def bucket(self, actor_id: str, bucket: str) -> dict[str, dict[str, Any]]:
         return self.rows.setdefault(f"{actor_id}:{bucket}", {})
@@ -109,6 +111,8 @@ def make_config() -> tuple[Config, MemoryStore]:
             timestamp: Any = None,
             ttl_seconds: int | None = None,
         ) -> bool:
+            if bucket in store.write_faults:
+                return False
             if not data:
                 store.rows.get(f"{actor_id}:{bucket}", {}).pop(name, None)
                 return True

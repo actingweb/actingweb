@@ -747,8 +747,9 @@ reuse window is answered as theft and its chain revoked (a reuse after that,
 or after the token's own expiry, is answered as expired, and a token issued
 before rotation families existed revokes only itself). That includes two
 tabs or windows refreshing the same token at the same moment, and a client
-retrying after a refresh failed on a storage fault (the server answered an
-error after consuming the token); both are signed out. When two requests
+retrying a refresh that consumed its token but failed to store the new one
+(answered 503); both are signed out. A read or consume fault leaves the token
+untouched, so its retry still works. When two requests
 present the same token at once, the one that consumed it may keep the new
 tokens it is issued: they survive if they are created after the other
 request revoked the chain, and are revoked with it if created before. So
@@ -778,31 +779,53 @@ response, the client still holds the consumed token, and presenting it again
 after the grace period reads as theft: the rotation family is revoked and the
 user must sign in again. Browsers rarely lose a response; native and mobile
 apps do, when the device sleeps or the app is suspended with a refresh in
-flight. A client that follows these rules avoids the lockout:
+flight. These rules make the lockout unlikely. Rules 1 and 2 are a
+mitigation, not a guarantee: what a platform lets an app observe and hold
+open varies, and some clients (a WebView, an iPad app running on a Mac) have
+little of either.
 
-1. **Never start a refresh the device may not see answered.** On macOS, do
-   not refresh during a dark wake (Power Nap), and stop starting refreshes
-   once the app is told the system will sleep. On iOS and Android, do not
-   start one while the app is being suspended.
-2. **Hold the device awake for an in-flight refresh**, so the response
-   arrives before sleep: on macOS ``ProcessInfo.beginActivity`` or an IOKit
-   power assertion, on iOS ``beginBackgroundTask``.
-3. **Keep the old token on an ambiguous failure, but do not count on
-   retrying it.** A retry inside the grace period (at most 60 seconds)
-   rotates again; a retry after a sleep is the reuse the server answers as
-   theft. Rules 1 and 2 are the fix; the retry is not.
+1. **Refresh only while the app is active or the page is visible, and not
+   from a timer.** Refresh when the user brings the app forward or before a
+   request that needs a fresh access token. A background timer can fire
+   during a dark wake (Power Nap) or while the app is being suspended, and a
+   dark wake does not make an app active. A native AppKit app can also stop
+   starting refreshes on ``NSWorkspaceWillSleepNotification`` (posted on
+   ``NSWorkspace.shared.notificationCenter``); an iOS binary, including one
+   running on a Mac as "Designed for iPad", has no such signal.
+2. **Keep the process that owns the connection running until the response
+   arrives**, where the platform allows it: on iOS ``beginBackgroundTask``,
+   on macOS a ``ProcessInfo.beginActivity`` or IOKit power assertion. These
+   cover only the process that makes the request: in a WKWebView the
+   ``fetch`` runs in WebKit's networking process, so a background task in
+   the app process may not cover it. An idle-sleep assertion does not stop
+   the user closing the lid or choosing Sleep.
+3. **On an ambiguous failure, keep the old token and retry once, at once,
+   while awake.** A timeout or a dropped connection does not tell the client
+   whether the server consumed the token. A retry inside the grace period
+   (60 seconds by default) rotates again, so a prompt retry recovers. A
+   retry after a sleep is the reuse the server answers as theft; there, only
+   rules 1 and 2 help.
 4. **One refresh in flight per token**, across tabs and windows as well (a
    lock, or a ``BroadcastChannel``), as in the single-flight example under
    `Troubleshooting`_.
-5. **Store the new pair before using it; a failed store is a failed
-   refresh.** A client that adopts the new tokens but fails to persist the
-   new refresh token (a Keychain or storage write that fails) keeps the
-   consumed one as its stored token, and its next refresh is theft.
-6. **Give the refresh request a timeout**, so a request parked across a
-   sleep fails on the client instead of hanging. Together with rule 1 it
-   lets the client start over cleanly after wake.
+5. **Store the new refresh token before relying on it. If the store fails,
+   keep the new tokens in memory, retry the store, and never fall back to
+   the old refresh token**: the server has already consumed it, and
+   presenting it after the grace period is theft. The one case this cannot
+   cover is the process dying before a store succeeds; a cold start then
+   reads the consumed token.
+6. **Give the refresh request a timeout short enough that one immediate
+   retry still lands inside the grace period**: roughly 15 to 20 seconds
+   against the 60-second default, shorter if the deployment lowers the
+   grace. A timer does not run while the device sleeps, so a request parked
+   across a sleep is already past the grace when the client wakes; the
+   timeout helps only while the device is awake.
 7. **Treat a 401 on refresh as final**: clear the session and send the user
-   to sign in. Do not retry the same token.
+   to sign in. Do not retry the same token. **A 503 is not final**: it means
+   the server could not reach its token store. Keep the token and retry
+   after the ``Retry-After`` seconds; the token is either untouched or, if
+   the server consumed it before the fault, rotates again on a retry inside
+   the grace period.
 
 Mobile App Authentication
 -------------------------

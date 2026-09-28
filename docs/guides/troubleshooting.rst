@@ -134,12 +134,31 @@ Native or mobile client asks to log in again after the device slept
   suspended before the response arrived, and after waking the client
   presented the consumed token again. Past the grace period that is read as
   theft and the rotation family is revoked. A client that received the new
-  tokens but failed to store the new refresh token shows the same symptom.
-- **Fix**: In the client: do not start a refresh the device may not see
-  answered, hold the device awake while one is in flight, give the request a
-  timeout, and treat a failed store as a failed refresh. See
-  :ref:`spa-refresh-reliably`. Raising the grace period is not the fix: it
-  is capped at 60 seconds, well short of a sleep.
+  tokens, failed to store the new refresh token and fell back to the old
+  one shows the same symptom.
+- **Fix**: In the client: refresh only while the app is active and not from
+  a timer, keep the process that owns the connection running while a
+  refresh is in flight, give the request a short timeout and retry once at
+  once while awake, and never fall back to a consumed refresh token when
+  storing the new one fails. See :ref:`spa-refresh-reliably`. Raising the
+  grace period is not the fix: it is capped at 60 seconds, well short of a
+  sleep. The 3.15 change that reads an SPA refresh token past its own
+  expiry as expired rather than theft is a separate fix; it does not
+  address this symptom.
+
+SPA client signed out during a database throttle
+------------------------------------------------
+
+- **Symptom**: Before 3.15, an SPA or native client was signed out when the
+  token store was briefly unavailable (a DynamoDB throttle, a database
+  failover); the refresh answered 401 "Invalid or expired refresh_token"
+  and the server logged "Could not consume refresh token".
+- **Cause**: The SPA refresh grant answered a store fault as if the token
+  were unknown, and a client that treats a 401 as final signed out.
+- **Fix**: From 3.15 the grant answers **503** with ``Retry-After`` and the
+  body "Token store temporarily unavailable; retry", as the MCP grant does.
+  The client keeps its token and retries after ``Retry-After`` seconds; see
+  rule 7 in :ref:`spa-refresh-reliably`.
 
 Public MCP client (Codex, ChatGPT) fails every refresh with ``invalid_client``
 ------------------------------------------------------------------------------

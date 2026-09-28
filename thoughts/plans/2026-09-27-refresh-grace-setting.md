@@ -759,3 +759,104 @@ exactly-true guarantee wording. No code behaviour changed.
 `tests/test_oauth2_spa_refresh_rotation.py`, `tests/test_mcp_refresh_rotation.py`
 
 **Rationale**: review feedback and patch coverage. No behaviour change.
+
+### 2026-09-28, after the consumer's review of the rc1 docs
+
+The consumer's review is triaged in
+`thoughts/research/2026-09-28-rc1-refresh-guidance-review.md`. The owner
+chose to fix its item 1 in code for rc1.
+
+#### 15. The SPA refresh grant answers a store fault with 503 and `Retry-After`
+
+**Category**: Bug fix (consumer review, item 1)
+
+**What changed**:
+- `try_mark_refresh_token_used` reads strictly (`get_attr_strict`) and
+  raises `TokenStoreUnavailable` on a read fault or an unconfirmed consume.
+  It used to answer "unknown token".
+- `create_refresh_token` raises when `set_attr` answers `False`, instead of
+  returning an unstored token.
+- The refresh grant maps both to 503 with `Retry-After: 5`
+  (`_store_unavailable`), both before the consume and while minting after
+  it. After a mint fault, a retry inside the grace period rotates.
+- The FastAPI and Flask SPA endpoints pass `Retry-After` through. They
+  copied only the status code before.
+- The double gains `write_faults`.
+- New tests:
+  - `test_a_read_fault_answers_503_and_leaves_the_token_usable`;
+  - `test_a_consume_fault_answers_503_and_leaves_the_token_unused`;
+  - `test_a_mint_fault_after_the_consume_answers_503_and_a_prompt_retry_rotates`;
+  - `test_create_refresh_token_raises_when_the_write_is_not_stored`;
+  - `tests/test_spa_token_retry_after.py`, covering both frameworks.
+- All failed before the change. The passthrough test was checked by
+  stashing the integration changes.
+
+**Files affected**:
+- `actingweb/oauth_session.py`
+- `actingweb/handlers/oauth2_spa.py`
+- `actingweb/interface/integrations/fastapi_integration.py`,
+  `actingweb/interface/integrations/flask_integration.py`
+- `tests/mcp_token_double.py`, `tests/test_oauth2_spa_refresh_rotation.py`,
+  `tests/test_spa_token_retry_after.py`
+
+**Rationale**: our rule 7 ("a 401 on refresh is final") turned a transient
+throttle into a sign-out. This is item 1 of
+`token-store-fault-contract-gaps.md`, which is now removed from that todo;
+items 2 and 3 remain. It is a consumer-visible behaviour change, recorded as
+a FIXED changelog entry with two **Behavior change** sentences.
+
+#### 16. Client guidance corrected from the consumer's review
+
+**Category**: Verification fix (consumer review, items 2–5)
+
+**What changed**: in `spa-refresh-reliably`:
+- Rule 1 is now "only while active or visible, not from a timer".
+- Rule 2 says the assertion must cover the process that owns the
+  connection, including the WKWebView case.
+- Rule 3 now says to retry once, at once, while awake.
+- Rule 5 now says to keep the new tokens in memory, retry the store, and
+  never fall back to the old token.
+- Rule 6 now asks for a timeout short enough that one retry lands inside
+  the grace period, and says a timer does not run during sleep.
+- Rule 7 says a 503 is not final.
+- The section calls rules 1 and 2 a mitigation.
+
+Elsewhere:
+- The grace-0 caveat about a storage-fault retry is narrowed to a fault
+  after the consume, in six places.
+- Troubleshooting: the sleep entry's fix is corrected and names the
+  `c280bcf` fix as separate, and a new entry covers "signed out during a
+  database throttle".
+- Migration: "Start here" item 8 and the section cover the 503 and the new
+  `TokenStoreUnavailable` raises.
+
+**Files affected**:
+- `docs/guides/spa-authentication.rst`, `docs/guides/troubleshooting.rst`,
+  `docs/guides/mcp-applications.rst`
+- `docs/migration/v3.15.rst`, `docs/reference/security.rst`,
+  `docs/quickstart/configuration.rst`
+- `actingweb/interface/app.py` (docstring), `CHANGELOG.rst`
+
+**Rationale**: as written, rules 5 and 6 led a client into the lockout they
+were meant to prevent. Rules 1 and 2 asked for signals and assertions a
+WebView or Designed-for-iPad client may not have.
+
+#### 17. DynamoDB Local runs in memory
+
+**Category**: Bug fix (test infrastructure)
+
+**What changed**:
+- `docker-compose.test.yml` runs `-sharedDb -inMemory`, as CI does, and
+  drops the bind mount.
+- The on-disk database had grown to 560 MB, because `down -v` never
+  clears a bind mount. Parallel runs waited on its SQLite lock ("too long
+  waiting for a lock", 30 s read timeouts).
+- 4 of today's 5 DynamoDB full runs had one such teardown error.
+- Two runs after the change: 0 errors, 34 s and 37 s, against about
+  9 minutes before.
+- The old file was deleted at the owner's request.
+
+**Files affected**: `docker-compose.test.yml`
+
+**Rationale**: the recurring flake noted in the third verification, which
+the owner asked to have investigated.

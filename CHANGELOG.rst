@@ -96,7 +96,7 @@ SECURITY
   A store fault while an MCP refresh token or
   an authorization code is being consumed answers ``server_error`` and
   leaves it usable; it is never read as "already used" (the SPA refresh
-  endpoint still answers 401 on such a fault). Revocation removes a
+  endpoint now answers 503 on such a fault; see FIXED). Revocation removes a
   token's index row first, unconditionally, so a token being revoked is
   unusable on every worker at once even when the store then faults; what a
   fault leaves behind is cleanup (the actor row, reaped by TTL or the
@@ -238,7 +238,8 @@ ADDED
   consumed tokens. ``0`` means no grace: every reuse of a consumed token
   inside the two-day reuse window is answered as theft and its chain
   revoked, which also signs out a client's own concurrent duplicate refresh
-  and a client retrying after a refresh failed on a storage fault. Of two
+  and a client retrying a refresh that consumed its token but failed to
+  store the new one. Of two
   requests presenting the same token at once, the one that consumed it may
   keep its new tokens, depending on whether it creates them before or after
   the other revokes the chain, so ``0`` stops a later replay, not reliably
@@ -292,6 +293,26 @@ FIXED
   tokens expire within an hour. **Behavior change:** it confirms the client
   row and its index row are gone, and answers ``False`` when neither is,
   instead of reporting success for a client that can still authenticate.
+
+- **A token-store fault on the SPA refresh grant signed the client out.**
+  ``/oauth/spa/token`` answered a store it could not read, a consume it
+  could not confirm, and a rotated token it could not store with 401
+  "Invalid or expired refresh_token", the answer for a dead token, and a
+  client that treats 401 on refresh as final signed the user out on a
+  transient throttle with the token untouched. A refresh token whose write
+  answered ``False`` was also handed out unstored, so the next refresh got
+  that 401. **Behavior change:** the grant answers **503** with
+  ``Retry-After: 5`` and "Token store temporarily unavailable; retry", as
+  ``/oauth/token`` does, and both the FastAPI and Flask integrations now
+  pass ``Retry-After`` through. A client should keep its token and retry
+  after that many seconds: a read or consume fault leaves the token
+  untouched, and after a fault storing the successor a retry inside the
+  grace period rotates again. **Behavior change:**
+  ``OAuth2SessionManager.try_mark_refresh_token_used`` and
+  ``create_refresh_token`` raise ``TokenStoreUnavailable`` on a store fault
+  instead of answering "unknown token" or returning an unstored token;
+  code calling them directly should catch it. Reported by the Emm AI
+  client while reviewing the 3.15 refresh guidance.
 
 - **An expired SPA refresh token could revoke its whole chain.** The SPA
   token store checked whether a presented refresh token was already used

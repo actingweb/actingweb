@@ -2224,6 +2224,11 @@ class FastAPIIntegration(BaseActingWebIntegration):
             else 200
         )
 
+        # A 503 from the token grant names when to retry.
+        retry_after = getattr(webobj.response, "headers", {}).get("Retry-After")
+        if retry_after:
+            cors_headers["Retry-After"] = str(retry_after)
+
         response = JSONResponse(
             content=result, headers=cors_headers, status_code=status_code
         )

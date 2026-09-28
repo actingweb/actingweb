@@ -1333,6 +1333,10 @@ class FlaskIntegration(BaseActingWebIntegration):
         # Use the status code from the handler if set
         if hasattr(webobj.response, "status_code") and webobj.response.status_code:
             json_response.status_code = webobj.response.status_code
+        # A 503 from the token grant names when to retry.
+        retry_after = getattr(webobj.response, "headers", {}).get("Retry-After")
+        if retry_after:
+            json_response.headers["Retry-After"] = str(retry_after)
 
         # Copy cookies from handler response
         if hasattr(webobj.response, "cookies"):

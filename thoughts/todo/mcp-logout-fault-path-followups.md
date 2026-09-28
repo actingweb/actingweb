@@ -7,6 +7,9 @@
 Claude code review of PR #148. None blocks `3.15.0rc1`.
 **Severity:** Low, all five.
 
+**2026-09-28:** item 3 also applies to `/oauth/revoke`, which gains a 503
+in `logout-does-not-revoke-refresh-chain.md`; do them together.
+
 ## Items
 
 1. **The FastAPI cookie branch drops the 503 and `Retry-After`.** A request

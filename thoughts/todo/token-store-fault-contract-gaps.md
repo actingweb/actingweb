@@ -17,6 +17,9 @@ functions was superseded on 2026-09-27; its successor
 grace tier, so these stay here. The SPA tests now run on
 `tests/mcp_token_double.py`, which has the fault hooks they need.
 
+**2026-09-28:** item 1 must land with `logout-does-not-revoke-refresh-chain.md`,
+which makes `/oauth/revoke` and SPA logout call `revoke_token_chain`.
+
 ## Items
 
 1. **The SPA theft response has no fault handling and no anchor.**

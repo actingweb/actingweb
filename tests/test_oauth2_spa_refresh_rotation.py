@@ -1,5 +1,8 @@
 """Tests for refresh-token rotation grace/theft handling on /oauth/spa/token.
 
+The handler runs on ``tests.mcp_token_double``, a real Config over an
+in-memory store with fault hooks, shared with the MCP rotation tests.
+
 Covers ``OAuth2SPAHandler._handle_refresh_token``:
 
 - Reuse of an already-used refresh token *within* the grace window issues a
@@ -13,7 +16,9 @@ Covers ``OAuth2SPAHandler._handle_refresh_token``:
 
 import json
 import time
-from unittest.mock import MagicMock
+from typing import Any
+
+import pytest
 
 from actingweb.aw_web_request import AWWebObj
 from actingweb.config import Config
@@ -21,85 +26,27 @@ from actingweb.constants import (
     OAUTH2_SYSTEM_ACTOR,
     SPA_REFRESH_TOKEN_REUSE_WINDOW,
 )
-from actingweb.handlers.oauth2_spa import (
-    GRACE_PERIOD_EXTENDED,
-    OAuth2SPAHandler,
-)
+from actingweb.handlers.oauth2_spa import OAuth2SPAHandler
 from actingweb.oauth_session import (
     _REFRESH_TOKEN_BUCKET,
     get_oauth2_session_manager,
 )
+from tests.mcp_token_double import MemoryStore, make_config
+
+_STORES: dict[int, MemoryStore] = {}
 
 
-def _make_config() -> tuple[Config, dict]:
-    config = MagicMock(spec=Config)
-    config.new_token = MagicMock(side_effect=lambda: f"aw-access-{time.time_ns()}")
+def _make_config() -> tuple[Config, dict[str, dict[str, Any]]]:
+    """A real Config on the shared in-memory store; returns its rows."""
+    config, store = make_config()
+    _STORES[id(config)] = store
+    return config, store.rows
 
-    storage: dict = {}
 
-    class MockDbAttribute:
-        def __init__(self):  # type: ignore
-            self.storage = storage
-
-        def get_bucket(self, actor_id, bucket):  # type: ignore
-            return self.storage.get(f"{actor_id}:{bucket}", {})
-
-        def get_attr(self, actor_id, bucket, name):  # type: ignore
-            return self.storage.get(f"{actor_id}:{bucket}", {}).get(name)
-
-        def set_attr(
-            self, actor_id, bucket, name, data, timestamp=None, ttl_seconds=None
-        ):  # type: ignore
-            self.storage.setdefault(f"{actor_id}:{bucket}", {})[name] = {"data": data}
-            return True
-
-        def delete_attr(self, actor_id, bucket, name):  # type: ignore
-            key = f"{actor_id}:{bucket}"
-            if key in self.storage and name in self.storage[key]:
-                del self.storage[key][name]
-                return True
-            return False
-
-        def conditional_update_attr(
-            self,
-            actor_id,
-            bucket,
-            name,
-            old_data,
-            new_data,
-            timestamp=None,
-            ttl_seconds=None,
-        ):  # type: ignore
-            key = f"{actor_id}:{bucket}"
-            current = self.storage.get(key, {}).get(name)
-            if current is None or current.get("data") != old_data:
-                return False
-            self.storage[key][name] = {"data": new_data}
-            return True
-
-        def get_attr_strict(self, actor_id, bucket, name):  # type: ignore
-            return self.storage.get(f"{actor_id}:{bucket}", {}).get(name)
-
-        def delete_bucket(self, actor_id, bucket):  # type: ignore
-            return self.storage.pop(f"{actor_id}:{bucket}", None) is not None
-
-        def delete_by_chain(self, actor_id=None, buckets=None, chain_id=None):  # type: ignore
-            if not actor_id or not chain_id or not buckets:
-                return 0
-            deleted = 0
-            for bucket in buckets:
-                items = self.storage.get(f"{actor_id}:{bucket}", {})
-                for name, rec in list(items.items()):
-                    data = rec.get("data") or {}
-                    if isinstance(data, dict) and data.get("chain_id") == chain_id:
-                        del items[name]
-                        deleted += 1
-            return deleted
-
-    db_mod = MagicMock()
-    db_mod.DbAttribute = MockDbAttribute
-    config.DbAttribute = db_mod
-    return config, storage
+def storage_store(config: Config) -> MemoryStore:
+    """The MemoryStore behind a config from :func:`_make_config`, for its
+    fault hooks."""
+    return _STORES[id(config)]
 
 
 def _handler(config) -> OAuth2SPAHandler:
@@ -132,7 +79,10 @@ def test_reuse_within_grace_window_issues_full_rotation():
     config, storage = _make_config()
     actor_id = "grace-actor"
     token, chain_id = _seed_used_token(
-        config, storage, actor_id, used_seconds_ago=GRACE_PERIOD_EXTENDED - 5
+        config,
+        storage,
+        actor_id,
+        used_seconds_ago=config.refresh_token_grace_period - 5,
     )
 
     handler = _handler(config)
@@ -174,7 +124,10 @@ def test_reuse_beyond_grace_window_revokes_only_the_chain():
     sibling_chain = mgr.validate_refresh_token(sibling)["chain_id"]  # type: ignore[index]
 
     token, chain_id = _seed_used_token(
-        config, storage, actor_id, used_seconds_ago=GRACE_PERIOD_EXTENDED + 30
+        config,
+        storage,
+        actor_id,
+        used_seconds_ago=config.refresh_token_grace_period + 30,
     )
 
     handler = _handler(config)
@@ -242,7 +195,7 @@ def test_legacy_chainless_reuse_revokes_only_the_presented_token():
             "created_at": int(time.time()) - 1000,
             "expires_at": int(time.time()) + 100000,
             "used": True,
-            "used_at": int(time.time()) - (GRACE_PERIOD_EXTENDED + 30),
+            "used_at": int(time.time()) - (config.refresh_token_grace_period + 30),
             # no chain_id
         }
     }
@@ -259,3 +212,163 @@ def test_legacy_chainless_reuse_revokes_only_the_presented_token():
     # Only the presented legacy token was revoked.
     assert token not in storage.get(key, {})
     assert other in storage.get(key, {})
+
+
+def test_a_used_token_past_its_expiry_is_expired_not_theft():
+    """A consumed token presented after its own ``expires_at`` reads as
+    expired (401, row removed) and never reaches the reuse ladder, so its
+    chain is not revoked. The MCP store checks in the same order."""
+    config, storage = _make_config()
+    actor_id = "expired-actor"
+    token, chain_id = _seed_used_token(
+        config,
+        storage,
+        actor_id,
+        used_seconds_ago=config.refresh_token_grace_period + 30,
+    )
+    key = f"{OAUTH2_SYSTEM_ACTOR}:{_REFRESH_TOKEN_BUCKET}"
+    storage[key][token]["data"]["expires_at"] = int(time.time()) - 1
+    mgr = get_oauth2_session_manager(config)
+    live = mgr.create_refresh_token(actor_id, "user@example.com", chain_id=chain_id)
+
+    handler = _handler(config)
+    result = handler._handle_refresh_token({"refresh_token": token}, "json")
+
+    assert result.get("status_code") == 401
+    assert "expired" in result.get("message", "").lower()
+    assert token not in storage[key]
+    assert mgr.validate_refresh_token(live) is not None
+
+
+@pytest.mark.parametrize(
+    ("grace", "used_seconds_ago", "rotates"),
+    [
+        (20, 15, True),
+        (20, 40, False),
+        (0, 5, False),
+        (0, 0, False),
+        (None, 5, True),
+        (None, 30, True),
+        (None, 90, False),
+    ],
+    ids=[
+        "grace20-15s",
+        "grace20-40s",
+        "grace0-5s",
+        "grace0-same-second",
+        "default-5s",
+        "default-30s",
+        "default-90s",
+    ],
+)
+def test_the_configured_grace_decides_rotation_or_theft(
+    grace: int | None, used_seconds_ago: int, rotates: bool
+) -> None:
+    """The ladder reads ``config.refresh_token_grace_period``: inside it a
+    reuse rotates in the same chain; past it the chain is revoked. ``None``
+    leaves the default (60 s). Grace 0 means no grace, so a reuse in the
+    same second is theft too."""
+    config, storage = _make_config()
+    if grace is not None:
+        config.refresh_token_grace_period = grace
+    actor_id = "grace-setting-actor"
+    token, chain_id = _seed_used_token(
+        config, storage, actor_id, used_seconds_ago=used_seconds_ago
+    )
+    mgr = get_oauth2_session_manager(config)
+    live = mgr.create_refresh_token(actor_id, "user@example.com", chain_id=chain_id)
+
+    handler = _handler(config)
+    result = handler._handle_refresh_token({"refresh_token": token}, "json")
+
+    if rotates:
+        assert result.get("success") is True
+        new_refresh = result.get("refresh_token")
+        assert new_refresh and new_refresh != token
+        new_data = mgr.validate_refresh_token(new_refresh)
+        assert new_data is not None and new_data["chain_id"] == chain_id
+        assert mgr.validate_refresh_token(live) is not None
+    else:
+        assert result.get("status_code") == 401
+        assert "revoked" in result.get("message", "").lower()
+        assert mgr.validate_refresh_token(live) is None
+
+
+def _refresh(config, token: str) -> tuple[dict[str, Any], OAuth2SPAHandler]:
+    handler = _handler(config)
+    result = handler._handle_refresh_token({"refresh_token": token}, "json")
+    return result, handler
+
+
+def _assert_retryable_503(result: dict[str, Any], handler: OAuth2SPAHandler) -> None:
+    assert result.get("status_code") == 503
+    assert handler.response is not None
+    assert handler.response.status_code == 503
+    assert handler.response.headers.get("Retry-After") == "5"
+
+
+def test_a_read_fault_answers_503_and_leaves_the_token_usable():
+    """A store that cannot be read must not answer 401 "invalid or expired":
+    a client following the guide treats that as final and signs out."""
+    config, _ = _make_config()
+    store = storage_store(config)
+    mgr = get_oauth2_session_manager(config)
+    token = mgr.create_refresh_token("fault-actor", "user@example.com")
+
+    store.faulty_buckets.add(_REFRESH_TOKEN_BUCKET)
+    result, handler = _refresh(config, token)
+    _assert_retryable_503(result, handler)
+
+    store.faulty_buckets.clear()
+    result, _ = _refresh(config, token)
+    assert result.get("success") is True
+
+
+def test_a_consume_fault_answers_503_and_leaves_the_token_unused():
+    config, storage = _make_config()
+    store = storage_store(config)
+    mgr = get_oauth2_session_manager(config)
+    token = mgr.create_refresh_token("fault-actor", "user@example.com")
+
+    store.cas_fault = True
+    result, handler = _refresh(config, token)
+    _assert_retryable_503(result, handler)
+    key = f"{OAUTH2_SYSTEM_ACTOR}:{_REFRESH_TOKEN_BUCKET}"
+    assert not storage[key][token]["data"].get("used")
+
+    store.cas_fault = False
+    result, _ = _refresh(config, token)
+    assert result.get("success") is True
+
+
+def test_a_mint_fault_after_the_consume_answers_503_and_a_prompt_retry_rotates():
+    """The token is consumed but its successor could not be stored. The
+    client gets a retryable 503, and its retry inside the grace period
+    rotates in the same chain."""
+    config, _ = _make_config()
+    store = storage_store(config)
+    mgr = get_oauth2_session_manager(config)
+    token = mgr.create_refresh_token("fault-actor", "user@example.com")
+
+    store.write_faults.add(_REFRESH_TOKEN_BUCKET)
+    result, handler = _refresh(config, token)
+    _assert_retryable_503(result, handler)
+
+    store.write_faults.clear()
+    result, _ = _refresh(config, token)
+    assert result.get("success") is True
+    assert result.get("refresh_token")
+
+
+def test_create_refresh_token_raises_when_the_write_is_not_stored():
+    """A token that was never stored must not be handed out: the client's
+    next refresh would get a final 401."""
+    from actingweb.oauth2_server.token_manager import TokenStoreUnavailable
+
+    config, _ = _make_config()
+    store = storage_store(config)
+    store.write_faults.add(_REFRESH_TOKEN_BUCKET)
+    with pytest.raises(TokenStoreUnavailable):
+        get_oauth2_session_manager(config).create_refresh_token(
+            "fault-actor", "user@example.com"
+        )

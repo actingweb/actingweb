@@ -334,11 +334,16 @@ Security Considerations
 5. **PKCE**: the built-in authorize pages accept ``S256`` only and bind the
    challenge and ``redirect_uri`` to the code; codes are single-use.
 6. **Refresh-token rotation**: every refresh returns a new refresh token and
-   consumes the old one. A consumed token replayed within 60 seconds rotates
-   again, so a client that lost a response recovers; the cost is that a
-   thief replaying inside those 60 seconds also gets a working branch, and
-   neither branch is flagged afterwards. Replayed later (up to two days) it
-   revokes the whole chain.
+   consumes the old one. A consumed token replayed within the grace period
+   rotates again, so a client that lost a response recovers; the cost is
+   that a thief replaying inside the grace period also gets a working
+   branch, and neither branch is flagged unless one of them later replays
+   one of its own consumed tokens. Replayed later (up to
+   two days) it revokes the whole chain. The grace period is 60 seconds by
+   default; ``with_refresh_token_grace(seconds)`` lowers it (0 to 60), which
+   narrows that window. See :ref:`spa-refresh-grace` and
+   :ref:`spa-refresh-reliably` for the trade-off and for how a client
+   avoids losing a response.
 7. **Revocation is per process**: revoking a token clears this process's MCP
    cache; another worker may accept a revoked access token from its own cache
    for up to 300 seconds.

@@ -29,8 +29,9 @@ import time
 from typing import TYPE_CHECKING, Any, Optional
 from urllib.parse import urlparse
 
-from ..constants import SPA_REFRESH_TOKEN_REUSE_WINDOW
+from ..constants import REFRESH_TOKEN_GRACE_DEFAULT, SPA_REFRESH_TOKEN_REUSE_WINDOW
 from ..secret_compare import secret_digest_equals, secret_equals
+from ..single_use import classify_reuse, refresh_token_grace
 from .base_handler import BaseHandler
 from .oauth2_utils import normalize_user_info
 
@@ -47,11 +48,14 @@ PKCE_VERIFIER_CHARSET = (
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~"
 )
 
-# Token refresh grace period constants (in seconds)
-# These handle concurrent refresh token requests from SPAs
+# Token refresh grace period (in seconds). The grace a deployment runs with is
+# Config.refresh_token_grace_period (ActingWebApp.with_refresh_token_grace()),
+# read through single_use.refresh_token_grace(). GRACE_PERIOD_EXTENDED keeps
+# the default's old name and is not read by the ladder. Inside the grace,
+# GRACE_PERIOD_IMMEDIATE only picks the log line.
 GRACE_PERIOD_IMMEDIATE = 10  # Normal concurrent requests (common in SPAs)
-GRACE_PERIOD_EXTENDED = 60  # Network delays or slow processing
-# Reuse within (GRACE_PERIOD_EXTENDED, SPA_REFRESH_TOKEN_REUSE_WINDOW] is treated
+GRACE_PERIOD_EXTENDED = REFRESH_TOKEN_GRACE_DEFAULT
+# Reuse within (grace, SPA_REFRESH_TOKEN_REUSE_WINDOW] is treated
 # as potential theft (chain revoked); beyond that horizon a reused token is
 # treated as expired (the row is only still present because the purge lagged).
 
@@ -621,9 +625,17 @@ class OAuth2SPAHandler(BaseHandler):
 
         session_manager = get_oauth2_session_manager(self.config)
 
+        from ..oauth2_server.token_manager import TokenStoreUnavailable
+
         # Atomically check and mark token as used (race-free)
         # This ensures only one concurrent request can successfully use the token
-        success, token_data = session_manager.try_mark_refresh_token_used(refresh_token)
+        try:
+            success, token_data = session_manager.try_mark_refresh_token_used(
+                refresh_token
+            )
+        except TokenStoreUnavailable as e:
+            logger.error(f"Refresh token store unavailable: {e}")
+            return self._store_unavailable()
 
         if not token_data:
             return self._json_error(401, "Invalid or expired refresh_token")
@@ -634,10 +646,12 @@ class OAuth2SPAHandler(BaseHandler):
         if not actor_id:
             return self._json_error(401, "Invalid refresh token data")
 
-        # If token was already used, apply a grace window before treating the
-        # reuse as theft:
-        #   0 - GRACE_PERIOD_EXTENDED: benign reuse -> FULL rotation (same chain)
-        #   > GRACE_PERIOD_EXTENDED:   potential theft -> revoke the chain
+        # If token was already used, classify the reuse (single_use.
+        # classify_reuse, shared with the MCP ladder; grace =
+        # config.refresh_token_grace_period, 0 meaning no grace):
+        #   within a non-zero grace: benign reuse -> FULL rotation (same chain)
+        #   within the reuse window: potential theft -> revoke the chain
+        #   past the window:         expired -> refuse, no revocation
         #
         # Within the grace window the reuse is either a genuine concurrent /
         # duplicate request, or a client that dropped its previous rotation
@@ -658,20 +672,30 @@ class OAuth2SPAHandler(BaseHandler):
         if not success:
             used_at = token_data.get("used_at", 0)
             time_since_use = int(time.time()) - used_at
+            verdict = classify_reuse(
+                time_since_use,
+                refresh_token_grace(self.config),
+                SPA_REFRESH_TOKEN_REUSE_WINDOW,
+            )
 
-            if time_since_use <= GRACE_PERIOD_IMMEDIATE:
-                logger.debug(
-                    f"Refresh token reuse within {time_since_use}s for actor {actor_id} "
-                    f"(concurrent request) - issuing new tokens with rotation"
-                )
+            if verdict == "grace":
+                # Only the log line depends on GRACE_PERIOD_IMMEDIATE; the
+                # grace/theft boundary is the configured grace. With a grace
+                # of 10 s or less every grace verdict takes the first branch.
+                if time_since_use <= GRACE_PERIOD_IMMEDIATE:
+                    logger.debug(
+                        f"Refresh token reuse within {time_since_use}s for actor "
+                        f"{actor_id} (concurrent request) - issuing new tokens with "
+                        f"rotation"
+                    )
+                else:
+                    logger.info(
+                        f"Refresh token reuse after {time_since_use}s for actor "
+                        f"{actor_id} (delayed or dropped-rotation request) - issuing "
+                        f"new tokens with rotation"
+                    )
                 # Fall through to full rotation below.
-            elif time_since_use <= GRACE_PERIOD_EXTENDED:
-                logger.info(
-                    f"Refresh token reuse after {time_since_use}s for actor {actor_id} "
-                    f"(delayed or dropped-rotation request) - issuing new tokens with rotation"
-                )
-                # Fall through to full rotation below.
-            elif time_since_use > SPA_REFRESH_TOKEN_REUSE_WINDOW:
+            elif verdict == "expired":
                 # Past the reuse-detection horizon. On rotation the consumed
                 # token's storage TTL was shortened to this window, so it should
                 # already be purged; we only still see it because the purge is
@@ -723,9 +747,15 @@ class OAuth2SPAHandler(BaseHandler):
         new_access_token = self._generate_actingweb_token(
             actor_id, identifier or "", chain_id=chain_id
         )
-        new_refresh_token = session_manager.create_refresh_token(
-            actor_id, identifier, chain_id=chain_id
-        )
+        try:
+            new_refresh_token = session_manager.create_refresh_token(
+                actor_id, identifier, chain_id=chain_id
+            )
+        except TokenStoreUnavailable as e:
+            # The presented token is already consumed; a retry inside the
+            # grace period rotates again in the same chain.
+            logger.error(f"Could not store the rotated refresh token: {e}")
+            return self._store_unavailable()
 
         expires_in = 3600  # 1 hour for access token
         refresh_expires_in = 86400 * 14  # 2 weeks for refresh token
@@ -1719,6 +1749,16 @@ class OAuth2SPAHandler(BaseHandler):
                 logger.debug(f"No provider token to clear for actor {actor_id}")
         except Exception as e:
             logger.debug(f"Clearing provider token for actor {actor_id}: {e}")
+
+    def _store_unavailable(self) -> dict[str, Any]:
+        """503 with ``Retry-After`` for a token-store fault on the refresh
+        grant, as the MCP token endpoint answers. A 401 would tell the client
+        its token is invalid, and a client following the SPA guide treats a
+        401 on refresh as final and signs the user out."""
+        result = self._json_error(503, "Token store temporarily unavailable; retry")
+        if self.response:
+            self.response.headers["Retry-After"] = "5"
+        return result
 
     def _json_error(self, status_code: int, message: str) -> dict[str, Any]:
         """Create JSON error response."""

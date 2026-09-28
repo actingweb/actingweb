@@ -205,7 +205,15 @@ MCP_REFRESH_TOKEN_TTL = 2592000  # 30 days
 # client that dropped the previous rotation). Inside the reuse window it is
 # treated as theft and the chain is revoked; beyond it, as expired. The
 # consumed row is kept, and its storage TTL shortened, for the reuse window.
-MCP_REFRESH_TOKEN_GRACE_PERIOD = 60  # seconds
+# The grace period is shared by both refresh ladders (SPA and MCP);
+# ActingWebApp.with_refresh_token_grace() sets it per deployment, within
+# [0, REFRESH_TOKEN_GRACE_MAX]. The ceiling is Okta's maximum: a longer grace
+# widens the window in which a copied token is honoured.
+REFRESH_TOKEN_GRACE_DEFAULT = 60  # seconds
+REFRESH_TOKEN_GRACE_MAX = 60  # seconds
+# The default's pre-3.15 name. Not read by the ladders: the grace in force is
+# single_use.refresh_token_grace(config).
+MCP_REFRESH_TOKEN_GRACE_PERIOD = REFRESH_TOKEN_GRACE_DEFAULT
 MCP_REFRESH_TOKEN_REUSE_WINDOW = 86400 * 2  # 2 days
 # Max frequency of the opportunistic expired MCP token purge, per process.
 MCP_TOKEN_PURGE_INTERVAL = 3600  # 1 hour
@@ -257,9 +265,12 @@ def _validate_ttl_constants() -> None:
         "MCP reuse window must outlast an access token yet stay under the "
         "full refresh TTL"
     )
-    assert MCP_REFRESH_TOKEN_GRACE_PERIOD < MCP_REFRESH_TOKEN_REUSE_WINDOW, (
-        "MCP grace period must be shorter than the reuse window"
+    assert 0 <= REFRESH_TOKEN_GRACE_DEFAULT <= REFRESH_TOKEN_GRACE_MAX, (
+        "The default refresh grace period must be a value the builder accepts"
     )
+    assert REFRESH_TOKEN_GRACE_MAX < min(
+        SPA_REFRESH_TOKEN_REUSE_WINDOW, MCP_REFRESH_TOKEN_REUSE_WINDOW
+    ), "The refresh grace ceiling must be shorter than both reuse windows"
     assert INDEX_TTL_BUFFER > 0, "Index TTL buffer must be positive"
     assert TTL_CLOCK_SKEW_BUFFER > 0, "Clock skew buffer must be positive"
 

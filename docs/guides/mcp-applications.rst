@@ -583,6 +583,29 @@ OAuth2 Flow
 4. OAuth2 callback creates/finds ActingWeb actor based on user email
 5. Bearer token provided for subsequent API access
 
+Refresh Tokens
+~~~~~~~~~~~~~~
+
+MCP refresh tokens are single-use: every refresh returns a new
+``refresh_token``, and the client must store it. A consumed token presented
+again within the grace period rotates again (a retry, or a lost response);
+later, within two days, it is treated as theft and its chain is revoked.
+The grace period is 60 seconds by default and is shared with the SPA
+refresh grant:
+
+.. code-block:: python
+
+    app = ActingWebApp(...).with_refresh_token_grace(30)  # 0 to 60 seconds
+
+A lower value honours a copied refresh token for less time. ``0`` means no
+grace: every replay inside the two-day reuse window is answered as theft and
+its chain revoked, including a client's own duplicate request and a retry
+of a refresh that consumed its token but failed to store the new one; a
+request presented at the same moment
+as the one that consumed the token may still keep its new tokens. See
+:ref:`spa-refresh-grace` for the trade-off and :ref:`spa-refresh-reliably`
+for what a client does so it never needs a longer grace.
+
 Authentication in Application Code
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 

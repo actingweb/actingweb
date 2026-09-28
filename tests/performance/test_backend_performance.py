@@ -362,7 +362,7 @@ class TestSubscriptionPerformance:
                 peerid=peerid,
                 subid=subid,
                 granularity="default",
-                callback="https://callback.example.com",
+                callback=True,
             )
 
         result = benchmark(create_subscription)
@@ -390,7 +390,7 @@ class TestSubscriptionPerformance:
             peerid=peerid,
             subid=subid,
             granularity="default",
-            callback="https://callback.example.com",
+            callback=True,
         )
 
         def read_subscription() -> dict[str, Any] | None:

@@ -6,6 +6,9 @@ import re
 import uuid
 from typing import TYPE_CHECKING, Any, Optional
 
+from .constants import REFRESH_TOKEN_GRACE_DEFAULT
+from .single_use import validate_refresh_token_grace
+
 if TYPE_CHECKING:
     from types import ModuleType
 
@@ -144,6 +147,15 @@ class Config:
         # When True, callbacks use blocking HTTP requests instead of async fire-and-forget
         # This ensures callbacks complete before the Lambda function freezes
         self.sync_subscription_callbacks = False
+        #########
+        # Refresh-token rotation
+        #########
+        # Seconds after a refresh token is consumed during which presenting it
+        # again rotates again in the same chain instead of reading as theft.
+        # Read by both the SPA and the MCP refresh ladders. Set it with
+        # ActingWebApp.with_refresh_token_grace() (0 to 60). A property: every
+        # write, including the kwargs below, is validated.
+        self.refresh_token_grace_period = REFRESH_TOKEN_GRACE_DEFAULT
         #########
         # Trust settings for this app
         #########
@@ -386,6 +398,19 @@ class Config:
         self.root = self.proto + self.fqdn + "/"
         # Authentication realm used in Basic auth
         self.auth_realm = self.fqdn
+
+    @property
+    def refresh_token_grace_period(self) -> int:
+        """Seconds after a refresh token is consumed during which presenting
+        it again rotates again instead of counting as theft (both refresh
+        grants). Set it with ``ActingWebApp.with_refresh_token_grace()``."""
+        return self._refresh_token_grace_period
+
+    @refresh_token_grace_period.setter
+    def refresh_token_grace_period(self, value: int) -> None:
+        # Every write is checked, like the builder's, so a bad value fails
+        # where it is set rather than on the request that reads it.
+        self._refresh_token_grace_period = validate_refresh_token_grace(value)
 
     def _check_trust_permissions_available(self) -> bool:
         """Check if trust permission management system is available."""

@@ -17,7 +17,6 @@ import pytest
 import actingweb.oauth2_server.token_manager as tm_mod
 from actingweb.constants import (
     ACCESS_TOKEN_INDEX_BUCKET,
-    MCP_REFRESH_TOKEN_GRACE_PERIOD,
     MCP_REFRESH_TOKEN_REUSE_WINDOW,
     MCP_TOKEN_PURGE_INTERVAL,
     OAUTH2_SYSTEM_ACTOR,
@@ -167,6 +166,58 @@ def test_reuse_inside_grace_rotates_without_revoking(
     assert second["access_token"] in store.names(ACTOR, TOKENS)
 
 
+@pytest.mark.parametrize(
+    ("grace", "seconds_ago", "rotates"),
+    [
+        (20, 15, True),
+        (20, 40, False),
+        (0, 5, False),
+        (0, 0, False),
+        (None, 5, True),
+        (None, 30, True),
+        (None, 90, False),
+    ],
+    ids=[
+        "grace20-15s",
+        "grace20-40s",
+        "grace0-5s",
+        "grace0-same-second",
+        "default-5s",
+        "default-30s",
+        "default-90s",
+    ],
+)
+def test_the_configured_grace_decides_rotation_or_theft(
+    env: tuple[ActingWebTokenManager, MemoryStore],
+    grace: int | None,
+    seconds_ago: int,
+    rotates: bool,
+) -> None:
+    """The ladder reads ``config.refresh_token_grace_period``: inside it a
+    reuse rotates in the same chain; past it the chain is revoked. ``None``
+    leaves the default (60 s). Grace 0 means no grace, so a reuse in the
+    same second is theft too."""
+    tm, store = env
+    if grace is not None:
+        tm.config.refresh_token_grace_period = grace
+    first = _login(tm)
+    second = tm.refresh_access_token(first["refresh_token"], CLIENT)
+    assert second
+    _set_used(store, first["refresh_token"], seconds_ago)
+
+    again = tm.refresh_access_token(first["refresh_token"], CLIENT)
+
+    if rotates:
+        assert again is not None
+        chain = _chain(store, REFRESH, first["refresh_token"])
+        assert _chain(store, REFRESH, again["refresh_token"]) == chain
+        assert second["refresh_token"] in store.names(ACTOR, REFRESH)
+    else:
+        assert again is None
+        assert second["refresh_token"] not in store.names(ACTOR, REFRESH)
+        assert second["access_token"] not in store.names(ACTOR, TOKENS)
+
+
 def test_reuse_inside_window_revokes_the_whole_chain_only(
     env: tuple[ActingWebTokenManager, MemoryStore],
 ) -> None:
@@ -310,7 +361,7 @@ def test_cleanup_removes_used_refresh_tokens_past_the_window(
     old = _login(tm)
     recent = _login(tm)
     _set_used(store, old["refresh_token"], MCP_REFRESH_TOKEN_REUSE_WINDOW + 60)
-    _set_used(store, recent["refresh_token"], MCP_REFRESH_TOKEN_GRACE_PERIOD)
+    _set_used(store, recent["refresh_token"], tm.config.refresh_token_grace_period)
 
     cleaned = tm.cleanup_expired_tokens()
 

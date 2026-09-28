@@ -1134,6 +1134,19 @@ Notes (2026-09-25):
   clients should retry a 503 logout (Iteration 22); a custom
   attribute backend, if the consumer has one, must accept
   `conditional_update_attr(ttl_seconds=)` and `delete_by_chain(defer_name=)`.
+  **[Updated 2026-09-27, from
+  `thoughts/plans/2026-09-27-refresh-grace-setting.md`]** Also: bump the pin
+  to the rc; the refresh grace period is now
+  `with_refresh_token_grace(seconds)` (0 to 60, default 60, both ladders),
+  and the consumer needs no change to it (their feedback: no value up to
+  60 s covers a 336 s gap); the SPA store now reads a consumed token past
+  its own `expires_at` as expired, not theft (`c280bcf`). For their #109,
+  point at the SPA guide's "Refreshing reliably on native and mobile
+  clients": no refresh started during a dark wake or once sleep is
+  announced; a power assertion / `beginBackgroundTask` around an in-flight
+  refresh; a timeout on the refresh request; a failed persist of the new
+  refresh token is a failed refresh; keep single-flight, the final 401 and
+  keep-on-ambiguous-failure, without counting on a retry after sleep.
 
 ### New Tests, both unit and integration tests
 

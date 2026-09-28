@@ -1,14 +1,27 @@
 ---
-status: proposed
+status: superseded
+superseded_by: thoughts/plans/2026-09-27-refresh-grace-setting.md
 ---
 
 # Implementation Plan: a dropped refresh rotation is not theft (replay the recorded successor, both ladders)
 
 **Date:** 2026-09-26
 **Research:** thoughts/research/2026-09-26-spa-refresh-reuse-after-dropped-rotation.md
-**Branch:** to be created as `release/3.15.0-dropped-rotation` from `master`
-once PR #148 (`release/3.15.0-mcp-oauth-hardening`) has merged; this plan
-rides in that PR. Lands before `3.15.0rc1`.
+**Branch:** was `release/3.15.0-dropped-rotation` (renamed
+`release/3.15.0-refresh-grace` for the successor plan); nothing from this
+plan was committed.
+
+> **Superseded 2026-09-27 by the owner's decision.** Implementing Phase 2
+> showed the replay as designed disables theft detection (see the
+> `[Updated 2026-09-27]` note under Decisions Made). The `replayed` patch
+> that closed it was a second self-invented mechanism on top of the first.
+> The owner chose to stay on standard mechanisms instead: a configurable
+> grace period (a reuse interval, as identity vendors offer, capped at 60 s)
+> and client-side fixes for the lost response. The
+> Phase 1 and 2 code was reverted on the branch before any commit, except
+> the SPA store's expiry-before-used order, which the successor plan
+> carries forward. Kept as the record of what was tried and why it was
+> dropped.
 
 ## Overview
 
@@ -36,6 +49,21 @@ the shared single-use layer.
   state, no re-stamp, no crash window between writes, no two-live-successor
   race, and is safe under a mixed-version rollout (an old worker answers the
   replay with today's theft branch, which is no worse than today).
+  **[Updated 2026-09-27, pending owner confirmation]** Implementing Phase 2
+  showed the replay as specified disables theft detection. A thief who
+  uses the victim's current refresh token first gets its successor S2; the
+  victim's reuse is replayed S2; from then on each holder's reuse finds an
+  unused successor and is replayed again, indefinitely, with no chain
+  revocation. Today's ladder catches the victim's first reuse past 60 s.
+  Plan case 2 as written ("the second, past 60 s, → 401") failed against
+  the Phase 2 code. **Fix applied (Phase 2):** the replay is claimed by a
+  compare-and-swap on the successor's row that also marks it `replayed`;
+  a consumed row carrying `replayed` is never replayed again, and a lost
+  claim is answered as theft. Detection now fires at the second
+  divergence, whoever presents first. **The trade:** a client whose next
+  rotation after a replay is dropped too is locked out, as every dropped
+  rotation is today (two consecutive drops, not one). The alternative is
+  the orphan design the evaluators rejected.
 - **Both ladders, one implementation.** Owner, 2026-09-26. The helper lives
   in `actingweb/single_use.py`; `oauth2_spa.py` and `token_manager.py` call
   it through their stores.
@@ -98,6 +126,11 @@ the shared single-use layer.
   record, so the chain still has one live access token that the successor's
   eventual rotation revokes. A lost swap (the successor was consumed
   meanwhile) is logged at DEBUG; the fresh token then lives out its hour.
+  **[Updated 2026-09-27]** The swap is now load-bearing, not best-effort:
+  it also sets `replayed`, and it runs before the old access token is
+  revoked. A lost swap removes the freshly minted access token and answers
+  as for theft. That also closes the "replay races the successor's own
+  consume" failure scenario.
 - **Logging.** The replay logs at **WARNING** with a distinct phrase
   ("dropped rotation replayed"), `since_use`, the chain prefix and the
   actor, because production runs at WARNING and the line is the only lead
@@ -137,9 +170,11 @@ the shared single-use layer.
   the chain survives) — pre-existing, raised by the PR #148 review, filed as
   `thoughts/todo/token-store-fault-contract-gaps.md`. Phase 2 rewrites
   exactly those functions and moves the SPA tests onto the fault-injecting
-  double, so **the owner decides at approval** whether Phase 2 absorbs the
+  double, so the owner was to decide at approval whether Phase 2 absorbs the
   two SPA items (a 503 + `Retry-After` on the SPA refresh grant is a
-  consumer-visible change) or they stay filed.
+  consumer-visible change) or they stay filed. `/implement_plan` was
+  invoked on 2026-09-27 without that decision, so they **stay filed**
+  (deduced, not confirmed).
 
 ## What Already Exists
 
@@ -180,12 +215,15 @@ flowchart TD
     W -- no --> X[expired: remove row, refuse, no revocation]
     W -- yes --> S{successor row unused, unexpired,\nsame chain and actor?}
     S -- no: absent, used, or read fault --> T[theft: revoke chain, refuse]
-    S -- yes --> B[replay: revoke successor's access token,\nmint fresh access token, write it back,\n200 with refresh_token = successor]
+    S -- yes --> Q{presented row not replayed,\nand claim swap on the successor lands?}
+    Q -- no --> T
+    Q -- yes --> B[replay: mark successor replayed with a fresh access token,\nrevoke its previous access token,\n200 with refresh_token = successor]
 ```
 
-The theft detector after a replay is the successor's own first use: two
-holders of the same successor diverge, and the second presenter past the
-grace period lands in `T`.
+The theft detector after a replay is the `replayed` mark: two holders of
+the same replayed successor diverge, and the second presenter past the
+grace period lands in `T`. (Updated 2026-09-27: without the mark the second
+presenter would be replayed again, indefinitely.)
 
 ## Phase 1: The shared helper in `single_use.py`
 
@@ -227,9 +265,20 @@ grace period lands in `T`.
 
 ### Verification
 
-- [ ] Run the contract's `### Checks` fast tier verbatim
+- [x] Run the contract's `### Checks` fast tier verbatim (outside the
+      sandbox; see Learnings below)
 
-### Implementation Status: Not Started
+### Implementation Status: Complete, then reverted 2026-09-27 (superseded)
+
+**Deviations (2026-09-27):**
+- `actor_id_field=` became `owner: tuple[str, str] | None`. SPA tokens
+  all live in the system actor's partition, so the actor the helper reads
+  from is not the owner the record must name; the pair carries the field
+  and the expected value.
+- `chain_id=None` returns `None` without a read, like `name=None`.
+- `REPLAYED` (the field name) was added here in Phase 2, with the rule in
+  the module docstring.
+- Tests: ten in `tests/test_single_use.py`, including "never writes".
 
 ---
 
@@ -352,20 +401,67 @@ backends).
 - Write-back of the fresh access token loses its swap — DEBUG; the token
   lives out its hour — a test asserting the response is still 200.
 - Replay races the successor's own consume — `unused_successor` read it
-  unused, the client rotates it a moment later; the replayed holder then
-  presents it past 60 s → theft. Equivalent to today's grace fork; noted.
+  unused, the client rotates it a moment later. **[Updated 2026-09-27]**
+  The claim swap loses, the fresh access token is removed and the reuse is
+  theft — `test_a_successor_used_during_the_replay_is_theft`.
 
 ### Verification
 
-- [ ] Run the contract's `### Checks` fast tier verbatim
-- [ ] `poetry run pytest tests/test_oauth2_spa_refresh_rotation.py
-      tests/test_oauth_session.py -q`
+- [x] Run the contract's `### Checks` fast tier verbatim
+- [x] `poetry run pytest tests/test_oauth2_spa_refresh_rotation.py
+      tests/test_oauth_session.py -q` (47 passed)
+- [x] Full tier on Phases 1–2 together (2026-09-27, outside the sandbox):
+      ruff, format and pyright clean; DynamoDB 3712 passed, 31 skipped;
+      PostgreSQL 3601 passed, 140 skipped, 2 failed, both the benchmark
+      subscription tests already filed
+      (`benchmark-subscription-tests-pass-url-to-boolean-callback.md`);
+      `sphinx-build -W` clean.
 
-### Implementation Status: Not Started
+### Implementation Status: Complete, then reverted 2026-09-27 (superseded)
+
+**Deviations (2026-09-27):**
+- **The `replayed` rule** (see the updated decision): case 2 as the plan
+  stated it failed against the plan's design; fixed as recorded there.
+  Pending the owner's confirmation of the two-consecutive-drops trade.
+- `set_refresh_token_access_token` became `claim_replay(record, token,
+  access_token)`: it sets `replayed` too and is load-bearing. The handler
+  mints the fresh access token, claims, and only then revokes the
+  successor's previous access token; a lost claim revokes the fresh token
+  and falls to the theft branch. `_replay_successor` returns `None` then.
+- `restamp_successor(token, token_data, successor)` takes the consumed
+  token's name; the record alone does not carry it.
+- `replayable_successor` refuses a row with `replayed` set and passes
+  `owner=("actor_id", token_data["actor_id"])`.
+- Two more `create_refresh_token` callers the plan missed,
+  `handlers/oauth2_callback.py` (the SPA-mode callback and the SPA
+  redirect login), gain `access_token=` like the three in
+  `oauth2_spa.py`.
+- The grace re-stamp runs at the mint (`not success` reaches the mint
+  only from the grace tiers).
+- The whole SPA rotation test file moved onto `tests/mcp_token_double.py`
+  (the local double is gone; nothing needed it).
+
+**Tests added beyond the thirteen cases:** a thief using the victim's
+current token first is detected at the second divergence; two
+consecutive dropped rotations lock the client out (pins the trade); a
+successor used between the read and the claim is theft and leaves no
+fresh access token; a failed mint leaves an absent successor that reads
+as theft past the grace period (no SPA mint-fault test existed to
+extend). 16 of the 20 fail on `master`.
 
 ---
 
 ## Phase 3: The MCP ladder
+
+**Not started; the plan was superseded 2026-09-27 before this phase.**
+If confirmed, this phase mirrors Phase 2's deviations: the replay mints,
+then claims the successor by compare-and-swap (`access_token`,
+`access_token_id`, `replayed=True`), then point-deletes the previous access
+token; a lost claim deletes the fresh token and falls to `_revoke_chain`;
+`unused_successor` is not consulted for a consumed row with `replayed`
+set; and the attacker, double-drop, claim-race and mint-fault tests are
+ported with the thirteen cases. The backend integration test's second
+presentation then answers `None` as written.
 
 ### Changes
 

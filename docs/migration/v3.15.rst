@@ -28,6 +28,15 @@ Most applications need to check only the first three items:
 6. **Loggers you quieted to hide request bodies** can be restored.
 7. **PostgreSQL operators**: consumed token rows are purged by the token
    endpoint; nothing to schedule.
+8. **SPA and native clients**: the refresh-token grace period is now a
+   setting (default unchanged at 60 seconds), a store fault on the SPA
+   refresh grant answers 503 with ``Retry-After`` instead of 401, an SPA
+   refresh token presented after its own expiry is refused as expired
+   instead of revoking its chain, and the SPA guide gains how a native
+   client avoids losing a refresh response to sleep. A client should retry
+   a 503 rather than sign out; code calling ``try_mark_refresh_token_used``
+   or ``create_refresh_token`` directly should catch
+   ``TokenStoreUnavailable``.
 
 The trust list omits credentials
 ================================
@@ -67,7 +76,8 @@ Every ``grant_type=refresh_token`` response carries a **new**
 ``refresh_token``, and the one presented is consumed. The access token it
 was issued with is revoked.
 
-- A consumed token presented again **within 60 seconds** rotates again.
+- A consumed token presented again **within 60 seconds** (the default grace
+  period) rotates again.
   This covers a retried request and a client that lost the response.
 - Within **two days** it is treated as theft: every access and refresh
   token descended from the same sign-in is revoked, and the grant answers
@@ -80,7 +90,7 @@ was issued with is revoked.
 
 A refresh token issued before 3.15 joins a chain on its first rotation.
 Revoking any token of a chain revokes the whole chain, including consumed
-refresh tokens that could otherwise still rotate inside the 60 seconds.
+refresh tokens that could otherwise still rotate inside the grace period.
 That applies to ``ActingWebTokenManager.revoke_token`` and, from 3.15, to
 ``/oauth/logout`` called with an MCP bearer token, which before 3.15 left
 the token live. ``/oauth/logout`` with an SPA session token is unchanged.
@@ -91,6 +101,10 @@ index row is removed first, so the token is already unusable everywhere and
 the retry confirms it. The exception is a fault while revoking the token's
 *chain*: the presented token is then kept as the handle to the chain, and
 stays valid until the retry, which revokes the chain.
+
+The 60 seconds is the default grace period, shared with the SPA refresh
+grant and configurable downwards; see
+`The refresh-token grace period and SPA refresh tokens`_.
 
 A client that keeps its first refresh token will work for one hour after
 its first refresh, then lose its session. The fix is in the client: store
@@ -109,6 +123,54 @@ Revoking a token clears it from the MCP token cache of the process that
 revoked it. Another worker or Lambda container may keep honouring a revoked
 access token from its own cache for up to 300 seconds. This was true of
 revocation before 3.15 as well; it now also applies to rotation.
+
+The refresh-token grace period and SPA refresh tokens
+=====================================================
+
+**The grace period is a setting.** Both refresh grants (``/oauth/spa/token``
+and ``/oauth/token``) hard-coded a 60-second grace period, in which a
+consumed refresh token presented again rotates again instead of counting as
+theft. From 3.15 it is set with:
+
+.. code-block:: python
+
+   app = ActingWebApp(...).with_refresh_token_grace(30)  # 0 to 60 seconds
+
+The default stays 60 seconds, which is also the ceiling. A value outside 0
+to 60, or one that is not an integer, raises ``ValueError`` wherever it is
+set: the builder, ``Config(...)``, or an assignment to
+``Config.refresh_token_grace_period``. A lower value narrows the window in
+which a copied token is honoured. ``0`` means no grace, which also signs out
+a client's own concurrent duplicate refresh and a retry of a refresh that
+consumed its token but failed to store the new one; see :ref:`spa-refresh-grace` for what it does and does not
+guarantee. Applications that do not call the method need no change.
+
+**A store fault on the SPA refresh grant answers 503.** When the token
+store cannot be read, cannot confirm the consume, or cannot store the new
+refresh token, ``/oauth/spa/token`` answers **503** with ``Retry-After: 5``
+and "Token store temporarily unavailable; retry", as ``/oauth/token`` does.
+Before 3.15 it answered 401 "Invalid or expired refresh_token", which a
+client treating 401 as final turned into a sign-out. A client should keep
+its token and retry after ``Retry-After`` seconds.
+``OAuth2SessionManager.try_mark_refresh_token_used`` and
+``create_refresh_token`` now raise ``TokenStoreUnavailable``
+(``actingweb.oauth2_server.token_manager``) on a store fault, instead of
+answering "unknown token" or returning a token that was never stored; code
+that calls them directly should catch it.
+
+**An expired SPA refresh token is not theft.** A consumed SPA refresh token
+presented after its own ``expires_at`` answers ``401`` "Invalid or expired
+refresh_token" and is removed, without revoking its chain. Before 3.15 it
+could reach the reuse check, be treated as theft, and sign out the device
+holding the current token. The MCP token store already worked this way.
+
+**Native clients that lose a refresh response.** A desktop or mobile client
+that sends a refresh and never sees the response, because the device slept
+or the app was suspended, presents the consumed token again after waking.
+Past the grace period that is theft, and the user is signed out. No allowed
+grace reaches across a sleep; the fix is in the client. The SPA guide's
+:ref:`spa-refresh-reliably` lists what to do, and the troubleshooting guide
+has the symptom (:doc:`../guides/troubleshooting`).
 
 Reconnect public-client connectors registered before 3.15
 =========================================================

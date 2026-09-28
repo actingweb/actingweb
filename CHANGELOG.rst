@@ -5,6 +5,20 @@ CHANGELOG
 Unreleased
 ----------
 
+v3.15.0rc1: September 28, 2026
+------------------------------
+
+.. note::
+
+   **This is a security release for the MCP OAuth2 server and the trust
+   API.** The trust list stops returning peer secrets, MCP refresh tokens
+   become single-use with reuse detection, public MCP clients (such as
+   Codex) work, and PKCE is enforced on the built-in sign-in pages. The
+   refresh-token grace period becomes a setting, and the SPA guide gains how
+   native clients avoid being signed out when a refresh response is lost to
+   sleep. Most applications need to check three things; see
+   ``docs/migration/v3.15.rst``, which starts with the list.
+
 SECURITY
 ~~~~~~~~
 
@@ -72,14 +86,17 @@ SECURITY
   within 60 seconds rotates again (a retry or a lost response); within two
   days it is treated as theft, every token in its chain is revoked and the
   grant answers ``invalid_grant``; after that it answers ``invalid_grant``
-  without revoking. A refresh token issued before 3.15 joins a chain on its
-  first rotation and is covered from then on. If the store cannot complete
-  a theft revocation, the grant answers ``server_error`` and leaves the
-  replayed token in place for the next presentation to retry from, rather
-  than report the chain revoked. A store fault while an MCP refresh token or
+  without revoking. The 60 seconds is the default grace period, shared with
+  the SPA refresh grant and configurable downwards with
+  ``with_refresh_token_grace()`` (see ADDED). A refresh token issued before
+  3.15 joins a chain on its first rotation and is covered from then on. If
+  the store cannot complete a theft revocation, the grant answers
+  ``server_error`` and leaves the replayed token in place for the next
+  presentation to retry from, rather than report the chain revoked.
+  A store fault while an MCP refresh token or
   an authorization code is being consumed answers ``server_error`` and
   leaves it usable; it is never read as "already used" (the SPA refresh
-  endpoint still answers 401 on such a fault). Revocation removes a
+  endpoint now answers 503 on such a fault; see FIXED). Revocation removes a
   token's index row first, unconditionally, so a token being revoked is
   unusable on every worker at once even when the store then faults; what a
   fault leaves behind is cleanup (the actor row, reaped by TTL or the
@@ -203,6 +220,36 @@ CHANGED
   ``features/`` directory for ``/plan_feature`` documents, matching the
   ``actingweb_mcp`` repository. No library code changes.
 
+ADDED
+~~~~~
+
+- **The refresh-token grace period is a deployment setting.**
+  ``ActingWebApp.with_refresh_token_grace(seconds)`` sets
+  ``Config.refresh_token_grace_period``, the time after a refresh token is
+  consumed during which presenting it again rotates again instead of
+  counting as theft. It applies to both the SPA (``/oauth/spa/token``) and
+  the MCP (``/oauth/token``) refresh grants, which both hard-coded 60
+  seconds. The default stays 60 seconds, which is also the ceiling (Okta's
+  maximum for the same setting); a value outside 0 to 60, or one that is not
+  an integer, raises ``ValueError`` wherever it is set: the builder,
+  ``Config(...)``, or an assignment to the attribute. A lower value narrows
+  the window in which a copied token yields a new branch of its chain, which
+  reuse detection flags only if that branch later replays one of its own
+  consumed tokens. ``0`` means no grace: every reuse of a consumed token
+  inside the two-day reuse window is answered as theft and its chain
+  revoked, which also signs out a client's own concurrent duplicate refresh
+  and a client retrying a refresh that consumed its token but failed to
+  store the new one. Of two
+  requests presenting the same token at once, the one that consumed it may
+  keep its new tokens, depending on whether it creates them before or after
+  the other revokes the chain, so ``0`` stops a later replay, not reliably
+  a simultaneous one; use it only with clients that single-flight their
+  refreshes. No value covers a client that loses a
+  refresh response across a device sleep: the SPA guide gains "Refreshing
+  reliably on native and mobile clients", which describes how a client
+  avoids that lockout, and the troubleshooting guide gains the symptom.
+  Deployments that do not call the method behave as before.
+
 FIXED
 ~~~~~
 
@@ -246,6 +293,38 @@ FIXED
   tokens expire within an hour. **Behavior change:** it confirms the client
   row and its index row are gone, and answers ``False`` when neither is,
   instead of reporting success for a client that can still authenticate.
+
+- **A token-store fault on the SPA refresh grant signed the client out.**
+  ``/oauth/spa/token`` answered a store it could not read, a consume it
+  could not confirm, and a rotated token it could not store with 401
+  "Invalid or expired refresh_token", the answer for a dead token, and a
+  client that treats 401 on refresh as final signed the user out on a
+  transient throttle with the token untouched. A refresh token whose write
+  answered ``False`` was also handed out unstored, so the next refresh got
+  that 401. **Behavior change:** the grant answers **503** with
+  ``Retry-After: 5`` and "Token store temporarily unavailable; retry", as
+  ``/oauth/token`` does, and both the FastAPI and Flask integrations now
+  pass ``Retry-After`` through. A client should keep its token and retry
+  after that many seconds: a read or consume fault leaves the token
+  untouched, and after a fault storing the successor a retry inside the
+  grace period rotates again. **Behavior change:**
+  ``OAuth2SessionManager.try_mark_refresh_token_used`` and
+  ``create_refresh_token`` raise ``TokenStoreUnavailable`` on a store fault
+  instead of answering "unknown token" or returning an unstored token;
+  code calling them directly should catch it. Reported by the Emm AI
+  client while reviewing the 3.15 refresh guidance.
+
+- **An expired SPA refresh token could revoke its whole chain.** The SPA
+  token store checked whether a presented refresh token was already used
+  before checking whether it had expired. A consumed token presented after
+  its own ``expires_at``, but inside the two-day reuse window, therefore
+  reached the reuse ladder, was read as theft, and revoked its chain,
+  logging out the device holding the current token. The store now checks
+  expiry first, as the MCP token store already did: such a token answers
+  401 "Invalid or expired refresh_token" and its row is removed.
+  **Behavior change:** a consumed SPA refresh token replayed after its own
+  expiry is no longer treated as theft; it is refused without revoking the
+  chain.
 
 v3.14.7: September 14, 2026
 ----------------------------

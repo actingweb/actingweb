@@ -19,8 +19,10 @@ Most applications need to check only the first three items:
    read them from ``GET /{actor_id}/trust/{relationship}/{peerid}``.
 2. **MCP refresh tokens are single-use.** Every refresh returns a new
    refresh token; clients must store it.
-3. **Connectors added before 3.15 as public clients** (Codex and ChatGPT
-   were seen doing this) must be removed and added again once.
+3. **Connectors added before 3.15 that fail every refresh with
+   ``invalid_client``** (Codex was seen doing this) must be removed and
+   added again once. Clients that send the secret they were issued,
+   including ChatGPT, claude.ai and Claude Code, need nothing.
 4. **Custom authorize templates** must keep the two hidden PKCE inputs.
 5. **Code that validates MCP tokens itself** should handle
    ``TokenStoreUnavailable``, and code reading ``Attributes._bucket_loaded``
@@ -183,7 +185,15 @@ confidential with a secret. Public clients that never send that secret
 
 3.15 registers them correctly, but **existing registrations are not
 changed**. Users with such a connector remove it and add it again once; the
-client registers afresh. New connections need nothing.
+client registers afresh. Signing in again is not enough: a client that
+keeps its registration (Codex does) keeps the old confidential one. New
+connections need nothing.
+
+Only clients that refresh without their issued secret are affected. A
+client that sends it, as ChatGPT, claude.ai and Claude Code do, keeps
+working on its old registration, so there is no need to ask every user to
+reconnect. The symptom to look for is one client id failing every refresh
+with ``invalid_client`` ("Invalid client secret" in the log).
 
 A public client now gets no ``client_secret``, must send a PKCE
 ``S256`` challenge, and may not use ``client_credentials``. Confidential

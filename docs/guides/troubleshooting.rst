@@ -160,14 +160,33 @@ SPA client signed out during a database throttle
   The client keeps its token and retries after ``Retry-After`` seconds; see
   rule 7 in :ref:`spa-refresh-reliably`.
 
-Public MCP client (Codex, ChatGPT) fails every refresh with ``invalid_client``
-------------------------------------------------------------------------------
+Public MCP client (such as Codex) fails every refresh with ``invalid_client``
+-----------------------------------------------------------------------------
 
 - **Cause**: The connector was registered before 3.15, when registration
   ignored ``token_endpoint_auth_method: none`` and stored every client as
   confidential. The client never sends the secret it was issued.
 - **Fix**: Remove the connector and add it again; it registers as a public
-  client.
+  client. Signing in again is not enough when the client reuses its
+  registration. Clients that send their issued secret (ChatGPT, claude.ai,
+  Claude Code) are not affected.
+
+ChatGPT asks the user to reconnect although its refresh token is valid
+----------------------------------------------------------------------
+
+- **Symptom**: After an access token was invalidated on the server (rows
+  deleted from the token store, a store cleared, an application guard
+  answering 401), ChatGPT shows "your connection has expired, reconnect"
+  and the log has no ``refresh_token`` grant from it.
+- **Cause**: ChatGPT refreshes only on its own expiry clock, from the
+  ``expires_in`` it was given. A 401 from ``/mcp`` does not make it try its
+  refresh token; it re-reads the server metadata, re-initialises, and on a
+  second 401 asks the user to sign in again. Claude Code and claude.ai
+  refresh in that case. Seen with the chatgpt.com connector on 3.15.0rc1.
+- **Fix**: None on the server beyond not answering 401 to a token that is
+  still meant to be valid. The reconnect reuses the connector's
+  registration, so it is one sign-in, not a new connector. Refreshing on
+  expiry works: ChatGPT stores each rotated refresh token.
 
 ``/mcp`` answers 503 with ``Retry-After``
 -----------------------------------------

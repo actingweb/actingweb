@@ -36,8 +36,8 @@ Version Migrations
    OAuth2 server and the trust API. The trust list stops returning peer
    secrets, MCP refresh tokens become single-use, public MCP clients (such
    as Codex) work, and PKCE is enforced on the built-in sign-in pages.
-   Connectors added before 3.15 as public clients need to be removed and
-   added again once. The refresh-token grace period becomes a setting
+   Connectors added before 3.15 that refresh without their issued secret
+   (Codex) need to be removed and added again once. The refresh-token grace period becomes a setting
    (default unchanged), and the SPA guide gains how native clients avoid
    being signed out when a refresh response is lost to sleep.
 

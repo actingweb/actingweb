@@ -28,6 +28,13 @@ codes) went into `thoughts/plans/2026-09-25-mcp-oauth-hardening-and-credential-e
   client's metadata URL with caching, and interacts with the DCR retention
   todo (`dcr-registrations-and-client-trust-rows-never-expire.md`), since
   CIMD clients would not create registrations at all.
+  **2026-09-28, rc1 live pass (consumer):** claude.ai's new "Add custom
+  connector" dialog now preselects "Use Claude's published identity" (CIMD)
+  as the recommended OAuth-client option. Against rc1, which does not
+  advertise CIMD, it fell back to DCR and worked (confidential,
+  `client_secret_post`), so nothing is broken; supporting CIMD would put
+  claude.ai on its recommended path and stop it adding a registration per
+  connect.
 - **A confidential client that sends no PKCE challenge gets an unbound
   code.** Since 3.15 the built-in authorize pages bind a challenge when one
   is sent and require one from a public client, but a confidential client

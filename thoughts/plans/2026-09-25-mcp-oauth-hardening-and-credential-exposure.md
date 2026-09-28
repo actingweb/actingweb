@@ -1164,7 +1164,58 @@ Notes (2026-09-25):
 - [ ] `pip install actingweb==3.15.0` in a scratch venv imports and reports
       `__version__`
 
-### Implementation Status: Not Started
+### Implementation Status: In Progress
+
+**[Updated 2026-09-28] rc1 progress.**
+- `3.15.0rc1` was tagged on the PR #149 merge commit `8c0b8d8`, published
+  to TestPyPI, and has a GitHub pre-release.
+- actingweb_mcp's full test suite against rc1 from TestPyPI: 4803 passed.
+  The 3 errors were Stripe webhook tests that need DynamoDB Local on :8000,
+  which was not running there, so they are environment, not rc1.
+- actingwebdemo #29 pinned rc1, refreshed its lock (pyjwt 2.13 → 2.15), and
+  changed its deploy to follow the pin on push, pre-releases included.
+  demo.actingweb.io runs rc1: the deploy log shows actingweb 3.15.0rc1,
+  pyjwt 2.15.0 and cryptography 50.0.0.
+- The owner tested the demo manually on 2026-09-28: all OK. The demo has no
+  MCP, so this covers the OAuth2 sign-in, SPA and protocol paths only.
+- actingweb_mcp signed off on rc1 (2026-09-28): full suite 4928 passed,
+  12 skipped. Live through ngrok, Codex (public client, codex-cli 0.150.1)
+  refreshes without a secret after its access token is revoked and keeps
+  its tools (the #95/#96 defect). curl checks of registration, the token
+  endpoint error codes, S256-only PKCE and the authorize forms all matched
+  the docs. On both the MCP and SPA grants a reuse inside the grace rotates
+  again and a reuse after about 70 s revokes the chain. Their migration
+  took four small code changes. Not verified live: the SPA 503 on a store
+  fault (covered by `tests/test_spa_token_retry_after.py`).
+- From their production data (30 days): pre-3.15 registrations are all
+  confidential, and only one external Codex client failed refresh (43
+  "Invalid client secret"); five ChatGPT registrations never failed, and
+  claude.ai / Claude Code send their secret. The reconnect guidance in the
+  migration guide, troubleshooting guide, migration index and changelog was
+  narrowed to clients that refresh without their issued secret.
+- Live connector pass on rc1 (2026-09-28, consumer's dev deployment via
+  ngrok; refreshes forced by deleting the access-token rows and waiting out
+  the 5-min process cache, refresh #2 more than 60 s after #1):
+  - Claude Code 2.1.283: public (`none`), S256, clientInfo "claude-code";
+    refresh #1 and #2 OK with no secret and no reuse logged, so it stores
+    the rotated token.
+  - claude.ai: confidential (`client_secret_post`; its CIMD default fell
+    back to DCR), S256, clientInfo "Anthropic/ClaudeAI"; refresh #1 and #2
+    OK. A leftover Sep 24 (3.14) registration and 3.14-issued refresh
+    token also refreshed under rc1: the upgrade path works.
+  - ChatGPT: public (`none`), S256, clientInfo "openai-mcp". It does not
+    refresh on a 401; it asks the user to reconnect (full sign-in, same
+    registration). Refreshing on its own expiry clock works: with the dev
+    access-token lifetime temporarily at 120 s (reverted), refresh #1
+    (20:45:07) and #2 (20:48:39) were 200 with no secret, and the store
+    showed one linear chain, every consumed token used once, no reuse or
+    theft logged. So it stores the rotated token.
+  - Codex desktop (codex-mcp-client 0.155.0-alpha): public, S256, refresh
+    without a secret OK.
+  - The deduced decision in Phase 2 holds: all four send an authenticated
+    `initialize` (clientInfo seen on the trust rows).
+- The connector pass is complete: all four clients pass. Nothing blocks
+  `3.15.0`.
 
 **[Updated 2026-09-26]** Sequencing changed. The hardening work (Phases 1–3,
 Iterations 1–24) merges to `master` first through an ordinary PR with no

@@ -243,6 +243,19 @@ semantics one. Three options:
    the optimization path in `delete_by_chain`'s docstring. Fixes theft response
    and logout together, costs a GSI and a backfill.
 
+**Measured 2026-09-28 (actingweb_mcp production, the only large deployment
+we know of):** the shared partition `_actingweb_oauth2` holds 1
+`spa_access_tokens` row (0.5 RCU per full Query) and 41
+`spa_refresh_tokens` rows (2.5 RCU, one ~20 KB page). A full
+`delete_by_chain` costs about 3 RCU of reads plus one delete per chain row.
+Over 30 days: 11 `POST /oauth/logout` (about 0.4/day), and 0 calls each to
+`/oauth/revoke`, `/oauth/spa/revoke`, `/oauth/spa/logout`; for scale, 727
+`POST /oauth/spa/token`. **Decision: option 1, accept the scan, and ship the
+fix as a 3.15.1 patch.** State the per-call cost in `delete_by_chain`'s
+docstring and the security docs, and keep option 3 (a GSI on a promoted
+`chain_id`) as the named growth path for a deployment whose partition is
+large.
+
 ### Also, `revoke_token_chain` is written as a theft response
 
 It logs at WARNING ("Revoked N token(s) in chain …") and unconditionally calls

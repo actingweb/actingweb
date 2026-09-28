@@ -5,6 +5,20 @@ CHANGELOG
 Unreleased
 ----------
 
+v3.15.0rc1: September 28, 2026
+------------------------------
+
+.. note::
+
+   **This is a security release for the MCP OAuth2 server and the trust
+   API.** The trust list stops returning peer secrets, MCP refresh tokens
+   become single-use with reuse detection, public MCP clients (such as
+   Codex) work, and PKCE is enforced on the built-in sign-in pages. The
+   refresh-token grace period becomes a setting, and the SPA guide gains how
+   native clients avoid being signed out when a refresh response is lost to
+   sleep. Most applications need to check three things; see
+   ``docs/migration/v3.15.rst``, which starts with the list.
+
 SECURITY
 ~~~~~~~~
 

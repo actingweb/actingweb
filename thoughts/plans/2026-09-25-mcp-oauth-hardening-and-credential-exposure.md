@@ -1,5 +1,5 @@
 ---
-status: active
+status: done
 ---
 
 # Implementation Plan: 3.15.0 — MCP OAuth hardening and two credential exposures
@@ -737,12 +737,16 @@ not enforced) implemented. Registry tests patch `actingweb.actor.Actor` as
 - [x] `poetry run ruff check actingweb tests && poetry run ruff format --check actingweb tests`
 - [x] `make test-all-parallel` on DynamoDB; re-run failures sequentially
 - [x] `DATABASE_BACKEND=postgresql ... make test-integration` (per `CLAUDE.md`)
-- [ ] Manual, dev server with a real provider: register a `none` client with
+- [x] Manual, dev server with a real provider: register a `none` client with
       `curl`; GET authorize with an S256 challenge → form POST → callback →
       exchange with the verifier; refresh, then present the first refresh
       token again after 60 s and confirm 400 `invalid_grant` and that the
       second refresh token is dead; on PostgreSQL confirm the consumed rows
       are gone after the purge interval
+      **[Done 2026-09-28]** by actingweb_mcp's curl pass on rc1 (DynamoDB):
+      `none` registration, S256, a replay after about 70 s revoking the
+      chain. The PostgreSQL purge was not checked live; the purge tests
+      cover it.
 
 ### Implementation Status: Complete
 
@@ -1159,12 +1163,19 @@ Notes (2026-09-25):
 
 ### Verification
 
-- [ ] `git tag -l v3.15.0` on master after merge; GitHub Release created;
+- [x] `git tag -l v3.15.0` on master after merge; GitHub Release created;
       PyPI shows 3.15.0
-- [ ] `pip install actingweb==3.15.0` in a scratch venv imports and reports
+- [x] `pip install actingweb==3.15.0` in a scratch venv imports and reports
       `__version__`
 
-### Implementation Status: In Progress
+### Implementation Status: Complete
+
+**[Updated 2026-09-28] Released.** PR #150 merged; `v3.15.0` tagged on the
+merge commit `1a7a5fa`. The release workflow validated the version and
+published to PyPI and a GitHub Release. `pip install actingweb==3.15.0` in
+a scratch venv reports `3.15.0`. actingwebdemo #30 pinned `v3.15.0`, and
+its deploy installed actingweb 3.15.0 into the `actingwebdemo-prod` stack
+(UPDATE_COMPLETE).
 
 **[Updated 2026-09-28] rc1 progress.**
 - `3.15.0rc1` was tagged on the PR #149 merge commit `8c0b8d8`, published

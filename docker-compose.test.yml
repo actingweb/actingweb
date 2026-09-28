@@ -2,11 +2,13 @@ services:
   dynamodb-test:
     image: amazon/dynamodb-local:latest
     container_name: actingweb-test-dynamodb
-    command: '-jar DynamoDBLocal.jar -sharedDb -dbPath ./data'
+    # In memory, like CI: the on-disk database under a host bind mount was
+    # never cleared by `down -v`, grew across runs, and parallel runs hit
+    # its SQLite lock ("too long waiting for a lock", 30 s read timeouts).
+    # -sharedDb keeps one database for every credential and region.
+    command: '-jar DynamoDBLocal.jar -sharedDb -inMemory'
     ports:
       - '8001:8000'
-    volumes:
-      - ./tests/integration/dynamodb-data:/home/dynamodblocal/data
     working_dir: /home/dynamodblocal
     networks:
       - test-network

@@ -5,8 +5,8 @@ CHANGELOG
 Unreleased
 ----------
 
-v3.15.0rc1: September 28, 2026
-------------------------------
+v3.15.0: September 28, 2026
+---------------------------
 
 .. note::
 
@@ -258,8 +258,11 @@ FIXED
   none`` and issued a secret, and the token endpoint turned an absent secret
   into ``""``, which the refresh grant compared and rejected. Fixed by the
   public-client support above. **Connectors registered before 3.15 stay
-  confidential clients** and keep failing refresh until they are removed
-  and added again, which registers them afresh.
+  confidential clients**: one that refreshes without its issued secret
+  keeps failing until it is removed and added again, which registers it
+  afresh (signing in again reuses the old registration). Clients that send
+  the secret, such as ChatGPT, claude.ai and Claude Code, are not
+  affected.
 
 - **``/oauth/token`` reported every 400 as ``invalid_request``.** The error
   body was rebuilt from the status, so ``invalid_grant`` (a dead refresh

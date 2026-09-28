@@ -182,7 +182,9 @@ ChatGPT asks the user to reconnect although its refresh token is valid
   ``expires_in`` it was given. A 401 from ``/mcp`` does not make it try its
   refresh token; it re-reads the server metadata, re-initialises, and on a
   second 401 asks the user to sign in again. Claude Code and claude.ai
-  refresh in that case. Seen with the chatgpt.com connector on 3.15.0rc1.
+  refresh in that case. This is ChatGPT's behaviour, not the library's, so
+  it applies on every 3.15 release; seen with the chatgpt.com connector in
+  September 2026.
 - **Fix**: None on the server beyond not answering 401 to a token that is
   still meant to be valid. The reconnect reuses the connector's
   registration, so it is one sign-in, not a new connector. Refreshing on

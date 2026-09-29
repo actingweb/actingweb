@@ -125,6 +125,48 @@ def verify_pkce(code_verifier: str, stored_challenge: str) -> bool:
     return secret_digest_equals(computed_challenge, stored_challenge)
 
 
+def spa_cors_headers(
+    config: Any,
+    origin: str | None,
+    *,
+    methods: str = "GET, POST, OPTIONS",
+) -> dict[str, str]:
+    """CORS response headers for the SPA endpoints and ``/oauth/logout``.
+
+    One builder for the handler and both integrations, so the
+    ``spa_cors_origins`` allowlist (``ActingWebApp.with_spa_cors_origins``)
+    decides ``Access-Control-Allow-Origin`` everywhere. The default is
+    ``["*"]``, which echoes the request origin; with an allowlist, an origin
+    outside it gets the first allowed origin, which the browser then rejects.
+    Credentials are allowed because the endpoints set and clear cookies.
+
+    ``Access-Control-Expose-Headers: Retry-After`` lets a cross-origin SPA read
+    the delay of a 503 (the refresh grant, ``/oauth/revoke`` and
+    ``/oauth/logout`` answer one on a token store fault); without it the
+    browser hides the header and the client falls back to a fixed delay.
+
+    Args:
+        config: The ActingWeb config (reads ``spa_cors_origins``)
+        origin: The request's ``Origin`` header, or None
+        methods: The ``Access-Control-Allow-Methods`` value
+    """
+    # An empty or unset list is treated as "*" so ``allowed_origins[0]`` is safe.
+    allowed_origins = getattr(config, "spa_cors_origins", ["*"]) or ["*"]
+    requested = origin or "*"
+    if "*" in allowed_origins or requested in allowed_origins:
+        allow_origin = requested
+    else:
+        allow_origin = allowed_origins[0]
+    return {
+        "Access-Control-Allow-Origin": allow_origin,
+        "Access-Control-Allow-Methods": methods,
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, Accept",
+        "Access-Control-Allow-Credentials": "true",
+        "Access-Control-Expose-Headers": "Retry-After",
+        "Access-Control-Max-Age": "86400",
+    }
+
+
 class OAuth2SPAHandler(BaseHandler):
     """
     Handler for SPA-optimized OAuth2 endpoints.
@@ -153,26 +195,10 @@ class OAuth2SPAHandler(BaseHandler):
     def _set_cors_headers(self) -> None:
         """Set CORS headers for SPA access."""
         if self.response:
-            # Allow configurable origins, default to * (an empty/unset list is
-            # treated as "*" so the fallback ``allowed_origins[0]`` below is safe).
-            allowed_origins = getattr(self.config, "spa_cors_origins", ["*"]) or ["*"]
             origin = (
-                self.request.headers.get("Origin", "*") if self.request.headers else "*"
+                self.request.headers.get("Origin") if self.request.headers else None
             )
-
-            if "*" in allowed_origins or origin in allowed_origins:
-                self.response.headers["Access-Control-Allow-Origin"] = origin
-            else:
-                self.response.headers["Access-Control-Allow-Origin"] = allowed_origins[
-                    0
-                ]
-
-            self.response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
-            self.response.headers["Access-Control-Allow-Headers"] = (
-                "Authorization, Content-Type, Accept"
-            )
-            self.response.headers["Access-Control-Allow-Credentials"] = "true"
-            self.response.headers["Access-Control-Max-Age"] = "86400"
+            self.response.headers.update(spa_cors_headers(self.config, origin))
 
     def options(self, path: str = "") -> dict[str, Any]:
         """Handle CORS preflight requests."""
@@ -218,7 +244,9 @@ class OAuth2SPAHandler(BaseHandler):
         - /oauth/spa/authorize - Initiate OAuth flow
         - /oauth/spa/token - Token exchange/refresh
         - /oauth/spa/revoke - Token revocation
-        - /oauth/spa/logout - Logout and clear session
+
+        ``/oauth/spa/logout`` is not routed here: both integrations delegate it
+        to the main ``/oauth/logout`` handler.
 
         Args:
             path: The sub-path after /oauth/spa/
@@ -234,8 +262,6 @@ class OAuth2SPAHandler(BaseHandler):
             return self._handle_token()
         elif path == "revoke":
             return self._handle_revoke()
-        elif path == "logout":
-            return self._handle_logout()
         else:
             return self._json_error(404, f"Unknown SPA endpoint: {path}")
 
@@ -621,7 +647,7 @@ class OAuth2SPAHandler(BaseHandler):
             return self._json_error(400, "Missing refresh_token")
 
         # Validate refresh token and get associated actor
-        from ..oauth_session import get_oauth2_session_manager
+        from ..oauth_session import _REFRESH_TOKEN_BUCKET, get_oauth2_session_manager
 
         session_manager = get_oauth2_session_manager(self.config)
 
@@ -721,20 +747,34 @@ class OAuth2SPAHandler(BaseHandler):
                 # tokens minted before chain_id existed fall back to revoking just
                 # the presented token, which still avoids the mass-logout.
                 chain_id = token_data.get("chain_id")
-                if chain_id:
-                    revoked = session_manager.revoke_token_chain(actor_id, chain_id)
-                    logger.warning(
-                        f"Refresh token reuse detected for actor {actor_id} "
-                        f"({time_since_use}s after first use) - potential token theft, "
-                        f"revoked {revoked} token(s) in chain {chain_id[:8]}..."
-                    )
-                else:
-                    session_manager.revoke_refresh_token(refresh_token)
-                    logger.warning(
-                        f"Refresh token reuse detected for actor {actor_id} "
-                        f"({time_since_use}s after first use) - potential token theft, "
-                        f"revoked the reused (legacy, chain-less) token"
-                    )
+                # A fault keeps the presented (used) token in place as the
+                # retry handle and answers 503, never "revoked": a thief who
+                # replays it again finishes the revocation. The WARNING stays
+                # here, with the one caller that wants it.
+                try:
+                    if chain_id:
+                        revoked = session_manager.revoke_token_chain(
+                            actor_id,
+                            chain_id,
+                            anchor=(_REFRESH_TOKEN_BUCKET, refresh_token),
+                        )
+                        logger.warning(
+                            f"Refresh token reuse detected for actor {actor_id} "
+                            f"({time_since_use}s after first use) - potential token theft, "
+                            f"revoked {revoked} token(s) in chain {chain_id[:8]}..."
+                        )
+                    else:
+                        session_manager.revoke_session(
+                            refresh_token, token_type_hint="refresh_token"
+                        )
+                        logger.warning(
+                            f"Refresh token reuse detected for actor {actor_id} "
+                            f"({time_since_use}s after first use) - potential token theft, "
+                            f"revoked the reused (legacy, chain-less) token"
+                        )
+                except TokenStoreUnavailable as e:
+                    logger.error(f"Could not revoke the reused token's chain: {e}")
+                    return self._store_unavailable()
                 return self._json_error(
                     401, "Refresh token already used - session revoked for security"
                 )
@@ -744,10 +784,10 @@ class OAuth2SPAHandler(BaseHandler):
         # detected anywhere in this lineage, only this family is revoked — and
         # the access token is tagged with the chain so it is revoked too.
         chain_id = token_data.get("chain_id")
-        new_access_token = self._generate_actingweb_token(
-            actor_id, identifier or "", chain_id=chain_id
-        )
         try:
+            new_access_token = self._generate_actingweb_token(
+                actor_id, identifier or "", chain_id=chain_id
+            )
             new_refresh_token = session_manager.create_refresh_token(
                 actor_id, identifier, chain_id=chain_id
             )
@@ -964,12 +1004,22 @@ class OAuth2SPAHandler(BaseHandler):
 
         # Generate ActingWeb SPA tokens
         actor_id = actor_instance.id or ""
-        spa_access_token = self._generate_actingweb_token(actor_id, identifier)
-
+        from ..oauth2_server.token_manager import TokenStoreUnavailable
         from ..oauth_session import get_oauth2_session_manager
 
         session_manager = get_oauth2_session_manager(self.config)
-        spa_refresh_token = session_manager.create_refresh_token(actor_id, identifier)
+        # One chain for the login pair, so either token can end the session.
+        chain_id = session_manager.new_chain_id()
+        try:
+            spa_access_token = self._generate_actingweb_token(
+                actor_id, identifier, chain_id=chain_id
+            )
+            spa_refresh_token = session_manager.create_refresh_token(
+                actor_id, identifier, chain_id=chain_id
+            )
+        except TokenStoreUnavailable as e:
+            logger.error(f"Could not store the login tokens: {e}")
+            return self._store_unavailable()
 
         expires_in = 3600  # 1 hour for access token
         refresh_expires_in = 86400 * 14  # 2 weeks for refresh token
@@ -1120,12 +1170,22 @@ class OAuth2SPAHandler(BaseHandler):
             return self._json_error(403, "Authentication rejected")
 
         actor_id = actor_instance.id or ""
-        spa_access_token = self._generate_actingweb_token(actor_id, identifier)
-
+        from ..oauth2_server.token_manager import TokenStoreUnavailable
         from ..oauth_session import get_oauth2_session_manager
 
         session_manager = get_oauth2_session_manager(self.config)
-        spa_refresh_token = session_manager.create_refresh_token(actor_id, identifier)
+        # One chain for the login pair, so either token can end the session.
+        chain_id = session_manager.new_chain_id()
+        try:
+            spa_access_token = self._generate_actingweb_token(
+                actor_id, identifier, chain_id=chain_id
+            )
+            spa_refresh_token = session_manager.create_refresh_token(
+                actor_id, identifier, chain_id=chain_id
+            )
+        except TokenStoreUnavailable as e:
+            logger.error(f"Could not store the login tokens: {e}")
+            return self._store_unavailable()
 
         expires_in = 3600
         refresh_expires_in = 86400 * 14
@@ -1364,12 +1424,22 @@ class OAuth2SPAHandler(BaseHandler):
 
         # Generate tokens
         identifier = actor.creator or ""
-        access_token = self._generate_actingweb_token(actor_id, identifier)
-
+        from ..oauth2_server.token_manager import TokenStoreUnavailable
         from ..oauth_session import get_oauth2_session_manager
 
         session_manager = get_oauth2_session_manager(self.config)
-        refresh_token = session_manager.create_refresh_token(actor_id, identifier)
+        # One chain for the login pair, so either token can end the session.
+        chain_id = session_manager.new_chain_id()
+        try:
+            access_token = self._generate_actingweb_token(
+                actor_id, identifier, chain_id=chain_id
+            )
+            refresh_token = session_manager.create_refresh_token(
+                actor_id, identifier, chain_id=chain_id
+            )
+        except TokenStoreUnavailable as e:
+            logger.error(f"Could not store the login tokens: {e}")
+            return self._store_unavailable()
 
         expires_in = 3600  # 1 hour for access token
         refresh_expires_in = 86400 * 14  # 2 weeks for refresh token
@@ -1403,16 +1473,36 @@ class OAuth2SPAHandler(BaseHandler):
 
     def _handle_revoke(self) -> dict[str, Any]:
         """
-        Revoke access and/or refresh tokens.
+        Revoke a session token and the refresh-token chain it belongs to.
 
-        POST /oauth/spa/revoke
+        POST /oauth/revoke (also /oauth/spa/revoke)
 
         Request body (JSON):
         - token: The token to revoke
         - token_type_hint: "access_token" or "refresh_token" (optional)
 
-        Also clears related cookies.
+        The token may also come from the ``Authorization: Bearer`` header, the
+        ``refresh_token`` cookie (so a cookie-mode browser can revoke after its
+        access token expired) or the ``access_token`` / ``oauth_token`` cookie.
+
+        A token with a chain (every login and rotation token since 3.15.1)
+        ends the whole chain: the access token, the refresh token and any
+        rotated successors. Revoking a used refresh token therefore keeps the
+        theft tripwire's effect, where a single-row delete removed it. A token
+        without one (the www cookie login, or one issued earlier) revokes only
+        itself. RFC 7009 §2.1: when the hint does not locate the token the
+        other token type is searched, and an unrecognised hint is ignored.
+        Whoever holds a token may revoke its chain, so presenting another
+        chain's token ends that chain: no new exposure.
+
+        An unknown token answers 200 (RFC 7009 §2.2). A store fault answers
+        503 with ``Retry-After`` and clears no cookie: the client must assume
+        the token still exists and retry with it. The stored provider token is
+        cleared for the actor after a confirmed revoke, which affects every
+        device of the actor, not only this chain.
         """
+        from ..oauth2_server.token_manager import TokenStoreUnavailable
+
         # Parse request body
         try:
             body = self.request.body
@@ -1426,9 +1516,11 @@ class OAuth2SPAHandler(BaseHandler):
             params = json.loads(body_str) if body_str else {}
         except json.JSONDecodeError:
             return self._json_error(400, "Invalid JSON in request body")
+        if not isinstance(params, dict):
+            return self._json_error(400, "Request body must be a JSON object")
 
         token = params.get("token")
-        token_type_hint = params.get("token_type_hint", "access_token")
+        token_type_hint = str(params.get("token_type_hint") or "access_token")
 
         if not token:
             # Try to get from Authorization header
@@ -1440,38 +1532,33 @@ class OAuth2SPAHandler(BaseHandler):
             if auth_header.startswith("Bearer "):
                 token = auth_header[7:]
 
+        cookies = self.request.cookies or {}
+        if not token and cookies.get("refresh_token"):
+            token = cookies.get("refresh_token")
+            token_type_hint = "refresh_token"
+
         if not token:
-            # Try cookie
-            if self.request.cookies:
-                token = self.request.cookies.get(
-                    "access_token"
-                ) or self.request.cookies.get("oauth_token")
+            token = cookies.get("access_token") or cookies.get("oauth_token")
 
         if not token:
             return self._json_error(400, "No token provided")
 
-        # Revoke the token
+        from ..oauth_session import get_oauth2_session_manager
+
+        session_manager = get_oauth2_session_manager(self.config)
         try:
-            from ..oauth_session import get_oauth2_session_manager
+            row = session_manager.revoke_session(
+                str(token), token_type_hint=token_type_hint
+            )
+        except TokenStoreUnavailable as e:
+            logger.error(f"Token store unavailable during revoke: {e}")
+            return self._store_unavailable()
 
-            session_manager = get_oauth2_session_manager(self.config)
-
-            if token_type_hint == "refresh_token":
-                session_manager.revoke_refresh_token(token)
-            else:
-                # Look up actor from session token and clear provider token
-                try:
-                    token_data = session_manager.validate_access_token(token)
-                    if token_data:
-                        actor_id = token_data.get("actor_id")
-                        if actor_id:
-                            self._clear_provider_token_for_actor(actor_id)
-                except Exception as lookup_error:
-                    logger.debug(f"Provider token lookup during revoke: {lookup_error}")
-                session_manager.revoke_access_token(token)
-
-        except Exception as e:
-            logger.warning(f"Token revocation error: {e}")
+        # After the confirmed revoke, never before: a fault above leaves the
+        # provider token in place for the retry.
+        actor_id = row.get("actor_id") if row else None
+        if actor_id:
+            self._clear_provider_token_for_actor(actor_id)
 
         # Clear cookies
         self._clear_token_cookies()
@@ -1479,74 +1566,6 @@ class OAuth2SPAHandler(BaseHandler):
         return {
             "success": True,
             "message": "Token revoked successfully",
-        }
-
-    def _handle_logout(self) -> dict[str, Any]:
-        """
-        Logout and clear all session data.
-
-        POST /oauth/spa/logout
-
-        Clears all tokens and cookies. Also clears the stored provider token
-        locally so the backend can no longer make API calls on behalf of the
-        user — but does NOT call the provider's revocation endpoint (logout is
-        not an account disconnect; see _clear_provider_token_for_actor).
-        """
-        # Get token to revoke
-        token = None
-        auth_header = (
-            self.request.headers.get("Authorization", "")
-            if self.request.headers
-            else ""
-        )
-        if auth_header.startswith("Bearer "):
-            token = auth_header[7:]
-
-        if not token and self.request.cookies:
-            token = self.request.cookies.get(
-                "access_token"
-            ) or self.request.cookies.get("oauth_token")
-
-        if token:
-            try:
-                from ..oauth_session import get_oauth2_session_manager
-
-                session_manager = get_oauth2_session_manager(self.config)
-
-                # Revoke provider token (e.g., Google) stored in actor.store
-                try:
-                    token_data = session_manager.validate_access_token(token)
-                    if token_data:
-                        actor_id = token_data.get("actor_id")
-                        if actor_id:
-                            self._clear_provider_token_for_actor(actor_id)
-                except Exception as lookup_error:
-                    logger.debug(f"Provider token lookup during logout: {lookup_error}")
-
-                # Revoke the ActingWeb session token
-                session_manager.revoke_access_token(token)
-            except Exception as e:
-                logger.debug(f"Token revocation during logout: {e}")
-
-        # Revoke refresh token if in cookie
-        if self.request.cookies:
-            refresh_token = self.request.cookies.get("refresh_token")
-            if refresh_token:
-                try:
-                    from ..oauth_session import get_oauth2_session_manager
-
-                    session_manager = get_oauth2_session_manager(self.config)
-                    session_manager.revoke_refresh_token(refresh_token)
-                except Exception as e:
-                    logger.debug(f"Refresh token revocation during logout: {e}")
-
-        # Clear all cookies
-        self._clear_token_cookies()
-
-        return {
-            "success": True,
-            "message": "Logged out successfully",
-            "redirect_url": f"{self.config.proto}{self.config.fqdn}/",
         }
 
     def _handle_session_check(self) -> dict[str, Any]:
@@ -1620,24 +1639,25 @@ class OAuth2SPAHandler(BaseHandler):
         """Generate an ActingWeb access token for an actor.
 
         When ``chain_id`` is provided (the refresh-token family this access token
-        is being minted alongside, on rotation), the access token is tagged with
-        it so that revoking the family on reuse detection also revokes this
-        access token instead of letting it live out its full TTL.
+        is being minted alongside, at login and on rotation), the access token is
+        tagged with it so that revoking the family (logout, ``/oauth/revoke`` or
+        reuse detection) also revokes this access token instead of letting it
+        live out its full TTL.
+
+        Raises:
+            TokenStoreUnavailable: the token could not be stored.
         """
+        from ..oauth_session import get_oauth2_session_manager
+
         # Use the config's token generation
         token = self.config.new_token()
 
-        # Store token mapping
-        try:
-            from ..oauth_session import get_oauth2_session_manager
-
-            session_manager = get_oauth2_session_manager(self.config)
-            session_manager.store_access_token(
-                token, actor_id, identifier, chain_id=chain_id
-            )
-        except Exception as e:
-            logger.warning(f"Failed to store access token: {e}")
-
+        # Store token mapping. A failed write raises TokenStoreUnavailable and
+        # is not swallowed: the access token is the logout handle, so a token
+        # that validates nowhere must never be handed out.
+        get_oauth2_session_manager(self.config).store_access_token(
+            token, actor_id, identifier, chain_id=chain_id
+        )
         return token
 
     def _set_token_cookies(
@@ -1751,8 +1771,9 @@ class OAuth2SPAHandler(BaseHandler):
             logger.debug(f"Clearing provider token for actor {actor_id}: {e}")
 
     def _store_unavailable(self) -> dict[str, Any]:
-        """503 with ``Retry-After`` for a token-store fault on the refresh
-        grant, as the MCP token endpoint answers. A 401 would tell the client
+        """503 with ``Retry-After`` for a token-store fault on the SPA token
+        endpoints (the refresh grant, ``/oauth/revoke`` and the theft response),
+        as the MCP token endpoint answers. A 401 would tell the client
         its token is invalid, and a client following the SPA guide treats a
         401 on refresh as final and signs the user out."""
         result = self._json_error(503, "Token store temporarily unavailable; retry")

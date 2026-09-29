@@ -43,7 +43,12 @@ management with both **DynamoDB** and **PostgreSQL** backends.
    them there. On DynamoDB the call is a no-op and native TTL does the work.
    The scheduled ``cleanup_expired_tokens()`` remains useful for orphaned
    index entries; it also removes consumed refresh tokens past the reuse
-   window and TTL-expired provider-token rows.
+   window and TTL-expired provider-token rows. Since 3.15.1 it reads every row
+   strictly, so a store fault never passes for "the row is gone": a row or an
+   index it cannot read is left alone and counted under the ``skipped`` key of
+   the returned dictionary, and the next run retries it. An index row whose
+   token is gone or past its storage TTL is removed together with any actor row
+   still left for it.
 
 Backend Selection
 -----------------

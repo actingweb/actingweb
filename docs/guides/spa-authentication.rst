@@ -198,13 +198,13 @@ OAuth role (ActingWeb as OAuth *client* to Google/GitHub) than the MCP OAuth2 en
      - Token refresh with rotation for external provider tokens
    * - ``/oauth/revoke``
      - POST
-     - Revoke access and/or refresh tokens
+     - Revoke a token and the refresh-token chain it belongs to
    * - ``/oauth/session``
      - GET
      - Check current session status
    * - ``/oauth/logout``
      - POST/GET
-     - Logout and clear all tokens (returns JSON when Accept: application/json)
+     - Revoke the session's refresh-token chain and clear its cookies (returns JSON when Accept: application/json)
 
 Getting Started
 ---------------
@@ -513,6 +513,16 @@ Access token in JSON, refresh token in HttpOnly cookie. Best for:
    //     "actor_id": "abc123",
    //     "token_delivery": "hybrid"
    // }
+
+.. note::
+
+   **Logging out of a hybrid session started by the provider callback.** When
+   the OAuth callback itself delivers a hybrid session, its refresh-token
+   cookie is scoped to ``/oauth/spa/token`` and the browser never sends it to
+   ``/oauth/logout``. The access token still ends the whole chain while it is
+   valid, and a client that holds the refresh token can send it in the logout
+   body. A request the browser sends cross-site with ``SameSite=Lax`` cookies
+   does not carry the cookie either. See :ref:`spa-logout`.
 
 PKCE Support
 ------------
@@ -928,48 +938,130 @@ Check Session Status
        }
    }
 
+.. _spa-logout:
+
 Logout
 ~~~~~~
+
+``/oauth/logout`` ends the session's whole refresh-token chain: the access
+token, the refresh token and every token rotated from them. Another device of
+the same user has its own chain and keeps working. (Before 3.15.1 it deleted
+only the access token, so the refresh token still worked for up to 14 days.)
+
+An access token expires after an hour, and an expired token cannot be
+looked up, so a client that logs out after being idle should also send its
+refresh token, in the JSON body or in the ``refresh_token`` cookie. With no
+access token the refresh token alone drives the revocation; with both, each is
+revoked.
 
 .. code-block:: javascript
 
    async function logout() {
-       const response = await fetch('/oauth/logout', {
-           method: 'POST',
-           headers: {
-               'Authorization': `Bearer ${getAccessToken()}`
-           }
-       });
+       const headers = { 'Content-Type': 'application/json' };
+       if (getAccessToken()) {
+           headers['Authorization'] = `Bearer ${getAccessToken()}`;
+       }
 
-       const result = await response.json();
+       let response;
+       try {
+           response = await fetch('/oauth/logout', {
+               method: 'POST',
+               headers,
+               // Cookie-mode clients send no body; the refresh_token cookie
+               // travels with credentials.
+               body: JSON.stringify({ refresh_token: getRefreshToken() }),
+               credentials: 'include'
+           });
+       } catch (err) {
+           return false;  // network error: the session may still be live
+       }
 
-       // Clear local token storage
+       if (response.status === 503) {
+           // The token store faulted and revoked nothing. The tokens still
+           // work, so keep them and retry (RFC 7009 §2.2.1: on 503 the
+           // client must assume the token still exists).
+           const seconds = Number(response.headers.get('Retry-After')) || 5;
+           await new Promise(resolve => setTimeout(resolve, seconds * 1000));
+           return logout();
+       }
+
+       if (!response.ok) {
+           return false;
+       }
+
+       // Clear local tokens only after a 2xx.
        clearTokens();
-
-       // Redirect to home
+       const result = await response.json();
        window.location.href = result.redirect_url;
+       return true;
    }
+
+A store fault answers **503** with ``Retry-After: 5`` and
+``{"success": false, "error": "temporarily_unavailable"}``. Nothing was
+revoked, no cookie was cleared, and the presented token is still the handle for
+the retry. Retry promptly: if the access token expires before the retry, send
+the refresh token as well, which anchors on a 14-day row. A cross-origin SPA
+can read ``Retry-After`` because the endpoint lists it in
+``Access-Control-Expose-Headers``; a proxy that strips that header leaves the
+client to a fixed delay.
+
+.. note::
+
+   **Known limitation: logout racing a refresh.** A refresh request that has
+   already consumed the old refresh token when the logout runs can mint its
+   successor tokens after the chain was deleted, so a logout that answers 200
+   can leave one live token pair behind for that chain. The window is
+   milliseconds and needs a refresh in flight at the moment of logout; a client
+   should not refresh while it is logging out (single-flight the two). A
+   second logout, or a revoke of the new refresh token, ends it. This is
+   tracked as a follow-up.
 
 .. note::
 
    **Logout is a session action, not an account disconnect.** ``/oauth/logout``
-   revokes the ActingWeb session token and clears the stored identity-provider
-   token *locally* (so the backend can no longer call provider APIs on the user's
-   behalf). It does **not** call the provider's token-revocation endpoint. This is
-   deliberate: revoking the upstream grant for Sign in with Apple emails the user
-   and severs the grant, forcing a fresh consent prompt on the next login.
-   Provider-side revocation is reserved for an explicit account-disconnect / delete
-   flow. (Changed in 3.11.0.)
+   revokes the ActingWeb session token and its chain and, for a ``POST``,
+   clears the stored identity-provider token *locally* (so the backend can no
+   longer call provider APIs on the user's behalf; a ``GET`` ends the chain
+   but leaves that token alone). The provider token is stored once per
+   actor, so this clears it for every device of that actor, not only this
+   chain. It clears the provider *access* token only: the provider refresh
+   token in ``actor.store.oauth_refresh_token`` is left in place, and nothing in
+   the library reads it, so an application that refreshes provider tokens
+   itself should clear it on logout. It does **not** call the provider's
+   token-revocation endpoint. This
+   is deliberate: revoking the upstream grant for Sign in with Apple emails the
+   user and severs the grant, forcing a fresh consent prompt on the next login.
+   Provider-side revocation is reserved for an explicit account-disconnect /
+   delete flow. (Changed in 3.11.0.)
+
+.. note::
+
+   ``GET /oauth/logout`` with the session cookies ends the chain too. A
+   cross-site top-level navigation carries ``SameSite=Lax`` cookies, so another
+   site can force one device's logout. That exposes nothing and ends one
+   session. A ``GET`` leaves the actor's stored provider token alone: only a
+   ``POST`` (or ``/oauth/revoke``) clears it, since it is shared by every
+   device; use ``POST`` where that matters.
+
+.. note::
+
+   If the handler itself fails (a bug, not a store fault) the integrations
+   answer a plain 500 without CORS headers, and a cross-origin browser sees a
+   network error. This is the same as every other SPA endpoint.
 
 Token Revocation
 ~~~~~~~~~~~~~~~~
 
-Explicitly revoke tokens (e.g., when user logs out from another device):
+Explicitly revoke a token (for example when the user signs out from another
+device). The token may be an access token or a refresh token, and revoking
+either ends the whole chain it belongs to, a *used* refresh token included, so
+the theft check keeps its effect. A token issued before 3.15.1 that has no chain
+revokes only itself.
 
 .. code-block:: javascript
 
    async function revokeToken(token, tokenType = 'access_token') {
-       await fetch('/oauth/revoke', {
+       const response = await fetch('/oauth/revoke', {
            method: 'POST',
            headers: { 'Content-Type': 'application/json' },
            body: JSON.stringify({
@@ -977,7 +1069,19 @@ Explicitly revoke tokens (e.g., when user logs out from another device):
                token_type_hint: tokenType
            })
        });
+
+       if (response.status === 503) {
+           // Nothing was revoked; the token still works. Retry after
+           // Retry-After seconds.
+           throw new Error('retry');
+       }
    }
+
+The hint is optional: if it does not locate the token the other token type is
+searched (RFC 7009 §2.1), and an unrecognised hint is ignored. An unknown token
+answers ``200`` (RFC 7009 §2.2). The token may also come from the
+``Authorization`` header, the ``refresh_token`` cookie (so a cookie-mode browser
+can revoke after its access token expired) or the ``access_token`` cookie.
 
 Complete Example
 ----------------
@@ -1097,13 +1201,20 @@ Here's a complete SPA authentication flow:
        }
 
        async logout() {
-           await fetch('/oauth/spa/logout', {
+           const response = await fetch('/oauth/logout', {
                method: 'POST',
                headers: {
                    'Authorization': `Bearer ${this.accessToken}`
                },
                credentials: 'include'
            });
+
+           // A 503 means the store revoked nothing and the session is still
+           // live: keep the tokens and let the user retry. Clear local tokens
+           // only after a 2xx.
+           if (!response.ok) {
+               throw new Error('Logout failed; try again');
+           }
 
            this.accessToken = null;
            this.expiresAt = null;
@@ -1379,7 +1490,7 @@ Token exchange and refresh with rotation.
 POST /oauth/revoke
 ~~~~~~~~~~~~~~~~~~~~~~
 
-Revoke tokens.
+Revoke a token and the refresh-token chain it belongs to.
 
 **Request Body:**
 
@@ -1390,6 +1501,10 @@ Revoke tokens.
        "token_type_hint": "access_token"
    }
 
+``token_type_hint`` is optional (``"access_token"`` or ``"refresh_token"``).
+Without ``token`` the endpoint reads the ``Authorization`` header, then the
+``refresh_token`` cookie, then the ``access_token`` cookie.
+
 **Response:**
 
 .. code-block:: json
@@ -1398,6 +1513,20 @@ Revoke tokens.
        "success": true,
        "message": "Token revoked successfully"
    }
+
+An unknown token also answers 200. A token store fault answers **503** with
+``Retry-After: 5``, revokes nothing and clears no cookie:
+
+.. code-block:: json
+
+   {
+       "error": true,
+       "status_code": 503,
+       "message": "Token store temporarily unavailable; retry"
+   }
+
+The stored provider token is cleared for the actor after a confirmed
+revocation, for every device of that actor.
 
 GET /oauth/session
 ~~~~~~~~~~~~~~~~~~~~~~
@@ -1432,11 +1561,24 @@ Check session status.
 POST /oauth/logout
 ~~~~~~~~~~~~~~~~~~~~~~
 
-Logout and clear session.
+Revoke the session's refresh-token chain and clear its cookies.
 
 **Headers:**
 
 - ``Authorization: Bearer <access_token>`` (optional)
+
+**Request Body (optional JSON):**
+
+.. code-block:: json
+
+   {
+       "refresh_token": "the_refresh_token"
+   }
+
+The refresh token may also arrive in the ``refresh_token`` cookie (any method).
+When both the body and the cookie name a token, and when an access token and a
+refresh token are both present, each is revoked. A missing, empty or malformed
+body is ignored, never a 400.
 
 **Response:**
 
@@ -1444,9 +1586,26 @@ Logout and clear session.
 
    {
        "success": true,
-       "message": "Logged out successfully",
-       "redirect_url": "/"
+       "message": "Successfully logged out",
+       "redirect_url": "https://example.com/",
+       "cleared_cookies": ["access_token", "oauth_token", "refresh_token", "session_id"]
    }
+
+The ``refresh_token`` cookie is cleared at ``/`` and at ``/oauth/spa/token``.
+A token store fault answers **503** with ``Retry-After: 5`` and no
+``Set-Cookie``:
+
+.. code-block:: json
+
+   {
+       "success": false,
+       "error": "temporarily_unavailable",
+       "message": "Token store temporarily unavailable; retry the logout",
+       "method": "POST"
+   }
+
+The stored provider token is cleared for the actor after a confirmed
+revocation of a ``POST``, for every device of that actor.
 
 GET /oauth/email
 ~~~~~~~~~~~~~~~~~

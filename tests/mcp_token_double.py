@@ -21,6 +21,15 @@ it:
   DynamoDB shape), or delete every row but the last and then raise
   (``"partial"``, a DynamoDB fault part-way through its row-by-row delete;
   ``defer_name`` puts that row last, so it is the one that survives);
+- ``store.chain_delete_hook`` runs inside ``delete_by_chain`` before any row is
+  touched (the ``cas_hook`` shape), so a test can change the store between a
+  caller's read and its delete: fault the anchor's bucket, pop the anchor row;
+- ``store.enforce_ttl = True`` makes the double behave like the real backends
+  for expiry: ``get_attr_strict`` treats a row whose deadline has passed as
+  absent while ``get_bucket`` still lists it (the row is only reaped later).
+  ``store.ttls`` keeps recording *relative* seconds; ``store.deadlines`` holds
+  the absolute stamp (``ttl + TTL_CLOCK_SKEW_BUFFER``, as the backends store
+  it) and ``store.advance(seconds)`` moves the double's clock;
 - ``store.cas_fault`` makes ``conditional_update_attr`` answer False without
   writing, the shape both backends give a throttle or a dropped connection;
   ``store.cas_lost_response`` makes it write and still answer False (the
@@ -37,12 +46,13 @@ here.
 """
 
 import copy
+import time
 from collections.abc import Callable
 from typing import Any
 from unittest.mock import MagicMock
 
 from actingweb.config import Config
-from actingweb.constants import OAUTH2_SYSTEM_ACTOR
+from actingweb.constants import OAUTH2_SYSTEM_ACTOR, TTL_CLOCK_SKEW_BUFFER
 
 
 class MemoryStore:
@@ -70,6 +80,35 @@ class MemoryStore:
         self.delete_faults: set[tuple[str, str, str]] = set()
         # Buckets whose set_attr answers False without writing.
         self.write_faults: set[str] = set()
+        # Runs inside delete_by_chain before rows are touched.
+        self.chain_delete_hook: Callable[[], object] | None = None
+        # Real-backend expiry: a strict read of a row past its deadline is
+        # None, while get_bucket still lists it.
+        self.enforce_ttl = False
+        self.deadlines: dict[tuple[str, str, str], float] = {}
+        self._clock_offset = 0.0
+
+    def now(self) -> float:
+        """The double's clock: wall time plus whatever the test advanced."""
+        return time.time() + self._clock_offset
+
+    def advance(self, seconds: float) -> None:
+        self._clock_offset += seconds
+
+    def record_ttl(
+        self, actor_id: str, bucket: str, name: str, ttl_seconds: int | None
+    ) -> None:
+        self.ttls[(actor_id, bucket, name)] = ttl_seconds
+        if ttl_seconds is None:
+            self.deadlines.pop((actor_id, bucket, name), None)
+        else:
+            self.deadlines[(actor_id, bucket, name)] = (
+                self.now() + ttl_seconds + TTL_CLOCK_SKEW_BUFFER
+            )
+
+    def expired(self, actor_id: str, bucket: str, name: str) -> bool:
+        deadline = self.deadlines.get((actor_id, bucket, name))
+        return self.enforce_ttl and deadline is not None and self.now() > deadline
 
     def bucket(self, actor_id: str, bucket: str) -> dict[str, dict[str, Any]]:
         return self.rows.setdefault(f"{actor_id}:{bucket}", {})
@@ -97,6 +136,8 @@ def make_config() -> tuple[Config, MemoryStore]:
         def get_attr_strict(self, actor_id: str, bucket: str, name: str) -> Any:
             if bucket in store.faulty_buckets:
                 raise RuntimeError(f"backend fault reading {bucket}")
+            if store.expired(actor_id, bucket, name):
+                return None
             return copy.deepcopy(store.rows.get(f"{actor_id}:{bucket}", {}).get(name))
 
         def get_attr(self, actor_id: str, bucket: str, name: str) -> Any:
@@ -117,7 +158,7 @@ def make_config() -> tuple[Config, MemoryStore]:
                 store.rows.get(f"{actor_id}:{bucket}", {}).pop(name, None)
                 return True
             store.bucket(actor_id, bucket)[name] = {"data": copy.deepcopy(data)}
-            store.ttls[(actor_id, bucket, name)] = ttl_seconds
+            store.record_ttl(actor_id, bucket, name, ttl_seconds)
             return True
 
         def delete_attr(self, actor_id: str, bucket: str, name: str) -> bool:
@@ -156,7 +197,7 @@ def make_config() -> tuple[Config, MemoryStore]:
                 return False
             store.bucket(actor_id, bucket)[name] = {"data": copy.deepcopy(new_data)}
             if ttl_seconds is not None:
-                store.ttls[(actor_id, bucket, name)] = ttl_seconds
+                store.record_ttl(actor_id, bucket, name, ttl_seconds)
             return not store.cas_lost_response
 
         def delete_bucket(self, actor_id: str, bucket: str) -> bool:
@@ -169,6 +210,8 @@ def make_config() -> tuple[Config, MemoryStore]:
             chain_id: str | None = None,
             defer_name: str | None = None,
         ) -> int:
+            if store.chain_delete_hook is not None:
+                store.chain_delete_hook()
             if store.chain_delete_fault == "raise":
                 raise RuntimeError("throttled deleting chain")
             if store.chain_delete_fault == "zero":

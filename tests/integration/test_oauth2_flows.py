@@ -510,6 +510,19 @@ class TestOAuth2CORSPreflight:
             f"Logout without origin should use *, got: {response.headers.get('Access-Control-Allow-Origin')}"
         )
 
+    def test_logout_exposes_retry_after_with_and_without_an_origin(self, test_app):
+        """A cross-origin SPA must be able to read the Retry-After of a 503."""
+        with_origin = requests.post(
+            f"{test_app}/oauth/logout",
+            headers={"Origin": "https://my-spa.example.com"},
+        )
+        without_origin = requests.post(f"{test_app}/oauth/logout")
+
+        for response in (with_origin, without_origin):
+            assert "Retry-After" in response.headers.get(
+                "Access-Control-Expose-Headers", ""
+            ), f"missing Expose-Headers: {dict(response.headers)}"
+
     def test_spa_logout_delegates_to_main_logout(self, test_app):
         """
         Test that /oauth/spa/logout delegates to the main logout handler.

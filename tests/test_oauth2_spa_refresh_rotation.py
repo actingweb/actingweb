@@ -372,3 +372,149 @@ def test_create_refresh_token_raises_when_the_write_is_not_stored():
         get_oauth2_session_manager(config).create_refresh_token(
             "fault-actor", "user@example.com"
         )
+
+
+# ---------------------------------------------------------------------------
+# The theft response follows the fault contract: a fault keeps the presented
+# token and answers 503 + Retry-After, never "revoked".
+# ---------------------------------------------------------------------------
+
+
+def _seed_theft(config, storage, actor_id="fault-actor"):
+    """A used refresh token past the grace window, plus a chain-tagged access
+    token; returns ``(token, chain_id, access_token)``."""
+    token, chain_id = _seed_used_token(
+        config,
+        storage,
+        actor_id,
+        used_seconds_ago=config.refresh_token_grace_period + 30,
+    )
+    access = "chain-access-token"
+    get_oauth2_session_manager(config).store_access_token(
+        access, actor_id, "user@example.com", chain_id=chain_id
+    )
+    return token, chain_id, access
+
+
+def _assert_503(handler: OAuth2SPAHandler, result: dict[str, Any]) -> None:
+    assert result.get("status_code") == 503
+    assert handler.response is not None
+    assert handler.response.status_code == 503
+    assert handler.response.headers["Retry-After"] == "5"
+
+
+@pytest.mark.parametrize("fault", ["zero", "raise"])
+def test_a_theft_revocation_fault_answers_503_and_keeps_the_used_token(fault):
+    config, storage = _make_config()
+    store = storage_store(config)
+    token, _chain_id, access = _seed_theft(config, storage)
+    store.chain_delete_fault = fault
+
+    handler = _handler(config)
+    result = handler._handle_refresh_token({"refresh_token": token}, "json")
+
+    _assert_503(handler, result)
+    refresh_key = f"{OAUTH2_SYSTEM_ACTOR}:{_REFRESH_TOKEN_BUCKET}"
+    assert token in storage[refresh_key], "the used token is the retry handle"
+    assert store.data(OAUTH2_SYSTEM_ACTOR, "spa_access_tokens", access) is not None
+
+    # The next presentation, once the store is healthy, finishes the job.
+    store.chain_delete_fault = None
+    retry = _handler(config)
+    result = retry._handle_refresh_token({"refresh_token": token}, "json")
+    assert result.get("status_code") == 401
+    assert "revoked" in result.get("message", "")
+    assert token not in storage[refresh_key]
+    assert store.data(OAUTH2_SYSTEM_ACTOR, "spa_access_tokens", access) is None
+
+
+def test_a_partial_theft_revocation_keeps_the_anchor_and_the_retry_finishes():
+    config, storage = _make_config()
+    store = storage_store(config)
+    token, _chain_id, access = _seed_theft(config, storage)
+    store.chain_delete_fault = "partial"
+
+    handler = _handler(config)
+    result = handler._handle_refresh_token({"refresh_token": token}, "json")
+
+    _assert_503(handler, result)
+    # The access row went; the presented (anchor) row is the one that survives.
+    assert store.data(OAUTH2_SYSTEM_ACTOR, "spa_access_tokens", access) is None
+    assert store.data(OAUTH2_SYSTEM_ACTOR, _REFRESH_TOKEN_BUCKET, token) is not None
+
+    store.chain_delete_fault = None
+    retry = _handler(config)
+    result = retry._handle_refresh_token({"refresh_token": token}, "json")
+    assert result.get("status_code") == 401
+    assert store.data(OAUTH2_SYSTEM_ACTOR, _REFRESH_TOKEN_BUCKET, token) is None
+
+
+def test_a_faulting_anchor_read_after_a_zero_delete_answers_503():
+    config, storage = _make_config()
+    store = storage_store(config)
+    token, _chain_id, _access = _seed_theft(config, storage)
+    store.chain_delete_fault = "zero"
+    store.chain_delete_hook = lambda: store.faulty_buckets.add(_REFRESH_TOKEN_BUCKET)
+
+    handler = _handler(config)
+    result = handler._handle_refresh_token({"refresh_token": token}, "json")
+
+    _assert_503(handler, result)
+
+
+def test_a_concurrent_revocation_is_done_not_a_fault():
+    """A zero delete with the anchor already gone means another request
+    revoked the chain first: 401 "revoked", not 503."""
+    config, storage = _make_config()
+    store = storage_store(config)
+    token, _chain_id, _access = _seed_theft(config, storage)
+    refresh_key = f"{OAUTH2_SYSTEM_ACTOR}:{_REFRESH_TOKEN_BUCKET}"
+    store.chain_delete_fault = "zero"
+    store.chain_delete_hook = lambda: storage[refresh_key].pop(token, None)
+
+    handler = _handler(config)
+    result = handler._handle_refresh_token({"refresh_token": token}, "json")
+
+    assert result.get("status_code") == 401
+    assert "revoked" in result.get("message", "")
+
+
+def test_a_legacy_chainless_reuse_fault_answers_503_and_keeps_the_row():
+    config, storage = _make_config()
+    store = storage_store(config)
+    key = f"{OAUTH2_SYSTEM_ACTOR}:{_REFRESH_TOKEN_BUCKET}"
+    token = "legacy-refresh-token"
+    storage.setdefault(key, {})[token] = {
+        "data": {
+            "actor_id": "legacy-actor",
+            "identifier": "user@example.com",
+            "created_at": int(time.time()) - 1000,
+            "expires_at": int(time.time()) + 100000,
+            "used": True,
+            "used_at": int(time.time()) - (config.refresh_token_grace_period + 30),
+        }
+    }
+    store.delete_faults.add((OAUTH2_SYSTEM_ACTOR, _REFRESH_TOKEN_BUCKET, token))
+
+    handler = _handler(config)
+    result = handler._handle_refresh_token({"refresh_token": token}, "json")
+
+    _assert_503(handler, result)
+    assert token in storage[key]
+
+
+def test_the_mcp_caches_are_evicted_on_the_fault_path_too(monkeypatch):
+    config, storage = _make_config()
+    store = storage_store(config)
+    token, _chain_id, _access = _seed_theft(config, storage, actor_id="evict-actor")
+    store.chain_delete_fault = "raise"
+    evicted: list[str] = []
+    monkeypatch.setattr(
+        "actingweb.mcp.invalidation.evict_caches_for_actor",
+        lambda actor_id: evicted.append(actor_id) or 0,
+    )
+
+    handler = _handler(config)
+    handler._handle_refresh_token({"refresh_token": token}, "json")
+
+    assert evicted == ["evict-actor"]

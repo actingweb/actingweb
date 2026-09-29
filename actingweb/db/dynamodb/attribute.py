@@ -1,3 +1,4 @@
+import logging
 import os
 import time
 from collections.abc import Sequence
@@ -13,6 +14,25 @@ from pynamodb.exceptions import DoesNotExist
 from pynamodb.models import Model
 
 from actingweb.db.dynamodb._ensure import ensure_table
+
+# ``delete_by_chain`` scans whole token buckets; past this many rows in one
+# bucket it logs a WARNING that the scan is outgrowing its budget (see the
+# method's docstring).
+CHAIN_SCAN_WARN_ROWS = 1000
+
+logger = logging.getLogger(__name__)
+
+
+def ttl_deadline(ttl_seconds: int) -> int:
+    """The stored ``ttl_timestamp`` for a row that lives ``ttl_seconds``.
+
+    Adds ``TTL_CLOCK_SKEW_BUFFER`` so DynamoDB's native TTL never reaps a row
+    before its application-level expiry, whatever the clock skew.
+    """
+    from ...constants import TTL_CLOCK_SKEW_BUFFER
+
+    return int(time.time()) + ttl_seconds + TTL_CLOCK_SKEW_BUFFER
+
 
 """
     DbAttribute handles all db operations for an attribute (internal)
@@ -173,10 +193,7 @@ class DbAttribute:
         # Calculate TTL timestamp if provided
         ttl_timestamp = None
         if ttl_seconds is not None:
-            from ...constants import TTL_CLOCK_SKEW_BUFFER
-
-            # Add buffer for clock skew safety
-            ttl_timestamp = int(time.time()) + ttl_seconds + TTL_CLOCK_SKEW_BUFFER
+            ttl_timestamp = ttl_deadline(ttl_seconds)
 
         # Defensive sanitization of data before storing
         from actingweb.db.utils import sanitize_json_data
@@ -305,12 +322,8 @@ class DbAttribute:
             if timestamp:
                 actions = list(actions) + [Attribute.timestamp.set(timestamp)]
             if ttl_seconds is not None:
-                from ...constants import TTL_CLOCK_SKEW_BUFFER
-
                 actions = list(actions) + [
-                    Attribute.ttl_timestamp.set(
-                        int(time.time()) + ttl_seconds + TTL_CLOCK_SKEW_BUFFER
-                    )
+                    Attribute.ttl_timestamp.set(ttl_deadline(ttl_seconds))
                 ]
 
             item.update(
@@ -379,10 +392,15 @@ class DbAttribute:
 
         Backs refresh-token family (chain) revocation. DynamoDB has no secondary
         index on the JSON-embedded ``chain_id``, so this queries the (shared)
-        token buckets and filters in memory. The cost is bounded by the shortened
-        used-token TTL that keeps the buckets small; for very large deployments
-        the optimization path is a GSI on a promoted top-level ``chain_id``
-        attribute. Revocation is rare (a theft event), so the scan is acceptable.
+        token buckets and filters in memory.
+
+        **Cost.** Chain revocation is routine, not rare: every SPA logout and
+        ``/oauth/revoke`` runs it, besides the theft response. It is acceptable
+        while the two SPA token buckets together stay under about 1 MB (about
+        3,000 rows, one page each; at most about 250 RCU per call). A WARNING
+        is logged once per call when one bucket holds more than
+        ``CHAIN_SCAN_WARN_ROWS`` rows. Beyond that budget the optimization is
+        a GSI on a promoted top-level ``chain_id`` attribute.
 
         Args:
             actor_id: Storage partition id (the system actor the tokens live under).
@@ -394,21 +412,27 @@ class DbAttribute:
 
         Returns:
             Number of items deleted.
+
+        Raises:
+            Exception: a query or delete failed. It is raised, never skipped:
+                a non-zero count from one bucket would otherwise hide a
+                bucket that was not swept.
         """
         if not actor_id or not chain_id or not buckets:
             return 0
         deleted = 0
         deferred = []
         for bucket in buckets:
-            try:
-                query = Attribute.query(
-                    actor_id,
-                    Attribute.bucket_name.startswith(bucket),
-                    consistent_read=True,
-                )
-            except Exception:  # PynamoDB DoesNotExist exception
-                continue
-            for t in list(query):
+            scanned = 0
+            # ``bucket + ":"``: the row-key delimiter ``get_bucket`` and
+            # ``delete_bucket`` use, so a sibling bucket sharing the prefix
+            # (``spa_access_tokens_x``) is not read.
+            for t in Attribute.query(
+                actor_id,
+                Attribute.bucket_name.startswith(bucket + ":"),
+                consistent_read=True,
+            ):
+                scanned += 1
                 data = t.data
                 if (
                     t.bucket == bucket
@@ -420,6 +444,13 @@ class DbAttribute:
                         continue
                     t.delete()
                     deleted += 1
+            if scanned > CHAIN_SCAN_WARN_ROWS:
+                logger.warning(
+                    f"Chain revocation scanned {scanned} rows in bucket "
+                    f"{bucket}; past {CHAIN_SCAN_WARN_ROWS} rows the per-call "
+                    f"scan is outgrowing its budget. Promote chain_id to a "
+                    f"top-level attribute with a GSI."
+                )
         for t in deferred:
             t.delete()
             deleted += 1

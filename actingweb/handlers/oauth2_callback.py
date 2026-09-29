@@ -706,16 +706,18 @@ class OAuth2CallbackHandler(BaseHandler):
 
             session_manager = get_oauth2_session_manager(self.config)
 
-            # Generate ActingWeb access token and store it
+            # Generate ActingWeb access token and store it. The login pair
+            # shares one chain, so either token can end the session.
             spa_access_token = self.config.new_token()
             actor_id_str = actor_instance.id or ""
+            chain_id = session_manager.new_chain_id()
             session_manager.store_access_token(
-                spa_access_token, actor_id_str, identifier
+                spa_access_token, actor_id_str, identifier, chain_id=chain_id
             )
 
             # Generate refresh token for SPA
             spa_refresh_token = session_manager.create_refresh_token(
-                actor_id_str, identifier
+                actor_id_str, identifier, chain_id=chain_id
             )
 
             # Update response with SPA tokens (not OAuth provider tokens)
@@ -1239,10 +1241,14 @@ class OAuth2CallbackHandler(BaseHandler):
         # Generate SPA session tokens (session_manager already initialized at start of method)
         spa_access_token = self.config.new_token()
         actor_id_str = actor_instance.id or ""
-        session_manager.store_access_token(spa_access_token, actor_id_str, identifier)
+        # One chain for the login pair, so either token can end the session.
+        chain_id = session_manager.new_chain_id()
+        session_manager.store_access_token(
+            spa_access_token, actor_id_str, identifier, chain_id=chain_id
+        )
 
         spa_refresh_token = session_manager.create_refresh_token(
-            actor_id_str, identifier
+            actor_id_str, identifier, chain_id=chain_id
         )
 
         # Build return path

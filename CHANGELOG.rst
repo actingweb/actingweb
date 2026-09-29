@@ -5,6 +5,232 @@ CHANGELOG
 Unreleased
 ----------
 
+SECURITY
+~~~~~~~~
+
+- **Logging out of an SPA session, or revoking a token, left the refresh
+  chain alive.** ``POST /oauth/logout`` with a session token deleted only
+  the access-token row, and ``POST /oauth/revoke`` deleted only the row it
+  was given, so the refresh token kept working for up to its 14-day TTL.
+  Revoking a *used* refresh token was worse than nothing: it removed the row
+  that would have caught a thief who had already rotated, and left the live
+  successor. Both endpoints now end the whole refresh-token chain (access
+  token, refresh token and every rotated successor) through the new
+  ``OAuth2SessionManager.revoke_session``. Another device of the same user
+  has its own chain and keeps working. **Behavior change:** the v3.15
+  migration guide's line "``/oauth/logout`` with an SPA session token is
+  unchanged" no longer holds. This covers the www UI's cookie logout too, and
+  a token with no chain (the www cookie login, and any token issued before
+  3.15.1) still revokes only itself. **Behavior change:** login access tokens
+  now carry their chain id (the passphrase, authorization-code, JWT bearer
+  and mobile ticket grants, and both provider callbacks),
+  so an access token is a handle for ending its chain and the theft response
+  revokes it as well. An access token issued before 3.15.1 has no chain, so a
+  session that began before the upgrade is ended only by its refresh token
+  until its next rotation. **Known limitation:** a refresh already in flight
+  when the logout runs can mint its successor tokens after the chain was
+  deleted, so a 200 logout can leave one live pair for that chain (a
+  millisecond window; a client should not refresh while logging out, and a
+  second logout or revoke ends it). Reported by the Emm AI client, twice.
+
+- **The SPA theft response could answer "session revoked" over a chain it
+  had not revoked.** On refresh-token reuse,
+  ``OAuth2SessionManager.revoke_token_chain`` called ``delete_by_chain`` with
+  no fault handling. PostgreSQL's ``delete_by_chain`` answers 0 on a fault,
+  so the handler still answered 401 "session revoked for security" while the
+  thief's branch survived; DynamoDB's raises part-way and answered a
+  framework 500 with the MCP cache eviction skipped. **Behavior change:** a
+  fault now answers **503** with ``Retry-After: 5``, keeps the presented
+  (used) token in place as the retry handle, and evicts the caches
+  regardless, as the MCP token store's theft response has done since 3.15. A
+  revocation that a concurrent request already finished still answers 401
+  "revoked". A chain-less legacy token goes through the same confirmed delete
+  instead of reporting success for an unconfirmed one.
+
+CHANGED
+~~~~~~~
+
+- **Revoke and logout follow the 3.15 fault contract.** A token-store fault
+  used to read as "unknown token": ``/oauth/revoke`` swallowed every
+  exception and answered 200 with the cookies cleared, and ``/oauth/logout``
+  looked the session up with a read that returned ``None`` on a fault and
+  reported success. **Behavior change:** both answer **503** with
+  ``Retry-After: 5``, revoke nothing, clear no cookie, and leave the
+  presented token valid for the retry; a client must clear its local tokens
+  only after a 2xx (RFC 7009 §2.2.1). The bodies keep their endpoint's
+  shape: logout answers ``{"success": false, "error":
+  "temporarily_unavailable"}``, revoke and ``/oauth/spa/token`` answer
+  ``{"error": true, "status_code": 503}``. An unknown token still answers
+  200 (RFC 7009 §2.2). The stored provider token is cleared for the actor
+  only after a confirmed revoke, and for every device of that actor (by
+  ``/oauth/revoke`` and a POST logout; a GET logout leaves it alone). Only
+  the provider access token is cleared; the provider refresh token in
+  ``actor.store.oauth_refresh_token`` stays, and nothing in the library reads
+  it. **Behavior change:** ``/oauth/revoke`` no longer catches a bug in its own
+  code; that now surfaces as the framework's 500 instead of a false 200.
+  **Behavior change:** ``/oauth/logout`` no longer answers 200 "Logged out
+  (token revocation failed)" with the cookies cleared when its own code hits
+  an unexpected error; it answers 500 and clears no cookie, so the client
+  keeps its retry handle and never reads a logout that did not happen as done.
+
+- **Logout also accepts the refresh token, and clears the right cookies.**
+  An access token expires after an hour and its expired row cannot be read,
+  so logout after an idle hour had no chain to end. **Behavior change:** POST
+  a JSON body ``{"refresh_token": "..."}`` (a form field of the same name is
+  accepted), or send the ``refresh_token`` cookie on any method. With no
+  access token the refresh token alone drives the revocation; with both,
+  each is revoked, so two different chains both end. A missing, empty or
+  malformed body is ignored, never a 400. **Behavior change:** the cookies
+  cleared are now ``access_token``, ``oauth_token``, ``refresh_token`` and
+  ``session_id`` at ``/`` plus ``refresh_token`` at ``/oauth/spa/token``. The
+  list named ``oauth_refresh_token`` before, which nothing ever set, so a
+  cookie-mode browser kept its refresh cookie after logout. The response's
+  ``cleared_cookies`` lists those four names. ``GET /oauth/logout`` ends the
+  chain too; a cross-site navigation carrying the ``SameSite=Lax`` cookies
+  can therefore force one device's logout, which exposes nothing; a GET
+  leaves the actor's stored provider token alone, and only a POST logout (or
+  ``/oauth/revoke``) clears it.
+  ``/oauth/revoke`` likewise reads the ``refresh_token`` cookie when the
+  body and the ``Authorization`` header carry no token, and a token the hint
+  does not locate is searched for in the other token type (RFC 7009 §2.1); an
+  unrecognised hint is ignored.
+
+- **FastAPI's logout route now returns the handler's response on every
+  path.** The route rewrote it: with an ``oauth_token`` cookie it answered
+  200 and deleted the cookie whatever the handler said (a 503 included), and
+  a request carrying only a refresh token never reached the handler.
+  **Behavior change:** the route always delegates and passes the handler's
+  status, ``Retry-After`` and ``Set-Cookie`` headers through. A browser form
+  post or link carrying the ``oauth_token`` cookie still gets the 302 to
+  ``/``, only after a successful logout, and the redirect carries the
+  handler's cookie clears. A fault answers JSON 503 and keeps the cookie, so
+  a www UI cookie logout that hits a fault is a 503 now, where it used to
+  redirect. A request with no token at all answers the handler's
+  ``{"success": true, "message": "Successfully logged out"}`` with the
+  cookies cleared, where the route answered ``{"message": "No active session
+  to logout"}``. Flask already delegated and needed no change.
+
+- **CORS on the SPA endpoints and logout honours the origin allowlist and
+  exposes Retry-After.** Both integrations echoed any ``Origin`` with
+  ``Access-Control-Allow-Credentials: true`` on logout and the SPA
+  endpoints, discarding the ``spa_cors_origins`` allowlist the handler
+  computes, and a cross-origin browser could not read the ``Retry-After`` of
+  a 503. **Behavior change:** a shared ``spa_cors_headers`` builder applies
+  the allowlist everywhere, and every response lists
+  ``Access-Control-Expose-Headers: Retry-After``, including the refresh
+  grant's 3.15.0 503. The default is ``["*"]``, so only a deployment that
+  called ``with_spa_cors_origins()`` changes, and it changes to what it
+  configured: an origin outside the list gets the first allowed origin, and
+  a browser blocks the response. Check that the list contains your SPA's
+  real origin. The FastAPI ``OPTIONS /oauth/spa/logout`` preflight, which
+  answered ``*`` with credentials and so failed in a browser, now answers
+  like ``/oauth/logout``.
+
+- **A failed access-token write now raises.** ``store_access_token`` handed
+  out a token that validated nowhere when the write failed. **Behavior
+  change:** it raises ``TokenStoreUnavailable``, as ``create_refresh_token``
+  does, and the SPA handler's ``_generate_actingweb_token`` no longer
+  swallows it. The login access token is the logout handle now, so a token
+  that was never stored must not be issued. **Behavior change:** the SPA
+  login grants (authorization code, JWT bearer and mobile ticket, passphrase)
+  answer **503** with ``Retry-After: 5`` on a store fault, as the refresh
+  grant does; before, a fault there was a framework 500. The provider
+  callbacks and the www cookie login (no refresh token) gain a 500 on a store
+  fault where the cookie login used to set an unusable cookie.
+
+- **The chain revocation method takes an anchor and logs INFO.**
+  **Behavior change:** ``OAuth2SessionManager.revoke_token_chain`` has a new
+  keyword-only ``anchor=(bucket, name)`` naming the presented row, which is
+  deleted last; with it a fault raises ``TokenStoreUnavailable`` and a chain
+  a concurrent request already revoked returns 0. PostgreSQL's
+  ``delete_by_chain`` now raises on an error, as DynamoDB's does, instead of
+  answering 0 (this revocation path is its only caller). Without it the method
+  still returns 0 and never raises for a zero delete. It logs at INFO; the
+  WARNING moved to the theft handler, the one caller that wants it.
+  ``revoke_access_token`` and ``revoke_refresh_token`` are single-row and
+  fault-blind; they are kept for compatibility, and library paths use
+  ``revoke_session``.
+
+- **The SDK logout answers retry on a store fault.**
+  ``OAuth2Server.handle_logout_request`` answered ``action: "success"`` with
+  the cookies to clear while the token was still valid. **Behavior change:**
+  a fault while validating or revoking returns ``{"action": "retry",
+  "message": ..., "retry_after": 5}`` with no ``clear_cookies``, and its
+  ``clear_cookies`` names are the four above. An SDK caller that branches on
+  ``action`` should handle ``retry``.
+
+- **Operations: chain revocation on DynamoDB scans the two SPA token
+  buckets once per logout or revoke.** ``delete_by_chain`` has no index on
+  the JSON-embedded ``chain_id`` there; PostgreSQL uses one. That was
+  acceptable for a rare theft event and is now routine. It stays cheap while
+  the two buckets together are under about 1 MB (about 3,000 rows, one page
+  each, at most about 250 read units per call; a production deployment
+  measured 42 rows and a few read units). A WARNING is logged once per call
+  when one bucket holds more than 1,000 rows; that is the signal to promote
+  ``chain_id`` to a top-level attribute with a global secondary index, the
+  named growth path. The scan also reads ``bucket:`` as its prefix now, so a
+  sibling bucket that shares the name is no longer read, and a bucket whose
+  query cannot be built raises instead of being skipped.
+
+- **The expired-token cleanup returns a skipped count.** **Behavior
+  change:** the dictionary ``cleanup_expired_tokens()`` returns has a new
+  ``skipped`` key (see FIXED).
+
+ADDED
+~~~~~
+
+- ``OAuth2SessionManager.revoke_session(token, *, token_type_hint=...)``, the
+  one entry point logout and ``/oauth/revoke`` use: a strict read in the
+  hinted bucket then the other, the whole chain ended when the row has one,
+  and the revoked row's data returned so the caller can clear the provider
+  token after a confirmed revoke (a row whose payload is not a mapping is
+  removed and answered as an empty dict). It raises ``TokenStoreUnavailable``
+  on a fault. ``OAuth2SessionManager.new_chain_id()`` starts a chain for a login
+  pair, and ``actingweb.handlers.oauth2_spa.spa_cors_headers`` builds the SPA
+  CORS headers. ``actingweb.single_use.revoke_chain_confirmed`` is the
+  internal core both token stores share.
+
+FIXED
+~~~~~
+
+- **A store fault during an MCP code exchange answered invalid_grant.** The
+  auth-code and provider-token lookups ended in ``except Exception: return
+  None``, so a transient fault read as "no such code" and the client redid
+  the consent redirect. **Behavior change:** they read strictly and the token
+  endpoint answers ``server_error`` (500, retryable), and the code stays
+  exchangeable: the provider-token read now happens before the code is
+  consumed. This also corrects the 3.15.0 entry below, which says the SPA
+  refresh grant answers 503 "as ``/oauth/token`` does": ``/oauth/token``
+  answers ``server_error``; ``Retry-After`` on a 503 is the SPA grant's own
+  convention. Upgrading ``/oauth/token`` to 503 is not part of this release.
+
+- **The scheduled cleanup orphaned TTL-past rows and aborted on one fault.**
+  ``cleanup_expired_tokens()`` removed the index row of a token it could not
+  find and left its actor row behind, and read a transient fault as "the
+  token is gone", which deleted a live authorization code's index row.
+  **Behavior change:** every row is classified with a strict read. A row that
+  reads as absent has its index row and its actor row removed by name (an
+  actor row's TTL is never longer than its index row's, so nothing live is
+  hidden); a row or index it cannot read is left alone and counted under
+  ``skipped``, and the sweep goes on. A consumed refresh token past the reuse
+  window and an access token past its ``expires_at`` are removed as before.
+  Only confirmed deletes are counted as removed: the actor row goes first and
+  its index row only after that delete is confirmed, so a delete the store did
+  not perform is counted under ``skipped`` and retried by the next run, and a
+  row whose payload is not a mapping is left alone and counted as skipped.
+
+- **Deleting a client skipped cache eviction when a token delete raised, and
+  bumped the cache generation once per token.** **Behavior change:**
+  ``revoke_client_tokens`` evicts each token's cache entry whatever its
+  delete did, and the actor's caches once per client.
+
+- **Removing an expired MCP access token deleted the actor row before the
+  index row, and re-read an owner it already had.** **Behavior change:** the
+  index row goes first in both branches, so the token stops validating on
+  every worker whatever happens to the rows below, and the actor row's delete
+  is confirmed. A removal the store could not confirm now answers ``False``
+  where the fallback branch reported success.
+
 v3.15.0: September 28, 2026
 ---------------------------
 

@@ -45,6 +45,7 @@ Full:
 poetry run ruff check actingweb tests
 poetry run ruff format --check actingweb tests
 poetry run pyright actingweb tests
+poetry run python tests/integration/verify_groups.py
 make test-all-parallel
 DATABASE_BACKEND=postgresql PG_DB_HOST=localhost PG_DB_PORT=5433 PG_DB_NAME=actingweb_test PG_DB_USER=actingweb PG_DB_PASSWORD=testpassword make test-all-parallel
 poetry run sphinx-build -W --keep-going -D suppress_warnings="ref.doc,misc.highlighting_failure" -b html . _build/html

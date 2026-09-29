@@ -96,6 +96,9 @@ def _handler(config, body: dict) -> OAuth2SPAHandler:
     return OAuth2SPAHandler(webobj, config, hooks=None)
 
 
+_LAST_SESSION_MGR: list[MagicMock] = []
+
+
 def _run(config, body):
     # GitHub token exchange: access_token only, NO id_token (identity comes from
     # the userinfo endpoint, exercising the generalized fallback path).
@@ -125,6 +128,8 @@ def _run(config, body):
 
     session_mgr = MagicMock()
     session_mgr.create_refresh_token.return_value = "aw-refresh"
+    session_mgr.new_chain_id.return_value = "login-chain"
+    _LAST_SESSION_MGR[:] = [session_mgr]
 
     with (
         patch("actingweb.oauth2.requests.post", return_value=token_resp),
@@ -153,6 +158,13 @@ class TestMobileTicketGrant:
         result = _run(config, {"grant_type": "mobile_ticket", "ticket": ticket})
         assert result.get("success") is True
         assert result.get("access_token") == "aw-access-token"
+        # The login pair shares one chain, so either token ends the session.
+        mgr = _LAST_SESSION_MGR[0]
+        assert (
+            mgr.store_access_token.call_args.kwargs["chain_id"]
+            == mgr.create_refresh_token.call_args.kwargs["chain_id"]
+            == "login-chain"
+        )
 
     def test_apple_alias_routes_to_same_handler(self) -> None:
         # The legacy grant name must still redeem a generic ticket.

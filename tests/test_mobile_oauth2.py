@@ -278,6 +278,7 @@ class TestAuthorizationCodeGrant:
             # Setup session manager
             mock_session_mgr = MagicMock()
             mock_session_mgr.create_refresh_token.return_value = "spa-refresh-token"
+            mock_session_mgr.new_chain_id.return_value = "login-chain"
             mock_session_mgr_factory.return_value = mock_session_mgr
 
             handler = OAuth2SPAHandler(mock_webobj, mock_config, hooks=None)
@@ -298,6 +299,12 @@ class TestAuthorizationCodeGrant:
             assert result["email"] == "test@example.com"
             assert result["access_token"] == "spa-access-token-123"
             assert result["refresh_token"] == "spa-refresh-token"
+            # The login pair shares one chain, so either token ends the session.
+            assert (
+                mock_session_mgr.store_access_token.call_args.kwargs["chain_id"]
+                == mock_session_mgr.create_refresh_token.call_args.kwargs["chain_id"]
+                == "login-chain"
+            )
             assert result["token_type"] == "Bearer"
             assert "expires_in" in result
             assert "expires_at" in result

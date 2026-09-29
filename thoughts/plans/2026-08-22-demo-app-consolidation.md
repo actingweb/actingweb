@@ -588,12 +588,15 @@ and this phase is the one that can genuinely break.
 - [x] `curl -s -o /dev/null -w "%{http_code}" https://demo.actingweb.io/`
       returns `200` (checked 2026-09-02) and the deployed library is the
       vendored 3.14.x, per Phase 4
-- [ ] **Not verified by anyone recording it here:** one full OAuth login
+- [x] **Not verified by anyone recording it here:** one full OAuth login
       against the live site. #27's OAuth fix and #28's re-enabling of devtest
       on the live site imply it was exercised, but no record says so. Owed
       work does not live in a `done` plan, so it is filed as
       `thoughts/todo/demo-live-oauth-login-unverified.md` (INDEX row 26);
       tick this box when that todo is deleted
+      **[Done 2026-09-28]** The owner signed in to demo.actingweb.io (on
+      actingweb 3.15.0rc1) as a fresh user: the actor was created and
+      `/<actor_id>/www` rendered. The todo is deleted.
 
 ### Implementation Status: Complete — in `actingwebdemo`, 2026-08-25 to 08-27
 

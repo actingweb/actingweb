@@ -1222,8 +1222,11 @@ class DbAttributeProtocol(Protocol):
         Delete attributes whose stored ``data['chain_id']`` matches ``chain_id``.
 
         Backs refresh-token family (chain) revocation. PostgreSQL uses an
-        expression index for an O(chain) delete; DynamoDB scans the given buckets
-        and filters in memory (bounded by token TTL).
+        expression index for an O(chain) delete; DynamoDB scans the given
+        buckets and filters in memory. Both raise on a fault. The scan is
+        routine (every SPA logout and revoke), acceptable while the two SPA
+        token buckets together stay under about 1 MB (about 3,000 rows);
+        beyond that a GSI on a promoted ``chain_id`` is due.
 
         Args:
             actor_id: Storage partition id the tokens live under.

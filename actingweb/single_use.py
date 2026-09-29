@@ -221,6 +221,69 @@ def delete_confirmed(
         return False
 
 
+def revoke_chain_confirmed(
+    config: "config_class.Config",
+    actor_id: str,
+    buckets: list[str],
+    chain_id: str,
+    *,
+    anchor: tuple[str, str] | None,
+) -> int:
+    """Delete every row of one refresh-token chain and confirm it happened.
+
+    The store-agnostic core of both token stores' chain revocation. It calls
+    the backend's ``delete_by_chain`` with the anchor deferred to last, so a
+    DynamoDB fault part-way through its row-by-row delete leaves the anchor
+    (the presented token) in place as the retry handle. Both backends raise
+    on an error, but a zero can still mean a delete that silently did
+    nothing (a store double, an older backend), so on a zero the anchor
+    tells the two apart: gone means a concurrent revocation already did the
+    work, present or unreadable means the delete failed.
+
+    Logging and cache eviction are left to the callers, which differ.
+
+    Args:
+        config: ActingWeb configuration
+        actor_id: The actor whose buckets hold the chain
+        buckets: The access and refresh token buckets to sweep
+        chain_id: The chain to revoke
+        anchor: ``(bucket, name)`` of the row the caller loaded and wants
+            deleted last, or None
+
+    Returns:
+        The number of rows deleted; 0 when the anchor was already gone (a
+        concurrent revocation) and, without an anchor, whenever nothing was
+        deleted (the caller decides what that means).
+
+    Raises:
+        StoreFault: the delete raised, or deleted nothing while the anchor is
+            still there or could not be read.
+    """
+    from .db import get_attribute
+
+    db = get_attribute(config)
+    try:
+        revoked = db.delete_by_chain(
+            actor_id=actor_id,
+            buckets=buckets,
+            chain_id=chain_id,
+            defer_name=anchor[1] if anchor else None,
+        )
+    except Exception as e:
+        raise StoreFault(f"Could not revoke token chain for actor {actor_id}") from e
+    if revoked or anchor is None:
+        return int(revoked or 0)
+    try:
+        row = db.get_attr_strict(actor_id=actor_id, bucket=anchor[0], name=anchor[1])
+    except Exception as e:
+        raise StoreFault(
+            f"Could not confirm the chain revocation for actor {actor_id}"
+        ) from e
+    if row and "data" in row:
+        raise StoreFault(f"Token chain revocation for actor {actor_id} deleted nothing")
+    return 0
+
+
 class PurgeThrottle:
     """Process-local "at most once per interval" gate for an opportunistic purge.
 

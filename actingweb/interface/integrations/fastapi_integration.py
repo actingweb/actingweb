@@ -35,14 +35,13 @@ logger = logging.getLogger(__name__)
 
 
 def _logout_outcome(handler_response: Any) -> tuple[bool, str]:
-    """``(success, message)`` for the web UI's logout response.
+    """``(success, message)`` read from the logout handler's response.
 
-    The web UI branch builds its own response, so it reads the logout
-    handler's: a status of 400 or more, or a body with ``error``, is a
-    failure (the handler's message, or its error description); a success
-    whose message is not the plain one (a revocation that failed) passes
-    that message through. Anything unreadable is treated as success, as
-    this branch always did.
+    Decides only whether a browser logout is redirected to ``/``: a status of
+    400 or more, or a body with ``error``, is a failure (the handler's
+    message, or its error description); a success whose message is not the
+    plain one passes that message through. Anything unreadable is treated as
+    success. The response itself is the handler's, never rebuilt from this.
     """
     default = (True, "Logged out successfully")
     try:
@@ -752,24 +751,22 @@ class FastAPIIntegration(BaseActingWebIntegration):
         @self.fastapi_app.options("/oauth/logout")
         async def oauth2_logout(request: Request) -> Response:  # pyright: ignore[reportUnusedFunction]
             """
-            Unified logout endpoint that handles both:
-            1. MCP OAuth2 client token revocation (if Authorization header present)
-            2. Web UI session logout (if oauth_token cookie present)
+            Unified logout endpoint: MCP token revocation (Authorization
+            header), web UI and SPA session logout (oauth_token or
+            refresh_token cookie, or a refresh token in the JSON body).
 
             Uses SPA CORS (echo origin + credentials) because logout clears cookies
             and cross-origin SPAs need credentialed CORS for Set-Cookie to work.
             """
 
-            # Helper to get SPA CORS headers (echo origin + credentials)
+            # SPA CORS headers: the spa_cors_origins allowlist decides the
+            # origin, credentials are allowed, Retry-After is exposed.
             def get_spa_cors_headers() -> dict[str, str]:
-                origin = request.headers.get("origin", "")
-                return {
-                    "Access-Control-Allow-Origin": origin if origin else "*",
-                    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-                    "Access-Control-Allow-Headers": "Authorization, Content-Type, Accept",
-                    "Access-Control-Allow-Credentials": "true",
-                    "Access-Control-Max-Age": "86400",
-                }
+                from ...handlers.oauth2_spa import spa_cors_headers
+
+                return spa_cors_headers(
+                    self.aw_app.get_config(), request.headers.get("origin")
+                )
 
             # Handle OPTIONS (CORS preflight) immediately
             if request.method == "OPTIONS":
@@ -786,47 +783,31 @@ class FastAPIIntegration(BaseActingWebIntegration):
                 or request.headers.get("x-requested-with") == "XMLHttpRequest"
             )
 
-            auth_header = request.headers.get("authorization", "")
             oauth_cookie = request.cookies.get("oauth_token")
 
-            # Web UI logout (oauth_token cookie present) — clear cookie
-            # and also revoke the session token via the handler
-            if oauth_cookie:
-                self.logger.info("Logout: Clearing web UI session")
-                # Delegate to handler for session token revocation
-                handler_response = await self._handle_oauth2_endpoint(request, "logout")
+            # Always delegate: the handler revokes the session (a bearer token,
+            # the oauth_token cookie, or a refresh token in the body or
+            # cookie), answers a token-less request with 200, and answers a
+            # token store fault with 503 + Retry-After and no cookie change.
+            # Its response (status, Retry-After, Set-Cookie, CORS) is what the
+            # client gets; nothing here may rewrite a failure into a 200 or
+            # delete a cookie the handler kept.
+            handler_response = await self._handle_oauth2_endpoint(request, "logout")
 
-                if is_ajax:
-                    success, message = _logout_outcome(handler_response)
-                    response = JSONResponse(
-                        {
-                            "success": success,
-                            "message": message,
-                            "redirect_url": "/",
-                        },
-                        headers=get_spa_cors_headers(),
-                    )
-                    response.delete_cookie("oauth_token", path="/")
-                    return response
-                else:
-                    response = RedirectResponse(url="/", status_code=302)
-                    response.delete_cookie("oauth_token", path="/")
-                    for key, value in get_spa_cors_headers().items():
-                        response.headers[key] = value
-                    return response
-
-            # SPA/MCP client logout (Bearer token, no cookie)
-            if auth_header.startswith("Bearer "):
-                self.logger.info("Logout: Revoking session token")
-                return await self._handle_oauth2_endpoint(request, "logout")
-
-            # No active session
-            self.logger.info("Logout: No active session found")
-            return JSONResponse(
-                {"message": "No active session to logout"},
-                status_code=200,
-                headers=get_spa_cors_headers(),
-            )
+            # The one exception: a browser form post or link carrying the
+            # web UI's oauth_token cookie goes back to "/" after a *successful*
+            # logout, keeping the handler's Set-Cookie headers.
+            if oauth_cookie and not is_ajax:
+                success, _message = _logout_outcome(handler_response)
+                if success:
+                    redirect = RedirectResponse(url="/", status_code=302)
+                    for key, value in handler_response.headers.items():
+                        if key.lower().startswith("access-control-"):
+                            redirect.headers[key] = value
+                    for cookie in handler_response.headers.getlist("set-cookie"):
+                        redirect.headers.append("set-cookie", cookie)
+                    return redirect
+            return handler_response
 
         # Unified OAuth endpoints (JSON API, accessible at /oauth/*)
         @self.fastapi_app.get("/oauth/config")
@@ -896,6 +877,18 @@ class FastAPIIntegration(BaseActingWebIntegration):
         @self.fastapi_app.options("/oauth/spa/logout")
         async def oauth2_spa_logout(request: Request) -> Response:  # pyright: ignore[reportUnusedFunction]
             """Logout (deprecated, use /oauth/logout)."""
+            if request.method == "OPTIONS":
+                # Answer the preflight here: the handler's options() says "*",
+                # which a credentialed cross-origin request cannot use.
+                from ...handlers.oauth2_spa import spa_cors_headers
+
+                return JSONResponse(
+                    {"message": "CORS preflight"},
+                    status_code=200,
+                    headers=spa_cors_headers(
+                        self.aw_app.get_config(), request.headers.get("origin")
+                    ),
+                )
             # Delegate to main logout handler for consistency
             return await self._handle_oauth2_endpoint(request, "logout")
 
@@ -2128,13 +2121,9 @@ class FastAPIIntegration(BaseActingWebIntegration):
             origin = req_data["headers"].get("origin", "") or req_data["headers"].get(
                 "Origin", ""
             )
-            cors_headers = {
-                "Access-Control-Allow-Origin": origin if origin else "*",
-                "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-                "Access-Control-Allow-Headers": "Authorization, Content-Type, Accept",
-                "Access-Control-Allow-Credentials": "true",
-                "Access-Control-Max-Age": "86400",
-            }
+            from ...handlers.oauth2_spa import spa_cors_headers
+
+            cors_headers = spa_cors_headers(self.aw_app.get_config(), origin)
         else:
             cors_headers = {
                 "Access-Control-Allow-Origin": "*",
@@ -2205,17 +2194,13 @@ class FastAPIIntegration(BaseActingWebIntegration):
         # SPA endpoints always return JSON
         from fastapi.responses import JSONResponse
 
-        # Get origin for CORS
-        origin = req_data["headers"].get("origin", "*")
+        # CORS headers for SPA endpoints: the spa_cors_origins allowlist decides
+        # the origin, Retry-After is exposed to the browser.
+        from ...handlers.oauth2_spa import spa_cors_headers
 
-        # Add CORS headers for SPA endpoints
-        cors_headers = {
-            "Access-Control-Allow-Origin": origin,
-            "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-            "Access-Control-Allow-Headers": "Authorization, Content-Type, Accept",
-            "Access-Control-Allow-Credentials": "true",
-            "Access-Control-Max-Age": "86400",
-        }
+        cors_headers = spa_cors_headers(
+            self.aw_app.get_config(), req_data["headers"].get("origin")
+        )
 
         # Use status code from handler if set
         status_code = (
@@ -2261,25 +2246,15 @@ class FastAPIIntegration(BaseActingWebIntegration):
         """
         from fastapi.responses import JSONResponse
 
+        # CORS: the spa_cors_origins allowlist decides the origin
+        from ...handlers.oauth2_spa import spa_cors_headers
         from ...oauth_session import get_oauth2_session_manager
 
-        # Get origin for CORS
         req_data = await self._normalize_request(request)
-        origin = req_data["headers"].get("origin", "*")
         config = self.aw_app.get_config()
-        allowed_origins = getattr(config, "spa_cors_origins", ["*"]) or ["*"]
-        allowed_origin = (
-            origin
-            if ("*" in allowed_origins or origin in allowed_origins)
-            else allowed_origins[0]
+        cors_headers = spa_cors_headers(
+            config, req_data["headers"].get("origin"), methods="GET, OPTIONS"
         )
-
-        cors_headers = {
-            "Access-Control-Allow-Origin": allowed_origin,
-            "Access-Control-Allow-Methods": "GET, OPTIONS",
-            "Access-Control-Allow-Headers": "Authorization, Content-Type, Accept",
-            "Access-Control-Allow-Credentials": "true",
-        }
 
         try:
             session_manager = get_oauth2_session_manager(config)

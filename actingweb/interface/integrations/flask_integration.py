@@ -1281,14 +1281,12 @@ class FlaskIntegration(BaseActingWebIntegration):
             origin = req_data["headers"].get("Origin", "") or req_data["headers"].get(
                 "origin", ""
             )
-            json_response.headers["Access-Control-Allow-Origin"] = (
-                origin if origin else "*"
-            )
-            json_response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
-            json_response.headers["Access-Control-Allow-Headers"] = (
-                "Authorization, Content-Type, Accept"
-            )
-            json_response.headers["Access-Control-Allow-Credentials"] = "true"
+            from ...handlers.oauth2_spa import spa_cors_headers
+
+            for key, value in spa_cors_headers(
+                self.aw_app.get_config(), origin
+            ).items():
+                json_response.headers[key] = value
         else:
             json_response.headers["Access-Control-Allow-Origin"] = "*"
             json_response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
@@ -1349,15 +1347,14 @@ class FlaskIntegration(BaseActingWebIntegration):
                 else:
                     logger.warning("Cookie missing 'name' field, skipping")
 
-        # Add CORS headers for SPA endpoints
-        origin = req_data["headers"].get("Origin", "*")
-        json_response.headers["Access-Control-Allow-Origin"] = origin
-        json_response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
-        json_response.headers["Access-Control-Allow-Headers"] = (
-            "Authorization, Content-Type, Accept"
-        )
-        json_response.headers["Access-Control-Allow-Credentials"] = "true"
-        json_response.headers["Access-Control-Max-Age"] = "86400"
+        # Add CORS headers for SPA endpoints (the spa_cors_origins allowlist
+        # decides the origin; Retry-After is exposed to the browser)
+        from ...handlers.oauth2_spa import spa_cors_headers
+
+        for key, value in spa_cors_headers(
+            self.aw_app.get_config(), req_data["headers"].get("Origin")
+        ).items():
+            json_response.headers[key] = value
 
         return json_response
 

@@ -263,6 +263,8 @@ class TestAppleWebFlow:
         session_mgr.get_session.return_value = None
         session_mgr.create_refresh_token.return_value = "spa-refresh"
         session_mgr.store_session.return_value = "pending-session-id"
+        session_mgr.new_chain_id.return_value = "login-chain"
+        self.session_mgr = session_mgr
 
         with (
             patch("actingweb.oauth2.requests.post", return_value=token_resp),
@@ -288,6 +290,13 @@ class TestAppleWebFlow:
         assert webobj.response.redirect is not None
         assert "test.example.com/spa/callback" in webobj.response.redirect
         assert "session=" in webobj.response.redirect
+        # The login pair shares one chain, so either token ends the session.
+        mgr = self.session_mgr
+        assert (
+            mgr.store_access_token.call_args.kwargs["chain_id"]
+            == mgr.create_refresh_token.call_args.kwargs["chain_id"]
+            == "login-chain"
+        )
 
     def test_first_sign_in_user_payload_normalized_in_hook(
         self, ec_pem: str, rsa_key

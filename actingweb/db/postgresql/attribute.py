@@ -12,6 +12,17 @@ from actingweb.db.postgresql.connection import get_connection
 logger = logging.getLogger(__name__)
 
 
+def ttl_deadline(ttl_seconds: int) -> int:
+    """The stored ``ttl_timestamp`` for a row that lives ``ttl_seconds``.
+
+    Adds ``TTL_CLOCK_SKEW_BUFFER`` so the expired-row purge never removes a row
+    before its application-level expiry, whatever the clock skew.
+    """
+    from actingweb.constants import TTL_CLOCK_SKEW_BUFFER
+
+    return int(time.time()) + ttl_seconds + TTL_CLOCK_SKEW_BUFFER
+
+
 def _delete_diagnostics_enabled() -> bool:
     """Whether to emit per-DELETE diagnostics for the attribute table.
 
@@ -378,10 +389,7 @@ class DbAttribute:
         # Calculate TTL timestamp if provided
         ttl_timestamp = None
         if ttl_seconds is not None:
-            from actingweb.constants import TTL_CLOCK_SKEW_BUFFER
-
-            # Add buffer for clock skew safety
-            ttl_timestamp = int(time.time()) + ttl_seconds + TTL_CLOCK_SKEW_BUFFER
+            ttl_timestamp = ttl_deadline(ttl_seconds)
 
         bucket_name = bucket + ":" + name
 
@@ -541,10 +549,8 @@ class DbAttribute:
         ttl_sql = ""
         ttl_params: tuple[Any, ...] = ()
         if ttl_seconds is not None:
-            from actingweb.constants import TTL_CLOCK_SKEW_BUFFER
-
             ttl_sql = ", ttl_timestamp = %s"
-            ttl_params = (int(time.time()) + ttl_seconds + TTL_CLOCK_SKEW_BUFFER,)
+            ttl_params = (ttl_deadline(ttl_seconds),)
 
         try:
             with get_connection() as conn:
@@ -679,6 +685,11 @@ class DbAttribute:
 
         Returns:
             Number of rows deleted.
+
+        Raises:
+            Exception: the delete failed. It is raised, never answered as 0,
+                like DynamoDB's, so a failed revocation cannot pass for one
+                that had nothing to delete.
         """
         if not actor_id or not chain_id or not buckets:
             return 0
@@ -696,8 +707,10 @@ class DbAttribute:
                 conn.commit()
             return deleted if deleted and deleted > 0 else 0
         except Exception as e:
+            # Raised, not answered as 0: a zero is what "nothing matched"
+            # returns too, and revocation must tell the two apart.
             logger.error(f"Error deleting token chain: {e}")
-            return 0
+            raise
 
 
 class DbAttributeBucketList:

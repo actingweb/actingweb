@@ -933,7 +933,14 @@ class OAuth2EndpointsHandler(BaseHandler):
             # Handle OAuth2 token logout (web UI authentication)
             try:
                 if token or refresh_tokens:
-                    response = self._handle_provider_token_logout(token, refresh_tokens)
+                    response = self._handle_provider_token_logout(
+                        token,
+                        refresh_tokens,
+                        # A GET can be forced cross-site (SameSite=Lax cookies),
+                        # so only a POST also clears the actor-wide provider
+                        # token; a GET still ends the session's chain.
+                        clear_provider_token=method == "POST",
+                    )
                 else:
                     # No token provided - just clear cookies
                     response = {
@@ -1073,7 +1080,11 @@ class OAuth2EndpointsHandler(BaseHandler):
         return found
 
     def _handle_provider_token_logout(
-        self, token: str | None, refresh_tokens: list[str] | None = None
+        self,
+        token: str | None,
+        refresh_tokens: list[str] | None = None,
+        *,
+        clear_provider_token: bool = True,
     ) -> dict[str, Any]:
         """
         Route a logout to the store that holds the presented token.
@@ -1087,16 +1098,24 @@ class OAuth2EndpointsHandler(BaseHandler):
         Args:
             token: ActingWeb session or MCP access token, if presented
             refresh_tokens: Refresh tokens presented in the body or cookie
+            clear_provider_token: Whether a session logout also clears the
+                actor's stored provider token (False for a GET)
 
         Returns:
             Response dict: ``action`` is ``success`` or ``retry``
         """
         if token and token.startswith(self.oauth2_server.token_manager.token_prefix):
             return self._handle_mcp_token_logout(token)
-        return self._handle_session_token_logout(token, refresh_tokens or [])
+        return self._handle_session_token_logout(
+            token, refresh_tokens or [], clear_provider_token=clear_provider_token
+        )
 
     def _handle_session_token_logout(
-        self, token: str | None, refresh_tokens: list[str]
+        self,
+        token: str | None,
+        refresh_tokens: list[str],
+        *,
+        clear_provider_token: bool = True,
     ) -> dict[str, Any]:
         """
         End the session an ActingWeb session token or refresh token belongs to.
@@ -1107,7 +1126,9 @@ class OAuth2EndpointsHandler(BaseHandler):
         access token is revoked first; a refresh token from the same chain then
         finds nothing left to read, one GetItem. The stored provider token is
         cleared for the actor after a confirmed revoke, which affects every
-        device of the actor, not only this chain. We do NOT call the
+        device of the actor, not only this chain. A GET (which a cross-site
+        navigation can force) ends the chain but leaves the provider token
+        alone (``clear_provider_token=False``). We do NOT call the
         provider's revocation endpoint: logout is not an account disconnect
         (see ``_clear_provider_token_for_actor``).
 
@@ -1150,8 +1171,9 @@ class OAuth2EndpointsHandler(BaseHandler):
 
         # After the confirmed revoke, never before: a fault leaves the provider
         # token in place for the retry.
-        for actor_id in actor_ids:
-            self._clear_provider_token_for_actor(actor_id)
+        if clear_provider_token:
+            for actor_id in actor_ids:
+                self._clear_provider_token_for_actor(actor_id)
 
         return {
             "action": "success",

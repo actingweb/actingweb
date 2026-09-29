@@ -1208,3 +1208,93 @@ session".
 **Rationale**: The provider-token clear is actor-wide by design (Decisions
 Made); the note undersold it.
 
+### 2026-09-29, after PR #153 CI and review (commit `7ebdd24`)
+
+#### 14. Document the new xdist group
+
+**Category**: Bug fix (CI)
+
+**What changed**: `tests/integration/XDIST_GROUPS.md` lists the new
+`spa_chain_revocation_backend` group. Root cause: `tests/integration/verify_groups.py`
+(run by the "Verify xdist groups" step of `.github/workflows/tests.yml`) fails
+when a group name is missing from that file; both backends' test jobs failed at
+that step, before any test ran. The guard is the regression test; it passes
+locally ("All 50 groups documented"). The contract's Full tier does not run it,
+which is why the local full tier was green.
+
+**Files affected**: `tests/integration/XDIST_GROUPS.md`.
+
+**Rationale**: New xdist groups must be documented; the check is CI-only.
+
+#### 15. Known limitation stated next to the guarantee; GSI todo; docstring rewrap
+
+**Category**: Verification fix (PR review items 1, 3, 6)
+
+**What changed**: The SPA guide's logout section and the changelog's first
+SECURITY entry now state the logout/refresh race as a known limitation, beside
+the promise that logout ends the chain (`thoughts/todo/spa-logout-refresh-rotation-race.md`
+stays the follow-up). `thoughts/todo/dynamodb-chain-id-gsi.md` (with an
+`INDEX.md` row) gives the growth path an owner and a trigger. The
+`delete_by_chain` docstring in `db/protocols.py` is rewrapped.
+
+**Files affected**: `docs/guides/spa-authentication.rst`, `CHANGELOG.rst`,
+`thoughts/todo/dynamodb-chain-id-gsi.md`, `thoughts/todo/INDEX.md`,
+`actingweb/db/protocols.py`.
+
+**Rationale**: A security patch's limitation belongs next to its guarantee.
+
+#### 16. GET logout ends the chain but no longer clears the provider token
+
+**Category**: Decision changed (PR review item 2; owner chose 2026-09-29)
+
+**What changed**: `_handle_logout_request` passes
+`clear_provider_token=method == "POST"`; `_handle_provider_token_logout` and
+`_handle_session_token_logout` take a keyword-only `clear_provider_token`
+(default True). A GET (which a cross-site navigation can force with
+`SameSite=Lax` cookies) still ends the session's chain; only a POST logout and
+`/oauth/revoke` clear the actor-wide provider token. The earlier decision
+"GET /oauth/logout revokes the chain too" stands; this narrows its side effect.
+
+**Files affected**:
+- `actingweb/handlers/oauth2_endpoints.py`.
+- `tests/test_oauth2_spa_logout_revokes_chain.py` — the GET test asserts no
+  provider clear; the POST tests already assert one.
+- `tests/test_oauth2_logout_mcp_tokens.py` — two `assert_called_once_with`
+  calls take the new keyword.
+- `CHANGELOG.rst`, `docs/guides/spa-authentication.rst` — GET/POST wording.
+
+**Rationale**: Reviewer point: a forced GET would also wipe the actor's
+provider token for every device, a larger effect than one device's logout.
+
+#### 17. SPA login grants answer 503 on a token-store fault
+
+**Category**: Decision changed (PR review item 5; owner chose 2026-09-29)
+
+**What changed**: The three `OAuth2SPAHandler` login sites (authorization
+code, `_finalize_native_session` for JWT bearer and mobile ticket, passphrase)
+catch `TokenStoreUnavailable` around the login token pair and answer
+`_store_unavailable()` (503 + `Retry-After: 5`), as the refresh grant does. The
+provider callbacks and the www cookie login stay as plan-stated scope (a fault
+is a framework 500; the www cookie login's 500 is named in the changelog).
+
+**Files affected**:
+- `actingweb/handlers/oauth2_spa.py` — three sites.
+- `tests/test_oauth2_spa_logout_revokes_chain.py` — new
+  `test_a_store_fault_during_a_passphrase_login_is_503_with_retry_after`.
+- `CHANGELOG.rst` — the "failed access-token write now raises" entry.
+
+**Rationale**: A 500 tells a client to give up; a 503 with `Retry-After` tells
+it the login is retryable.
+
+#### Not changed, answered on the PR
+
+Items 4 (patch vs minor; owner decision, CORS already flagged in the changelog),
+7 (`ttl_deadline` duplicated: kept per backend, imports are local to match the
+surrounding modules), 8 (`Content-Type` looked up in both casings because plain
+dict headers are case-sensitive; `parse_qs` imported locally like the rest of
+the module) and the process note (a split into a separate MCP-cleanup PR).
+Tests the reviewer asked for already exist: two chains in one request
+(`test_two_different_chains_are_both_revoked`), a chain-less legacy token
+(`..._legacy_chainless_access_token_removes_only_that_row`), and the CORS
+allowlist fallback (`tests/test_spa_token_retry_after.py`).
+

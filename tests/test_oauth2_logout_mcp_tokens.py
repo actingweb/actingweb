@@ -329,7 +329,7 @@ def test_fastapi_refresh_cookie_alone_reaches_the_handler() -> None:
     ) as logout:
         resp = client.post("/oauth/logout")
     assert resp.status_code == 200
-    logout.assert_called_once_with(None, ["rt-cookie-value"])
+    logout.assert_called_once_with(None, ["rt-cookie-value"], clear_provider_token=True)
 
 
 def test_flask_refresh_cookie_alone_reaches_the_handler() -> None:
@@ -342,7 +342,7 @@ def test_flask_refresh_cookie_alone_reaches_the_handler() -> None:
     ) as logout:
         resp = client.post("/oauth/logout")
     assert resp.status_code == 200
-    logout.assert_called_once_with(None, ["rt-cookie-value"])
+    logout.assert_called_once_with(None, ["rt-cookie-value"], clear_provider_token=True)
 
 
 def test_flask_logout_success_clears_the_corrected_cookies() -> None:

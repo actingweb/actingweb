@@ -1007,10 +1007,22 @@ client to a fixed delay.
 
 .. note::
 
+   **Known limitation: logout racing a refresh.** A refresh request that has
+   already consumed the old refresh token when the logout runs can mint its
+   successor tokens after the chain was deleted, so a logout that answers 200
+   can leave one live token pair behind for that chain. The window is
+   milliseconds and needs a refresh in flight at the moment of logout; a client
+   should not refresh while it is logging out (single-flight the two). A
+   second logout, or a revoke of the new refresh token, ends it. This is
+   tracked as a follow-up.
+
+.. note::
+
    **Logout is a session action, not an account disconnect.** ``/oauth/logout``
-   revokes the ActingWeb session token and its chain and clears the stored
-   identity-provider token *locally* (so the backend can no longer call
-   provider APIs on the user's behalf). The provider token is stored once per
+   revokes the ActingWeb session token and its chain and, for a ``POST``,
+   clears the stored identity-provider token *locally* (so the backend can no
+   longer call provider APIs on the user's behalf; a ``GET`` ends the chain
+   but leaves that token alone). The provider token is stored once per
    actor, so this clears it for every device of that actor, not only this
    chain. It clears the provider *access* token only: the provider refresh
    token in ``actor.store.oauth_refresh_token`` is left in place, and nothing in
@@ -1026,9 +1038,10 @@ client to a fixed delay.
 
    ``GET /oauth/logout`` with the session cookies ends the chain too. A
    cross-site top-level navigation carries ``SameSite=Lax`` cookies, so another
-   site can force one device's logout. That exposes no data and ends one
-   session, but it also clears the actor's stored provider token for every
-   device (see above); use ``POST`` where that matters.
+   site can force one device's logout. That exposes nothing and ends one
+   session. A ``GET`` leaves the actor's stored provider token alone: only a
+   ``POST`` (or ``/oauth/revoke``) clears it, since it is shared by every
+   device; use ``POST`` where that matters.
 
 .. note::
 
@@ -1592,7 +1605,7 @@ A token store fault answers **503** with ``Retry-After: 5`` and no
    }
 
 The stored provider token is cleared for the actor after a confirmed
-revocation, for every device of that actor.
+revocation of a ``POST``, for every device of that actor.
 
 GET /oauth/email
 ~~~~~~~~~~~~~~~~~

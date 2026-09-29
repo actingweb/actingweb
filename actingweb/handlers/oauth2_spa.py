@@ -1004,17 +1004,22 @@ class OAuth2SPAHandler(BaseHandler):
 
         # Generate ActingWeb SPA tokens
         actor_id = actor_instance.id or ""
+        from ..oauth2_server.token_manager import TokenStoreUnavailable
         from ..oauth_session import get_oauth2_session_manager
 
         session_manager = get_oauth2_session_manager(self.config)
         # One chain for the login pair, so either token can end the session.
         chain_id = session_manager.new_chain_id()
-        spa_access_token = self._generate_actingweb_token(
-            actor_id, identifier, chain_id=chain_id
-        )
-        spa_refresh_token = session_manager.create_refresh_token(
-            actor_id, identifier, chain_id=chain_id
-        )
+        try:
+            spa_access_token = self._generate_actingweb_token(
+                actor_id, identifier, chain_id=chain_id
+            )
+            spa_refresh_token = session_manager.create_refresh_token(
+                actor_id, identifier, chain_id=chain_id
+            )
+        except TokenStoreUnavailable as e:
+            logger.error(f"Could not store the login tokens: {e}")
+            return self._store_unavailable()
 
         expires_in = 3600  # 1 hour for access token
         refresh_expires_in = 86400 * 14  # 2 weeks for refresh token
@@ -1165,17 +1170,22 @@ class OAuth2SPAHandler(BaseHandler):
             return self._json_error(403, "Authentication rejected")
 
         actor_id = actor_instance.id or ""
+        from ..oauth2_server.token_manager import TokenStoreUnavailable
         from ..oauth_session import get_oauth2_session_manager
 
         session_manager = get_oauth2_session_manager(self.config)
         # One chain for the login pair, so either token can end the session.
         chain_id = session_manager.new_chain_id()
-        spa_access_token = self._generate_actingweb_token(
-            actor_id, identifier, chain_id=chain_id
-        )
-        spa_refresh_token = session_manager.create_refresh_token(
-            actor_id, identifier, chain_id=chain_id
-        )
+        try:
+            spa_access_token = self._generate_actingweb_token(
+                actor_id, identifier, chain_id=chain_id
+            )
+            spa_refresh_token = session_manager.create_refresh_token(
+                actor_id, identifier, chain_id=chain_id
+            )
+        except TokenStoreUnavailable as e:
+            logger.error(f"Could not store the login tokens: {e}")
+            return self._store_unavailable()
 
         expires_in = 3600
         refresh_expires_in = 86400 * 14
@@ -1414,17 +1424,22 @@ class OAuth2SPAHandler(BaseHandler):
 
         # Generate tokens
         identifier = actor.creator or ""
+        from ..oauth2_server.token_manager import TokenStoreUnavailable
         from ..oauth_session import get_oauth2_session_manager
 
         session_manager = get_oauth2_session_manager(self.config)
         # One chain for the login pair, so either token can end the session.
         chain_id = session_manager.new_chain_id()
-        access_token = self._generate_actingweb_token(
-            actor_id, identifier, chain_id=chain_id
-        )
-        refresh_token = session_manager.create_refresh_token(
-            actor_id, identifier, chain_id=chain_id
-        )
+        try:
+            access_token = self._generate_actingweb_token(
+                actor_id, identifier, chain_id=chain_id
+            )
+            refresh_token = session_manager.create_refresh_token(
+                actor_id, identifier, chain_id=chain_id
+            )
+        except TokenStoreUnavailable as e:
+            logger.error(f"Could not store the login tokens: {e}")
+            return self._store_unavailable()
 
         expires_in = 3600  # 1 hour for access token
         refresh_expires_in = 86400 * 14  # 2 weeks for refresh token

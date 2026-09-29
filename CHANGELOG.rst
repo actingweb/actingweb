@@ -27,7 +27,11 @@ SECURITY
   so an access token is a handle for ending its chain and the theft response
   revokes it as well. An access token issued before 3.15.1 has no chain, so a
   session that began before the upgrade is ended only by its refresh token
-  until its next rotation. Reported by the Emm AI client, twice.
+  until its next rotation. **Known limitation:** a refresh already in flight
+  when the logout runs can mint its successor tokens after the chain was
+  deleted, so a 200 logout can leave one live pair for that chain (a
+  millisecond window; a client should not refresh while logging out, and a
+  second logout or revoke ends it). Reported by the Emm AI client, twice.
 
 - **The SPA theft response could answer "session revoked" over a chain it
   had not revoked.** On refresh-token reuse,
@@ -58,7 +62,8 @@ CHANGED
   "temporarily_unavailable"}``, revoke and ``/oauth/spa/token`` answer
   ``{"error": true, "status_code": 503}``. An unknown token still answers
   200 (RFC 7009 §2.2). The stored provider token is cleared for the actor
-  only after a confirmed revoke, and for every device of that actor. Only
+  only after a confirmed revoke, and for every device of that actor (by
+  ``/oauth/revoke`` and a POST logout; a GET logout leaves it alone). Only
   the provider access token is cleared; the provider refresh token in
   ``actor.store.oauth_refresh_token`` stays, and nothing in the library reads
   it. **Behavior change:** ``/oauth/revoke`` no longer catches a bug in its own
@@ -82,8 +87,9 @@ CHANGED
   cookie-mode browser kept its refresh cookie after logout. The response's
   ``cleared_cookies`` lists those four names. ``GET /oauth/logout`` ends the
   chain too; a cross-site navigation carrying the ``SameSite=Lax`` cookies
-  can therefore force one device's logout, which exposes no data but also
-  clears the actor's stored provider token for every device.
+  can therefore force one device's logout, which exposes nothing; a GET
+  leaves the actor's stored provider token alone, and only a POST logout (or
+  ``/oauth/revoke``) clears it.
   ``/oauth/revoke`` likewise reads the ``refresh_token`` cookie when the
   body and the ``Authorization`` header carry no token, and a token the hint
   does not locate is searched for in the other token type (RFC 7009 §2.1); an
@@ -125,10 +131,12 @@ CHANGED
   change:** it raises ``TokenStoreUnavailable``, as ``create_refresh_token``
   does, and the SPA handler's ``_generate_actingweb_token`` no longer
   swallows it. The login access token is the logout handle now, so a token
-  that was never stored must not be issued. The SPA login and rotation paths
-  already failed on ``create_refresh_token``; the www cookie login (no
-  refresh token) gains a 500 on a store fault where it used to set an
-  unusable cookie.
+  that was never stored must not be issued. **Behavior change:** the SPA
+  login grants (authorization code, JWT bearer and mobile ticket, passphrase)
+  answer **503** with ``Retry-After: 5`` on a store fault, as the refresh
+  grant does; before, a fault there was a framework 500. The provider
+  callbacks and the www cookie login (no refresh token) gain a 500 on a store
+  fault where the cookie login used to set an unusable cookie.
 
 - **The chain revocation method takes an anchor and logs INFO.**
   **Behavior change:** ``OAuth2SessionManager.revoke_token_chain`` has a new

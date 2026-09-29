@@ -177,6 +177,31 @@ def test_the_passphrase_login_tags_its_pair_with_one_chain(env: Env) -> None:
     assert access_row["chain_id"] == refresh_row["chain_id"]
 
 
+def test_a_store_fault_during_a_passphrase_login_is_503_with_retry_after(
+    env: Env,
+) -> None:
+    """The login pair is minted through the access-token write; a fault there
+    used to be a framework 500 with no Retry-After."""
+    env.config.devtest = True
+    actor = mock.MagicMock()
+    actor.id = ACTOR
+    actor.passphrase = "s3cret"
+    actor.creator = "u@example.com"
+    env.store.write_faults.add(_ACCESS_TOKEN_BUCKET)
+    handler = env.spa(
+        {"actor_id": ACTOR, "passphrase": "s3cret"},
+    )
+    with mock.patch("actingweb.actor.Actor", return_value=actor):
+        result = handler._handle_passphrase_exchange(
+            {"actor_id": ACTOR, "passphrase": "s3cret"}, "json"
+        )
+
+    assert result["status_code"] == 503
+    assert handler.response.status_code == 503
+    assert handler.response.headers["Retry-After"] == "5"
+    assert "access_token" not in result
+
+
 def test_a_rotation_keeps_the_pair_on_the_same_chain(env: Env) -> None:
     _access, refresh, chain = env.login()
     result = env.refresh(refresh)
@@ -242,6 +267,9 @@ def test_a_get_logout_with_the_cookie_ends_the_chain_too(env: Env) -> None:
 
     assert result["success"] is True
     assert env.alive(access, refresh) == (False, False)
+    # A GET can be forced cross-site, so it ends the chain but leaves the
+    # actor-wide provider token alone; only a POST clears it.
+    assert env.provider_clears == []
 
 
 def test_logout_with_an_expired_access_row_and_the_refresh_token_in_the_body(

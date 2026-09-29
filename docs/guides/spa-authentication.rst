@@ -1026,8 +1026,9 @@ client to a fixed delay.
 
    ``GET /oauth/logout`` with the session cookies ends the chain too. A
    cross-site top-level navigation carries ``SameSite=Lax`` cookies, so another
-   site can force one device's logout. That exposes nothing and ends one
-   session; use ``POST`` where that matters.
+   site can force one device's logout. That exposes no data and ends one
+   session, but it also clears the actor's stored provider token for every
+   device (see above); use ``POST`` where that matters.
 
 .. note::
 

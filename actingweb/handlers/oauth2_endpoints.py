@@ -1111,9 +1111,11 @@ class OAuth2EndpointsHandler(BaseHandler):
         provider's revocation endpoint: logout is not an account disconnect
         (see ``_clear_provider_token_for_actor``).
 
-        Deliberately outside the caller's catch-all: a token store fault is
-        answered ``retry`` (503), never swallowed into "logged out", because
-        the session is still valid and the client must present its token again.
+        A token store fault is caught here and answered ``retry`` (503), never
+        swallowed into "logged out", because the session is still valid and the
+        client must present its token again. It is converted before the
+        caller's catch-all, which answers any other unexpected error with a
+        fail-closed 500 (no cookie cleared).
 
         Args:
             token: ActingWeb session token, if presented

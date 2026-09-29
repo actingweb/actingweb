@@ -1,6 +1,6 @@
 ---
 status: done
-verified: thoughts/verifications/2026-09-29-logout-does-not-revoke-refresh-chain-2.md
+verified: thoughts/verifications/2026-09-29-logout-does-not-revoke-refresh-chain-3.md
 ---
 
 # Implementation Plan: SPA logout and `/oauth/revoke` end the refresh chain
@@ -1160,3 +1160,51 @@ with an `INDEX.md` row; not fixed in 3.15.1.
 
 **Rationale**: Owner did not select it; the request is unusual and the exposure
 Low.
+
+### 2026-09-29, after verification thoughts/verifications/2026-09-29-logout-does-not-revoke-refresh-chain-2.md (commit `60aecbe`)
+
+#### 11. The `_handle_session_token_logout` docstring matches the catch-all
+
+**Category**: Verification fix (issue I13)
+
+**What changed**: The docstring no longer says the method runs "outside the
+caller's catch-all". It says a store fault is caught and answered `retry`
+here, before the caller's fail-closed 500 for any other error.
+
+**Files affected**: `actingweb/handlers/oauth2_endpoints.py` (docstring only).
+
+**Rationale**: Iteration 1 moved the call inside a catch-all that now answers
+500; the comment had become false.
+
+#### 12. `revoke_session` keeps searching after it removes a malformed row
+
+**Category**: Verification fix (issue I15)
+
+**What changed**: Removing a row whose payload is not a mapping no longer
+returns at once. The search continues to the other bucket, so a same-named row
+with a real chain is still revoked; `{}` is returned only when nothing else was
+found.
+
+**Files affected**:
+- `actingweb/oauth_session.py` — `revoke_session` (`removed_malformed` flag).
+- `tests/test_oauth_session.py` — new
+  `test_revoke_session_still_ends_a_real_chain_after_a_malformed_row`.
+
+**Rationale**: A logout that reported success must not leave a live chain
+behind because a malformed row shadowed it (theoretical, since token names are
+random, but free to close).
+
+#### 13. Forced GET logout wording names the provider-token clear
+
+**Category**: Verification fix (issue I16)
+
+**What changed**: The changelog and the guide's GET-logout note say a
+cross-site forced logout exposes no data but also clears the actor's stored
+provider token for every device, instead of "exposes nothing and ends one
+session".
+
+**Files affected**: `CHANGELOG.rst`, `docs/guides/spa-authentication.rst`.
+
+**Rationale**: The provider-token clear is actor-wide by design (Decisions
+Made); the note undersold it.
+

@@ -1075,6 +1075,7 @@ class OAuth2SessionManager:
         db = get_attribute(self.config)
         found_bucket: str | None = None
         data: dict[str, Any] | None = None
+        removed_malformed = False
         for bucket in buckets:
             try:
                 row = db.get_attr_strict(
@@ -1096,9 +1097,11 @@ class OAuth2SessionManager:
                         f"Could not confirm the removal of a malformed row in {bucket}"
                     )
                 logger.warning(f"Removed a malformed token row from {bucket}")
-                return {}
+                removed_malformed = True
         if found_bucket is None or data is None:
-            return None
+            # Nothing with a chain or an owner was found; a malformed row that
+            # was removed still answers as removed, not as "unknown".
+            return {} if removed_malformed else None
 
         actor_id = str(data.get("actor_id") or "")
         chain_id = data.get("chain_id")

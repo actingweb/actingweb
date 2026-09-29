@@ -82,7 +82,8 @@ CHANGED
   cookie-mode browser kept its refresh cookie after logout. The response's
   ``cleared_cookies`` lists those four names. ``GET /oauth/logout`` ends the
   chain too; a cross-site navigation carrying the ``SameSite=Lax`` cookies
-  can therefore force one device's logout, which exposes nothing.
+  can therefore force one device's logout, which exposes no data but also
+  clears the actor's stored provider token for every device.
   ``/oauth/revoke`` likewise reads the ``refresh_token`` cookie when the
   body and the ``Authorization`` header carry no token, and a token the hint
   does not locate is searched for in the other token type (RFC 7009 §2.1); an

@@ -875,6 +875,21 @@ def test_revoke_session_removes_a_row_whose_payload_is_not_a_mapping() -> None:
     assert store.data(_SYSTEM, _ACCESS_TOKEN_BUCKET, "junk") is None
 
 
+def test_revoke_session_still_ends_a_real_chain_after_a_malformed_row() -> None:
+    """A malformed row in the first bucket must not stop the other bucket's
+    same-named row from being revoked."""
+    mgr, store = _session_env()
+    access, refresh, _chain = _login_pair(mgr)
+    store.bucket(_SYSTEM, _ACCESS_TOKEN_BUCKET)[refresh] = {"data": "junk"}
+
+    row = mgr.revoke_session(refresh)
+
+    assert row and row.get("actor_id")
+    assert store.data(_SYSTEM, _ACCESS_TOKEN_BUCKET, refresh) is None
+    assert store.data(_SYSTEM, _REFRESH_TOKEN_BUCKET, refresh) is None
+    assert store.data(_SYSTEM, _ACCESS_TOKEN_BUCKET, access) is None
+
+
 def test_revoke_session_raises_when_a_malformed_row_cannot_be_removed() -> None:
     from actingweb.oauth2_server import TokenStoreUnavailable
 

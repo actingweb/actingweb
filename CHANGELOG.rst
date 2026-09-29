@@ -5,6 +5,9 @@ CHANGELOG
 Unreleased
 ----------
 
+v3.15.1: September 29, 2026
+---------------------------
+
 SECURITY
 ~~~~~~~~
 

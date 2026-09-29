@@ -129,7 +129,9 @@ class TestOAuth2SessionManager:
                             deleted += 1
                 return deleted
 
-            def delete_by_chain(self, actor_id=None, buckets=None, chain_id=None):  # type: ignore
+            def delete_by_chain(
+                self, actor_id=None, buckets=None, chain_id=None, defer_name=None
+            ):  # type: ignore
                 if not actor_id or not chain_id or not buckets:
                     return 0
                 deleted = 0
@@ -801,3 +803,164 @@ class TestOAuth2SessionManagerFactory:
         assert hasattr(manager, "store_session")
         assert hasattr(manager, "get_session")
         assert hasattr(manager, "complete_session")
+
+
+# ---------------------------------------------------------------------------
+# revoke_session, revoke_token_chain(anchor=), store_access_token faults
+# ---------------------------------------------------------------------------
+
+import pytest  # noqa: E402
+
+from actingweb.constants import OAUTH2_SYSTEM_ACTOR as _SYSTEM  # noqa: E402
+from actingweb.oauth_session import (  # noqa: E402
+    _ACCESS_TOKEN_BUCKET,
+    _REFRESH_TOKEN_BUCKET,
+    OAuth2SessionManager,
+)
+from tests.mcp_token_double import MemoryStore, make_config  # noqa: E402
+
+
+def _session_env() -> tuple[OAuth2SessionManager, MemoryStore]:
+    config, store = make_config()
+    return OAuth2SessionManager(config), store
+
+
+def _login_pair(mgr: OAuth2SessionManager, actor: str = "a1") -> tuple[str, str, str]:
+    chain = mgr.new_chain_id()
+    mgr.store_access_token("acc-" + chain, actor, "u@x", chain_id=chain)
+    refresh = mgr.create_refresh_token(actor, "u@x", chain_id=chain)
+    return "acc-" + chain, refresh, chain
+
+
+def test_revoke_session_with_a_chain_tagged_access_token_ends_the_chain() -> None:
+    mgr, store = _session_env()
+    access, refresh, _chain = _login_pair(mgr)
+    other_access, other_refresh, _ = _login_pair(mgr)
+
+    row = mgr.revoke_session(access)
+
+    assert row is not None and row["actor_id"] == "a1"
+    assert store.data(_SYSTEM, _ACCESS_TOKEN_BUCKET, access) is None
+    assert store.data(_SYSTEM, _REFRESH_TOKEN_BUCKET, refresh) is None
+    assert store.data(_SYSTEM, _ACCESS_TOKEN_BUCKET, other_access) is not None
+    assert store.data(_SYSTEM, _REFRESH_TOKEN_BUCKET, other_refresh) is not None
+
+
+def test_revoke_session_with_a_chainless_refresh_token_removes_only_it() -> None:
+    mgr, store = _session_env()
+    access, refresh, _chain = _login_pair(mgr)
+    store.bucket(_SYSTEM, _REFRESH_TOKEN_BUCKET)["legacy"] = {
+        "data": {"actor_id": "a1", "identifier": "u@x", "used": False}
+    }
+
+    row = mgr.revoke_session("legacy", token_type_hint="refresh_token")
+
+    assert row is not None and row["actor_id"] == "a1"
+    assert store.data(_SYSTEM, _REFRESH_TOKEN_BUCKET, "legacy") is None
+    assert store.data(_SYSTEM, _REFRESH_TOKEN_BUCKET, refresh) is not None
+    assert store.data(_SYSTEM, _ACCESS_TOKEN_BUCKET, access) is not None
+
+
+def test_revoke_session_unknown_token_returns_none() -> None:
+    mgr, _store = _session_env()
+    assert mgr.revoke_session("nope") is None
+    assert mgr.revoke_session("") is None
+
+
+def test_revoke_session_removes_a_row_whose_payload_is_not_a_mapping() -> None:
+    mgr, store = _session_env()
+    store.bucket(_SYSTEM, _ACCESS_TOKEN_BUCKET)["junk"] = {"data": "not a mapping"}
+
+    assert mgr.revoke_session("junk") == {}
+    assert store.data(_SYSTEM, _ACCESS_TOKEN_BUCKET, "junk") is None
+
+
+def test_revoke_session_raises_when_a_malformed_row_cannot_be_removed() -> None:
+    from actingweb.oauth2_server import TokenStoreUnavailable
+
+    mgr, store = _session_env()
+    store.bucket(_SYSTEM, _ACCESS_TOKEN_BUCKET)["junk"] = {"data": "not a mapping"}
+    store.delete_faults.add((_SYSTEM, _ACCESS_TOKEN_BUCKET, "junk"))
+
+    with pytest.raises(TokenStoreUnavailable):
+        mgr.revoke_session("junk")
+    assert store.data(_SYSTEM, _ACCESS_TOKEN_BUCKET, "junk") is not None
+
+
+def test_revoke_session_finds_a_refresh_token_under_the_default_hint() -> None:
+    """RFC 7009 §2.1: a hint miss extends the search to the other bucket."""
+    mgr, store = _session_env()
+    access, refresh, _chain = _login_pair(mgr)
+
+    assert mgr.revoke_session(refresh) is not None
+    assert store.data(_SYSTEM, _ACCESS_TOKEN_BUCKET, access) is None
+    assert store.data(_SYSTEM, _REFRESH_TOKEN_BUCKET, refresh) is None
+
+
+def test_revoke_session_ignores_an_unrecognised_hint() -> None:
+    mgr, store = _session_env()
+    access, _refresh, _chain = _login_pair(mgr)
+    assert mgr.revoke_session(access, token_type_hint="banana") is not None
+    assert store.data(_SYSTEM, _ACCESS_TOKEN_BUCKET, access) is None
+
+
+def test_revoke_session_a_read_fault_raises() -> None:
+    from actingweb.oauth2_server import TokenStoreUnavailable
+
+    mgr, store = _session_env()
+    store.faulty_buckets.add(_ACCESS_TOKEN_BUCKET)
+    with pytest.raises(TokenStoreUnavailable):
+        mgr.revoke_session("anything")
+
+
+def test_revoke_session_a_faulting_chainless_delete_raises_and_keeps_the_row() -> None:
+    from actingweb.oauth2_server import TokenStoreUnavailable
+
+    mgr, store = _session_env()
+    store.bucket(_SYSTEM, _ACCESS_TOKEN_BUCKET)["www"] = {
+        "data": {"actor_id": "a1", "identifier": "u@x"}
+    }
+    store.delete_faults.add((_SYSTEM, _ACCESS_TOKEN_BUCKET, "www"))
+    with pytest.raises(TokenStoreUnavailable):
+        mgr.revoke_session("www")
+    assert store.data(_SYSTEM, _ACCESS_TOKEN_BUCKET, "www") is not None
+
+
+def test_revoke_session_scans_the_chain_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    mgr, _store = _session_env()
+    access, _refresh, _chain = _login_pair(mgr)
+    calls: list[str] = []
+    evicted: list[str] = []
+    real = mgr.config.DbAttribute.DbAttribute.delete_by_chain
+    monkeypatch.setattr(
+        mgr.config.DbAttribute.DbAttribute,
+        "delete_by_chain",
+        lambda self, **kw: calls.append("scan") or real(self, **kw),
+    )
+    monkeypatch.setattr(
+        "actingweb.mcp.invalidation.evict_caches_for_actor",
+        lambda actor_id: evicted.append(actor_id) or 0,
+    )
+    mgr.revoke_session(access)
+    assert calls == ["scan"]
+    assert evicted == ["a1"]
+
+
+def test_revoke_token_chain_without_an_anchor_still_returns_zero_on_a_zero() -> None:
+    mgr, store = _session_env()
+    _access, _refresh, chain = _login_pair(mgr)
+    store.chain_delete_fault = "zero"
+    assert mgr.revoke_token_chain("a1", chain) == 0
+
+
+def test_store_access_token_raises_when_the_write_is_not_stored() -> None:
+    from actingweb.oauth2_server import TokenStoreUnavailable
+
+    mgr, store = _session_env()
+    store.write_faults.add(_ACCESS_TOKEN_BUCKET)
+    with pytest.raises(TokenStoreUnavailable):
+        mgr.store_access_token("t", "a1", "u@x")
+
+
+def test_new_chain_id_is_fresh_each_time() -> None:
+    assert OAuth2SessionManager.new_chain_id() != OAuth2SessionManager.new_chain_id()

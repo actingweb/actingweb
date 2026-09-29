@@ -37,6 +37,19 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# The cookies a logout clears, as ``(name, path)``. ``access_token`` and
+# ``oauth_token`` are the SPA cookie-mode pair, ``refresh_token`` is set at
+# ``/`` by cookie mode and at ``/oauth/spa/token`` by the hybrid callback, and
+# ``session_id`` is the www session. (``oauth_refresh_token`` was named here
+# before 3.15.1 but nothing ever set it.)
+_LOGOUT_COOKIES: tuple[tuple[str, str], ...] = (
+    ("access_token", "/"),
+    ("oauth_token", "/"),
+    ("refresh_token", "/"),
+    ("refresh_token", "/oauth/spa/token"),
+    ("session_id", "/"),
+)
+
 
 class OAuth2EndpointsHandler(BaseHandler):
     """
@@ -868,8 +881,20 @@ class OAuth2EndpointsHandler(BaseHandler):
         """
         Handle OAuth2 logout request.
 
-        This endpoint revokes the current access token and clears session cookies.
-        Works for both GET and POST requests.
+        This endpoint revokes the presented session and clears its cookies.
+        Works for both GET and POST requests. A session token ends its whole
+        refresh-token chain (access token, refresh token and rotated
+        successors); an MCP token ends its MCP chain.
+
+        The chain can also be named by a refresh token, which matters because
+        an access token expires after an hour and its expired row cannot be
+        read: POST a JSON body ``{"refresh_token": "..."}`` (a form field of
+        the same name is accepted), or send the ``refresh_token`` cookie on any
+        method. With no access token, the refresh token alone drives the
+        revoke; with both, each is revoked, so two different chains both end.
+
+        A token store fault answers 503 with ``Retry-After`` and clears no
+        cookie: the presented token stays valid and is the retry handle.
 
         Args:
             method: HTTP method (GET or POST)
@@ -903,20 +928,18 @@ class OAuth2EndpointsHandler(BaseHandler):
                 else:
                     logger.debug("No token found in cookies or Authorization header")
 
+            refresh_tokens = self._logout_refresh_tokens(method)
+
             # Handle OAuth2 token logout (web UI authentication)
             try:
-                if token:
-                    response = self._handle_provider_token_logout(token)
+                if token or refresh_tokens:
+                    response = self._handle_provider_token_logout(token, refresh_tokens)
                 else:
                     # No token provided - just clear cookies
                     response = {
                         "action": "success",
                         "message": "Successfully logged out",
-                        "clear_cookies": [
-                            "oauth_token",
-                            "oauth_refresh_token",
-                            "session_id",
-                        ],
+                        "clear_cookies": list(_LOGOUT_COOKIES),
                         "redirect_url": f"{self.config.proto}{self.config.fqdn}/",
                     }
 
@@ -938,17 +961,12 @@ class OAuth2EndpointsHandler(BaseHandler):
                 import traceback
 
                 logger.error(f"Full logout error: {traceback.format_exc()}")
-                # Continue with basic logout even if Google revocation fails
-                response = {
-                    "action": "success",
-                    "message": "Logged out (token revocation failed)",
-                    "clear_cookies": [
-                        "oauth_token",
-                        "oauth_refresh_token",
-                        "session_id",
-                    ],
-                    "redirect_url": f"{self.config.proto}{self.config.fqdn}/",
-                }
+                # Fail closed: an unexpected error means the revoke is not
+                # confirmed, so a 200 with the cookies cleared would report a
+                # logout that did not happen and strand the client without its
+                # retry handle (RFC 7009 §2.2.1: on 5xx assume the token
+                # still exists). Answer 500 and leave the cookies alone.
+                return self.error_response(500, "Internal server error during logout")
 
             if response["action"] == "retry":
                 # An MCP token whose revocation hit a store fault: it is kept
@@ -968,15 +986,20 @@ class OAuth2EndpointsHandler(BaseHandler):
                 # Clear cookies
                 self.response.set_status(200)
 
-                # Clear OAuth cookies by setting them to expire immediately
-                for cookie_name in response.get("clear_cookies", []):
+                # Clear OAuth cookies by setting them to expire immediately.
+                # An entry is ``(name, path)``; a bare name means path ``/``.
+                to_clear = [
+                    (entry, "/") if isinstance(entry, str) else entry
+                    for entry in response.get("clear_cookies", [])
+                ]
+                for cookie_name, cookie_path in to_clear:
                     try:
                         # Clear both secure and non-secure versions of cookies
                         self.response.set_cookie(
-                            cookie_name, "", max_age=-1, path="/", secure=False
+                            cookie_name, "", max_age=-1, path=cookie_path, secure=False
                         )
                         self.response.set_cookie(
-                            cookie_name, "", max_age=-1, path="/", secure=True
+                            cookie_name, "", max_age=-1, path=cookie_path, secure=True
                         )
                     except Exception as cookie_error:
                         logger.warning(
@@ -989,7 +1012,9 @@ class OAuth2EndpointsHandler(BaseHandler):
                     "message": response["message"],
                     "redirect_url": response["redirect_url"],
                     "method": method,
-                    "cleared_cookies": response.get("clear_cookies", []),
+                    "cleared_cookies": list(
+                        dict.fromkeys(name for name, _path in to_clear)
+                    ),
                 }
             else:
                 logger.error(f"Logout failed with response: {response}")
@@ -1002,75 +1027,136 @@ class OAuth2EndpointsHandler(BaseHandler):
             logger.error(f"Full logout handler traceback: {traceback.format_exc()}")
             return self.error_response(500, "Internal server error during logout")
 
-    def _handle_provider_token_logout(self, token: str) -> dict[str, Any]:
-        """
-        Handle logout by invalidating the ActingWeb session and clearing the
-        provider's OAuth token from the actor store.
+    def _logout_refresh_tokens(self, method: str) -> list[str]:
+        """The refresh tokens a logout request names, without duplicates.
 
-        The token passed here is an ActingWeb-generated session token. We look
-        up the actor from it, then clear the stored provider token locally. We
-        do NOT call the provider's revocation endpoint — logout is not an
-        account disconnect (see _clear_provider_token_for_actor).
+        POST: the JSON body's ``refresh_token`` (only when the content type is
+        JSON) or a ``refresh_token`` field of a form-encoded body (never the
+        query string). Any method: the
+        ``refresh_token`` cookie. An absent, empty, non-JSON or otherwise
+        unreadable body is ignored, never a 400: old clients post no body, and
+        logout must still proceed.
+        """
+        from urllib.parse import parse_qs
+
+        found: list[str] = []
+
+        def add(value: object) -> None:
+            if isinstance(value, str) and value and value not in found:
+                found.append(value)
+
+        if method == "POST":
+            headers = self.request.headers or {}
+            content_type = str(
+                headers.get("Content-Type") or headers.get("content-type") or ""
+            )
+            body = self.request.body
+            lowered = content_type.lower()
+            if isinstance(body, bytes):
+                text = body.decode("utf-8", "ignore")
+            else:
+                text = str(body) if body else ""
+            if "json" in lowered and text:
+                try:
+                    parsed = json.loads(text)
+                    if isinstance(parsed, dict):
+                        add(parsed.get("refresh_token"))
+                except ValueError:
+                    logger.debug("Logout body is not valid JSON; ignoring it")
+            elif "x-www-form-urlencoded" in lowered and text:
+                # The form *body* only, never the query string: a credential
+                # in a URL lands in access logs and referrers.
+                for value in parse_qs(text).get("refresh_token", []):
+                    add(value)
+        if self.request.cookies:
+            add(self.request.cookies.get("refresh_token"))
+        return found
+
+    def _handle_provider_token_logout(
+        self, token: str | None, refresh_tokens: list[str] | None = None
+    ) -> dict[str, Any]:
+        """
+        Route a logout to the store that holds the presented token.
+
+        An MCP access token (the token manager's prefix; SPA session tokens
+        never carry it) is revoked in the MCP token store with every token of
+        its chain. Anything else is an ActingWeb session token, or a refresh
+        token with no access token, and goes to
+        :meth:`_handle_session_token_logout`.
 
         Args:
-            token: ActingWeb session token
+            token: ActingWeb session or MCP access token, if presented
+            refresh_tokens: Refresh tokens presented in the body or cookie
 
         Returns:
-            Response dict indicating logout success/failure
+            Response dict: ``action`` is ``success`` or ``retry``
         """
-        # An MCP access token (the token manager's prefix; SPA session tokens
-        # are hex and never carry it) is revoked in the MCP token store, with
-        # every token of its refresh-token chain. The session manager below
-        # does not know it.
-        token_manager = self.oauth2_server.token_manager
-        if token.startswith(token_manager.token_prefix):
+        if token and token.startswith(self.oauth2_server.token_manager.token_prefix):
             return self._handle_mcp_token_logout(token)
+        return self._handle_session_token_logout(token, refresh_tokens or [])
 
+    def _handle_session_token_logout(
+        self, token: str | None, refresh_tokens: list[str]
+    ) -> dict[str, Any]:
+        """
+        End the session an ActingWeb session token or refresh token belongs to.
+
+        Each presented token goes through
+        ``OAuth2SessionManager.revoke_session``: a token with a chain ends the
+        whole chain, a chain-less one (the www cookie login) only itself. The
+        access token is revoked first; a refresh token from the same chain then
+        finds nothing left to read, one GetItem. The stored provider token is
+        cleared for the actor after a confirmed revoke, which affects every
+        device of the actor, not only this chain. We do NOT call the
+        provider's revocation endpoint: logout is not an account disconnect
+        (see ``_clear_provider_token_for_actor``).
+
+        Deliberately outside the caller's catch-all: a token store fault is
+        answered ``retry`` (503), never swallowed into "logged out", because
+        the session is still valid and the client must present its token again.
+
+        Args:
+            token: ActingWeb session token, if presented
+            refresh_tokens: Refresh tokens presented in the body or cookie
+
+        Returns:
+            ``{"action": "retry", ...}`` on a store fault, else ``success``
+            with the cookies to clear.
+        """
+        from ..oauth2_server.token_manager import TokenStoreUnavailable
+        from ..oauth_session import get_oauth2_session_manager
+
+        session_manager = get_oauth2_session_manager(self.config)
+        presented: list[tuple[str, str]] = []
+        if token:
+            presented.append((token, "access_token"))
+        presented.extend((rt, "refresh_token") for rt in refresh_tokens)
+
+        actor_ids: list[str] = []
         try:
-            from ..oauth_session import get_oauth2_session_manager
-
-            session_manager = get_oauth2_session_manager(self.config)
-
-            # Look up actor from the session token so we can clear
-            # the provider's token stored in actor.store
-            try:
-                token_data = session_manager.validate_access_token(token)
-                if token_data:
-                    actor_id = token_data.get("actor_id")
-                    if actor_id:
-                        self._clear_provider_token_for_actor(actor_id)
-            except Exception as lookup_error:
-                logger.debug(f"Provider token lookup during logout: {lookup_error}")
-
-            # Revoke the ActingWeb session token
-            try:
-                session_manager.revoke_access_token(token)
-                logger.debug("Revoked ActingWeb session token")
-            except Exception as revoke_error:
-                logger.debug(f"Session token revocation: {revoke_error}")
-                # Non-critical — token will expire naturally
-
-            # Always return success and clear cookies
+            for value, hint in presented:
+                row = session_manager.revoke_session(value, token_type_hint=hint)
+                actor_id = row.get("actor_id") if row else None
+                if actor_id and actor_id not in actor_ids:
+                    actor_ids.append(actor_id)
+        except TokenStoreUnavailable as e:
+            logger.error(f"Session token revocation on logout failed: {e}")
             return {
-                "action": "success",
-                "message": "Successfully logged out",
-                "clear_cookies": ["oauth_token", "oauth_refresh_token", "session_id"],
-                "redirect_url": f"{self.config.proto}{self.config.fqdn}/",
+                "action": "retry",
+                "message": "Token store temporarily unavailable; retry the logout",
             }
 
-        except Exception as e:
-            logger.error(f"Error handling token logout: {e}")
-            import traceback
+        # After the confirmed revoke, never before: a fault leaves the provider
+        # token in place for the retry.
+        for actor_id in actor_ids:
+            self._clear_provider_token_for_actor(actor_id)
 
-            logger.error(f"Token logout error traceback: {traceback.format_exc()}")
-
-            # Still return success to clear cookies and log user out locally
-            return {
-                "action": "success",
-                "message": "Logged out (with errors)",
-                "clear_cookies": ["oauth_token", "oauth_refresh_token", "session_id"],
-                "redirect_url": f"{self.config.proto}{self.config.fqdn}/",
-            }
+        return {
+            "action": "success",
+            "message": "Successfully logged out",
+            "clear_cookies": list(_LOGOUT_COOKIES),
+            "redirect_url": f"{self.config.proto}{self.config.fqdn}/",
+        }
 
     def _handle_mcp_token_logout(self, token: str) -> dict[str, Any]:
         """Revoke an MCP access token and its refresh-token chain on logout.
@@ -1097,7 +1183,7 @@ class OAuth2EndpointsHandler(BaseHandler):
         return {
             "action": "success",
             "message": "Successfully logged out",
-            "clear_cookies": ["oauth_token", "oauth_refresh_token", "session_id"],
+            "clear_cookies": list(_LOGOUT_COOKIES),
             "redirect_url": f"{self.config.proto}{self.config.fqdn}/",
         }
 

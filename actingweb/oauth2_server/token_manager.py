@@ -10,6 +10,7 @@ import hashlib
 import logging
 import secrets
 import time
+from collections.abc import Callable
 from typing import Any
 
 from .. import config as config_class
@@ -20,7 +21,8 @@ from ..constants import (
     REFRESH_TOKEN_INDEX_BUCKET,
 )
 from ..secret_compare import secret_digest_equals, secret_equals
-from ..single_use import PurgeThrottle
+from ..single_use import PurgeThrottle, StoreFault, revoke_chain_confirmed
+from ..single_use import _mask as _mask_token
 
 logger = logging.getLogger(__name__)
 
@@ -40,13 +42,6 @@ class TokenStoreUnavailable(Exception):
       ``revoke_client_tokens`` when a bucket is unreadable or a delete is
       unconfirmed).
     """
-
-
-def _mask_token(token: str) -> str:
-    """Mask a token for safe logging, showing only first 8 chars."""
-    if not token or len(token) < 8:
-        return "***"
-    return f"{token[:8]}..."
 
 
 class ActingWebTokenManager:
@@ -192,6 +187,13 @@ class ActingWebTokenManager:
             logger.warning(f"redirect_uri mismatch for code {_mask_token(code)}")
             return None
 
+        # Read the provider token before the consume: a store fault here
+        # raises TokenStoreUnavailable with the code still unconsumed, so the
+        # client's retry works. Absence is judged after the consume, below.
+        google_token_data = self._load_google_token_data(
+            actor_id, auth_data["google_token_key"]
+        )
+
         # Consume the code before anything else can use it. A code that is
         # already used, or that a concurrent exchange consumed first, is
         # refused; the winner's tokens are left alone.
@@ -219,10 +221,6 @@ class ActingWebTokenManager:
                 self._remove_auth_code(code)
                 return None
 
-        # Load Google token data
-        google_token_data = self._load_google_token_data(
-            actor_id, auth_data["google_token_key"]
-        )
         if not google_token_data:
             logger.error(
                 f"Failed to load Google token data for auth code {_mask_token(code)}"
@@ -295,7 +293,13 @@ class ActingWebTokenManager:
         # Check if token has expired
         if int(time.time()) > token_data["expires_at"]:
             logger.debug(f"Access token expired: {_mask_token(token)}")
-            self._remove_access_token(token)
+            # With the owner known the index row goes first and the actor
+            # row's delete is confirmed, as on every other removal path.
+            self._remove_access_token(
+                token,
+                actor_id=token_data.get("actor_id"),
+                google_token_key=token_data.get("google_token_key"),
+            )
             return None
 
         return token_data["actor_id"], token_data["client_id"], token_data
@@ -643,7 +647,7 @@ class ActingWebTokenManager:
             TokenStoreUnavailable: the store could not confirm the consume
                 either way; the record is untouched and the client may retry.
         """
-        from ..single_use import StoreFault, consume_once
+        from ..single_use import consume_once
 
         try:
             return consume_once(
@@ -703,8 +707,8 @@ class ActingWebTokenManager:
         two reasons a delete can remove nothing apart: when the anchor is gone
         too, a concurrent revocation of the same chain already did the work
         and this is not a fault; when it is still there, the delete failed
-        (PostgreSQL's ``delete_by_chain`` answers 0 on an error, DynamoDB's
-        raises) and :class:`TokenStoreUnavailable` is raised rather than
+        (a delete that silently did nothing) and
+        :class:`TokenStoreUnavailable` is raised rather than
         report a revocation that did not happen. Without an anchor, 0 is
         always a fault. A snapshot that could not be read only skips the
         index and provider-row cleanup.
@@ -719,7 +723,6 @@ class ActingWebTokenManager:
             Number of token rows deleted from the actor's buckets.
         """
         from .. import attribute
-        from ..db import get_attribute
         from ..mcp.invalidation import evict_caches_for_actor
 
         try:
@@ -746,20 +749,25 @@ class ActingWebTokenManager:
                     refresh_names.append(name)
 
             try:
-                revoked = get_attribute(self.config).delete_by_chain(
-                    actor_id=actor_id,
-                    buckets=[self.tokens_bucket, self.refresh_tokens_bucket],
-                    chain_id=chain_id,
-                    defer_name=anchor[1] if anchor else None,
+                revoked = revoke_chain_confirmed(
+                    self.config,
+                    actor_id,
+                    [self.tokens_bucket, self.refresh_tokens_bucket],
+                    chain_id,
+                    anchor=anchor,
                 )
-            except Exception as e:
+            except StoreFault as e:
+                logger.error(f"Revoking token chain for actor {actor_id} failed: {e}")
                 raise TokenStoreUnavailable(
                     f"Could not revoke token chain for actor {actor_id}"
                 ) from e
             if not revoked:
-                if anchor and self._strict_read(actor_id, *anchor) is None:
+                if anchor:
+                    # The helper found the anchor gone: a concurrent
+                    # revocation of the same chain already did the work.
                     logger.info(f"Token chain for actor {actor_id} was already revoked")
                     return 0
+                # Without an anchor a zero cannot be told from a failed delete.
                 logger.error(
                     f"Revoking token chain for actor {actor_id} deleted nothing; "
                     f"treating it as a store fault"
@@ -928,60 +936,17 @@ class ActingWebTokenManager:
         return self._search_auth_code_in_actors(code)
 
     def _search_auth_code_in_actors(self, code: str) -> dict[str, Any] | None:
-        """Search for auth code across actors."""
-        try:
-            # Use the system actor to store a global index of auth codes
-            from .. import attribute
+        """Search for auth code across actors.
 
-            # Create a global index bucket for auth codes
-            index_bucket = attribute.Attributes(
-                actor_id=OAUTH2_SYSTEM_ACTOR,
-                bucket=AUTH_CODE_INDEX_BUCKET,
-                config=self.config,
-            )
-
-            # Look up which actor has this code
-            found_actor_data = index_bucket.get_attr(name=code)
-            if not found_actor_data or "data" not in found_actor_data:
-                logger.debug(f"Auth code {_mask_token(code)} not found in global index")
-                return None
-
-            found_actor_id = found_actor_data["data"]
-            if not found_actor_id:
-                logger.debug(
-                    f"Auth code {_mask_token(code)} has no actor ID in global index"
-                )
-                return None
-
-            # Load the actual auth code data from private attributes
-            auth_bucket = attribute.Attributes(
-                actor_id=found_actor_id,
-                bucket=self.auth_codes_bucket,
-                config=self.config,
-            )
-            auth_attr = auth_bucket.get_attr(name=code)
-
-            if not auth_attr or "data" not in auth_attr:
-                logger.warning(
-                    f"Auth code {_mask_token(code)} found in index but not in actor {found_actor_id}"
-                )
-                # Clean up the stale index entry
-                index_bucket.delete_attr(name=code)
-                return None
-
-            auth_data = auth_attr["data"]
-            if isinstance(auth_data, dict):
-                logger.debug(
-                    f"Found auth code {_mask_token(code)} in actor {found_actor_id}"
-                )
-                return auth_data
-            else:
-                logger.warning(f"Invalid auth code data format for {_mask_token(code)}")
-                return None
-
-        except Exception as e:
-            logger.error(f"Error searching for auth code {_mask_token(code)}: {e}")
-            return None
+        Raises:
+            TokenStoreUnavailable: the store could not be read. A fault must
+                not read as "no such code": the exchange answers a retryable
+                error and the code stays exchangeable, and the expired-token
+                sweep must not delete a live code's rows.
+        """
+        return self._search_indexed_token(
+            code, AUTH_CODE_INDEX_BUCKET, self.auth_codes_bucket, "Auth code"
+        )
 
     def _remove_auth_code(self, code: str) -> None:
         """Remove authorization code."""
@@ -1043,30 +1008,19 @@ class ActingWebTokenManager:
     def _load_google_token_data(
         self, actor_id: str, token_key: str
     ) -> dict[str, Any] | None:
-        """Load Google OAuth2 token data from private attributes."""
-        try:
-            from .. import attribute
+        """Load Google OAuth2 token data from private attributes.
 
-            # Load Google token data from private attributes bucket
-            google_bucket = attribute.Attributes(
-                actor_id=actor_id, bucket=self.google_tokens_bucket, config=self.config
-            )
-            token_attr = google_bucket.get_attr(name=token_key)
-
-            if not token_attr or "data" not in token_attr:
-                logger.warning(
-                    f"Google token data not found for key {_mask_token(token_key)}"
-                )
-                return None
-
-            token_data = token_attr["data"]
-            return token_data if isinstance(token_data, dict) else None
-
-        except Exception as e:
-            logger.error(
-                f"Error loading Google token data for actor {actor_id}, key {_mask_token(token_key)}: {e}"
+        Raises:
+            TokenStoreUnavailable: the row could not be read; absence and a
+                fault are not the same answer.
+        """
+        token_data = self._strict_read(actor_id, self.google_tokens_bucket, token_key)
+        if token_data is None:
+            logger.warning(
+                f"Google token data not found for key {_mask_token(token_key)}"
             )
             return None
+        return token_data if isinstance(token_data, dict) else None
 
     def _remove_google_token_data(self, actor_id: str, token_key: str) -> None:
         """Remove Google OAuth2 token data from private attributes."""
@@ -1268,41 +1222,52 @@ class ActingWebTokenManager:
             )
             return True
         try:
-            # First load token data to get Google token key
-            token_data = self._load_access_token(token)
-
-            # First find which actor has this token
             from .. import attribute
+            from ..single_use import delete_confirmed
 
-            index_bucket = attribute.Attributes(
+            # One read of the index names the owner. The index row then goes
+            # first, as in the branch above, so the token is unusable
+            # everywhere whatever happens to the rows below.
+            found_actor_id = self._strict_read(
+                OAUTH2_SYSTEM_ACTOR, ACCESS_TOKEN_INDEX_BUCKET, token
+            )
+            token_data = (
+                self._strict_read(str(found_actor_id), self.tokens_bucket, token)
+                if found_actor_id
+                else None
+            )
+            attribute.Attributes(
                 actor_id=OAUTH2_SYSTEM_ACTOR,
                 bucket=ACCESS_TOKEN_INDEX_BUCKET,
                 config=self.config,
-            )
-
-            found_actor_data = index_bucket.get_attr(name=token)
-            if found_actor_data and "data" in found_actor_data:
-                found_actor_id = found_actor_data["data"]
-                # Remove from private attributes
-                tokens_bucket = attribute.Attributes(
-                    actor_id=found_actor_id,
-                    bucket=self.tokens_bucket,
-                    config=self.config,
-                )
-                tokens_bucket.delete_attr(name=token)
-                logger.debug(
-                    f"Removed access token {_mask_token(token)} from actor {found_actor_id}"
-                )
-
-                # Also remove associated Google token data
-                if token_data and "google_token_key" in token_data:
-                    self._remove_google_token_data(
-                        found_actor_id, token_data["google_token_key"]
-                    )
-
-            # Remove from global index
-            index_bucket.delete_attr(name=token)
+            ).delete_attr(name=token)
             logger.debug(f"Removed access token {_mask_token(token)} from global index")
+            if not found_actor_id:
+                return True
+
+            # An access row that is already past its storage TTL reads as
+            # None here, so its provider-token row cannot be named. That row
+            # was written first with the same TTL (``_store_google_token_data``,
+            # ``MCP_ACCESS_TOKEN_TTL``), so it is past its own TTL too and the
+            # native TTL (DynamoDB) or ``cleanup_expired_tokens``'
+            # ``delete_expired`` (PostgreSQL) reaps it.
+            if isinstance(token_data, dict) and token_data.get("google_token_key"):
+                self._remove_google_token_data(
+                    str(found_actor_id), token_data["google_token_key"]
+                )
+            gone = delete_confirmed(
+                self.config, str(found_actor_id), self.tokens_bucket, token
+            )
+            if not gone:
+                logger.error(
+                    f"Could not confirm removal of access token "
+                    f"{_mask_token(token)} for actor {found_actor_id}; its index "
+                    f"row is gone, so it no longer validates"
+                )
+                return False
+            logger.debug(
+                f"Removed access token {_mask_token(token)} from actor {found_actor_id}"
+            )
             return True
 
         except Exception as e:
@@ -1541,17 +1506,21 @@ class ActingWebTokenManager:
         unreadable: list[str] = []
         unconfirmed = 0
 
-        from ..mcp.invalidation import evict_caches_for_token
+        from ..mcp.invalidation import evict_caches_for_actor, evict_caches_for_token
 
         def remove_access(name: str, data: dict[str, Any]) -> bool:
-            removed = self._remove_access_token(
-                name, actor_id=actor_id, google_token_key=data.get("google_token_key")
-            )
-            # Evict either way: a token of a deleted client must not keep
-            # authenticating from this process's cache (per process; see
-            # revoke_token).
-            evict_caches_for_token(name)
-            return removed
+            try:
+                return self._remove_access_token(
+                    name,
+                    actor_id=actor_id,
+                    google_token_key=data.get("google_token_key"),
+                )
+            finally:
+                # Evict whatever the delete did, raise included: a token of a
+                # deleted client must not keep authenticating from this
+                # process's cache (per process; see revoke_token). Only the
+                # token's entry here; the actor's wrapper goes once, below.
+                evict_caches_for_token(name, actor_wide=False)
 
         def remove_refresh(name: str, _data: dict[str, Any]) -> bool:
             return self._remove_refresh_token_row(actor_id, name)
@@ -1590,6 +1559,10 @@ class ActingWebTokenManager:
                     f"{client_id}"
                 )
 
+        # Once per client, not once per token: the process-wide generation
+        # bump this triggers is what invalidates the actor's wrapper.
+        evict_caches_for_actor(actor_id)
+
         if revoked_count > 0:
             logger.info(
                 f"Revoked {revoked_count} tokens for client {client_id} in actor {actor_id}"
@@ -1606,6 +1579,108 @@ class ActingWebTokenManager:
                 f"revoked {revoked_count} token(s) of client {client_id}"
             )
         return revoked_count
+
+    def _sweep_index(
+        self,
+        index_bucket: str,
+        actor_bucket: str,
+        counter: str,
+        is_dead: Callable[[dict[str, Any]], bool],
+        remove: Callable[[str, str, dict[str, Any]], bool],
+        cleaned: dict[str, int],
+    ) -> None:
+        """Sweep one global index and the actor rows it points at.
+
+        Every row is classified with a strict read, so a store fault can never
+        pass for "the row is gone": a fault skips the row (counted under
+        ``skipped``) and the sweep continues, and an index that cannot be read
+        is skipped as a whole. A row that reads as absent has its actor row
+        removed by name and then its index row: the strict read cannot tell
+        "absent" from "past its storage TTL but not yet reaped", and the actor
+        row of the latter would otherwise outlive its index row for good. That
+        is safe because an actor row's TTL is never longer than its index
+        row's (the index gets ``INDEX_TTL_BUFFER`` on top, and a consume only
+        shortens the actor row), so a strict read that returns nothing never
+        hides a live row.
+
+        An access row already past its storage TTL reads as absent, so its
+        provider-token row cannot be named here; that row shares the access
+        row's TTL and is reaped with it (see ``_remove_access_token``).
+
+        The actor row goes first and every delete is confirmed
+        (``delete_confirmed``), the index row only after the actor row is
+        confirmed gone. These rows are already dead, so nothing depends on
+        the index-first order that revocation needs; what matters here is
+        that a delete the store did not perform leaves the index row in
+        place, is counted under ``skipped`` (never as removed), and is
+        retried by the next run. A row whose payload is present but not a
+        mapping is left alone and counted as skipped.
+        """
+        from .. import attribute
+        from ..single_use import delete_confirmed
+
+        index = attribute.Attributes(
+            actor_id=OAUTH2_SYSTEM_ACTOR, bucket=index_bucket, config=self.config
+        )
+        try:
+            rows = index.get_bucket()
+        except Exception as e:
+            logger.warning(f"Could not read index {index_bucket}: {e}")
+            cleaned["skipped"] += 1
+            return
+        if not index.loaded:
+            logger.warning(f"Could not read index {index_bucket}; skipping it")
+            cleaned["skipped"] += 1
+            return
+
+        faults = 0
+
+        def index_gone(name: str) -> bool:
+            return delete_confirmed(
+                self.config, OAUTH2_SYSTEM_ACTOR, index_bucket, name
+            )
+
+        for name, index_attr in list((rows or {}).items()):
+            actor_id = (index_attr or {}).get("data")
+            try:
+                if not actor_id:
+                    # Orphaned index entry
+                    settled = index_gone(name)
+                    counted = "index_entries"
+                else:
+                    data = self._strict_read(str(actor_id), actor_bucket, name)
+                    if isinstance(data, dict):
+                        if not is_dead(data):
+                            continue
+                        settled = remove(name, str(actor_id), data) and index_gone(name)
+                        counted = counter
+                    elif data is None:
+                        # Absent or past its storage TTL: actor row by name,
+                        # then the index row.
+                        settled = delete_confirmed(
+                            self.config, str(actor_id), actor_bucket, name
+                        ) and index_gone(name)
+                        counted = "index_entries"
+                    else:
+                        # Present but not a mapping: not ours to delete.
+                        settled = False
+                        counted = counter
+                if settled:
+                    cleaned[counted] += 1
+                else:
+                    faults += 1
+                    cleaned["skipped"] += 1
+            except Exception as e:
+                faults += 1
+                cleaned["skipped"] += 1
+                logger.debug(
+                    f"Sweep skipped {_mask_token(name)} in {index_bucket}: {e}"
+                )
+        if faults:
+            logger.warning(
+                f"Sweep of {index_bucket} skipped {faults} row(s) it could not "
+                f"read or delete; the next run retries them"
+            )
 
     def cleanup_expired_tokens(self) -> dict[str, int]:
         """
@@ -1628,16 +1703,21 @@ class ActingWebTokenManager:
             - access_tokens: Number of expired access tokens removed
             - refresh_tokens: Number of expired refresh tokens removed
             - auth_codes: Number of expired auth codes removed
-            - index_entries: Number of orphaned index entries removed
+            - index_entries: Number of orphaned index entries removed (an
+              index row whose token is gone or past its storage TTL, together
+              with any actor row still left for it)
+            - skipped: Number of rows or indexes that could not be read or
+              deleted (a store fault); they are left alone and the next run
+              retries them, so a transient fault never deletes a live row
             - provider_tokens: Number of TTL-expired provider-token rows
               removed (always 0 on DynamoDB, where native TTL removes them)
 
         A consumed refresh token counts as expired once it is past
         ``MCP_REFRESH_TOKEN_REUSE_WINDOW``.
         """
-        from .. import attribute
         from ..constants import MCP_REFRESH_TOKEN_REUSE_WINDOW
         from ..db import get_attribute
+        from ..single_use import delete_confirmed
 
         current_time = int(time.time())
         cleaned: dict[str, int] = {
@@ -1645,87 +1725,58 @@ class ActingWebTokenManager:
             "refresh_tokens": 0,
             "auth_codes": 0,
             "index_entries": 0,
+            "skipped": 0,
         }
 
-        # Clean up access token index
-        access_index = attribute.Attributes(
-            actor_id=OAUTH2_SYSTEM_ACTOR,
-            bucket=ACCESS_TOKEN_INDEX_BUCKET,
-            config=self.config,
-        )
-        access_index_data = access_index.get_bucket()
+        def refresh_is_dead(data: dict[str, Any]) -> bool:
+            # Expired, or consumed and past the reuse window: a used refresh
+            # token only exists for reuse detection.
+            return current_time > data.get("expires_at", 0) or bool(
+                data.get("used")
+                and int(data.get("used_at") or 0) + MCP_REFRESH_TOKEN_REUSE_WINDOW
+                < current_time
+            )
 
-        if access_index_data:
-            for token, index_attr in list(access_index_data.items()):
-                if not index_attr or "data" not in index_attr:
-                    # Orphaned index entry
-                    access_index.delete_attr(name=token)
-                    cleaned["index_entries"] += 1
-                    continue
+        def access_remove(name: str, actor_id: str, data: dict[str, Any]) -> bool:
+            key = data.get("google_token_key")
+            if key:
+                self._remove_google_token_data(actor_id, key)
+            return delete_confirmed(self.config, actor_id, self.tokens_bucket, name)
 
-                # Check if the actual token still exists and is valid
-                token_data = self._load_access_token(token)
-                if not token_data:
-                    # Token doesn't exist, clean index
-                    access_index.delete_attr(name=token)
-                    cleaned["index_entries"] += 1
-                elif current_time > token_data.get("expires_at", 0):
-                    # Token expired, clean both
-                    self._remove_access_token(token)
-                    cleaned["access_tokens"] += 1
+        def refresh_remove(name: str, actor_id: str, _data: dict[str, Any]) -> bool:
+            return delete_confirmed(
+                self.config, actor_id, self.refresh_tokens_bucket, name
+            )
 
-        # Clean up refresh token index
-        refresh_index = attribute.Attributes(
-            actor_id=OAUTH2_SYSTEM_ACTOR,
-            bucket=REFRESH_TOKEN_INDEX_BUCKET,
-            config=self.config,
-        )
-        refresh_index_data = refresh_index.get_bucket()
+        def code_remove(name: str, actor_id: str, _data: dict[str, Any]) -> bool:
+            return delete_confirmed(self.config, actor_id, self.auth_codes_bucket, name)
 
-        if refresh_index_data:
-            for token, index_attr in list(refresh_index_data.items()):
-                if not index_attr or "data" not in index_attr:
-                    refresh_index.delete_attr(name=token)
-                    cleaned["index_entries"] += 1
-                    continue
-
-                token_data = self._load_refresh_token(token)
-                if not token_data:
-                    refresh_index.delete_attr(name=token)
-                    cleaned["index_entries"] += 1
-                elif current_time > token_data.get("expires_at", 0) or (
-                    token_data.get("used")
-                    and int(token_data.get("used_at") or 0)
-                    + MCP_REFRESH_TOKEN_REUSE_WINDOW
-                    < current_time
-                ):
-                    # Expired, or consumed and past the reuse window: a used
-                    # refresh token only exists for reuse detection.
-                    self._remove_refresh_token(token)
-                    cleaned["refresh_tokens"] += 1
-
-        # Clean up auth code index
-        auth_index = attribute.Attributes(
-            actor_id=OAUTH2_SYSTEM_ACTOR,
-            bucket=AUTH_CODE_INDEX_BUCKET,
-            config=self.config,
-        )
-        auth_index_data = auth_index.get_bucket()
-
-        if auth_index_data:
-            for code, index_attr in list(auth_index_data.items()):
-                if not index_attr or "data" not in index_attr:
-                    auth_index.delete_attr(name=code)
-                    cleaned["index_entries"] += 1
-                    continue
-
-                auth_data = self._load_auth_code(code)
-                if not auth_data:
-                    auth_index.delete_attr(name=code)
-                    cleaned["index_entries"] += 1
-                elif current_time > auth_data.get("expires_at", 0):
-                    self._remove_auth_code(code)
-                    cleaned["auth_codes"] += 1
+        for index_bucket, actor_bucket, counter, is_dead, remove in (
+            (
+                ACCESS_TOKEN_INDEX_BUCKET,
+                self.tokens_bucket,
+                "access_tokens",
+                lambda d: current_time > d.get("expires_at", 0),
+                access_remove,
+            ),
+            (
+                REFRESH_TOKEN_INDEX_BUCKET,
+                self.refresh_tokens_bucket,
+                "refresh_tokens",
+                refresh_is_dead,
+                refresh_remove,
+            ),
+            (
+                AUTH_CODE_INDEX_BUCKET,
+                self.auth_codes_bucket,
+                "auth_codes",
+                lambda d: current_time > d.get("expires_at", 0),
+                code_remove,
+            ),
+        ):
+            self._sweep_index(
+                index_bucket, actor_bucket, counter, is_dead, remove, cleaned
+            )
 
         # Provider-token rows have no index to walk; they are swept by their
         # storage TTL (a no-op on DynamoDB, where native TTL removes them).

@@ -428,6 +428,15 @@ class OAuth2SessionManager:
     # SPA Token Management Methods
     # ========================================================================
 
+    @staticmethod
+    def new_chain_id() -> str:
+        """A fresh refresh-token chain identifier.
+
+        A login mints its access and refresh tokens with one chain id, so
+        either token can end the whole chain.
+        """
+        return secrets.token_urlsafe(16)
+
     def store_access_token(
         self,
         token: str,
@@ -444,12 +453,20 @@ class OAuth2SessionManager:
             actor_id: Associated actor ID
             identifier: User identifier (email or provider ID)
             ttl: Time to live in seconds (default: 1 hour)
-            chain_id: Refresh-token family this access token was minted from (set
-                on rotation). When the family is revoked on reuse detection,
-                access tokens carrying the same ``chain_id`` are revoked with it,
-                so a stolen access token cannot outlive the theft response by up
-                to its full TTL. None for tokens not tied to a rotation chain
-                (e.g. the initial login token), which simply self-expire.
+            chain_id: Refresh-token family this access token was minted from.
+                Set at login (from :meth:`new_chain_id`, shared with the
+                refresh token minted alongside) and at rotation. When the
+                family is revoked, by logout, ``/oauth/revoke`` or reuse
+                detection, access tokens carrying the same ``chain_id`` are
+                revoked with it, so a stolen access token cannot outlive the
+                revocation by up to its full TTL, and the access token is a
+                handle for ending its own chain. None only for tokens with no
+                refresh token behind them (the www cookie login), which simply
+                self-expire and revoke only themselves.
+
+        Raises:
+            TokenStoreUnavailable: the token could not be stored. Never hand
+                out a token that validates nowhere.
         """
         from . import attribute
         from .constants import OAUTH2_SYSTEM_ACTOR, SPA_ACCESS_TOKEN_TTL
@@ -469,7 +486,12 @@ class OAuth2SessionManager:
             bucket=_ACCESS_TOKEN_BUCKET,
             config=self.config,
         )
-        bucket.set_attr(name=token, data=token_data, ttl_seconds=effective_ttl)
+        if not bucket.set_attr(name=token, data=token_data, ttl_seconds=effective_ttl):
+            from .oauth2_server.token_manager import TokenStoreUnavailable
+
+            raise TokenStoreUnavailable(
+                f"Could not store an access token for actor {actor_id}"
+            )
 
         logger.info(f"Stored access token for actor {actor_id}")
 
@@ -514,6 +536,11 @@ class OAuth2SessionManager:
     def revoke_access_token(self, token: str) -> bool:
         """
         Revoke an access token.
+
+        Single-row and fault-blind: it deletes only this row, never the
+        refresh-token chain the token belongs to, and reports success for a
+        delete the store never performed. Kept for compatibility; library
+        paths use :meth:`revoke_session`.
 
         Args:
             token: The access token to revoke
@@ -591,7 +618,7 @@ class OAuth2SessionManager:
             "created_at": int(time.time()),
             "expires_at": int(time.time()) + effective_ttl,
             "used": False,
-            "chain_id": chain_id or secrets.token_urlsafe(16),
+            "chain_id": chain_id or self.new_chain_id(),
         }
 
         bucket = attribute.Attributes(
@@ -780,6 +807,11 @@ class OAuth2SessionManager:
         """
         Revoke a refresh token.
 
+        Single-row and fault-blind, like :meth:`revoke_access_token`: the rest
+        of the chain stays, and a used token's row (the reuse tripwire) is
+        removed. Kept for compatibility; library paths use
+        :meth:`revoke_session`.
+
         Args:
             token: The refresh token to revoke
 
@@ -893,69 +925,200 @@ class OAuth2SessionManager:
 
         return revoked
 
-    def revoke_token_chain(self, actor_id: str, chain_id: str) -> int:
+    def revoke_token_chain(
+        self,
+        actor_id: str,
+        chain_id: str,
+        *,
+        anchor: tuple[str, str] | None = None,
+    ) -> int:
         """
-        Revoke a single refresh-token family/lineage (security measure).
+        Revoke a single refresh-token family/lineage.
 
-        Called when refresh-token reuse is detected on a rotating chain. Unlike
-        :meth:`revoke_all_tokens`, this scopes the theft response to the affected
+        Used by the theft response on reuse detection, and by logout and
+        ``/oauth/revoke`` through :meth:`revoke_session`. Unlike
+        :meth:`revoke_all_tokens`, this scopes the revocation to the affected
         lineage only: every refresh token sharing ``chain_id`` is deleted (the
         legitimate holder and the attacker both rotate from the same family, so
         both lose the chain and must re-authenticate), while the actor's *other*
-        devices/sessions — which have their own ``chain_id`` — keep working.
+        devices/sessions, which have their own ``chain_id``, keep working.
 
-        Access tokens minted from this chain (tagged with the same ``chain_id``
-        at rotation) are revoked too, so a stolen access token cannot keep
-        working for up to its full TTL after the theft response. Access tokens
-        with no ``chain_id`` (e.g. the initial login token) are left to
-        self-expire — they carry no linkage to scope on, and live at most one
-        access-token TTL.
+        Access tokens minted from this chain are revoked too: login and
+        rotation both tag them with the chain id, so a stolen access token
+        cannot keep working for up to its full TTL. Only an access token with
+        no ``chain_id`` (the www cookie login, and tokens issued before 3.15.1)
+        is left to self-expire.
+
+        ``anchor`` is the ``(bucket, name)`` of the row the caller loaded (the
+        presented token). It is deleted last, so a DynamoDB fault part-way
+        through the row-by-row delete leaves it in place and the next
+        presentation retries. It also tells a fault from a concurrent
+        revocation when nothing was deleted: anchor gone means someone else
+        already did the work; anchor present or unreadable means the delete
+        failed, and :class:`TokenStoreUnavailable` is raised instead of
+        reporting a revocation that did not happen. Without an anchor a zero
+        cannot be told apart and is returned as 0 (callers decide).
+
+        This process's MCP caches for the actor are evicted whatever the
+        outcome, fault included.
+
+        **Cost.** The delete is scoped by ``chain_id`` under the shared
+        ``OAUTH2_SYSTEM_ACTOR`` partition. PostgreSQL uses the
+        ``idx_attributes_chain_id`` expression index (O(chain)). DynamoDB scans
+        the two SPA token buckets once per call: routine now, on every logout
+        and revoke. That is acceptable while the two buckets together stay
+        under about 1 MB (about 3,000 rows, one page each); a WARNING is
+        logged when either bucket passes ``CHAIN_SCAN_WARN_ROWS``. Beyond that
+        a GSI on a promoted ``chain_id`` is due.
 
         Args:
-            actor_id: The logical (user) actor the chain belongs to. Used only
-                for the log line — the delete itself is scoped by ``chain_id``
-                under the shared ``OAUTH2_SYSTEM_ACTOR`` token partition, not by
-                this actor.
+            actor_id: The logical (user) actor the chain belongs to. Used for
+                the log line and cache eviction; the delete is scoped by
+                ``chain_id`` under the token partition, not by this actor.
             chain_id: The refresh-token family identifier to revoke
+            anchor: ``(bucket, name)`` of the presented row, deleted last
 
         Returns:
-            Number of tokens revoked (refresh + access)
+            Number of tokens revoked (refresh + access); 0 when a concurrent
+            revocation already finished the work.
+
+        Raises:
+            TokenStoreUnavailable: the revocation could not be confirmed.
         """
         from .constants import OAUTH2_SYSTEM_ACTOR
-        from .db import get_attribute
+        from .mcp.invalidation import evict_caches_for_actor
+        from .oauth2_server.token_manager import TokenStoreUnavailable
+        from .single_use import StoreFault, revoke_chain_confirmed
 
         if not chain_id:
             return 0
 
-        # Delete every token (refresh + access) carrying this chain_id. The
-        # backend does it in one shot scoped to the chain: PostgreSQL via the
-        # ``idx_attributes_chain_id`` expression index (O(chain), not a scan of
-        # the shared token partition); DynamoDB by a bounded scan of the two
-        # token buckets (no JSON-field GSI — acceptable for a rare theft event,
-        # and bounded by the shortened used-token TTL). The partition key is the
-        # system actor (all SPA tokens live there); ``actor_id`` above is only
-        # for log context.
-        db = get_attribute(self.config)
-        revoked = db.delete_by_chain(
-            OAUTH2_SYSTEM_ACTOR,
-            [_REFRESH_TOKEN_BUCKET, _ACCESS_TOKEN_BUCKET],
-            chain_id,
-        )
+        try:
+            revoked = revoke_chain_confirmed(
+                self.config,
+                OAUTH2_SYSTEM_ACTOR,
+                [_REFRESH_TOKEN_BUCKET, _ACCESS_TOKEN_BUCKET],
+                chain_id,
+                anchor=anchor,
+            )
+        except StoreFault as e:
+            logger.error(
+                f"Revoking token chain {chain_id[:8]}... for actor {actor_id} "
+                f"failed: {e}"
+            )
+            raise TokenStoreUnavailable(
+                f"Could not revoke token chain for actor {actor_id}"
+            ) from e
+        finally:
+            # The theft response has to take effect now, not when the MCP
+            # caches' five-minute TTL expires; eviction is unconditional, a
+            # fault included.
+            evict_caches_for_actor(actor_id)
 
         if revoked:
-            logger.warning(
+            logger.info(
                 f"Revoked {revoked} token(s) in chain {chain_id[:8]}... "
                 f"for actor {actor_id}"
             )
-
-        # This — not revoke_all_tokens() — is the production theft response, so
-        # it is the path that most needs the MCP caches cleared. Unconditional:
-        # a chain that deleted nothing still means reuse was detected.
-        from .mcp.invalidation import evict_caches_for_actor
-
-        evict_caches_for_actor(actor_id)
-
+        elif anchor:
+            logger.info(
+                f"Token chain {chain_id[:8]}... for actor {actor_id} was "
+                f"already revoked"
+            )
         return revoked
+
+    def revoke_session(
+        self, token: str, *, token_type_hint: str = "access_token"
+    ) -> dict[str, Any] | None:
+        """
+        End the session a presented token belongs to.
+
+        The one entry point for logout and ``/oauth/revoke``. The row is read
+        strictly in the bucket ``token_type_hint`` names and, on a miss, in the
+        other one (RFC 7009 §2.1: a server unable to locate the token by its
+        hint extends the search across its token types; an unrecognised hint
+        means access token first). A token whose row has a ``chain_id`` ends
+        the whole chain through :meth:`revoke_token_chain`, anchored on the
+        presented row; a chain-less token (the www cookie login, or one issued
+        before 3.15.1) revokes only itself.
+
+        Args:
+            token: The presented access or refresh token
+            token_type_hint: ``"access_token"`` or ``"refresh_token"``
+
+        Returns:
+            The revoked row's data (``actor_id``, ``identifier``,
+            ``chain_id``, ...) so the caller can clear the actor's provider
+            token *after* a confirmed revoke without a second read; None when
+            the token is unknown or expired. An empty dict when the row's
+            payload was not a mapping: the row is removed, but it names no
+            owner.
+
+        Raises:
+            TokenStoreUnavailable: a read faulted, or the revocation could not
+                be confirmed. The presented token is still there to retry with.
+        """
+        from .constants import OAUTH2_SYSTEM_ACTOR
+        from .db import get_attribute
+        from .mcp.invalidation import evict_caches_for_actor
+        from .oauth2_server.token_manager import TokenStoreUnavailable
+        from .single_use import delete_confirmed
+
+        if not token:
+            return None
+
+        buckets = (
+            [_REFRESH_TOKEN_BUCKET, _ACCESS_TOKEN_BUCKET]
+            if token_type_hint == "refresh_token"
+            else [_ACCESS_TOKEN_BUCKET, _REFRESH_TOKEN_BUCKET]
+        )
+        db = get_attribute(self.config)
+        found_bucket: str | None = None
+        data: dict[str, Any] | None = None
+        for bucket in buckets:
+            try:
+                row = db.get_attr_strict(
+                    actor_id=OAUTH2_SYSTEM_ACTOR, bucket=bucket, name=token
+                )
+            except Exception as e:
+                raise TokenStoreUnavailable(f"Could not read {bucket}") from e
+            if row and isinstance(row.get("data"), dict):
+                found_bucket, data = bucket, row["data"]
+                break
+            if row and "data" in row:
+                # A row is there but its payload is not a mapping: it has no
+                # chain to end and no owner to name, but it must not be left
+                # standing while the caller is told the token is unknown.
+                if not delete_confirmed(
+                    self.config, OAUTH2_SYSTEM_ACTOR, bucket, token
+                ):
+                    raise TokenStoreUnavailable(
+                        f"Could not confirm the removal of a malformed row in {bucket}"
+                    )
+                logger.warning(f"Removed a malformed token row from {bucket}")
+                return {}
+        if found_bucket is None or data is None:
+            return None
+
+        actor_id = str(data.get("actor_id") or "")
+        chain_id = data.get("chain_id")
+        if chain_id:
+            self.revoke_token_chain(
+                actor_id, str(chain_id), anchor=(found_bucket, token)
+            )
+            return data
+
+        try:
+            if not delete_confirmed(
+                self.config, OAUTH2_SYSTEM_ACTOR, found_bucket, token
+            ):
+                raise TokenStoreUnavailable(
+                    f"Could not confirm the revocation of a token in {found_bucket}"
+                )
+        finally:
+            if actor_id:
+                evict_caches_for_actor(actor_id)
+        return data
 
     def cleanup_expired_tokens(self) -> int:
         """

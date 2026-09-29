@@ -147,3 +147,53 @@ def test_code_is_never_logged_in_full(caplog: pytest.LogCaptureFixture) -> None:
     assert caplog.records
     assert code not in caplog.text
     assert "never-issued-code-value" not in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# A store fault during an exchange is retryable, not "invalid_grant"
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("bucket", [AUTH_CODE_INDEX_BUCKET, "mcp_google_tokens"])
+def test_a_fault_during_the_exchange_raises_and_leaves_the_code_exchangeable(
+    bucket: str,
+) -> None:
+    tm, store = _setup()
+    code = tm.create_authorization_code(ACTOR, CLIENT, {"access_token": "g"})
+    store.faulty_buckets.add(bucket)
+
+    with pytest.raises(TokenStoreUnavailable):
+        tm.exchange_authorization_code(code, CLIENT)
+
+    store.faulty_buckets.clear()
+    # Not consumed: the provider read (and the code read) precede the consume.
+    assert tm.exchange_authorization_code(code, CLIENT) is not None
+
+
+@pytest.mark.parametrize("bucket", [AUTH_CODE_INDEX_BUCKET, "mcp_google_tokens"])
+def test_the_token_endpoint_answers_server_error_on_an_exchange_fault(
+    bucket: str,
+) -> None:
+    from tests.mcp_oauth_server_helpers import make_server, register
+
+    config, store = make_config()
+    server = make_server(config)
+    resp = register(server)
+    code = server.token_manager.create_authorization_code(
+        ACTOR,
+        resp["client_id"],
+        {"access_token": "g"},
+        redirect_uri="https://client/cb",
+    )
+    params = {
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": "https://client/cb",
+        "client_id": resp["client_id"],
+        "client_secret": resp["client_secret"],
+    }
+    store.faulty_buckets.add(bucket)
+    assert server.handle_token_request(params)["error"] == "server_error"
+
+    store.faulty_buckets.clear()
+    assert "access_token" in server.handle_token_request(params)

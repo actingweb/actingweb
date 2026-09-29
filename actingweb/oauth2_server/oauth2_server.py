@@ -732,8 +732,15 @@ class ActingWebOAuth2Server:
             token: Optional access token to revoke (if not provided, assumes current session)
 
         Returns:
-            Response indicating logout success
+            Response indicating logout success. When the token store faults
+            (a token could not be read or its revocation could not be
+            confirmed) the action is ``"retry"`` with ``retry_after`` seconds
+            and no ``clear_cookies``: the token is still valid, so the caller
+            keeps it and retries rather than reporting a logout that did not
+            happen.
         """
+        from .token_manager import TokenStoreUnavailable
+
         message = "Successfully logged out"
         try:
             if token:
@@ -759,6 +766,13 @@ class ActingWebOAuth2Server:
                             )
                     else:
                         logger.warning("Logout attempted with invalid or expired token")
+                except TokenStoreUnavailable as store_error:
+                    logger.error(f"Token store fault during logout: {store_error}")
+                    return {
+                        "action": "retry",
+                        "message": "Token store temporarily unavailable; retry the logout",
+                        "retry_after": 5,
+                    }
                 except Exception as revoke_error:
                     logger.error(
                         f"Token revocation failed with exception: {revoke_error}"
@@ -777,7 +791,12 @@ class ActingWebOAuth2Server:
             return {
                 "action": "success",
                 "message": message,
-                "clear_cookies": ["oauth_token", "oauth_refresh_token", "session_id"],
+                "clear_cookies": [
+                    "access_token",
+                    "oauth_token",
+                    "refresh_token",
+                    "session_id",
+                ],
                 "redirect_url": f"{self.config.proto}{self.config.fqdn}/",
             }
 
@@ -789,7 +808,12 @@ class ActingWebOAuth2Server:
             return {
                 "action": "success",  # Still return success to clear cookies
                 "message": "Logged out (with errors)",
-                "clear_cookies": ["oauth_token", "oauth_refresh_token", "session_id"],
+                "clear_cookies": [
+                    "access_token",
+                    "oauth_token",
+                    "refresh_token",
+                    "session_id",
+                ],
                 "redirect_url": f"{self.config.proto}{self.config.fqdn}/",
             }
 

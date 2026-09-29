@@ -1,5 +1,6 @@
 ---
-status: proposed
+status: done
+verified: thoughts/verifications/2026-09-29-logout-does-not-revoke-refresh-chain-2.md
 ---
 
 # Implementation Plan: SPA logout and `/oauth/revoke` end the refresh chain
@@ -472,7 +473,30 @@ flowchart TD
 - [ ] Run `tests/integration/test_spa_chain_revocation_backend.py` and
       `tests/integration/test_mcp_refresh_rotation_backend.py` on both backends
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+**Notes (2026-09-29):**
+
+- Fast tier green (2,820 passed); the two backend integration files pass on
+  DynamoDB and PostgreSQL. The full tier runs once at the end, not per phase,
+  because nothing is committed between phases in this run.
+- Deviation: the per-backend TTL helper is named `ttl_deadline`, not
+  `ttl_timestamp`, because `ttl_timestamp` is a local variable in
+  `set_attr` and a field on the DynamoDB model.
+- `_search_auth_code_in_actors` reuses `_search_indexed_token` (the shape the
+  access and refresh lookups already use) instead of a bespoke strict reader.
+- `cleanup_expired_tokens` now returns a `skipped` key (always present, 0 when
+  nothing was skipped); the sweep lives in one `_sweep_index` helper for the
+  three indexes. Changelog: name the new key.
+- The DynamoDB scan-warning and sibling-bucket tests stub `Attribute.query`
+  (`tests/test_dynamodb_delete_by_chain.py`) rather than the in-memory double,
+  since they pin the real backend's query shape. The double's `delete_by_chain`
+  already matches buckets exactly, so it needed no prefix emulation.
+- No breaking existing test appeared in Phase 1; the three the plan expected to
+  break belong to Phase 2 (`revoke_session` in the logout mock).
+- Release impact: nothing in Phase 1 adds a route, hook, kwarg or config
+  option. `revoke_token_chain` gains a keyword-only `anchor=` with a default
+  and `store_access_token` now raises, both patch-compatible per the plan.
 
 ---
 
@@ -527,7 +551,9 @@ flowchart TD
     `:947-948`, `:1057`, `:1071`, `:1100`; `oauth2_server.py:780`, `:792`).
     The response's `cleared_cookies` field lists names as today.
   - The outer catch-all at `:936-951` stays for genuine bugs; it no longer
-    sees `TokenStoreUnavailable`.
+    sees `TokenStoreUnavailable`. **[Updated 2026-09-29, Iteration 1]** It
+    now answers 500 and clears no cookie instead of 200 "Logged out (token
+    revocation failed)" with the cookies cleared.
 - **SDK `OAuth2Server.handle_logout_request`** (`oauth2_server.py:724-797`,
   todo item 5): catch `TokenStoreUnavailable` around **both**
   `validate_access_token` (`:743`, which raises it too) and `revoke_token`
@@ -640,7 +666,39 @@ flowchart TD
 - [ ] `make test-integration` on DynamoDB and PostgreSQL for the two new
       integration files
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+**Notes (2026-09-29):**
+
+- Fast tier green (2,870 passed, 0 pyright warnings). The two new integration
+  files (`test_oauth2_spa_logout.py`, plus `test_oauth2_flows.py` and the
+  passphrase suite that share the routes) pass on DynamoDB and PostgreSQL.
+- `_handle_provider_token_logout` now takes `(token, refresh_tokens)` and routes
+  MCP vs session; the extracted `_handle_session_token_logout` takes a *list*
+  of refresh tokens (body and cookie can name two different ones, and the guide
+  says both are revoked), where the plan sketched a single `refresh_token`.
+- `clear_cookies` entries are `(name, path)` tuples inside the handler; a bare
+  name (used by the existing route tests' patched outcomes) is read as path `/`.
+  `cleared_cookies` in the response stays a de-duplicated list of names:
+  `access_token`, `oauth_token`, `refresh_token`, `session_id`. The SDK
+  `OAuth2Server.handle_logout_request` returns the same four names.
+- The FastAPI route needed no CORS rework here: `_handle_oauth2_endpoint`
+  already echoes the origin with credentials for logout, merges the handler's
+  headers (so `Retry-After` and the corrected `Set-Cookie` pass through) and
+  copies its cookies. The route now always delegates and only the non-AJAX
+  `oauth_token` success case is turned into a 302, copying Set-Cookie and
+  `Access-Control-*` headers onto the redirect.
+- Behavior change to name in the changelog: a token-less logout on FastAPI used
+  to answer `{"message": "No active session to logout"}` from the route and now
+  answers the handler's `{"success": true, "message": "Successfully logged out"}`
+  with the cookies cleared (the plan's `test_logout_endpoint_without_session`
+  pin holds: 200 plus a message).
+- The site A callback test (`tests/test_oauth2_callback_spa_json_chain.py`) and
+  the tagging assertions on the three existing mocked-session-manager tests
+  cover the two callback sites; the passphrase site is asserted on the double.
+- Existing tests changed as the plan predicted: the three logout tests in
+  `test_oauth2_logout_mcp_tokens.py` (session-store call, SDK message, the two
+  FastAPI cookie-branch tests that asserted the rebuilt response).
 
 ---
 
@@ -727,7 +785,37 @@ flowchart TD
 - [ ] `poetry run sphinx-build -W ...` passes
 - [ ] Re-read `thoughts/README.md` before deleting the todos
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+**Notes (2026-09-29):**
+
+- `spa_cors_headers(config, origin, *, methods=...)` lives in
+  `handlers/oauth2_spa.py` and replaces five hand-built blocks: the handler's
+  own `_set_cors_headers`, Flask's logout and SPA-endpoint branches, and
+  FastAPI's logout preflight, logout response and SPA-endpoint response. It also
+  replaced the session-retrieve block (`methods="GET, OPTIONS"`), which already
+  honoured the allowlist. The unit test for the allowlist had to go through
+  `ActingWebApp.with_spa_cors_origins()`: `get_config()` re-stamps
+  `spa_cors_origins` from the app on every call.
+- The OPTIONS defect was confirmed with a probe on both integrations: FastAPI
+  `OPTIONS /oauth/spa/logout` answered `*` with credentials and lacked
+  `Accept`; Flask answered the echoed origin. It was first filed as a todo,
+  then fixed in this release (see the summary).
+- Changelog headlines carry no inline literals (RST does not nest a literal in
+  bold); the 3.15.0 entry's "as `/oauth/token` does" is corrected by a
+  sentence in the 3.15.1 FIXED entry rather than by editing the shipped entry.
+- Todo bookkeeping: deleted `logout-does-not-revoke-refresh-chain.md`,
+  `token-store-fault-contract-gaps.md`, `mcp-logout-fault-path-followups.md`,
+  `mcp-cleanup-expired-tokens-strict-read.md` and
+  `spa-session-retrieve-endpoint-test.md`; trimmed
+  `mcp-token-manager-hygiene-followups.md` to its two remaining items
+  (renumbered 1 and 2); `INDEX.md` updated, including
+  the `db-layer-get-bucket-or-empty.md` row's note on who consumes
+  `Attributes.loaded`.
+- `/oauth/revoke` answers 400 for a JSON body that is not an object. The old
+  blanket catch turned that into a false 200; with the catch gone it would have
+  been a framework 500.
+- Docs build (`sphinx-build -W`) passes.
 
 ---
 
@@ -843,3 +931,232 @@ and Phase 3 corrects it).
   provider token from it after logout is for the implementer to check.
 - DynamoDB `defer_name` matches by name across both buckets
   (`dynamodb/attribute.py:418`); harmless given distinct token formats.
+
+## Implementation Summary
+
+**Completed:** 2026-09-29
+**All phases:** Complete
+**Test status:** All passing (see the Full tier line below)
+
+### Deviations from Plan
+- The per-backend TTL helper is `ttl_deadline`, not `ttl_timestamp` (a local
+  variable and a model field already carry that name).
+- `_handle_session_token_logout` takes a list of refresh tokens, not one: the
+  body and the cookie can name different tokens and the guide says both are
+  revoked.
+- `_search_auth_code_in_actors` reuses `_search_indexed_token` instead of a
+  bespoke strict reader.
+- `cleanup_expired_tokens` returns a `skipped` key on every call, and the three
+  index sweeps share one `_sweep_index` helper.
+- `/oauth/revoke` answers 400 for a non-object JSON body (not in the plan).
+- The FastAPI route needed no CORS-header rebuild for the handler response:
+  `_handle_oauth2_endpoint` already merges the handler's headers, so the route
+  only decides the 302 and returns the response otherwise.
+- The full tier ran once, at the end, not per phase: nothing was committed
+  between phases in this run.
+- [Iteration 1] The logout catch-all fails closed: 500, cookies kept, instead
+  of the plan's "stays for genuine bugs" 200.
+- [Iterations 5-8] PostgreSQL `delete_by_chain` raises on an error (the plan
+  had it answer 0 and disambiguated through the anchor read, which stays);
+  `cleanup_expired_tokens` removes the actor row before the index row and counts
+  only confirmed deletes; `revoke_session` removes a row whose payload is not a
+  mapping and returns `{}`; a refresh token in the POST query string is ignored.
+
+### Learnings
+- `oauth_refresh_token` (the provider refresh token in `actor.store`) is
+  written at five sites and read nowhere in the library. Logout clears the
+  provider access token only, so nothing here refreshes a provider token
+  after logout; a consumer that reads that field itself should know it
+  survives a logout. This closes the plan's unverified note.
+- `_generate_actingweb_token` used to swallow a failed write; the swallow hid
+  an unstored login token from every caller. Removing it changed nothing for
+  the SPA sites (their refresh mint already raised) and only the www cookie
+  login gains a 500.
+- The FastAPI logout route's cookie branch had two independent problems: it
+  rewrote the handler's response and it only ran when an `oauth_token` cookie
+  existed. Both are fixed by always delegating.
+- The form-field `refresh_token` path is covered end to end on both
+  integrations, like the JSON-body and cookie paths.
+- The FastAPI `OPTIONS /oauth/spa/logout` defect was fixed in the same release
+  after review (the route answers the preflight with `spa_cors_headers`), so no
+  todo was left for it.
+
+## Iterations
+
+### 2026-09-29, after verification thoughts/verifications/2026-09-29-logout-does-not-revoke-refresh-chain.md
+
+#### 1. The logout catch-all fails closed
+
+**Category**: Verification fix (issue I2)
+
+**What changed**: The outer `except Exception` in `_handle_logout_request` no
+longer answers 200 "Logged out (token revocation failed)" with every session
+cookie cleared. It logs the traceback and returns `error_response(500, ...)`
+with no cookie change, so the client keeps its retry handle and the presented
+token stays valid on the server. A token-less logout still answers 200 and
+clears the cookies (idempotent, nothing to revoke); a known store fault still
+answers 503 with `Retry-After`. Owner asked for "the most standard approach";
+the reasoning is RFC 7009 §2.2.1 (on 5xx the client must assume the token
+still exists) and that clearing the cookie strands the only retry handle.
+
+**Files affected**:
+- `actingweb/handlers/oauth2_endpoints.py` — the catch-all returns the 500.
+- `tests/test_oauth2_spa_logout_revokes_chain.py` — new
+  `test_an_unexpected_error_is_500_and_keeps_the_cookies_and_tokens` (forces an
+  error in `_handle_session_token_logout`; asserts 500, no `Set-Cookie`, both
+  tokens alive).
+- `CHANGELOG.rst` — a **Behavior change:** sentence in the "Revoke and logout
+  follow the 3.15 fault contract" entry.
+
+**Rationale**: The plan kept the catch-all "for genuine bugs", but that made
+the headline guarantee ("no cookie is cleared unless the revoke was
+confirmed") false for every error that is not a `TokenStoreUnavailable`. The
+FastAPI passthrough test that uses the "token revocation failed" message
+patches the handler outcome, so it stays valid as a passthrough test.
+
+#### 2. The logout-versus-refresh race is filed, not fixed
+
+**Category**: Decision changed (issue I1)
+
+**What changed**: The owner rated I1 Medium and chose not to fix it in
+3.15.1. `thoughts/todo/spa-logout-refresh-rotation-race.md` holds the finding
+and two fix shapes, with an `INDEX.md` row.
+
+**Files affected**:
+- `thoughts/todo/spa-logout-refresh-rotation-race.md` — new.
+- `thoughts/todo/INDEX.md` — new row.
+
+**Rationale**: A millisecond window that needs a refresh at the moment of
+logout, the same shape as the existing theft response; not a regression.
+
+#### 3. The release stays a 3.15.1 patch, without a **Breaking:** lead
+
+**Category**: Decision changed (issue I9)
+
+**What changed**: Nothing in the code. The owner confirmed the patch; the
+changelog keeps its **Behavior change:** sentences and gets no **Breaking:**
+lead and no migration guide. This overrides the `CLAUDE.md` rule of thumb
+that a wire-shape change is a minor; the plan's outside-voice verdict ("3.15.1
+stands; the changelog carries the response-field and 503 changes") is the
+basis.
+
+**Rationale**: Owner decision 2026-09-29.
+
+#### 4. The FastAPI `OPTIONS /oauth/spa/logout` fix is accepted as shipped
+
+**Category**: Decision changed (issue I8)
+
+**What changed**: Nothing; recorded. The plan's "What We're NOT Doing" still
+says the defect is filed as a todo; it was fixed in the release instead
+(`fastapi_integration.py`, `oauth2_spa_logout`, covered by
+`tests/test_spa_token_retry_after.py`).
+
+**Rationale**: Small, tested, named in the changelog and the Implementation
+Summary; no public signature changes.
+
+#### 5. A refresh token in the logout query string is ignored; stale docstring
+
+**Category**: Verification fix (issues I11, I7)
+
+**What changed**: `_logout_refresh_tokens` no longer reads `request.params`
+(the merged query and form values); the form field is read from a
+form-encoded *body* only (`parse_qs`), so `POST /oauth/logout?refresh_token=...`
+is ignored and a credential is never expected in a URL. The
+`_store_unavailable` docstring now names the SPA token endpoints it serves.
+
+**Files affected**:
+- `actingweb/handlers/oauth2_endpoints.py` — `_logout_refresh_tokens`.
+- `actingweb/handlers/oauth2_spa.py` — `_store_unavailable` docstring.
+- `tests/test_oauth2_spa_logout_revokes_chain.py` — the form-field test now
+  supplies only the body; new
+  `test_a_refresh_token_in_the_query_string_is_ignored`. The Flask and FastAPI
+  form-field route tests (`tests/test_oauth2_logout_mcp_tokens.py`) still pass
+  and exercise the real form body.
+
+**Rationale**: A credential in a URL lands in access logs and referrers; the
+guide only ever promised a JSON body or a form field.
+
+#### 6. The expired-token sweep counts only confirmed deletes and retries the rest
+
+**Category**: Verification fix (issues I4, I12)
+
+**What changed**: `_sweep_index` now removes the actor row first and its index
+row only after that delete is confirmed (`delete_confirmed` for both). A delete
+the store did not perform is counted under `skipped`, not as removed, and leaves
+the index row so the next run retries it. A row whose payload is present but not
+a mapping is left alone and counted as skipped. The per-kind removers return
+whether the actor row is gone. The docstring states why the index-first order of
+revocation is not needed here (these rows are already dead).
+
+**Files affected**:
+- `actingweb/oauth2_server/token_manager.py` — `_sweep_index`,
+  `cleanup_expired_tokens` removers.
+- `tests/test_mcp_token_store_faults.py` — two new sweep tests (unconfirmed
+  delete then retry; non-mapping payload).
+- `CHANGELOG.rst` — the sweep FIXED entry.
+
+**Rationale**: The index-first removers dropped the index row and then counted
+the row as removed even when the actor-row delete failed, so the orphan was
+never revisited and the counters overstated.
+
+#### 7. PostgreSQL `delete_by_chain` raises on an error
+
+**Category**: Verification fix (issue I3)
+
+**What changed**: The `except` in the PostgreSQL `delete_by_chain` re-raises
+instead of returning 0. Its only caller, `single_use.revoke_chain_confirmed`,
+already turns any exception into `StoreFault`; the anchor read stays for a
+silent zero. Docstrings in `db/protocols.py`, `single_use.py` and
+`token_manager.py` updated.
+
+**Files affected**:
+- `actingweb/db/postgresql/attribute.py`, `actingweb/db/protocols.py`,
+  `actingweb/single_use.py`, `actingweb/oauth2_server/token_manager.py`.
+- `tests/test_postgresql_delete_by_chain.py` — new (skipped without psycopg).
+- `CHANGELOG.rst` — the anchor entry.
+
+**Rationale**: A failed PostgreSQL delete whose anchor row then expired read as
+"already revoked". Raising makes the two backends alike.
+
+#### 8. `revoke_session` removes a row whose payload is not a mapping
+
+**Category**: Verification fix (issue I6)
+
+**What changed**: A row that exists but whose `data` is not a mapping is removed
+with `delete_confirmed` (a failed removal raises `TokenStoreUnavailable`) and
+`revoke_session` returns `{}`, instead of answering "unknown token" over a row
+that stays.
+
+**Files affected**:
+- `actingweb/oauth_session.py` — `revoke_session`.
+- `tests/test_oauth_session.py` — two new tests.
+- `CHANGELOG.rst` — the ADDED entry for `revoke_session`.
+
+**Rationale**: The caller cleared cookies and reported success while the row
+stayed.
+
+#### 9. Provider-token leftovers of an expired access row are documented, not coded
+
+**Category**: Decision changed (issue I5)
+
+**What changed**: No behaviour change. Checked `_store_google_token_data`: the
+provider-token row is written first with the access token's TTL
+(`MCP_ACCESS_TOKEN_TTL`), so when the access row reads as TTL-past its provider
+row is too, and native TTL (DynamoDB) or `cleanup_expired_tokens`'
+`delete_expired` (PostgreSQL) reaps it. The finding was a non-issue; comments in
+`_remove_access_token` and the `_sweep_index` docstring say why.
+
+**Files affected**: `actingweb/oauth2_server/token_manager.py` (comments only).
+
+**Rationale**: The provider key lives only in the unreadable row; storing it
+elsewhere would change the index row shape for no lasting leak.
+
+#### 10. Mixed MCP-token plus SPA-cookie logout is filed
+
+**Category**: Decision changed (issue I10)
+
+**What changed**: Filed as `thoughts/todo/logout-mcp-token-with-spa-refresh-cookie.md`
+with an `INDEX.md` row; not fixed in 3.15.1.
+
+**Rationale**: Owner did not select it; the request is unusual and the exposure
+Low.

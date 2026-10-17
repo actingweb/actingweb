@@ -3,10 +3,18 @@
 # audit with no network, so everything the test suite needs is fetched here:
 # Python deps, DynamoDB Local (JRE + jar) and a PostgreSQL server.
 #
+# TEST-ONLY IMAGE: the PostgreSQL superuser role and the `testpassword` credentials
+# below mirror docker-compose.test.yml. Never deploy this image.
+#
 # In the finished image, start both test databases and run the suite with:
 #   aw-test-services
 #   poetry run pytest tests/ --ignore=tests/performance -m "not benchmark" --no-cov
 #   DATABASE_BACKEND=postgresql poetry run pytest tests/integration --no-cov
+
+# DynamoDB Local, pinned by version and digest (the CloudFront tarball has no
+# versioned URL).
+FROM amazon/dynamodb-local:3.3.2@sha256:6ada631ec7aa5fc83446855eb17233e3dad184fec47477e8140c6c569cfe0c86 AS dynamodb
+
 FROM python:3.11-bookworm
 
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -27,10 +35,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates curl git default-jre-headless postgresql postgresql-contrib \
     && rm -rf /var/lib/apt/lists/*
 
-# DynamoDB Local, as docker-compose.test.yml runs it (in memory, shared db, :8001).
-RUN mkdir -p /opt/dynamodb-local \
-    && curl -fsSL https://d1ni2b6xgvw0s0.cloudfront.net/v2.x/dynamodb_local_latest.tar.gz \
-       | tar -xz -C /opt/dynamodb-local
+COPY --from=dynamodb /home/dynamodblocal /opt/dynamodb-local
 
 # PostgreSQL cluster matching the CI service (:5433, actingweb/testpassword, actingweb_test).
 RUN PGBIN="$(ls -d /usr/lib/postgresql/*/bin | head -n1)" \
@@ -46,26 +51,20 @@ RUN su postgres -c "/opt/pgbin/pg_ctl -D /var/lib/aw-pg -o '-p 5433 -k /var/run/
          -c "CREATE DATABASE actingweb_test OWNER actingweb;" \
     && su postgres -c "/opt/pgbin/pg_ctl -D /var/lib/aw-pg -w stop"
 
-# Starts both test databases in the background; safe to run more than once.
-RUN printf '%s\n' \
-      '#!/bin/sh' \
-      'if ! curl -s -o /dev/null http://localhost:8001/; then' \
-      '  (cd /opt/dynamodb-local && nohup java -Djava.library.path=./DynamoDBLocal_lib -jar DynamoDBLocal.jar -sharedDb -inMemory -port 8001 >/tmp/dynamodb.log 2>&1 &)' \
-      'fi' \
-      'su postgres -c "/opt/pgbin/pg_ctl -D /var/lib/aw-pg -o \"-p 5433 -k /var/run/postgresql\" -l /tmp/postgres.log -w status" >/dev/null 2>&1 \' \
-      '  || su postgres -c "/opt/pgbin/pg_ctl -D /var/lib/aw-pg -o \"-p 5433 -k /var/run/postgresql\" -l /tmp/postgres.log -w start"' \
-      'for i in $(seq 1 30); do curl -s -o /dev/null http://localhost:8001/ && exit 0; sleep 1; done' \
-      'echo "DynamoDB Local did not start; see /tmp/dynamodb.log" >&2; exit 1' \
-      > /usr/local/bin/aw-test-services \
-    && chmod +x /usr/local/bin/aw-test-services
+COPY .oss-scanner/aw-test-services.sh /usr/local/bin/aw-test-services
+RUN chmod +x /usr/local/bin/aw-test-services
 
-RUN pip install "poetry>=2,<3"
+# Poetry version that generated poetry.lock.
+RUN pip install "poetry==2.4.1"
+
+# Dependencies first so a source change does not rebuild this layer.
+# Same install as CI: every extra (Flask, FastAPI, PostgreSQL) plus the dev group.
+WORKDIR /src
+COPY pyproject.toml poetry.lock /src/
+RUN poetry install --with dev --extras "all" --no-root
 
 # scanner contract: the checkout lives inside the image, at /src
 COPY . /src
-WORKDIR /src
-
-# Same install as CI: every extra (Flask, FastAPI, PostgreSQL) plus the dev group.
 RUN poetry install --with dev --extras "all"
 
 # Smoke-test the image: unit tests against DynamoDB Local. A failing test does not

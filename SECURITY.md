@@ -9,8 +9,9 @@ upgrade to the newest version before reporting.
 
 Please do **not** open a public GitHub issue for a security problem.
 
-Report it privately by email to **support@actingweb.io**. Include the affected version, the database
-backend (DynamoDB or PostgreSQL), and a reproducer if you have one.
+Report it privately by email to **support@actingweb.io**. Include the
+affected version, the database backend (DynamoDB or PostgreSQL), and a
+reproducer if you have one.
 
 Fixed vulnerabilities are listed under `SECURITY` in
 [CHANGELOG.rst](CHANGELOG.rst).

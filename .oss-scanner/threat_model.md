@@ -137,8 +137,14 @@ these (for example "a token-store fault fails closed").
 - `handlers/devtest.py` and anything reachable only with
   `with_devtest(enable=True)` (documented as never-in-production). A devtest
   route that answers while devtest is disabled **is** in scope.
-- Spec features this library does not implement: agent/proxy request
-  forwarding (`proxied` subscriptions) and `/sessions`.
+- What `/actions`, `/methods` and `/resources` *do*. The library owns the
+  routing, authentication, permission checks and dispatch for these paths
+  (in scope). The application supplies the behaviour through
+  `@app.action_hook`, `@app.method_hook` and callback hooks, and that code is
+  the application's.
+- Spec features the library has no route for: `/sessions` and agent/proxy
+  request forwarding (`proxied` subscriptions). An application that adds its
+  own route for one of these owns that route's authentication.
 - `examples/`, `tests/`, `docs/`, `thoughts/`, `skills/`.
 - Misconfiguration the docs warn against: plain `http://` outside a
   controlled network (the spec allows it there), `AWS_DB_HOST` pointing

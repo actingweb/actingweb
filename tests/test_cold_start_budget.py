@@ -48,6 +48,21 @@ def clean_ensure_state(monkeypatch):
     _ensure._flag_logged = False
 
 
+@pytest.fixture(autouse=True)
+def existing_tables(clean_ensure_state):
+    """Create every required table before the spies go on. The budget is
+    about a warm deployment whose tables exist; on a fresh DynamoDB (a
+    serial run against an empty -inMemory instance) the first exists()
+    would report False and the create path would be counted instead."""
+    from actingweb.db.dynamodb import _ensure
+    from actingweb.db.verify_tables import required_models
+
+    for model in required_models():
+        if not model.exists():
+            model.create_table(wait=True)
+    _ensure.reset_ensure_cache()
+
+
 @pytest.fixture
 def config():
     from actingweb.config import Config

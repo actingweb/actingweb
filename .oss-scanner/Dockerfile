@@ -68,8 +68,10 @@ COPY . /src
 RUN poetry install --with dev --extras "all"
 
 # Smoke-test the image: unit tests against DynamoDB Local. A failing test does not
-# fail the build.
+# fail the build. PostgreSQL is stopped afterwards so the image does not carry a
+# stale postmaster.pid into the scanner's first `aw-test-services`.
 RUN aw-test-services \
     && (poetry run pytest tests/ --ignore=tests/integration --ignore=tests/performance \
           -m "not benchmark" --no-cov -q -p no:cacheprovider \
-        || echo "WARNING: unit tests reported failures")
+        || echo "WARNING: unit tests reported failures") \
+    && su postgres -c "/opt/pgbin/pg_ctl -D /var/lib/aw-pg -m fast -w stop"

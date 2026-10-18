@@ -5,6 +5,23 @@ CHANGELOG
 Unreleased
 ----------
 
+CHANGED
+~~~~~~~
+
+- **GitHub and other license scanners could not identify the project's
+  license.** The only license file was ``LICENSE.rst``, a documentation page
+  with an RST label, a badge and a summary of terms, so no scanner matched it
+  to BSD-3-Clause, and the package metadata said only ``License: BSD``. The
+  repository root now carries a plain-text ``LICENSE`` with the exact
+  BSD-3-Clause text and the existing copyright notices, the documentation
+  page moved to ``docs/license.rst`` (it now reproduces that text), and
+  ``pyproject.toml`` declares the SPDX identifier ``BSD-3-Clause``. The
+  license itself is unchanged. **Behavior change:** wheels and sdists built
+  from this release report ``License: BSD-3-Clause`` and ship
+  ``dist-info/licenses/LICENSE`` instead of ``LICENSE.rst``; the license page
+  in the built documentation moves from ``LICENSE.html`` to
+  ``docs/license.html``.
+
 v3.15.1: September 29, 2026
 ---------------------------
 

@@ -71,7 +71,7 @@ Documentation
 
    README
    CHANGELOG
-   LICENSE
+   docs/license
    CONTRIBUTING
 
 Quick Links

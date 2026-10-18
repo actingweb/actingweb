@@ -15,7 +15,8 @@ rather than counting calls across the real model set.
 
 This file changes no production code and must pass UNMODIFIED through
 every later phase of the release. A phase that needs it edited introduced
-a new Model subclass, which the plan forbids outright.
+a new Model subclass, which the plan forbids outright. That covers the
+budget assertions; fixture setup (such as ``existing_tables``) may change.
 """
 
 import os

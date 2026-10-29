@@ -24,6 +24,9 @@ before changing it.
 
 ## Update Log
 
+- **2026-10-29**: PR 1 opened as #160 from `release/3.16.0-db-fault-semantics`
+  (commit `4275401`, master merged in). Phases 3-4 next, on
+  `release/3.16.0-creator-uniqueness`.
 - **2026-10-29**: Iterations 42-43 after verification 6: the resume path's
   permanent and lost-answer faults, the refused fallback diff, the logout
   cookie, and filings.
@@ -548,7 +551,7 @@ Adoption path with the flag off (3.16 code that stays):
 - [x] Full tier on both backends (2026-10-29): ruff, format, pyright clean;
   `verify_groups.py` 50 groups; DynamoDB 4166 passed, 31 skipped; PostgreSQL
   4055 passed, 142 skipped; docs build clean.
-- [ ] Open PR 1: waits for `/verify_implementation` and `/commit`.
+- [x] Open PR 1: #160, after six verifications (commit `4275401`).
 
 ### Implementation Status: Complete
 

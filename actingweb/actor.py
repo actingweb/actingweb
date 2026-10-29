@@ -2956,6 +2956,11 @@ class Actor:
 
         # Increment sequence number
         new_seq = self._increment_subscription_sequence(peer_id, sub_id)
+        if not new_seq:
+            logger.warning(
+                f"Subscription {sub_id} for {peer_id} is gone; no resync sent"
+            )
+            return False
 
         # Build resource URL for resync
         if not self.config:
@@ -3183,15 +3188,17 @@ class Actor:
             subscription_id: Subscription ID
 
         Returns:
-            New sequence number
+            New sequence number, or 0 when the subscription no longer exists
         """
         sub_obj = self.get_subscription_obj(peerid=peer_id, subid=subscription_id)
         if not sub_obj:
-            return 1
+            return 0
 
-        # Use the increase_seq() method which increments and returns new sequence
+        # Use the increase_seq() method which increments and returns new sequence.
+        # 0 when the subscription row is gone: there is no number to give, and
+        # 1 would repeat one the subscriber already has.
         new_seq = sub_obj.increase_seq()
-        return new_seq if new_seq else 1
+        return new_seq if new_seq else 0
 
     def _leave_sequence_gap(self, sub: dict[str, Any]) -> None:
         """Move a subscription's sequence on without a diff, so the

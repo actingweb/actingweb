@@ -360,7 +360,8 @@ class TestI4FactoryFaultCors:
                 headers={"Origin": self.ORIGIN, "Accept": "application/json"},
             )
         assert response.status_code == 503
-        assert response.headers.get("Access-Control-Allow-Origin") == self.ORIGIN
+        assert response.headers.get("Access-Control-Allow-Origin") == "*"
+        assert "Access-Control-Allow-Credentials" not in response.headers
         assert "Retry-After" in response.headers.get(
             "Access-Control-Expose-Headers", ""
         )
@@ -379,7 +380,8 @@ class TestI4FactoryFaultCors:
                 headers={"Origin": self.ORIGIN, "Accept": "application/json"},
             )
         assert response.status_code == 503
-        assert response.headers.get("access-control-allow-origin") == self.ORIGIN
+        assert response.headers.get("access-control-allow-origin") == "*"
+        assert "access-control-allow-credentials" not in response.headers
 
 
 class TestJ4PostCommitFolds:

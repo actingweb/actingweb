@@ -180,15 +180,16 @@ def error_cors_headers(path: str, origin: str, config: Any) -> dict[str, str]:
     """The CORS headers a database-fault answer on ``path`` must carry, so a
     cross-origin browser client can read the 503 instead of seeing a network
     error: the SPA allowlist on the SPA routes, the wildcard set on the other
-    OAuth2 endpoints and the factory's own set on ``/``, none elsewhere."""
+    OAuth2 endpoints, a wildcard set without credentials on ``/``, none
+    elsewhere."""
     if path == "/":
-        # What RootFactoryHandler sends with its JSON. The fault body is
-        # fixed, so reflecting the origin here exposes nothing.
+        # Any page may read the fault, but without credentials: the body is
+        # fixed and needs none, and RootFactoryHandler's own reflection of
+        # the origin with credentials is not a pattern to copy.
         return {
-            "Access-Control-Allow-Origin": origin or "*",
+            "Access-Control-Allow-Origin": "*",
             "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
             "Access-Control-Allow-Headers": "Authorization, Content-Type, Accept",
-            "Access-Control-Allow-Credentials": "true",
             "Access-Control-Expose-Headers": "Retry-After",
         }
     if is_spa_path(path):

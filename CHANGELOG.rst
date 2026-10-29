@@ -169,12 +169,12 @@ CHANGED
   app-level handler: a ``DbError`` that reaches Flask or FastAPI, from a
   library route or your own, answers **503** with ``Retry-After: 5`` and a
   fixed JSON body (``"error": "temporarily_unavailable"``); the exception text
-  is logged, never sent. The answer carries the CORS headers its route
-  normally sends (the SPA allowlist on the SPA routes, the wildcard set on
-  the other OAuth2 endpoints, the factory's own on ``/``), so a cross-origin
-  client can read it, and never a redirect or cookie the handler set before
-  the fault. A backend error a retry cannot fix (a validation,
-  size or constraint error) answers **500** without ``Retry-After``.
+  is logged, never sent. A cross-origin client can read the answer: it
+  carries the SPA allowlist's CORS headers on the SPA routes, the wildcard
+  set on the other OAuth2 endpoints, and a wildcard set without credentials
+  on ``/``. It never carries a redirect or cookie the handler set before the
+  fault. A backend error a retry cannot fix (a validation, size or
+  constraint error) answers **500** without ``Retry-After``.
   ``CreatorTaken``, a new ``DbError`` subclass for a creator another actor
   holds, answers **409**; nothing raises it yet (it is reserved for enforced
   creator uniqueness). ``get_by_creator`` gains

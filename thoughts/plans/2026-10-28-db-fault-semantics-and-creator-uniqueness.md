@@ -1854,6 +1854,38 @@ rest is wording and record-keeping.
 - after the marker fix: fast tier 3249 passed, 23 skipped; guard 0
   violations.
 
+### 2026-10-29, after the Claude review of PR #160
+
+The owner asked for the review's three blocking items as a follow-up commit.
+
+#### 44. Fault CORS on `/` without credentials; PostgreSQL classification pinned; no sequence 1 for a gone subscription
+
+**Category**: Verification fix (PR review)
+
+**What changed**:
+- `error_cors_headers("/")` sends `Access-Control-Allow-Origin: *` without
+  `Allow-Credentials`, instead of reflecting the origin with credentials.
+  The fault body is fixed and needs no credentials. `POST /` is
+  unauthenticated, so the E5 note on the creator-uniqueness todo now says
+  CORS is not the boundary for a 409 there.
+- `is_permanent` is unchanged: in psycopg 3 a lost or closed connection
+  raises `OperationalError` or `InterfaceError`, not `ProgrammingError`.
+  `TestPostgresPermanentClassification` pins which errors answer 503 and
+  which answer 500.
+- `_increment_subscription_sequence` answers 0, not 1, when the
+  subscription row is gone, and `_callback_subscription_resync` then sends
+  nothing. 1 repeated a number the subscriber already had. The test fails
+  against the old fallback.
+
+**Files affected**: `actingweb/interface/integrations/_errors.py`,
+`actingweb/actor.py`, `CHANGELOG.rst`,
+`thoughts/todo/creator-uniqueness-not-enforced.md`,
+`tests/test_db_fault_fifth_pass.py`, `tests/test_db_fault_pr160_review.py`
+
+**Rationale**: the review's items 1, 2 and 6. Its non-blocking items (a
+log marker for the silent-loss path, `increase_seq`'s return type, a
+risk list in the PR description) are not taken here.
+
 ## Evaluation Notes
 
 ### Architecture

@@ -308,6 +308,7 @@ class OAuth2SessionManager:
         *,
         hooks: "HookRegistry | None" = None,
         create_only: bool = False,
+        auth_method: str | None = None,
     ) -> Optional["actor_module.Actor"]:
         """
         Complete an already-claimed OAuth session.
@@ -348,8 +349,11 @@ class OAuth2SessionManager:
             from .oauth2 import create_oauth2_authenticator
 
             authenticator = create_oauth2_authenticator(self.config, provider)
+            # Passed only when set so authenticators that predate the keyword
+            # (and tests asserting the call) see the call they always saw.
+            extra: dict[str, Any] = {"auth_method": auth_method} if auth_method else {}
             actor_instance = authenticator.lookup_or_create_actor_by_email(
-                email, hooks=hooks, create_only=create_only
+                email, hooks=hooks, create_only=create_only, **extra
             )
 
             if not actor_instance:
@@ -861,23 +865,49 @@ class OAuth2SessionManager:
 
         evict_caches_for_actor(actor_id)
 
-    def revoke_all_tokens(self, actor_id: str) -> int:
+    def revoke_all_tokens(self, actor_id: str, *, strict: bool = False) -> int:
         """
         Revoke all tokens for an actor (security measure).
+
+        :meth:`revoke_all_tokens_for_actors` with one actor.
 
         This should be called when potential token theft is detected
         (e.g., refresh token reuse).
 
         Args:
             actor_id: The actor ID to revoke tokens for
+            strict: Raise ``TokenStoreUnavailable`` when a token bucket could
+                not be read or a delete was not confirmed, instead of revoking
+                what it could. The adoption of an unvouched actor passes it:
+                a fault there must fail the sign-in, not leave a squatter's
+                session alive.
 
         Returns:
             Number of tokens revoked
         """
+        return self.revoke_all_tokens_for_actors([actor_id], strict=strict)
+
+    def revoke_all_tokens_for_actors(
+        self, actor_ids: list[str], *, strict: bool = False
+    ) -> int:
+        """Revoke every token of several actors in one pass over the token
+        buckets, which hold every user's tokens. ``strict`` as
+        :meth:`revoke_all_tokens`."""
         from . import attribute
         from .constants import OAUTH2_SYSTEM_ACTOR
 
+        wanted = {a for a in actor_ids if a}
+        actor_id = ", ".join(sorted(wanted))
         revoked = 0
+        failures: list[str] = []
+
+        def delete(bucket: "attribute.Attributes", name: str, token: str) -> bool:
+            if strict:
+                # DynamoDB's delete_attr answers True on a fault; confirm it.
+                from .single_use import delete_confirmed
+
+                return delete_confirmed(self.config, OAUTH2_SYSTEM_ACTOR, name, token)
+            return bucket.delete_attr(name=token)
 
         # Revoke access tokens
         access_bucket = attribute.Attributes(
@@ -886,14 +916,17 @@ class OAuth2SessionManager:
             config=self.config,
         )
         access_tokens = access_bucket.get_bucket()
+        if not access_bucket.loaded:
+            failures.append(f"{_ACCESS_TOKEN_BUCKET} unreadable")
         if access_tokens:
             # Snapshot with list() — delete_attr mutates the bucket dict we're
             # iterating (it would raise "dictionary changed size during
             # iteration"). Mirrors cleanup_expired_tokens().
             for token, token_attr in list(access_tokens.items()):
                 if token_attr and "data" in token_attr:
-                    if token_attr["data"].get("actor_id") == actor_id:
-                        access_bucket.delete_attr(name=token)
+                    if token_attr["data"].get("actor_id") in wanted:
+                        if not delete(access_bucket, _ACCESS_TOKEN_BUCKET, token):
+                            failures.append(f"{_ACCESS_TOKEN_BUCKET} delete")
                         revoked += 1
 
         # Revoke refresh tokens
@@ -903,12 +936,15 @@ class OAuth2SessionManager:
             config=self.config,
         )
         refresh_tokens = refresh_bucket.get_bucket()
+        if not refresh_bucket.loaded:
+            failures.append(f"{_REFRESH_TOKEN_BUCKET} unreadable")
         if refresh_tokens:
             # Same snapshot needed as the access-token loop above.
             for token, token_attr in list(refresh_tokens.items()):
                 if token_attr and "data" in token_attr:
-                    if token_attr["data"].get("actor_id") == actor_id:
-                        refresh_bucket.delete_attr(name=token)
+                    if token_attr["data"].get("actor_id") in wanted:
+                        if not delete(refresh_bucket, _REFRESH_TOKEN_BUCKET, token):
+                            failures.append(f"{_REFRESH_TOKEN_BUCKET} delete")
                         revoked += 1
 
         if revoked:
@@ -921,8 +957,16 @@ class OAuth2SessionManager:
         # there was nothing cached.
         from .mcp.invalidation import evict_caches_for_actor
 
-        evict_caches_for_actor(actor_id)
+        for one in wanted:
+            evict_caches_for_actor(one)
 
+        if strict and failures:
+            from .oauth2_server.token_manager import TokenStoreUnavailable
+
+            raise TokenStoreUnavailable(
+                f"Could not revoke every SPA token of actor {actor_id}: "
+                f"{', '.join(failures)}"
+            )
         return revoked
 
     def revoke_token_chain(

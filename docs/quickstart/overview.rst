@@ -107,6 +107,13 @@ page, or create one via the API:
 
 The response contains the new actor ID. The actor root is ``http://localhost:5000/<actor_id>``.
 
+.. note::
+
+   This is the actor factory (``POST /``), open by default as the protocol
+   requires. A deployment where OAuth is the sign-in closes it with
+   ``.with_open_factory(False)``, after which this request answers ``403`` with
+   a body naming the switch. See :doc:`configuration`.
+
 4) Explore
 ==========
 

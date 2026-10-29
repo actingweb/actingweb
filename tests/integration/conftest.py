@@ -189,6 +189,7 @@ TEST_APP_HOST = "localhost"
 BASE_APP_PORT = 5555
 BASE_PEER_PORT = 5556
 BASE_WWW_PORT = 5557
+BASE_CLOSED_FACTORY_PORT = 5559
 
 
 @pytest.fixture(scope="session")
@@ -1112,3 +1113,43 @@ def remote_store_verifier():
             return {}
 
     return RemoteStoreVerifier()
+
+
+@pytest.fixture(scope="session")
+def closed_factory_app(docker_services, setup_database, worker_info):  # pylint: disable=unused-argument
+    """A test harness with ``with_open_factory(False)`` on its own worker port."""
+    from threading import Thread
+
+    import uvicorn
+
+    from .test_harness import create_test_app
+
+    port = BASE_CLOSED_FACTORY_PORT + worker_info["port_offset"]
+    url = f"http://{TEST_APP_HOST}:{port}"
+
+    fastapi_app, _ = create_test_app(
+        fqdn=f"{TEST_APP_HOST}:{port}",
+        proto="http://",
+        enable_oauth=False,
+        enable_mcp=False,
+        enable_devtest=True,
+        open_factory=False,
+    )
+
+    Thread(
+        target=lambda: uvicorn.run(
+            fastapi_app, host="0.0.0.0", port=port, log_level="error"
+        ),
+        daemon=True,
+    ).start()
+
+    for _ in range(30):
+        try:
+            if requests.get(f"{url}/", timeout=2).status_code in [200, 404]:
+                break
+        except requests.exceptions.ConnectionError:
+            pass
+        time.sleep(0.5)
+    else:
+        raise RuntimeError(f"Closed-factory app failed to start on port {port}")
+    return url

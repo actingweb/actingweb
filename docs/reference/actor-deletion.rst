@@ -45,17 +45,20 @@ What deletion does, in order
 ``DELETE /<actor_id>`` (and :meth:`actingweb.interface.ActorInterface.delete`)
 runs these steps in this order:
 
-#. **Write a deletion tombstone.** On the HTTP path this happens *before the*
-   ``actor_deleted`` *hook runs* — so an external call made from that hook, and
-   any provider callback racing it, already sees ``DELETED``.
-#. Run the ``actor_deleted`` lifecycle hook (HTTP path only).
+#. **Write a deletion tombstone.** On the HTTP path, and when a sign-in
+   replaces an unvouched actor, this happens *before the* ``actor_deleted``
+   *hook runs* — so an external call made from that hook, and any provider
+   callback racing it, already sees ``DELETED``.
+#. Run the ``actor_deleted`` lifecycle hook (HTTP path, and a sign-in that
+   replaces an unvouched actor; see :doc:`hooks-reference`).
 #. Delete peer-trustee relationships.
 #. Delete properties and property lists.
 #. Delete subscriptions.
 #. Delete trust relationships, including reciprocal ones on peers.
 #. Delete all attribute buckets.
 #. **Delete the actor row** — last.
-#. Run the ``actor_deleted_complete`` lifecycle hook (HTTP path only).
+#. Run the ``actor_deleted_complete`` lifecycle hook (HTTP path, and a sign-in that
+   replaces an unvouched actor; see :doc:`hooks-reference`).
 
 Two consequences follow from the row going last, and both are contract:
 
@@ -194,6 +197,11 @@ actor no longer exists. This is where external side effects belong.
         # The actor is definitely gone. A provider callback triggered from
         # here cannot race the wipe.
         subscription_id = _pending.pop(actor_id, None)
+        if kwargs.get("reason") == "replaced_at_adoption":
+            # A sign-in replaced an actor nobody vouched for (created through
+            # POST /). Whatever it held was set up by whoever squatted the
+            # address; decide here whether that billing is real.
+            return
         if subscription_id:
             stripe.Subscription.delete(subscription_id)
 
@@ -202,9 +210,12 @@ after the wipe rather than during it, and the tombstone is there to suppress it.
 
 Both hooks are fire-and-forget — an exception is logged and ``DELETE`` still
 returns 204. Neither fires for
-:meth:`actingweb.interface.ActorInterface.delete`; only the HTTP path runs
-lifecycle hooks, so an application deleting an actor programmatically owns its
-own cleanup. A tombstone is written on both paths.
+:meth:`actingweb.interface.ActorInterface.delete`; only the HTTP path and the
+replacement of an unvouched actor at sign-in (``reason="replaced_at_adoption"``,
+``replaced_by_identifier``) run lifecycle hooks, so an application deleting an
+actor programmatically owns its own cleanup. A replacement that stops part-way
+is re-run by the next sign-in, so the hooks can fire more than once for one old
+actor. A tombstone is written on every path.
 
 .. _no-referential-integrity:
 

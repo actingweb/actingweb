@@ -21,6 +21,9 @@ class TestOAuthProviderWrite:
         auth = _authenticator()
         existing = MagicMock()
         existing.store = MagicMock()
+        # A vouched actor: the adoption rule leaves it alone.
+        existing.store.auth_method = "google_oauth2"
+        existing.store.email_verified = None
         existing.get_from_creator.return_value = True
 
         with patch("actingweb.actor.Actor", return_value=existing):

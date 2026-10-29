@@ -75,6 +75,10 @@ aw_app = (
         secret=os.getenv("APP_BOT_SECRET", ""),
         admin_room=os.getenv("APP_BOT_ADMIN_ROOM", ""),
     )
+    # Open by default so the quickstart curl against POST / works. An OAuth-only
+    # production deployment sets OPEN_FACTORY=false: the unauthenticated actor
+    # factory is the only way to squat an address.
+    .with_open_factory(enable=os.getenv("OPEN_FACTORY", "true").lower() == "true")
     .with_unique_creator(enable=True)  # Each user gets one actor
     .with_email_as_creator(enable=True)  # Use email from OAuth as creator
     # ActingWebApp enables MCP by default; explicitly disabled here since

@@ -4,7 +4,7 @@ from typing import Any
 
 from pynamodb.attributes import UnicodeAttribute
 from pynamodb.constants import PAY_PER_REQUEST_BILLING_MODE
-from pynamodb.exceptions import DoesNotExist
+from pynamodb.exceptions import DoesNotExist, PutError
 from pynamodb.indexes import AllProjection, GlobalSecondaryIndex
 from pynamodb.models import Model
 
@@ -89,12 +89,17 @@ class DbActor:
             return None
 
     def get_by_creator(
-        self, creator: str | None = None
+        self, creator: str | None = None, *, strict: bool = False
     ) -> dict[str, Any] | list[dict[str, Any]] | None:
         """Retrieves the actor from db based on creator field
 
         Returns None if none was found. If one is found, that one is
         loaded in the object. If more, all are returned.
+
+        The creator index is eventually consistent, so it can list an actor
+        whose row was just deleted; that entry is None. With ``strict`` such
+        an entry is left out, and a read fault raises instead of reading as
+        None.
         """
         if not creator:
             return None
@@ -104,6 +109,15 @@ class DbActor:
         ret = []
         for c in self.handle:
             logger.debug("get_by_creator matched actor id=" + c.id)
+            if strict:
+                try:
+                    row = Actor.get(c.id, consistent_read=True)
+                except DoesNotExist:
+                    continue  # deleted since the index listed it
+                ret.append(
+                    {"id": row.id, "creator": row.creator, "passphrase": row.passphrase}
+                )
+                continue
             ret.append(self.get(actor_id=c.id))
         return ret
 
@@ -114,6 +128,7 @@ class DbActor:
         if not self.handle:
             logger.debug("Attempted modification of DbActor without db handle")
             return False
+        previous = (self.handle.creator, self.handle.passphrase)  # type: ignore[attr-defined]
         if creator and len(creator) > 0:
             # Email in creator needs to be lower case
             if "@" in creator:
@@ -121,7 +136,12 @@ class DbActor:
             self.handle.creator = creator  # type: ignore[attr-defined]
         if passphrase and len(passphrase) > 0:
             self.handle.passphrase = passphrase.decode("utf-8")  # type: ignore[attr-defined]
-        self.handle.save()  # type: ignore[attr-defined]
+        try:
+            self.handle.save()  # type: ignore[attr-defined]
+        except Exception:
+            # A failed save leaves the handle as stored.
+            self.handle.creator, self.handle.passphrase = previous  # type: ignore[attr-defined]
+            raise
         return True
 
     def create(
@@ -144,7 +164,16 @@ class DbActor:
             logger.warning("Trying to create actor that exists(" + actor_id + ")")
             return False
         self.handle = Actor(id=actor_id, creator=creator, passphrase=passphrase)
-        self.handle.save()
+        try:
+            # get() answers None on a fault as well as on absence, so the
+            # check above cannot keep a live actor from being overwritten.
+            self.handle.save(condition=Actor.id.does_not_exist())
+        except PutError as e:
+            if e.cause_response_code == "ConditionalCheckFailedException":
+                logger.warning("Trying to create actor that exists(" + actor_id + ")")
+                self.handle = None
+                return False
+            raise
         return True
 
     def delete(self):

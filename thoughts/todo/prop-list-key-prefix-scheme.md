@@ -79,6 +79,26 @@ key shape, or a separate table, is the §1 design decision — this constrains i
 rather than adding a mechanism. The consumer's need is real but not blocked:
 scoped bulk reads already took it from 1,361 RCU to 685.
 
+## A fourth requirement: items larger than one row, as a layout concern
+
+Filed 2026-10-18 by the Emm AI project (`actingweb_mcp`, read-only HTML
+output documents plan, Decision D2) and triaged 2026-10-26
+(`thoughts/research/2026-10-26-inbound-triage-factory-squat-list-item-size-spa-prompt.md`):
+a list item is one row, DynamoDB caps a row at 400 KB, and the consumer has
+no way to store a longer document body. Its five constraints: atomic or
+generation-stamped commit with the compare-and-swap guard still meaning "the
+item changed since I read it"; cheap first-row reads for lists and previews;
+delete and rank moves cascade with no orphan rows; one item stays one item
+for subscription diffs and the `/properties` handlers; a DynamoDB test path.
+
+`thoughts/todo/spanned-list-items.md` carries the part a minor can deliver
+(3.16): gen-stamped body rows in a `list:{name}-$span-` region under the
+existing partition, which also takes spanned items' bodies out of range
+scans — a partial answer to the second requirement above. What this scheme
+still owes: the partition-wide 1 MB Query page ceiling, which spanning does
+not move, and the diff-row cap (a spanned item's diff carries a reference,
+not the value, because a `SubscriptionDiff` row has the same 400 KB limit).
+
 ## A third requirement: an attribute key delimiter that cannot collide
 
 The attribute composite key `bucket + ":" + name` can collide, because both

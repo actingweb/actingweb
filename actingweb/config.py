@@ -81,6 +81,10 @@ class Config:
         self.devtest = True
         # Will enforce unique creator field across all actors
         self.unique_creator = False
+        # Whether the actor factory (``POST /``) accepts requests. Set False for
+        # an OAuth-only deployment: the unauthenticated factory is the only way
+        # to create an actor for an address nobody has proven.
+        self.open_factory = True
         # Use "email" internal value to set creator value (after creation and property set)
         self.force_email_prop_as_creator = True
         # basic or oauth: basic for creator + bearer tokens

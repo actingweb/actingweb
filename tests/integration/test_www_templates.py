@@ -507,6 +507,9 @@ class TestWWWWithOAuthCookie:
                     f"{test_app}/{actor_id}/www",
                     cookies={"oauth_token": oauth2_client.access_token},
                     timeout=10,
+                    # A 302 goes to the real OAuth provider; following it
+                    # needs the internet and tests nothing of ours.
+                    allow_redirects=False,
                 )
                 # Should get 200 with HTML (or redirect if cookie auth not fully implemented)
                 assert response.status_code in [200, 302]

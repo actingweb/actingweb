@@ -5,6 +5,360 @@ CHANGELOG
 Unreleased
 ----------
 
+SECURITY
+~~~~~~~~
+
+- **An unauthenticated ``POST /`` could squat an address, and the address
+  owner's first OAuth login adopted the squatter's actor with the squatter's
+  credentials still live.** The actor factory creates an actor for any
+  address nobody has claimed, with a passphrase of the caller's choosing.
+  When the owner later signed in with OAuth, ``lookup_or_create_actor_by_identifier``
+  returned that actor as theirs: the passphrase still opened it, and so did
+  any trust relationship made with it (including an ``admin`` trust to the
+  squatter's own actor with a secret the squatter chose), any subscription,
+  and any property the squatter had prefilled. Every creation path now
+  records how the actor came to exist (``auth_method`` in the ``_internal``
+  store, written before ``actor_created`` fires), and a sign-in that proves an
+  address over an actor nobody vouched for no longer inherits it. An actor
+  counts as *vouched* when ``auth_method`` is a non-empty value other than
+  ``factory``, ``email_unverified`` or ``creator_changed`` **and**
+  ``email_verified`` is not ``"false"``. For an unvouched actor the sign-in either **replaces** it (an
+  actor created through ``POST /``, marker ``factory``, is deleted through the
+  tested wipe and a fresh actor is created: the owner gets a new actor id and
+  ``actor_created`` fires again) or **cleans it in place** (every other
+  unvouched actor, which may belong to its legitimate creator, keeps its id
+  and its properties; its passphrase is rotated and every trust
+  relationship, subscription, SPA session, MCP token, registered OAuth2
+  client, peer-trustee row, stored provider token and ``trustee_root`` is
+  removed, and its stored ``email`` is set to the proven address (the
+  provider's email for a provider-id creator such as ``apple:…``), then it is
+  marked vouched). A replacement also deletes every other ``factory`` actor
+  with the same creator, a sign-in to a vouched actor deletes the ``factory``
+  actors beside it, and a lookup by creator prefers a vouched actor, then any
+  other unvouched one, and takes a ``factory`` actor last, so a squatter's
+  extra factory actors can neither split the owner's sign-ins over new actors
+  nor leave the owner's own unvouched actor (and its data) behind a new one.
+  The emailed verification link is an address proof too
+  and runs the in-place rule before marking the address verified. Neither
+  mode contacts a peer: the peer URLs on an unvouched actor were chosen by
+  whoever created it, so the wipe skips the remote ``DELETE`` calls and keeps
+  every local cleanup. The in-place rule rotates first, wipes second, re-reads
+  the trust and subscription lists third and marks last; if the wipe cannot be
+  confirmed the sign-in fails closed with an ERROR log and the actor stays
+  unvouched, so the next sign-in retries. Every read the rule acts on must be
+  answered by the backend: PostgreSQL reports a caught read fault as an empty
+  result, and a marker, list or session bucket that could not be read fails
+  the sign-in closed instead of passing for "nothing there", so a database
+  blip neither wipes a vouched actor nor marks a half-wiped one vouched. The
+  writes and deletes it relies on are confirmed the same way: the marker is
+  read back after it is written (an actor whose marker did not land is
+  removed again at creation, and a clean whose marker did not land fails the
+  sign-in), and the session revoke confirms each delete, which DynamoDB
+  otherwise reports as done on a fault. The actors with the creator are
+  listed with a strict read before anything is removed: a listing that
+  faults or misses the actor being replaced, or a listed actor that cannot be
+  read, fails the sign-in with every actor still in place, and a new actor is
+  created only when the read says none is left. A replacement that stopped part-way
+  (its tombstone written, its row still there) is finished by the next
+  sign-in. **Behavior change:** an actor created before 3.16 other than by the
+  provider sign-in buttons (the factory, the email form, ``Actor.create``, the
+  MCP OAuth server) has no marker; the sign-in buttons already wrote
+  ``<provider>_oauth2``. The MCP OAuth server's actors are real accounts whose
+  address the provider proved, so an application with MCP sign-ups must mark
+  them before upgrading. An unmarked actor's first address proof after the
+  upgrade cleans it in place
+  (new passphrase, no trusts, subscriptions, sessions or registered OAuth2
+  clients, so MCP connectors must reconnect; data kept), and an actor created
+  through ``POST /`` after the upgrade is replaced at its first address proof
+  (new id, data gone). The emailed verification link ends the sessions of the
+  actor it verifies, so the user signs in again after the click; a user whose
+  provider supplies no verified address cannot do that yet, since the
+  free-text form answers ``409`` for an address that already has an actor (as
+  before 3.16), and must sign in through a provider that supplies the address.
+  The same ``409`` locks such a user out while the factory is open, since
+  anyone can ``POST /`` their address first (also older than 3.16); closing
+  the factory removes that path.
+  Install 3.16
+  and run ``actingweb-mark-actors-vouched`` before the application serves its
+  first sign-in to mark actors you know are legitimate;
+  ``docs/migration/v3.16.rst`` has the details. **Known
+  limitations:** a provider access token or ``oauth_token`` cookie matched by
+  email in ``auth.py`` does not adopt; unvouched siblings other than
+  ``factory`` ones (``unique_creator`` off) are cleaned only when a sign-in
+  resolves to them; a vouched actor carrying a deletion tombstone (a
+  ``DELETE /<id>`` that stalled before its wipe) is returned as it is, as
+  before 3.16, since a stale tombstone must not wipe a live actor; one
+  sign-in deletes the actor it replaces, if any, and at most 10 ``factory``
+  actors beside it (each is a full wipe inside the request), so a squatter
+  who created more is cleared over several sign-ins; two concurrent first sign-ins may
+  both run the rule and fire ``actor_adopted`` twice (a replacement reuses a
+  successor the other already created, which narrows the race to two adjacent
+  statements); and ``devtest`` must be
+  off in production, since it lets a caller rewrite ``_internal``. Close the
+  factory with ``with_open_factory(False)`` for an OAuth-only deployment.
+
+- **Renaming one's own actor to someone else's address handed it to them,
+  vouched, at their first login.** ``PUT /<id>/trust/trustee`` lets the
+  actor's creator set any new ``creator``, and nothing checks that the caller
+  owns the new address. Before this release that made no difference next to
+  the open factory; with the adoption rule above it was the remaining way to
+  squat: sign in with your own account (a vouched actor), rename it to the
+  victim's address, and their first sign-in returned it with your passphrase,
+  sessions and trusts live. A creator changed through that endpoint now marks
+  the actor ``creator_changed``, which is unvouched, so the first sign-in that
+  proves the new address cleans it in place. The marker is written, and
+  confirmed, before the creator changes; if it cannot be, the request answers
+  500 and the creator stays; a creator change that fails after it also
+  answers 500, with the previous marker restored once a fresh read shows the
+  creator unchanged. A ``factory`` actor keeps
+  ``factory``, so it is still replaced, not cleaned. The endpoint reads the
+  actor's ``_internal`` bucket first and answers 500 when it cannot, and a
+  refused or failed change applies nothing else from the request
+  (``trustee_root`` included). Two values keep the marker, because they hand
+  the actor to nobody new: ``trustee`` (the protocol's handoff; no sign-in
+  resolves to it) and the actor's own stored ``email``, which a provider or
+  the emailed link wrote. **Behavior change:** an actor whose creator was
+  changed over HTTP to another address is cleaned (new passphrase, no
+  trusts, subscriptions or sessions; data kept) at the next sign-in by that
+  address. With ``force_email_prop_as_creator`` on and a stored email, the
+  endpoint refuses a ``creator`` other than that email or ``trustee`` with
+  400: the creator is restored from the email on the next load anyway, and a sign-in
+  for the new address in between resolved to this actor.
+  ``ActorInterface.modify_creator`` and ``force_email_prop_as_creator`` do
+  not unvouch: the application, or a provider-written email, vouches for
+  those. A route of your own that passes user input to ``modify_creator``
+  vouches for that address unless it passes ``unvouch=True`` (new), which
+  applies the endpoint's rules.
+
+CHANGED
+~~~~~~~
+
+- **``auth_method`` is now set before ``actor_created`` fires.** It used to be
+  written after the actor was created, so an ``actor_created`` hook could not
+  read it. Only ``auth_method`` moves; the other post-create properties are
+  still written after the hook, as before. **Behavior change:** actors the
+  library creates through ``POST /`` carry ``factory``, those created by an
+  OAuth sign-in carry ``<provider>_oauth2``, by the self-asserted email form
+  ``email_unverified``, by the MCP bearer path ``oauth2_bearer``, the system
+  actors ``system``, and ``Actor.create`` / ``ActorInterface.create`` default
+  to ``app``.
+
+- **Breaking: ``actor_deleted`` and ``actor_deleted_complete`` also fire when
+  a sign-in replaces a factory-created actor, with keyword arguments.** They
+  used to fire only for the HTTP ``DELETE /<actor_id>``. A replacement passes
+  ``reason="replaced_at_adoption"`` and ``replaced_by_identifier=<creator>``
+  so a hook that mails "your account was deleted" or cancels billing can tell
+  it apart. A hook written as ``def on_deleted(actor):``, the signature 3.15
+  documented, raises ``TypeError`` on those arguments, which is logged and
+  skipped, so its cleanup never runs for a replaced actor. **Check:** give
+  every ``actor_deleted`` and ``actor_deleted_complete`` hook ``**kwargs``
+  (``actor_deleted_complete`` gets ``actor_id`` and the same two).
+  **Behavior change:** a replacement that fails mid-wipe is re-run by the
+  next sign-in, so the two hooks may fire more than once for one old actor.
+
+- **Breaking: the trust, subscription and peer-trustee list backends and
+  ``DbActor.get_by_creator`` take ``strict``.** ``fetch(actor_id, *,
+  strict=False)`` and ``get_by_creator(creator, *, strict=False)`` are part of
+  the database protocols (``actingweb.db.protocols``); with ``strict=True`` a
+  read fault raises instead of answering ``[]`` or ``None``, and
+  ``get_by_creator`` leaves out an actor its index lists whose row is gone
+  (DynamoDB's creator index is eventually consistent). Both bundled backends
+  implement it. **Check:** a custom backend must accept the keyword.
+
+- **``Actor.delete`` returns a bool.** It returned ``None``; it now returns
+  ``True`` when the backend reported no fault removing the actor row
+  (PostgreSQL answers ``False`` on a caught fault; DynamoDB raises).
+  **Behavior change:** none for callers that ignored the result.
+
+- **``Actor.create`` returns ``False`` when it created nothing.** It returned
+  ``True`` whenever it got past the unique-creator check, including when the
+  backend refused the insert because the id was taken or the insert failed,
+  and then fired ``actor_created`` and wrote ``trustee_root`` into the bucket
+  of whatever actor held that id. It now returns ``False`` without a hook or
+  a write, and ``ActorInterface.create`` raises; the ``Actor`` object is left
+  unbound (``id``, ``handle`` and ``store`` are ``None``), so a caller that
+  ignores the ``False`` cannot modify or delete the actor holding the id. The
+  MCP bearer bridge loads the actor another request created first, when it
+  carries its marker and no tombstone. If the ``auth_method`` marker
+  does not land, only the new row is removed (a fixed id such as a system
+  actor can own buckets older than its row), and the object is left unbound
+  the same way. **Behavior change:** a create
+  with a caller-supplied ``actor_id`` that is already taken returns ``False``
+  (``ActorInterface.create`` raises). **Check:** code that re-creates a known
+  id to "ensure" it exists must load it instead when ``create`` returns
+  ``False``; the two bundled system actors do.
+
+- **The factory's ``GET /`` no longer honours ``_method=POST``.** A GET with
+  that parameter ran the create. A link prefetcher or an ``<img>`` on another
+  site could create actors on an open factory. **Behavior change:** such a GET
+  now answers like any other ``GET /``; post the form instead.
+
+- **``Actor.modify`` takes a passphrase and returns the backend result.** It
+  accepted only ``creator`` and returned ``True`` whatever the backend did.
+  ``Actor.modify(creator=None, passphrase=None)`` now returns ``False`` when
+  neither is given or the backend reports failure; DynamoDB raises on a failed
+  save and PostgreSQL returns ``False``, so callers that must know treat both
+  as failure. The in-memory values change only after the backend succeeded.
+  **Behavior change:** PostgreSQL's ``DbActor.modify`` reports a zero-row
+  update as failure. **Check:** code that ignored the return value is
+  unaffected; code that relied on ``True`` for a vanished row is not.
+
+- **The MCP OAuth2 server writes the same actor fields as the other sign-in
+  paths.** ``_get_or_create_actor_for_email`` hand-rolled actor creation and
+  wrote only the creator. It now delegates to the provider's authenticator, so
+  the adoption rule applies to MCP sign-ins and a new actor gets
+  ``created_at``, ``oauth_provider``, ``email`` and the marker; an existing
+  actor has ``oauth_provider`` refreshed on every sign-in. **Behavior
+  change:** actors created through the MCP OAuth2 server carry the same
+  fields as those created by a web sign-in.
+
+- **The two factory 403s carry a body.** The duplicate-creator 403 on
+  ``POST /`` was empty; it now answers ``{"error": true, "status_code": 403,
+  "message": ...}`` for JSON clients and renders ``aw-root-failed.html`` with
+  ``error`` for form clients, as does the new closed-factory 403. The Flask
+  and FastAPI form fallbacks render the error page on 403 as well as 400.
+  **Behavior change:** a client that expected an empty 403 body gets one.
+
+- **The devtest all-buckets listing no longer answers 500 for an entry without
+  a timestamp.** Every created actor now has an ``_internal`` bucket and its
+  entries carry none; ``GET /<id>/devtest/attribute`` called ``strftime`` on
+  ``None``. The listing skips the formatting for such an entry.
+
+- **GitHub and other license scanners could not identify the project's
+  license.** The only license file was ``LICENSE.rst``, a documentation page
+  with an RST label, a badge and a summary of terms, so no scanner matched it
+  to BSD-3-Clause, and the package metadata said only ``License: BSD``. The
+  repository root now carries a plain-text ``LICENSE`` with the exact
+  BSD-3-Clause text and the existing copyright notices, the documentation
+  page moved to ``docs/license.rst`` (it now reproduces that text), and
+  ``pyproject.toml`` declares the SPDX identifier ``BSD-3-Clause``. The
+  license itself is unchanged. **Behavior change:** wheels and sdists built
+  from this release report ``License: BSD-3-Clause`` and ship
+  ``dist-info/licenses/LICENSE`` instead of ``LICENSE.rst``; the license page
+  in the built documentation moves from ``LICENSE.html`` to
+  ``docs/license.html``.
+
+ADDED
+~~~~~
+
+- **``ActorInterface.modify_creator(new_creator, *, unvouch=False)``** and
+  **``Actor.modify_creator_unvouched(creator)``**. With ``unvouch=True`` an
+  application route that passes a user-supplied address applies
+  ``PUT /<id>/trust/trustee``'s rules: ``creator_changed`` written and
+  confirmed first (``factory`` kept; ``trustee``, the stored email and the
+  current creator exempt), and the old marker restored when the change fails
+  and a fresh read shows the creator unchanged. With
+  ``force_email_prop_as_creator`` on, it refuses an address other than the
+  stored email or ``trustee`` (``Actor.creator_change_pinned``), as the
+  endpoint does. Returns ``False`` when the creator did not change.
+
+- **``with_open_factory(enable=False)`` closes the actor factory.** The
+  factory (``POST /``) creates an actor for any address from unauthenticated
+  input, which is the only way to squat one. An OAuth-only deployment can now
+  answer it with a 403 (the house JSON body, or the error page for a form)
+  instead; the existing-creator form redirect, which answered "does this
+  address have an actor, and which id", is closed with it. ``Config`` gains
+  ``open_factory`` (default ``True``); a value assigned on the ``Config``
+  survives until ``with_open_factory`` is called, after which the builder's
+  value wins. This deviates from the protocol's mandatory factory, so the
+  factory stays open unless you call it. A closed factory still renders the
+  ``GET /`` page and its form, whose submit gets the 403; replace the
+  template if that page should not offer one. **Behavior change:** none
+  unless you call it.
+
+- **``actor_adopted`` lifecycle hook.** Fires once on the surviving actor
+  after an unvouched actor was replaced or cleaned, with
+  ``previous_auth_method``, ``previous_actor_id`` (the replaced id, else
+  ``None``), ``provider`` (base name, ``None`` for the emailed link),
+  ``mode`` (``"replaced"`` or ``"cleaned"``), ``removed_trusts`` (``peerid``,
+  ``relationship``, ``approved``, ``established_via``; never ``secret``),
+  ``removed_subscription_peers``, ``tokens_revoked``, ``removed_client_ids``,
+  ``removed_sibling_ids`` (the other ``factory`` actors the sign-in deleted,
+  including the one it first resolved to when it then cleaned the owner's own
+  actor instead)
+  and ``property_names``
+  (the in-place case, so the application can inspect what a squatter may have
+  prefilled). It may fire more than once for one actor.
+
+- **``auth_method`` on create.** ``ActorInterface.create(..., auth_method="app")``
+  and ``Actor.create(..., auth_method="app")``. It is a trust assertion:
+  ``app`` means the application vouches for the creator; pass ``factory`` for
+  anything created from unauthenticated input. Adoption also records
+  ``auth_method_adopted_from``, ``auth_method_adopted_at`` and, for a
+  replacement, ``auth_method_replaced_actor_id`` in the ``_internal`` store.
+
+- **``prompt`` on ``POST /oauth/spa/authorize``.** A SPA can ask the provider
+  for account selection with ``"prompt": "select_account"``. It is additive:
+  ``consent`` is always sent, and Google receives ``select_account consent``;
+  GitHub and Apple drop the addition. Any other value answers 400 listing the
+  accepted ones. ``GET /oauth/spa/config`` and ``GET /?format=json`` list
+  ``prompt_values``; on ``/oauth/spa/config`` (and ``/oauth/config``) each
+  provider entry also carries ``prompt_supported``.
+  ``OAuth2Provider.authorize_prompt_params`` and
+  ``OAuth2Authenticator.create_authorization_url(prompt=)`` carry it.
+
+- **Core primitives for the adoption rule.** ``Actor.purge_relationships``
+  removes every trust, subscription and peer-trustee row with all side-stores
+  and reports whether the lists are empty afterwards;
+  ``Actor.delete``, ``delete_peer_trustee`` and ``delete_reciprocal_trust``
+  take ``notify_peers`` (default ``True``) to skip the remote ``DELETE``
+  calls; ``ActingWebTokenManager.revoke_actor_tokens`` revokes an actor's MCP
+  tokens whatever the client; ``adopt_actor`` and ``is_vouched_actor`` in
+  ``actingweb.oauth2``. Fault-aware reads for callers that act on absence:
+  ``InternalStore.loaded`` (whether the ``_internal`` read was answered),
+  ``fetch(actor_id, strict=True)`` on the trust and subscription list
+  backends (raise instead of PostgreSQL's ``[]`` on a fault), and
+  ``OAuth2SessionManager.revoke_all_tokens(actor_id, strict=True)`` (raise
+  ``TokenStoreUnavailable`` when a token could not be revoked).
+  ``InternalStore.set_confirmed(name, value)`` writes a value and confirms
+  it with a strict read-back, for a write that must not fail silently.
+
+- **``actingweb-mark-actors-vouched``** (``actingweb.maintenance.mark_actors_vouched``;
+  ``scripts/mark_actors_vouched.py`` wraps it). For operators upgrading a
+  deployment that must not have its existing actors cleaned at first sign-in:
+  writes ``auth_method`` (default ``operator``; an unvouched value is
+  refused) on actors with no marker, with ``--creator``, ``--start-after`` to
+  resume, ``--dry-run`` and ``--include-factory`` to also re-mark ``factory``
+  actors. It needs the 3.16 library, scans the whole actor table, and prints
+  ``scanned``, ``marked``, ``skipped``, ``pending`` (marked, but still waiting
+  for email verification, so still unvouched) and ``errors``. Exit 0 when
+  every actor was handled, 1 when one could not be marked (re-run it without
+  ``--start-after``; the summary says so), 2 when the actor list could not be
+  read and nothing was scanned, or when an argument such as ``--marker`` was
+  refused. Run it as maintenance, with the application's environment.
+
+FIXED
+~~~~~
+
+- **``GET /?format=json`` on Flask returned the HTML page.** The Flask root
+  route rendered the factory template for every GET without running the
+  handler, so the JSON configuration document (providers, endpoints,
+  ``prompt_values``) that FastAPI serves never reached a Flask client. A GET
+  asking for JSON (``?format=json`` or ``Accept: application/json``) now gets
+  it on both integrations; a browser still gets the page. The Flask JSON
+  branch returns the configuration only: ``_method=POST`` on that GET does not
+  create an actor. **Behavior change:** a Flask ``GET /`` (and ``/login``,
+  which shares the handler) with either signal answers JSON instead of HTML.
+
+- **``Accept: application/json`` was not recognised on FastAPI's ``GET /``.**
+  The factory handler looked the header up case-sensitively, and FastAPI
+  passes header names lowercased. The lookup is case-insensitive now, which
+  also lets a closed factory answer a form post that asks for JSON with the
+  JSON error body instead of an empty 403.
+
+- **On DynamoDB, ``Actor.create`` with a caller-supplied ``actor_id`` could
+  overwrite a live actor.** The existence check reads the row first, and that
+  read answers ``None`` on a throttle or timeout as well as on absence; the
+  put that followed was unconditional. The MCP bridge supplies the id exactly
+  when it could not load the actor. The insert is conditional now
+  (``attribute_not_exists(id)``), as PostgreSQL's primary key already made it,
+  so the live row and its ``_internal`` bucket stay untouched.
+
+- **``Actor.create`` with ``unique_creator`` could fail right after a
+  replacement on DynamoDB.** The creator index is eventually consistent and
+  can still list the just-deleted actor, which reads back as ``None``; the
+  uniqueness check dereferenced it. ``None`` entries are skipped now.
+
 v3.15.1: September 29, 2026
 ---------------------------
 

@@ -42,6 +42,12 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Values a client may add to the always-sent ``prompt=consent``. Google's
+# documented prompt values are none, consent and select_account; ``login`` is
+# not among them, so it is not accepted.
+SPA_PROMPT_VALUES = ("select_account",)
+SPA_PROMPT_VALUES_ACCEPTED = ("",) + SPA_PROMPT_VALUES
+
 # PKCE constants
 PKCE_VERIFIER_LENGTH = 64  # 43-128 characters recommended
 PKCE_VERIFIER_CHARSET = (
@@ -309,6 +315,11 @@ class OAuth2SPAHandler(BaseHandler):
                                 "userinfo_endpoint": auth.provider.userinfo_uri,
                                 "response_mode": _provider_response_mode(prov_name),
                                 "platform": _provider_platform(prov_name),
+                                "prompt_supported": bool(
+                                    auth.provider.authorize_prompt_params(
+                                        SPA_PROMPT_VALUES[0]
+                                    )
+                                ),
                             }
                         )
                         oauth_enabled = True
@@ -329,6 +340,11 @@ class OAuth2SPAHandler(BaseHandler):
                                 auth.provider.name
                             ),
                             "platform": _provider_platform(auth.provider.name),
+                            "prompt_supported": bool(
+                                auth.provider.authorize_prompt_params(
+                                    SPA_PROMPT_VALUES[0]
+                                )
+                            ),
                         }
                     )
                     oauth_enabled = True
@@ -342,6 +358,7 @@ class OAuth2SPAHandler(BaseHandler):
             "pkce_methods": ["S256"],
             "spa_mode_supported": True,
             "token_delivery_modes": ["json", "cookie", "hybrid"],
+            "prompt_values": list(SPA_PROMPT_VALUES),
             "refresh_token_rotation": True,
             "endpoints": {
                 # Unified endpoints (no /spa/ prefix needed)
@@ -422,6 +439,13 @@ class OAuth2SPAHandler(BaseHandler):
         # return_path: Where to redirect after successful auth (e.g., "/app", "/dashboard")
         # The {actor_id} placeholder will be replaced with the actual actor ID
         return_path = params.get("return_path", "/app")
+        # prompt: additive account selection; consent is always sent regardless.
+        prompt = params.get("prompt") or ""
+        if not isinstance(prompt, str) or prompt not in SPA_PROMPT_VALUES_ACCEPTED:
+            return self._json_error(
+                400,
+                f"Invalid prompt: {prompt!r}; accepted: {', '.join(SPA_PROMPT_VALUES)}",
+            )
 
         # Validate token_delivery mode
         if token_delivery not in ["json", "cookie", "hybrid"]:
@@ -529,6 +553,7 @@ class OAuth2SPAHandler(BaseHandler):
                 code_challenge_method=""
                 if is_apple
                 else ("S256" if code_challenge else ""),
+                prompt=prompt,
             )
         except Exception as e:
             logger.error(f"Failed to create authorization URL: {e}")
@@ -944,11 +969,18 @@ class OAuth2SPAHandler(BaseHandler):
         actor_exists = existing_check.get_from_creator(identifier)
 
         if actor_exists:
-            # Use the already-fetched actor instead of doing another DB lookup
-            actor_instance = existing_check
-            from ..oauth2 import clear_pending_email_verification
+            # Use the already-fetched actor instead of doing another DB lookup.
+            # An actor nobody vouched for is replaced or cleaned first; the
+            # result may be a different actor, and is None if that failed.
+            from ..oauth2 import adopt_actor
 
-            clear_pending_email_verification(actor_instance, self.config)
+            actor_instance = adopt_actor(
+                existing_check,
+                provider=authenticator.provider,
+                config=self.config,
+                hooks=self.hooks,
+                user_info=user_info,
+            )
         else:
             actor_instance = authenticator.lookup_or_create_actor_by_identifier(
                 identifier, user_info=user_info, hooks=self.hooks
@@ -1113,10 +1145,15 @@ class OAuth2SPAHandler(BaseHandler):
 
         existing_check = actor_module.Actor(config=self.config)
         if existing_check.get_from_creator(identifier):
-            actor_instance = existing_check
-            from ..oauth2 import clear_pending_email_verification
+            from ..oauth2 import adopt_actor
 
-            clear_pending_email_verification(actor_instance, self.config)
+            actor_instance = adopt_actor(
+                existing_check,
+                provider=authenticator.provider,
+                config=self.config,
+                hooks=self.hooks,
+                user_info=user_info,
+            )
         else:
             actor_instance = authenticator.lookup_or_create_actor_by_identifier(
                 identifier, user_info=user_info, hooks=self.hooks

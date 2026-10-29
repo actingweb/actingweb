@@ -125,7 +125,7 @@ Decorator: ``app.lifecycle_hook(event: str)``
 
 Signature: ``func(actor, **kwargs) -> Any``
 
-- Common events: ``actor_created``, ``actor_deleted``, ``actor_deleted_complete``, ``oauth_success``, ``trust_initiated``, ``trust_request_received``, ``trust_fully_approved_local``, ``trust_fully_approved_remote``, ``trust_deleted``, ``subscription_deleted``, ``email_verification_required``, ``email_verified``
+- Common events: ``actor_created``, ``actor_deleted``, ``actor_deleted_complete``, ``actor_adopted``, ``oauth_success``, ``trust_initiated``, ``trust_request_received``, ``trust_fully_approved_local``, ``trust_fully_approved_remote``, ``trust_deleted``, ``subscription_deleted``, ``email_verification_required``, ``email_verified``
 
 Event Details
 ~~~~~~~~~~~~~
@@ -134,9 +134,11 @@ Event Details
     Triggered when a new actor is created. Fires exactly once, from inside
     ``Actor.create()`` itself, before an OAuth handler stores tokens or
     provider metadata on the actor — so at hook time, fields like
-    ``oauth_token``, ``oauth_provider``, ``auth_method``, ``created_at``,
-    ``email`` and ``email_verified`` are **not yet set**. ``oauth_success``
-    (below) is the hook that carries the tokens and provider info.
+    ``oauth_token``, ``oauth_provider``, ``created_at``, ``email`` and
+    ``email_verified`` are **not yet set**. ``auth_method`` is the exception
+    (3.16): ``Actor.create()`` writes it before the hook fires, so the hook can
+    tell a factory-created actor from an OAuth one. ``oauth_success`` (below)
+    is the hook that carries the tokens and provider info.
 
     **Signature**: ``func(actor: ActorInterface) -> None``
 
@@ -146,14 +148,19 @@ Event Details
        twice — once from a handler-level call after tokens/metadata were
        stored, once from inside ``Actor.create()``. The single remaining
        call is the earlier (pre-metadata) one; a hook that read those
-       fields on the second call now sees them absent.
+       fields (other than ``auth_method``, which has been written since
+       3.16) on the second call now sees them absent.
 
 ``actor_deleted``
     Triggered when an actor is deleted, **before any data is removed**. The
     actor is still fully readable, so this is where to *read* whatever external
     cleanup will need.
 
-    **Signature**: ``func(actor: ActorInterface) -> None``
+    **Signature**: ``func(actor: ActorInterface, **kwargs) -> None``
+
+    Accept ``**kwargs``: the library passes keyword arguments on some
+    deletions (below), and a hook that does not accept them raises
+    ``TypeError``, which is logged and skipped, so its cleanup never runs.
 
     .. warning::
 
@@ -163,15 +170,58 @@ Event Details
        in ``actor_deleted_complete`` instead. See
        :doc:`actor-deletion`.
 
+    Also fires (3.16) when a sign-in **replaces** an unvouched,
+    factory-created actor (see ``actor_adopted``), with the keyword arguments
+    ``reason="replaced_at_adoption"`` and ``replaced_by_identifier=<creator>``,
+    so a hook that mails "your account was deleted" or cancels billing can tell
+    it apart from a user-initiated delete. A replacement that fails mid-wipe is
+    re-run by the next sign-in, so this hook (and ``actor_deleted_complete``)
+    may fire more than once for the same old actor.
+
+``actor_adopted``
+    Triggered once per adoption, on the **surviving** actor, after a sign-in
+    that proved the creator address (a provider login or the emailed
+    verification link) replaced or cleaned an actor nobody vouched for. May
+    fire more than once for one actor: two concurrent first sign-ins both run
+    the rule.
+
+    **Signature**: ``func(actor: ActorInterface, previous_auth_method: str,
+    previous_actor_id: str | None, provider: str | None, mode: str,
+    removed_trusts: list[dict], removed_subscription_peers: list[str],
+    tokens_revoked: int, removed_client_ids: list[str],
+    property_names: list[str], removed_sibling_ids: list[str]) -> None``
+
+    - ``previous_auth_method``: the marker the actor had, ``"legacy"`` when it
+      had none.
+    - ``previous_actor_id``: the replaced actor's id, ``None`` when it was
+      cleaned in place.
+    - ``provider``: the provider's base name (``google-mobile`` reports
+      ``google``), ``None`` for the emailed verification link.
+    - ``mode``: ``"replaced"`` or ``"cleaned"``.
+    - ``removed_trusts``: ``peerid``, ``relationship``, ``approved`` and
+      ``established_via`` of each removed trust; **never** the ``secret``.
+    - ``removed_client_ids``: the OAuth2 clients registered under the actor,
+      deleted with it.
+    - ``property_names``: the properties that survive a clean-in-place, so the
+      application can inspect what a squatter may have prefilled; empty for a
+      replacement.
+    - ``removed_sibling_ids``: the ``factory`` actors with the same creator
+      that the sign-in deleted (each also fired ``actor_deleted``). For a
+      clean-in-place it is empty, unless the sign-in first resolved to a
+      factory actor and then cleaned the owner's own actor instead: that
+      factory actor is listed here.
+
 ``actor_deleted_complete``
     Triggered **after** the wipe completes. Receives ``actor=None`` and
     ``actor_id`` — there is deliberately no ``ActorInterface``, because the
     actor no longer exists. External side effects belong here.
 
-    **Signature**: ``func(actor: None, actor_id: str) -> None``
+    **Signature**: ``func(actor: None, actor_id: str, **kwargs) -> None``
 
-    Fires only on the HTTP ``DELETE /<actor_id>`` path, like ``actor_deleted``.
-    See :doc:`actor-deletion` for the full contract.
+    Fires on the HTTP ``DELETE /<actor_id>`` path and (3.16) when a sign-in
+    replaces an unvouched actor, with the same ``reason`` and
+    ``replaced_by_identifier`` keyword arguments as ``actor_deleted``. See
+    :doc:`actor-deletion` for the full contract.
 
 ``oauth_success``
     Triggered after successful OAuth2 authentication.

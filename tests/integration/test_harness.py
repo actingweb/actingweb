@@ -28,6 +28,7 @@ def create_test_app(
     enable_devtest: bool = True,
     enable_subscription_processing: bool = False,
     subscription_config: dict | None = None,
+    open_factory: bool = True,
 ) -> tuple[FastAPI, ActingWebApp]:
     """
     Create a minimal ActingWeb test harness.
@@ -40,6 +41,7 @@ def create_test_app(
         enable_devtest: Enable devtest endpoints (for proxy tests)
         enable_subscription_processing: Enable automatic subscription processing
         subscription_config: Optional config dict for subscription processing
+        open_factory: Whether the actor factory (POST /) accepts requests
 
     Returns:
         Tuple of (fastapi_app, actingweb_app)
@@ -57,6 +59,7 @@ def create_test_app(
         .with_devtest(enable=enable_devtest)
         .with_unique_creator(enable=False)
         .with_email_as_creator(enable=False)
+        .with_open_factory(enable=open_factory)
     )
 
     # Optional: Add OAuth2 configuration for OAuth tests

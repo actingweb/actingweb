@@ -166,8 +166,12 @@ class DbSubscriptionList:
     The  actor_id must always be set.
     """
 
-    def fetch(self, actor_id):
-        """Retrieves the subscriptions of an actor_id from the database as an array"""
+    def fetch(self, actor_id, *, strict=False):
+        """Retrieves the subscriptions of an actor_id from the database as an array
+
+        A read fault raises (the Query runs lazily during iteration), so
+        ``strict`` changes nothing here; it exists for protocol parity.
+        """
         if not actor_id:
             return None
         self.actor_id = actor_id

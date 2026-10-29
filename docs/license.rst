@@ -8,9 +8,10 @@ License
    :alt: License: BSD 3-Clause
 
 This project is licensed under the **BSD 3-Clause License**
-(SPDX identifier: ``BSD-3-Clause``). See the `LICENSE <LICENSE>`_ file
-for the complete license text. For machine-readable tooling, files in
-this repository may include the following header:
+(SPDX identifier: ``BSD-3-Clause``). The complete license text, from the
+``LICENSE`` file at the repository root, is reproduced at the end of this
+page. For machine-readable tooling, files in this repository may include
+the following header:
 
 .. code-block:: text
 
@@ -48,4 +49,9 @@ this repository may include the following header:
 If you ship binaries, include the license and disclaimer in your
 documentation or “About/Legal” screen, and keep this notice intact.
 If the repository includes third-party components, add attributions in
-a `NOTICE <NOTICE>`_ file (if present).
+a ``NOTICE`` file (if present).
+
+**License text**
+
+.. literalinclude:: ../LICENSE
+   :language: text

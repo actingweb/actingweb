@@ -2381,6 +2381,21 @@ class MCPHandler(BaseHandler):
             logger.error(f"Error during ActingWeb token authentication: {e}")
             return None
 
+    def _race_winner(self, actor_id: str) -> bool:
+        """Whether a concurrent request finished creating ``actor_id``: the
+        row exists, carries its marker, and is not being deleted. An unmarked
+        row is a create whose marker write failed and whose rollback did too;
+        a tombstoned one is mid-deletion."""
+        from .. import actor as actor_module
+        from ..deletion import DeletionStatus, get_deletion_status
+
+        winner = actor_module.Actor(actor_id, self.config)
+        if not winner.id or winner.store is None or not winner.store.loaded:
+            return False
+        if not winner.store.auth_method:
+            return False
+        return get_deletion_status(actor_id, self.config) != DeletionStatus.DELETED
+
     def _get_or_create_actor_cached(
         self,
         actor_id: str,
@@ -2431,12 +2446,16 @@ class MCPHandler(BaseHandler):
                     creator=user_email,
                     passphrase="",  # OAuth2 actors don't need passphrases
                     actor_id=actor_id,
+                    auth_method="oauth2_bearer",
                 )
 
                 if created_actor:
                     logger.info(
                         f"Successfully created ActingWeb actor {actor_id} for OAuth2 user {user_email}"
                     )
+                    core_actor = actor_module.Actor(actor_id, self.config)
+                elif self._race_winner(actor_id):
+                    # A concurrent request created it first.
                     core_actor = actor_module.Actor(actor_id, self.config)
                 else:
                     logger.error(f"Failed to create ActingWeb actor {actor_id}")

@@ -340,7 +340,9 @@ class DbSubscriptionList:
         self.actor_id = None
         self.subscriptions = []
 
-    def fetch(self, actor_id: str | None = None) -> list[dict[str, Any]] | list[Any]:
+    def fetch(
+        self, actor_id: str | None = None, *, strict: bool = False
+    ) -> list[dict[str, Any]] | list[Any]:
         """
         Retrieve all subscriptions for an actor.
 
@@ -390,6 +392,8 @@ class DbSubscriptionList:
 
         except Exception as e:
             logger.error(f"Error fetching subscriptions for actor {actor_id}: {e}")
+            if strict:
+                raise
             return []
 
     def delete(self) -> bool:

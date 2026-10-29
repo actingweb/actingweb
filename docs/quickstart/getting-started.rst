@@ -122,6 +122,9 @@ Creating and managing actors is straightforward:
     actor = ActorInterface.create(
         creator="user@example.com", config=config, hooks=app.hooks
     )
+    # ActorInterface.create() also takes auth_method (default "app", meaning
+    # your application vouches for the creator); see "How an Actor Was Created"
+    # in the authentication guide.
 
     # Access properties
     actor.properties.email = "user@example.com"
@@ -153,7 +156,8 @@ Creating and managing actors is straightforward:
    (``POST /`` with a JSON ``{"creator": "..."}`` body), which is how a browser
    sign-up flow or an external client creates them. See
    :doc:`overview` for the HTTP request/response. The factory path runs the
-   ``actor_created`` lifecycle hook automatically.
+   ``actor_created`` lifecycle hook automatically. An OAuth-only deployment
+   closes it with ``.with_open_factory(False)``.
 
 Configuration
 -------------
@@ -199,6 +203,7 @@ Configuration methods:
 - ``.with_devtest(enable=True)`` - Enable/disable development endpoints (MUST be False in production)
 - ``.with_bot(token, email, secret, admin_room)`` - Configure bot integration
 - ``.with_unique_creator(enable=True)`` - Enforce unique creator field
+- ``.with_open_factory(enable=True)`` - Open or close the actor factory (``POST /``); close it for OAuth-only deployments
 - ``.with_email_as_creator(enable=True)`` - Use email property as creator
 - ``.add_actor_type(name, factory, relationship)`` - Add known actor type
 

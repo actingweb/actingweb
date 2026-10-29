@@ -319,6 +319,71 @@ ActingWeb tokens exclusively.
                                                     ↓
                                           Return to client (SPA: JSON, /www: Cookie)
 
+How an Actor Was Created
+------------------------
+
+Every actor records how it came to exist in ``auth_method`` (in the
+``_internal`` store, written before ``actor_created`` fires):
+
+.. list-table::
+   :header-rows: 1
+
+   * - ``auth_method``
+     - Set by
+     - Vouched
+   * - ``app``
+     - ``Actor.create`` / ``ActorInterface.create`` (the default)
+     - yes
+   * - ``<provider>_oauth2`` (e.g. ``google_oauth2``)
+     - an OAuth sign-in (web, SPA or the MCP OAuth2 server) that created the
+       actor, or that cleaned an unvouched one in place
+     - yes
+   * - ``oauth2_bearer``
+     - the MCP bearer path
+     - yes
+   * - ``system``
+     - the system actors
+     - yes
+   * - ``email_verified``, ``operator``
+     - a verified email link; ``actingweb-mark-actors-vouched``
+     - yes
+   * - ``factory``
+     - ``POST /`` (unauthenticated input)
+     - **no**
+   * - ``email_unverified``
+     - the self-asserted email form
+     - **no**
+   * - ``creator_changed``
+     - ``PUT /<id>/trust/trustee`` with a new ``creator``: the caller asserted
+       the new address, nobody proved it (``trustee`` and the actor's own
+       stored email keep the previous marker)
+     - **no**
+   * - absent
+     - an actor created before 3.16 other than by a provider sign-in
+       (those carry ``<provider>_oauth2``)
+     - **no**
+
+Any marker counts as unvouched while ``email_verified`` is ``"false"``: the
+address is still waiting for its proof.
+
+``auth_method`` is a trust assertion about ``creator``. When a sign-in later
+proves the creator address over an unvouched actor, the actor is replaced
+(``factory``) or cleaned in place (the rest); see :doc:`../reference/security`
+and the ``actor_adopted`` hook in :doc:`../reference/hooks-reference`. Adoption
+records ``auth_method_adopted_from``, ``auth_method_adopted_at`` and, for a
+replacement, ``auth_method_replaced_actor_id`` beside the new marker. An
+application that creates actors itself passes the keyword:
+
+.. code-block:: python
+
+   # The application vouches for the creator (the default):
+   ActorInterface.create(creator=email, config=config, hooks=app.hooks)
+
+   # Anything created from unauthenticated input says so:
+   ActorInterface.create(
+       creator=email, config=config, hooks=app.hooks, auth_method="factory"
+   )
+
 OAuth Login Flow with Postponed Actor Creation
 -----------------------------------------------
 
@@ -992,8 +1057,22 @@ Verification Flow
 3. **Email Sent**: Lifecycle hook ``email_verification_required`` triggered with ``verification_url``
 4. **User Clicks Link**: ``GET /oauth/email?verify=<token>``
 5. **Validation**: Token looked up via reverse index, checked against stored value and expiry
-6. **Mark Verified**: ``actor.store.email_verified`` set to ``"true"``
-7. **Hook Triggered**: Lifecycle hook ``email_verified`` executed
+6. **Adoption** (3.16): the link proves the address, so an unvouched actor (every
+   actor the free-text email form created) is cleaned in place first: passphrase
+   rotated, trusts, subscriptions, SPA sessions, MCP tokens and registered
+   OAuth2 clients removed, stored provider tokens and ``trustee_root``
+   cleared, marker set to
+   ``email_verified``. ``actor_adopted`` fires. If this cannot be completed the
+   link answers ``500`` and can be clicked again.
+7. **Mark Verified**: ``actor.store.email_verified`` set to ``"true"``
+8. **Hook Triggered**: Lifecycle hook ``email_verified`` executed
+
+Because step 6 revokes the user's sessions, the user must sign in again after
+the click; point the confirmation page or the SPA at the login. A user whose
+provider supplies no verified address returns to the free-text form, which
+answers ``409`` for an address that already has an actor, whether the user's
+own or one created through the open factory by someone else; they can sign in
+once the provider supplies the address (for GitHub, after verifying it there).
 
 The verification flow is the same for both SPA and HTML template applications — the
 ``email_verification_required`` lifecycle hook is responsible for sending the verification

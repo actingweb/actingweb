@@ -1,0 +1,324 @@
+===========================
+Migrating to ActingWeb 3.16
+===========================
+
+.. warning::
+
+   This guide shows the API **as it evolved across this migration**. Where
+   a block demonstrates the *previous* pattern, it must not be copied into
+   new code; see :doc:`../guides/index` for the current API.
+
+Start here
+==========
+
+3.16 closes a squat on the actor factory and adds ``prompt`` to the SPA
+sign-in. Most applications need to check only the first three items:
+
+1. **An actor created before 3.16 with no marker is cleaned at its first
+   sign-in after the upgrade.** That covers the factory, the email form,
+   direct ``Actor.create`` calls and the MCP OAuth server; actors the provider
+   sign-in buttons created already carry ``<provider>_oauth2`` and are left
+   alone. Its passphrase is rotated and its trusts, subscriptions,
+   sessions and registered OAuth2 clients are removed (MCP connectors must
+   register and authorize again); its data is kept. Install 3.16 and run
+   ``actingweb-mark-actors-vouched`` *before the application serves its first
+   sign-in* to skip that for actors you know are legitimate. **An application
+   whose users signed up through an MCP connector must run it:** the MCP OAuth
+   server proved those addresses through the provider but never wrote a
+   marker, so they are real accounts that would otherwise be cleaned.
+2. **Actors created through ``POST /`` after the upgrade are replaced, not
+   cleaned,** at the first sign-in that proves their address: new actor id,
+   data gone. If your deployment creates actors through the factory and later
+   signs the same users in with OAuth, create them with
+   ``ActorInterface.create()`` instead, or close the factory. The same goes
+   for the factory form with ``www_auth="oauth"``: the actor it creates is
+   replaced at the OAuth callback that follows, so ``actor_created`` fires
+   twice (and ``actor_deleted`` once) for one first login. A replacement also
+   deletes the other ``factory`` actors with the same creator, and a sign-in to
+   a vouched actor deletes the ``factory`` actors beside it (``actor_deleted``
+   fires for each; at most 10 per sign-in, not counting the actor a
+   replacement removes, the rest at later ones), and a lookup
+   by creator among several that share it prefers a vouched actor, then any
+   other unvouched one, and takes a ``factory`` actor last: an owner's actor
+   from before 3.16 beside a squatter's is the one cleaned, with its data.
+3. **An OAuth-only deployment should close the factory:**
+   ``.with_open_factory(False)``.
+4. Code calling ``Actor.create`` or ``ActorInterface.create`` directly needs
+   nothing for new ids: the new ``auth_method`` keyword defaults to ``"app"``.
+   With a caller-supplied ``actor_id`` that is already taken, ``create`` now
+   returns ``False`` (``ActorInterface.create`` raises) instead of ``True``.
+5. MCP sign-ins now write the same actor fields as the other paths.
+6. A hook on ``actor_deleted`` or ``actor_deleted_complete`` may now see
+   ``reason="replaced_at_adoption"``.
+7. ``Actor.modify`` now takes a passphrase and returns the backend result;
+   ``Actor.delete`` returns a bool.
+8. SPA clients can ask for account selection with ``prompt``.
+9. A custom database backend must accept ``strict`` on the trust,
+   subscription and peer-trustee list ``fetch`` and on
+   ``DbActor.get_by_creator``.
+10. ``PUT /<id>/trust/trustee`` with a new ``creator`` unvouches the actor;
+    with ``force_email_prop_as_creator`` on it refuses an address other than
+    the stored email.
+
+What changed and why
+====================
+
+The factory squat
+-----------------
+
+``POST /`` creates an actor for any address nobody has claimed, with a
+passphrase of the caller's choosing, and needs no authentication. Before 3.16
+the address owner's first OAuth login adopted that actor as theirs with the
+squatter's credentials still live: the passphrase, any trust relationship made
+with it (including an ``admin`` trust to the squatter's own actor with a secret
+the squatter chose), any subscription, and any property the squatter prefilled.
+
+From 3.16 every creation path records how the actor came to exist in
+``auth_method`` (see :doc:`../guides/authentication`), and a sign-in that proves
+an address over an actor nobody vouched for no longer inherits it. The protocol
+mandates the factory, so it stays; the fix is that a self-asserted ``creator``
+can no longer be inherited as a verified identity.
+
+Two populations, two behaviours
+-------------------------------
+
+.. list-table::
+   :header-rows: 1
+
+   * - The unvouched actor
+     - At the first address proof
+     - Data
+     - Actor id
+   * - Created before 3.16 with no marker (any path but the provider
+       sign-in buttons, the MCP OAuth server included),
+       ``email_unverified``,
+       ``creator_changed`` (its creator was set through
+       ``PUT /<id>/trust/trustee``), or ``email_verified == "false"``
+     - **Cleaned in place**: passphrase rotated; every trust, subscription,
+       SPA session, MCP token and registered OAuth2 client removed; stored
+       provider tokens and ``trustee_root`` cleared; marked
+       vouched
+     - kept
+     - unchanged
+   * - Created through ``POST /`` after the upgrade (``factory``)
+     - **Replaced**: deleted through the tested wipe and recreated
+     - gone
+     - new
+
+*Cleaned in place* is for actors that may belong to their legitimate creator:
+a pre-3.16 deployment's factory-then-OAuth users, and the self-asserted email
+form's users, who by design hold a two-week session and real data before they
+verify. Properties a squatter prefilled are **reported, not removed**: the
+``actor_adopted`` hook carries their names so the application can inspect them.
+
+An *address proof* is a provider login or the emailed verification link. The
+link also runs the in-place rule before marking the address verified, so a
+squatter whose provider profile carries the victim's address cannot keep a
+session through a phished "verify your email" click. A user who verifies by
+link therefore gets a new passphrase and has their sessions revoked: the
+application should send them to sign in again after the click.
+
+A user whose provider supplies no verified address reaches the free-text email
+form at every sign-in, and that form answers ``409`` for an address that
+already has an actor (as before 3.16). Such a user can sign in again once the
+provider supplies the address, for example after verifying it at GitHub. The
+verification click only moves the sign-out earlier: the session used to last
+until it expired. The same ``409`` meets such a user whenever someone else
+created an actor for their address through the open factory first, which is
+one more reason for an OAuth deployment to close it.
+
+No request leaves the process during either: the peer URLs on an unvouched
+actor were chosen by whoever created it, so the wipe skips the remote
+``DELETE`` calls and keeps every local cleanup. If the wipe cannot be
+confirmed the sign-in fails closed (an ERROR is logged and the actor stays
+unvouched), and the next sign-in retries. The status the client sees is
+``502`` on ``/oauth/callback`` and ``500`` on the SPA authorize and token
+endpoints and on the verification link.
+
+Marking actors you trust before the first sign-in
+-------------------------------------------------
+
+An actor that already holds legitimate relationships should not be cleaned at
+its next login. The tool ships with the library and needs 3.16: install the
+upgrade, then mark the actors before the application serves its first sign-in,
+with the application's own environment:
+
+.. code-block:: bash
+
+   actingweb-mark-actors-vouched --dry-run
+   actingweb-mark-actors-vouched --marker operator
+   actingweb-mark-actors-vouched --creator alice@example.com
+
+(``python -m actingweb.maintenance.mark_actors_vouched`` and, in a source
+checkout, ``scripts/mark_actors_vouched.py`` run the same code.)
+
+The tool writes ``auth_method`` on actors that have none and leaves every
+actor that already carries a marker alone. It resumes with
+``--start-after <actor id>`` and scans the whole actor table (maintenance, not
+a serving path). ``--include-factory`` also re-marks ``factory`` actors, for a
+deployment that kept the factory open after upgrading and wants to vouch for
+what it created; run that while no sign-in is served, since a sign-in replacing
+one of those actors (or a sibling of it) deletes it whichever is first. A value that does not vouch (``factory``,
+``email_unverified``, ``creator_changed``) is refused as ``--marker``. Every
+actor the **MCP OAuth server** created before 3.16 is unmarked too, and the
+same tool covers them.
+
+Reading the output. The last line reports:
+
+``scanned``
+   Actors considered (after ``--creator`` and ``--start-after``).
+``marked``
+   Marker written and read back (or, with ``--dry-run``, would be).
+``skipped``
+   Already carried a marker; not touched.
+``pending``
+   Marked, but their email verification is still pending
+   (``email_verified == "false"``). They stay unvouched and are cleaned at
+   the sign-in that proves the address.
+``errors``
+   The marker could not be read or the write did not read back. Re-run;
+   actors already marked are skipped.
+
+A ``progress:`` line every 100 actors, and the closing
+``last actor handled: <id>`` line, give the value for ``--start-after`` if the
+run is interrupted. Once an actor has errored they say to re-run without
+``--start-after`` instead: the actors that errored sort before that id.
+Exit codes: ``0`` every actor was handled, ``1`` at least one error, ``2`` the
+actor list itself could not be read and nothing was scanned (not a report of
+zero actors), or an argument was refused, such as a ``--marker`` that does
+not vouch; the message says which.
+
+A cleaned-in-place actor's passphrase changes, so anything that stored the
+old one must read the new one from ``GET /<actor_id>`` with the session token
+(``Accept: application/json``).
+
+Direct ``Actor.create`` and ``ActorInterface.create`` callers
+-------------------------------------------------------------
+
+Both take ``auth_method`` (default ``"app"``: the application vouches for the
+creator). Pass ``"factory"`` for anything created from unauthenticated input.
+Nothing to do otherwise.
+
+.. code-block:: python
+
+   # Before: nothing recorded how the actor was created
+   ActorInterface.create(creator=email, config=config, hooks=app.hooks)
+
+   # From 3.16: same call, marker "app"; say so for unauthenticated input
+   ActorInterface.create(
+       creator=email, config=config, hooks=app.hooks, auth_method="factory"
+   )
+
+The MCP OAuth server
+--------------------
+
+``_get_or_create_actor_for_email`` now delegates to the provider's authenticator,
+so the adoption rule applies to MCP sign-ins. **Behavior change:** MCP sign-ins
+write ``oauth_provider`` on every sign-in, and a new actor gets ``created_at``,
+``oauth_provider``, ``email`` and the marker, as the other paths always did.
+
+Closing the factory
+-------------------
+
+.. code-block:: python
+
+   app = ActingWebApp(...).with_oauth(...).with_open_factory(False)
+
+``POST /`` then answers ``403`` with ``{"error": true, "status_code": 403,
+"message": "Actor creation is disabled on this server (with_open_factory); ..."}``
+(the error page for a form), and the existing-creator form redirect, which told
+anyone which actor id belongs to an address, is closed with it. This deviates
+from the protocol's mandatory factory, so the factory stays open unless you
+call it; a basic-auth deployment that needs the factory form login keeps it
+open. A closed factory still renders the ``GET /`` page and its form, whose
+submit gets the 403; replace the template if that page should not offer one.
+The reference demo app reads ``OPEN_FACTORY`` (default ``true``, so the
+quickstart curl works).
+
+Hooks
+-----
+
+* ``actor_adopted`` is new; see :doc:`../reference/hooks-reference`. It may fire
+  more than once for one actor.
+* ``actor_deleted`` and ``actor_deleted_complete`` also fire when a sign-in
+  replaces a factory-created actor, with ``reason="replaced_at_adoption"`` and
+  ``replaced_by_identifier``. A hook that mails "your account was deleted" or
+  cancels billing should check ``reason``. A replacement that fails mid-wipe is
+  re-run by the next sign-in, so they may fire more than once for one old
+  actor. **Check** that both hooks accept ``**kwargs``: one written as
+  ``def on_deleted(actor):`` raises ``TypeError`` on these keyword arguments,
+  which is logged and skipped, so its cleanup never runs for a replaced actor.
+* ``auth_method`` is written before ``actor_created`` fires; the other
+  post-create fields still are not set at hook time.
+
+``Actor.modify``
+----------------
+
+``Actor.modify(creator=None, passphrase=None)`` now takes a passphrase and
+returns the backend result. DynamoDB raises on a failed save and PostgreSQL
+returns ``False``; PostgreSQL also reports a zero-row update as failure. Code
+that ignored the return value is unaffected. ``Actor.delete`` returns ``True``
+when the backend reported no fault removing the actor row (it returned
+``None``).
+
+Changing the creator over HTTP
+------------------------------
+
+``PUT /<id>/trust/trustee`` with a new ``creator`` marks the actor
+``creator_changed``, which is unvouched: the first sign-in that proves the new
+address cleans it in place. Two values keep the marker: ``trustee`` (the
+protocol's handoff) and the actor's own stored ``email``, so handing an actor
+to its trustee and back to its owner changes nothing. A ``factory`` actor keeps
+``factory``: it is still replaced at the first sign-in, not cleaned. With
+``force_email_prop_as_creator`` on and a stored email, a ``creator`` other than
+those two answers ``400``: the creator is pinned to that email.
+
+The endpoint answers ``500`` and changes nothing (``trustee_root`` included)
+when it cannot read the actor's ``_internal`` bucket, when the marker cannot
+be written, or when the creator change itself fails. In the last case the
+previous marker is restored once a fresh read shows the creator unchanged;
+when that read fails the actor stays ``creator_changed``.
+
+``ActorInterface.modify_creator()`` does not unvouch by default: the
+application vouches for the address it passes. A route of your own that
+passes user input to it should ask for the endpoint's rules::
+
+    actor.modify_creator(new_address, unvouch=True)
+
+Custom database backends
+------------------------
+
+The trust and subscription list protocols in ``actingweb.db.protocols`` take
+``fetch(actor_id, *, strict=False)``. With ``strict=True`` a read fault must
+raise instead of answering ``[]``; the adoption rule depends on it. Both
+bundled backends implement it.
+
+SPA ``prompt``
+--------------
+
+``POST /oauth/spa/authorize`` accepts ``"prompt": "select_account"``. It is
+additive: ``consent`` is always sent. Google receives ``select_account
+consent``; GitHub and Apple ignore it. ``GET /oauth/spa/config`` lists
+``prompt_values`` and a per-provider ``prompt_supported`` (as does
+``/oauth/config``; ``GET /?format=json`` lists ``prompt_values`` only). Any other value
+answers ``400``. See :doc:`../guides/spa-authentication`.
+
+What stays the same
+===================
+
+* A provider access token or ``oauth_token`` cookie matched by email in
+  ``auth.py`` does not adopt.
+* Sibling actors that share a creator (``unique_creator`` off) and are not
+  marked ``factory`` are not touched until a sign-in resolves to one: the rule
+  acts on that actor. ``factory`` siblings are deleted by any sign-in that
+  proves the address (item 2).
+* A vouched actor that carries a deletion tombstone (a ``DELETE /<id>`` that
+  stalled before its wipe) is returned to the sign-in as it is, as before.
+* Two concurrent first sign-ins may both run the rule; ``actor_adopted`` may
+  fire twice. A second replacement reuses the successor the first one already
+  created when it can read it, which narrows the race to two adjacent
+  statements; it does not close it.
+* Properties a squatter prefilled on a cleaned-in-place actor are reported,
+  not removed.
+* ``devtest`` must be off in production: it lets a caller rewrite ``_internal``,
+  including ``auth_method``.

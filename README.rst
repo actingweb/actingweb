@@ -362,6 +362,6 @@ process and history.
 License
 -------
 
-BSD. See ``LICENSE``.
+BSD-3-Clause. See ``LICENSE``.
 </content>
 </invoke>

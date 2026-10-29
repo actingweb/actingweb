@@ -437,7 +437,8 @@ class TestTombstoneDoesNotOutliveItsActor:
         actor = Actor(config=config)
         # Pre-set the handle so create() uses this one rather than building a
         # real accessor; a backend that refuses the insert returns False.
-        actor.handle = mock.Mock(create=mock.Mock(return_value=False))
+        handle = mock.Mock(create=mock.Mock(return_value=False))
+        actor.handle = handle
 
         actor.create(
             url="http://test.example.com",
@@ -446,7 +447,7 @@ class TestTombstoneDoesNotOutliveItsActor:
             actor_id=actor_id,
         )
 
-        assert actor.handle.create.called, "test did not exercise the create path"
+        assert handle.create.called, "test did not exercise the create path"
         assert get_deletion_status(actor_id, config) == DeletionStatus.DELETED
 
     def test_creating_over_an_id_still_being_wiped_keeps_the_tombstone(

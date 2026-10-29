@@ -67,6 +67,11 @@ The ``ActorInterface`` exposes several useful properties:
     actor.subscriptions   # SubscriptionManager instance
     actor.services        # ServiceRegistry (third-party OAuth2 services)
 
+The core actor behind the interface is ``actor.core_actor``. It changes the
+creator or the passphrase with ``actor.core_actor.modify(creator=...,
+passphrase=...)``, which returns the backend result (``False`` when neither is
+given or the backend reports failure; DynamoDB raises on a failed save).
+
 ``actor.property_lists`` is only summarized here -- see
 :doc:`../guides/property-lists` for the full API (``to_list()``,
 ``find()``, ``items_with_handles()``, the identity-addressed mutators, and

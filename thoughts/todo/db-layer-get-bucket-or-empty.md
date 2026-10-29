@@ -25,3 +25,11 @@ meant "empty or fault" on PostgreSQL — but the same shape 3.14.3's
 `fetch_all_including_lists() ... or {}` had, which emptied a list. Audit each
 site for what "empty" makes it do next (`fanout` and `callback_processor` act
 on the result) and raise or bail on `None` where the action is not idempotent.
+
+The same shape exists one level over, on the trust and subscription list
+backends: PostgreSQL's `DbTrustList.fetch` / `DbSubscriptionList.fetch`
+return `[]` on a caught fault. The 3.16 adoption path reads them with
+`fetch(actor_id, strict=True)` (raises instead) and decides vouching only
+after `InternalStore.loaded`; other callers that act on an empty list are not
+audited yet. `strict=True` and `InternalStore.loaded` are the primitives to
+reuse.

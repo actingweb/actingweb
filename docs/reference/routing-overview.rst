@@ -24,7 +24,7 @@ Integration
 Core Actor Routes
 =================
 
-- `/`: Root factory (create actor via web or API)
+- `/`: Root factory (create actor via web or API). Open by default; answers 403 when the app calls `with_open_factory(False)`
 - `/<actor_id>`: Actor root endpoint (see :ref:`actor-root-endpoint`)
 - `/<actor_id>/meta`: Discovery metadata
 - `/<actor_id>/properties`: Get/update/delete properties

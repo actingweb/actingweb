@@ -1629,6 +1629,11 @@ class FastAPIIntegration(BaseActingWebIntegration):
         # Run handler in thread pool to avoid blocking
         await self._run_in_executor_with_context(handler.get)
 
+        # A client that asked for JSON (Accept, or ?format=json) gets the
+        # handler's configuration document, not the page.
+        if "application/json" in str(webobj.response.headers.get("Content-Type", "")):
+            return self._create_fastapi_response(webobj, request)
+
         # Render template with populated values (including oauth_enabled, oauth_providers, etc.)
         if self.templates and webobj.response.template_values:
             return self.templates.TemplateResponse(
@@ -1763,12 +1768,17 @@ class FastAPIIntegration(BaseActingWebIntegration):
                         "aw-root-created.html",
                         context=webobj.response.template_values,
                     )
-            elif webobj.response.status_code == 400:
+            elif webobj.response.status_code in (400, 403):
+                # 403: the factory is closed (with_open_factory) or the
+                # creator exists; both carry an ``error`` for the page.
                 if self.templates:
                     return self.templates.TemplateResponse(
                         request,
                         "aw-root-failed.html",
                         context=webobj.response.template_values,
+                        status_code=(
+                            403 if webobj.response.status_code == 403 else 200
+                        ),
                     )
 
             return self._create_fastapi_response(webobj, request)

@@ -197,9 +197,12 @@ class DevtestHandler(base_handler.BaseHandler):
                 if isinstance(params, dict):
                     for _b, d in params.items():
                         for k, v in d.items():
-                            d[k]["timestamp"] = v["timestamp"].strftime(
-                                "%Y-%m-%d %H:%M:%S"
-                            )
+                            # An entry may carry no timestamp (the _internal
+                            # bucket every created actor now has); the
+                            # single-bucket branch above is lenient too.
+                            ts = v.get("timestamp")
+                            if ts is not None and hasattr(ts, "strftime"):
+                                d[k]["timestamp"] = ts.strftime("%Y-%m-%d %H:%M:%S")
                     out = json.dumps(params)
                     if self.response:
                         self.response.write(out)

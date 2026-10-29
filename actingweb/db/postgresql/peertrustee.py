@@ -295,12 +295,15 @@ class DbPeerTrusteeList:
         self.actor_id = None
         self.peertrustees = []
 
-    def fetch(self, actor_id: str | None = None) -> list[dict[str, Any]] | list[Any]:
+    def fetch(
+        self, actor_id: str | None = None, *, strict: bool = False
+    ) -> list[dict[str, Any]] | list[Any]:
         """
         Retrieve all peertrustees for an actor.
 
         Args:
             actor_id: The actor ID
+            strict: Raise on a read fault instead of answering ``[]``
 
         Returns:
             List of peertrustee dicts, or empty list if none found
@@ -340,6 +343,8 @@ class DbPeerTrusteeList:
 
         except Exception as e:
             logger.error(f"Error fetching peertrustees for actor {actor_id}: {e}")
+            if strict:
+                raise
             return []
 
     def delete(self) -> bool:

@@ -150,6 +150,7 @@ Web UI and Dev Endpoints
 
 - Enable the web UI with `.with_web_ui(True)` (available at `/<actor_id>/www`)
 - Enable dev/test helpers with `.with_devtest(True)` (disable in production)
+- Close the actor factory (`POST /`) with `.with_open_factory(False)` for an OAuth-only deployment
 
 Running Locally
 ---------------

@@ -345,9 +345,17 @@ Flow 2.2: Web UI Login without Email (GitHub Private Email)
        ↓
        User clicks link in email: GET /oauth/email?verify=<token>
        ↓
-       Token validated, email marked as verified
+       Token validated
+       ↓
+       Actor cleaned in place (3.16; the free-text actor is unvouched):
+         passphrase rotated, sessions, MCP tokens, trusts, subscriptions
+         and OAuth2 clients removed; actor_adopted fired
+       ↓
+       Email marked as verified
        ↓
        email_verified lifecycle hook fired
+       ↓
+       User signs in again (their sessions were revoked)
 
 Flow 2.3: MCP Authorization with trust_type (No Email Available)
 -----------------------------------------------------------------------

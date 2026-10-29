@@ -57,13 +57,16 @@ class DbActor:
             return None
 
     def get_by_creator(
-        self, creator: str | None = None
+        self, creator: str | None = None, *, strict: bool = False
     ) -> dict[str, Any] | list[dict[str, Any]] | None:
         """
         Get actors by creator field.
 
         Args:
             creator: The creator email to search for
+
+            strict: Raise on a read fault instead of answering None, and
+                answer ``[]`` when none was found
 
         Returns:
             Single dict if one found, list of dicts if multiple found, None if none found
@@ -89,7 +92,7 @@ class DbActor:
                     rows = cur.fetchall()
 
                     if not rows:
-                        return None
+                        return [] if strict else None
 
                     ret = []
                     for row in rows:
@@ -104,6 +107,8 @@ class DbActor:
                     return ret
         except Exception as e:
             logger.error(f"Error retrieving actors by creator {creator}: {e}")
+            if strict:
+                raise
             return None
 
     def create(
@@ -195,13 +200,11 @@ class DbActor:
                 creator = creator.lower()
             updates.append("creator = %s")
             params.append(creator)
-            self.handle["creator"] = creator
 
         if passphrase and len(passphrase) > 0:
             passphrase_str = passphrase.decode("utf-8")
             updates.append("passphrase = %s")
             params.append(passphrase_str)
-            self.handle["passphrase"] = passphrase_str
 
         if not updates:
             return True  # Nothing to update
@@ -219,11 +222,22 @@ class DbActor:
                         """,
                         tuple(params),
                     )
+                    if cur.rowcount != 1:
+                        logger.error(
+                            f"Modify of actor {actor_id} matched {cur.rowcount} rows"
+                        )
+                        conn.rollback()
+                        return False
                 conn.commit()
-            return True
         except Exception as e:
             logger.error(f"Error modifying actor {actor_id}: {e}")
             return False
+        # Only after the commit: a failed modify leaves the handle as stored.
+        if creator:
+            self.handle["creator"] = creator
+        if passphrase:
+            self.handle["passphrase"] = passphrase.decode("utf-8")
+        return True
 
     def delete(self) -> bool:
         """

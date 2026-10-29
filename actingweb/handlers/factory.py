@@ -26,11 +26,9 @@ class RootFactoryHandler(base_handler.BaseHandler):
 
     def _wants_json(self) -> bool:
         """Check if client prefers JSON response."""
-        # Check Accept header
-        if self.request.headers:
-            accept = self.request.headers.get("Accept", "")
-            if "application/json" in accept:
-                return True
+        # Check Accept header (case-insensitively: FastAPI lowercases names)
+        if "application/json" in self.request.get_header("Accept"):
+            return True
 
         # Check format query parameter
         if self.request.get("format") == "json":
@@ -55,6 +53,8 @@ class RootFactoryHandler(base_handler.BaseHandler):
         For MCP authorization trust types, use /oauth/authorize which handles
         MCP client authorization flows.
         """
+        from .oauth2_spa import SPA_PROMPT_VALUES
+
         base_url = f"{self.config.proto}{self.config.fqdn}"
 
         # Build OAuth provider list
@@ -100,6 +100,7 @@ class RootFactoryHandler(base_handler.BaseHandler):
             "spa_mode_supported": True,
             "pkce_supported": True,
             "token_delivery_modes": ["json", "cookie", "hybrid"],
+            "prompt_values": list(SPA_PROMPT_VALUES),
             "refresh_token_rotation": True,
             "endpoints": {
                 # Unified OAuth endpoints (JSON API)
@@ -142,9 +143,8 @@ class RootFactoryHandler(base_handler.BaseHandler):
         return response_data
 
     def get(self):
-        if self.request.get("_method") == "POST":
-            self.post()
-            return
+        # No ``_method=POST`` override here: a GET (a link prefetcher, an
+        # <img> on another site) must never create an actor.
 
         # Check if JSON response is requested (for SPAs)
         if self._wants_json():
@@ -196,7 +196,33 @@ class RootFactoryHandler(base_handler.BaseHandler):
         else:
             self.response.set_status(404)
 
+    def _refuse(self, status: int, message: str, *, as_json: bool) -> None:
+        """Answer a refused creation: the house JSON error body, or the error
+        variable the form fallback page renders."""
+        self.response.set_status(status, message)
+        if as_json:
+            self.response.write(
+                json.dumps({"error": True, "status_code": status, "message": message})
+            )
+            self.response.headers["Content-Type"] = "application/json"
+        else:
+            self.response.template_values = {
+                "error": message,
+                "base_path": self._base_path(),
+            }
+
     def post(self):
+        if not getattr(self.config, "open_factory", True):
+            # The body is not parsed yet: a JSON body (Content-Type) or a
+            # client asking for JSON back (Accept) gets the JSON error.
+            content_type = self.request.get_header("Content-Type")
+            self._refuse(
+                403,
+                "Actor creation is disabled on this server (with_open_factory); "
+                "sign in through OAuth instead",
+                as_json="application/json" in content_type or self._wants_json(),
+            )
+            return
         try:
             body = self.request.body
             if isinstance(body, bytes):
@@ -250,6 +276,7 @@ class RootFactoryHandler(base_handler.BaseHandler):
             passphrase=passphrase,
             trustee_root=trustee_root,
             hooks=self.hooks,
+            auth_method="factory",
         ):
             # Check if this is a unique creator constraint violation
             if self.config and self.config.unique_creator and creator:
@@ -257,7 +284,11 @@ class RootFactoryHandler(base_handler.BaseHandler):
                 in_db = get_actor(self.config)
                 exists = in_db.get_by_creator(creator=creator)
                 if exists:
-                    self.response.set_status(403, "Creator already exists")
+                    self._refuse(
+                        403,
+                        "Creator already exists",
+                        as_json=is_json or self._wants_json(),
+                    )
                     logger.warning(
                         "Creator already exists, cannot create new Actor("
                         + str(self.request.url)

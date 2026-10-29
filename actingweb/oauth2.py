@@ -12,7 +12,7 @@ import logging
 import re
 import time
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 from urllib.parse import urlparse
 
 import requests  # type: ignore[import-untyped]
@@ -21,11 +21,13 @@ from oauthlib.oauth2 import WebApplicationClient  # type: ignore[import-untyped]
 
 from . import actor as actor_module
 from . import config as config_class
+from . import deletion
 from .constants import ESTABLISHED_VIA_OAUTH2_INTERACTIVE
 from .interface.actor_interface import ActorInterface
 from .oauth2_id_token import JWKSIdTokenValidator
 
 if TYPE_CHECKING:
+    from .attribute import InternalStore
     from .interface.hooks import HookRegistry
 
 logger = logging.getLogger(__name__)
@@ -121,6 +123,15 @@ class OAuth2Provider:
 
     def authorize_extra_params(self, email_hint: str = "") -> dict[str, str]:
         """Provider-specific extra query parameters for the authorize URL."""
+        return {}
+
+    def authorize_prompt_params(self, requested: str) -> dict[str, str]:
+        """Extra authorize parameters for a client-requested ``prompt``.
+
+        Additive: ``consent`` is always sent (it is what yields a refresh
+        token), and the client may add ``select_account``. Providers that do
+        not support the value drop it (the default).
+        """
         return {}
 
     def token_request_headers(self) -> dict[str, str]:
@@ -231,6 +242,11 @@ class GoogleOAuth2Provider(OAuth2Provider):
         if email_hint:
             return {"login_hint": email_hint}
         return {}
+
+    def authorize_prompt_params(self, requested: str) -> dict[str, str]:
+        # Google takes a space-delimited list; consent stays so a refresh
+        # token is still issued.
+        return {"prompt": f"{requested} consent"}
 
     def extract_user_info_from_token_response(
         self, token_response: dict[str, Any]
@@ -504,6 +520,7 @@ class OAuth2Authenticator:
         user_agent: str = "",
         code_challenge: str = "",
         code_challenge_method: str = "",
+        prompt: str = "",
     ) -> str:
         """
         Create OAuth2 authorization URL using oauthlib with trust type selection.
@@ -516,6 +533,9 @@ class OAuth2Authenticator:
             user_agent: User-Agent header for client identification and MCP coordination
             code_challenge: PKCE code challenge for SPA OAuth flows
             code_challenge_method: PKCE challenge method (typically "S256")
+            prompt: Optional account-selection request (``select_account``),
+                added to the always-sent ``consent`` for providers that
+                support it; others ignore it
 
         Returns:
             OAuth2 authorization URL
@@ -551,6 +571,8 @@ class OAuth2Authenticator:
 
         # Add provider-specific authorize params (e.g. Google's login_hint)
         extra_params.update(self.provider.authorize_extra_params(email_hint))
+        if prompt:
+            extra_params.update(self.provider.authorize_prompt_params(prompt))
 
         # Add PKCE parameters if provided (for SPA OAuth flows)
         if code_challenge and code_challenge_method:
@@ -924,6 +946,7 @@ class OAuth2Authenticator:
         *,
         hooks: "HookRegistry | None" = None,
         create_only: bool = False,
+        auth_method: str | None = None,
     ) -> actor_module.Actor | None:
         """
         Look up actor by email or create new one if not found.
@@ -942,7 +965,11 @@ class OAuth2Authenticator:
             Actor instance or None if failed
         """
         return self.lookup_or_create_actor_by_identifier(
-            email, user_info=None, hooks=hooks, create_only=create_only
+            email,
+            user_info=None,
+            hooks=hooks,
+            create_only=create_only,
+            auth_method=auth_method,
         )
 
     def lookup_or_create_actor_by_identifier(
@@ -952,9 +979,13 @@ class OAuth2Authenticator:
         *,
         hooks: "HookRegistry | None" = None,
         create_only: bool = False,
+        auth_method: str | None = None,
     ) -> actor_module.Actor | None:
         """
         Look up actor by identifier (email or provider ID) or create new one if not found.
+
+        An existing actor nobody vouched for (see :func:`is_vouched_actor`) is
+        replaced or cleaned before it is returned; see :func:`adopt_actor`.
 
         Args:
             identifier: User identifier - can be email or provider-specific ID
@@ -973,6 +1004,9 @@ class OAuth2Authenticator:
                 enforces creator uniqueness in the database yet (see
                 ``thoughts/todo/creator-uniqueness-not-enforced.md``) — so
                 this is a best-effort narrowing, not a guarantee.
+            auth_method: Marker written on a newly created actor. Defaults to
+                ``"<provider>_oauth2"``; the self-asserted email form passes
+                ``"email_unverified"``.
 
         Returns:
             Actor instance, or None if failed or refused under ``create_only``
@@ -995,52 +1029,28 @@ class OAuth2Authenticator:
                     )
                     return None
                 logger.info(f"Found existing actor for identifier: {identifier}")
-                # Record the most recent provider on every sign-in (not only on
-                # create) so revocation logic can rely on it.
-                if existing_actor.store:
-                    existing_actor.store.oauth_provider = self.provider.name
-                clear_pending_email_verification(existing_actor, self.config)
-                return existing_actor
+                # Vouched actors only get the provider recorded; an actor
+                # nobody vouched for is replaced or cleaned first.
+                return adopt_actor(
+                    existing_actor,
+                    provider=self.provider,
+                    config=self.config,
+                    hooks=effective_hooks,
+                    user_info=user_info,
+                )
 
             # Create new actor with identifier as creator
             logger.info(f"Creating new actor for identifier: {identifier}")
 
             try:
-                actor_interface = ActorInterface.create(
-                    creator=identifier,
-                    config=self.config,
-                    passphrase="",  # ActingWeb will auto-generate
-                    hooks=effective_hooks,
+                return _create_actor_for_identifier(
+                    self.config,
+                    self.provider,
+                    identifier,
+                    user_info,
+                    effective_hooks,
+                    auth_method=auth_method,
                 )
-
-                # Set up initial properties for OAuth actor
-                if actor_interface.core_actor.store:
-                    # Store OAuth provider info
-                    actor_interface.core_actor.store.auth_method = (
-                        f"{self.provider.name}_oauth2"
-                    )
-                    actor_interface.core_actor.store.created_at = str(int(time.time()))
-                    actor_interface.core_actor.store.oauth_provider = self.provider.name
-
-                    # If identifier is provider-specific ID, store actual email separately
-                    if ":" in identifier and user_info:
-                        email = user_info.get("email")
-                        if email:
-                            actor_interface.core_actor.store.email = email.lower()
-                            logger.debug(
-                                f"Stored display email for provider ID actor: {email}"
-                            )
-
-                        # Store provider-specific ID for reference
-                        self.provider.store_provider_identity(
-                            actor_interface.core_actor.store, identifier
-                        )
-                    elif "@" in identifier:
-                        # Identifier is an email - store it in email property too
-                        actor_interface.core_actor.store.email = identifier
-
-                return actor_interface.core_actor
-
             except Exception as create_error:
                 logger.error(
                     f"Failed to create actor for identifier {identifier}: {create_error}"
@@ -1519,7 +1529,7 @@ def create_oauth2_trust_relationship(
 
 def clear_pending_email_verification(
     actor_instance: actor_module.Actor, config: config_class.Config
-) -> None:
+) -> bool:
     """
     Clear squatted pending-verification state on a provider-verified login.
 
@@ -1532,11 +1542,14 @@ def clear_pending_email_verification(
     would otherwise let the abandoned link keep "verifying" the actor.
 
     No-op unless ``store.email_verified == "false"``.
+
+    Returns False when the pending flag was not confirmed gone: the actor
+    still reads as unvouched (:func:`is_vouched_actor`).
     """
     if not actor_instance.store:
-        return
+        return True
     if actor_instance.store.email_verified != "false":
-        return
+        return True
 
     from .attribute import Attributes
     from .constants import ACTINGWEB_SYSTEM_ACTOR, EMAIL_VERIFY_TOKEN_INDEX_BUCKET
@@ -1550,6 +1563,713 @@ def clear_pending_email_verification(
         )
         index.delete_attr(token)
 
-    actor_instance.store.email_verified = None
     actor_instance.store.email_verification_token = None
     actor_instance.store.email_verification_created_at = None
+    return actor_instance.store.set_confirmed("email_verified", None)
+
+
+# ---------------------------------------------------------------------------
+# Vouching and adoption
+# ---------------------------------------------------------------------------
+
+#: ``auth_method`` markers that say nobody vouched for the actor's creator: the
+#: address was typed by whoever created the actor (or, for
+#: ``creator_changed``, set later through ``PUT /<id>/trust/trustee``), not
+#: proven by a provider.
+UNVOUCHED_AUTH_METHODS = frozenset({"factory", "email_unverified", "creator_changed"})
+
+#: Unvouched markers whose actor is deleted and recreated, not cleaned in
+#: place. An actor made from unauthenticated input holds nothing legitimate.
+REPLACE_AUTH_METHODS = frozenset({"factory"})
+
+
+def is_vouched_actor(actor_instance: actor_module.Actor) -> bool:
+    """Whether some party vouched for this actor's creator address.
+
+    Vouched means ``auth_method`` is a non-empty string outside
+    :data:`UNVOUCHED_AUTH_METHODS` **and** ``email_verified`` is not
+    ``"false"`` (a pre-3.16 free-text actor carries ``"<provider>_oauth2"`` for
+    an address the provider never verified). An actor with no marker, created
+    before 3.16, is unvouched.
+    """
+    store = actor_instance.store
+    if not store:
+        return False
+    return is_vouched_store(store)
+
+
+def is_vouched_store(store: "InternalStore") -> bool:
+    """:func:`is_vouched_actor` for an actor's ``_internal`` store."""
+    method = store.auth_method
+    if not isinstance(method, str) or not method:
+        return False
+    if method in UNVOUCHED_AUTH_METHODS:
+        return False
+    return store.email_verified != "false"
+
+
+MarkerClass = Literal["vouched", "unvouched", "replace"]
+
+
+def classify_store(store: "InternalStore") -> MarkerClass:
+    """How the adoption rule treats an actor, from its loaded ``_internal``
+    store: ``"vouched"``, ``"replace"`` (a marker in
+    :data:`REPLACE_AUTH_METHODS`), or ``"unvouched"`` (cleaned in place)."""
+    if is_vouched_store(store):
+        return "vouched"
+    if store.auth_method in REPLACE_AUTH_METHODS:
+        return "replace"
+    return "unvouched"
+
+
+def classify_marker(config: config_class.Config, actor_id: str) -> MarkerClass | None:
+    """:func:`classify_store` for an actor id; None when its ``_internal``
+    bucket cannot be read (never raises). Every caller decides from this,
+    so one unreadable bucket means the same thing everywhere: unknown."""
+    from .attribute import InternalStore
+
+    try:
+        store = InternalStore(actor_id=actor_id, config=config)
+        if not store.loaded:
+            return None
+        return classify_store(store)
+    except Exception as e:
+        logger.warning(f"Could not read the marker of {actor_id}: {e}")
+        return None
+
+
+def _create_actor_for_identifier(
+    config: config_class.Config,
+    provider: "OAuth2Provider",
+    identifier: str,
+    user_info: dict[str, Any] | None,
+    hooks: "HookRegistry | None",
+    *,
+    auth_method: str | None = None,
+) -> actor_module.Actor:
+    """Create an actor for a provider-proven identifier and seed its store.
+
+    Raises on failure (``ActorInterface.create`` raises when nothing was
+    persisted).
+    """
+    actor_interface = ActorInterface.create(
+        creator=identifier,
+        config=config,
+        passphrase="",  # ActingWeb will auto-generate
+        hooks=hooks,
+        auth_method=auth_method or f"{provider.name}_oauth2",
+    )
+    store = actor_interface.core_actor.store
+    if store:
+        store.created_at = str(int(time.time()))
+        store.oauth_provider = provider.name
+
+        # If identifier is provider-specific ID, store actual email separately
+        if ":" in identifier and user_info:
+            email = user_info.get("email")
+            if email:
+                store.email = email.lower()
+                logger.debug(f"Stored display email for provider ID actor: {email}")
+
+            # Store provider-specific ID for reference
+            provider.store_provider_identity(store, identifier)
+        elif "@" in identifier:
+            # Identifier is an email - store it in email property too
+            store.email = identifier
+
+    return actor_interface.core_actor
+
+
+def _revoke_all_actor_tokens(
+    config: config_class.Config, actor_id: str, *, spa: bool = True
+) -> int:
+    """Revoke every SPA and MCP token of an actor. Raises if one cannot be.
+    ``spa=False`` skips the SPA tokens, for a caller that revoked them for
+    several actors in one pass (:func:`_revoke_spa_tokens`)."""
+    from .oauth2_server.token_manager import get_actingweb_token_manager
+
+    revoked = _revoke_spa_tokens(config, [actor_id]) if spa else 0
+    revoked += get_actingweb_token_manager(config).revoke_actor_tokens(actor_id)
+    return revoked
+
+
+def _revoke_spa_tokens(config: config_class.Config, actor_ids: list[str]) -> int:
+    """Revoke the SPA tokens of several actors in one pass over the system
+    token buckets, which hold every user's tokens. Raises if one cannot be."""
+    from .oauth_session import get_oauth2_session_manager
+
+    return get_oauth2_session_manager(config).revoke_all_tokens_for_actors(
+        actor_ids, strict=True
+    )
+
+
+def _actor_client_ids(config: config_class.Config, actor_id: str) -> list[str]:
+    """Ids of the OAuth2 clients registered under an actor. Raises if the
+    bucket cannot be read (``list_clients_for_actor`` answers a fault with
+    an empty list)."""
+    from . import attribute
+    from .oauth2_server.client_registry import MCPClientRegistry
+
+    bucket = attribute.Attributes(
+        actor_id=actor_id,
+        bucket=MCPClientRegistry(config).clients_bucket,
+        config=config,
+    )
+    rows = bucket.get_bucket()
+    if not bucket.loaded:
+        raise RuntimeError(f"OAuth2 clients of actor {actor_id} could not be read")
+    return sorted(str(k) for k in (rows or {}))
+
+
+def _delete_actor_clients(
+    config: config_class.Config, actor_id: str, client_ids: list[str]
+) -> None:
+    """Delete clients (row, index row, tokens). Call after the actor's trusts
+    are gone: the registry's trust cleanup would otherwise notify the peer.
+    Raises if a client could not be disabled."""
+    from .oauth2_server.client_registry import MCPClientRegistry
+
+    registry = MCPClientRegistry(config)
+    for client_id in client_ids:
+        if not registry.delete_client(client_id, actor_id=actor_id):
+            raise RuntimeError(f"OAuth2 client {client_id} could not be deleted")
+
+
+def _fire_lifecycle(
+    hooks: "HookRegistry | None",
+    event: str,
+    actor_instance: actor_module.Actor | None,
+    config: config_class.Config,
+    **kwargs: Any,
+) -> None:
+    """Run a lifecycle hook; ``None`` hooks fire nothing, failures are logged."""
+    if hooks is None:
+        return
+    try:
+        wrapper = None
+        if actor_instance is not None:
+            registry = getattr(config, "service_registry", None)
+            wrapper = ActorInterface(actor_instance, service_registry=registry)
+        hooks.execute_lifecycle_hooks(event, wrapper, **kwargs)
+    except Exception as e:
+        logger.error(f"Lifecycle hook {event} failed: {e}")
+
+
+def _remove_for_replacement(
+    victim: actor_module.Actor,
+    *,
+    config: config_class.Config,
+    hooks: "HookRegistry | None",
+    creator: str,
+    client_ids: list[str],
+    spa_revoked: bool = False,
+) -> int | None:
+    """Delete an actor a sign-in replaces; return the tokens revoked.
+
+    ``spa_revoked``: the caller already revoked its SPA tokens. Returns None
+    when the row removal was not confirmed: the tombstone is written, so the
+    next sign-in finishes it.
+    """
+    actor_id = victim.id or ""
+    tokens_revoked = _revoke_all_actor_tokens(config, actor_id, spa=not spa_revoked)
+    reason = {
+        "reason": "replaced_at_adoption",
+        "replaced_by_identifier": creator,
+    }
+    deletion.mark_actor_deleted(actor_id, config)
+    _fire_lifecycle(hooks, "actor_deleted", victim, config, **reason)
+    if not victim.delete(notify_peers=False):
+        logger.error(
+            f"Adoption of actor {actor_id}: the backend did not confirm the "
+            "row removed; the next sign-in finishes the replacement"
+        )
+        return None
+    # The client rows went with the buckets, which already disables the
+    # clients; this removes their index rows. Not fatal: the actor row is
+    # gone, so failing here would skip the hooks below and leave nothing
+    # for the next sign-in to resume.
+    try:
+        _delete_actor_clients(config, actor_id, client_ids)
+    except Exception as e:
+        logger.error(
+            f"Adoption of actor {actor_id}: client index rows remain "
+            f"after the replacement: {e}"
+        )
+    _fire_lifecycle(
+        hooks, "actor_deleted_complete", None, config, actor_id=actor_id, **reason
+    )
+    return tokens_revoked
+
+
+def _creator_rows(config: config_class.Config, creator: str) -> list[dict[str, Any]]:
+    """The actors with this creator, from a strict read: a backend fault
+    raises, and an actor deleted since the index listed it is left out."""
+    from .db import get_actor
+
+    lookup = creator.lower() if "@" in creator else creator
+    rows = get_actor(config).get_by_creator(creator=lookup, strict=True)
+    if isinstance(rows, dict):
+        rows = [rows]
+    return [r for r in (rows or []) if r and r.get("id")]
+
+
+def _factory_siblings(
+    config: config_class.Config, creator: str, *, exclude: str
+) -> list[str] | None:
+    """The ids of the other actors with this creator whose marker is in
+    :data:`REPLACE_AUTH_METHODS`.
+
+    Call while ``exclude`` (the actor being replaced) still exists: a listing
+    that does not include it is incomplete, and returns None. None also when
+    a candidate's marker cannot be read: deciding from an absent marker could
+    delete a vouched actor or keep a factory one. Raises when the list itself
+    cannot be read.
+    """
+    seen_exclude = False
+    siblings: list[str] = []
+    for row in _creator_rows(config, creator):
+        sibling_id = str(row["id"])
+        if sibling_id == exclude:
+            seen_exclude = True
+            continue
+        marker = classify_marker(config, sibling_id)
+        if marker is None:
+            logger.error(
+                f"Adoption for {creator!r}: the marker of sibling {sibling_id} "
+                "could not be read; failing closed"
+            )
+            return None
+        if marker == "replace":
+            if not actor_module.Actor(actor_id=sibling_id, config=config).id:
+                # The strict list says the row exists; a load that misses it
+                # is a fault (both backends answer one with None).
+                logger.error(
+                    f"Adoption for {creator!r}: sibling {sibling_id} could not "
+                    "be read; failing closed"
+                )
+                return None
+            siblings.append(sibling_id)
+    if not seen_exclude:
+        logger.error(
+            f"Adoption for {creator!r}: actor {exclude} is missing from the "
+            "actors with this creator; failing closed"
+        )
+        return None
+    return siblings
+
+
+SWEEP_LIMIT = 10
+"""Factory actors one sign-in removes. Each is a full wipe inside the
+request; an open factory lets anyone add more, so later sign-ins go on."""
+
+
+def _sweep_factory_actors(
+    config: config_class.Config,
+    hooks: "HookRegistry | None",
+    creator: str,
+    actor_ids: list[str],
+) -> tuple[int, list[str]] | None:
+    """Delete the ``factory`` actors a sign-in for ``creator`` found, at most
+    :data:`SWEEP_LIMIT` (lowest ids first); return the tokens revoked and the
+    ids removed, or None when one could not be removed (the next sign-in
+    retries).
+
+    Each marker is read when the SPA tokens are revoked (one pass for all)
+    and again just before its actor is deleted: one vouched in between (the
+    backfill) is kept.
+    """
+    pending = sorted(actor_ids)
+    if len(pending) > SWEEP_LIMIT:
+        logger.warning(
+            f"Sweep for {creator!r}: {len(pending)} factory actors; removing "
+            f"{SWEEP_LIMIT}, later sign-ins remove the rest"
+        )
+        pending = pending[:SWEEP_LIMIT]
+    current: list[str] = []
+    for sibling_id in pending:
+        marker = classify_marker(config, sibling_id)
+        if marker is None:
+            logger.error(
+                f"Sweep for {creator!r}: the marker of {sibling_id} could not "
+                "be re-read; next sign-in retries"
+            )
+            return None
+        if marker == "replace":
+            current.append(sibling_id)
+    if not current:
+        return 0, []
+    tokens_revoked = _revoke_spa_tokens(config, current)
+    swept: list[str] = []
+    for sibling_id in current:
+        marker = classify_marker(config, sibling_id)
+        if marker is None:
+            logger.error(
+                f"Sweep for {creator!r}: the marker of {sibling_id} could not "
+                "be re-read; next sign-in retries"
+            )
+            return None
+        if marker != "replace":
+            continue  # vouched since the pass above (the backfill)
+        sibling = actor_module.Actor(actor_id=sibling_id, config=config)
+        if not sibling.id:
+            from .deletion import DeletionStatus, get_deletion_status
+
+            if get_deletion_status(sibling_id, config) == DeletionStatus.DELETED:
+                continue  # deleted since it was listed
+            logger.error(
+                f"Sweep for {creator!r}: {sibling_id} could not be read; next "
+                "sign-in retries"
+            )
+            return None
+        removed = _remove_for_replacement(
+            sibling,
+            config=config,
+            hooks=hooks,
+            creator=creator,
+            client_ids=_actor_client_ids(config, sibling_id),
+            spa_revoked=True,
+        )
+        if removed is None:
+            return None
+        tokens_revoked += removed
+        swept.append(sibling_id)
+    return tokens_revoked, swept
+
+
+def adopt_actor(
+    existing: actor_module.Actor,
+    *,
+    provider: "OAuth2Provider | None",
+    config: config_class.Config,
+    hooks: "HookRegistry | None",
+    user_info: dict[str, Any] | None = None,
+    verified_by_email: bool = False,
+) -> actor_module.Actor | None:
+    """Apply the adoption rule to an actor a sign-in has just resolved.
+
+    Called whenever a proof of the creator address (a provider login or the
+    emailed verification link) lands on an existing actor. A vouched actor
+    only has the provider recorded. An unvouched one is either
+
+    * **replaced** when ``auth_method`` is in :data:`REPLACE_AUTH_METHODS`
+      (and a provider is at hand to create the successor): deleted through the
+      tested wipe and recreated, so the caller gets an actor with a *new id*; or
+    * **cleaned in place**: passphrase rotated, every trust, subscription and
+      token removed, data kept, and marked vouched.
+
+    No request leaves the process: the peer URLs on an unvouched actor were
+    chosen by whoever created it. Never raises; returns ``None`` when the
+    adoption could not be completed, so the caller fails the sign-in closed
+    and the next one retries. ``actor_adopted`` fires once on success.
+    """
+    try:
+        return _adopt_actor(
+            existing,
+            provider=provider,
+            config=config,
+            hooks=hooks,
+            user_info=user_info,
+            verified_by_email=verified_by_email,
+        )
+    except Exception as e:
+        logger.error(
+            f"Adoption of actor {getattr(existing, 'id', None)} failed: {e}",
+            exc_info=True,
+        )
+        return None
+
+
+def _adopt_actor(
+    existing: actor_module.Actor,
+    *,
+    provider: "OAuth2Provider | None",
+    config: config_class.Config,
+    hooks: "HookRegistry | None",
+    user_info: dict[str, Any] | None,
+    verified_by_email: bool,
+    carried: dict[str, Any] | None = None,
+) -> actor_module.Actor | None:
+    """``carried``: what a replacement already removed before handing the
+    owner's own unvouched actor back here to be cleaned; reported with this
+    adoption so ``actor_adopted`` names everything the sign-in removed."""
+    store = existing.store
+    if store is not None and not store.loaded:
+        # A caught backend fault reads as "no marker", which would wipe a
+        # vouched actor. Decide only from a read the backend answered.
+        logger.error(
+            f"Adoption of actor {existing.id}: its _internal bucket could not "
+            "be read; failing the sign-in closed"
+        )
+        return None
+
+    if is_vouched_actor(existing):
+        if provider is not None and store:
+            # Record the most recent provider on every sign-in (not only on
+            # create) so revocation logic can rely on it.
+            store.oauth_provider = provider.name
+        if existing.factory_sibling_ids and existing.creator:
+            # The lookup found factory actors beside this one. No lookup
+            # reaches them, but each one costs every later sign-in a read;
+            # the owner's sign-in removes them. Not fatal: the owner is in.
+            try:
+                if (
+                    _sweep_factory_actors(
+                        config, hooks, existing.creator, existing.factory_sibling_ids
+                    )
+                    is None
+                ):
+                    logger.error(
+                        f"Sign-in to {existing.id}: factory actors beside it "
+                        "remain; the next sign-in retries"
+                    )
+            except Exception as e:
+                logger.error(
+                    f"Sign-in to {existing.id}: factory actors beside it remain: {e}"
+                )
+        # Nothing is pending here: a pending verification unvouches. A
+        # tombstone is not read here: one left on a live actor (a DELETE
+        # that stalled, a clear on create that faulted) must not wipe it.
+        return existing
+
+    from . import property as property_module
+    from . import subscription as subscription_module
+    from . import trust as trust_module
+    from .deletion import DeletionStatus, get_deletion_status
+
+    actor_id = existing.id or ""
+    marker = store.auth_method if store else None
+    previous = marker if isinstance(marker, str) and marker else "legacy"
+    # A tombstone on an unvouched actor that still resolves is a wipe that
+    # stopped part-way: a replacement (or a DELETE) whose buckets, the marker
+    # among them, are already gone. Finish it rather than clean what is left
+    # in place under a tombstone. UNKNOWN is not evidence of a wipe, so it
+    # falls through to the marker: cleaning in place keeps the data.
+    unfinished_wipe = get_deletion_status(actor_id, config) == DeletionStatus.DELETED
+    if unfinished_wipe and provider is None:
+        logger.error(
+            f"Adoption of actor {actor_id}: a deletion of it is unfinished and "
+            "there is no provider to create its successor; failing closed"
+        )
+        return None
+    replace = provider is not None and (
+        previous in REPLACE_AUTH_METHODS or unfinished_wipe
+    )
+    provider_name = provider.name if provider is not None else None
+    now = str(int(time.time()))
+    tokens_revoked = 0
+    swept_ids: list[str] = []
+    # Read before anything is removed; a fault fails the sign-in here.
+    client_ids = _actor_client_ids(config, actor_id)
+
+    if replace:
+        assert provider is not None
+        creator = existing.creator or ""
+        # Every other factory actor for the same address goes too: an open
+        # factory lets anyone create several, and replacing one per sign-in
+        # would spread the owner's sign-ins over a new actor each time. Listed
+        # before anything is removed, so a read fault fails the sign-in with
+        # every actor still in place.
+        siblings = _factory_siblings(config, creator, exclude=actor_id)
+        if siblings is None:
+            return None
+        removed_trusts, subscription_peers = actor_module.relationship_summary(
+            trust_module.Trusts(actor_id=actor_id, config=config).fetch(),
+            subscription_module.Subscriptions(actor_id=actor_id, config=config).fetch(),
+        )
+        property_names: list[str] = []
+        removed = _remove_for_replacement(
+            existing, config=config, hooks=hooks, creator=creator, client_ids=client_ids
+        )
+        if removed is None:
+            return None
+        tokens_revoked = removed
+        swept = _sweep_factory_actors(config, hooks, creator, siblings)
+        if swept is None:
+            return None
+        tokens_revoked += swept[0]
+        swept_ids = swept[1]
+        # A concurrent first sign-in may already have created the successor,
+        # and a vouched actor for the address may exist beside the factory
+        # ones (get_from_creator prefers it). This narrows the race to the
+        # gap between two statements; nothing enforces creator uniqueness in
+        # the database yet (thoughts/todo/creator-uniqueness-not-enforced.md).
+        # A new actor is created only when a strict read says none is left:
+        # one that is listed but cannot be read fails the sign-in, since a new
+        # vouched actor would outrank the owner's unvouched one for good.
+        removed_ids = {actor_id, *swept_ids}
+        remaining = [
+            r for r in _creator_rows(config, creator) if r["id"] not in removed_ids
+        ]
+        successor = actor_module.Actor(config=config)
+        if remaining and not (
+            successor.get_from_creator(creator)
+            and successor.store is not None
+            and successor.store.loaded
+        ):
+            logger.error(
+                f"Adoption of actor {actor_id}: an actor for {creator!r} remains "
+                "but could not be read; next sign-in retries"
+            )
+            return None
+        marker_class = (
+            classify_store(successor.store)
+            if remaining and successor.store is not None
+            else None
+        )
+        if marker_class == "vouched":
+            result = successor
+            if result.store is not None:
+                result.store.oauth_provider = provider.name
+        elif marker_class == "unvouched":
+            # The owner's own unvouched actor (from before 3.16, or the email
+            # form's) sat beside the factory ones: clean it in place instead
+            # of leaving it, and its data, behind a new actor.
+            return _adopt_actor(
+                successor,
+                provider=provider,
+                config=config,
+                hooks=hooks,
+                user_info=user_info,
+                verified_by_email=verified_by_email,
+                carried={
+                    "replaced_ids": [actor_id, *swept_ids],
+                    "removed_trusts": removed_trusts,
+                    "subscription_peers": subscription_peers,
+                    "tokens_revoked": tokens_revoked,
+                    "client_ids": client_ids,
+                },
+            )
+        else:
+            # Nothing left, or only a factory actor created since the listing
+            # (the owner's next sign-in sweeps it).
+            result = _create_actor_for_identifier(
+                config, provider, creator, user_info, hooks
+            )
+            if result.store:
+                result.store.auth_method_adopted_from = previous
+                result.store.auth_method_adopted_at = now
+                result.store.auth_method_replaced_actor_id = actor_id
+        mode = "replaced"
+    else:
+        new_passphrase = config.new_token()
+        if not new_passphrase:
+            logger.error(f"Adoption of actor {actor_id} aborted: empty passphrase")
+            return None
+        # Rotate first: even if everything after this fails, the creator's
+        # passphrase no longer opens the actor. Then revoke the sessions, so
+        # nothing the creator holds can add a relationship during the wipe.
+        if not existing.modify(passphrase=new_passphrase):
+            logger.error(f"Adoption of actor {actor_id}: passphrase rotation failed")
+            return None
+        tokens_revoked = _revoke_all_actor_tokens(config, actor_id)
+        fetched = property_module.Properties(actor_id=actor_id, config=config).fetch()
+        property_names = (
+            sorted(str(k) for k in fetched) if isinstance(fetched, dict) else []
+        )
+        purged = existing.purge_relationships(notify_peers=False)
+        if not purged["confirmed"]:
+            logger.error(
+                f"Adoption of actor {actor_id}: trusts or subscriptions remain "
+                "after the wipe; actor left unvouched, next sign-in retries"
+            )
+            return None
+        # After the purge: with the client trusts gone, the registry's trust
+        # cleanup has nothing left to notify.
+        _delete_actor_clients(config, actor_id, client_ids)
+        removed_trusts = purged["trusts"]
+        subscription_peers = purged["subscription_peers"]
+        if store:
+            # What the previous creator left in _internal goes on every clean,
+            # each removal confirmed before the marker vouches:
+            # - its provider tokens: a provider sign-in writes its own
+            #   afterwards, but only those it got (often no refresh token on a
+            #   repeat consent, no access token on the native JWT-bearer
+            #   grant), and the emailed link proves the address, not that
+            #   provider account;
+            # - trustee_root, which it chose (the factory body, or
+            #   PUT /<id>/trust/trustee) and the actor would keep publishing.
+            # The stored email becomes the proven address, so a later load
+            # under force_email_prop_as_creator cannot hand the actor back to
+            # an address the previous creator wrote.
+            resets: dict[str, str | None] = {
+                "oauth_token": None,
+                "oauth_refresh_token": None,
+                "oauth_token_expiry": None,
+                "oauth_token_timestamp": None,
+                "trustee_root": None,
+            }
+            # A provider-id creator ("apple:…") has no address of its own: the
+            # provider's email when it gave one, else none.
+            proven_email = (
+                (existing.creator or "").lower()
+                if "@" in (existing.creator or "")
+                else str((user_info or {}).get("email") or "").lower() or None
+            )
+            resets["email"] = proven_email
+            for name, value in resets.items():
+                if value is None and getattr(store, name, None) is None:
+                    continue  # not there (the bucket read answered)
+                if not store.set_confirmed(name, value):
+                    logger.error(
+                        f"Adoption of actor {actor_id}: {name} could not be "
+                        "reset; actor left unvouched, next sign-in retries"
+                    )
+                    return None
+            if not store.set_confirmed(
+                "auth_method",
+                f"{provider_name}_oauth2" if provider_name else "email_verified",
+            ):
+                logger.error(
+                    f"Adoption of actor {actor_id}: the vouched marker did not "
+                    "land; actor left unvouched, next sign-in retries"
+                )
+                return None
+            store.auth_method_adopted_from = previous
+            store.auth_method_adopted_at = now
+            if provider_name:
+                store.oauth_provider = provider_name
+        if not verified_by_email and not clear_pending_email_verification(
+            existing, config
+        ):
+            # The marker vouches, but a pending flag still unvouches the
+            # actor: every later sign-in would clean it again.
+            logger.error(
+                f"Adoption of actor {actor_id}: the pending email verification "
+                "could not be cleared; next sign-in retries"
+            )
+            return None
+        result = existing
+        mode = "cleaned"
+
+    if carried:
+        removed_trusts = [*carried["removed_trusts"], *removed_trusts]
+        subscription_peers = [*carried["subscription_peers"], *subscription_peers]
+        tokens_revoked += carried["tokens_revoked"]
+        client_ids = [*carried["client_ids"], *client_ids]
+        swept_ids = [*carried["replaced_ids"], *swept_ids]
+    logger.warning(
+        f"Adopted unvouched actor {actor_id} (was {previous!r}) via "
+        f"{provider_name or 'email verification'}: mode={mode}, "
+        f"trusts={len(removed_trusts)}, subscriptions={len(subscription_peers)}, "
+        f"tokens={tokens_revoked}, clients={len(client_ids)}, "
+        f"properties={len(property_names)}, "
+        f"peers={[t['peerid'] for t in removed_trusts][:10]}, "
+        f"siblings={swept_ids}"
+    )
+    _fire_lifecycle(
+        hooks,
+        "actor_adopted",
+        result,
+        config,
+        previous_auth_method=previous,
+        previous_actor_id=actor_id if replace else None,
+        provider=provider_name,
+        mode=mode,
+        removed_trusts=removed_trusts,
+        removed_subscription_peers=subscription_peers,
+        tokens_revoked=tokens_revoked,
+        removed_client_ids=client_ids,
+        property_names=property_names,
+        removed_sibling_ids=swept_ids,
+    )
+    return result

@@ -170,6 +170,9 @@ def _mocked_backend(jwks: dict, captured: dict | None = None):
     mock_actor = MagicMock()
     mock_actor.id = "actor-1"
     mock_actor.store = MagicMock()
+    # A vouched actor: the adoption rule leaves it alone.
+    mock_actor.store.auth_method = "google_oauth2"
+    mock_actor.store.email_verified = None
     mock_actor.get_from_creator.return_value = True
 
     session_mgr = MagicMock()

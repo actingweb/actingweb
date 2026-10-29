@@ -227,9 +227,15 @@ class TestFactoryJSONAPI:
     @pytest.fixture
     def mock_webobj(self):
         """Create mock web object."""
+        from actingweb.aw_web_request import AWRequest
+
         webobj = MagicMock()
         webobj.request = MagicMock()
         webobj.request.headers = {"Accept": "application/json"}
+        # The real case-insensitive lookup, over whatever headers a test sets.
+        webobj.request.get_header = lambda header="": AWRequest.get_header(
+            webobj.request, header
+        )
         webobj.request.get = MagicMock(return_value="")
         webobj.response = MagicMock()
         webobj.response.headers = {}
@@ -845,3 +851,89 @@ class TestLogoutDoesNotRevokeProviderGrant:
             handler._clear_provider_token_for_actor("does-not-exist")
 
         mk_auth.assert_not_called()
+
+
+class TestSpaAuthorizePrompt:
+    """``prompt`` is additive: ``consent`` is always sent, the client may add
+    ``select_account``, anything else is a 400 (3.16)."""
+
+    @pytest.fixture
+    def handler_parts(self):
+        config = MagicMock()
+        config.proto = "https://"
+        config.fqdn = "test.example.com"
+        config.oauth = {"client_id": "cid", "client_secret": "csec"}
+        config.oauth2_provider = "google"
+        config.oauth_providers = {}
+        webobj = MagicMock()
+        webobj.request.headers = {"Accept": "application/json"}
+        webobj.request.cookies = {}
+        webobj.response.headers = {}
+        return config, webobj
+
+    def _authorize(self, handler_parts, body):
+        from unittest.mock import patch
+
+        from actingweb.handlers.oauth2_spa import OAuth2SPAHandler
+
+        config, webobj = handler_parts
+        webobj.request.body = json.dumps(body)
+        authenticator = MagicMock()
+        authenticator.is_enabled.return_value = True
+        authenticator.create_authorization_url.return_value = "https://idp.test/auth"
+        with patch(
+            "actingweb.oauth2.create_oauth2_authenticator", return_value=authenticator
+        ):
+            result = OAuth2SPAHandler(webobj, config)._handle_authorize()
+        return result, authenticator
+
+    def test_unknown_prompt_is_400_and_lists_accepted_values(self, handler_parts):
+        result, _auth = self._authorize(
+            handler_parts, {"provider": "google", "prompt": "login"}
+        )
+        assert result["status_code"] == 400
+        assert "select_account" in result["message"]
+
+    def test_non_string_prompt_is_400(self, handler_parts):
+        result, _auth = self._authorize(
+            handler_parts, {"provider": "google", "prompt": ["select_account"]}
+        )
+        assert result["status_code"] == 400
+
+    def test_select_account_reaches_the_authorization_url(self, handler_parts):
+        result, auth = self._authorize(
+            handler_parts,
+            {
+                "provider": "google",
+                "prompt": "select_account",
+                "pkce": "client",
+                "code_challenge": "c" * 43,
+            },
+        )
+        assert result.get("authorization_url") == "https://idp.test/auth", result
+        assert auth.create_authorization_url.call_args.kwargs["prompt"] == (
+            "select_account"
+        )
+
+    def test_absent_prompt_passes_empty(self, handler_parts):
+        result, auth = self._authorize(
+            handler_parts,
+            {"provider": "google", "pkce": "client", "code_challenge": "c" * 43},
+        )
+        assert result.get("authorization_url") == "https://idp.test/auth", result
+        assert auth.create_authorization_url.call_args.kwargs["prompt"] == ""
+
+    def test_config_lists_prompt_values_and_per_provider_support(self, handler_parts):
+        from actingweb.config import Config
+        from actingweb.handlers.oauth2_spa import OAuth2SPAHandler
+
+        _config, webobj = handler_parts
+        config = Config(database="dynamodb", fqdn="test.example.com", proto="https://")
+        config.oauth_providers = {
+            "google": {"client_id": "g", "client_secret": "s"},
+            "github": {"client_id": "h", "client_secret": "s"},
+        }
+        result = OAuth2SPAHandler(webobj, config)._handle_config()
+        assert result["prompt_values"] == ["select_account"]
+        support = {p["name"]: p["prompt_supported"] for p in result["oauth_providers"]}
+        assert support == {"google": True, "github": False}

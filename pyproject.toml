@@ -36,6 +36,7 @@ Issues = "https://github.com/actingweb/actingweb/issues"
 actingweb-verify-property-lists = "actingweb.maintenance.verify_property_lists:main"
 actingweb-migrate-property-lists = "actingweb.maintenance.migrate_property_lists:main"
 actingweb-verify-orphans = "actingweb.maintenance.verify_orphans:main"
+actingweb-mark-actors-vouched = "actingweb.maintenance.mark_actors_vouched:main"
 
 [tool.poetry.dependencies]
 python = "^3.11"

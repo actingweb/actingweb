@@ -375,7 +375,7 @@ class ActingWebOAuth2Server:
                 )
 
             # Get or create actor for this user
-            actor_obj = self._get_or_create_actor_for_email(email)
+            actor_obj = self._get_or_create_actor_for_email(email, provider_name)
             if not actor_obj:
                 return self._error_response(
                     "server_error", "Failed to create or retrieve user actor"
@@ -817,60 +817,21 @@ class ActingWebOAuth2Server:
                 "redirect_url": f"{self.config.proto}{self.config.fqdn}/",
             }
 
-    def _get_or_create_actor_for_email(self, email: str) -> Any | None:
-        """Get or create actor for email address."""
+    def _get_or_create_actor_for_email(
+        self, email: str, provider_name: str = "google"
+    ) -> Any | None:
+        """Get or create the actor for a provider-verified email address.
+
+        Goes through the provider's authenticator so the adoption rule applies:
+        an actor nobody vouched for is replaced or cleaned before the MCP
+        client is handed access to it.
+        """
         try:
-            from .. import actor as actor_module
-            from ..interface.actor_interface import ActorInterface
-
-            # Attempt to find an existing actor for this email
-            existing_actor = actor_module.Actor(config=self.config)
-            if existing_actor.get_from_creator(email):
-                from ..oauth2 import clear_pending_email_verification
-
-                clear_pending_email_verification(existing_actor, self.config)
-                return existing_actor
-
-            # Create new actor using ActorInterface for proper lifecycle hook execution
-            try:
-                passphrase = self.config.new_token() if self.config else ""
-                actor_interface = ActorInterface.create(
-                    creator=email,
-                    config=self.config,
-                    passphrase=passphrase,
-                    hooks=getattr(
-                        self.config, "_hooks", None
-                    ),  # Pass hooks if available for lifecycle events
-                )
-
-                # Get the core actor for backward compatibility
-                actor_obj = actor_interface.core_actor
-
-                # The actor should now have its ID set from the create() method
-                if not actor_obj.id:
-                    logger.error("Actor creation succeeded but ID is not set")
-                    return None
-
-            except Exception as create_error:
-                logger.error(
-                    f"Failed to create actor for email {email}: {create_error}"
-                )
-                return None
-
-            # Verify the actor has the necessary components
-            if not actor_obj.property:
-                logger.error(
-                    f"Actor {actor_obj.id} does not have property object set after creation"
-                )
-                return None
-
-            return actor_obj
-
+            return self._get_authenticator(
+                provider_name
+            ).lookup_or_create_actor_by_identifier(email)
         except Exception as e:
             logger.error(f"Error creating actor for email {email}: {e}")
-            import traceback
-
-            logger.error(f"Full traceback: {traceback.format_exc()}")
             return None
 
     def _create_google_oauth_url_for_mcp(self, mcp_state: str, email_hint: str) -> str:

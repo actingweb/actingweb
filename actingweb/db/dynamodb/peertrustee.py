@@ -1,5 +1,6 @@
 import logging
 import os
+from typing import Any
 
 from pynamodb.attributes import UnicodeAttribute
 from pynamodb.constants import PAY_PER_REQUEST_BILLING_MODE
@@ -137,13 +138,20 @@ class DbPeerTrusteeList:
     The  actor_id must always be set.
     """
 
-    def fetch(self, actor_id=None):
-        """Retrieves the peer trustees of an actor_id from the database"""
+    def fetch(
+        self, actor_id: str | None = None, *, strict: bool = False
+    ) -> list[dict[str, Any]] | None:
+        """Retrieves the peer trustees of an actor_id from the database.
+
+        A consistent read, like the trust and subscription lists: a caller
+        that deletes and re-reads must not see the rows it just removed. A
+        read fault raises (the query is not caught), so ``strict`` changes
+        nothing here; it is accepted for the protocol."""
         if not actor_id:
             return None
         self.actor_id = actor_id
         self.peertrustees = []
-        self.handle = PeerTrustee.query(self.actor_id)
+        self.handle = PeerTrustee.query(self.actor_id, consistent_read=True)
         if self.handle:
             for t in self.handle:
                 self.peertrustees.append(
@@ -163,7 +171,7 @@ class DbPeerTrusteeList:
         """Deletes all the peertrustees in the database"""
         if not self.actor_id:
             return False
-        self.handle = PeerTrustee.query(self.actor_id)
+        self.handle = PeerTrustee.query(self.actor_id, consistent_read=True)
         if not self.handle:
             return False
         for p in self.handle:

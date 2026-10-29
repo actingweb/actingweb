@@ -533,14 +533,23 @@ class OAuth2CallbackHandler(BaseHandler):
                             )
 
                     # A state-selected actor skips
-                    # lookup_or_create_actor_by_identifier() entirely, so it
-                    # would otherwise keep any squatted pending-verification
-                    # state. The creator check above already established that
-                    # the provider vouched for this actor's owner, which is
-                    # exactly the condition the cleanup is for.
-                    from ..oauth2 import clear_pending_email_verification
+                    # lookup_or_create_actor_by_identifier() entirely, so the
+                    # adoption rule has to run here: the creator check above
+                    # established that the provider proved this actor's
+                    # address, which is what the rule is for. It may hand back
+                    # a different actor (a replacement) or None.
+                    from ..oauth2 import adopt_actor
 
-                    clear_pending_email_verification(actor_instance, self.config)
+                    actor_instance = adopt_actor(
+                        actor_instance,
+                        provider=self.authenticator.provider,
+                        config=self.config,
+                        hooks=self.hooks,
+                        user_info=user_info,
+                    )
+                    if not actor_instance:
+                        logger.error(f"Adoption of actor {actor_id} failed")
+                        return self.error_response(502, "Actor creation failed")
 
             except Exception as e:
                 logger.warning(

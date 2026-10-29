@@ -226,6 +226,9 @@ class LifecycleEvent(Enum):
     # there is no live actor left to hand over, which is the point — see
     # actingweb.deletion.
     ACTOR_DELETED_COMPLETE = "actor_deleted_complete"
+    # Fired once per adoption of an actor nobody vouched for, after a sign-in
+    # proved the address and the actor was replaced or cleaned.
+    ACTOR_ADOPTED = "actor_adopted"
     OAUTH_SUCCESS = "oauth_success"
     TRUST_APPROVED = "trust_approved"
     TRUST_DELETED = "trust_deleted"

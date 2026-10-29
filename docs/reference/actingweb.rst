@@ -93,6 +93,27 @@ actingweb.trust module
     :undoc-members:
     :show-inheritance:
 
+actingweb.oauth2 module
+-----------------------
+
+.. automodule:: actingweb.oauth2
+    :members: adopt_actor, is_vouched_actor, UNVOUCHED_AUTH_METHODS, REPLACE_AUTH_METHODS, OAuth2Provider, OAuth2Authenticator
+    :show-inheritance:
+
+actingweb.oauth\_session module
+-------------------------------
+
+.. automodule:: actingweb.oauth_session
+    :members: OAuth2SessionManager, get_oauth2_session_manager
+    :show-inheritance:
+
+actingweb.db.protocols module
+-----------------------------
+
+.. automodule:: actingweb.db.protocols
+    :members: DbTrustListProtocol, DbSubscriptionListProtocol
+    :show-inheritance:
+
 actingweb.runtime\_context module
 ---------------------------------
 

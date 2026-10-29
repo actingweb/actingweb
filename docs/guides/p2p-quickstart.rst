@@ -121,7 +121,8 @@ Verify
 ------
 
 Create both actors, establish trust, subscribe, and publish -- all over the
-REST API. Actor creation is unauthenticated, but every request after that
+REST API. Actor creation is unauthenticated (the actor factory, open unless the
+app calls ``with_open_factory(False)``), but every request after that
 requires HTTP Basic auth (``creator:passphrase``) -- capture each actor's
 ``passphrase`` from its creation response rather than discarding it (this
 needs ``jq``):

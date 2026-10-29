@@ -128,9 +128,15 @@ class TrustTypeRegistry:
                         creator="system",
                         passphrase=passphrase,
                         actor_id=ACTINGWEB_SYSTEM_ACTOR,
+                        auth_method="system",
                     )
                     if not created:
-                        return None
+                        # Another worker may have created it since the check.
+                        sys_actor = actor_module.Actor(
+                            ACTINGWEB_SYSTEM_ACTOR, config=self.config
+                        )
+                        if not sys_actor.actor:
+                            return None
                 except ClientError as e:
                     if e.response["Error"]["Code"] == "ResourceInUseException":
                         logger.debug(

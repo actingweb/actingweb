@@ -1502,6 +1502,30 @@ class ActingWebTokenManager:
                 client's tokens may be left. Whatever could be revoked is
                 revoked first.
         """
+        return self._revoke_matching_tokens(actor_id, client_id)
+
+    def revoke_actor_tokens(self, actor_id: str) -> int:
+        """Revoke every MCP access and refresh token of an actor, whatever client.
+
+        Same removal helpers as :meth:`revoke_client_tokens` without the client
+        filter, so the system actor's index rows and the provider-token rows go
+        with the tokens. Used when an unvouched actor is adopted.
+
+        Returns:
+            Number of tokens confirmed revoked.
+
+        Raises:
+            TokenStoreUnavailable: as :meth:`revoke_client_tokens`.
+        """
+        return self._revoke_matching_tokens(actor_id, None)
+
+    def _revoke_matching_tokens(self, actor_id: str, client_id: str | None) -> int:
+        """Revoke an actor's access and refresh tokens; one client's, or all.
+
+        Raises :class:`TokenStoreUnavailable` as :meth:`revoke_client_tokens`
+        documents. Whatever could be revoked is revoked first.
+        """
+        scope = f"for client {client_id}" if client_id else "for the actor"
         revoked_count = 0
         unreadable: list[str] = []
         unconfirmed = 0
@@ -1535,10 +1559,9 @@ class ActingWebTokenManager:
                 continue
             for token_name, token_attr in rows.items():
                 token_data = (token_attr or {}).get("data")
-                if not (
-                    isinstance(token_data, dict)
-                    and token_data.get("client_id") == client_id
-                ):
+                if not isinstance(token_data, dict):
+                    continue
+                if client_id is not None and token_data.get("client_id") != client_id:
                     continue
                 # One token's failure is counted, never allowed to stop the
                 # rest or to be swallowed.
@@ -1547,28 +1570,23 @@ class ActingWebTokenManager:
                 except Exception as e:
                     logger.error(
                         f"Error revoking {kind} token {_mask_token(token_name)} "
-                        f"for client {client_id}: {e}"
+                        f"{scope}: {e}"
                     )
                     removed = False
                 if not removed:
                     unconfirmed += 1
                     continue
                 revoked_count += 1
-                logger.debug(
-                    f"Revoked {kind} token {_mask_token(token_name)} for client "
-                    f"{client_id}"
-                )
+                logger.debug(f"Revoked {kind} token {_mask_token(token_name)} {scope}")
 
         # Once per client, not once per token: the process-wide generation
         # bump this triggers is what invalidates the actor's wrapper.
         evict_caches_for_actor(actor_id)
 
         if revoked_count > 0:
-            logger.info(
-                f"Revoked {revoked_count} tokens for client {client_id} in actor {actor_id}"
-            )
+            logger.info(f"Revoked {revoked_count} tokens {scope} in actor {actor_id}")
         else:
-            logger.debug(f"No tokens found to revoke for client {client_id}")
+            logger.debug(f"No tokens found to revoke {scope}")
 
         if unreadable or unconfirmed:
             problems = [f"could not read {bucket}" for bucket in unreadable]
@@ -1576,7 +1594,7 @@ class ActingWebTokenManager:
                 problems.append(f"could not confirm {unconfirmed} delete(s)")
             raise TokenStoreUnavailable(
                 f"{'; '.join(problems)} for actor {actor_id}; "
-                f"revoked {revoked_count} token(s) of client {client_id}"
+                f"revoked {revoked_count} token(s) {scope}"
             )
         return revoked_count
 

@@ -30,7 +30,9 @@ def ensure_oauth2_system_actor(config: "config_class.Config") -> str:
         config: ActingWeb configuration object
 
     Returns:
-        The system actor ID (OAUTH2_SYSTEM_ACTOR constant)
+        The system actor ID (OAUTH2_SYSTEM_ACTOR constant), also when the actor
+        could not be created: callers load it and handle its absence.
+        (``TrustTypeRegistry._get_system_actor`` returns None instead.)
 
     Raises:
         No exceptions - errors are logged as warnings
@@ -60,9 +62,13 @@ def ensure_oauth2_system_actor(config: "config_class.Config") -> str:
                     creator="oauth2-system",
                     passphrase=passphrase,
                     actor_id=OAUTH2_SYSTEM_ACTOR,
+                    auth_method="system",
                 )
                 if created:
                     logger.info(f"Created OAuth2 system actor: {OAUTH2_SYSTEM_ACTOR}")
+                elif actor_module.Actor(OAUTH2_SYSTEM_ACTOR, config=config).actor:
+                    # Another process created it between the check and here.
+                    logger.debug("OAuth2 system actor was created by another process")
                 else:
                     logger.error(
                         f"Failed to create OAuth2 system actor: {OAUTH2_SYSTEM_ACTOR}"

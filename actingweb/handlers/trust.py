@@ -260,12 +260,37 @@ class TrustRelationshipHandler(base_handler.BaseHandler):
                 self.response.set_status(500, "Internal error")
             return
 
+        if creator and not self._change_creator(myself, creator):
+            # Refused or failed; the status is set. Nothing else is applied.
+            return
         if len(trustee_root) > 0:
             actor_interface.trust.trustee_root = trustee_root
-        if creator:
-            myself.modify(creator=creator)
         if self.response:
             self.response.set_status(204, "No content")
+
+    def _change_creator(self, myself: Any, creator: str) -> bool:
+        """Change the creator for ``PUT /<id>/trust/trustee``.
+
+        Returns False with the response status set when the change was
+        refused or did not land.
+        """
+        # A creator set over HTTP is self-asserted, like the factory's: nothing
+        # proved the caller owns the new address, so the change unvouches the
+        # actor (Actor.modify_creator_unvouched has the rules, the pin too).
+        # An unreadable _internal bucket fails there, as a 500.
+        if myself.creator_change_pinned(creator):
+            if self.response:
+                self.response.set_status(
+                    400,
+                    "creator is pinned to the stored email "
+                    "(force_email_prop_as_creator)",
+                )
+            return False
+        if myself.modify_creator_unvouched(creator):
+            return True
+        if self.response:
+            self.response.set_status(500, "Internal error")
+        return False
 
     def delete(self, actor_id, relationship):
         # Use AuthResult for granular control since we need add_response=False

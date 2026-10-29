@@ -366,6 +366,20 @@ class TestFreeTextNewAddressFiresOauthSuccess:
         _args, kwargs = session_mgr.complete_claimed_session.call_args
         assert kwargs["hooks"] is hooks
 
+    def test_free_text_branch_asks_for_the_email_unverified_marker(self):
+        """The actor the free-text branch creates holds an address nobody
+        proved; the marker is what lets a later proof clean it."""
+        config = _config()
+        _run_post_result = _run_post(
+            config,
+            _webobj(email=NEW_EMAIL),
+            _hooks(),
+            session=_session(verified_emails=[]),
+            complete_actor=_new_actor(),
+        )
+        _args, kwargs = _run_post_result[1].complete_claimed_session.call_args
+        assert kwargs["auth_method"] == "email_unverified"
+
     def test_rejected_oauth_success_returns_403_and_writes_nothing(self):
         config = _config()
         webobj = _webobj(email=NEW_EMAIL)

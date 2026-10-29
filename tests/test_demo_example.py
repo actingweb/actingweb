@@ -191,3 +191,47 @@ def test_demo_example_not_in_built_wheel():
     with zipfile.ZipFile(wheel_path) as wheel:
         leaked = [n for n in wheel.namelist() if n.startswith("examples/")]
     assert not leaked, f"examples/ leaked into wheel: {leaked}"
+
+
+def _env_example_value(key: str) -> str | None:
+    from dotenv import dotenv_values
+
+    return dotenv_values(DEMO_DIR / ".env.example").get(key)
+
+
+def test_demo_env_example_sets_open_factory() -> None:
+    """The env-example case below reads None, the unset branch, if the key
+    is removed; this pins that the key is there."""
+    assert _env_example_value("OPEN_FACTORY") == "true"
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (None, True),
+        ("true", True),
+        ("false", False),
+        # A copied .env.example is what the browser-QA setup runs with.
+        pytest.param(_env_example_value("OPEN_FACTORY"), True, id="env-example"),
+    ],
+)
+def test_demo_example_open_factory_follows_env(monkeypatch, value, expected):
+    """OPEN_FACTORY=false closes the actor factory; unset leaves it open so the
+    quickstart curl works."""
+    import importlib.util
+
+    if value is None:
+        monkeypatch.delenv("OPEN_FACTORY", raising=False)
+    else:
+        monkeypatch.setenv("OPEN_FACTORY", value)
+    name = f"demo_application_open_factory_{value}"
+    spec = importlib.util.spec_from_file_location(name, DEMO_DIR / "application.py")
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.modules.pop(name, None)
+
+    assert module.aw_app.get_config().open_factory is expected

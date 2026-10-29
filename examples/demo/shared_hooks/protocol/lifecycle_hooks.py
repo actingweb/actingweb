@@ -7,7 +7,8 @@ called directly via API endpoints.
 
 Available Lifecycle Events:
 - actor_created: Called when a new actor is created
-- actor_deleted: Called before an actor is deleted
+- actor_deleted: Called before an actor is deleted (DELETE /{actor_id}, or a
+  sign-in replacing an unvouched actor: reason="replaced_at_adoption")
 - oauth_success: Called after successful OAuth authentication
 
 These hooks are useful for:
@@ -58,7 +59,9 @@ def register_lifecycle_hooks(app):
         """
         Handle actor deletion event.
 
-        Triggered: Automatically before an actor is deleted via DELETE /{actor_id}
+        Triggered: Automatically before an actor is deleted via DELETE /{actor_id},
+        and when a sign-in replaces an unvouched actor created through POST /
+        (kwargs["reason"] == "replaced_at_adoption").
 
         This hook allows for custom cleanup operations before the actor
         is removed. The framework handles standard cleanup (properties,

@@ -212,8 +212,28 @@ class OAuth2EmailHandler(BaseHandler):
             logger.warning(f"Verification token expired for actor {actor_id}")
             return self._verification_error(410, "Verification link has expired")
 
-        # Mark email as verified
-        actor.store.email_verified = "true"
+        # The link proves the address, so this is an adoption event: an actor
+        # nobody vouched for is cleaned (passphrase, relationships, sessions)
+        # before it is marked verified. Otherwise a squatter whose provider
+        # profile carries this address keeps a session through the click.
+        from ..oauth2 import adopt_actor
+
+        if not adopt_actor(
+            actor,
+            provider=None,
+            config=self.config,
+            hooks=self.hooks,
+            verified_by_email=True,
+        ):
+            logger.error(f"Adoption at email verification failed for {actor_id}")
+            return self._verification_error(500, "Internal error")
+
+        # Mark email as verified. Confirmed, and before the token goes: a
+        # flag that stays "false" keeps the actor unvouched, and without the
+        # token the link could not be clicked again.
+        if not actor.store.set_confirmed("email_verified", "true"):
+            logger.error(f"Email verification of {actor_id}: the flag did not land")
+            return self._verification_error(500, "Internal error")
         actor.store.email_verification_token = None
         actor.store.email_verification_created_at = None
         actor.store.email_verified_at = str(int(time.time()))
@@ -479,6 +499,9 @@ class OAuth2EmailHandler(BaseHandler):
             email,
             hooks=self.hooks,
             create_only=email_requires_verification,
+            # A typed, unverified address vouches for nothing: the marker lets
+            # a later proof of the address clean the actor before adopting it.
+            auth_method="email_unverified" if email_requires_verification else None,
         )
 
         if not actor_instance and email_requires_verification:

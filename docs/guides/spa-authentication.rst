@@ -274,6 +274,14 @@ The ``return_path`` parameter specifies where to redirect after successful authe
 It will be prepended with the actor ID: ``/{actor_id}{return_path}``. You can also use
 the ``{actor_id}`` placeholder for custom paths: ``return_path: '/{actor_id}/dashboard'``.
 
+To let the user pick another account at the provider (for example a "use a
+different account" link after a sign-out), add ``prompt: 'select_account'``.
+It is additive: ``consent`` is always sent, so Google receives
+``select_account consent`` and still issues a refresh token. Providers that do
+not support the value (GitHub, Apple) ignore it; ``GET /oauth/spa/config``
+reports which do with ``prompt_supported`` on each provider entry, and lists the
+accepted values in ``prompt_values``. Any other value answers ``400``.
+
 **For MCP Client Authorization** (creates trust relationship):
 
 If your SPA is an MCP client that needs to establish a trust relationship
@@ -430,7 +438,12 @@ lifecycle hook — the same hook used for HTML template applications:
 
 When the user clicks the verification link, the browser navigates to
 ``GET /oauth/email?verify=<token>``, which validates the token and marks the email
-as verified. See :doc:`authentication` for the full verification flow details.
+as verified. Since 3.16 the click also cleans the actor in place first (the
+link proves the address, and the free-text form's actor is unvouched): its
+passphrase is rotated and every SPA session and MCP token is revoked, so the SPA
+must sign the user in again after the click; an access token it still holds
+answers ``401``. See :doc:`authentication` for the full verification flow
+details.
 
 Token Delivery Modes
 --------------------
@@ -1370,11 +1383,12 @@ Returns OAuth configuration.
        "pkce_methods": ["S256"],
        "spa_mode_supported": true,
        "token_delivery_modes": ["json", "cookie", "hybrid"],
+       "prompt_values": ["select_account"],
        "refresh_token_rotation": true,
        "endpoints": {...}
    }
 
-The ``oauth_providers`` array contains one entry per configured provider. When only one provider is configured, the array has a single entry.
+The ``oauth_providers`` array contains one entry per configured provider. When only one provider is configured, the array has a single entry. On ``/oauth/config`` and ``/oauth/spa/config`` (the same handler) each entry also carries ``prompt_supported``: whether the provider honours the ``prompt`` request parameter, for example ``"prompt_supported": true`` for Google. ``GET /?format=json`` lists ``prompt_values`` but not the per-provider field.
 
 .. note::
 
@@ -1410,6 +1424,9 @@ Initiate OAuth flow for SPA.
   Supports ``{actor_id}`` placeholder: ``/{actor_id}/dashboard``.
 - ``pkce``: ``server`` (recommended) or ``client``
 - ``token_delivery``: ``json``, ``cookie``, or ``hybrid``
+- ``prompt``: (Optional) ``select_account`` to ask the provider for account
+  selection, added to the always-sent ``consent``. Any other value answers
+  ``400``. Ignored by providers with ``prompt_supported: false``.
 
 **Response:**
 

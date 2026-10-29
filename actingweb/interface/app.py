@@ -76,6 +76,9 @@ class ActingWebApp:
         # None means "not set via the builder": Config's default, or a value
         # assigned on the Config, stays authoritative.
         self._refresh_token_grace_period: int | None = None
+        # None = the builder was never asked: a value assigned on the Config
+        # survives. After with_open_factory() the builder's value wins.
+        self._open_factory: bool | None = None
         self._thread_pool_workers = (
             10  # Default thread pool size for FastAPI integration
         )
@@ -213,6 +216,8 @@ class ActingWebApp:
         # Config survives; after one, the builder's value wins.
         if self._refresh_token_grace_period is not None:
             self._config.refresh_token_grace_period = self._refresh_token_grace_period
+        if self._open_factory is not None:
+            self._config.open_factory = self._open_factory
         # Peer profile caching configuration
         if hasattr(self, "_peer_profile_attributes"):
             self._config.peer_profile_attributes = self._peer_profile_attributes
@@ -305,6 +310,20 @@ class ActingWebApp:
     def with_devtest(self, enable: bool = True) -> "ActingWebApp":
         """Enable or disable development/testing endpoints."""
         self._enable_devtest = enable
+        self._apply_runtime_changes_to_config()
+        return self
+
+    def with_open_factory(self, enable: bool = True) -> "ActingWebApp":
+        """Open or close the actor factory (``POST /``).
+
+        The factory creates an actor for any address from unauthenticated
+        input, so an OAuth-only deployment closes it (``enable=False``): the
+        request answers 403, and sign-in through OAuth is the only way to get
+        an actor. A deviation from the protocol's mandatory factory, off the
+        default (``True``) only on request. A basic-auth deployment that needs
+        the factory form login keeps it open.
+        """
+        self._open_factory = enable
         self._apply_runtime_changes_to_config()
         return self
 
@@ -1360,6 +1379,8 @@ class ActingWebApp:
                 self._config.refresh_token_grace_period = (
                     self._refresh_token_grace_period
                 )
+            if self._open_factory is not None:
+                self._config.open_factory = self._open_factory
             # Populate multi-provider OAuth config on initial creation
             named = {k: dict(v) for k, v in self._oauth_configs.items() if k}
             if named:

@@ -1,6 +1,9 @@
+import logging
 from typing import Any, cast
 
 from actingweb.db import get_attribute, get_attribute_bucket_list
+
+logger = logging.getLogger(__name__)
 
 
 class InternalStore:
@@ -36,6 +39,61 @@ class InternalStore:
             for k, v in d.items():
                 # Populate directly — no write-through back to the database
                 self.__dict__[k] = (v or {}).get("data")
+
+    @property
+    def loaded(self) -> bool:
+        """Whether the bucket was read and the backend answered.
+
+        A caught backend fault (PostgreSQL returns ``None``) leaves every
+        attribute reading ``None`` for the life of this instance; a caller
+        that acts on an absent value must check this first.
+        """
+        self._ensure_loaded()
+        return self.__dict__["_db"].loaded
+
+    def mark_empty(self) -> None:
+        """Treat the bucket as read and empty, without a database read.
+
+        For an actor that was just created: its bucket has nothing in it yet.
+        """
+        self.__dict__["_loaded"] = True
+        self.__dict__["_db"].mark_loaded_empty()
+
+    def set_confirmed(self, k: str, v: Any) -> bool:
+        """Write ``k`` and confirm it landed with a strict read-back.
+
+        A plain assignment cannot report a fault (PostgreSQL's ``set_attr``
+        answers ``False``, which the assignment discards). Use this where a
+        value that silently fails to land changes a security decision, such
+        as the ``auth_method`` marker. ``v=None`` deletes ``k`` and confirms
+        it is gone. Returns ``False`` on a fault or a mismatch; never raises.
+        """
+        db = self.__dict__["_db"]
+        try:
+            self._ensure_loaded()
+            if v is None:
+                # DynamoDB answers True on a failed delete; the read decides.
+                db.delete_attr(name=k)
+            elif not db.set_attr(name=k, data=v):
+                return False
+            backend = db.dbprop
+            if not backend:
+                return False
+            row = backend.get_attr_strict(
+                actor_id=db.actor_id, bucket=db.bucket, name=k
+            )
+        except Exception as e:
+            logger.error(f"Could not confirm the write of {k}: {e}")
+            return False
+        if v is None:
+            if row is not None:
+                return False
+            self.__dict__.pop(k, None)
+            return True
+        if not row or row.get("data") != v:
+            return False
+        self.__dict__[k] = v
+        return True
 
     def __getitem__(self, k: str) -> Any:
         return self.__getattr__(k)
@@ -133,6 +191,11 @@ class Attributes:
         (as it is before any read).
         """
         return self._bucket_loaded
+
+    def mark_loaded_empty(self) -> None:
+        """Record the bucket as read and empty without asking the backend."""
+        self.data = {}
+        self._bucket_loaded = True
 
     def get_attr(self, name: str | None = None) -> dict[str, Any] | None:
         """Retrieves a single attribute.

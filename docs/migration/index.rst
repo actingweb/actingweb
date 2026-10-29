@@ -19,6 +19,7 @@ Contents
 .. toctree::
    :maxdepth: 2
 
+   v3.16
    v3.15
    v3.14
    v3.13
@@ -30,6 +31,19 @@ Contents
 
 Version Migrations
 ==================
+
+**v3.16 Migration**
+   Guide for upgrading to ActingWeb 3.16, a security release for the actor
+   factory. An unauthenticated ``POST /`` could squat an address, and the
+   owner's first OAuth login adopted the squatter's actor with the squatter's
+   credentials still live. Every actor now records how it was created;
+   a sign-in that proves an address over an actor nobody vouched for replaces
+   it (factory-created) or cleans it in place (everything else, including
+   every actor created before 3.16), with ``actingweb-mark-actors-vouched``
+   to opt known-good actors out before the first sign-in. A creator changed
+   over ``PUT /<id>/trust/trustee`` now unvouches the actor. Adds
+   ``with_open_factory`` to close the factory, the ``actor_adopted`` hook, and
+   ``prompt=select_account`` on the SPA sign-in.
 
 **v3.15 Migration**
    Guide for upgrading to ActingWeb 3.15, a security release for the MCP

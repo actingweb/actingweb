@@ -674,7 +674,9 @@ class DbTrustList:
         self.actor_id = None
         self.trusts = []
 
-    def fetch(self, actor_id: str | None = None) -> list[dict[str, Any]] | list[Any]:
+    def fetch(
+        self, actor_id: str | None = None, *, strict: bool = False
+    ) -> list[dict[str, Any]] | list[Any]:
         """
         Retrieve all trusts for an actor.
 
@@ -772,6 +774,8 @@ class DbTrustList:
 
         except Exception as e:
             logger.error(f"Error fetching trusts for actor {actor_id}: {e}")
+            if strict:
+                raise
             return []
 
     def delete(self) -> bool:

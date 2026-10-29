@@ -272,6 +272,9 @@ class TestAuthorizationCodeGrant:
             mock_existing.id = "actor-123"
             mock_existing.store = MagicMock()
             mock_existing.creator = "test@example.com"
+            # A vouched actor: the adoption rule leaves it alone.
+            mock_existing.store.auth_method = "google_oauth2"
+            mock_existing.store.email_verified = None
             mock_existing.get_from_creator.return_value = True
             mock_actor_cls.return_value = mock_existing
 
@@ -449,6 +452,9 @@ class TestAuthorizationCodeGrant:
             mock_lookup.return_value = mock_actor
 
             mock_existing = MagicMock()
+            # A vouched actor: the adoption rule leaves it alone.
+            mock_existing.store.auth_method = "google_oauth2"
+            mock_existing.store.email_verified = None
             mock_existing.get_from_creator.return_value = True
             mock_actor_cls.return_value = mock_existing
 
@@ -521,6 +527,9 @@ class TestAuthorizationCodeGrant:
             mock_lookup.return_value = mock_actor
 
             mock_existing = MagicMock()
+            # A vouched actor: the adoption rule leaves it alone.
+            mock_existing.store.auth_method = "google_oauth2"
+            mock_existing.store.email_verified = None
             mock_existing.get_from_creator.return_value = True
             mock_actor_cls.return_value = mock_existing
 

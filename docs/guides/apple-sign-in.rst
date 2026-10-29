@@ -213,7 +213,7 @@ hook (best-effort / rate-limited):
 .. code-block:: python
 
     @app.lifecycle_hook("actor_deleted")
-    def on_actor_deleted(actor):
+    def on_actor_deleted(actor, **kwargs):
         provider = actor.store.oauth_provider or ""
         refresh = actor.store.oauth_refresh_token
         if provider.startswith("apple") and refresh:

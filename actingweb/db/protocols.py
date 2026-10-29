@@ -34,12 +34,18 @@ class DbActorProtocol(Protocol):
         """
         ...
 
-    def get_by_creator(self, creator: str | None = None) -> list[dict[str, Any]] | None:
+    def get_by_creator(
+        self, creator: str | None = None, *, strict: bool = False
+    ) -> list[dict[str, Any]] | None:
         """
         Get actors by creator field.
 
         Args:
             creator: The creator email to search for
+            strict: Raise on a backend read fault instead of answering None,
+                and leave out (never as None) an actor the index lists whose
+                row is gone. The adoption rule passes it: "no actor for this
+                address" must be an answer, not a fault.
 
         Returns:
             List of dicts (possibly empty), or None if error or no creator provided
@@ -684,12 +690,17 @@ class DbTrustListProtocol(Protocol):
     actor_id: str | None
     trusts: list[dict[str, Any]]
 
-    def fetch(self, actor_id: str | None) -> list[dict[str, Any]] | list[Any]:
+    def fetch(
+        self, actor_id: str | None, *, strict: bool = False
+    ) -> list[dict[str, Any]] | list[Any]:
         """
         Retrieve all trusts for an actor.
 
         Args:
             actor_id: The actor ID
+            strict: Raise on a backend read fault instead of answering with
+                an empty list (PostgreSQL catches faults; DynamoDB raises
+                either way).
 
         Returns:
             List of trust dicts, or empty list
@@ -784,12 +795,15 @@ class DbPeerTrusteeListProtocol(Protocol):
     actor_id: str | None
     peertrustees: list[dict[str, Any]] | None
 
-    def fetch(self, actor_id: str | None = None) -> list[dict[str, Any]] | list[Any]:
+    def fetch(
+        self, actor_id: str | None = None, *, strict: bool = False
+    ) -> list[dict[str, Any]] | list[Any]:
         """
         Retrieve all peer trustees for an actor.
 
         Args:
             actor_id: The actor ID
+            strict: Raise on a backend read fault instead of answering ``[]``
 
         Returns:
             List of peer trustee dicts, or empty list
@@ -893,12 +907,17 @@ class DbSubscriptionListProtocol(Protocol):
     actor_id: str | None
     subscriptions: list[dict[str, Any]]
 
-    def fetch(self, actor_id: str | None) -> list[dict[str, Any]] | list[Any]:
+    def fetch(
+        self, actor_id: str | None, *, strict: bool = False
+    ) -> list[dict[str, Any]] | list[Any]:
         """
         Retrieve all subscriptions for an actor.
 
         Args:
             actor_id: The actor ID
+            strict: Raise on a backend read fault instead of answering with
+                an empty list (PostgreSQL catches faults; DynamoDB raises
+                either way).
 
         Returns:
             List of subscription dicts, or empty list

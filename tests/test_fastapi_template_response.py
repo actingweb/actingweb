@@ -103,3 +103,53 @@ class TestTemplateResponseWithoutTemplates:
         # The built-in default factory/sign-in template renders out of the box
         assert "<form" in response.text
         assert "Sign in - ActingWeb" in response.text
+
+
+class TestClosedFactoryFormFallback:
+    """No OAuth and ``with_open_factory(False)``: a form post renders the
+    error page with a 403, not an empty one."""
+
+    def test_form_post_renders_failed_template_with_403(self) -> None:
+        aw_app = (
+            ActingWebApp(
+                aw_type="urn:actingweb:test",
+                database="dynamodb",
+                fqdn="test.example.com",
+                proto="https://",
+            )
+            .with_web_ui(enable=True)
+            .with_open_factory(enable=False)
+        )
+        app = FastAPI()
+        # The library's own templates: they render the handler's ``error``.
+        aw_app.integrate_fastapi(app)
+        response = TestClient(app).post(
+            "/",
+            data={"creator": "someone@example.com"},
+            headers={"content-type": "application/x-www-form-urlencoded"},
+        )
+        assert response.status_code == 403
+        assert "text/html" in response.headers.get("content-type", "")
+        assert "with_open_factory" in response.text
+
+
+class TestFactoryJsonConfig:
+    """``GET /`` asking for JSON returns the handler's configuration document,
+    not the page."""
+
+    @pytest.mark.parametrize(
+        "kwargs",
+        [{"params": {"format": "json"}}, {"headers": {"Accept": "application/json"}}],
+    )
+    def test_json_config_is_served(self, kwargs) -> None:
+        aw_app = ActingWebApp(
+            aw_type="urn:actingweb:test",
+            database="dynamodb",
+            fqdn="test.example.com",
+            proto="https://",
+        ).with_web_ui(enable=True)
+        app = FastAPI()
+        aw_app.integrate_fastapi(app)
+        response = TestClient(app).get("/", **kwargs)
+        assert response.status_code == 200
+        assert response.json()["prompt_values"] == ["select_account"]

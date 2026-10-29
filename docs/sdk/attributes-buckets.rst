@@ -172,7 +172,7 @@ Per-Actor Buckets
      - TTL
      - Cleanup Trigger
    * - ``_internal``
-     - Internal actor metadata (email, trustee_root, oauth tokens)
+     - Internal actor metadata (email, trustee_root, oauth tokens, ``auth_method`` and, after an adoption, ``auth_method_adopted_from``, ``auth_method_adopted_at``, ``auth_method_replaced_actor_id``)
      - Permanent
      - Actor deletion
    * - ``trust_permissions``

@@ -24,16 +24,18 @@ def _actor(email_verified: str | None = "false", token: str | None = "tok-abc"):
 class TestClearPendingEmailVerification:
     def test_clears_pending_state_and_index_row(self):
         actor = _actor()
+        actor.store.set_confirmed.return_value = True
         config = MagicMock(spec=Config)
 
         with patch("actingweb.attribute.Attributes") as mock_attrs_cls:
             mock_index = MagicMock()
             mock_attrs_cls.return_value = mock_index
 
-            clear_pending_email_verification(actor, config)
+            assert clear_pending_email_verification(actor, config) is True
 
         mock_index.delete_attr.assert_called_once_with("tok-abc")
-        assert actor.store.email_verified is None
+        # The flag decides the vouch, so its delete is confirmed (3.16).
+        actor.store.set_confirmed.assert_called_once_with("email_verified", None)
         assert actor.store.email_verification_token is None
         assert actor.store.email_verification_created_at is None
 
@@ -65,7 +67,13 @@ class TestClearPendingEmailVerification:
             clear_pending_email_verification(actor, config)
             mock_attrs_cls.assert_not_called()
 
-        assert actor.store.email_verified is None
+        actor.store.set_confirmed.assert_called_once_with("email_verified", None)
+
+    def test_unconfirmed_clear_reports_false(self):
+        actor = _actor(email_verified="false", token=None)
+        actor.store.set_confirmed.return_value = False
+
+        assert clear_pending_email_verification(actor, MagicMock(spec=Config)) is False
 
 
 class TestClearPendingWiredIntoLookupOrCreate:
@@ -85,14 +93,18 @@ class TestClearPendingWiredIntoLookupOrCreate:
 
         with (
             patch("actingweb.actor.Actor", return_value=existing_actor),
-            patch("actingweb.oauth2.clear_pending_email_verification") as mock_clear,
+            patch(
+                "actingweb.oauth2.adopt_actor", return_value=existing_actor
+            ) as mock_adopt,
         ):
             result = authenticator.lookup_or_create_actor_by_identifier(
                 "user@example.com"
             )
 
+        # The clear moved inside adopt_actor, after the vouching decision.
         assert result is existing_actor
-        mock_clear.assert_called_once_with(existing_actor, config)
+        assert mock_adopt.call_args.args == (existing_actor,)
+        assert mock_adopt.call_args.kwargs["config"] is config
 
 
 class TestClearPendingOnStateSelectedActor:
@@ -153,10 +165,14 @@ class TestClearPendingOnStateSelectedActor:
                 return_value=auth,
             ),
             patch("actingweb.actor.Actor", return_value=state_actor),
-            patch("actingweb.oauth2.clear_pending_email_verification") as mock_clear,
+            patch(
+                "actingweb.oauth2.adopt_actor", return_value=state_actor
+            ) as mock_adopt,
         ):
             OAuth2CallbackHandler(webobj, config, hooks=hooks).get()
 
-        # The state branch was taken (no lookup/create) and the cleanup ran.
+        # The state branch was taken (no lookup/create) and the adoption rule,
+        # which owns the pending-state cleanup, ran on the state-selected actor.
         auth.lookup_or_create_actor_by_identifier.assert_not_called()
-        mock_clear.assert_called_once_with(state_actor, config)
+        assert mock_adopt.call_args.args == (state_actor,)
+        assert mock_adopt.call_args.kwargs["config"] is config

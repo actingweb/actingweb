@@ -100,6 +100,8 @@ class ActorInterface:
         trustee_root: str | None = None,
         hooks: Any = None,
         service_registry=None,
+        *,
+        auth_method: str = "app",
     ) -> "ActorInterface":
         """
         Create a new actor.
@@ -113,6 +115,12 @@ class ActorInterface:
             trustee_root: Optional trustee root URL to set on the actor
             hooks: Optional hook registry for executing lifecycle hooks
             service_registry: Optional service registry for third-party service access
+            auth_method: How the actor came to exist, a trust assertion about
+                ``creator``. ``"app"`` (the default) means the application
+                vouches for the creator. Pass ``"factory"`` for anything
+                created from unauthenticated input: such an actor is replaced
+                when a sign-in later proves the address. Written before
+                ``actor_created`` fires.
 
         Returns:
             New ActorInterface instance
@@ -133,6 +141,7 @@ class ActorInterface:
             delete=delete_existing,
             trustee_root=trustee_root,
             hooks=hooks,
+            auth_method=auth_method,
         )
 
         if not success:
@@ -375,22 +384,34 @@ class ActorInterface:
 
         Note that this does **not** run lifecycle hooks — neither
         ``actor_deleted`` nor ``actor_deleted_complete``. Only the HTTP
-        ``DELETE /<actor_id>`` path fires those, so an application deleting an
-        actor programmatically owns its own cleanup. A deletion tombstone *is*
+        ``DELETE /<actor_id>`` path fires those, and the replacement of an
+        unvouched actor at sign-in (``reason="replaced_at_adoption"``), so an
+        application deleting an actor programmatically owns its own cleanup. A deletion tombstone *is*
         written either way (see :meth:`get_deletion_status`).
         """
         self._core_actor.delete()
 
-    def modify_creator(self, new_creator: str) -> bool:
+    def modify_creator(self, new_creator: str, *, unvouch: bool = False) -> bool:
         """
         Modify the creator of this actor.
 
+        By default the application vouches for ``new_creator``: the
+        ``auth_method`` marker is left as it is. Pass ``unvouch=True`` for an
+        address nobody proved (user input): the change then follows
+        ``PUT /<id>/trust/trustee``'s rules
+        (:meth:`actingweb.actor.Actor.modify_creator_unvouched`), including the
+        ``force_email_prop_as_creator`` pin, which refuses (returns False) an
+        address other than the stored email.
+
         Args:
             new_creator: New creator identifier
+            unvouch: Unvouch the actor unless the change hands it to nobody new
 
         Returns:
             True if successful, False otherwise
         """
+        if unvouch:
+            return self._core_actor.modify_creator_unvouched(new_creator)
         return self._core_actor.modify(creator=new_creator)
 
     def is_valid(self) -> bool:

@@ -68,6 +68,33 @@ class DummyPropertyClass:
         self.value = v
 
 
+def relationship_summary(
+    trusts: list[Any] | None, subscriptions: list[Any] | None
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """What an adoption removed, for its log line and the ``actor_adopted``
+    hook: each trust's ``peerid``, ``relationship``, ``approved`` and
+    ``established_via`` (never its ``secret``), and the sorted subscription
+    peer ids."""
+    removed_trusts = [
+        {
+            "peerid": t.get("peerid", ""),
+            "relationship": t.get("relationship", ""),
+            "approved": t.get("approved"),
+            "established_via": t.get("established_via"),
+        }
+        for t in (trusts or [])
+        if isinstance(t, dict)
+    ]
+    peers = sorted(
+        {
+            str(s.get("peerid", ""))
+            for s in (subscriptions or [])
+            if isinstance(s, dict) and s.get("peerid")
+        }
+    )
+    return removed_trusts, peers
+
+
 class Actor:
     ###################
     # Basic operations
@@ -83,6 +110,9 @@ class Actor:
         self.last_response_code: int = 0
         self.last_response_message: str = ""
         self.id: str | None = actor_id
+        # Set by get_from_creator: the other actors with this creator that are
+        # marked for replacement (``factory``), for a sign-in to sweep.
+        self.factory_sibling_ids: list[str] = []
         if self.config:
             self.handle = get_actor(self.config)
         else:
@@ -275,6 +305,18 @@ class Actor:
             return
         self.get(actor_id=actor_id)
 
+    def _candidate_rank(self, actor_id: str) -> int:
+        """Sort key for a ``get_by_creator`` row: 0 vouched, 1 any other
+        unvouched actor (or one whose ``_internal`` bucket cannot be read),
+        2 ``factory``."""
+        from actingweb.oauth2 import classify_marker
+
+        if not self.config:
+            return 1
+        return {"vouched": 0, "replace": 2}.get(
+            classify_marker(self.config, actor_id) or "", 1
+        )
+
     def get_from_creator(self, creator: str | None = None) -> bool:
         """Initialise an actor by matching on creator/email.
 
@@ -287,6 +329,7 @@ class Actor:
         self.id = None
         self.creator = None
         self.passphrase = None
+        self.factory_sibling_ids = []
 
         if not self.config or not creator:
             return False
@@ -314,6 +357,21 @@ class Actor:
             logger.warning(
                 f"Multiple actors share creator {lookup_creator!r}: {candidate_ids}"
             )
+            # A vouched actor first: unvouched siblings (an open factory lets
+            # anyone add one) must not take a sign-in from the owner's actor.
+            # Factory actors last: one an owner's actor from before 3.16 sits
+            # beside is the one a sign-in replaces, and the owner's would then
+            # be left behind its successor. Stable, so the lowest id still
+            # wins within each group.
+            ranks = {
+                str(c.get("id")): self._candidate_rank(str(c.get("id")))
+                for c in candidates
+                if c.get("id")
+            }
+            candidates.sort(key=lambda item: ranks.get(str(item.get("id")), 1))
+            factory_ids = [i for i, rank in ranks.items() if rank == 2]
+        else:
+            factory_ids = []
 
         for candidate in candidates:
             actor_id = candidate.get("id")
@@ -321,6 +379,7 @@ class Actor:
                 continue
             self.get(actor_id=actor_id)
             if self.id:
+                self.factory_sibling_ids = [i for i in factory_ids if i != self.id]
                 return True
 
         return False
@@ -334,12 +393,21 @@ class Actor:
         delete: bool = False,
         trustee_root: str | None = None,
         hooks: Any = None,
+        auth_method: str = "app",
     ) -> bool:
         """ "Creates a new actor and persists it.
 
         If delete is True, any existing actors with same creator value
         will be deleted. If it is False, the one with the correct passphrase
         will be chosen (if any)
+
+        ``auth_method`` records how the actor came to exist and is written to
+        the ``_internal`` store before ``actor_created`` fires, only when a
+        row was actually persisted. It is a trust assertion: ``"app"`` means
+        the calling application vouches for ``creator``; pass ``"factory"``
+        for anything created from unauthenticated input. An unvouched actor
+        (see :func:`actingweb.oauth2.is_vouched_actor`) is replaced or
+        cleaned when a sign-in later proves the address.
         """
         seed = url
         now = datetime.datetime.now(datetime.UTC)
@@ -351,6 +419,11 @@ class Actor:
         if self.config and self.config.unique_creator:
             in_db = get_actor(self.config)
             exists = in_db.get_by_creator(creator=self.creator)
+            if isinstance(exists, list):
+                # DynamoDB's creator index is eventually consistent: an actor
+                # deleted a moment ago can still be listed, and its consistent
+                # read then answers None.
+                exists = [c for c in exists if c]
             if exists:
                 # If uniqueness is turned on at a later point, we may have multiple accounts
                 # with creator as "creator". Check if we have an internal value "email" and then
@@ -405,13 +478,53 @@ class Actor:
         # same shape: nothing created, so nothing to un-tombstone.
         if created:
             deletion.clear_actor_tombstone(self.id, self.config)
+        if not created:
+            # The id was taken (by a live actor, or one mid-deletion) or the
+            # insert failed: nothing was created, and the bucket under this id
+            # is not ours to write. Unbind, so a caller that ignores the False
+            # cannot modify or delete the actor that holds the id.
+            self.id = None
+            self.passphrase = None
+            self.handle = None
+            self.store = None
+            return False
         self.store = attribute.InternalStore(actor_id=self.id, config=self.config)
+        if not actor_id:
+            # A generated id is new, so its bucket is empty; skip the read. A
+            # caller-supplied one (a system actor) can own older buckets.
+            self.store.mark_empty()
         self.property = property.PropertyStore(actor_id=self.id, config=self.config)
         self.property_lists = property.PropertyListStore(
             actor_id=self.id, config=self.config
         )
 
-        # Set trustee_root if provided
+        # Record how the actor was created, before anything else lands in
+        # its bucket, so a rollback has only the row to remove.
+        if self.store and auth_method:
+            if not self.store.set_confirmed("auth_method", auth_method):
+                # An actor without its marker reads as legacy, and the next
+                # sign-in would wipe it. Undo the creation: only the row, since
+                # a fixed id (a system actor) can own buckets that predate it.
+                logger.error(
+                    f"Actor {self.id}: the auth_method marker did not land; "
+                    "removing the new actor row"
+                )
+                try:
+                    rolled_back = bool(self.handle and self.handle.delete())
+                except Exception as e:
+                    logger.error(f"Actor {self.id}: row removal raised: {e}")
+                    rolled_back = False
+                if not rolled_back:
+                    logger.error(
+                        f"Actor {self.id}: removing the unmarked actor failed; "
+                        "its next sign-in cleans it in place"
+                    )
+                self.id = None
+                self.passphrase = None
+                self.handle = None
+                self.store = None
+                return False
+
         if (
             trustee_root
             and isinstance(trustee_root, str)
@@ -436,20 +549,137 @@ class Actor:
 
         return True
 
-    def modify(self, creator: str | None = None) -> bool:
-        if not self.handle or not creator:
+    def creator_change_pinned(self, creator: str) -> bool:
+        """Whether ``force_email_prop_as_creator`` refuses changing the creator
+        to ``creator``: on, with a stored email that ``creator`` is not (nor
+        ``"trustee"``). :meth:`get` would put the stored email back on the next
+        load, and a sign-in for the new address in between would resolve to
+        this actor. False when ``_internal`` cannot be read."""
+        store = self.store
+        if not self.config or not self.config.force_email_prop_as_creator:
+            return False
+        if not store or not store.loaded:
+            return False
+        own_email = store.email
+        target = creator.lower() if "@" in creator else creator
+        return (
+            isinstance(own_email, str)
+            and bool(own_email)
+            and target not in ("trustee", own_email.lower())
+        )
+
+    def modify_creator_unvouched(self, creator: str) -> bool:
+        """Change the creator to an address nobody proved, and unvouch.
+
+        A sign-in that later proves ``creator`` then cleans the actor in place
+        instead of adopting it as is (:func:`actingweb.oauth2.adopt_actor`).
+        The marker becomes ``creator_changed``, written and confirmed before
+        the creator changes, except when the change hands the actor to nobody
+        new: ``"trustee"`` (the protocol's handoff; no sign-in resolves to it),
+        the actor's own stored ``email`` (a provider or the emailed link wrote
+        it), or the current creator. A marker in
+        :data:`actingweb.oauth2.REPLACE_AUTH_METHODS` (``"factory"``) is kept:
+        that actor is already unvouched, and is replaced rather than cleaned.
+
+        Returns False when the creator did not change, including when
+        :meth:`creator_change_pinned` refuses it. The previous marker is
+        restored then, but only once a fresh read shows the stored creator
+        unchanged (a failure can be a lost acknowledgement of a write that
+        landed). Never raises.
+        """
+        from actingweb.oauth2 import REPLACE_AUTH_METHODS
+
+        store = self.store
+        if not store or not store.loaded or not self.config:
+            logger.error(f"Actor {self.id}: _internal unreadable; creator not changed")
+            return False
+        if self.creator_change_pinned(creator):
+            logger.warning(
+                f"Actor {self.id}: creator is pinned to the stored email "
+                "(force_email_prop_as_creator); creator not changed"
+            )
+            return False
+        target = creator.lower() if "@" in creator else creator
+        own_email = store.email
+        previous_marker = store.auth_method
+        unvouch = (
+            target != self.creator
+            and target != "trustee"
+            and not (isinstance(own_email, str) and own_email.lower() == target)
+            and previous_marker not in REPLACE_AUTH_METHODS
+        )
+        # Marker first: a change that lands without it would leave the actor
+        # vouched under an address nobody proved.
+        if unvouch and not store.set_confirmed("auth_method", "creator_changed"):
+            logger.error(
+                f"Actor {self.id}: could not unvouch before a creator change; "
+                "creator not changed"
+            )
+            return False
+        original = self.creator
+        try:
+            if self.modify(creator=creator):
+                return True
+        except Exception as e:
+            # DynamoDB raises on a failed save; PostgreSQL answers False.
+            logger.error(f"Actor {self.id}: creator change failed: {e}")
+        if unvouch:
+            try:
+                row = get_actor(self.config).get(actor_id=self.id)
+            except Exception:
+                row = None
+            if not row or row.get("creator") != original:
+                logger.error(
+                    f"Actor {self.id}: creator change failed and the stored "
+                    "creator could not be confirmed unchanged; auth_method left "
+                    "'creator_changed'"
+                )
+            elif not store.set_confirmed("auth_method", previous_marker or None):
+                # Unvouched, so the owner's next sign-in cleans it.
+                logger.error(
+                    f"Actor {self.id}: creator unchanged but auth_method is "
+                    f"still 'creator_changed' (was {previous_marker!r})"
+                )
+        return False
+
+    def modify(self, creator: str | None = None, passphrase: str | None = None) -> bool:
+        """Change the actor's creator and/or passphrase.
+
+        Returns the backend result. DynamoDB raises when the save fails and
+        PostgreSQL returns ``False``; callers that must know treat both as
+        failure. The in-memory values change only after the backend reported
+        success.
+        """
+        if not self.handle or not (creator or passphrase):
             logger.debug("Attempted modify of actor with no handle or no param changed")
             return False
-        if "@" in creator:
+        if creator and "@" in creator:
             creator = creator.lower()
-        self.creator = creator
-        if self.actor:
-            self.actor["creator"] = creator
-        self.handle.modify(creator=creator)
+        ok = self.handle.modify(
+            creator=creator or None,
+            passphrase=passphrase.encode("utf-8") if passphrase else None,
+        )
+        if not ok:
+            return False
+        if creator:
+            self.creator = creator
+            if self.actor:
+                self.actor["creator"] = creator
+        if passphrase:
+            self.passphrase = passphrase
+            if self.actor:
+                self.actor["passphrase"] = passphrase
         return True
 
-    def delete(self) -> None:
+    def delete(self, notify_peers: bool = True) -> bool:
         """Deletes an actor and cleans up all relevant stored data.
+
+        ``notify_peers=False`` skips the remote DELETE calls to peers and
+        trustees (``requests.delete``) and keeps every local cleanup. Use it
+        when the peer URLs are not trustworthy.
+
+        Returns whether the backend reported the actor row removed (PostgreSQL
+        answers ``False`` on a caught fault; DynamoDB raises).
 
         The actor row is removed **last**, so the actor keeps resolving for the
         duration of the wipe. Existence checks therefore fail open here, and
@@ -459,9 +689,9 @@ class Actor:
         """
         if not self.handle:
             logger.debug("Attempted delete of actor with no handle")
-            return
+            return False
         deletion.mark_actor_deleted(self.id, self.config)
-        self.delete_peer_trustee(shorttype="*")
+        self.delete_peer_trustee(shorttype="*", notify_peers=notify_peers)
         if not self.property_list:
             self.property_list = property.Properties(
                 actor_id=self.id, config=self.config
@@ -476,12 +706,14 @@ class Actor:
             for rel in relationships:
                 if isinstance(rel, dict) and "peerid" in rel:
                     self.delete_reciprocal_trust(
-                        peerid=rel.get("peerid", ""), delete_peer=True
+                        peerid=rel.get("peerid", ""),
+                        delete_peer=True,
+                        notify_peers=notify_peers,
                     )
         trusts.delete()
         buckets = attribute.Buckets(actor_id=self.id, config=self.config)
         buckets.delete()
-        self.handle.delete()
+        return bool(self.handle.delete())
 
     ######################
     # Advanced operations
@@ -514,13 +746,13 @@ class Actor:
         self.property_list = property.Properties(actor_id=self.id, config=self.config)
         return self.property_list.fetch()
 
-    def delete_peer_trustee(self, shorttype=None, peerid=None):
+    def delete_peer_trustee(self, shorttype=None, peerid=None, notify_peers=True):
         if not peerid and not shorttype:
             return False
         if shorttype == "*":
             if self.config and self.config.actors:
                 for t in self.config.actors:
-                    self.delete_peer_trustee(shorttype=t)
+                    self.delete_peer_trustee(shorttype=t, notify_peers=notify_peers)
             return True
         if (
             shorttype
@@ -556,31 +788,36 @@ class Actor:
                 return False
         if not peer_data or isinstance(peer_data, bool):
             return False
-        logger.info(f"Deleting peer actor at {peer_data['baseuri']}")
-        u_p = b"trustee:" + peer_data["passphrase"].encode("utf-8")
-        headers = {
-            "Authorization": "Basic " + base64.b64encode(u_p).decode("utf-8"),
-        }
-        try:
-            response = requests.delete(
-                url=peer_data["baseuri"], headers=headers, timeout=(5, 10)
-            )
-            self.last_response_code = response.status_code
-            self.last_response_message = (
-                response.content.decode("utf-8", "ignore")
-                if isinstance(response.content, bytes)
-                else str(response.content)
-            )
-        except Exception:
-            logger.debug("Not able to delete peer actor remotely due to network issues")
-            self.last_response_code = 408
-            return False
-        if response.status_code < 200 or response.status_code > 299:
-            logger.debug("Not able to delete peer actor remotely, peer is unwilling")
-            return False
+        if notify_peers:
+            logger.info(f"Deleting peer actor at {peer_data['baseuri']}")
+            u_p = b"trustee:" + peer_data["passphrase"].encode("utf-8")
+            headers = {
+                "Authorization": "Basic " + base64.b64encode(u_p).decode("utf-8"),
+            }
+            try:
+                response = requests.delete(
+                    url=peer_data["baseuri"], headers=headers, timeout=(5, 10)
+                )
+                self.last_response_code = response.status_code
+                self.last_response_message = (
+                    response.content.decode("utf-8", "ignore")
+                    if isinstance(response.content, bytes)
+                    else str(response.content)
+                )
+            except Exception:
+                logger.debug(
+                    "Not able to delete peer actor remotely due to network issues"
+                )
+                self.last_response_code = 408
+                return False
+            if response.status_code < 200 or response.status_code > 299:
+                logger.debug(
+                    "Not able to delete peer actor remotely, peer is unwilling"
+                )
+                return False
         # Delete trust, peer is already deleted remotely
         if peer_data and not self.delete_reciprocal_trust(
-            peerid=peer_data["peerid"], delete_peer=False
+            peerid=peer_data["peerid"], delete_peer=False, notify_peers=notify_peers
         ):
             logger.debug("Not able to delete peer actor trust in db")
         if new_peer and not new_peer.delete():
@@ -1296,8 +1533,14 @@ class Actor:
         else:
             return new_trust.get()
 
-    def delete_reciprocal_trust(self, peerid=None, delete_peer=False):
-        """Deletes a trust relationship and requests deletion of peer's relationship as well."""
+    def delete_reciprocal_trust(
+        self, peerid=None, delete_peer=False, notify_peers=True
+    ):
+        """Deletes a trust relationship and requests deletion of peer's relationship as well.
+
+        ``notify_peers=False`` skips the remote DELETE (``delete_peer`` is then
+        ignored) and runs only the local cleanup.
+        """
         failed_once = False  # For multiple relationships, this will be True if at least one deletion at peer failed
         success_once = False  # True if at least one relationship was deleted at peer
         if not peerid:
@@ -1323,7 +1566,9 @@ class Actor:
                 else False
             )
 
-            if delete_peer and not is_oauth2_trust and not is_self_deletion:
+            if not notify_peers:
+                pass
+            elif delete_peer and not is_oauth2_trust and not is_self_deletion:
                 url = rel["baseuri"] + "/trust/" + rel["relationship"] + "/" + self.id
                 headers = {}
                 if rel["secret"]:
@@ -1489,9 +1734,99 @@ class Actor:
                 actor_id=self.id, peerid=rel["peerid"], config=self.config
             )
             dbtrust.delete()
-        if delete_peer and (not success_once or failed_once):
+        if notify_peers and delete_peer and (not success_once or failed_once):
             return False
         return True
+
+    def purge_relationships(self, notify_peers: bool = False) -> dict[str, Any]:
+        """Remove every trust, subscription and peer-trustee row of this actor.
+
+        Used when a sign-in proves the address over an actor nobody vouched
+        for, so a relationship made while the actor was unvouched cannot
+        outlive the adoption. All side-stores are cleaned (permissions,
+        remote-peer data, callback state, subscriptions with diffs). With
+        ``notify_peers=False`` (the default) no request leaves the process:
+        the peer URLs were chosen by whoever created the relationship.
+
+        ``Trusts.delete()`` reports success whatever the backend did, so the
+        lists are re-read afterwards and ``confirmed`` says whether they (the
+        peer-trustee rows too) are empty. The reads are strict: PostgreSQL
+        answers a caught fault with an empty list, which must not pass for
+        "nothing left", so a fault
+        before the wipe removes nothing and a fault after it leaves
+        ``confirmed`` False. Trust secrets are never included in the returned
+        summary.
+        """
+        from actingweb.db import (
+            get_peer_trustee_list,
+            get_subscription_list,
+            get_trust_list,
+        )
+
+        unconfirmed: dict[str, Any] = {
+            "trusts": [],
+            "subscription_peers": [],
+            "confirmed": False,
+        }
+        config = self.config
+        if not config:
+            return unconfirmed
+        try:
+            # Read the subscriptions first: removing a trust also removes
+            # that peer's subscriptions, which would empty the summary.
+            sub_rows = (
+                get_subscription_list(config).fetch(actor_id=self.id, strict=True) or []
+            )
+            relationships = (
+                get_trust_list(config).fetch(actor_id=self.id, strict=True) or []
+            )
+        except Exception as e:
+            logger.error(f"Purge of actor {self.id}: could not read its lists: {e}")
+            return unconfirmed
+        removed_trusts, subscription_peers = relationship_summary(
+            relationships, sub_rows
+        )
+        subs = subscription.Subscriptions(actor_id=self.id, config=self.config)
+        trusts = trust.Trusts(actor_id=self.id, config=self.config)
+        for rel in relationships:
+            if isinstance(rel, dict) and rel.get("peerid"):
+                self.delete_reciprocal_trust(
+                    peerid=rel["peerid"],
+                    delete_peer=False,
+                    notify_peers=notify_peers,
+                )
+        trusts.delete()
+
+        subs.delete()
+
+        self.delete_peer_trustee(shorttype="*", notify_peers=notify_peers)
+        # delete_peer_trustee("*") visits only the types in config.actors; a
+        # row for a type dropped since (or never listed) stays. Remove the
+        # rest locally.
+        peer_list = get_peer_trustee_list(config)
+        try:
+            if peer_list.fetch(actor_id=self.id, strict=True):
+                peer_list.delete()
+        except Exception as e:
+            logger.error(f"Purge of actor {self.id}: peer trustees not removed: {e}")
+
+        try:
+            trusts_left = get_trust_list(config).fetch(actor_id=self.id, strict=True)
+            subs_left = get_subscription_list(config).fetch(
+                actor_id=self.id, strict=True
+            )
+            peers_left = get_peer_trustee_list(config).fetch(
+                actor_id=self.id, strict=True
+            )
+            confirmed = not trusts_left and not subs_left and not peers_left
+        except Exception as e:
+            logger.error(f"Purge of actor {self.id}: could not re-read its lists: {e}")
+            confirmed = False
+        return {
+            "trusts": removed_trusts,
+            "subscription_peers": subscription_peers,
+            "confirmed": confirmed,
+        }
 
     def create_subscription(
         self,

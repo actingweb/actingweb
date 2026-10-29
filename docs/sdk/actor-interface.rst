@@ -51,6 +51,11 @@ Creating and Loading Actors
    # Load by creator
    actor3 = ActorInterface.get_by_creator("user@example.com", config=app.get_config())
 
+``create()`` also takes ``auth_method`` (default ``"app"``): a trust assertion
+that the application vouches for ``creator``. Pass ``auth_method="factory"``
+for anything created from unauthenticated input; such an actor is replaced when
+a sign-in later proves the address. See :doc:`../guides/authentication`.
+
 Properties (Key–Value)
 ----------------------
 

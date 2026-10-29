@@ -788,6 +788,25 @@ class FlaskIntegration(BaseActingWebIntegration):
 
     def _handle_factory_get_request(self) -> Response | WerkzeugResponse | str:
         """Handle GET requests to factory route - just show the email form."""
+        # A client asking for JSON (Accept, or ?format=json) gets the handler's
+        # configuration document (OAuth providers, endpoints, prompt values),
+        # as FastAPI serves it; the page below never runs the handler.
+        accepts_json = "application/json" in request.headers.get("Accept", "")
+        if accepts_json or request.args.get("format") == "json":
+            req_data = self._normalize_request()
+            webobj = AWWebObj(
+                url=req_data["url"],
+                params=req_data["values"],
+                body=req_data["data"],
+                headers=req_data["headers"],
+                cookies=req_data["cookies"],
+            )
+            # The configuration only: a GET (a prefetcher, an <img>) must never
+            # create an actor.
+            factory.RootFactoryHandler(
+                webobj, self.aw_app.get_config(), hooks=self.aw_app.hooks
+            )._get_json_config()
+            return self._create_flask_response(webobj)
         # Simply show the factory template without any authentication
         try:
             return Response(render_template("aw-root-factory.html"))
@@ -916,7 +935,9 @@ class FlaskIntegration(BaseActingWebIntegration):
                     )
                 except Exception:
                     pass  # Fall back to default response
-            elif webobj.response.status_code == 400:
+            elif webobj.response.status_code in (400, 403):
+                # 403: the factory is closed (with_open_factory) or the
+                # creator exists; both carry an ``error`` for the page.
                 try:
                     # Carry the handler's status onto the rendered page.
                     # Without it a provider outage (502) or a rejected login

@@ -90,5 +90,5 @@ def validate_expected_email(state: str, authenticated_email: str) -> bool:
         if not expected:
             return True
         return expected == authenticated_email.strip().lower()
-    except Exception:
+    except Exception:  # folds DbError: no DB access
         return True

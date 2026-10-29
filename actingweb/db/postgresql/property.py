@@ -136,7 +136,11 @@ class DbProperty:
             raise DbError("property read", actor_id) from e
 
     def get_actor_id_from_property(
-        self, name: str | None = None, value: str | None = None
+        self,
+        name: str | None = None,
+        value: str | None = None,
+        *,
+        strict: bool = True,
     ) -> str | None:
         """
         Reverse lookup: find actor by property value.
@@ -146,12 +150,25 @@ class DbProperty:
         Args:
             name: Property name (e.g., "oauthId")
             value: Property value to search for
+            strict: When False, a read fault answers None instead of raising
 
         Returns:
             Actor ID if found, None otherwise
+
+        Raises:
+            DbError: on a read fault (unless ``strict=False``)
         """
         if not name or not value:
             return None
+        try:
+            return self._get_actor_id_from_property(name, value)
+        except DbError:
+            if strict:
+                raise
+            logger.error(f"Reverse lookup for '{name}' failed; returning None")
+            return None
+
+    def _get_actor_id_from_property(self, name: str, value: str) -> str | None:
 
         if self._use_lookup_table and name not in self._indexed_properties:
             # Same contract as the DynamoDB backend: only properties
@@ -192,8 +209,8 @@ class DbProperty:
                             row = cur.fetchone()
                             if row:
                                 actor_id = row[0]
-                except Exception:
-                    actor_id = None
+                except Exception as e:
+                    raise DbError("property reverse lookup") from e
                 if actor_id:
                     logger.warning(
                         f"DEPRECATED: reverse lookup for '{name}' served by a "
@@ -229,8 +246,7 @@ class DbProperty:
                                 )
                                 return None
                 except Exception as e:
-                    logger.error(f"Error loading property after lookup: {e}")
-                    return None
+                    raise DbError("property reverse lookup") from e
 
             return actor_id
         else:
@@ -259,8 +275,7 @@ class DbProperty:
                         else:
                             return None
             except Exception as e:
-                logger.error(f"Error reverse lookup for property {name}: {e}")
-                return None
+                raise DbError("property reverse lookup") from e
 
     def set(
         self, actor_id: str | None = None, name: str | None = None, value: Any = None
@@ -274,9 +289,11 @@ class DbProperty:
             value: Property value (None or empty string deletes)
 
         Returns:
-            True on success, False on failure. Unlike ``get()``, backend
-            faults are reported through this boolean (logged, not raised) —
-            callers MUST check the return value.
+            True on success, False only for a missing name or actor id.
+
+        Raises:
+            DbError: on a backend fault. The property write and its lookup
+                row commit together or not at all.
         """
         if not name:
             return False
@@ -340,8 +357,7 @@ class DbProperty:
             }
             return True
         except Exception as e:
-            logger.error(f"Error setting property {actor_id}/{name}: {e}")
-            return False
+            raise DbError("property set", actor_id) from e
 
     def _update_lookup_entry_in_transaction(
         self, cur: Any, actor_id: str, name: str, old_value: str | None, new_value: str
@@ -356,21 +372,20 @@ class DbProperty:
             old_value: Previous property value
             new_value: New property value
 
-        Best-effort update - logs errors but doesn't fail property write.
+        A failed statement raises: it has aborted the transaction, so the
+        caller's commit would roll the property write back while reporting
+        success. The caller's transaction rolls back and raises instead.
         """
         try:
-            # Delete old lookup entry if exists
+            # Delete old lookup entry if exists (a DELETE of no row is no error)
             if old_value and old_value != new_value:
-                try:
-                    cur.execute(
-                        """
-                        DELETE FROM property_lookup
-                        WHERE property_name = %s AND value = %s AND actor_id = %s
-                        """,
-                        (name, old_value, actor_id),
-                    )
-                except Exception:
-                    pass  # Entry doesn't exist or already deleted
+                cur.execute(
+                    """
+                    DELETE FROM property_lookup
+                    WHERE property_name = %s AND value = %s AND actor_id = %s
+                    """,
+                    (name, old_value, actor_id),
+                )
 
             # Create new lookup entry (skip if value unchanged)
             if not old_value or old_value != new_value:
@@ -396,7 +411,7 @@ class DbProperty:
                 f"old_value_len={len(old_value) if old_value else 0} "
                 f"new_value_len={len(new_value)} error={e}"
             )
-            # Don't fail the property write - accept eventual consistency
+            raise
 
     def _delete_lookup_entry_in_transaction(
         self, cur: Any, actor_id: str | None, name: str, value: str
@@ -410,7 +425,8 @@ class DbProperty:
             name: Property name
             value: Property value
 
-        Best-effort deletion - logs errors but doesn't fail property delete.
+        A failed statement raises, for the reason
+        ``_update_lookup_entry_in_transaction`` gives.
         """
         try:
             cur.execute(
@@ -425,14 +441,18 @@ class DbProperty:
                 f"LOOKUP_DELETE_FAILED: actor={actor_id} property={name} "
                 f"value_len={len(value)} error={e}"
             )
-            # Don't fail the property delete
+            raise
 
     def delete(self) -> bool:
         """
         Delete property using self.handle.
 
         Returns:
-            True on success, False on failure
+            True when the row is gone after the call (an already-absent row
+            counts), False without a handle
+
+        Raises:
+            DbError: on a backend fault
         """
         if not self.handle:
             return False
@@ -468,8 +488,7 @@ class DbProperty:
             self.handle = None
             return True
         except Exception as e:
-            logger.error(f"Error deleting property {actor_id}/{name}: {e}")
-            return False
+            raise DbError("property delete", actor_id) from e
 
     def get_range(
         self,
@@ -807,7 +826,9 @@ class DbPropertyList:
                 env_props = os.getenv("INDEXED_PROPERTIES", "").split(",")
                 self._indexed_properties = [p.strip() for p in env_props if p.strip()]
 
-    def fetch(self, actor_id: str | None = None) -> dict[str, str] | None:
+    def fetch(
+        self, actor_id: str | None = None, *, strict: bool = True
+    ) -> dict[str, str] | None:
         """
         Retrieve the PLAIN (non-list) properties for an actor.
 
@@ -827,7 +848,11 @@ class DbPropertyList:
             actor_id: The actor ID
 
         Returns:
-            Dict of {property_name: property_value}, or None
+            Dict of {property_name: property_value}, or None for a read fault
+            with ``strict=False``
+
+        Raises:
+            DbError: on a read fault (unless ``strict=False``)
         """
         if not actor_id:
             return None
@@ -861,11 +886,13 @@ class DbPropertyList:
                     self.props = dict(rows)
                     return self.props
         except Exception as e:
+            if strict:
+                raise DbError("property list fetch", actor_id) from e
             logger.error(f"Error fetching properties for actor {actor_id}: {e}")
             return None
 
     def fetch_all_including_lists(
-        self, actor_id: str | None = None
+        self, actor_id: str | None = None, *, strict: bool = True
     ) -> dict[str, str] | None:
         """
         Retrieve ALL properties including list properties.
@@ -904,6 +931,8 @@ class DbPropertyList:
                     else:
                         return None
         except Exception as e:
+            if strict:
+                raise DbError("property list fetch_all", actor_id) from e
             logger.error(f"Error fetching all properties for actor {actor_id}: {e}")
             return None
 
@@ -915,7 +944,10 @@ class DbPropertyList:
         but we explicitly delete them here for consistency and clarity.
 
         Returns:
-            True on success, False on failure
+            True when the rows are gone, False without an actor id
+
+        Raises:
+            DbError: on a backend fault
         """
         if not self.actor_id:
             return False
@@ -950,25 +982,21 @@ class DbPropertyList:
                     )
 
                     # Delete lookup entries (redundant with CASCADE but explicit)
-                    if indexed_props:
-                        for name, value in indexed_props:
-                            try:
-                                cur.execute(
-                                    """
-                                    DELETE FROM property_lookup
-                                    WHERE property_name = %s AND value = %s AND actor_id = %s
-                                    """,
-                                    (name, value, self.actor_id),
-                                )
-                            except Exception as e:
-                                logger.warning(
-                                    f"Failed to delete lookup entry {name}={value}: {e}"
-                                )
+                    # A failed statement aborts the transaction, so it is not
+                    # caught here: the commit would roll everything back while
+                    # this method reported success.
+                    for name, value in indexed_props:
+                        cur.execute(
+                            """
+                            DELETE FROM property_lookup
+                            WHERE property_name = %s AND value = %s AND actor_id = %s
+                            """,
+                            (name, value, self.actor_id),
+                        )
 
                 conn.commit()
 
             self.handle = None
             return True
         except Exception as e:
-            logger.error(f"Error deleting properties for actor {self.actor_id}: {e}")
-            return False
+            raise DbError("property list delete", self.actor_id) from e

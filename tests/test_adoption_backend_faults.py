@@ -1,10 +1,8 @@
 """Adoption under a backend read fault (3.16 iteration).
 
-PostgreSQL catches a read error and answers with an empty result: ``None``
-for a bucket, ``[]`` for a trust or subscription list. DynamoDB raises. These
-tests reproduce the PostgreSQL shape at the backend seam, so they hold on
-either backend: the adoption must fail the sign-in closed, never read the
-fault as "nothing there".
+Since 3.16 both backends raise ``DbError`` on a read fault. These tests
+inject one at the backend seam: the adoption must fail the sign-in closed,
+never read the fault as "nothing there".
 """
 
 from collections.abc import Iterator
@@ -18,6 +16,7 @@ from actingweb import trust as trust_module
 from actingweb.actor import Actor
 from actingweb.constants import OAUTH2_SYSTEM_ACTOR
 from actingweb.db import get_attribute, get_subscription_list, get_trust_list
+from actingweb.db.exceptions import DbError
 from actingweb.maintenance import mark_actors_vouched as script
 from actingweb.oauth2 import OAuth2Authenticator, OAuth2Provider
 from actingweb.oauth_session import get_oauth2_session_manager
@@ -50,8 +49,8 @@ def auth() -> OAuth2Authenticator:
 
 @contextmanager
 def bucket_read_fault(config: Any, actor_id: str, bucket: str) -> Iterator[None]:
-    """``get_bucket`` answers ``None`` (PostgreSQL's caught fault) for one
-    bucket of one actor; every other read is real."""
+    """``get_bucket`` raises ``DbError`` (a backend fault, both backends
+    since 3.16) for one bucket of one actor; every other read is real."""
     unpatched = get_attribute(config)
     cls = type(unpatched)
     real = unpatched.get_bucket  # bound before patching; static on DynamoDB
@@ -62,8 +61,9 @@ def bucket_read_fault(config: Any, actor_id: str, bucket: str) -> Iterator[None]
         a = kw.get("actor_id", args[0] if args else None)
         b = kw.get("bucket", args[1] if len(args) > 1 else None)
         if a == actor_id and b == bucket:
-            return None
-        return real(actor_id=a, bucket=b)
+            raise DbError("simulated backend read fault")
+        rest = {k: v for k, v in kw.items() if k not in ("actor_id", "bucket")}
+        return real(actor_id=a, bucket=b, **rest)
 
     with patch.object(cls, "get_bucket", fake):
         yield
@@ -71,16 +71,16 @@ def bucket_read_fault(config: Any, actor_id: str, bucket: str) -> Iterator[None]
 
 @contextmanager
 def list_read_fault(factory: Any, config: Any, actor_id: str) -> Iterator[None]:
-    """A list ``fetch`` behaves as PostgreSQL does on a caught error: ``[]``,
-    or a raise when the caller asked for ``strict``."""
+    """A list ``fetch`` faults: it raises ``DbError``, or answers ``[]``
+    when the caller asked for ``strict=False``."""
     cls = type(factory(config))
     real = cls.fetch
 
     def fake(self: Any, actor_id_: Any = None, **kw: Any) -> Any:
         a = kw.pop("actor_id", actor_id_)
         if a == actor_id:
-            if kw.get("strict"):
-                raise RuntimeError("simulated backend read fault")
+            if kw.get("strict", True):
+                raise DbError("simulated backend read fault")
             return []
         return real(self, actor_id=a, **kw)
 
@@ -117,8 +117,9 @@ class TestWipeConfirmationReadFault:
         plant_squat_state(config, legacy)
         factory = get_trust_list if which == "trusts" else get_subscription_list
 
-        with list_read_fault(factory, config, aid(legacy)):
-            assert auth.lookup_or_create_actor_by_identifier(creator) is None
+        # 3.16: the fault propagates (the integrations answer 503).
+        with list_read_fault(factory, config, aid(legacy)), pytest.raises(DbError):
+            auth.lookup_or_create_actor_by_identifier(creator)
 
         row = Actor(actor_id=aid(legacy), config=config)
         assert not istore(row).auth_method, "a fault must not mark it vouched"

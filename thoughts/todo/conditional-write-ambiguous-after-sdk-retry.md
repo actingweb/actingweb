@@ -8,6 +8,8 @@ are in
 [`../research/2026-09-14-v2-list-mutation-raises-after-its-write-committed.md`](../research/2026-09-14-v2-list-mutation-raises-after-its-write-committed.md)'s
 "Adjacent finding" section.
 
+**Fix together with** [a property-list append cannot be repeated safely after a lost answer](idempotent-list-item-create.md): a key row written in the same conditional step tells "I won on the attempt whose answer I never saw" from "someone else won".
+
 ## What is wrong
 
 PynamoDB 6.1.0's default retry configuration builds a botocore client in

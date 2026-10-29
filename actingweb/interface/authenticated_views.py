@@ -8,6 +8,7 @@ import logging
 from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any, Optional
 
+from ..db.exceptions import DbError
 from ..permission_evaluator import PermissionResult, get_permission_evaluator
 from ..property import rows_for
 from ..property_list import ListItemHandle
@@ -101,6 +102,8 @@ class AuthenticatedPropertyStore:
                 )
             # ALLOWED or NOT_FOUND (fallback to legacy) - proceed
         except PermissionError:
+            raise
+        except DbError:
             raise
         except Exception as e:
             # Fail closed on permission system errors (security best practice)
@@ -414,6 +417,8 @@ class AuthenticatedPropertyListStore:
                 )
         except PermissionError:
             raise
+        except DbError:
+            raise
         except Exception as e:
             # Fail closed on permission system errors (security best practice)
             logger.error(
@@ -487,6 +492,8 @@ class AuthenticatedPropertyListStore:
                 list(names),
                 "read",
             )
+        except DbError:
+            raise
         except Exception as e:
             logger.error(
                 "Permission system error during bulk list read for actor %s: %s. "
@@ -622,6 +629,8 @@ class AuthenticatedSubscriptionManager:
                     f"Subscription denied: {self._auth_context.accessor_id} to {target}"
                 )
         except PermissionError:
+            raise
+        except DbError:
             raise
         except Exception as e:
             # Fail closed on permission system errors (security best practice)

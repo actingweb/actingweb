@@ -19,6 +19,8 @@ import threading
 import time
 from typing import Any
 
+from ..db.exceptions import DbError
+
 # Global cache for MCP client info during session establishment
 _mcp_client_info_cache: dict[str, dict[str, Any]] = {}
 # Upper bound on cached clientInfo entries; oldest are evicted first.
@@ -456,7 +458,7 @@ def _warn_hook_output_schema_not_advertised_once(hook: Any, tool_name: str) -> N
         from ..interface.hooks import get_hook_metadata
 
         hook_metadata = get_hook_metadata(hook)
-    except Exception:  # pragma: no cover - metadata lookup must not break listing
+    except Exception:  # pragma: no cover - metadata lookup must not break listing  # folds DbError: no DB access
         return
     if not hook_metadata:
         return
@@ -850,6 +852,8 @@ class MCPHandler(BaseHandler):
                 },
             }
 
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Error handling MCP GET request: {e}")
             return self.error_response(500, f"Internal server error: {str(e)}")
@@ -985,6 +989,8 @@ class MCPHandler(BaseHandler):
                     request_id, -32601, f"Method not found: {method}"
                 )
 
+        except DbError as e:  # folds DbError: answered by _db_fault_response
+            return self._db_fault_response(data.get("id"), e)
         except Exception as e:
             logger.error(f"Error handling MCP POST request: {e}")
             return self._create_jsonrpc_error(
@@ -1048,7 +1054,7 @@ class MCPHandler(BaseHandler):
                     f"Token store unavailable during initialize; client info "
                     f"not recorded: {e}"
                 )
-            except Exception as e:
+            except Exception as e:  # folds DbError: client-info recording is best-effort; initialize needs no DB
                 logger.warning(
                     f"Could not record client info on initialize: "
                     f"{type(e).__name__}: {e}"
@@ -1184,6 +1190,8 @@ class MCPHandler(BaseHandler):
             evaluator = None
             try:
                 evaluator = get_permission_evaluator(self.config)
+            except DbError:
+                raise
             except Exception as e:
                 logger.debug(f"Permission evaluator unavailable during tools/list: {e}")
                 evaluator = None
@@ -1241,6 +1249,8 @@ class MCPHandler(BaseHandler):
 
                     if not client_type:
                         client_type = "universal"
+            except DbError:
+                raise
             except Exception as e:
                 logger.debug(f"Could not detect client type for tools filtering: {e}")
                 client_type = "universal"
@@ -1274,6 +1284,8 @@ class MCPHandler(BaseHandler):
                                     f"Tool '{tool_name}' filtered out by visibility_predicate for actor {getattr(actor, 'id', '?')}"
                                 )
                                 continue
+                        except DbError:
+                            raise
                         except Exception as e:
                             logger.warning(
                                 f"visibility_predicate for tool '{tool_name}' raised {e}; treating as not visible (fail-closed)"
@@ -1295,6 +1307,8 @@ class MCPHandler(BaseHandler):
                                     f"Tool '{tool_name}' filtered out for peer {peer_id} (actor {actor.id})"
                                 )
                                 continue
+                        except DbError:
+                            raise
                         except Exception as e:
                             logger.warning(
                                 f"Error evaluating tool permission for '{tool_name}': {e}"
@@ -1314,6 +1328,8 @@ class MCPHandler(BaseHandler):
                             override = description_predicate(actor)
                             if override is not None:
                                 description = override
+                        except DbError:
+                            raise
                         except Exception as e:
                             logger.warning(
                                 f"description_predicate for tool '{tool_name}' raised {e}; falling back to static description"
@@ -1393,6 +1409,8 @@ class MCPHandler(BaseHandler):
                         f"Applying ChatGPT formatting for tools/list: {len(tools)} tools (client: {client_name})"
                     )
                     return {"jsonrpc": "2.0", "id": request_id, "result": tools_result}
+        except DbError:
+            raise
         except Exception as e:
             logger.debug(
                 f"Could not apply client-specific formatting for tools/list: {e}"
@@ -1427,6 +1445,8 @@ class MCPHandler(BaseHandler):
             evaluator = None
             try:
                 evaluator = get_permission_evaluator(self.config)
+            except DbError:
+                raise
             except Exception as e:
                 logger.debug(
                     f"Permission evaluator unavailable during resources/list: {e}"
@@ -1462,6 +1482,8 @@ class MCPHandler(BaseHandler):
                                     f"Resource '{uri_template}' filtered out for peer {peer_id} (actor {actor.id})"
                                 )
                                 continue
+                        except DbError:
+                            raise
                         except Exception as e:
                             logger.warning(
                                 f"Error evaluating resource permission for '{uri_template}': {e}"
@@ -1502,6 +1524,8 @@ class MCPHandler(BaseHandler):
             evaluator = None
             try:
                 evaluator = get_permission_evaluator(self.config)
+            except DbError:
+                raise
             except Exception as e:
                 logger.debug(
                     f"Permission evaluator unavailable during prompts/list: {e}"
@@ -1534,6 +1558,8 @@ class MCPHandler(BaseHandler):
                                     f"Prompt '{prompt_name}' filtered out for peer {peer_id} (actor {actor.id})"
                                 )
                                 continue
+                        except DbError:
+                            raise
                         except Exception as e:
                             logger.warning(
                                 f"Error evaluating prompt permission for '{prompt_name}': {e}"
@@ -1597,6 +1623,8 @@ class MCPHandler(BaseHandler):
                     -32003,
                     f"Access denied: You don't have permission to use tool '{tool_name}'",
                 )
+        except DbError:
+            raise
         except Exception as e:
             # Fail closed: an evaluator that raises cannot vouch for this
             # request, and serving it anyway would hand out whatever the broken
@@ -1639,6 +1667,8 @@ class MCPHandler(BaseHandler):
                                         tool_name=tool_name,
                                     ),
                                 }
+                            except DbError:
+                                raise
                             except Exception as e:
                                 logger.error(f"Error executing tool {tool_name}: {e}")
                                 return self._create_jsonrpc_error(
@@ -1696,6 +1726,8 @@ class MCPHandler(BaseHandler):
                     -32003,
                     f"Access denied: You don't have permission to use prompt '{prompt_name}'",
                 )
+        except DbError:
+            raise
         except Exception as e:
             # Fail closed: an evaluator that raises cannot vouch for this
             # request, and serving it anyway would hand out whatever the broken
@@ -1756,6 +1788,8 @@ class MCPHandler(BaseHandler):
                                         ],
                                     },
                                 }
+                            except DbError:
+                                raise
                             except Exception as e:
                                 logger.error(
                                     f"Error generating prompt {prompt_name}: {e}"
@@ -1818,6 +1852,8 @@ class MCPHandler(BaseHandler):
                         -32003,
                         f"Access denied: You don't have permission to access resource '{uri}'",
                     )
+            except DbError:
+                raise
             except Exception as e:
                 # Fail closed: an evaluator that raises cannot vouch for this
                 # request, and serving it anyway would hand out whatever the broken
@@ -1857,7 +1893,7 @@ class MCPHandler(BaseHandler):
                                 variables = match_uri_template(
                                     str(resource_uri), str(uri)
                                 )
-                            except Exception:
+                            except Exception:  # folds DbError: no DB access
                                 variables = None
                             if variables is not None:
                                 uri_matches = True
@@ -1910,6 +1946,8 @@ class MCPHandler(BaseHandler):
                                             ]
                                         },
                                     }
+                                except DbError:
+                                    raise
                                 except Exception as e:
                                     logger.error(f"Error executing resource {uri}: {e}")
                                     return self._create_jsonrpc_error(
@@ -1922,6 +1960,8 @@ class MCPHandler(BaseHandler):
                 request_id, -32601, f"Resource not found: {uri}"
             )
 
+        except DbError as e:  # folds DbError: answered by _db_fault_response
+            return self._db_fault_response(request_id, e)
         except Exception as e:
             logger.error(f"Error reading resource {uri}: {e}")
             return self._create_jsonrpc_error(
@@ -2158,7 +2198,7 @@ class MCPHandler(BaseHandler):
                             break
                 if session_id:
                     return str(session_id)
-        except Exception:
+        except Exception:  # folds DbError: no DB access
             logger.debug("Mcp-Session-Id header lookup failed", exc_info=True)
         return None
 
@@ -2377,6 +2417,11 @@ class MCPHandler(BaseHandler):
             # A store fault is not an invalid token: the callers answer 503
             # so a consumer's guard fails closed and the client retries.
             raise
+        except DbError as e:
+            # Any other backend fault is the same: not an invalid token. A
+            # None here would answer 401 with WWW-Authenticate and send the
+            # client through a fresh OAuth flow during a throttle.
+            raise TokenStoreUnavailable("actor or trust read") from e
         except Exception as e:
             logger.error(f"Error during ActingWeb token authentication: {e}")
             return None
@@ -2461,6 +2506,8 @@ class MCPHandler(BaseHandler):
                     logger.error(f"Failed to create ActingWeb actor {actor_id}")
                     return None
 
+            except DbError:
+                raise
             except Exception as e:
                 logger.error(f"Error creating ActingWeb actor {actor_id}: {e}")
                 return None
@@ -2566,6 +2613,8 @@ class MCPHandler(BaseHandler):
             )
             return None
 
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Error looking up MCP trust relationship: {e}")
             return None
@@ -2602,7 +2651,7 @@ class MCPHandler(BaseHandler):
                 f"{actor_id} cannot be reconciled with authenticated client "
                 f"{client_id} (peer id prefix: '{peer_prefix}')"
             )
-        except Exception:
+        except Exception:  # folds DbError: no DB access
             logger.debug("MCP trust/client invariant check failed", exc_info=True)
 
     def get_auth_header(self) -> str | None:
@@ -2745,6 +2794,8 @@ class MCPHandler(BaseHandler):
             )
             return True
 
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Error validating Google token against actor email: {e}")
             return False
@@ -2772,6 +2823,8 @@ class MCPHandler(BaseHandler):
             if client_info and isinstance(client_info, dict):
                 self._update_trust_with_client_info(actor, client_info)
 
+        except DbError:
+            raise
         except Exception as e:
             logger.debug(f"Could not update client info from request: {e}")
             # Non-critical, don't raise exception
@@ -2879,7 +2932,7 @@ class MCPHandler(BaseHandler):
                     f"Could not load actor {actor.id} to update trust with client info"
                 )
 
-        except Exception as e:
+        except Exception as e:  # folds DbError: non-critical metadata write
             logger.error(f"Could not update trust with client info: {e}")
             # Non-critical, don't raise exception
 
@@ -2898,6 +2951,27 @@ class MCPHandler(BaseHandler):
         return self._create_jsonrpc_error(
             request_id, -32603, "Token store temporarily unavailable; retry"
         )
+
+    def _db_fault_response(self, request_id: Any, exc: DbError) -> dict[str, Any]:
+        """A JSON-RPC error for a database fault in a method.
+
+        The status and headers come from the shared mapping (``_errors``):
+        503 with ``Retry-After`` for a transient fault, 500 for one a retry
+        cannot fix. The body carries fixed text, never the fault's, which can
+        name an actor.
+        """
+        from ..interface.integrations._errors import (
+            db_error_answer,
+            log_db_error,
+            reason_phrase,
+        )
+
+        status, headers, body = db_error_answer(exc)
+        log_db_error(exc)
+        for key, value in headers.items():
+            self.response.headers[key] = value
+        self.response.set_status(status, reason_phrase(status))
+        return self._create_jsonrpc_error(request_id, -32603, body["message"])
 
     def _store_mcp_client_info_temporarily(self, client_info: dict[str, Any]) -> None:
         """Cache an unauthenticated ``initialize``'s clientInfo for this session.
@@ -3145,7 +3219,7 @@ class MCPHandler(BaseHandler):
                     f"Could not load actor {actor_interface.id} to mark client peer_approved"
                 )
 
-        except Exception as e:
+        except Exception as e:  # folds DbError: non-critical; next auth retries
             logger.error(f"Error marking client {client_id} as peer_approved: {e}")
             # Non-critical - client can still access with existing permissions
 
@@ -3158,7 +3232,7 @@ class MCPHandler(BaseHandler):
                 www_auth = mcp_www_authenticate(base_url)
                 if hasattr(self, "response") and self.response:
                     self.response.headers["WWW-Authenticate"] = www_auth
-            except Exception as e:
+            except Exception as e:  # folds DbError: no DB access
                 logger.error(f"Error adding WWW-Authenticate header: {e}")
                 if hasattr(self, "response") and self.response:
                     self.response.headers["WWW-Authenticate"] = (

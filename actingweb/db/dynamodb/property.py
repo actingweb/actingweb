@@ -10,6 +10,7 @@ from pynamodb.indexes import AllProjection, GlobalSecondaryIndex
 from pynamodb.models import Model
 
 from actingweb.db.dynamodb._ensure import ensure_table
+from actingweb.db.dynamodb.property_lookup import is_missing_resource
 from actingweb.db.exceptions import DbError
 
 logger = logging.getLogger(__name__)
@@ -217,7 +218,11 @@ class DbProperty:
         return str(self.handle.value) if self.handle.value else None
 
     def get_actor_id_from_property(
-        self, name: str | None = None, value: str | None = None
+        self,
+        name: str | None = None,
+        value: str | None = None,
+        *,
+        strict: bool = True,
     ) -> str | None:
         """
         Reverse lookup: find actor by property value.
@@ -227,12 +232,25 @@ class DbProperty:
         Args:
             name: Property name (e.g., "oauthId")
             value: Property value to search for
+            strict: When False, a read fault answers None instead of raising
 
         Returns:
             Actor ID if found, None otherwise
+
+        Raises:
+            DbError: on a read fault (unless ``strict=False``)
         """
         if not name or not value:
             return None
+        try:
+            return self._get_actor_id_from_property(name, value)
+        except DbError:
+            if strict:
+                raise
+            logger.error(f"Reverse lookup for '{name}' failed; returning None")
+            return None
+
+    def _get_actor_id_from_property(self, name: str, value: str) -> str | None:
 
         if self._use_lookup_table:
             if name not in self._indexed_properties:
@@ -252,7 +270,7 @@ class DbProperty:
             from actingweb.db.dynamodb.property_lookup import DbPropertyLookup
 
             lookup = DbPropertyLookup()
-            actor_id = lookup.get(property_name=name, value=value)
+            actor_id = lookup.get(property_name=name, value=value)  # raises
 
             if actor_id is None:
                 # Migration fallback tier 1: the deprecated v1 lookup table
@@ -281,7 +299,9 @@ class DbProperty:
                     ):
                         actor_id = str(res.id) if res.id else None
                         break
-                except Exception:
+                except Exception as e:
+                    if not is_missing_resource(e):
+                        raise DbError("property reverse lookup") from e
                     actor_id = None
                 if actor_id:
                     logger.warning(
@@ -296,11 +316,13 @@ class DbProperty:
                 # Load the property into self.handle for subsequent operations
                 try:
                     self.handle = Property.get(actor_id, name, consistent_read=True)
-                except Exception:
+                except DoesNotExist:
                     logger.warning(
                         f"Lookup found actor {actor_id} but property {name} doesn't exist"
                     )
                     return None
+                except Exception as e:
+                    raise DbError("property reverse lookup") from e
 
             return actor_id
         else:
@@ -331,7 +353,7 @@ class DbProperty:
                         f"with_indexed_properties([]). "
                         f"See docs/migration/v3.13 for details."
                     ) from e
-                raise
+                raise DbError("property reverse lookup") from e
 
             if not self.handle:
                 return None
@@ -741,9 +763,14 @@ class DbPropertyList:
         # keeps it. Existing tables are never altered — first creator wins.
         ensure_table(Property if self._use_lookup_table else PropertyLegacy)
 
-    def fetch(self, actor_id: str | None = None) -> dict[str, str] | None:
+    def fetch(
+        self, actor_id: str | None = None, *, strict: bool = True
+    ) -> dict[str, str] | None:
         """Retrieves the PLAIN (non-list) properties of an actor_id from
         the database.
+
+        A read fault raises ``DbError``; ``strict=False`` answers it with
+        None.
 
         Two range-constrained Queries rather than a whole-partition Query
         with client-side filtering: DynamoDB cannot ``OR`` on a sort key,
@@ -769,27 +796,40 @@ class DbPropertyList:
         # whose partition holds no plain properties -- preserved here by
         # unconditionally returning self.props rather than reintroducing a
         # falsy-handle check against either query's result.
-        for condition in (Property.name < "list:", Property.name >= "list;"):
-            self.handle = Property.query(actor_id, range_key_condition=condition)
-            for d in self.handle:
-                self.props[d.name] = d.value
+        try:
+            for condition in (Property.name < "list:", Property.name >= "list;"):
+                self.handle = Property.query(actor_id, range_key_condition=condition)
+                for d in self.handle:
+                    self.props[d.name] = d.value
+        except Exception as e:
+            self.props = {}
+            if strict:
+                raise DbError("property list fetch", actor_id) from e
+            logger.error(f"Error fetching the properties of {actor_id}: {e}")
+            return None
         return self.props
 
     def fetch_all_including_lists(
-        self, actor_id: str | None = None
+        self, actor_id: str | None = None, *, strict: bool = True
     ) -> dict[str, str] | None:
-        """Retrieves ALL properties including list properties - for internal PropertyListStore use"""
+        """Retrieves ALL properties including list properties - for internal PropertyListStore use
+
+        A read fault raises ``DbError``; ``strict=False`` answers it with
+        None.
+        """
         if not actor_id:
             return None
         self.actor_id = actor_id
-        self.handle = Property.query(actor_id)
-        if self.handle:
-            props = {}
-            for d in self.handle:
+        props = {}
+        try:
+            for d in Property.query(actor_id):
                 props[d.name] = d.value
-            return props
-        else:
+        except Exception as e:
+            if strict:
+                raise DbError("property list fetch_all", actor_id) from e
+            logger.error(f"Error fetching all properties of {actor_id}: {e}")
             return None
+        return props
 
     def delete(self) -> bool:
         """Deletes all the properties in the database"""
@@ -802,11 +842,13 @@ class DbPropertyList:
         # access-cost.md) instead of one DeleteItem round trip per row.
         indexed_props: list[tuple[str, str]] = []
         names: list[str] = []
-        self.handle = Property.query(self.actor_id)
-        for p in self.handle:
-            if self._use_lookup_table and str(p.name) in self._indexed_properties:
-                indexed_props.append((str(p.name), str(p.value)))
-            names.append(str(p.name))
+        try:
+            for p in Property.query(self.actor_id):
+                if self._use_lookup_table and str(p.name) in self._indexed_properties:
+                    indexed_props.append((str(p.name), str(p.value)))
+                names.append(str(p.name))
+        except Exception as e:
+            raise DbError("property list delete", self.actor_id) from e
 
         if names:
             try:

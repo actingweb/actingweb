@@ -7,6 +7,7 @@ import time
 from datetime import datetime
 from typing import Any
 
+from actingweb.db.exceptions import DbError
 from actingweb.db.postgresql.connection import get_connection
 
 logger = logging.getLogger(__name__)
@@ -190,7 +191,7 @@ class DbAttribute:
 
     @staticmethod
     def get_bucket(
-        actor_id: str | None = None, bucket: str | None = None
+        actor_id: str | None = None, bucket: str | None = None, *, strict: bool = True
     ) -> dict[str, dict[str, Any]] | None:
         """
         Get all attributes from a bucket.
@@ -201,9 +202,11 @@ class DbAttribute:
 
         Returns:
             Dict of {attribute_name: {data: ..., timestamp: ...}} -- ``{}``
-            for an empty bucket. ``None`` only for missing arguments or a
-            caught backend fault, matching DynamoDB (3.14.4; before,
-            an empty bucket also read as ``None`` here).
+            for an empty bucket. ``None`` only for missing arguments, or a
+            read fault with ``strict=False``. Expired rows are returned.
+
+        Raises:
+            DbError: on a read fault (unless ``strict=False``)
         """
         if not actor_id or not bucket:
             return None
@@ -232,12 +235,18 @@ class DbAttribute:
                     return ret
 
         except Exception as e:
+            if strict:
+                raise DbError("attribute get_bucket") from e
             logger.error(f"Error retrieving bucket {actor_id}/{bucket}: {e}")
             return None
 
     @staticmethod
     def get_attr(
-        actor_id: str | None = None, bucket: str | None = None, name: str | None = None
+        actor_id: str | None = None,
+        bucket: str | None = None,
+        name: str | None = None,
+        *,
+        strict: bool = True,
     ) -> dict[str, Any] | None:
         """
         Get a single attribute from a bucket.
@@ -246,9 +255,14 @@ class DbAttribute:
             actor_id: The actor ID
             bucket: The bucket name
             name: The attribute name
+            strict: When False, a read fault answers None instead of raising
 
         Returns:
-            Dict with {data: ..., timestamp: ...}, or None
+            Dict with {data: ..., timestamp: ...}, or None when absent. An
+            expired row is returned (only ``get_attr_strict`` hides it).
+
+        Raises:
+            DbError: on a read fault (unless ``strict=False``)
         """
         if not actor_id or not bucket or not name:
             return None
@@ -281,6 +295,8 @@ class DbAttribute:
                     }
 
         except Exception as e:
+            if strict:
+                raise DbError("attribute get_attr") from e
             logger.error(f"Error retrieving attribute {actor_id}/{bucket}/{name}: {e}")
             return None
 
@@ -290,10 +306,7 @@ class DbAttribute:
     ) -> dict[str, Any] | None:
         """Read one attribute, distinguishing absence from failure.
 
-        ``get_attr()`` logs and returns ``None`` for both a missing row and a
-        failed query. Callers whose "absent" branch is a decision rather than a
-        fallback — the deletion tombstone read — need the two separated, so
-        operational errors propagate here instead of being swallowed.
+        Absence (or expiry) returns ``None``; a fault raises ``DbError``.
 
         Expired rows read as absent. ``ttl_timestamp`` is only reclaimed by an
         explicit ``delete_expired()`` sweep on this backend, so honouring it at
@@ -304,17 +317,20 @@ class DbAttribute:
 
         bucket_name = bucket + ":" + name
 
-        with get_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT data, timestamp, ttl_timestamp
-                    FROM attributes
-                    WHERE id = %s AND bucket_name = %s AND bucket = %s
-                    """,
-                    (actor_id, bucket_name, bucket),
-                )
-                row = cur.fetchone()
+        try:
+            with get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT data, timestamp, ttl_timestamp
+                        FROM attributes
+                        WHERE id = %s AND bucket_name = %s AND bucket = %s
+                        """,
+                        (actor_id, bucket_name, bucket),
+                    )
+                    row = cur.fetchone()
+        except Exception as e:
+            raise DbError("attribute get_attr_strict") from e
 
         if not row:
             return None
@@ -348,7 +364,11 @@ class DbAttribute:
                          Note: A 1-hour buffer is added for clock skew safety.
 
         Returns:
-            True on success, False on failure
+            True on success (for a delete: the row is gone after the call, an
+            absent row counts), False only for missing arguments
+
+        Raises:
+            DbError: on a backend fault
         """
         if not actor_id or not name or not bucket:
             return False
@@ -381,10 +401,7 @@ class DbAttribute:
                     _log_delete_aftermath(actor_id, bucket, name, rowcount)
                 return True
             except Exception as e:
-                logger.error(
-                    f"Error deleting attribute {actor_id}/{bucket}/{name}: {e}"
-                )
-                return False
+                raise DbError("attribute delete") from e
 
         # Calculate TTL timestamp if provided
         ttl_timestamp = None
@@ -438,8 +455,7 @@ class DbAttribute:
             return True
 
         except Exception as e:
-            logger.error(f"Error setting attribute {actor_id}/{bucket}/{name}: {e}")
-            return False
+            raise DbError("attribute set") from e
 
     def delete_attr(
         self,
@@ -456,7 +472,10 @@ class DbAttribute:
             name: The attribute name
 
         Returns:
-            True on success, False on failure
+            True when the row is gone after the call (an absent row counts)
+
+        Raises:
+            DbError: on a backend fault
         """
         return self.set_attr(actor_id=actor_id, bucket=bucket, name=name, data=None)
 
@@ -616,8 +635,7 @@ class DbAttribute:
             return True
 
         except Exception as e:
-            logger.error(f"Error deleting bucket {actor_id}/{bucket}: {e}")
-            return False
+            raise DbError("attribute delete_bucket") from e
 
     @staticmethod
     def delete_expired(
@@ -726,7 +744,7 @@ class DbAttributeBucketList:
 
     @staticmethod
     def fetch(
-        actor_id: str | None = None,
+        actor_id: str | None = None, *, strict: bool = True
     ) -> dict[str, dict[str, dict[str, Any]]] | None:
         """
         Retrieve all attributes for an actor, grouped by bucket.
@@ -775,12 +793,14 @@ class DbAttributeBucketList:
                     return ret
 
         except Exception as e:
+            if strict:
+                raise DbError("attribute bucket list fetch") from e
             logger.error(f"Error fetching all attributes for actor {actor_id}: {e}")
             return None
 
     @staticmethod
     def fetch_timestamps(
-        actor_id: str | None = None,
+        actor_id: str | None = None, *, strict: bool = True
     ) -> dict[str, Any] | None:
         """
         Retrieve timestamps for all attribute buckets.
@@ -821,6 +841,8 @@ class DbAttributeBucketList:
                     return ret
 
         except Exception as e:
+            if strict:
+                raise DbError("attribute bucket list fetch_timestamps") from e
             logger.error(f"Error fetching timestamps for actor {actor_id}: {e}")
             return None
 
@@ -852,5 +874,4 @@ class DbAttributeBucketList:
             return True
 
         except Exception as e:
-            logger.error(f"Error deleting all attributes for actor {actor_id}: {e}")
-            return False
+            raise DbError("attribute bucket list delete") from e

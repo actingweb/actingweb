@@ -12,6 +12,7 @@ from urllib.parse import urljoin
 
 import requests
 
+from ...db.exceptions import DbError
 from ...oauth2 import OAuth2Authenticator, OAuth2Provider
 from .service_config import ServiceConfig
 
@@ -153,6 +154,8 @@ class ServiceClient:
             )
             return True
 
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Error handling {self.service_config.name} callback: {e}")
             return False
@@ -177,6 +180,8 @@ class ServiceClient:
                 logger.info(f"Refreshed access token for {self.service_config.name}")
                 return True
 
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Error refreshing token for {self.service_config.name}: {e}")
 
@@ -275,6 +280,8 @@ class ServiceClient:
 
             return response.json() if response.content else {}
 
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Error making request to {self.service_config.name}: {e}")
             return None
@@ -326,7 +333,7 @@ class ServiceClient:
                         f"Failed to revoke token with {self.service_config.name}: {response.status_code}"
                     )
                     success = False
-            except Exception as e:
+            except Exception as e:  # folds DbError: third-party HTTP only
                 logger.error(
                     f"Error revoking token with {self.service_config.name}: {e}"
                 )

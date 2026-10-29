@@ -17,6 +17,7 @@ from . import actor as actor_module
 from . import attribute
 from . import config as config_class
 from .constants import ACTINGWEB_SYSTEM_ACTOR, TRUST_TYPES_BUCKET
+from .db.exceptions import DbError
 
 # Backward-compatibility alias expected by tests and older integrations
 TRUST_TYPE_SYSTEM_ACTOR = ACTINGWEB_SYSTEM_ACTOR
@@ -100,6 +101,8 @@ class TrustTypeRegistry:
                 bucket=TRUST_TYPES_BUCKET,
                 config=self.config,
             )
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Error accessing trust types bucket: {e}")
             return None
@@ -145,11 +148,15 @@ class TrustTypeRegistry:
                         # Continue with the actor instance even if creation failed due to existing table
                     else:
                         raise  # Re-raise genuine errors
+                except DbError:
+                    raise
                 except Exception as e:
                     logger.error(f"Error creating system actor: {e}")
                     return None
             self._system_actor = sys_actor
             return self._system_actor
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Error ensuring system actor: {e}")
             return None
@@ -175,6 +182,8 @@ class TrustTypeRegistry:
                 f"Registered trust type '{trust_type.name}' with {len(trust_type.base_permissions)} permissions"
             )
             return True
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Error registering trust type {trust_type.name}: {e}")
             return False
@@ -203,6 +212,8 @@ class TrustTypeRegistry:
             )
             self._cache[name] = trust_type
             return trust_type
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Error loading trust type {name}: {e}")
             return None
@@ -224,11 +235,13 @@ class TrustTypeRegistry:
                     trust_type = TrustType.from_dict(trust_type_data)
                     trust_types.append(trust_type)
                     self._cache[trust_type.name] = trust_type
-                except Exception as e:
+                except Exception as e:  # folds DbError: no DB access
                     logger.error(f"Error parsing trust type {key}: {e}")
                     continue
             self._cache_valid = True
             return trust_types
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Error listing trust types: {e}")
             return []
@@ -252,6 +265,8 @@ class TrustTypeRegistry:
                 logger.error(f"Failed to delete trust type {name}")
                 return False
 
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Error deleting trust type {name}: {e}")
             return False
@@ -273,11 +288,14 @@ def initialize_registry(config: config_class.Config) -> None:
     global _registry, _registry_config
     if _registry is None or _registry_config is not config:
         logger.info("Initializing trust type registry...")
-        _registry = TrustTypeRegistry(config)
-        _registry_config = config
-        _register_default_types(_registry)
+        registry = TrustTypeRegistry(config)
+        # Publish the singleton only once the defaults are registered: a
+        # store fault here raises, and the next call registers them again
+        # instead of serving a registry without them.
+        _register_default_types(registry)
+        _registry, _registry_config = registry, config
         logger.info(
-            f"Trust type registry initialized with {len(_registry.list_types())} types"
+            f"Trust type registry initialized with {len(registry.list_types())} types"
         )
 
 
@@ -286,10 +304,12 @@ def get_registry(config: config_class.Config) -> TrustTypeRegistry:
     global _registry, _registry_config
     if _registry is None or _registry_config is not config:
         # Lazy initialization to keep backward compatibility with tests and apps.
-        # Also rebuilds when handed a *different* application's config.
-        _registry = TrustTypeRegistry(config)
-        _registry_config = config
-        _register_default_types(_registry)
+        # Also rebuilds when handed a *different* application's config. The
+        # singleton is published only once the defaults are registered (see
+        # initialize_registry).
+        registry = TrustTypeRegistry(config)
+        _register_default_types(registry)
+        _registry, _registry_config = registry, config
     return _registry
 
 
@@ -483,6 +503,8 @@ def _register_default_types(registry: TrustTypeRegistry) -> None:
     for trust_type in default_types:
         try:
             registry.register_type(trust_type)
+        except DbError:
+            raise
         except Exception as e:
             logger.error(
                 f"Failed to register default trust type {trust_type.name}: {e}"

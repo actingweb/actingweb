@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
+from .db.exceptions import DbError
+
 if TYPE_CHECKING:
     from .interface.actor_interface import ActorInterface
 
@@ -165,6 +167,8 @@ class CallbackProcessor:
                 f"(via CallbackProcessor)"
             )
             return True
+        except DbError:
+            raise
         except Exception as e:
             logger.error(
                 f"Failed to update subscription {subscription_id} sequence: {e}"
@@ -234,10 +238,20 @@ class CallbackProcessor:
         )
 
     def _add_pending(
-        self, peer_id: str, subscription_id: str, callback: dict[str, Any]
+        self,
+        peer_id: str,
+        subscription_id: str,
+        callback: dict[str, Any],
+        after_seq: int | None = None,
     ) -> bool:
-        """Add callback to pending queue. Returns False if queue full."""
+        """Add callback to pending queue. Returns False if queue full.
+
+        ``after_seq``: the last processed sequence; entries at or below it are
+        processed leftovers and neither count toward the limit nor stay.
+        """
         pending = self._get_pending(peer_id, subscription_id)
+        if after_seq is not None:
+            pending = [c for c in pending if (c.get("sequence") or 0) > after_seq]
 
         if len(pending) >= self._max_pending:
             return False  # Back-pressure
@@ -250,13 +264,15 @@ class CallbackProcessor:
         self._set_pending(peer_id, subscription_id, pending)
         return True
 
-    def _remove_pending(
-        self, peer_id: str, subscription_id: str, sequence: int
+    def _prune_pending(
+        self, peer_id: str, subscription_id: str, through_seq: int
     ) -> None:
-        """Remove callback from pending by sequence."""
+        """Remove every pending callback at or below ``through_seq`` in one
+        write: they are processed, and the sequence record says so."""
         pending = self._get_pending(peer_id, subscription_id)
-        pending = [c for c in pending if c.get("sequence") != sequence]
-        self._set_pending(peer_id, subscription_id, pending)
+        kept = [c for c in pending if (c.get("sequence") or 0) > through_seq]
+        if len(kept) != len(pending):
+            self._set_pending(peer_id, subscription_id, kept)
 
     def _clear_pending(self, peer_id: str, subscription_id: str) -> None:
         """Clear all pending callbacks."""
@@ -319,7 +335,12 @@ class CallbackProcessor:
             # Check for gap
             if sequence > last_seq + 1:
                 # Gap detected - add to pending
-                pending = self._get_pending(peer_id, subscription_id)
+                pending = [
+                    c
+                    for c in self._get_pending(peer_id, subscription_id)
+                    # Entries at or below last_seq are processed leftovers.
+                    if (c.get("sequence") or 0) > last_seq
+                ]
 
                 # Check gap timeout on existing pending
                 if self._check_gap_timeout(pending):
@@ -341,7 +362,9 @@ class CallbackProcessor:
                     "data": data,
                     "callback_type": callback_type,
                 }
-                if not self._add_pending(peer_id, subscription_id, callback_data):
+                if not self._add_pending(
+                    peer_id, subscription_id, callback_data, after_seq=last_seq
+                ):
                     logger.warning(
                         f"Pending queue full for {peer_id}:{subscription_id}"
                     )
@@ -366,15 +389,21 @@ class CallbackProcessor:
                 )
             ]
 
-            # Check pending for consecutive sequences
-            pending = self._get_pending(peer_id, subscription_id)
+            # Check pending for consecutive sequences. The drained ones are
+            # collected here and removed from pending only after the state
+            # write below succeeds: removing them first lost them when that
+            # write faulted or lost the optimistic lock and retried.
+            pending = [
+                c
+                for c in self._get_pending(peer_id, subscription_id)
+                # Entries at or below last_seq are processed leftovers.
+                if (c.get("sequence") or 0) > last_seq
+            ]
+            by_seq = {c.get("sequence"): c for c in pending}
             next_seq = sequence + 1
-            while pending:
-                next_callback = next(
-                    (c for c in pending if c.get("sequence") == next_seq), None
-                )
-                if not next_callback:
-                    break
+            drained: list[int] = []
+            while next_seq in by_seq:
+                next_callback = by_seq[next_seq]
                 callbacks_to_process.append(
                     ProcessedCallback(
                         peer_id=peer_id,
@@ -385,8 +414,7 @@ class CallbackProcessor:
                         timestamp=next_callback["data"].get("timestamp", ""),
                     )
                 )
-                self._remove_pending(peer_id, subscription_id, next_seq)
-                pending = self._get_pending(peer_id, subscription_id)
+                drained.append(next_seq)
                 next_seq += 1
 
             # Update CallbackProcessor-specific state FIRST (optimistic lock)
@@ -402,7 +430,19 @@ class CallbackProcessor:
                 for cb in callbacks_to_process:
                     try:
                         await handler(cb)
-                    except Exception as e:
+                    except DbError:
+                        # The library's own storage write (auto-storage in the
+                        # handler) faulted, and the sequence has not advanced.
+                        # The 503 leaves the diff uncleared on the publisher,
+                        # which does not retry (the protocol's at-most-once
+                        # rule): it comes back through a poll or a gap resync,
+                        # which runs the handler again, so data the handler
+                        # wrote before the fault can be applied twice. The
+                        # consumer data hooks inside the handler fold their own
+                        # errors; a legacy callback hook's DbError arrives
+                        # here too and aborts the rest of the batch.
+                        raise
+                    except Exception as e:  # folds DbError: handled by the clause above
                         # Log with full traceback for debugging, but continue
                         # processing - at-most-once semantics means we don't retry
                         logger.error(
@@ -413,7 +453,30 @@ class CallbackProcessor:
             # This prevents duplicate detection on retry and ensures sequence only
             # advances after the callback has been fully processed
             new_last_seq = callbacks_to_process[-1].sequence
-            if not self._update_last_seq(peer_id, subscription_id, new_last_seq):
+            try:
+                recorded = self._update_last_seq(peer_id, subscription_id, new_last_seq)
+            except DbError as e:  # folds DbError: at-most-once: handlers already ran
+                # The handlers have run: a 503 now would leave the diff
+                # uncleared, and the next poll or resync would run them again.
+                # Keep at-most-once delivery: log it and answer PROCESSED. The
+                # stale sequence makes the next callback look like a gap,
+                # which the gap timeout resyncs; a subscription with no next
+                # callback waits until one arrives.
+                logger.error(
+                    f"Sequence write to {new_last_seq} faulted after processing: {e}"
+                )
+                recorded = True
+            if recorded:
+                # The drained callbacks are processed: they leave pending in
+                # one write, best effort. A later read skips them only if the
+                # sequence write above landed; if both faulted they can run
+                # again (filed in the subscriber hardening todo).
+                if drained:
+                    try:
+                        self._prune_pending(peer_id, subscription_id, new_last_seq)
+                    except DbError as e:  # folds DbError: best-effort prune
+                        logger.error(f"Pruning processed callbacks faulted: {e}")
+            else:
                 # Failed to update subscription - this is critical but we've already
                 # processed the callback, so log error but don't retry
                 logger.error(
@@ -460,6 +523,8 @@ class CallbackProcessor:
             )
             try:
                 await handler(callback)
+            except DbError:
+                raise
             except Exception as e:
                 # Log with full traceback for debugging
                 logger.error(f"Resync handler error: {e}", exc_info=True)
@@ -494,6 +559,8 @@ class CallbackProcessor:
             )
             try:
                 await handler(callback)
+            except DbError:
+                raise
             except Exception as e:
                 logger.error(f"Permission handler error: {e}", exc_info=True)
 
@@ -544,7 +611,7 @@ class CallbackProcessor:
         )
 
         # Get all attributes in bucket and delete those for this peer
-        all_attrs = db.get_bucket() or {}
+        all_attrs = db.get_bucket(strict=False) or {}
         for attr_name in list(all_attrs.keys()):
             if f":{peer_id}:" in attr_name:
                 db.delete_attr(name=attr_name)
@@ -598,7 +665,12 @@ class CallbackProcessor:
             # Check for gap
             if sequence > last_seq + 1:
                 # Gap detected - add to pending
-                pending = self._get_pending(peer_id, subscription_id)
+                pending = [
+                    c
+                    for c in self._get_pending(peer_id, subscription_id)
+                    # Entries at or below last_seq are processed leftovers.
+                    if (c.get("sequence") or 0) > last_seq
+                ]
 
                 # Check gap timeout on existing pending
                 if self._check_gap_timeout(pending):
@@ -620,7 +692,9 @@ class CallbackProcessor:
                     "data": data,
                     "callback_type": callback_type,
                 }
-                if not self._add_pending(peer_id, subscription_id, callback_data):
+                if not self._add_pending(
+                    peer_id, subscription_id, callback_data, after_seq=last_seq
+                ):
                     logger.warning(
                         f"Pending queue full for {peer_id}:{subscription_id}"
                     )
@@ -645,15 +719,21 @@ class CallbackProcessor:
                 )
             ]
 
-            # Check pending for consecutive sequences
-            pending = self._get_pending(peer_id, subscription_id)
+            # Check pending for consecutive sequences. The drained ones are
+            # collected here and removed from pending only after the state
+            # write below succeeds: removing them first lost them when that
+            # write faulted or lost the optimistic lock and retried.
+            pending = [
+                c
+                for c in self._get_pending(peer_id, subscription_id)
+                # Entries at or below last_seq are processed leftovers.
+                if (c.get("sequence") or 0) > last_seq
+            ]
+            by_seq = {c.get("sequence"): c for c in pending}
             next_seq = sequence + 1
-            while pending:
-                next_callback = next(
-                    (c for c in pending if c.get("sequence") == next_seq), None
-                )
-                if not next_callback:
-                    break
+            drained: list[int] = []
+            while next_seq in by_seq:
+                next_callback = by_seq[next_seq]
                 callbacks_to_process.append(
                     ProcessedCallback(
                         peer_id=peer_id,
@@ -664,8 +744,7 @@ class CallbackProcessor:
                         timestamp=next_callback["data"].get("timestamp", ""),
                     )
                 )
-                self._remove_pending(peer_id, subscription_id, next_seq)
-                pending = self._get_pending(peer_id, subscription_id)
+                drained.append(next_seq)
                 next_seq += 1
 
             # Update CallbackProcessor-specific state FIRST (optimistic lock)
@@ -681,7 +760,19 @@ class CallbackProcessor:
                 for cb in callbacks_to_process:
                     try:
                         handler(cb)
-                    except Exception as e:
+                    except DbError:
+                        # The library's own storage write (auto-storage in the
+                        # handler) faulted, and the sequence has not advanced.
+                        # The 503 leaves the diff uncleared on the publisher,
+                        # which does not retry (the protocol's at-most-once
+                        # rule): it comes back through a poll or a gap resync,
+                        # which runs the handler again, so data the handler
+                        # wrote before the fault can be applied twice. The
+                        # consumer data hooks inside the handler fold their own
+                        # errors; a legacy callback hook's DbError arrives
+                        # here too and aborts the rest of the batch.
+                        raise
+                    except Exception as e:  # folds DbError: handled by the clause above
                         # Log with full traceback for debugging, but continue
                         # processing - at-most-once semantics means we don't retry
                         logger.error(
@@ -692,7 +783,30 @@ class CallbackProcessor:
             # This prevents duplicate detection on retry and ensures sequence only
             # advances after the callback has been fully processed
             new_last_seq = callbacks_to_process[-1].sequence
-            if not self._update_last_seq(peer_id, subscription_id, new_last_seq):
+            try:
+                recorded = self._update_last_seq(peer_id, subscription_id, new_last_seq)
+            except DbError as e:  # folds DbError: at-most-once: handlers already ran
+                # The handlers have run: a 503 now would leave the diff
+                # uncleared, and the next poll or resync would run them again.
+                # Keep at-most-once delivery: log it and answer PROCESSED. The
+                # stale sequence makes the next callback look like a gap,
+                # which the gap timeout resyncs; a subscription with no next
+                # callback waits until one arrives.
+                logger.error(
+                    f"Sequence write to {new_last_seq} faulted after processing: {e}"
+                )
+                recorded = True
+            if recorded:
+                # The drained callbacks are processed: they leave pending in
+                # one write, best effort. A later read skips them only if the
+                # sequence write above landed; if both faulted they can run
+                # again (filed in the subscriber hardening todo).
+                if drained:
+                    try:
+                        self._prune_pending(peer_id, subscription_id, new_last_seq)
+                    except DbError as e:  # folds DbError: best-effort prune
+                        logger.error(f"Pruning processed callbacks faulted: {e}")
+            else:
                 # Failed to update subscription - this is critical but we've already
                 # processed the callback, so log error but don't retry
                 logger.error(
@@ -739,6 +853,8 @@ class CallbackProcessor:
             )
             try:
                 handler(callback)
+            except DbError:
+                raise
             except Exception as e:
                 # Log with full traceback for debugging
                 logger.error(f"Resync handler error: {e}", exc_info=True)
@@ -773,6 +889,8 @@ class CallbackProcessor:
             )
             try:
                 handler(callback)
+            except DbError:
+                raise
             except Exception as e:
                 logger.error(f"Permission handler error: {e}", exc_info=True)
 

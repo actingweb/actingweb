@@ -22,6 +22,7 @@ import httpx
 from . import attribute
 from . import config as config_class
 from .constants import PEER_CAPABILITIES_BUCKET
+from .db.exceptions import DbError
 
 if TYPE_CHECKING:
     from .interface.actor_interface import ActorInterface
@@ -199,7 +200,7 @@ class PeerCapabilities:
                         version_response = client.get(version_url, timeout=5.0)
                         if version_response.status_code == 200:
                             version = version_response.text.strip()
-                    except Exception:
+                    except Exception:  # folds DbError: peer HTTP only
                         pass  # Version is optional
 
                     # Update trust with capabilities
@@ -221,6 +222,8 @@ class PeerCapabilities:
                 f"Network error fetching capabilities from {self._peer_id}: {e}"
             )
             return False
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Error fetching capabilities from {self._peer_id}: {e}")
             return False
@@ -266,7 +269,7 @@ class PeerCapabilities:
                         version_response = await client.get(version_url, timeout=5.0)
                         if version_response.status_code == 200:
                             version = version_response.text.strip()
-                    except Exception:
+                    except Exception:  # folds DbError: peer HTTP only
                         pass  # Version is optional
 
                     # Update trust with capabilities
@@ -288,6 +291,8 @@ class PeerCapabilities:
                 f"Network error fetching capabilities from {self._peer_id}: {e}"
             )
             return False
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Error fetching capabilities from {self._peer_id}: {e}")
             return False
@@ -487,7 +492,7 @@ class CachedCapabilitiesStore:
                 bucket=PEER_CAPABILITIES_BUCKET,
                 config=self.config,
             )
-        except Exception as e:
+        except Exception as e:  # folds DbError: constructor only, no DB access
             logger.error(
                 f"Error accessing peer capabilities bucket for actor {actor_id}: {e}"
             )
@@ -529,6 +534,8 @@ class CachedCapabilitiesStore:
                 logger.error(f"Failed to store peer capabilities {capabilities_key}")
                 return False
 
+        except DbError:
+            raise
         except Exception as e:
             logger.error(
                 f"Error storing peer capabilities "
@@ -554,7 +561,7 @@ class CachedCapabilitiesStore:
             capabilities_key = f"{actor_id}:{peer_id}"
 
             # Get capabilities from attribute bucket
-            attr_data = bucket.get_attr(name=capabilities_key)
+            attr_data = bucket.get_attr(name=capabilities_key, strict=False)
 
             if not attr_data or "data" not in attr_data:
                 return None
@@ -568,7 +575,7 @@ class CachedCapabilitiesStore:
 
             return capabilities
 
-        except Exception as e:
+        except Exception as e:  # folds DbError: strict=False read; JSON parse
             logger.error(f"Error loading peer capabilities {cache_key}: {e}")
             return None
 
@@ -594,6 +601,8 @@ class CachedCapabilitiesStore:
                 logger.debug(f"No peer capabilities to delete: {capabilities_key}")
                 return False
 
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Error deleting peer capabilities {actor_id}:{peer_id}: {e}")
             return False
@@ -608,7 +617,7 @@ class CachedCapabilitiesStore:
 
         try:
             # Get all attributes from the peer capabilities bucket
-            bucket_data = bucket.get_bucket() or {}
+            bucket_data = bucket.get_bucket(strict=False) or {}
 
             for attr_name, attr_info in bucket_data.items():
                 try:
@@ -620,13 +629,13 @@ class CachedCapabilitiesStore:
                     cache_key = f"{capabilities.actor_id}:{capabilities.peer_id}"
                     self._cache[cache_key] = capabilities
 
-                except Exception as e:
+                except Exception as e:  # folds DbError: JSON parse only
                     logger.error(f"Error parsing peer capabilities {attr_name}: {e}")
                     continue
 
             return capabilities_list
 
-        except Exception as e:
+        except Exception as e:  # folds DbError: strict=False read; JSON parse
             logger.error(f"Error listing peer capabilities for actor {actor_id}: {e}")
             return []
 
@@ -807,6 +816,8 @@ def fetch_peer_methods_and_actions(
         )
         return capabilities
 
+    except DbError:
+        raise
     except Exception as e:
         capabilities.fetch_error = f"Exception: {str(e)}"
         logger.error(f"Exception fetching peer capabilities from {peer_id}: {e}")
@@ -909,6 +920,8 @@ async def fetch_peer_methods_and_actions_async(
         )
         return capabilities
 
+    except DbError:
+        raise
     except Exception as e:
         capabilities.fetch_error = f"Exception: {str(e)}"
         logger.error(f"Exception fetching peer capabilities async from {peer_id}: {e}")

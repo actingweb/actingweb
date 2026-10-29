@@ -9,6 +9,7 @@ from pynamodb.indexes import AllProjection, GlobalSecondaryIndex
 from pynamodb.models import Model
 
 from actingweb.db.dynamodb._ensure import ensure_table
+from actingweb.db.exceptions import DbError
 
 """
     DbActor handles all db operations for an actor
@@ -53,8 +54,14 @@ class DbActor:
 
     """
 
-    def get(self, actor_id: str | None = None) -> dict[str, Any] | None:
-        """Retrieves the actor from the database"""
+    def get(
+        self, actor_id: str | None = None, *, strict: bool = True
+    ) -> dict[str, Any] | None:
+        """Retrieves the actor from the database.
+
+        None when no such actor exists. A read fault raises ``DbError``;
+        ``strict=False`` answers it with None instead (logged at ERROR).
+        """
         if not actor_id:
             return None
         try:
@@ -62,20 +69,11 @@ class DbActor:
         except DoesNotExist:
             return None
         except Exception as e:
-            # Anything that is not a confirmed absence — a throttle, a timeout,
-            # bad credentials, a missing table — used to return None here with
-            # no log line at any level, so callers could not tell "no such
-            # actor" from "the read failed" and nothing recorded that it had.
-            # None is still returned for backward compatibility (raising would
-            # turn every throttle across auth, OAuth2 and MCP into a 500), so
-            # this ERROR is the only signal that an existence check just
-            # answered "no" for an infrastructure reason. Callers needing the
-            # distinction should use actingweb.deletion.get_deletion_status(),
-            # which reports UNKNOWN rather than guessing.
+            if strict:
+                raise DbError("actor get") from e
             logger.error(
                 f"Failed to read actor {actor_id} from DynamoDB: "
-                f"{type(e).__name__}: {e}. Returning None — callers will see "
-                "this as 'actor does not exist'."
+                f"{type(e).__name__}: {e}. Returning None (strict=False)."
             )
             return None
         if self.handle:
@@ -89,36 +87,59 @@ class DbActor:
             return None
 
     def get_by_creator(
-        self, creator: str | None = None, *, strict: bool = False
+        self,
+        creator: str | None = None,
+        *,
+        strict: bool = True,
+        consistent: bool = False,
+        ids_only: bool = False,
     ) -> dict[str, Any] | list[dict[str, Any]] | None:
-        """Retrieves the actor from db based on creator field
+        """The actors with this creator, as a list (``[]`` when none).
 
-        Returns None if none was found. If one is found, that one is
-        loaded in the object. If more, all are returned.
+        ``ids_only`` answers ``[{"id": ...}]`` from the index alone, with no
+        per-row read (``consistent`` is then ignored): a caller that reads
+        only some of the rows lists them cheaply.
 
-        The creator index is eventually consistent, so it can list an actor
-        whose row was just deleted; that entry is None. With ``strict`` such
-        an entry is left out, and a read fault raises instead of reading as
-        None.
+        The creator index is eventually consistent: it can list an actor
+        whose row was just deleted, or miss one just created. With
+        ``consistent`` each listed row is re-read with a consistent get and a
+        row deleted since the index listed it is left out; without it the
+        index's projection is returned as is.
+
+        A read fault raises ``DbError``; ``strict=False`` answers it with
+        None instead.
         """
         if not creator:
             return None
         if "@" in creator:
             creator = creator.lower()
-        self.handle = Actor.creator_index.query(creator)
-        ret = []
-        for c in self.handle:
-            logger.debug("get_by_creator matched actor id=" + c.id)
-            if strict:
-                try:
-                    row = Actor.get(c.id, consistent_read=True)
-                except DoesNotExist:
-                    continue  # deleted since the index listed it
+        ret: list[dict[str, Any]] = []
+        try:
+            query = (
+                Actor.creator_index.query(creator, attributes_to_get=["id"])
+                if ids_only
+                else Actor.creator_index.query(creator)
+            )
+            for c in query:
+                logger.debug("get_by_creator matched actor id=" + c.id)
+                if ids_only:
+                    ret.append({"id": c.id})
+                    continue
+                if consistent:
+                    try:
+                        row = Actor.get(c.id, consistent_read=True)
+                    except DoesNotExist:
+                        continue  # deleted since the index listed it
+                else:
+                    row = c
                 ret.append(
                     {"id": row.id, "creator": row.creator, "passphrase": row.passphrase}
                 )
-                continue
-            ret.append(self.get(actor_id=c.id))
+        except Exception as e:
+            if strict:
+                raise DbError("actor get_by_creator") from e
+            logger.error(f"Error retrieving actors by creator {creator}: {e}")
+            return None
         return ret
 
     def modify(
@@ -138,10 +159,10 @@ class DbActor:
             self.handle.passphrase = passphrase.decode("utf-8")  # type: ignore[attr-defined]
         try:
             self.handle.save()  # type: ignore[attr-defined]
-        except Exception:
+        except Exception as e:
             # A failed save leaves the handle as stored.
             self.handle.creator, self.handle.passphrase = previous  # type: ignore[attr-defined]
-            raise
+            raise DbError("actor modify") from e
         return True
 
     def create(
@@ -165,23 +186,33 @@ class DbActor:
             return False
         self.handle = Actor(id=actor_id, creator=creator, passphrase=passphrase)
         try:
-            # get() answers None on a fault as well as on absence, so the
-            # check above cannot keep a live actor from being overwritten.
+            # The condition, not the check above, is what keeps a live actor
+            # from being overwritten by a concurrent create.
             self.handle.save(condition=Actor.id.does_not_exist())
         except PutError as e:
+            self.handle = None
             if e.cause_response_code == "ConditionalCheckFailedException":
                 logger.warning("Trying to create actor that exists(" + actor_id + ")")
-                self.handle = None
                 return False
-            raise
+            raise DbError("actor create") from e
+        except Exception as e:
+            self.handle = None
+            raise DbError("actor create") from e
         return True
 
-    def delete(self):
-        """Deletes the actor in the database"""
+    def delete(self) -> bool:
+        """Deletes the actor in the database.
+
+        True when the row is gone after the call (an already-absent row
+        counts); a fault raises ``DbError``. False only without a handle.
+        """
         if not self.handle:
             logger.debug("Attempted delete of DbActor without db handle")
             return False
-        self.handle.delete()  # type: ignore[attr-defined]
+        try:
+            self.handle.delete()  # type: ignore[attr-defined]
+        except Exception as e:
+            raise DbError("actor delete") from e
         self.handle = None
         return True
 
@@ -195,25 +226,29 @@ class DbActorList:
     DbActorList does all the db operations for list of actor objects
     """
 
-    def fetch(self):
-        """Retrieves ALL actors in the database.
+    def fetch(self, *, strict: bool = True) -> list[dict[str, Any]] | bool:
+        """Retrieves ALL actors in the database (``[]`` when there are none).
 
         Admin/maintenance use only: this is a deliberate full-table Scan,
         O(table size) and unpaginated — do not call it on a serving path.
+        A read fault raises ``DbError``; ``strict=False`` answers it with
+        False instead.
         """
-        self.handle = Actor.scan()
-        if self.handle:
-            ret = []
-            for t in self.handle:
+        ret = []
+        try:
+            for t in Actor.scan():
                 ret.append(
                     {
                         "id": t.id,
                         "creator": t.creator,
                     }
                 )
-            return ret
-        else:
+        except Exception as e:
+            if strict:
+                raise DbError("actor list fetch") from e
+            logger.error(f"Error fetching actor list: {e}")
             return False
+        return ret
 
     def __init__(self):
         self.handle = None

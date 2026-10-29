@@ -219,7 +219,7 @@ class TestSubscriptionDiffs:
             "sequence": 5,
         }
         mock_db_subscription.get.return_value = mock_sub_data
-        mock_db_subscription.modify.return_value = True
+        mock_db_subscription.increment_seq.return_value = 6
         mock_config.DbSubscription.DbSubscription.return_value = mock_db_subscription
 
         sub = Subscription(
@@ -231,11 +231,12 @@ class TestSubscriptionDiffs:
 
         result = sub.increase_seq()
 
-        # increase_seq now returns the new sequence number (int), not boolean
+        # increase_seq returns the number the backend allocated atomically
         assert result == 6
         assert sub.subscription is not None  # Type narrowing for pyright
         assert sub.subscription["sequence"] == 6
-        mock_db_subscription.modify.assert_called_once_with(seqnr=6)
+        mock_db_subscription.increment_seq.assert_called_once_with()
+        mock_db_subscription.modify.assert_not_called()
 
     def test_subscription_add_diff(self):
         """Test add_diff creates new diff entry."""

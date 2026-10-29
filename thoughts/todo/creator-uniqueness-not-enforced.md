@@ -36,6 +36,13 @@ duplicate silently to the lowest id.
 - Whether enforcement is opt-in (a `with_unique_creator()` toggle, mirroring
   the existing config flag referenced in
   `docs/guides/authentication.rst`) or unconditional.
+- **CORS on a `CreatorTaken` 409 at `/`** (verification
+  `thoughts/verifications/2026-10-29-db-fault-semantics-and-creator-uniqueness-5.md`,
+  E5). Since the PR #160 review, `_errors.error_cors_headers("/")` sends a
+  wildcard origin without credentials. `POST /` is unauthenticated, so a
+  409 tells anyone (cross-origin or not) whether an address already has an
+  actor once `CreatorTaken` is raised; CORS is not the boundary. Decide in
+  PR 2 whether the factory's 409 should say "taken" at all.
 
 ## Constraints inherited from the 3.14.5 plan
 

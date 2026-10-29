@@ -1447,7 +1447,7 @@ class ActingWebApp:
                         model.Meta.table_name,
                         exc,
                     )
-        except Exception as e:
+        except Exception as e:  # folds DbError: startup best-effort pre-warm, lazy per-accessor creation still runs
             logger.info(f"Table pre-warm skipped: {e}")
 
     def _check_lookup_backfill_needed(self) -> None:
@@ -1482,7 +1482,7 @@ class ActingWebApp:
             v1_has_rows = False
             try:
                 v1_has_rows = any(True for _ in PropertyLookup.scan(limit=1))
-            except Exception:
+            except Exception:  # folds DbError: startup diagnostic probe, log only
                 pass
             if v1_has_rows:
                 logger.error(
@@ -1503,7 +1503,7 @@ class ActingWebApp:
                     f"'{PropertyLookupV2.Meta.table_name}'. "
                     "See docs/migration/v3.13."
                 )
-        except Exception as e:
+        except Exception as e:  # folds DbError: startup diagnostic probe, log only
             logger.debug(f"Lookup backfill check skipped: {e}")
 
     def integrate_flask(self, flask_app: Any) -> "FlaskIntegration":
@@ -1581,7 +1581,7 @@ class ActingWebApp:
             from ..permission_initialization import initialize_permission_system
 
             initialize_permission_system(self.get_config())
-        except Exception as e:
+        except Exception as e:  # folds DbError: startup init; the registry, store and evaluator build lazily on first use
             import logging
 
             logger = logging.getLogger(__name__)

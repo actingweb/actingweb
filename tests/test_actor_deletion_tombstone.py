@@ -258,12 +258,18 @@ class TestAcceptance3InfrastructureFailureIsNotDeleted:
         read as "not deleted".
         """
         from actingweb.db.dynamodb.attribute import Attribute, DbAttribute
+        from actingweb.db.exceptions import DbError
 
         with mock.patch.object(Attribute, "get", side_effect=RuntimeError("throttled")):
-            # The lenient read swallows it...
-            assert DbAttribute.get_attr(actor_id="a", bucket="b", name="c") is None
-            # ...the strict one does not.
-            with pytest.raises(RuntimeError):
+            # Only an explicit strict=False read folds it (3.16)...
+            assert (
+                DbAttribute.get_attr(actor_id="a", bucket="b", name="c", strict=False)
+                is None
+            )
+            # ...the default read and the strict one raise DbError.
+            with pytest.raises(DbError):
+                DbAttribute.get_attr(actor_id="a", bucket="b", name="c")
+            with pytest.raises(DbError):
                 DbAttribute.get_attr_strict(actor_id="a", bucket="b", name="c")
 
     @pytest.mark.skipif(not _is_dynamodb(), reason="patches the pynamodb model")
@@ -280,22 +286,20 @@ class TestAcceptance3InfrastructureFailureIsNotDeleted:
         )
 
     @pytest.mark.skipif(not _is_dynamodb(), reason="DynamoDB accessor")
-    def test_failed_actor_read_is_logged(self, caplog):
-        """DEL2's minimum: a swallowed infrastructure fault must leave a trace.
-
-        DbActor.get() still returns None (raising would turn every throttle
-        across auth, OAuth2 and MCP into a 500 on a validated release), so the
-        ERROR is the only signal that an existence check just answered "no" for
-        an infrastructure reason.
-        """
+    def test_failed_actor_read_raises_and_folds_only_when_asked(self, caplog):
+        """Since 3.16 a fault raises DbError (the integrations answer 503); a
+        ``strict=False`` read still answers None and leaves an ERROR trace."""
         from actingweb.db.dynamodb.actor import Actor as ActorModel
         from actingweb.db.dynamodb.actor import DbActor
+        from actingweb.db.exceptions import DbError
 
         with mock.patch.object(
             ActorModel, "get", side_effect=RuntimeError("throttled")
         ):
+            with pytest.raises(DbError):
+                DbActor().get(actor_id="some-actor")
             with caplog.at_level("ERROR"):
-                result = DbActor().get(actor_id="some-actor")
+                result = DbActor().get(actor_id="some-actor", strict=False)
 
         assert result is None
         assert any("Failed to read actor" in r.message for r in caplog.records)

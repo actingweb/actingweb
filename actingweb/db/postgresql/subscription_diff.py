@@ -4,6 +4,9 @@ import logging
 from datetime import datetime
 from typing import Any
 
+import psycopg
+
+from actingweb.db.exceptions import DbError
 from actingweb.db.postgresql.connection import get_connection
 
 logger = logging.getLogger(__name__)
@@ -27,6 +30,8 @@ class DbSubscriptionDiff:
         actor_id: str | None = None,
         subid: str | None = None,
         seqnr: int | None = None,
+        *,
+        strict: bool = True,
     ) -> dict[str, Any] | None:
         """
         Retrieve subscription diff from the database.
@@ -121,6 +126,8 @@ class DbSubscriptionDiff:
                     }
 
         except Exception as e:
+            if strict:
+                raise DbError("subscription diff get") from e
             logger.error(
                 f"Error retrieving subscription diff {actor_id}/{subid}/{seqnr}: {e}"
             )
@@ -143,7 +150,11 @@ class DbSubscriptionDiff:
             seqnr: The sequence number (default 1)
 
         Returns:
-            True on success, False on failure
+            True on success; False for missing arguments or a sequence
+            number that already has a diff
+
+        Raises:
+            DbError: on a backend fault
         """
         if not actor_id or not subid:
             logger.debug("Attempt to create subscriptiondiff without actorid or subid")
@@ -178,18 +189,23 @@ class DbSubscriptionDiff:
 
             return True
 
-        except Exception as e:
-            logger.error(
-                f"Error creating subscription diff {actor_id}/{subid}/{seqnr}: {e}"
-            )
+        except psycopg.errors.UniqueViolation:
+            # The sequence number is taken: a definite "not written", not an
+            # ambiguous fault the caller would have to treat as maybe-landed.
+            logger.warning(f"Diff {subid_seqnr} of {actor_id} already exists")
             return False
+        except Exception as e:
+            raise DbError("subscription diff create") from e
 
     def delete(self) -> bool:
         """
         Delete subscription diff using self.handle.
 
         Returns:
-            True on success, False on failure
+            True on success, False only for missing arguments or handle
+
+        Raises:
+            DbError: on a backend fault
         """
         if not self.handle:
             return False
@@ -220,10 +236,7 @@ class DbSubscriptionDiff:
             return True
 
         except Exception as e:
-            logger.error(
-                f"Error deleting subscription diff {actor_id}/{subid_seqnr}: {e}"
-            )
-            return False
+            raise DbError("subscription diff delete") from e
 
 
 class DbSubscriptionDiffList:
@@ -246,7 +259,11 @@ class DbSubscriptionDiffList:
         self.subid = None
 
     def fetch(
-        self, actor_id: str | None = None, subid: str | None = None
+        self,
+        actor_id: str | None = None,
+        subid: str | None = None,
+        *,
+        strict: bool = True,
     ) -> list[dict[str, Any]] | list[Any]:
         """
         Retrieve subscription diffs for an actor.
@@ -307,6 +324,8 @@ class DbSubscriptionDiffList:
                     return self.diffs
 
         except Exception as e:
+            if strict:
+                raise DbError("subscription diff list fetch") from e
             logger.error(f"Error fetching subscription diffs for actor {actor_id}: {e}")
             return []
 
@@ -320,7 +339,10 @@ class DbSubscriptionDiffList:
             seqnr: Optional sequence number to delete up to (inclusive)
 
         Returns:
-            True on success, False on failure
+            True on success, False only for missing arguments or handle
+
+        Raises:
+            DbError: on a backend fault
         """
         if not self.actor_id:
             return False
@@ -376,7 +398,4 @@ class DbSubscriptionDiffList:
             return True
 
         except Exception as e:
-            logger.error(
-                f"Error deleting subscription diffs for actor {self.actor_id}: {e}"
-            )
-            return False
+            raise DbError("subscription diff list delete") from e

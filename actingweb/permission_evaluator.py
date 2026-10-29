@@ -24,6 +24,7 @@ from typing import Any
 from actingweb.db import get_trust
 
 from . import config as config_class
+from .db.exceptions import DbError
 from .identifiers import has_control_characters
 from .trust_permissions import get_trust_permission_store, merge_permissions
 from .trust_type_registry import get_registry as get_trust_type_registry
@@ -134,6 +135,8 @@ class PermissionEvaluator:
                 )
             return result
 
+        except DbError:
+            raise
         except Exception as e:
             logger.error(
                 f"Error evaluating permission for {actor_id}:{peer_id} -> {permission_type.value}:{target!r}: {e}"
@@ -254,6 +257,8 @@ class PermissionEvaluator:
                     f"{operation} on {denied_props}"
                 )
 
+        except DbError:
+            raise
         except Exception as e:
             logger.error(
                 f"Error in bulk property evaluation for {actor_id}:{peer_id}: {e}"
@@ -421,6 +426,8 @@ class PermissionEvaluator:
 
             return allowed_items
 
+        except DbError:
+            raise
         except Exception as e:
             logger.error(
                 f"Error getting allowed items for {actor_id}:{peer_id} -> {permission_type.value}: {e}"
@@ -519,6 +526,8 @@ class PermissionEvaluator:
 
             return None
 
+        except DbError:
+            raise
         except Exception as e:
             logger.error(
                 f"Error looking up trust relationship {actor_id}:{peer_id}: {e}"

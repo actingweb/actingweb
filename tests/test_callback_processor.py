@@ -90,7 +90,9 @@ def mock_attributes() -> Generator[tuple[MagicMock, dict[str, Any]], None, None]
     with patch("actingweb.attribute.Attributes") as mock:
         storage: dict[str, Any] = {}
 
-        def get_attr_side_effect(name: str | None = None) -> dict[str, Any] | None:
+        def get_attr_side_effect(
+            name: str | None = None, **kw: Any
+        ) -> dict[str, Any] | None:
             if name is None:
                 return None
             return storage.get(name)
@@ -108,7 +110,7 @@ def mock_attributes() -> Generator[tuple[MagicMock, dict[str, Any]], None, None]
                 del storage[name]
             return True
 
-        def get_bucket_side_effect() -> dict[str, Any]:
+        def get_bucket_side_effect(**kw: Any) -> dict[str, Any]:
             return storage.copy()
 
         mock_instance = MagicMock()
@@ -600,7 +602,7 @@ class TestCallbackProcessorOptimisticLocking:
                     del storage[name]
                 return True
 
-            def get_bucket_side_effect() -> dict[str, Any]:
+            def get_bucket_side_effect(**kw: Any) -> dict[str, Any]:
                 return storage.copy()
 
             mock_instance = MagicMock()

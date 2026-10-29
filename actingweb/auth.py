@@ -8,6 +8,7 @@ from pynamodb.exceptions import DoesNotExist, PutError, UpdateError
 from actingweb import actor, request_context, trust
 from actingweb import config as config_class
 from actingweb.constants import TRUSTEE_CREATOR
+from actingweb.db.exceptions import DbError
 from actingweb.secret_compare import secret_equals
 
 # This is where each path and subpath in actingweb is assigned an authentication type
@@ -202,7 +203,11 @@ class Auth:
                 trust_record["created_at"] = usage_time
             if "established_via" in modify_kwargs:
                 trust_record["established_via"] = modify_kwargs["established_via"]
-        except (PutError, UpdateError) as e:
+        except (  # folds DbError: best-effort usage metadata write
+            PutError,
+            UpdateError,
+            DbError,
+        ) as e:
             logger.warning(f"Database error recording trust usage metadata: {e}")
         except DoesNotExist:
             logger.warning("Trust record no longer exists, skipping metadata update")
@@ -360,6 +365,8 @@ class Auth:
 
                 return False
 
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Error during OAuth2 token validation: {e}")
             return False
@@ -414,6 +421,10 @@ class Auth:
             logger.debug(f"SPA token authentication successful for actor {actor_id}")
             return True
 
+        except DbError:
+            # A token-store fault is not an invalid token: answering False
+            # would sign the user out. The integration answers 503.
+            raise
         except Exception as e:
             logger.debug(f"SPA token check failed: {e}")
             return False
@@ -533,6 +544,8 @@ class Auth:
 
                 return False
 
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Error during async OAuth2 token validation: {e}")
             return False
@@ -646,6 +659,8 @@ class Auth:
                 logger.debug(f"Redirecting to OAuth2: {auth_url[:100]}...")
                 return True
 
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Error creating OAuth2 redirect: {e}")
 
@@ -662,7 +677,7 @@ class Auth:
             else:
                 # Fallback to constructing from config and path
                 return f"{self.config.proto}{self.config.fqdn}{path}"
-        except Exception:
+        except Exception:  # folds DbError: no DB access
             # Last resort fallback
             return f"{self.config.proto}{self.config.fqdn}{path}"
 

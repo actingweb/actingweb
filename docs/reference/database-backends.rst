@@ -504,6 +504,47 @@ Connection Management
   - ``PG_POOL_TIMEOUT``
 - For AWS Lambda: Consider RDS Proxy for connection management
 
+Fault Contract
+~~~~~~~~~~~~~~
+
+Since 3.16 both backends answer a database fault the same way, and
+``actingweb.db.protocols`` states it once for every method:
+
+- **Absence is an answer.** A read that finds nothing answers ``None``,
+  ``[]`` or ``{}``.
+- **A fault raises.** A throttle, a timeout, a lost connection or a query
+  error raises ``actingweb.db.exceptions.DbError``, chained to the backend's
+  exception. It is never answered like absence.
+- **``strict=False`` folds.** Every ``get``, ``fetch`` and ``get_bucket``
+  takes it: the fault is logged at ERROR and answered as absence. Only reads
+  that display something pass it.
+- **Deletes on a loaded handle are confirmed.** True means the row is gone
+  after the call, including a row that was already absent; a fault raises.
+- **Conditional operations keep their meaning.** ``delete_attr_conditional``,
+  ``conditional_update_attr`` and the ``*_if_*`` methods answer True only
+  when *this* call changed the row, which single-use consumption needs.
+- **Writes raise.** A ``create``, ``modify`` or ``set`` that faults raises;
+  False is kept for the documented refusals (missing arguments or handle, an
+  id that is taken).
+- **Sequence numbers are allocated atomically.**
+  ``DbSubscription.increment_seq()`` adds 1 in one update and returns the new
+  number, so concurrent changes to one subscription never share a number. A
+  number that gets no diff stays a gap; the subscriber detects it at the next
+  diff and polls or resyncs, as the protocol's "Callback Delivery Semantics"
+  section describes.
+
+``Attributes.get_bucket()`` and ``get_attr()`` follow the same rule;
+``InternalStore`` (``actor.store``) is the one wrapper that folds, and its
+``loaded`` property tells an empty bucket from one that could not be read.
+
+Both integrations answer a ``DbError`` that reaches them with **503**,
+``Retry-After: 5`` and a fixed body
+(``{"error": "temporarily_unavailable", ...}``); the exception text goes to
+the log only. A backend error a retry cannot fix (a validation, size or
+constraint error) answers **500** without ``Retry-After``. ``CreatorTaken``,
+a ``DbError`` subclass for a creator another actor holds, answers **409**; it
+is reserved for enforced creator uniqueness and nothing raises it yet.
+
 Data Types
 ~~~~~~~~~~
 

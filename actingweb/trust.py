@@ -3,6 +3,8 @@ from typing import Any
 
 from actingweb.db import get_trust, get_trust_list
 
+from .db.exceptions import DbError
+
 logger = logging.getLogger(__name__)
 
 
@@ -124,7 +126,7 @@ class Trust:
                         f"Deleted OAuth2 client {oauth2_client_id} as part of trust "
                         f"deletion"
                     )
-            except Exception as e:
+            except Exception as e:  # folds DbError: after trust delete
                 logger.error(f"Error deleting OAuth2 client during trust deletion: {e}")
                 # Continue even if client deletion fails
 
@@ -362,19 +364,32 @@ class Trusts:
     in .trusts as a dictionary
     """
 
-    def fetch(self) -> list[dict[str, Any]] | list[Any] | None:
+    def fetch(self, strict: bool = True) -> list[dict[str, Any]] | list[Any] | None:
+        """The actor's trusts. A read fault raises ``DbError``;
+        ``strict=False`` answers ``[]`` instead (and caches nothing)."""
         if self.trusts is not None:
             return self.trusts
         if not self.list and self.config:
             self.list = get_trust_list(self.config)
         if not self.trusts and self.list:
-            self.trusts = self.list.fetch(actor_id=self.actor_id)
+            try:
+                self.trusts = self.list.fetch(actor_id=self.actor_id)
+            except DbError:  # folds DbError: strict=False read, the caller asked
+                if strict:
+                    raise
+                logger.error(
+                    f"Trusts of {self.actor_id} could not be read; "
+                    "answering [] (strict=False)"
+                )
+                return []
         return self.trusts
 
     def delete(self) -> bool:
         if not self.list:
             logger.debug("Already deleted list in trusts")
             return False
+        if self.trusts is None:
+            self.fetch()  # strict: the list deletes the rows it fetched
         self.list.delete()
         return True
 
@@ -390,4 +405,11 @@ class Trusts:
             return
         if self.config:
             self.list = get_trust_list(self.config)
-        self.fetch()
+        # The caller's own fetch() decides: a failed read caches nothing,
+        # so fetch() re-reads and raises, or folds with strict=False. A
+        # strict read here made every strict=False fold on this list
+        # unreachable.
+        try:
+            self.fetch()
+        except DbError:  # folds DbError: the caller's fetch() re-reads and decides
+            pass

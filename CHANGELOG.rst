@@ -46,15 +46,15 @@ SECURITY
   the trust and subscription lists third and marks last; if the wipe cannot be
   confirmed the sign-in fails closed with an ERROR log and the actor stays
   unvouched, so the next sign-in retries. Every read the rule acts on must be
-  answered by the backend: PostgreSQL reports a caught read fault as an empty
-  result, and a marker, list or session bucket that could not be read fails
-  the sign-in closed instead of passing for "nothing there", so a database
-  blip neither wipes a vouched actor nor marks a half-wiped one vouched. The
-  writes and deletes it relies on are confirmed the same way: the marker is
-  read back after it is written (an actor whose marker did not land is
-  removed again at creation, and a clean whose marker did not land fails the
-  sign-in), and the session revoke confirms each delete, which DynamoDB
-  otherwise reports as done on a fault. The actors with the creator are
+  answered by the backend: a marker, list or session bucket that could not be
+  read fails the sign-in closed instead of passing for "nothing there" (with
+  the fault contract below, a fault raises ``DbError`` and the sign-in
+  answers 503), so a database blip neither wipes a vouched actor nor marks a
+  half-wiped one vouched. The writes and deletes it relies on are confirmed
+  the same way: the marker is read back after it is written (an actor whose
+  marker did not land is removed again at creation, and a clean whose marker
+  did not land fails the sign-in), and the session revoke confirms each
+  delete. The actors with the creator are
   listed with a strict read before anything is removed: a listing that
   faults or misses the actor being replaced, or a listed actor that cannot be
   read, fails the sign-in with every actor still in place, and a new actor is
@@ -130,8 +130,83 @@ SECURITY
   vouches for that address unless it passes ``unvouch=True`` (new), which
   applies the endpoint's rules.
 
+REMOVED
+~~~~~~~
+
+- **``Subscription.decrease_seq()`` is removed.** It rolled a subscription's
+  sequence number back after a diff could not be stored, which could hand
+  the number to a second change. A number whose diff is not stored now stays
+  a gap (see the sequence-number entry under FIXED). Nothing in the library
+  called it after that change; code that did should drop the call.
+
 CHANGED
 ~~~~~~~
+
+- **Breaking: a custom database backend must implement
+  ``DbSubscription.increment_seq()``.** The library allocates each diff's
+  sequence number through it, as one atomic update that returns the new
+  number (``None`` when the row is gone), instead of writing ``previous + 1``
+  through ``modify(seqnr=...)``. The two built-in backends implement it. A
+  backend without it fails with ``AttributeError`` at its first diff. See
+  the migration guide's "Custom database backends".
+
+- **Breaking: a database fault raises ``DbError`` instead of reading as
+  "not found".** Before 3.16 PostgreSQL caught every query error and answered
+  ``None``, ``[]`` or ``False``, and DynamoDB did the same on most single-row
+  reads, so a throttle or a timeout looked exactly like absence, and a caller
+  that acted on "absent" created, overwrote or deleted on a guess (the FIXED
+  entries below list eleven). The fault contract is now the same on both
+  backends and is stated in ``actingweb.db.protocols``: every ``get``,
+  ``fetch``, ``get_by_creator``, ``get_bucket`` and reverse lookup raises
+  ``actingweb.db.exceptions.DbError`` on a fault unless called with
+  ``strict=False``; writes raise too; a delete through a loaded handle
+  answers ``True`` when the row is gone, an already-absent row included;
+  conditional deletes still answer ``True`` only when that call removed the
+  row. ``Attributes.get_bucket()``/``get_attr()`` are strict by default
+  (``strict=False`` folds), ``actor.store`` still never raises on a read and
+  keeps ``loaded`` as its signal, and the property list container raises
+  instead of reading a fault as an empty list. Both integrations register an
+  app-level handler: a ``DbError`` that reaches Flask or FastAPI, from a
+  library route or your own, answers **503** with ``Retry-After: 5`` and a
+  fixed JSON body (``"error": "temporarily_unavailable"``); the exception text
+  is logged, never sent. A cross-origin client can read the answer: it
+  carries the SPA allowlist's CORS headers on the SPA routes, the wildcard
+  set on the other OAuth2 endpoints, and a wildcard set without credentials
+  on ``/``. It never carries a redirect or cookie the handler set before the
+  fault. A backend error a retry cannot fix (a validation, size or
+  constraint error) answers **500** without ``Retry-After``.
+  ``CreatorTaken``, a new ``DbError`` subclass for a creator another actor
+  holds, answers **409**; nothing raises it yet (it is reserved for enforced
+  creator uniqueness). ``get_by_creator`` gains
+  ``consistent`` (DynamoDB's per-row consistent re-read, no longer implied by
+  ``strict``) and ``ids_only``. **Behavior change:** on DynamoDB, a
+  ``get_by_creator`` call without ``consistent=True`` returns the rows as the
+  creator index has them, which can lag a passphrase change or a deletion;
+  it used to re-read each row consistently. Pass ``consistent=True`` where
+  the answer decides something. **Behavior change:** a throttled DynamoDB or a
+  PostgreSQL pool timeout that used to answer 401, 404 or an empty list
+  answers 503; a sign-in that hits one answers 503 instead of a failed login,
+  a token-store fault no longer signs a SPA user out, and a permission check
+  whose override cannot be read answers 503 instead of denying (or, in the
+  property, method and action handlers, falling back to the trust type's
+  default access). **Behavior change:** the hook runners no longer swallow a
+  ``DbError``: a hook (``oauth_success``, a property, method or action hook,
+  a callback hook) whose own store read faults now fails the request with
+  503 instead of being logged and treated as "no answer", which for
+  ``oauth_success`` meant "accepted". Notifications fired after the work
+  committed (``actor_created``, ``actor_adopted``, ``actor_deleted_complete``,
+  ``trust_approved``) still log a fault and let the request succeed. A subscription callback whose
+  storage write faults answers 503; the publisher does not retry, so the diff
+  stays there for the subscriber's next poll or gap resync, which runs the
+  handler again. Once the callback's handlers have run, a fault recording its
+  sequence is logged
+  and the callback answers as processed, so the handlers do not run twice.
+  The two list maintenance tools (``migrate_property_lists``,
+  ``verify_property_lists``) exit **2** when the actor list cannot be read,
+  where they exited 0 with "No actors found". Check any
+  ``except Exception`` around ``ActorInterface`` calls that treats a failed
+  read as "absent", and any custom backend: it must accept ``strict`` and
+  raise ``DbError`` (see the migration guide's "Fault contract").
 
 - **``auth_method`` is now set before ``actor_created`` fires.** It used to be
   written after the actor was created, so an ``actor_created`` hook could not
@@ -358,6 +433,152 @@ FIXED
   replacement on DynamoDB.** The creator index is eventually consistent and
   can still list the just-deleted actor, which reads back as ``None``; the
   uniqueness check dereferenced it. ``None`` entries are skipped now.
+
+- **A trust read that faulted issued a new secret over a live OAuth trust.**
+  ``TrustManager.create_or_update_oauth_trust`` read the existing trust, and
+  a fault read as "none", so it generated a new secret, reset
+  ``peer_approved`` and upserted over the stored row. The read raises now and
+  nothing is written. (B1)
+
+- **A permission-override update could overwrite the stored override with a
+  partial one.** ``PUT /<id>/trust/<rel>/<peer>`` and
+  ``PUT .../permissions`` read the existing override, and a fault read as
+  "none", so the request's partial update was stored as the whole override
+  and the peer notified. The read propagates now (503) and nothing is stored
+  or sent. (B2)
+
+- **One faulted read cached "no permission override" for the whole
+  process.** ``TrustPermissionStore.get_permissions`` cached the fault's
+  ``None``, and the evaluator then applied the trust type's base permissions
+  to that peer until restart. Nothing is cached on a fault now; the store
+  and the evaluator re-raise ``DbError``, so the request answers 503 instead
+  of being evaluated against the wrong permissions. (B3)
+
+- **With ``unique_creator`` a listing fault let ``Actor.create`` insert a
+  duplicate.** The uniqueness check listed the creator's actors, and a
+  PostgreSQL fault answered "none". The listing is strict and consistent now,
+  so a fault refuses the create. (B4)
+
+- **A sign-in, the email form or the factory form could create a second
+  actor for an address that has one.** ``Actor.get_from_creator`` read a
+  listing fault as "no actor", and its callers created one. It raises now; a
+  sign-in answers 503 and creates nothing. (B5)
+
+- **A faulted peer-trustee read created a new peer actor.**
+  ``Actor.get_peer_trustee`` read a fault as "no peer" and POSTed to the
+  peer's factory, creating a peer actor and a reciprocal trust. It raises
+  now, before any request. (B6)
+
+- **A faulted read reset a subscription's callback queue.** The callback
+  processor read its state, pending queue and sequence with folding reads, so
+  a fault overwrote the queue and treated every callback as a gap. The reads
+  raise before any write now, and ``POST /<id>/callbacks/subscriptions``
+  answers 503 so the peer retries with the queue and state untouched. (B7)
+
+- **``Actor.delete`` could delete an actor without notifying its peers.**
+  The trust and subscription lists were read after the wipe had started, and
+  a PostgreSQL fault answered "none", so the actor was deleted, its peers
+  never told and their per-peer data orphaned. Both lists are read first now,
+  strictly: a fault raises before ``Actor.delete`` writes its tombstone or
+  removes anything. The ``DELETE /<id>`` route still writes its own tombstone
+  and fires ``actor_deleted`` before it calls ``Actor.delete``, so there a
+  fault answers 503 with the tombstone already written. (B8)
+
+- **Two concurrent changes to one subscription could share a sequence
+  number, and a failed diff could hand its number out again.** The publisher
+  read the sequence, added 1 and wrote it back, so two writers both produced
+  diff N + 1: PostgreSQL rejected the second (its change was lost without a
+  gap) and DynamoDB overwrote the first. A diff that could not be stored also
+  rolled the number back. Each diff's number is now allocated with one atomic
+  update (``DbSubscription.increment_seq``), and a number whose diff was not
+  stored stays a gap, as the protocol requires ("the sender MUST continue
+  incrementing sequence numbers for each change"). A subscriber that
+  ``register_diffs`` skips on a store fault also gets a gap, so it detects the
+  missed change at the next diff and polls or resyncs. **Behavior change:**
+  after a failed diff store the next diff carries the following number, not
+  the same one again. When the sequence row itself cannot be reached no gap
+  can be made, and only a periodic poll recovers that change. Both backends
+  now refuse a diff whose number already has one (DynamoDB overwrote it).
+  Upgrade every worker before the 3.16 ones publish diffs: a 3.15 worker
+  still writes the sequence as ``previous + 1`` and can move it back. A
+  custom backend must implement ``increment_seq`` (see the migration guide).
+  (D4, G4, D5)
+
+- **Resuming suspended subscriptions could lose every change made while
+  they were suspended.** ``resume_subscriptions()`` removed the suspension
+  first and then read the subscribers with a folding read, so a fault there
+  answered 0 resyncs, the same as "was not suspended", and a fault resyncing
+  one subscriber stopped the rest. A retry found nothing suspended. Changes
+  made during a suspension store no diff, so the resync is their only
+  recovery. The subscribers are now read strictly before the suspension is
+  removed, every subscriber gets its resync attempt, and if any faulted the
+  suspension is put back and the fault raised. **Behavior change:** such a
+  fault answers 503 and the call can be retried. A fault no retry can fix
+  (an item over the backend's size limit) is logged as that subscriber's
+  miss instead, and a resync that fails over HTTP is not counted: a return
+  value below the number of subscribers means some did not get the resync.
+  (A5, A6, C6)
+
+- **On DynamoDB, ``GET /<id>/subscriptions/<peer>/<subid>`` listed diffs in
+  key order.** Past sequence 9 the diffs came back as 1, 10, 11, 2, because
+  the list was sorted into a result that was then thrown away. They are now
+  in sequence order, as on PostgreSQL. (H5)
+
+- **Deleting an outbound subscription could delete the peer's whole stored
+  dataset.** ``Actor.delete_subscription`` counted the actor's other
+  subscriptions to that peer, and a fault read as "none", so it deleted the
+  ``RemotePeerStore`` bucket. The fault propagates now; neither the
+  subscription nor the bucket is deleted. (B9)
+
+- **A faulted read during a permission callback skipped revocation
+  cleanup.** ``POST /<id>/callbacks/permissions/<peer>`` read the previous
+  permissions, and a fault read as "first grant": revoked data was kept and
+  everything was synced. The callback answers 503 now, before anything is
+  stored or synced. (B10)
+
+- **A faulted read reset an open circuit breaker.** The fan-out manager read
+  a peer's persisted breaker, and a fault read as "no breaker": a fresh,
+  closed one was created and persisted over the open one. That delivery is
+  skipped now (``error="breaker_state_unreadable"``) and the stored state is
+  left as it was. (B11)
+
+- **An actor whose sign-in marker could not be read was ranked like an
+  unvouched one.** With several actors sharing an address, a fault on the
+  owner's vouched actor let a lower-id unvouched sibling (an attacker's
+  actor renamed to the address, say) win the sign-in, be cleaned and then
+  outrank the owner's for good. ``get_from_creator`` raises on an unreadable
+  marker now, and the replacement creates a successor only when every actor
+  left is a ``factory`` one: an unreadable one fails the sign-in. (BR)
+
+- **Every sign-in read every factory actor for the address.** With an open
+  factory anyone can add actors to an address faster than the per-sign-in
+  cap removes them, and each sign-in read and loaded all of them (about
+  three reads each) to remove ten; a fault on any of them failed it.
+  ``get_by_creator(ids_only=True)`` now lists ids from the index alone, the
+  lookup reads actors in id order only up to the first vouched one plus the
+  cap, the listing is passed down instead of repeated, and a fault on an
+  actor the sign-in will not touch no longer blocks it. (BS)
+
+- **A fault reading the OAuth2 state encryption key replaced the key.** The
+  state manager read the stored key inside a catch-all, so a throttle or
+  timeout on the system actor's property read looked like "no key yet": a
+  new key was generated and stored over the old one, and every MCP OAuth2
+  authorization in flight on every instance then failed with an invalid
+  state. A fault now fails the request (503) and leaves the stored key alone;
+  the next request reads it. A faulted key write or system-actor load no
+  longer falls back to an in-memory key either.
+
+- **The default trust types could go missing after a store fault at
+  startup.** The trust-type registry was published before its default types
+  were registered, so a fault during that registration left a registry
+  without them for the life of the process, and a permission check on a
+  default type answered "not found". The registry is now published only once
+  the defaults are in place; a fault fails the request and the next one
+  registers them again.
+
+- **A generated OAuth2 state key was written to the log.** When the state
+  manager could not store a key it generated one in memory and logged it in
+  full. It now logs that a non-persistent key is in use, not the key.
 
 v3.15.1: September 29, 2026
 ---------------------------

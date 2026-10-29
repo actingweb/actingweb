@@ -3,6 +3,9 @@
 import logging
 from typing import Any
 
+import psycopg
+
+from actingweb.db.exceptions import DbError
 from actingweb.db.postgresql.connection import get_connection
 
 logger = logging.getLogger(__name__)
@@ -26,6 +29,8 @@ class DbSubscription:
         actor_id: str | None = None,
         peerid: str | None = None,
         subid: str | None = None,
+        *,
+        strict: bool = True,
     ) -> dict[str, Any] | None:
         """
         Retrieve subscription from the database.
@@ -82,6 +87,8 @@ class DbSubscription:
                     return result
 
         except Exception as e:
+            if strict:
+                raise DbError("subscription get") from e
             logger.error(
                 f"Error retrieving subscription {actor_id}/{peerid}/{subid}: {e}"
             )
@@ -114,7 +121,10 @@ class DbSubscription:
             callback: Callback flag (default False)
 
         Returns:
-            True on success, False on failure
+            True on success, False only for missing arguments or handle
+
+        Raises:
+            DbError: on a backend fault
         """
         if not actor_id or not peerid or not subid:
             return False
@@ -167,11 +177,14 @@ class DbSubscription:
 
             return True
 
-        except Exception as e:
-            logger.error(
-                f"Error creating subscription {actor_id}/{peerid}/{subid}: {e}"
-            )
+        except psycopg.errors.UniqueViolation:
+            # A concurrent create won: the row exists, as the pre-check would
+            # have said. Answer False like DbActor.create, not a 503 that
+            # every retry would repeat.
+            logger.warning(f"Trying to create a subscription that exists ({actor_id})")
             return False
+        except Exception as e:
+            raise DbError("subscription create") from e
 
     def modify(
         self,
@@ -198,7 +211,10 @@ class DbSubscription:
             callback: New callback flag
 
         Returns:
-            True on success, False on failure
+            True on success, False only for missing arguments or handle
+
+        Raises:
+            DbError: on a backend fault
         """
         if not self.handle:
             logger.debug("Attempted modification of DbSubscription without db handle")
@@ -279,15 +295,67 @@ class DbSubscription:
             return True
 
         except Exception as e:
-            logger.error(f"Error modifying subscription {actor_id}/{peer_sub_id}: {e}")
-            return False
+            raise DbError("subscription modify") from e
+
+    def increment_seq(
+        self,
+        actor_id: str | None = None,
+        peerid: str | None = None,
+        subid: str | None = None,
+    ) -> int | None:
+        """Atomically add 1 to the stored sequence and return the new value.
+
+        One ``UPDATE ... SET seqnr = seqnr + 1 ... RETURNING seqnr``: two
+        concurrent writers get two numbers. Works on the loaded handle, or on
+        the row the three keys name without reading it first. None when the
+        subscription row does not exist. A fault raises ``DbError``; the
+        increment may then have committed, so the caller must not reuse the
+        number it expected.
+        """
+        keyed = bool(actor_id and peerid and subid)
+        if not keyed:
+            if not self.handle:
+                logger.debug(
+                    "Attempted increment_seq of DbSubscription without db handle"
+                )
+                return None
+            actor_id = self.handle.get("id")
+            peerid = self.handle.get("peerid")
+            subid = self.handle.get("subscriptionid")
+        if not actor_id or not peerid or not subid:
+            logger.error("DbSubscription handle missing required fields")
+            return None
+        try:
+            with get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE subscriptions
+                        SET seqnr = seqnr + 1
+                        WHERE id = %s AND peer_sub_id = %s
+                        RETURNING seqnr
+                        """,
+                        (actor_id, peerid + ":" + subid),
+                    )
+                    row = cur.fetchone()
+                conn.commit()
+        except Exception as e:
+            raise DbError("subscription increment_seq") from e
+        if row is None:
+            return None
+        if not keyed and self.handle is not None:
+            self.handle["sequence"] = int(row[0])
+        return int(row[0])
 
     def delete(self) -> bool:
         """
         Delete subscription using self.handle.
 
         Returns:
-            True on success, False on failure
+            True on success, False only for missing arguments or handle
+
+        Raises:
+            DbError: on a backend fault
         """
         if not self.handle:
             logger.debug("Attempted delete of DbSubscription with no handle set.")
@@ -319,8 +387,7 @@ class DbSubscription:
             return True
 
         except Exception as e:
-            logger.error(f"Error deleting subscription {actor_id}/{peer_sub_id}: {e}")
-            return False
+            raise DbError("subscription delete") from e
 
 
 class DbSubscriptionList:
@@ -341,7 +408,7 @@ class DbSubscriptionList:
         self.subscriptions = []
 
     def fetch(
-        self, actor_id: str | None = None, *, strict: bool = False
+        self, actor_id: str | None = None, *, strict: bool = True
     ) -> list[dict[str, Any]] | list[Any]:
         """
         Retrieve all subscriptions for an actor.
@@ -391,9 +458,9 @@ class DbSubscriptionList:
                     return self.subscriptions
 
         except Exception as e:
-            logger.error(f"Error fetching subscriptions for actor {actor_id}: {e}")
             if strict:
-                raise
+                raise DbError("subscription list fetch") from e
+            logger.error(f"Error fetching subscriptions for actor {actor_id}: {e}")
             return []
 
     def delete(self) -> bool:
@@ -401,7 +468,10 @@ class DbSubscriptionList:
         Delete all subscriptions for the actor.
 
         Returns:
-            True on success, False on failure
+            True on success, False only for missing arguments or handle
+
+        Raises:
+            DbError: on a backend fault
         """
         if not self.actor_id:
             return False
@@ -422,5 +492,4 @@ class DbSubscriptionList:
             return True
 
         except Exception as e:
-            logger.error(f"Error deleting subscriptions for actor {self.actor_id}: {e}")
-            return False
+            raise DbError("subscription list delete") from e

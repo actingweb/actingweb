@@ -110,7 +110,7 @@ def fetch_jwks(jwks_uri: str, *, force: bool = False) -> dict[str, Any] | None:
             _JWKS_NEGATIVE_CACHE.pop(jwks_uri, None)
         return jwks
 
-    except Exception as e:
+    except Exception as e:  # folds DbError: peer HTTP only
         logger.warning("Exception fetching JWKS from %s: %s", jwks_uri, e)
         with _LOCK:
             _JWKS_NEGATIVE_CACHE[jwks_uri] = _now()

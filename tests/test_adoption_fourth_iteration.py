@@ -19,18 +19,20 @@ from actingweb.attribute import Attributes
 from actingweb.aw_web_request import AWWebObj
 from actingweb.constants import ACTINGWEB_SYSTEM_ACTOR, EMAIL_VERIFY_TOKEN_INDEX_BUCKET
 from actingweb.db import get_actor
+from actingweb.db.exceptions import DbError
 from actingweb.handlers.oauth_email import OAuth2EmailHandler
 from actingweb.interface.actor_interface import ActorInterface
 from actingweb.maintenance import mark_actors_vouched as script
 from actingweb.oauth2 import OAuth2Authenticator, OAuth2Provider
 from tests._adoption_helpers import (
     aid,
+    backend_fault,
     create_core_actor,
     istore,
     make_config,
+    marker_write_fault,
     uuid_email,
 )
-from tests.test_adoption_write_faults import backend_fault, marker_write_fault
 
 
 @pytest.fixture
@@ -219,16 +221,14 @@ class TestCreateOnATakenId:
         older = Attributes(actor_id=actor_id, bucket="system_state", config=config)
         assert older.set_attr("keep", data={"v": 1})
         try:
-            with marker_write_fault(config, actor_id):
-                assert (
-                    Actor(config=config).create(
-                        url="https://test.example.com/",
-                        creator="system",
-                        passphrase="p",
-                        actor_id=actor_id,
-                        auth_method="system",
-                    )
-                    is False
+            # 3.16: a marker-write fault rolls the row back and raises (503).
+            with marker_write_fault(config, actor_id), pytest.raises(DbError):
+                Actor(config=config).create(
+                    url="https://test.example.com/",
+                    creator="system",
+                    passphrase="p",
+                    actor_id=actor_id,
+                    auth_method="system",
                 )
 
             assert not Actor(actor_id=actor_id, config=config).id

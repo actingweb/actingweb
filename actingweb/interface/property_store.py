@@ -7,6 +7,7 @@ import logging
 from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any, Optional
 
+from ..db.exceptions import DbError
 from ..property import PropertyStore as CorePropertyStore
 from ..property_list import ListItemHandle
 
@@ -73,6 +74,8 @@ class PropertyStore:
                 key, operation, actor_interface, value, path
             )
             return result if result is not None else value
+        except DbError:
+            raise
         except Exception as e:
             logger.warning(f"Error executing property hook for {key}: {e}")
             return value
@@ -90,7 +93,7 @@ class PropertyStore:
                 resource=resource or None,
                 blob=blob,
             )
-        except Exception as e:
+        except Exception as e:  # folds DbError: diff after the write committed
             logger.warning(f"Error registering diff for {key}: {e}")
 
     def __getitem__(self, key: str) -> Any:
@@ -312,7 +315,7 @@ class NotifyingListProperty:
                 resource=None,
                 blob=json.dumps(diff_info),
             )
-        except Exception as e:
+        except Exception as e:  # folds DbError: diff after the write committed
             logger.warning(f"Error registering diff for list {self._list_name}: {e}")
 
     # Read-only operations - delegate directly

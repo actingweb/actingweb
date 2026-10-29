@@ -22,6 +22,8 @@ from typing import (
     is_typeddict,
 )
 
+from ..db.exceptions import DbError
+
 # Import permission system for transparent permission checking
 try:
     from ..permission_evaluator import PermissionResult, get_permission_evaluator
@@ -123,7 +125,7 @@ def _typeddict_to_json_schema(typed_dict_class: type) -> dict[str, Any]:
     """
     try:
         hints = get_type_hints(typed_dict_class)
-    except Exception:
+    except Exception:  # folds DbError: no DB access (type-hint introspection)
         return {"type": "object"}
 
     properties: dict[str, Any] = {}
@@ -171,7 +173,7 @@ def _get_auto_schemas(
 
     try:
         hints = get_type_hints(func)
-    except Exception:
+    except Exception:  # folds DbError: no DB access (type-hint introspection)
         # Type hints may fail to resolve in some cases
         return None, None
 
@@ -437,6 +439,8 @@ class HookRegistry:
                 # No specific permission rule - allow for backward compatibility
                 return True
 
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Error in hook permission check: {e}")
             return True  # Allow on errors to maintain compatibility
@@ -628,6 +632,8 @@ class HookRegistry:
                     if value is None and operation in ["put", "post"]:
                         # Hook rejected the operation
                         return None
+                except DbError:
+                    raise
                 except Exception as e:
                     logger.error(f"Error in property hook for {property_name}: {e}")
                     if operation in ["put", "post"]:
@@ -643,6 +649,8 @@ class HookRegistry:
                     )
                     if value is None and operation in ["put", "post"]:
                         return None
+                except DbError:
+                    raise
                 except Exception as e:
                     logger.error(f"Error in wildcard property hook: {e}")
                     if operation in ["put", "post"]:
@@ -674,6 +682,8 @@ class HookRegistry:
                         processed = True
                         if isinstance(hook_result, dict):
                             result_data = hook_result
+                except DbError:
+                    raise
                 except Exception as e:
                     logger.error(f"Error in callback hook for {callback_name}: {e}")
 
@@ -688,6 +698,8 @@ class HookRegistry:
                         processed = True
                         if isinstance(hook_result, dict):
                             result_data = hook_result
+                except DbError:
+                    raise
                 except Exception as e:
                     logger.error(f"Error in wildcard callback hook: {e}")
 
@@ -718,6 +730,8 @@ class HookRegistry:
                         processed = True
                         if isinstance(hook_result, dict):
                             result_data = hook_result
+                except DbError:
+                    raise
                 except Exception as e:
                     logger.error(f"Error in app callback hook '{callback_name}': {e}")
 
@@ -745,6 +759,8 @@ class HookRegistry:
                 )
                 if hook_result:
                     processed = True
+            except DbError:
+                raise
             except Exception as e:
                 logger.error(f"Error in subscription hook: {e}")
 
@@ -768,6 +784,8 @@ class HookRegistry:
                     )
                     if hook_result is not None:
                         result = hook_result
+                except DbError:
+                    raise
                 except Exception as e:
                     logger.error(f"Error in lifecycle hook for {event}: {e}")
 
@@ -804,6 +822,8 @@ class HookRegistry:
                     if hook_result is not None:
                         result = hook_result
                         break  # First successful hook wins
+                except DbError:
+                    raise
                 except Exception as e:
                     logger.error(f"Error in method hook for {method_name}: {e}")
 
@@ -817,6 +837,8 @@ class HookRegistry:
                     if hook_result is not None:
                         result = hook_result
                         break  # First successful hook wins
+                except DbError:
+                    raise
                 except Exception as e:
                     logger.error(f"Error in wildcard method hook: {e}")
 
@@ -853,6 +875,8 @@ class HookRegistry:
                     if hook_result is not None:
                         result = hook_result
                         break  # First successful hook wins
+                except DbError:
+                    raise
                 except Exception as e:
                     logger.error(f"Error in action hook for {action_name}: {e}")
 
@@ -866,6 +890,8 @@ class HookRegistry:
                     if hook_result is not None:
                         result = hook_result
                         break  # First successful hook wins
+                except DbError:
+                    raise
                 except Exception as e:
                     logger.error(f"Error in wildcard action hook: {e}")
 
@@ -915,6 +941,8 @@ class HookRegistry:
                     if hook_result is not None:
                         result = hook_result
                         break  # First successful hook wins
+                except DbError:
+                    raise
                 except Exception as e:
                     logger.error(f"Error in method hook for {method_name}: {e}")
 
@@ -930,6 +958,8 @@ class HookRegistry:
                     if hook_result is not None:
                         result = hook_result
                         break
+                except DbError:
+                    raise
                 except Exception as e:
                     logger.error(f"Error in wildcard method hook: {e}")
 
@@ -972,6 +1002,8 @@ class HookRegistry:
                     if hook_result is not None:
                         result = hook_result
                         break
+                except DbError:
+                    raise
                 except Exception as e:
                     logger.error(f"Error in action hook for {action_name}: {e}")
 
@@ -986,6 +1018,8 @@ class HookRegistry:
                     if hook_result is not None:
                         result = hook_result
                         break
+                except DbError:
+                    raise
                 except Exception as e:
                     logger.error(f"Error in wildcard action hook: {e}")
 
@@ -1039,6 +1073,8 @@ class HookRegistry:
                     if value is None and operation in ["put", "post"]:
                         # Hook rejected the operation
                         return None
+                except DbError:
+                    raise
                 except Exception as e:
                     logger.error(f"Error in property hook for {property_name}: {e}")
                     if operation in ["put", "post"]:
@@ -1056,6 +1092,8 @@ class HookRegistry:
 
                     if value is None and operation in ["put", "post"]:
                         return None
+                except DbError:
+                    raise
                 except Exception as e:
                     logger.error(f"Error in wildcard property hook: {e}")
                     if operation in ["put", "post"]:
@@ -1092,6 +1130,8 @@ class HookRegistry:
                         processed = True
                         if isinstance(hook_result, dict):
                             result_data = hook_result
+                except DbError:
+                    raise
                 except Exception as e:
                     logger.error(f"Error in callback hook for {callback_name}: {e}")
 
@@ -1108,6 +1148,8 @@ class HookRegistry:
                         processed = True
                         if isinstance(hook_result, dict):
                             result_data = hook_result
+                except DbError:
+                    raise
                 except Exception as e:
                     logger.error(f"Error in wildcard callback hook: {e}")
 
@@ -1144,6 +1186,8 @@ class HookRegistry:
                         processed = True
                         if isinstance(hook_result, dict):
                             result_data = hook_result
+                except DbError:
+                    raise
                 except Exception as e:
                     logger.error(f"Error in app callback hook '{callback_name}': {e}")
 
@@ -1176,6 +1220,8 @@ class HookRegistry:
                 else:
                     if hook(actor, subscription, peer_id, data):
                         processed = True
+            except DbError:
+                raise
             except Exception as e:
                 logger.error(f"Error in subscription hook: {e}")
 
@@ -1206,6 +1252,8 @@ class HookRegistry:
 
                     if hook_result is not None:
                         result = hook_result
+                except DbError:
+                    raise
                 except Exception as e:
                     logger.error(f"Error in lifecycle hook for {event}: {e}")
 

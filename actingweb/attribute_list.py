@@ -23,6 +23,8 @@ import logging
 from datetime import datetime
 from typing import Any
 
+from .db.exceptions import DbError
+
 logger = logging.getLogger(__name__)
 
 
@@ -321,6 +323,8 @@ class ListAttribute:
                 actor_id=self.actor_id, bucket=self.bucket, config=self.config
             )
             attr.delete_attr(name=self._get_item_attribute_name(index))
+        except DbError:
+            raise  # a backend fault: the HTTP layer answers 503
         except Exception as e:
             logger.error(
                 f"Failed to delete item at index {index} for list '{self.name}': {e}"
@@ -364,6 +368,8 @@ class ListAttribute:
                         delete_db.delete_attr(name=self._get_item_attribute_name(i))
                         shifted_count += 1
                 failed_index = i
+        except DbError:
+            raise  # a backend fault: the HTTP layer answers 503
         except Exception as e:
             logger.error(
                 f"Partial failure in __delitem__ for list '{self.name}': "
@@ -379,6 +385,8 @@ class ListAttribute:
             meta = self._load_metadata()
             meta["length"] = length - 1
             self._save_metadata(meta)
+        except DbError:
+            raise  # a backend fault: the HTTP layer answers 503
         except Exception as e:
             logger.error(
                 f"Failed to update metadata after successful deletion in list '{self.name}': {e}"
@@ -600,6 +608,8 @@ class ListAttribute:
                         )
                         shifted_count += 1
                 failed_index = i
+        except DbError:
+            raise  # a backend fault: the HTTP layer answers 503
         except Exception as e:
             logger.error(
                 f"Partial failure in insert() for list '{self.name}': "
@@ -616,6 +626,8 @@ class ListAttribute:
                 actor_id=self.actor_id, bucket=self.bucket, config=self.config
             )
             insert_db.set_attr(name=self._get_item_attribute_name(index), data=item)
+        except DbError:
+            raise  # a backend fault: the HTTP layer answers 503
         except Exception as e:
             logger.error(
                 f"Failed to insert item at index {index} in list '{self.name}' "
@@ -631,6 +643,8 @@ class ListAttribute:
             meta = self._load_metadata()
             meta["length"] = length + 1
             self._save_metadata(meta)
+        except DbError:
+            raise  # a backend fault: the HTTP layer answers 503
         except Exception as e:
             logger.error(
                 f"Failed to update metadata after successful insertion in list '{self.name}': {e}"

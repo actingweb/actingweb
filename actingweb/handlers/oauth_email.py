@@ -13,6 +13,7 @@ import logging
 import time
 from typing import TYPE_CHECKING, Any, Optional
 
+from ..db.exceptions import DbError
 from ..secret_compare import secret_equals
 from .base_handler import BaseHandler
 
@@ -257,7 +258,7 @@ class OAuth2EmailHandler(BaseHandler):
                 self.hooks.execute_lifecycle_hooks(
                     "email_verified", actor_interface, email=actor.creator
                 )
-            except Exception as e:
+            except Exception as e:  # folds DbError: hook after verify committed
                 logger.error(f"Error in email_verified lifecycle hook: {e}")
 
         if self._wants_json():
@@ -379,7 +380,7 @@ class OAuth2EmailHandler(BaseHandler):
                 session_id = self.request.get("session") or ""
                 email = self.request.get("email") or ""
 
-        except Exception as e:
+        except Exception as e:  # folds DbError: no DB access
             logger.error(f"Failed to parse email form data: {e}")
             return self.error_response(400, "Invalid form data")
 
@@ -565,6 +566,8 @@ class OAuth2EmailHandler(BaseHandler):
                     user_info=session_user_info,
                 )
                 oauth_valid = bool(result) if result is not None else True
+            except DbError:
+                raise
             except Exception as e:
                 logger.error(f"Error in lifecycle hook for oauth_success: {e}")
                 oauth_valid = False
@@ -654,7 +657,7 @@ class OAuth2EmailHandler(BaseHandler):
                         verification_url=verification_url,
                         token=verification_token,
                     )
-                except Exception as e:
+                except Exception as e:  # folds DbError: notification after the verification token was committed
                     logger.error(f"Error in email_verification_required hook: {e}")
                     # Don't fail the OAuth flow - just log the error
 

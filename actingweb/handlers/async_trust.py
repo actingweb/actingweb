@@ -102,7 +102,7 @@ class AsyncTrustHandler(TrustHandler):
                 logger.info(
                     f"trust_initiated hook triggered for {actor_id} -> {peerid}"
                 )
-            except Exception as e:
+            except Exception as e:  # folds DbError: hook after trust committed
                 logger.error(f"Error triggering trust_initiated hook: {e}")
 
         self.response.headers["Location"] = str(

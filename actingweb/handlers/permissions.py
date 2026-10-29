@@ -12,6 +12,8 @@ from actingweb.handlers import base_handler
 from actingweb.trust_permissions import get_trust_permission_store
 from actingweb.trust_type_registry import get_registry
 
+from ..db.exceptions import DbError
+
 if TYPE_CHECKING:
     pass
 
@@ -61,6 +63,8 @@ class PermissionsHandler(base_handler.BaseHandler):
                 if self.response:
                     self.response.set_status(404, "Trust relationship not found")
                 return
+        except DbError:
+            raise
         except Exception as e:
             logger.warning(
                 f"Error verifying trust relationship for {actor_id} <-> {peer_id}: {e}"
@@ -146,6 +150,8 @@ class PermissionsHandler(base_handler.BaseHandler):
                 self.response.headers["Content-Type"] = "application/json"
                 self.response.write(json.dumps(response_data))
 
+        except DbError:
+            raise
         except Exception as e:
             logger.error(
                 f"Error retrieving permissions for {actor_id} -> {peer_id}: {e}",

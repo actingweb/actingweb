@@ -18,6 +18,7 @@ from typing import Any
 from . import attribute
 from . import config as config_class
 from .constants import PEER_PERMISSIONS_BUCKET
+from .db.exceptions import DbError
 
 logger = logging.getLogger(__name__)
 
@@ -231,6 +232,8 @@ class PeerPermissionStore:
             return attribute.Attributes(
                 actor_id=actor_id, bucket=PEER_PERMISSIONS_BUCKET, config=self.config
             )
+        except DbError:
+            raise
         except Exception as e:
             logger.error(
                 f"Error accessing peer permissions bucket for actor {actor_id}: {e}"
@@ -287,6 +290,8 @@ class PeerPermissionStore:
                 logger.error(f"Failed to store peer permissions {perm_key}")
                 return False
 
+        except DbError:
+            raise
         except Exception as e:
             logger.error(
                 f"Error storing peer permissions {permissions.get_permissions_key()}: {e}"
@@ -328,6 +333,8 @@ class PeerPermissionStore:
 
             return permissions
 
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Error loading peer permissions {cache_key}: {e}")
             return None
@@ -354,6 +361,8 @@ class PeerPermissionStore:
                 logger.debug(f"No peer permissions to delete: {perm_key}")
                 return False
 
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Error deleting peer permissions {actor_id}:{peer_id}: {e}")
             return False
@@ -380,12 +389,14 @@ class PeerPermissionStore:
                     cache_key = f"{permissions.actor_id}:{permissions.peer_id}"
                     self._cache[cache_key] = permissions
 
-                except Exception as e:
+                except Exception as e:  # folds DbError: no DB access
                     logger.error(f"Error parsing peer permissions {attr_name}: {e}")
                     continue
 
             return permissions_list
 
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Error listing peer permissions for actor {actor_id}: {e}")
             return []
@@ -514,6 +525,8 @@ def fetch_peer_permissions(
         logger.debug(f"Successfully fetched peer permissions for {peer_id}")
         return permissions
 
+    except DbError:
+        raise
     except Exception as e:
         permissions.fetch_error = f"Exception: {str(e)}"
         logger.error(f"Exception fetching peer permissions from {peer_id}: {e}")
@@ -624,6 +637,8 @@ async def fetch_peer_permissions_async(
         logger.debug(f"Successfully fetched peer permissions async for {peer_id}")
         return permissions
 
+    except DbError:
+        raise
     except Exception as e:
         permissions.fetch_error = f"Exception: {str(e)}"
         logger.error(f"Exception fetching peer permissions async from {peer_id}: {e}")

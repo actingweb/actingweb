@@ -15,6 +15,7 @@ from typing import Any
 from . import attribute
 from . import config as config_class
 from .constants import PEER_PROFILES_BUCKET
+from .db.exceptions import DbError
 
 logger = logging.getLogger(__name__)
 
@@ -118,7 +119,7 @@ class PeerProfileStore:
             return attribute.Attributes(
                 actor_id=actor_id, bucket=PEER_PROFILES_BUCKET, config=self.config
             )
-        except Exception as e:
+        except Exception as e:  # folds DbError: constructor only, no DB access
             logger.error(
                 f"Error accessing peer profiles bucket for actor {actor_id}: {e}"
             )
@@ -156,6 +157,8 @@ class PeerProfileStore:
                 logger.error(f"Failed to store peer profile {profile_key}")
                 return False
 
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Error storing peer profile {profile.get_profile_key()}: {e}")
             return False
@@ -176,7 +179,7 @@ class PeerProfileStore:
             profile_key = f"{actor_id}:{peer_id}"
 
             # Get profile from attribute bucket
-            attr_data = bucket.get_attr(name=profile_key)
+            attr_data = bucket.get_attr(name=profile_key, strict=False)
 
             if not attr_data or "data" not in attr_data:
                 return None
@@ -190,7 +193,7 @@ class PeerProfileStore:
 
             return profile
 
-        except Exception as e:
+        except Exception as e:  # folds DbError: strict=False read; JSON parse
             logger.error(f"Error loading peer profile {cache_key}: {e}")
             return None
 
@@ -216,6 +219,8 @@ class PeerProfileStore:
                 logger.debug(f"No peer profile to delete: {profile_key}")
                 return False
 
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Error deleting peer profile {actor_id}:{peer_id}: {e}")
             return False
@@ -230,7 +235,7 @@ class PeerProfileStore:
 
         try:
             # Get all attributes from the peer profiles bucket
-            bucket_data = bucket.get_bucket() or {}
+            bucket_data = bucket.get_bucket(strict=False) or {}
 
             for attr_name, attr_info in bucket_data.items():
                 try:
@@ -242,13 +247,13 @@ class PeerProfileStore:
                     cache_key = f"{profile.actor_id}:{profile.peer_id}"
                     self._cache[cache_key] = profile
 
-                except Exception as e:
+                except Exception as e:  # folds DbError: JSON parse only
                     logger.error(f"Error parsing peer profile {attr_name}: {e}")
                     continue
 
             return profiles_list
 
-        except Exception as e:
+        except Exception as e:  # folds DbError: strict=False read; JSON parse
             logger.error(f"Error listing peer profiles for actor {actor_id}: {e}")
             return []
 
@@ -372,6 +377,8 @@ def fetch_peer_profile(
         )
         return profile
 
+    except DbError:
+        raise
     except Exception as e:
         profile.fetch_error = f"Exception: {str(e)}"
         logger.error(f"Exception fetching peer profile from {peer_id}: {e}")
@@ -459,6 +466,8 @@ async def fetch_peer_profile_async(
         )
         return profile
 
+    except DbError:
+        raise
     except Exception as e:
         profile.fetch_error = f"Exception: {str(e)}"
         logger.error(f"Exception fetching peer profile async from {peer_id}: {e}")

@@ -12,6 +12,8 @@ This module provides a single, reusable function to ensure the system actor exis
 import logging
 from typing import TYPE_CHECKING
 
+from ..db.exceptions import DbError
+
 if TYPE_CHECKING:
     from .. import config as config_class
 
@@ -32,10 +34,10 @@ def ensure_oauth2_system_actor(config: "config_class.Config") -> str:
     Returns:
         The system actor ID (OAUTH2_SYSTEM_ACTOR constant), also when the actor
         could not be created: callers load it and handle its absence.
-        (``TrustTypeRegistry._get_system_actor`` returns None instead.)
 
     Raises:
-        No exceptions - errors are logged as warnings
+        DbError: the store could not be read or written. Other errors are
+            logged as warnings.
     """
     from botocore.exceptions import ClientError
 
@@ -83,6 +85,8 @@ def ensure_oauth2_system_actor(config: "config_class.Config") -> str:
         else:
             logger.debug(f"OAuth2 system actor already exists: {OAUTH2_SYSTEM_ACTOR}")
 
+    except DbError:
+        raise
     except Exception as e:
         # Log but don't fail - callers should handle missing actor gracefully
         logger.warning(f"Could not ensure OAuth2 system actor exists: {e}")

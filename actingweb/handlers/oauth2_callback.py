@@ -22,6 +22,7 @@ if TYPE_CHECKING:
     from ..interface.hooks import HookRegistry
 from .. import config as config_class
 from ..client_text import sanitize_client_name
+from ..db.exceptions import DbError
 from ..oauth2 import create_oauth2_authenticator, create_oauth2_trust_relationship
 from ..oauth_state import decode_state, validate_expected_email
 
@@ -60,7 +61,7 @@ def is_safe_spa_redirect(config: "config_class.Config", url: str) -> bool:
         return False
     try:
         parsed = urlparse(url)
-    except Exception:
+    except Exception:  # folds DbError: no DB access
         return False
 
     # Relative URLs (no scheme, no netloc) are same-origin.
@@ -79,7 +80,7 @@ def is_safe_spa_redirect(config: "config_class.Config", url: str) -> bool:
             return None
         try:
             cp = urlparse(candidate)
-        except Exception:
+        except Exception:  # folds DbError: no DB access
             return None
         if not cp.scheme:
             return None
@@ -458,6 +459,8 @@ class OAuth2CallbackHandler(BaseHandler):
                     "redirect_performed": True,
                 }
 
+            except DbError:
+                raise
             except Exception as session_error:
                 logger.error(f"Failed to create OAuth session: {session_error}")
                 # Fall back to error response if session storage fails
@@ -551,6 +554,8 @@ class OAuth2CallbackHandler(BaseHandler):
                         logger.error(f"Adoption of actor {actor_id} failed")
                         return self.error_response(502, "Actor creation failed")
 
+            except DbError:
+                raise
             except Exception as e:
                 logger.warning(
                     f"Failed to load actor {actor_id} from state: {e}, will lookup/create by identifier"
@@ -640,6 +645,8 @@ class OAuth2CallbackHandler(BaseHandler):
                         f"Failed to create trust relationship for {identifier} with type {trust_type}"
                     )
 
+            except DbError:
+                raise
             except Exception as e:
                 logger.error(f"Error creating OAuth2 trust relationship: {e}")
                 # Don't fail the OAuth flow - just log the error
@@ -669,6 +676,8 @@ class OAuth2CallbackHandler(BaseHandler):
                     user_info=user_info,  # Pass full user info for displayname etc.
                 )
                 oauth_valid = bool(result) if result is not None else True
+            except DbError:
+                raise
             except Exception as e:
                 logger.error(f"Error in lifecycle hook for oauth_success: {e}")
                 oauth_valid = False
@@ -766,7 +775,7 @@ class OAuth2CallbackHandler(BaseHandler):
                         access_token=access_token,
                         redirect_url=response_data["redirect_url"],
                     )
-                except Exception as e:
+                except Exception as e:  # folds DbError: hook after login committed
                     logger.error(f"Error executing oauth_completed hook: {e}")
 
             logger.debug(
@@ -831,7 +840,7 @@ class OAuth2CallbackHandler(BaseHandler):
                     access_token=access_token,
                     redirect_url=response_data["redirect_url"],
                 )
-            except Exception as e:
+            except Exception as e:  # folds DbError: hook after login committed
                 logger.error(f"Error executing oauth_completed hook: {e}")
 
         logger.debug(
@@ -1137,6 +1146,8 @@ class OAuth2CallbackHandler(BaseHandler):
                         "redirect_url": spa_email_url,
                         "redirect_performed": True,
                     }
+                except DbError:
+                    raise
                 except Exception as session_error:
                     logger.error(
                         f"SPA OAuth: Failed to create email session: {session_error}"
@@ -1220,6 +1231,8 @@ class OAuth2CallbackHandler(BaseHandler):
                     user_info=user_info,
                 )
                 oauth_valid = bool(result) if result is not None else True
+            except DbError:
+                raise
             except Exception as e:
                 logger.error(f"Error in SPA lifecycle hook for oauth_success: {e}")
                 oauth_valid = False
@@ -1436,6 +1449,8 @@ class OAuth2AppleCallbackHandler(OAuth2CallbackHandler):
 
             server = ActingWebOAuth2Server(self.config)
             result = server.handle_oauth_callback({"code": code, "state": mcp_state})
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Apple MCP callback dispatch failed: {e}")
             return self.error_response(500, "Internal server error")

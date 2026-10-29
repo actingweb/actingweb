@@ -20,6 +20,7 @@ from ..constants import (
     OAUTH2_SYSTEM_ACTOR,
     REFRESH_TOKEN_INDEX_BUCKET,
 )
+from ..db.exceptions import DbError
 from ..secret_compare import secret_digest_equals, secret_equals
 from ..single_use import PurgeThrottle, StoreFault, revoke_chain_confirmed
 from ..single_use import _mask as _mask_token
@@ -395,7 +396,7 @@ class ActingWebTokenManager:
                     data=actor_id,
                     ttl_seconds=MCP_REFRESH_TOKEN_REUSE_WINDOW + INDEX_TTL_BUFFER,
                 )
-            except Exception as e:
+            except Exception as e:  # folds DbError: TTL trim after the consume
                 logger.debug(f"Could not shorten refresh index TTL: {e}")
 
             # Revoke the access token this refresh token was issued with.
@@ -410,7 +411,7 @@ class ActingWebTokenManager:
                         google_token_key=refresh_data.get("google_token_key"),
                     )
                     evict_caches_for_token(old_access_token, actor_wide=False)
-                except Exception as e:
+                except Exception as e:  # folds DbError: after the refresh token was consumed; a raise makes the retry a replay
                     logger.warning(
                         f"Could not revoke the previous access token for actor "
                         f"{actor_id} on refresh: {e}"
@@ -679,7 +680,7 @@ class ActingWebTokenManager:
         )
         try:
             rows = store.get_bucket()
-        except Exception as e:
+        except DbError as e:  # folds DbError: caller treats None as unreadable
             logger.warning(f"Could not read bucket {bucket} for actor {actor_id}: {e}")
             return None
         if not store.loaded:
@@ -978,7 +979,7 @@ class ActingWebTokenManager:
             index_bucket.delete_attr(name=code)
             logger.debug(f"Removed auth code {_mask_token(code)} from global index")
 
-        except Exception as e:
+        except Exception as e:  # folds DbError: cleanup; TTL reaps the code
             logger.error(f"Error removing auth code {_mask_token(code)}: {e}")
 
     def _store_google_token_data(
@@ -1035,7 +1036,7 @@ class ActingWebTokenManager:
             logger.debug(
                 f"Removed Google token data for actor {actor_id} with key {_mask_token(token_key)}"
             )
-        except Exception as e:
+        except Exception as e:  # folds DbError: cleanup of a TTL'd provider-token row
             logger.error(
                 f"Error removing Google token data for actor {actor_id}, key {_mask_token(token_key)}: {e}"
             )
@@ -1133,7 +1134,7 @@ class ActingWebTokenManager:
                     bucket=index_bucket_name,
                     config=self.config,
                 ).delete_attr(name=token)
-            except Exception as e:
+            except Exception as e:  # folds DbError: stale index cleanup; the read already answered absent
                 logger.debug(f"Could not remove stale index row: {e}")
             return None
 
@@ -1270,7 +1271,7 @@ class ActingWebTokenManager:
             )
             return True
 
-        except Exception as e:
+        except Exception as e:  # folds DbError: False is reported as TokenStoreUnavailable by revoke_token
             logger.error(f"Error removing access token {_mask_token(token)}: {e}")
             return False
 
@@ -1374,6 +1375,8 @@ class ActingWebTokenManager:
                 f"Removed refresh token {_mask_token(token)} from global index"
             )
 
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Error removing refresh token {_mask_token(token)}: {e}")
 
@@ -1420,7 +1423,7 @@ class ActingWebTokenManager:
                     f"Unsupported PKCE challenge method: {code_challenge_method}"
                 )
                 return False
-        except Exception as e:
+        except Exception as e:  # folds DbError: no DB access
             logger.error(f"Error validating PKCE: {e}")
             return False
 
@@ -1478,6 +1481,8 @@ class ActingWebTokenManager:
             )
             return response
 
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Error creating access token for client credentials: {e}")
             return None
@@ -1567,7 +1572,7 @@ class ActingWebTokenManager:
                 # rest or to be swallowed.
                 try:
                     removed = remove(token_name, token_data)
-                except Exception as e:
+                except Exception as e:  # folds DbError: counted unconfirmed; TokenStoreUnavailable is raised after the rest
                     logger.error(
                         f"Error revoking {kind} token {_mask_token(token_name)} "
                         f"{scope}: {e}"
@@ -1642,7 +1647,7 @@ class ActingWebTokenManager:
         )
         try:
             rows = index.get_bucket()
-        except Exception as e:
+        except DbError as e:  # folds DbError: index counted skipped, retried
             logger.warning(f"Could not read index {index_bucket}: {e}")
             cleaned["skipped"] += 1
             return
@@ -1688,7 +1693,7 @@ class ActingWebTokenManager:
                 else:
                     faults += 1
                     cleaned["skipped"] += 1
-            except Exception as e:
+            except Exception as e:  # folds DbError: counted skipped, retried next run
                 faults += 1
                 cleaned["skipped"] += 1
                 logger.debug(
@@ -1802,7 +1807,7 @@ class ActingWebTokenManager:
             cleaned["provider_tokens"] = get_attribute(self.config).delete_expired(
                 buckets=[self.google_tokens_bucket]
             )
-        except Exception as e:
+        except Exception as e:  # folds DbError: sweep, retried next run
             logger.warning(f"Provider-token sweep failed: {e}")
             cleaned["provider_tokens"] = 0
 
@@ -1837,7 +1842,7 @@ class ActingWebTokenManager:
                     AUTH_CODE_INDEX_BUCKET,
                 ]
             )
-        except Exception as e:
+        except Exception as e:  # folds DbError: purge, retried next interval
             logger.warning(f"MCP token purge failed: {e}")
             return 0
 

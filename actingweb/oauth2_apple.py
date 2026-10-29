@@ -152,7 +152,7 @@ def load_private_key_pem(provider_config: dict[str, Any]) -> str:
     # Validate the key parses as an EC private key.
     try:
         key = load_pem_private_key(pem.encode("utf-8"), password=None)
-    except Exception as e:
+    except Exception as e:  # folds DbError: no DB access (key parse)
         raise ValueError(
             f"Apple private key from {source} is not a valid PEM key: {e}"
         ) from e

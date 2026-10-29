@@ -90,7 +90,7 @@ class RootFactoryHandler(base_handler.BaseHandler):
                     )
                     oauth_enabled = True
 
-        except Exception as e:
+        except Exception as e:  # folds DbError: OAuth URL build, no DB
             logger.warning(f"Failed to generate OAuth URLs for JSON config: {e}")
 
         # Build response
@@ -184,7 +184,7 @@ class RootFactoryHandler(base_handler.BaseHandler):
                             f"{prov_name} OAuth URL generated: {auth_url[:100]}..."
                         )
 
-            except Exception as e:
+            except Exception as e:  # folds DbError: OAuth URL build, no DB
                 logger.warning(f"Failed to generate OAuth URLs: {e}")
 
             self.response.template_values = {

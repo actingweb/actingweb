@@ -1358,7 +1358,10 @@ class ListProperty:
                 count_delta=0 if count is not None else count_delta,
                 advisory=True,
             )
-        except (DbError, RuntimeError) as exc:
+        except (  # folds DbError: hint touch only; recount repairs
+            DbError,
+            RuntimeError,
+        ) as exc:
             # ListMetadataContentionError subclasses RuntimeError, so this
             # clause WOULD swallow it -- but _save_metadata() never raises
             # it under advisory=True: its exhaustion path returns after
@@ -3616,6 +3619,8 @@ class ListProperty:
                 )
                 return
             self.migrate_to_v2()
+        except DbError:
+            raise
         except Exception as e:
             logger.warning(
                 f"Lazy migration to v2 failed for list '{self.name}': {e} "

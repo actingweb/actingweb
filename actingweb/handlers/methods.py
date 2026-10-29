@@ -12,6 +12,7 @@ from typing import Any
 from actingweb import auth
 from actingweb.handlers import base_handler
 
+from ..db.exceptions import DbError
 from ..permission_evaluator import (
     PermissionResult,
     get_permission_evaluator,
@@ -65,6 +66,8 @@ class MethodsHandler(base_handler.BaseHandler):
                     path="methods", subpath=method_name, method="GET"
                 )
 
+        except DbError:
+            raise
         except Exception as e:
             logger.error(
                 f"Error in method permission evaluation for {actor_id}:{peer_id}:{method_name}: {e}"
@@ -142,6 +145,8 @@ class MethodsHandler(base_handler.BaseHandler):
                                 if perm_result == PermissionResult.ALLOWED:
                                     filtered_methods.append(method)
                             result = {"methods": filtered_methods}
+                        except DbError:
+                            raise
                         except Exception as e:
                             logger.error(f"Error filtering methods by permission: {e}")
                             # Fall back to returning all methods on error
@@ -337,6 +342,8 @@ class MethodsHandler(base_handler.BaseHandler):
                     "error": {"code": -32601, "message": "Method not found"},
                     "id": params.get("id"),
                 }
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Error executing method {params['method']}: {e}")
             return {

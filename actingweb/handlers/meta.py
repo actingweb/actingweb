@@ -3,6 +3,8 @@ import logging
 
 from actingweb.handlers import base_handler
 
+from ..db.exceptions import DbError
+
 logger = logging.getLogger(__name__)
 
 
@@ -42,6 +44,8 @@ class MetaHandler(base_handler.BaseHandler):
                         trust_type.name for trust_type in trust_types
                     ]
                     values["aw_trust_types"] = supported_trust_types
+            except DbError:
+                raise
             except Exception:
                 # If trust type registry is not available, don't include trust types
                 pass
@@ -93,6 +97,8 @@ class MetaHandler(base_handler.BaseHandler):
                     out = json.dumps(trust_type_details)
                 else:
                     out = json.dumps([])
+            except DbError:
+                raise
             except Exception as e:
                 logger.error(f"Error retrieving trust types: {e}")
                 out = json.dumps([])
@@ -137,6 +143,8 @@ class MetaHandler(base_handler.BaseHandler):
                     "default_trust_type": default_type,
                 }
                 out = json.dumps(result)
+            except DbError:
+                raise
             except Exception as e:
                 logger.error(f"Error retrieving trust types: {e}")
                 out = json.dumps({"trust_types": {}, "default_trust_type": None})

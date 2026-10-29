@@ -1,11 +1,14 @@
 import logging
 import os
+from typing import Any
 
 from pynamodb.attributes import BooleanAttribute, NumberAttribute, UnicodeAttribute
 from pynamodb.constants import PAY_PER_REQUEST_BILLING_MODE
+from pynamodb.exceptions import UpdateError
 from pynamodb.models import Model
 
 from actingweb.db.dynamodb._ensure import ensure_table
+from actingweb.db.exceptions import DbError
 
 """
     DbSubscription handles all db operations for a subscription
@@ -43,8 +46,12 @@ class DbSubscription:
     The  actor_id must always be set.
     """
 
-    def get(self, actor_id=None, peerid=None, subid=None):
-        """Retrieves the subscription from the database"""
+    def get(self, actor_id=None, peerid=None, subid=None, *, strict=True):
+        """Retrieves the subscription from the database.
+
+        None when absent. A read fault raises ``DbError``; ``strict=False``
+        answers it with None.
+        """
         if not actor_id:
             return None
         if not peerid or not subid:
@@ -69,8 +76,10 @@ class DbSubscription:
                     "sequence": t.seqnr,
                     "callback": t.callback,
                 }
-        except Exception:  # PynamoDB DoesNotExist exception
-            pass
+        except Exception as e:
+            if strict:
+                raise DbError("subscription get") from e
+            logger.error(f"Error reading subscription of {actor_id}: {e}")
         return None
 
     def modify(
@@ -106,8 +115,46 @@ class DbSubscription:
             self.handle.resource = resource
         if seqnr is not None:
             self.handle.seqnr = seqnr
-        self.handle.save()
+        try:
+            self.handle.save()
+        except Exception as e:
+            raise DbError("subscription modify") from e
         return True
+
+    def increment_seq(
+        self,
+        actor_id: str | None = None,
+        peerid: str | None = None,
+        subid: str | None = None,
+    ) -> int | None:
+        """Atomically add 1 to the stored sequence and return the new value.
+
+        Two concurrent writers get two numbers: the increment is one
+        ``UpdateItem`` with ``ADD``, not a read followed by a write. Works on
+        the loaded handle, or on the row the three keys name without reading
+        it first. None when the subscription row does not exist. A fault
+        raises ``DbError``; the increment may then have landed, so the caller
+        must not reuse the number it expected.
+        """
+        if actor_id and peerid and subid:
+            item = Subscription(id=actor_id, peer_sub_id=peerid + ":" + subid)
+        elif self.handle:
+            item = self.handle
+        else:
+            logger.debug("Attempted increment_seq of DbSubscription without db handle")
+            return None
+        try:
+            item.update(
+                actions=[Subscription.seqnr.add(1)],
+                condition=Subscription.id.exists(),
+            )
+        except UpdateError as e:
+            if e.cause_response_code == "ConditionalCheckFailedException":
+                return None
+            raise DbError("subscription increment_seq") from e
+        except Exception as e:
+            raise DbError("subscription increment_seq") from e
+        return int(item.seqnr)
 
     def create(
         self,
@@ -142,15 +189,25 @@ class DbSubscription:
             self.handle.subtarget = subtarget
         if resource and len(resource) > 0:
             self.handle.resource = resource
-        self.handle.save()
+        try:
+            self.handle.save()
+        except Exception as e:
+            raise DbError("subscription create") from e
         return True
 
     def delete(self):
-        """Deletes the subscription in the database"""
+        """Deletes the subscription in the database.
+
+        True when the row is gone after the call (an already-absent row
+        counts); a fault raises ``DbError``. False only without a handle.
+        """
         if not self.handle:
             logger.debug("Attempted delete of DbSubscription with no handle set.")
             return False
-        self.handle.delete()
+        try:
+            self.handle.delete()
+        except Exception as e:
+            raise DbError("subscription delete") from e
         self.handle = None
         return True
 
@@ -166,16 +223,26 @@ class DbSubscriptionList:
     The  actor_id must always be set.
     """
 
-    def fetch(self, actor_id, *, strict=False):
+    def fetch(self, actor_id, *, strict=True):
         """Retrieves the subscriptions of an actor_id from the database as an array
 
-        A read fault raises (the Query runs lazily during iteration), so
-        ``strict`` changes nothing here; it exists for protocol parity.
+        ``[]`` when there are none. A read fault raises ``DbError``;
+        ``strict=False`` answers it with ``[]``.
         """
         if not actor_id:
             return None
         self.actor_id = actor_id
-        self.handle = Subscription.query(self.actor_id, consistent_read=True)
+        try:
+            return self._fetch(actor_id)
+        except Exception as e:
+            if strict:
+                raise DbError("subscription list fetch") from e
+            logger.error(f"Error fetching the subscriptions of {actor_id}: {e}")
+            self.subscriptions = []
+            return []
+
+    def _fetch(self, actor_id: str) -> list[dict[str, Any]]:
+        self.handle = Subscription.query(actor_id, consistent_read=True)
         self.subscriptions = []
         if self.handle:
             for t in self.handle:
@@ -200,11 +267,11 @@ class DbSubscriptionList:
         """Deletes all the subscriptions for an actor in the database"""
         if not self.actor_id:
             return False
-        self.handle = Subscription.query(self.actor_id, consistent_read=True)
-        if not self.handle:
-            return False
-        for p in self.handle:
-            p.delete()
+        try:
+            for p in Subscription.query(self.actor_id, consistent_read=True):
+                p.delete()
+        except Exception as e:
+            raise DbError("subscription list delete") from e
         self.handle = None
         return True
 

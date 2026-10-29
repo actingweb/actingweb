@@ -64,6 +64,7 @@ from .constants import (
     DELETION_TOMBSTONE_TTL,
 )
 from .db import get_attribute
+from .db.exceptions import DbError
 
 if TYPE_CHECKING:
     from .config import Config
@@ -106,7 +107,8 @@ def mark_actor_deleted(
 
     Failure is logged at ERROR but not raised: a user asking to delete their
     account must not be blocked by the bookkeeping. The ERROR matters because a
-    missing tombstone reopens the race for that actor.
+    missing tombstone reopens the race for that actor. A backend fault
+    (``DbError``) is the exception: it is raised, before anything is removed.
 
     Args:
         actor_id: The actor being deleted.
@@ -134,6 +136,8 @@ def mark_actor_deleted(
                 ),
             )
         )
+    except DbError:
+        raise
     except Exception as e:
         logger.error(
             f"Failed to write deletion tombstone for actor {actor_id}: {e}. "
@@ -169,7 +173,7 @@ def clear_actor_tombstone(actor_id: str | None, config: Config | None) -> bool:
                 name=actor_id,
             )
         )
-    except Exception as e:
+    except Exception as e:  # folds DbError: cleanup after the actor row was committed; a raise would fail a completed create
         logger.error(f"Failed to clear deletion tombstone for actor {actor_id}: {e}")
         return False
 
@@ -197,7 +201,7 @@ def get_deletion_status(actor_id: str | None, config: Config | None) -> Deletion
             bucket=DELETED_ACTORS_BUCKET,
             name=actor_id,
         )
-    except Exception as e:
+    except Exception as e:  # folds DbError: UNKNOWN by design; callers proceed or fail closed (see module docstring)
         logger.error(
             f"Could not read deletion tombstone for actor {actor_id}: {e}. "
             "Reporting UNKNOWN; callers must not read this as 'not deleted'."

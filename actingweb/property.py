@@ -1,6 +1,7 @@
 from typing import Any
 
 from actingweb.db import get_property, get_property_list
+from actingweb.db.exceptions import DbError
 
 from .identifiers import first_control_character
 from .property_list import _V1_INDEX_RE, _V2_RANK_MARKER, ListProperty, _v2_is_rank
@@ -82,6 +83,8 @@ class PropertyListStore:
                 db = get_property(self._config)
                 meta = db.get(actor_id=self._actor_id, name=f"list:{name}-meta")
                 return meta is not None
+        except DbError:
+            raise
         except Exception:
             pass
         return False
@@ -102,6 +105,8 @@ class PropertyListStore:
                             5:-5
                         ]  # Remove 'list:' prefix and '-meta' suffix
                         list_names.append(list_name)
+        except DbError:
+            raise
         except Exception as e:
             import logging
 
@@ -153,7 +158,7 @@ class PropertyListStore:
                 for prop_name in rows.keys():
                     if prop_name.startswith("list:") and prop_name.endswith("-meta"):
                         list_names.append(prop_name[5:-5])
-        except Exception as e:
+        except Exception as e:  # folds DbError: documented ([], {}) on error
             import logging
 
             logger = logging.getLogger(__name__)
@@ -457,21 +462,28 @@ class Properties:
     in .props as a dictionary
     """
 
-    def fetch(self) -> dict[str, Any] | bool:
+    def fetch(self, strict: bool = True) -> dict[str, Any] | bool:
+        """The actor's plain properties. A read fault raises ``DbError``;
+        ``strict=False`` answers False instead (and caches nothing)."""
         if not self.actor_id:
             return False
         if not self.list:
             return False
         if self.props is not None:
             return self.props
-        self.props = self.list.fetch(actor_id=self.actor_id)
+        try:
+            self.props = self.list.fetch(actor_id=self.actor_id)
+        except DbError:  # folds DbError: strict=False read, the caller asked
+            if strict:
+                raise
+            return False
         return self.props if self.props is not None else False
 
     def delete(self) -> bool:
         if not self.list:
-            self.fetch()
-        if not self.list:
             return False
+        if self.props is None:
+            self.fetch()  # strict: the list deletes the rows it fetched
         self.list.delete()
         return True
 
@@ -487,4 +499,11 @@ class Properties:
             self.list = None
         self.actor_id = actor_id
         self.props = None
-        self.fetch()
+        # The caller's own fetch() decides: a failed read caches nothing,
+        # so fetch() re-reads and raises, or folds with strict=False. A
+        # strict read here made every strict=False fold on this list
+        # unreachable.
+        try:
+            self.fetch()
+        except DbError:  # folds DbError: the caller's fetch() re-reads and decides
+            pass

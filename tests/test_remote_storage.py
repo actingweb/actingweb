@@ -4,6 +4,7 @@ Tests are grouped with @pytest.mark.xdist_group to ensure they run on the same
 worker during parallel execution, since they patch actingweb.attribute.Attributes.
 """
 
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -104,7 +105,7 @@ class TestRemotePeerStoreScalar:
         with patch("actingweb.attribute.Attributes") as mock:
             storage: dict[str, dict] = {}
 
-            def get_attr_side_effect(name: str | None = None) -> dict | None:
+            def get_attr_side_effect(name: str | None = None, **kw: Any) -> dict | None:
                 if name is None:
                     return None
                 return storage.get(name)
@@ -122,7 +123,7 @@ class TestRemotePeerStoreScalar:
                     del storage[name]
                 return True
 
-            def get_bucket_side_effect():
+            def get_bucket_side_effect(**kw: Any):
                 return storage
 
             def delete_bucket_side_effect():
@@ -355,7 +356,7 @@ class TestRemotePeerStoreCallbackData:
         with patch("actingweb.attribute.Attributes") as attr_mock:
             attr_instance = MagicMock()
 
-            def get_attr_side_effect(name: str | None = None) -> dict | None:
+            def get_attr_side_effect(name: str | None = None, **kw: Any) -> dict | None:
                 if name is None:
                     return None
                 return scalar_storage.get(name)
@@ -1021,12 +1022,12 @@ class TestRemotePeerStoreGetAllProperties:
         with patch("actingweb.attribute.Attributes") as attr_mock:
             attr_instance = MagicMock()
 
-            def get_attr_side_effect(name: str | None = None) -> dict | None:
+            def get_attr_side_effect(name: str | None = None, **kw: Any) -> dict | None:
                 if name is None:
                     return None
                 return scalar_storage.get(name)
 
-            def get_bucket_side_effect():
+            def get_bucket_side_effect(**kw: Any):
                 return scalar_storage
 
             attr_instance.get_attr.side_effect = get_attr_side_effect

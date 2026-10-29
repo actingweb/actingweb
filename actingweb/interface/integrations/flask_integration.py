@@ -13,7 +13,14 @@ from werkzeug.wrappers import Response as WerkzeugResponse
 
 from ... import request_context, runtime_context
 from ...aw_web_request import AWWebObj
+from ...db.exceptions import DbError
 from ...handlers import bot, factory, mcp, services
+from ._errors import (
+    db_error_answer,
+    error_cors_headers,
+    log_db_error,
+    map_db_error,
+)
 from .base_integration import BaseActingWebIntegration, default_templates_dir
 
 if TYPE_CHECKING:
@@ -35,6 +42,37 @@ class FlaskIntegration(BaseActingWebIntegration):
         self.flask_app = flask_app
         self._install_default_templates()
         self._setup_context_hooks()
+        # A DbError that reaches Flask, from a library route or from a
+        # consumer route calling ActorInterface, answers 503 (409 for
+        # CreatorTaken) instead of a 500.
+        self.flask_app.register_error_handler(DbError, self._db_error_response)
+
+    def _db_error_response(self, exc: Exception) -> Response:
+        """The app-level answer for a ``DbError`` (see ``_errors.py``).
+
+        On the SPA endpoints and ``/oauth/logout`` it carries the SPA CORS
+        headers, so a cross-origin SPA can read the 503 and its
+        ``Retry-After`` instead of seeing a network error.
+        """
+        import json as _json
+
+        assert isinstance(exc, DbError)
+        status, headers, body = db_error_answer(exc)
+        log_db_error(exc)
+        headers = {
+            **headers,
+            **error_cors_headers(
+                request.path,
+                request.headers.get("Origin", ""),
+                self.aw_app.get_config(),
+            ),
+        }
+        return Response(
+            _json.dumps(body),
+            status=status,
+            headers=headers,
+            mimetype="application/json",
+        )
 
     def _install_default_templates(self) -> None:
         """Register the library's built-in templates as a fallback source.
@@ -182,6 +220,8 @@ class FlaskIntegration(BaseActingWebIntegration):
                 if mcp_context:
                     # This is an MCP OAuth2 callback
                     return self._handle_oauth2_endpoint("callback")
+            except DbError:
+                raise
             except Exception:
                 # Not an MCP callback or state manager not available
                 pass
@@ -702,6 +742,10 @@ class FlaskIntegration(BaseActingWebIntegration):
                     return oauth_redirect
                 else:
                     logger.warning("OAuth2 not enabled in config")
+            except DbError:
+                # A store fault is not an invalid token: clearing the cookie
+                # would sign the user out. The app-level handler answers 503.
+                raise
             except Exception as e:
                 logger.error(f"OAuth token validation failed in factory: {e}")
                 # Token validation failed - clear cookie and redirect to fresh OAuth
@@ -726,7 +770,17 @@ class FlaskIntegration(BaseActingWebIntegration):
                 handler_method()
             else:
                 return Response(status=405)
-        except Exception as e:
+        except Exception as e:  # folds DbError: mapped to 503 by map_db_error, first line of this handler
+            if map_db_error(
+                webobj.response,
+                e,
+                error_cors_headers(
+                    request.path,
+                    request.headers.get("Origin", ""),
+                    self.aw_app.get_config(),
+                ),
+            ):
+                return self._create_flask_response(webobj)
             logger.error(f"Error in factory handler: {e}")
             # Map common network/SSL errors to clearer status codes if handler didn't set one
             if webobj.response.status_code != 200:
@@ -753,7 +807,7 @@ class FlaskIntegration(BaseActingWebIntegration):
                         "aw-root-factory.html", **webobj.response.template_values
                     )
                 )
-            except Exception:
+            except Exception:  # folds DbError: no DB access: template rendering
                 pass  # Fall back to default response
         elif request.method == "POST":
             # Only render templates for form submissions, not JSON requests
@@ -767,7 +821,7 @@ class FlaskIntegration(BaseActingWebIntegration):
                             "aw-root-created.html", **webobj.response.template_values
                         )
                     )
-                except Exception:
+                except Exception:  # folds DbError: no DB access: template rendering
                     pass  # Fall back to default response
             elif not is_json_request and webobj.response.status_code == 400:
                 try:
@@ -781,7 +835,7 @@ class FlaskIntegration(BaseActingWebIntegration):
                         ),
                         status=webobj.response.status_code,
                     )
-                except Exception:
+                except Exception:  # folds DbError: no DB access: template rendering
                     pass  # Fall back to default response
 
         return self._create_flask_response(webobj)
@@ -810,7 +864,7 @@ class FlaskIntegration(BaseActingWebIntegration):
         # Simply show the factory template without any authentication
         try:
             return Response(render_template("aw-root-factory.html"))
-        except Exception:
+        except Exception:  # folds DbError: no DB access: template rendering
             # Fallback for when templates are not available
             return Response(
                 """
@@ -861,7 +915,7 @@ class FlaskIntegration(BaseActingWebIntegration):
                             "aw-root-factory.html", error="Email is required"
                         )
                     )
-                except Exception:
+                except Exception:  # folds DbError: no DB access: template rendering
                     return Response("Email is required", status=400)
 
             logger.debug(f"Factory POST with email: {email}")
@@ -892,6 +946,8 @@ class FlaskIntegration(BaseActingWebIntegration):
                     # Fall back to standard actor creation without OAuth
                     return self._handle_factory_post_without_oauth(email)
 
+            except DbError:
+                raise
             except Exception as e:
                 logger.error(f"Error creating OAuth2 redirect: {e}")
                 # Fall back to standard actor creation if OAuth2 setup fails
@@ -900,6 +956,8 @@ class FlaskIntegration(BaseActingWebIntegration):
                 )
                 return self._handle_factory_post_without_oauth(email)
 
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Error in factory POST handler: {e}")
             return Response("Internal server error", status=500)
@@ -933,7 +991,7 @@ class FlaskIntegration(BaseActingWebIntegration):
                             "aw-root-created.html", **webobj.response.template_values
                         )
                     )
-                except Exception:
+                except Exception:  # folds DbError: no DB access: template rendering
                     pass  # Fall back to default response
             elif webobj.response.status_code in (400, 403):
                 # 403: the factory is closed (with_open_factory) or the
@@ -949,11 +1007,13 @@ class FlaskIntegration(BaseActingWebIntegration):
                         ),
                         status=webobj.response.status_code,
                     )
-                except Exception:
+                except Exception:  # folds DbError: no DB access: template rendering
                     pass  # Fall back to default response
 
             return self._create_flask_response(webobj)
 
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Error in standard actor creation: {e}")
             try:
@@ -962,7 +1022,7 @@ class FlaskIntegration(BaseActingWebIntegration):
                         "aw-root-failed.html", error="Actor creation failed"
                     )
                 )
-            except Exception:
+            except Exception:  # folds DbError: no DB access: template rendering
                 return Response("Actor creation failed", status=500)
 
     def _handle_bot_request(self) -> Response | WerkzeugResponse | str:
@@ -1019,7 +1079,7 @@ class FlaskIntegration(BaseActingWebIntegration):
                         ),
                         status=webobj.response.status_code,
                     )
-                except Exception:
+                except Exception:  # folds DbError: no DB access: template rendering
                     pass  # Fall back to default response
 
         return self._create_flask_response(webobj)
@@ -1064,7 +1124,7 @@ class FlaskIntegration(BaseActingWebIntegration):
                         ),
                         status=webobj.response.status_code,
                     )
-                except Exception:
+                except Exception:  # folds DbError: no DB access: template rendering
                     pass  # Fall back to default response
 
         return self._create_flask_response(webobj)
@@ -1111,7 +1171,7 @@ class FlaskIntegration(BaseActingWebIntegration):
                         "aw-oauth-email.html", **webobj.response.template_values
                     )
                 )
-            except Exception as e:
+            except Exception as e:  # folds DbError: no DB access: template rendering
                 # Template not found - provide basic HTML form as fallback
                 logger.warning(f"Template aw-oauth-email.html not found: {e}")
                 session_id = webobj.response.template_values.get("session_id", "")
@@ -1173,7 +1233,7 @@ class FlaskIntegration(BaseActingWebIntegration):
                 render_template("aw-verify-email.html", **template_values),
                 status=status_code,
             )
-        except Exception as e:
+        except Exception as e:  # folds DbError: no DB access: template rendering
             # Template not found - provide basic HTML as fallback
             logger.warning(f"Template aw-verify-email.html not found: {e}")
             status = template_values.get("status", "")
@@ -1240,7 +1300,7 @@ class FlaskIntegration(BaseActingWebIntegration):
                 return Response(
                     render_template(template_name, **webobj.response.template_values)
                 )
-            except Exception as e:
+            except Exception as e:  # folds DbError: no DB access: template rendering
                 # Template not found or rendering error - fall back to JSON
                 from flask import jsonify
 
@@ -1517,6 +1577,10 @@ class FlaskIntegration(BaseActingWebIntegration):
                         f"ActingWeb session token validation successful for actor {token_data.get('actor_id')}"
                     )
                     return None  # Valid ActingWeb session token
+            except DbError:
+                # A token-store fault is not an invalid token: a 401 here
+                # would sign every SPA user out during a throttle.
+                raise
             except Exception as e:
                 logger.debug(f"ActingWeb token validation failed: {e}")
 
@@ -1541,6 +1605,8 @@ class FlaskIntegration(BaseActingWebIntegration):
                     logger.debug(
                         "OAuth cookie token is expired or invalid - will redirect to fresh OAuth"
                     )
+            except DbError:
+                raise
             except Exception as e:
                 logger.debug(f"OAuth provider token validation error: {e}")
 
@@ -1580,6 +1646,8 @@ class FlaskIntegration(BaseActingWebIntegration):
                         response.delete_cookie("oauth_token", path="/")
                         logger.debug("Cleared expired oauth_token cookie")
                     return response
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Error creating OAuth2 redirect: {e}")
 
@@ -1676,7 +1744,17 @@ class FlaskIntegration(BaseActingWebIntegration):
                 )
             else:
                 return Response(status=405)
-        except Exception as e:
+        except Exception as e:  # folds DbError: mapped to 503 by map_db_error, first line of this handler
+            if map_db_error(
+                webobj.response,
+                e,
+                error_cors_headers(
+                    request.path,
+                    request.headers.get("Origin", ""),
+                    self.aw_app.get_config(),
+                ),
+            ):
+                return self._create_flask_response(webobj)
             logger.error(f"Error in {endpoint} handler: {e}")
             # Map common network/SSL errors to clearer status codes if handler didn't set one
             if webobj.response.status_code != 200:
@@ -1747,7 +1825,7 @@ class FlaskIntegration(BaseActingWebIntegration):
                             webobj.response.template_name, **template_values
                         )
                     )
-            except Exception as e:
+            except Exception as e:  # folds DbError: no DB access: template rendering
                 logger.debug(f"Template rendering failed for www/{path}: {e}")
                 # Fall back to default response
 
@@ -1810,7 +1888,7 @@ class FlaskIntegration(BaseActingWebIntegration):
             # Provider-specific discovery extras (e.g. Google/Apple JWKS URI)
             result.update(provider.discovery_extras())
             return result
-        except Exception:
+        except Exception:  # folds DbError: no DB access
             return {"error": "OAuth provider not configured"}
 
     def _create_mcp_info_response(self) -> dict[str, Any]:

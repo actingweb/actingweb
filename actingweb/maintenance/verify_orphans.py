@@ -129,7 +129,7 @@ class Checkpoint:
                     f"Resuming from checkpoint {path} (tables already "
                     f"swept: {sorted(self._tables_done) or 'none'})"
                 )
-            except Exception as e:
+            except Exception as e:  # folds DbError: no DB access (checkpoint file)
                 logger.warning(f"Could not read checkpoint {path}: {e}")
 
     def is_table_done(self, table: str) -> bool:
@@ -361,7 +361,7 @@ def main() -> int:
 
     try:
         actor_ids = _read_actor_ids(backend)
-    except Exception as e:
+    except Exception as e:  # folds DbError: read fault ends as exit 2
         logger.error(f"Actor-id read failed: {e}")
         actor_ids = set()
 
@@ -388,7 +388,7 @@ def main() -> int:
         try:
             rows = _rows_for(backend, table, limiter)
             result = classify_rows(actor_ids, rows)
-        except Exception as e:
+        except Exception as e:  # folds DbError: table errored, exit 1
             logger.error(f"{table}: sweep failed: {e}")
             had_error = True
             continue

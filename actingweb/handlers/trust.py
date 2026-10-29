@@ -7,6 +7,8 @@ from actingweb.client_text import sanitize_client_name, sanitize_label
 from actingweb.handlers import base_handler
 from actingweb.permission_evaluator import PermissionResult, get_permission_evaluator
 
+from ..db.exceptions import DbError
+
 # Import permission system with fallback
 try:
     from ..trust_permissions import (
@@ -89,7 +91,7 @@ class TrustHandler(base_handler.BaseHandler):
             self.post(actor_id)
             try:
                 status = getattr(self.response, "status_code", 0)
-            except Exception:
+            except Exception:  # folds DbError: no DB access
                 status = 0
             if status in (200, 201, 202):
                 # After successful creation, return to trust overview
@@ -185,7 +187,7 @@ class TrustHandler(base_handler.BaseHandler):
                 logger.info(
                     f"trust_initiated hook triggered for {actor_id} -> {peerid}"
                 )
-            except Exception as e:
+            except Exception as e:  # folds DbError: hook after the trust committed
                 logger.error(f"Error triggering trust_initiated hook: {e}")
 
         self.response.headers["Location"] = str(
@@ -210,7 +212,7 @@ class TrustRelationshipHandler(base_handler.BaseHandler):
             self.post(actor_id, relationship)
             try:
                 status = getattr(self.response, "status_code", 0)
-            except Exception:
+            except Exception:  # folds DbError: no DB access
                 status = 0
             if status in (200, 201, 202):
                 self.response.set_status(302, "Found")
@@ -419,7 +421,7 @@ class TrustRelationshipHandler(base_handler.BaseHandler):
                 logger.info(
                     f"trust_request_received hook triggered for {actor_id} <- {peerid}"
                 )
-            except Exception as e:
+            except Exception as e:  # folds DbError: hook after the trust committed
                 logger.error(f"Error triggering trust_request_received hook: {e}")
 
         self.response.headers["Location"] = str(
@@ -447,7 +449,7 @@ class TrustPeerHandler(base_handler.BaseHandler):
             self.put(actor_id, relationship, peerid)
             try:
                 status = getattr(self.response, "status_code", 0)
-            except Exception:
+            except Exception:  # folds DbError: no DB access
                 status = 0
             if status in (200, 201, 202, 204):
                 self.response.set_status(302, "Found")
@@ -458,7 +460,7 @@ class TrustPeerHandler(base_handler.BaseHandler):
             self.delete(actor_id, relationship, peerid)
             try:
                 status = getattr(self.response, "status_code", 0)
-            except Exception:
+            except Exception:  # folds DbError: no DB access
                 status = 0
             if status in (200, 201, 202, 204):
                 # Redirect to the trust overview so the browser view updates
@@ -638,7 +640,7 @@ class TrustPeerHandler(base_handler.BaseHandler):
                             f"Trust not yet fully approved after POST: approved={trust_data.get('approved')}, "
                             f"peer_approved={trust_data.get('peer_approved')}"
                         )
-            except Exception as e:
+            except Exception as e:  # folds DbError: hook after approval committed
                 logger.error(
                     f"Error triggering trust_fully_approved_remote hook in POST handler: {e}"
                 )
@@ -737,7 +739,7 @@ class TrustPeerHandler(base_handler.BaseHandler):
                         logger.info(
                             f"trust_fully_approved_local hook triggered for {actor_id} <-> {peerid}"
                         )
-            except Exception as e:
+            except Exception as e:  # folds DbError: hook after approval committed
                 logger.error(
                     f"Error triggering trust_fully_approved_local hook in PUT handler: {e}"
                 )
@@ -779,6 +781,8 @@ class TrustPeerHandler(base_handler.BaseHandler):
                         f"Failed to update permissions for trust relationship {actor_id}:{peerid}"
                     )
 
+            except DbError:
+                raise
             except Exception as e:
                 logger.error(
                     f"Error updating permissions for trust relationship {actor_id}:{peerid}: {e}"
@@ -950,6 +954,8 @@ class TrustPeerHandler(base_handler.BaseHandler):
                 logger.debug(
                     f"trust_deleted hook triggered for {actor_id} <-> {peerid}, initiated_by_peer={is_peer}"
                 )
+            except DbError:
+                raise
             except Exception as e:
                 logger.error(f"Error triggering trust_deleted hook: {e}")
 
@@ -1055,6 +1061,8 @@ class TrustPermissionHandler(base_handler.BaseHandler):
                         "is_custom": False,
                         "source": "trust_type_default",
                     }
+                except DbError:
+                    raise
                 except Exception as registry_error:
                     logger.error(
                         f"Error accessing trust type registry for {relationship}: {registry_error}"
@@ -1071,6 +1079,8 @@ class TrustPermissionHandler(base_handler.BaseHandler):
             self.response.headers["Content-Type"] = "application/json"
             self.response.set_status(200, "Ok")
 
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Error retrieving permissions for {actor_id}:{peerid}: {e}")
             if self.response:
@@ -1138,6 +1148,8 @@ class TrustPermissionHandler(base_handler.BaseHandler):
             logger.error(f"Invalid JSON in permission request: {e}")
             if self.response:
                 self.response.set_status(400, "Invalid JSON")
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Error updating permissions for {actor_id}:{peerid}: {e}")
             if self.response:
@@ -1167,6 +1179,8 @@ class TrustPermissionHandler(base_handler.BaseHandler):
             else:
                 self.response.set_status(404, "No permissions found")
 
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Error deleting permissions for {actor_id}:{peerid}: {e}")
             if self.response:
@@ -1242,6 +1256,8 @@ class TrustSharedPropertiesHandler(base_handler.BaseHandler):
                     actor_interface.property_lists.list_all_with_rows()
                 )
                 property_names.extend(list_names)
+        except DbError:
+            raise
         except Exception as e:
             logger.debug(f"Could not get property lists: {e}")
 
@@ -1266,6 +1282,8 @@ class TrustSharedPropertiesHandler(base_handler.BaseHandler):
                         prop_list = getattr(actor_interface.property_lists, prop_name)
                         prop_list.prime_from_rows(list_rows)
                         item_count = len(prop_list)
+                    except DbError:
+                        raise
                     except Exception as e:
                         logger.debug(
                             f"Could not get item count for property list {prop_name}: {e}"

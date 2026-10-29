@@ -1,6 +1,8 @@
 import logging
 from typing import Any
 
+from actingweb.db.exceptions import DbError
+
 from .connection import get_connection
 
 logger = logging.getLogger(__name__)
@@ -19,7 +21,11 @@ class DbPropertyLookup:
         self.handle: dict[str, Any] | None = None
 
     def get(
-        self, property_name: str | None = None, value: str | None = None
+        self,
+        property_name: str | None = None,
+        value: str | None = None,
+        *,
+        strict: bool = True,
     ) -> str | None:
         """
         Retrieve actor_id by property name and value.
@@ -27,9 +33,13 @@ class DbPropertyLookup:
         Args:
             property_name: Property name (e.g., "oauthId")
             value: Property value to lookup
+            strict: When False, a read fault answers None instead of raising
 
         Returns:
             Actor ID if found, None otherwise
+
+        Raises:
+            DbError: on a read fault (unless ``strict=False``)
         """
         if not property_name or not value:
             return None
@@ -55,6 +65,8 @@ class DbPropertyLookup:
                         return row[2]
                     return None
         except Exception as e:
+            if strict:
+                raise DbError("property lookup get") from e
             logger.error(f"Error getting lookup for property {property_name}: {e}")
             return None
 

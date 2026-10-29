@@ -18,6 +18,7 @@ try:
 except ImportError:
     Fernet = None  # type: ignore[misc,assignment]
 from .. import config as config_class
+from ..db.exceptions import DbError
 
 logger = logging.getLogger(__name__)
 
@@ -111,7 +112,7 @@ class OAuth2StateManager:
             )
             return mcp_context
 
-        except Exception as e:
+        except Exception as e:  # folds DbError: no DB access (decrypt only)
             logger.warning(f"Invalid state parameter: {e}")
             return None
 
@@ -203,7 +204,7 @@ class OAuth2StateManager:
             if key_str:
                 try:
                     return base64.urlsafe_b64decode(key_str.encode("utf-8"))
-                except Exception:
+                except Exception:  # folds DbError: no DB access (config decode)
                     pass
 
         # Try to get key from OAuth2 system actor
@@ -228,6 +229,11 @@ class OAuth2StateManager:
                         "Retrieved OAuth2 state encryption key from system actor"
                     )
                     return base64.urlsafe_b64decode(key_str.encode("utf-8"))
+            except DbError:
+                # A read that faulted is not "no key yet": generating one here
+                # would overwrite the stored key and invalidate every state in
+                # flight. Fail; the manager is built again on the next request.
+                raise
             except Exception as e:
                 logger.debug(f"Failed to retrieve existing encryption key: {e}")
 
@@ -244,6 +250,9 @@ class OAuth2StateManager:
                     "Generated and stored new OAuth2 state encryption key in system actor"
                 )
                 return key
+            except DbError:
+                # An unstored key would differ from every other instance's.
+                raise
             except Exception as e:
                 logger.error(f"Failed to store encryption key in system actor: {e}")
                 # Fall back to in-memory key with warning
@@ -252,16 +261,20 @@ class OAuth2StateManager:
                 )
                 return key
 
+        except DbError:
+            # A system-actor fault must not yield an in-memory key either.
+            raise
         except Exception as e:
             logger.error(f"Error accessing OAuth2 system actor: {e}")
             # Fall back to generating a new key (not persistent)
             if Fernet is None:
                 raise ImportError("cryptography package is required") from e
             key: bytes = Fernet.generate_key()
+            # Never log the key: a log line is not a secret store.
             logger.warning(
-                "Generated new OAuth2 state encryption key (not persistent). "
-                "Store this key persistently: %s",
-                base64.urlsafe_b64encode(key).decode("utf-8"),
+                "Generated a new OAuth2 state encryption key that is not "
+                "persisted; OAuth2 states will not survive a restart or reach "
+                "another instance. Set oauth2_state_encryption_key in the config."
             )
             return key
 

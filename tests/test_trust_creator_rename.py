@@ -17,12 +17,13 @@ from actingweb.actor import Actor
 from actingweb.handlers.trust import TrustRelationshipHandler
 from tests._adoption_helpers import (
     aid,
+    backend_fault,
     create_core_actor,
     istore,
     make_config,
+    marker_write_fault,
     uuid_email,
 )
-from tests.test_adoption_write_faults import backend_fault, marker_write_fault
 
 
 def _put(

@@ -24,6 +24,8 @@ if TYPE_CHECKING:
     from .interface.actor_interface import ActorInterface
     from .peer_capabilities import PeerCapabilities
 
+from .db.exceptions import DbError
+
 logger = logging.getLogger(__name__)
 
 # Shared HTTP client for connection pooling (module-level singleton)
@@ -267,11 +269,15 @@ class FanOutManager:
                 logger.debug(
                     f"Loaded {len(self._circuit_breakers)} circuit breaker states"
                 )
-        except Exception as e:
+        except Exception as e:  # folds DbError: bulk breaker preload at construction; the per-peer read raises
             logger.warning(f"Failed to load circuit breaker state: {e}")
 
     def _load_single_circuit_breaker(self, peer_id: str) -> CircuitBreaker | None:
-        """Load a single circuit breaker from persistence."""
+        """Load a single circuit breaker from persistence.
+
+        None when no state is stored. A read fault raises ``DbError``: a
+        fresh breaker in its place would be persisted closed over an open one.
+        """
         if not self._persist_cb:
             return None
         try:
@@ -289,6 +295,8 @@ class FanOutManager:
                 cb.failure_threshold = self._cb_threshold
                 cb.cooldown_seconds = self._cb_cooldown
                 return cb
+        except DbError:
+            raise
         except Exception as e:
             logger.debug(f"Failed to load circuit breaker for {peer_id}: {e}")
         return None
@@ -306,7 +314,7 @@ class FanOutManager:
                 config=self._actor.config,
             )
             db.set_attr(name=f"cb:{cb.peer_id}", data=cb.to_dict())
-        except Exception as e:
+        except Exception as e:  # folds DbError: breaker persist is best-effort after delivery; the in-memory breaker still applies
             logger.warning(f"Failed to persist circuit breaker for {cb.peer_id}: {e}")
 
     async def deliver_to_subscribers(
@@ -345,8 +353,22 @@ class FanOutManager:
             callback_url = sub.get("callback_url", "")
             granularity = sub.get("granularity", "high")
 
-            # Check circuit breaker
-            cb = self._get_circuit_breaker(peer_id)
+            # Check circuit breaker. A breaker whose stored state cannot be
+            # read is not a closed one: skip this attempt and leave the stored
+            # state alone, rather than reset an open breaker (B11).
+            try:
+                cb = self._get_circuit_breaker(peer_id)
+            except DbError:  # folds DbError: delivery skipped, breaker state kept
+                logger.warning(
+                    f"Circuit breaker state for {peer_id} could not be read; "
+                    "skipping this delivery"
+                )
+                return DeliveryResult(
+                    peer_id=peer_id,
+                    subscription_id=sub_id,
+                    success=False,
+                    error="breaker_state_unreadable",
+                )
             if not cb.should_allow_request():
                 return DeliveryResult(
                     peer_id=peer_id,
@@ -535,6 +557,8 @@ class FanOutManager:
                 success=False,
                 error=f"request_error: {e}",
             )
+        except DbError:
+            raise
         except Exception as e:
             cb.record_failure()
             self._persist_circuit_breaker(cb)
@@ -563,6 +587,8 @@ class FanOutManager:
             from .peer_capabilities import PeerCapabilities
 
             return PeerCapabilities(self._actor, peer_id)
+        except DbError:
+            raise
         except Exception:
             return None
 

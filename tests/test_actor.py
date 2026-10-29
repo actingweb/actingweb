@@ -229,7 +229,10 @@ class TestActorCreatorLookup:
 
             mock_get.side_effect = fake_get
             actor_instance = Actor(config=mock_config)
-            result = actor_instance.get_from_creator("user@example.com")
+            # Both are unmarked (legacy) actors; the lowest id wins. A mock
+            # config has no readable marker, which 3.16 refuses to rank.
+            with patch("actingweb.oauth2.classify_marker", return_value="unvouched"):
+                result = actor_instance.get_from_creator("user@example.com")
 
         assert result is True
         assert actor_instance.id == "actorA"

@@ -23,6 +23,8 @@ import json
 import logging
 from typing import TYPE_CHECKING, Any, Optional
 
+from ..db.exceptions import DbError
+
 # MCP protocol version constants (single source of truth)
 from ..log_summary import summarize_payload
 from ..mcp.protocol import LATEST_PROTOCOL_VERSION, SUPPORTED_PROTOCOL_VERSIONS
@@ -196,10 +198,14 @@ class OAuth2EndpointsHandler(BaseHandler):
             except ValueError as e:
                 # RFC 7591 §3.2.2
                 return self._token_error(400, "invalid_client_metadata", str(e))
+            except DbError:
+                raise
             except Exception as e:
                 logger.error(f"Client registration failed: {e}")
                 return self.error_response(500, "Client registration failed")
 
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Error in client registration: {e}")
             return self.error_response(500, "Internal server error")
@@ -312,6 +318,8 @@ class OAuth2EndpointsHandler(BaseHandler):
                 description = server_response.get("error_description", "Unknown error")
                 return self.error_response(400, f"{error}: {description}")
 
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Error in authorization request: {e}")
             return self.error_response(500, "Internal server error")
@@ -386,7 +394,7 @@ class OAuth2EndpointsHandler(BaseHandler):
                         # RFC 6749 §2.3.1: form-urlencoded before base64
                         header_client_id = unquote_plus(raw_id)
                         header_secret = unquote_plus(raw_secret) or None
-                except Exception as e:
+                except Exception as e:  # folds DbError: no DB access
                     logger.warning(f"Failed to parse Authorization header: {e}")
                 if header_client_id:
                     if params["client_id"] and params["client_id"] != header_client_id:
@@ -423,7 +431,7 @@ class OAuth2EndpointsHandler(BaseHandler):
             # housekeeping fail the grant.
             try:
                 self.oauth2_server.token_manager.maybe_purge_expired_tokens()
-            except Exception as e:
+            except Exception as e:  # folds DbError: best-effort cleanup after the token response was built, retried on a later request
                 logger.debug(f"MCP token purge skipped: {e}")
 
             # Handle using OAuth2 server
@@ -466,6 +474,8 @@ class OAuth2EndpointsHandler(BaseHandler):
             )
             return token_response
 
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Error in token request: {e}")
             return self.error_response(500, "Internal server error")
@@ -526,6 +536,8 @@ class OAuth2EndpointsHandler(BaseHandler):
                 )
                 return self.error_response(400, f"{error}: {description}")
 
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Error in OAuth2 callback: {e}")
             return self.error_response(500, "Internal server error")
@@ -583,6 +595,8 @@ class OAuth2EndpointsHandler(BaseHandler):
                     "Application must configure trust types for MCP OAuth2."
                 )
                 trust_types = []
+            except DbError:
+                raise
             except Exception as e:
                 logger.warning(f"Error accessing trust type registry: {e}")
                 trust_types = []
@@ -648,6 +662,8 @@ class OAuth2EndpointsHandler(BaseHandler):
                                 and trust_type.name not in allowed_types
                             ):
                                 should_include = False
+                    except DbError:
+                        raise
                     except Exception:
                         pass  # Continue if client lookup fails
 
@@ -775,6 +791,8 @@ class OAuth2EndpointsHandler(BaseHandler):
                             f"Generated {prov_name} OAuth authorization URL for MCP client"
                         )
 
+            except DbError:
+                raise
             except Exception as e:
                 logger.warning(
                     f"Failed to generate OAuth URLs for authorization form: {e}"
@@ -958,11 +976,13 @@ class OAuth2EndpointsHandler(BaseHandler):
                         from .mcp import MCPHandler
 
                         MCPHandler.clear_token_from_cache(token)
-                    except Exception as cache_error:
+                    except Exception as cache_error:  # folds DbError: no DB access
                         logger.warning(
                             f"Failed to clear MCP token cache: {cache_error}"
                         )
                         # Non-critical - token will expire from cache naturally
+            except DbError:
+                raise
             except Exception as logout_error:
                 logger.error(f"Token logout error: {logout_error}")
                 import traceback
@@ -1008,7 +1028,7 @@ class OAuth2EndpointsHandler(BaseHandler):
                         self.response.set_cookie(
                             cookie_name, "", max_age=-1, path=cookie_path, secure=True
                         )
-                    except Exception as cookie_error:
+                    except Exception as cookie_error:  # folds DbError: no DB access
                         logger.warning(
                             f"Failed to clear cookie {cookie_name}: {cookie_error}"
                         )
@@ -1027,6 +1047,8 @@ class OAuth2EndpointsHandler(BaseHandler):
                 logger.error(f"Logout failed with response: {response}")
                 return self.error_response(500, "Logout failed")
 
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Logout request error: {e}")
             import traceback
@@ -1246,7 +1268,7 @@ class OAuth2EndpointsHandler(BaseHandler):
                 )
             else:
                 logger.debug(f"No provider token to clear for actor {actor_id}")
-        except Exception as e:
+        except Exception as e:  # folds DbError: best-effort cleanup after the session revoke committed; a retry would find no session
             logger.debug(f"Clearing provider token for actor {actor_id}: {e}")
 
     def _token_error(

@@ -14,6 +14,8 @@ PostgreSQL — the connection is faked, so they run on any backend.
 
 import pytest
 
+from actingweb.db.exceptions import DbError
+
 psycopg = pytest.importorskip("psycopg", reason="PostgreSQL extra not installed")
 
 from actingweb.db.postgresql import attribute as pg_attribute  # noqa: E402
@@ -247,12 +249,11 @@ class TestDiagnosticsCannotCauseTheBugTheyDiagnose:
             pg_attribute, "get_connection", lambda: DeadConnection([], 1)
         )
 
-        assert (
+        # 3.16: a delete fault raises DbError instead of answering False.
+        with pytest.raises(DbError):
             pg_attribute.DbAttribute.set_attr(
                 actor_id="actor1", bucket="mcp_clients", name="mcp_abc", data=None
             )
-            is False
-        )
 
     def test_schema_is_reported_as_unknown_rather_than_guessed(
         self,

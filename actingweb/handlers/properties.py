@@ -7,6 +7,7 @@ from actingweb.db import get_property_list
 from actingweb.handlers import base_handler
 from actingweb.property_list import ListCorruptionError, ListMetadataContentionError
 
+from ..db.exceptions import DbError
 from ..identifiers import first_control_character
 from ..permission_evaluator import PermissionResult, get_permission_evaluator
 
@@ -157,6 +158,8 @@ class PropertiesHandler(base_handler.BaseHandler):
                     method=method_map.get(operation, "GET"),
                 )
 
+        except DbError:
+            raise
         except Exception as e:
             logger.error(
                 f"Error in permission evaluation for {actor_id}:{peer_id}:{property_path}: {e}"
@@ -399,6 +402,8 @@ class PropertiesHandler(base_handler.BaseHandler):
             except ListCorruptionError as e:
                 self._respond_list_corrupted(name, e)
                 return
+            except DbError:
+                raise
             except Exception as e:
                 logger.error(f"Error accessing list property '{name}': {e}")
                 if self.response:
@@ -470,6 +475,8 @@ class PropertiesHandler(base_handler.BaseHandler):
             try:
                 db_list = get_property_list(self.config)
                 all_rows = db_list.fetch_all_including_lists(actor_id=myself.id) or {}
+            except DbError:
+                raise
             except Exception as e:
                 logger.error(f"Error bulk-reading properties: {e}")
                 all_rows = {}
@@ -520,6 +527,8 @@ class PropertiesHandler(base_handler.BaseHandler):
                         filtered_pair[prop_name] = prop_value
                     # DENIED properties are excluded
                 pair = filtered_pair
+            except DbError:
+                raise
             except Exception as e:
                 logger.error(f"Error filtering properties by permission: {e}")
                 # On error, return empty for security (fail closed)
@@ -570,6 +579,8 @@ class PropertiesHandler(base_handler.BaseHandler):
                         ):
                             list_names.add(list_name)
                         # DENIED list properties are excluded
+                except DbError:
+                    raise
                 except Exception as e:
                     logger.error(f"Error filtering list properties by permission: {e}")
                     # On error, exclude all list properties for security
@@ -1560,6 +1571,8 @@ class PropertiesHandler(base_handler.BaseHandler):
                         except ListMetadataContentionError as e:
                             self._respond_list_metadata_contended(e)
                             return
+                        except DbError:
+                            raise
                         except Exception as e:
                             logger.error(
                                 f"Error in bulk update for list property '{key}': {e}"
@@ -1691,6 +1704,8 @@ class PropertiesHandler(base_handler.BaseHandler):
                 except ListCorruptionError as e:
                     self._respond_list_corrupted(name, e)
                     return
+                except DbError:
+                    raise
                 except Exception as e:
                     logger.error(f"Error deleting list property '{name}': {e}")
                     self.response.set_status(500, "Error deleting list property")
@@ -1811,6 +1826,8 @@ class PropertyMetadataHandler(base_handler.BaseHandler):
                     method=method_map.get(operation, "GET"),
                 )
 
+        except DbError:
+            raise
         except Exception as e:
             logger.error(
                 f"Error in permission evaluation for metadata {actor_id}:{peer_id}:{property_path}: {e}"
@@ -1994,6 +2011,8 @@ class PropertyListItemsHandler(base_handler.BaseHandler):
                     method=method_map.get(operation, "GET"),
                 )
 
+        except DbError:
+            raise
         except Exception as e:
             logger.error(
                 f"Error in permission evaluation for items {actor_id}:{peer_id}:{property_path}: {e}"
@@ -2289,6 +2308,8 @@ class PropertyListItemsHandler(base_handler.BaseHandler):
         except ListMetadataContentionError as e:
             self._respond_list_metadata_contended(e)
             return
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Error in list item operation '{action}' for '{name}': {e}")
             if self.response:

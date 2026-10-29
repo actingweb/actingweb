@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from ..actor import Actor as CoreActor
+from ..db.exceptions import DbError
 from ..subscription import Subscription as CoreSubscription
 
 if TYPE_CHECKING:
@@ -596,7 +597,7 @@ class SubscriptionManager:
                     logger.debug(
                         f"Executed subscription_deleted hook for {peer_id}, initiated_by_peer=False"
                     )
-                except Exception as e:
+                except Exception as e:  # folds DbError: lifecycle hook after the subscription deletion committed
                     # Log hook execution error but don't fail subscription deletion
                     logger.warning(
                         f"Lifecycle hook failed for subscription {subscription_id}: {e}"
@@ -1322,7 +1323,7 @@ class SubscriptionManager:
                     f"Successfully fetched {len(response)} items for list {property_name} from peer {peer_id}"
                 )
 
-            except Exception as e:
+            except Exception as e:  # folds DbError: peer HTTP only
                 # Log error but continue processing other properties
                 logger.error(
                     f"Error fetching list {property_name} from peer {peer_id}: {e}",
@@ -1423,7 +1424,7 @@ class SubscriptionManager:
                     f"Successfully fetched {len(response)} items for list {property_name} from peer {peer_id}"
                 )
 
-            except Exception as e:
+            except Exception as e:  # folds DbError: peer HTTP only
                 # Log error but continue processing other properties
                 logger.error(
                     f"Error fetching list {property_name} from peer {peer_id}: {e}",
@@ -1526,7 +1527,7 @@ class SubscriptionManager:
                             f"Peer {peer_id} returned error {error_code} when accessing trust. "
                             f"Trust appears revoked."
                         )
-                except Exception as e:
+                except Exception as e:  # folds DbError: peer HTTP only
                     logger.warning(f"Exception verifying trust with {peer_id}: {e}")
 
             # Only delete trust if peer's trust record doesn't exist or we can't access it
@@ -1554,6 +1555,8 @@ class SubscriptionManager:
                                 )
                                 if sub_obj:
                                     sub_obj.delete()
+                except DbError:
+                    raise
                 except Exception as e:
                     logger.error(
                         f"Error cleaning up dead subscriptions for {peer_id}: {e}",
@@ -1597,6 +1600,8 @@ class SubscriptionManager:
                             logger.info(
                                 f"trust_deleted hook executed for revoked trust with {peer_id}"
                             )
+                        except DbError:
+                            raise
                         except Exception as e:
                             logger.error(
                                 f"Error executing trust_deleted hook: {e}",
@@ -1627,6 +1632,8 @@ class SubscriptionManager:
                         logger.warning(
                             f"Failed to delete trust relationship with {peer_id}"
                         )
+                except DbError:
+                    raise
                 except Exception as e:
                     logger.error(
                         f"Exception while cleaning up revoked trust with {peer_id}: {e}"
@@ -1669,7 +1676,7 @@ class SubscriptionManager:
 
                 store = get_peer_profile_store(actor_config)
                 store.store_profile(profile)
-            except Exception as e:
+            except Exception as e:  # folds DbError: best-effort peer profile cache refresh after the sync committed
                 logger.warning(f"Failed to refresh peer profile during sync: {e}")
 
         # Refresh peer capabilities if configured (with staleness check)
@@ -1707,7 +1714,7 @@ class SubscriptionManager:
                     logger.debug(
                         f"Using cached capabilities for {peer_id} (cache is fresh)"
                     )
-            except Exception as e:
+            except Exception as e:  # folds DbError: best-effort peer capabilities cache refresh after the sync committed
                 logger.warning(f"Failed to refresh peer capabilities during sync: {e}")
 
         return PeerSyncResult(
@@ -2132,7 +2139,7 @@ class SubscriptionManager:
         # Fetch baseline data from target resource
         try:
             baseline_response = proxy.get_resource(path=target_path)
-        except Exception as e:
+        except Exception as e:  # folds DbError: peer HTTP only
             logger.warning(f"Failed to fetch baseline for {peer_id} from {target}: {e}")
             return None
 
@@ -2192,7 +2199,7 @@ class SubscriptionManager:
         # Fetch baseline data from target resource
         try:
             baseline_response = await proxy.get_resource_async(path=target_path)
-        except Exception as e:
+        except Exception as e:  # folds DbError: peer HTTP only
             logger.warning(f"Failed to fetch baseline for {peer_id} from {target}: {e}")
             return None
 
@@ -2258,7 +2265,7 @@ class SubscriptionManager:
             )
             return True  # Cache is stale
 
-        except Exception as e:
+        except Exception as e:  # folds DbError: staleness probe, refetches
             logger.debug(
                 f"Error checking capability cache staleness for {peer_id}: {e}"
             )
@@ -2344,7 +2351,7 @@ class SubscriptionManager:
 
             return profile, profile_extracted
 
-        except Exception as e:
+        except Exception as e:  # folds DbError: cache read, a fault falls back to fetching the profile from the peer
             # If reading from store fails, return failure
             logger.warning(
                 f"Profile extraction failed for {peer_id}: {e}",
@@ -2381,7 +2388,7 @@ class SubscriptionManager:
                 store = get_peer_profile_store(actor_config)
                 store.store_profile(profile)
                 logger.debug(f"Refreshed peer profile for {peer_id}")
-            except Exception as e:
+            except Exception as e:  # folds DbError: cache warm after the subscription and baseline committed
                 logger.warning(f"Failed to refresh peer profile: {e}")
 
         # Refresh peer capabilities if configured
@@ -2404,7 +2411,7 @@ class SubscriptionManager:
                 store = get_cached_capabilities_store(actor_config)
                 store.store_capabilities(capabilities)
                 logger.debug(f"Refreshed peer capabilities for {peer_id}")
-            except Exception as e:
+            except Exception as e:  # folds DbError: cache warm after the subscription and baseline committed
                 logger.warning(f"Failed to refresh peer capabilities: {e}")
 
         # Refresh peer permissions if configured
@@ -2427,7 +2434,7 @@ class SubscriptionManager:
                 store = get_peer_permission_store(actor_config)
                 store.store_permissions(permissions)
                 logger.debug(f"Refreshed peer permissions for {peer_id}")
-            except Exception as e:
+            except Exception as e:  # folds DbError: cache warm after the subscription and baseline committed
                 logger.warning(f"Failed to refresh peer permissions: {e}")
 
     async def _refresh_peer_metadata_async(self, peer_id: str) -> None:
@@ -2463,7 +2470,7 @@ class SubscriptionManager:
                 store = get_peer_profile_store(actor_config)
                 store.store_profile(profile)
                 logger.debug(f"Refreshed peer profile for {peer_id}")
-            except Exception as e:
+            except Exception as e:  # folds DbError: cache warm after the subscription and baseline committed
                 logger.warning(f"Failed to refresh peer profile: {e}")
 
         # Refresh peer capabilities if configured
@@ -2486,7 +2493,7 @@ class SubscriptionManager:
                 store = get_cached_capabilities_store(actor_config)
                 store.store_capabilities(capabilities)
                 logger.debug(f"Refreshed peer capabilities for {peer_id}")
-            except Exception as e:
+            except Exception as e:  # folds DbError: cache warm after the subscription and baseline committed
                 logger.warning(f"Failed to refresh peer capabilities: {e}")
 
         # Refresh peer permissions if configured
@@ -2509,7 +2516,7 @@ class SubscriptionManager:
                 store = get_peer_permission_store(actor_config)
                 store.store_permissions(permissions)
                 logger.debug(f"Refreshed peer permissions for {peer_id}")
-            except Exception as e:
+            except Exception as e:  # folds DbError: cache warm after the subscription and baseline committed
                 logger.warning(f"Failed to refresh peer permissions: {e}")
 
     async def sync_peer_async(
@@ -2607,7 +2614,7 @@ class SubscriptionManager:
                             f"Peer {peer_id} returned error {error_code} when accessing trust. "
                             f"Trust appears revoked."
                         )
-                except Exception as e:
+                except Exception as e:  # folds DbError: peer HTTP only
                     logger.warning(f"Exception verifying trust with {peer_id}: {e}")
 
             # Only delete trust if peer's trust record doesn't exist or we can't access it
@@ -2635,6 +2642,8 @@ class SubscriptionManager:
                                 )
                                 if sub_obj:
                                     await asyncio.to_thread(sub_obj.delete)
+                except DbError:
+                    raise
                 except Exception as e:
                     logger.error(
                         f"Error cleaning up dead subscriptions for {peer_id}: {e}",
@@ -2678,6 +2687,8 @@ class SubscriptionManager:
                             logger.info(
                                 f"trust_deleted hook executed (async) for revoked trust with {peer_id}"
                             )
+                        except DbError:
+                            raise
                         except Exception as e:
                             logger.error(
                                 f"Error executing trust_deleted hook: {e}",
@@ -2708,6 +2719,8 @@ class SubscriptionManager:
                         logger.warning(
                             f"Failed to delete trust relationship with {peer_id}"
                         )
+                except DbError:
+                    raise
                 except Exception as e:
                     logger.error(
                         f"Exception while cleaning up revoked trust with {peer_id}: {e}"
@@ -2753,7 +2766,7 @@ class SubscriptionManager:
 
                 store = get_peer_profile_store(actor_config)
                 store.store_profile(profile)
-            except Exception as e:
+            except Exception as e:  # folds DbError: best-effort peer profile cache refresh after the sync committed
                 logger.warning(
                     f"Failed to refresh peer profile during sync (async): {e}"
                 )
@@ -2793,7 +2806,7 @@ class SubscriptionManager:
                     logger.debug(
                         f"Using cached capabilities for {peer_id} (cache is fresh, async)"
                     )
-            except Exception as e:
+            except Exception as e:  # folds DbError: best-effort peer capabilities cache refresh after the sync committed
                 logger.warning(
                     f"Failed to refresh peer capabilities during sync (async): {e}"
                 )
@@ -2831,7 +2844,7 @@ class SubscriptionManager:
                     logger.debug(
                         f"Skipping permission storage during sync - fetch failed: {permissions.fetch_error}"
                     )
-            except Exception as e:
+            except Exception as e:  # folds DbError: best-effort peer permissions cache refresh after the sync committed
                 logger.warning(
                     f"Failed to refresh peer permissions during sync (async): {e}"
                 )

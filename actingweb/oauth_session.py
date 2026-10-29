@@ -18,6 +18,7 @@ import secrets
 import time
 from typing import TYPE_CHECKING, Any, Optional
 
+from .db.exceptions import DbError
 from .single_use import PurgeThrottle
 
 if TYPE_CHECKING:
@@ -383,6 +384,8 @@ class OAuth2SessionManager:
 
             return actor_instance
 
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Error completing OAuth session: {e}")
             return None
@@ -571,6 +574,8 @@ class OAuth2SessionManager:
             token_attr = bucket.get_attr(name=token)
             bucket.delete_attr(name=token)
             logger.debug("Revoked access token")
+        except DbError:
+            raise
         except Exception as e:
             logger.warning(f"Error revoking access token: {e}")
             return False
@@ -838,6 +843,8 @@ class OAuth2SessionManager:
             token_attr = bucket.get_attr(name=token)
             bucket.delete_attr(name=token)
             logger.debug("Revoked refresh token")
+        except DbError:
+            raise
         except Exception as e:
             logger.warning(f"Error revoking refresh token: {e}")
             return False
@@ -915,7 +922,7 @@ class OAuth2SessionManager:
             bucket=_ACCESS_TOKEN_BUCKET,
             config=self.config,
         )
-        access_tokens = access_bucket.get_bucket()
+        access_tokens = access_bucket.get_bucket(strict=False)
         if not access_bucket.loaded:
             failures.append(f"{_ACCESS_TOKEN_BUCKET} unreadable")
         if access_tokens:
@@ -935,7 +942,7 @@ class OAuth2SessionManager:
             bucket=_REFRESH_TOKEN_BUCKET,
             config=self.config,
         )
-        refresh_tokens = refresh_bucket.get_bucket()
+        refresh_tokens = refresh_bucket.get_bucket(strict=False)
         if not refresh_bucket.loaded:
             failures.append(f"{_REFRESH_TOKEN_BUCKET} unreadable")
         if refresh_tokens:
@@ -1245,7 +1252,7 @@ class OAuth2SessionManager:
             return db.delete_expired(
                 buckets=[_ACCESS_TOKEN_BUCKET, _REFRESH_TOKEN_BUCKET]
             )
-        except Exception as e:
+        except Exception as e:  # folds DbError: purge, retried next interval
             logger.warning(f"purge_expired_tokens failed: {e}")
             return 0
 

@@ -42,6 +42,7 @@ from pynamodb.exceptions import DoesNotExist, PutError
 from pynamodb.models import Model
 
 from actingweb.db.dynamodb._ensure import ensure_table
+from actingweb.db.exceptions import DbError
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +94,25 @@ def _digest_prefix(property_name: str, value: str) -> str:
     return compute_lookup_key(property_name, value)[:12]
 
 
+def is_missing_resource(e: Exception) -> bool:
+    """Whether a PynamoDB error says the table or index does not exist.
+
+    For the migration fallbacks (the v1 table, the legacy GSI) that is a
+    normal state, not a fault.
+    """
+    code = getattr(e, "cause_response_code", None)
+    if code in ("ResourceNotFoundException", "ValidationException"):
+        return True
+    if type(e).__name__ == "TableDoesNotExist":
+        return True
+    text = str(e)
+    return (
+        "ResourceNotFound" in text
+        or "Requested resource not found" in text
+        or "does not have the specified index" in text
+    )
+
+
 class DbPropertyLookup:
     """
     DbPropertyLookup handles all db operations for the property lookup table.
@@ -107,7 +127,11 @@ class DbPropertyLookup:
         ensure_table(PropertyLookupV2)
 
     def get(
-        self, property_name: str | None = None, value: str | None = None
+        self,
+        property_name: str | None = None,
+        value: str | None = None,
+        *,
+        strict: bool = True,
     ) -> str | None:
         """
         Retrieve actor_id by property name and value.
@@ -115,9 +139,13 @@ class DbPropertyLookup:
         Args:
             property_name: Property name (e.g., "oauthId")
             value: Property value to lookup (exact match, verbatim)
+            strict: When False, a read fault answers None instead of raising
 
         Returns:
             Actor ID if found, None otherwise
+
+        Raises:
+            DbError: on a read fault (unless ``strict=False``)
         """
         if not property_name or not value:
             return None
@@ -134,25 +162,35 @@ class DbPropertyLookup:
                 f"LOOKUP_GET_FAILED: property={property_name} "
                 f"digest={_digest_prefix(property_name, value)} error={e}"
             )
+            if strict:
+                raise DbError("property lookup get") from e
             return None
 
     def get_v1(
-        self, property_name: str | None = None, value: str | None = None
+        self,
+        property_name: str | None = None,
+        value: str | None = None,
+        *,
+        strict: bool = True,
     ) -> str | None:
         """Read-only fallback against the deprecated v1 table.
 
         Returns None when the v1 table does not exist (normal for fresh
         deployments) or holds no row. A hit means the deployment has not
-        run the v2 backfill yet.
+        run the v2 backfill yet. Any other read fault raises ``DbError``
+        (``strict=False`` answers it with None).
         """
         if not property_name or not value:
             return None
         try:
             row = PropertyLookup.get(property_name, value, consistent_read=True)
             return str(row.actor_id) if row.actor_id else None
-        except Exception:
-            # DoesNotExist and missing-table errors alike mean "no v1 answer"
+        except DoesNotExist:
             return None
+        except Exception as e:
+            if is_missing_resource(e) or not strict:
+                return None
+            raise DbError("property lookup get_v1") from e
 
     def create(
         self,

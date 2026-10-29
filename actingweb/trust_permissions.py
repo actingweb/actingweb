@@ -21,6 +21,7 @@ from typing import Any
 from . import attribute
 from . import config as config_class
 from .constants import TRUST_PERMISSIONS_BUCKET
+from .db.exceptions import DbError
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +103,8 @@ class TrustPermissionStore:
             return attribute.Attributes(
                 actor_id=actor_id, bucket=TRUST_PERMISSIONS_BUCKET, config=self.config
             )
+        except DbError:
+            raise
         except Exception as e:
             logger.error(
                 f"Error accessing trust permissions bucket for actor {actor_id}: {e}"
@@ -156,6 +159,8 @@ class TrustPermissionStore:
                 logger.error(f"Failed to store trust permissions {permission_key}")
                 return False
 
+        except DbError:
+            raise
         except Exception as e:
             logger.error(
                 f"Error storing trust permissions {permissions.get_permission_key()}: {e}"
@@ -203,7 +208,7 @@ class TrustPermissionStore:
         if success and self._should_notify_peer(notify_peer):
             try:
                 self._notify_peer(permissions)
-            except Exception as e:
+            except Exception as e:  # folds DbError: peer notification after the permissions were stored
                 # Fire-and-forget: log but don't affect return value
                 logger.warning(
                     f"Exception during peer notification for {permissions.actor_id}: {e}",
@@ -241,7 +246,7 @@ class TrustPermissionStore:
             async def _notify_with_error_handling():
                 try:
                     await self._notify_peer_async(permissions)
-                except Exception as e:
+                except Exception as e:  # folds DbError: peer notification after the permissions were stored
                     logger.warning(
                         f"Exception during async peer notification for {permissions.actor_id}: {e}",
                         exc_info=True,
@@ -307,7 +312,7 @@ class TrustPermissionStore:
                     f"Failed to notify peer {peer_id} from actor {actor_id}: {response}"
                 )
 
-        except Exception as e:
+        except Exception as e:  # folds DbError: notify after the store
             logger.warning(
                 f"Error notifying peer {peer_id} from actor {actor_id}: {e}",
                 exc_info=True,
@@ -390,7 +395,7 @@ class TrustPermissionStore:
                         f"status={response.status_code}"
                     )
 
-        except Exception as e:
+        except Exception as e:  # folds DbError: notify after the store
             logger.warning(
                 f"Error notifying peer {peer_id} from actor {actor_id}: {e}",
                 exc_info=True,
@@ -436,6 +441,8 @@ class TrustPermissionStore:
             trust_type = registry.get_type(permissions.trust_type)
             if trust_type and trust_type.base_permissions:
                 base_permissions = trust_type.base_permissions
+        except DbError:
+            raise
         except Exception as e:
             logger.warning(
                 f"Could not load base permissions for trust type "
@@ -507,6 +514,8 @@ class TrustPermissionStore:
 
             return permissions
 
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Error loading trust permissions {cache_key}: {e}")
             return None
@@ -533,12 +542,14 @@ class TrustPermissionStore:
                     cache_key = f"{permissions.actor_id}:{permissions.peer_id}"
                     self._cache[cache_key] = permissions
 
-                except Exception as e:
+                except Exception as e:  # folds DbError: no DB access
                     logger.error(f"Error parsing trust permissions {attr_name}: {e}")
                     continue
 
             return permissions_list
 
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Error listing trust permissions for actor {actor_id}: {e}")
             return []
@@ -570,6 +581,8 @@ class TrustPermissionStore:
                 logger.error(f"Failed to delete trust permissions {permission_key}")
                 return False
 
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Error deleting trust permissions {actor_id}:{peer_id}: {e}")
             return False
@@ -612,6 +625,8 @@ class TrustPermissionStore:
             # Store the updated permissions
             return self.store_permissions(updated_permissions)
 
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Error updating trust permissions {actor_id}:{peer_id}: {e}")
             return False
@@ -778,11 +793,10 @@ def get_trust_permission_store(
     including its database backend. It is now honored: a different config
     rebuilds the store.
     """
-    global _permission_store
-    if _permission_store is None:
-        raise RuntimeError(
-            "Trust permission store not initialized. Call initialize_trust_permission_store() at application startup."
-        )
-    if _permission_store_config is not config:
+    if _permission_store is None or _permission_store_config is not config:
+        # Building the store reads nothing, so a store missed at startup is
+        # built here rather than raising: a RuntimeError sent the property
+        # handlers to the legacy grant, which ignores DENY overrides.
         initialize_trust_permission_store(config)
+    assert _permission_store is not None
     return _permission_store

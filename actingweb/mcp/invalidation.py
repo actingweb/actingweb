@@ -39,12 +39,12 @@ def evict_caches_for_token(token: str, actor_wide: bool = True) -> bool:
         return False
     try:
         from ..handlers.mcp import MCPHandler
-    except Exception:  # pragma: no cover - MCP unavailable; nothing to evict
+    except Exception:  # pragma: no cover - MCP unavailable; nothing to evict  # folds DbError: import fallback, no DB access
         logger.debug("MCP handler unavailable; skipping token cache eviction")
         return False
     try:
         return bool(MCPHandler.clear_token_from_cache(token, actor_wide=actor_wide))
-    except Exception:  # pragma: no cover - eviction must never fail revocation
+    except Exception:  # pragma: no cover - eviction must never fail revocation  # folds DbError: in-memory cache eviction after the revocation committed
         logger.warning("Failed to evict MCP token cache entry", exc_info=True)
         return False
 
@@ -59,11 +59,11 @@ def evict_caches_for_actor(actor_id: str) -> int:
         return 0
     try:
         from ..handlers.mcp import evict_mcp_caches_for_actor
-    except Exception:  # pragma: no cover - MCP unavailable; nothing to evict
+    except Exception:  # pragma: no cover - MCP unavailable; nothing to evict  # folds DbError: import fallback, no DB access
         logger.debug("MCP handler unavailable; skipping actor cache eviction")
         return 0
     try:
         return evict_mcp_caches_for_actor(actor_id)
-    except Exception:  # pragma: no cover - eviction must never fail revocation
+    except Exception:  # pragma: no cover - eviction must never fail revocation  # folds DbError: in-memory cache eviction after the revocation committed
         logger.warning("Failed to evict MCP caches for actor", exc_info=True)
         return 0

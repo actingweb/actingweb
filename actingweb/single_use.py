@@ -216,7 +216,7 @@ def delete_confirmed(
         if db.delete_attr_conditional(actor_id=actor_id, bucket=bucket, name=name):
             return True
         return db.get_attr_strict(actor_id=actor_id, bucket=bucket, name=name) is None
-    except Exception as e:
+    except Exception as e:  # folds DbError: False is "unconfirmed"; callers fail closed
         logger.warning(f"Could not confirm a delete in {bucket}: {e}")
         return False
 

@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING, Any, Optional
 from urllib.parse import urlparse
 
 from ..constants import REFRESH_TOKEN_GRACE_DEFAULT, SPA_REFRESH_TOKEN_REUSE_WINDOW
+from ..db.exceptions import DbError
 from ..secret_compare import secret_digest_equals, secret_equals
 from ..single_use import classify_reuse, refresh_token_grace
 from .base_handler import BaseHandler
@@ -348,7 +349,7 @@ class OAuth2SPAHandler(BaseHandler):
                         }
                     )
                     oauth_enabled = True
-        except Exception as e:
+        except Exception as e:  # folds DbError: no DB access
             logger.warning(f"Failed to get OAuth providers: {e}")
 
         return {
@@ -477,6 +478,8 @@ class OAuth2SPAHandler(BaseHandler):
                     400, f"OAuth provider {provider} is not enabled"
                 )
 
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Failed to create authenticator: {e}")
             return self._json_error(500, "OAuth configuration error")
@@ -555,6 +558,8 @@ class OAuth2SPAHandler(BaseHandler):
                 else ("S256" if code_challenge else ""),
                 prompt=prompt,
             )
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Failed to create authorization URL: {e}")
             return self._json_error(500, "Failed to create authorization URL")
@@ -645,7 +650,7 @@ class OAuth2SPAHandler(BaseHandler):
             from ..oauth_session import get_oauth2_session_manager
 
             get_oauth2_session_manager(self.config).maybe_purge_expired_tokens()
-        except Exception as e:  # pragma: no cover - defensive
+        except Exception as e:  # pragma: no cover - defensive  # folds DbError: best-effort cleanup after the token response was built, retried on a later request
             logger.debug(f"Opportunistic token purge skipped: {e}")
 
         return result
@@ -915,6 +920,8 @@ class OAuth2SPAHandler(BaseHandler):
                 return self._json_error(
                     400, f"OAuth provider {provider} is not enabled"
                 )
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Failed to create authenticator for {provider}: {e}")
             return self._json_error(500, "OAuth configuration error")
@@ -1024,6 +1031,8 @@ class OAuth2SPAHandler(BaseHandler):
                     user_info=user_info,
                 )
                 oauth_valid = bool(result) if result is not None else True
+            except DbError:
+                raise
             except Exception as e:
                 logger.error(f"Error in lifecycle hook for oauth_success: {e}")
                 oauth_valid = False
@@ -1110,7 +1119,7 @@ class OAuth2SPAHandler(BaseHandler):
             unverified = jwt.decode(
                 assertion, options={"verify_signature": False, "verify_aud": False}
             )
-        except Exception:
+        except Exception:  # folds DbError: no DB access
             return None, None, "malformed id_token"
 
         iss = unverified.get("iss")
@@ -1196,6 +1205,8 @@ class OAuth2SPAHandler(BaseHandler):
                     user_info=user_info,
                 )
                 oauth_valid = bool(result) if result is not None else True
+            except DbError:
+                raise
             except Exception as e:
                 logger.error(f"Error in lifecycle hook for oauth_success: {e}")
                 oauth_valid = False
@@ -1663,6 +1674,8 @@ class OAuth2SPAHandler(BaseHandler):
                 "expires_in": max(0, expires_at - int(time.time())),
             }
 
+        except DbError:
+            raise
         except Exception as e:
             logger.warning(f"Session check error: {e}")
             return {
@@ -1804,7 +1817,7 @@ class OAuth2SPAHandler(BaseHandler):
                 )
             else:
                 logger.debug(f"No provider token to clear for actor {actor_id}")
-        except Exception as e:
+        except Exception as e:  # folds DbError: best-effort cleanup after the session revoke committed; a retry would find no session
             logger.debug(f"Clearing provider token for actor {actor_id}: {e}")
 
     def _store_unavailable(self) -> dict[str, Any]:

@@ -24,8 +24,15 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from ... import request_context, runtime_context
 from ...aw_web_request import AWWebObj
+from ...db.exceptions import DbError
 from ...handlers import bot, factory, mcp, services
 from ...log_summary import summarize_payload
+from ._errors import (
+    db_error_answer,
+    error_cors_headers,
+    log_db_error,
+    map_db_error,
+)
 from .base_integration import BaseActingWebIntegration, default_templates_dir
 
 if TYPE_CHECKING:
@@ -46,7 +53,7 @@ def _logout_outcome(handler_response: Any) -> tuple[bool, str]:
     default = (True, "Logged out successfully")
     try:
         body = json.loads(bytes(handler_response.body))
-    except Exception:
+    except Exception:  # folds DbError: no DB access
         return default
     if not isinstance(body, dict):
         return default
@@ -61,6 +68,29 @@ def _logout_outcome(handler_response: Any) -> tuple[bool, str]:
 
 
 # Pydantic Models for Type Safety
+
+
+def _db_error_handler(aw_app: Any) -> Callable[..., Any]:
+    """The app-level answer for a ``DbError`` (see ``_errors.py``).
+
+    On the SPA endpoints and ``/oauth/logout`` it carries the SPA CORS
+    headers, so a cross-origin SPA can read the 503 and its ``Retry-After``
+    instead of seeing a network error.
+    """
+
+    async def _db_error_response(request: Request, exc: Exception) -> JSONResponse:
+        assert isinstance(exc, DbError)
+        status, headers, body = db_error_answer(exc)
+        log_db_error(exc)
+        headers = {
+            **headers,
+            **error_cors_headers(
+                request.url.path, request.headers.get("origin", ""), aw_app.get_config()
+            ),
+        }
+        return JSONResponse(content=body, status_code=status, headers=headers)
+
+    return _db_error_response
 
 
 class ActorCreateRequest(BaseModel):
@@ -257,6 +287,8 @@ async def authenticate_google_oauth(
         ):
             return result  # type: ignore
         return None
+    except DbError:
+        raise
     except Exception as e:
         logger.error(f"OAuth2 authentication error: {e}")
         return None
@@ -301,6 +333,8 @@ def create_oauth_redirect_response(
                     redirect_response.delete_cookie("oauth_token", path="/")
                     logger.debug("Cleared expired oauth_token cookie")
                 return redirect_response
+    except DbError:
+        raise
     except Exception as e:
         logger.error(f"Error creating OAuth2 redirect: {e}")
 
@@ -322,7 +356,7 @@ def add_www_authenticate_header(response: Response, config: Any) -> None:
         if authenticator.is_enabled():
             www_auth = authenticator.create_www_authenticate_header()
             response.headers["WWW-Authenticate"] = www_auth
-    except Exception as e:
+    except Exception as e:  # folds DbError: no DB access
         logger.error(f"Error adding WWW-Authenticate header: {e}")
         response.headers["WWW-Authenticate"] = 'Bearer realm="ActingWeb"'
 
@@ -366,6 +400,10 @@ async def check_authentication_and_redirect(
                     f"ActingWeb session token validation successful for actor {actor_id}"
                 )
                 return None  # Valid ActingWeb token
+        except DbError:
+            # A token-store fault is not an invalid token: a 401 here would
+            # sign every SPA user out during a throttle.
+            raise
         except Exception as e:
             logger.debug(f"ActingWeb token validation failed: {e}")
 
@@ -387,6 +425,8 @@ async def check_authentication_and_redirect(
                     "OAuth cookie token is expired or invalid - will redirect to fresh OAuth"
                 )
                 # Token expired/invalid - fall through to create redirect response with cookie cleanup
+        except DbError:
+            raise
         except Exception as e:
             logger.debug(
                 f"OAuth cookie validation error: {e} - will redirect to fresh OAuth"
@@ -568,6 +608,10 @@ class FastAPIIntegration(BaseActingWebIntegration):
         )
         # Add request context middleware for logging correlation
         self.fastapi_app.add_middleware(RequestContextMiddleware)
+        # A DbError that reaches FastAPI, from a library route or from a
+        # consumer route calling ActorInterface, answers 503 (409 for
+        # CreatorTaken) instead of a 500.
+        self.fastapi_app.add_exception_handler(DbError, _db_error_handler(aw_app))
 
     async def _run_in_executor_with_context(
         self, func: Callable[..., Any], *args: Any, **kwargs: Any
@@ -704,6 +748,8 @@ class FastAPIIntegration(BaseActingWebIntegration):
                     self.logger.debug(
                         "No MCP context found, using standard OAuth2 callback"
                     )
+            except DbError:
+                raise
             except Exception:
                 # Not an MCP callback or state manager not available
                 self.logger.error("Error checking MCP context", exc_info=True)
@@ -1472,6 +1518,8 @@ class FastAPIIntegration(BaseActingWebIntegration):
                             f"ActingWeb token valid - redirecting to {redirect_url}"
                         )
                         return RedirectResponse(url=redirect_url, status_code=302)
+            except DbError:
+                raise
             except Exception as e:
                 self.logger.debug(f"ActingWeb token validation failed: {e}")
 
@@ -1520,6 +1568,8 @@ class FastAPIIntegration(BaseActingWebIntegration):
                     return oauth_redirect
                 else:
                     self.logger.warning("OAuth2 not enabled in config")
+            except DbError:
+                raise
             except Exception as e:
                 self.logger.error(f"OAuth token validation failed in factory: {e}")
                 # Token validation failed - clear cookie and redirect to fresh OAuth
@@ -1548,7 +1598,17 @@ class FastAPIIntegration(BaseActingWebIntegration):
             except (KeyboardInterrupt, SystemExit):
                 # Don't catch system signals
                 raise
-            except Exception as e:
+            except Exception as e:  # folds DbError: mapped to 503 by map_db_error, first line of this handler
+                if map_db_error(
+                    webobj.response,
+                    e,
+                    error_cors_headers(
+                        request.url.path,
+                        request.headers.get("origin", ""),
+                        self.aw_app.get_config(),
+                    ),
+                ):
+                    return self._create_fastapi_response(webobj, request)
                 # Log the error but let ActingWeb handlers set their own response codes
                 self.logger.error(f"Error in factory handler: {e}")
 
@@ -1723,6 +1783,8 @@ class FastAPIIntegration(BaseActingWebIntegration):
                     # Fall back to standard actor creation without OAuth
                     return await self._handle_factory_post_without_oauth(request, email)
 
+            except DbError:
+                raise
             except Exception as e:
                 self.logger.error(f"Error creating OAuth2 redirect: {e}")
                 # Fall back to standard actor creation if OAuth2 setup fails
@@ -1731,7 +1793,7 @@ class FastAPIIntegration(BaseActingWebIntegration):
                 )
                 return await self._handle_factory_post_without_oauth(request, email)
 
-        except HTTPException:
+        except (HTTPException, DbError):
             raise
         except Exception as e:
             self.logger.error(f"Error in factory POST handler: {e}")
@@ -1783,6 +1845,8 @@ class FastAPIIntegration(BaseActingWebIntegration):
 
             return self._create_fastapi_response(webobj, request)
 
+        except DbError:
+            raise
         except Exception as e:
             self.logger.error(f"Error in standard actor creation: {e}")
             if self.templates:
@@ -1943,7 +2007,7 @@ class FastAPIIntegration(BaseActingWebIntegration):
                         "aw-oauth-email.html",
                         context=webobj.response.template_values,
                     )
-                except Exception as e:
+                except Exception as e:  # folds DbError: template render, no DB
                     # Template not found - provide basic HTML form as fallback
                     self.logger.warning(f"Template aw-oauth-email.html not found: {e}")
                     session_id = webobj.response.template_values.get("session_id", "")
@@ -2011,7 +2075,7 @@ class FastAPIIntegration(BaseActingWebIntegration):
                     context=template_values,
                     status_code=status_code,
                 )
-            except Exception as e:
+            except Exception as e:  # folds DbError: no DB access: template rendering
                 # Template not found - provide basic HTML as fallback
                 self.logger.warning(f"Template aw-verify-email.html not found: {e}")
 
@@ -2086,7 +2150,7 @@ class FastAPIIntegration(BaseActingWebIntegration):
                         template_name,
                         context=webobj.response.template_values,
                     )
-                except Exception as e:
+                except Exception as e:  # folds DbError: template render, no DB
                     # Template not found or rendering error - fall back to JSON
                     self.logger.error(f"Template rendering failed: {e}")
                     from fastapi.responses import JSONResponse
@@ -2315,6 +2379,8 @@ class FastAPIIntegration(BaseActingWebIntegration):
                 headers=cors_headers,
             )
 
+        except DbError:
+            raise
         except Exception as e:
             self.logger.error(f"Error retrieving SPA session: {e}")
             return JSONResponse(
@@ -2555,7 +2621,17 @@ class FastAPIIntegration(BaseActingWebIntegration):
             except (KeyboardInterrupt, SystemExit):
                 # Don't catch system signals
                 raise
-            except Exception as e:
+            except Exception as e:  # folds DbError: mapped to 503 by map_db_error, first line of this handler
+                if map_db_error(
+                    webobj.response,
+                    e,
+                    error_cors_headers(
+                        request.url.path,
+                        request.headers.get("origin", ""),
+                        self.aw_app.get_config(),
+                    ),
+                ):
+                    return self._create_fastapi_response(webobj, request)
                 # Log the error but let ActingWeb handlers set their own response codes
                 self.logger.error(f"Error in {endpoint} handler: {e}")
 
@@ -2673,7 +2749,7 @@ class FastAPIIntegration(BaseActingWebIntegration):
             # Provider-specific discovery extras (e.g. Google/Apple JWKS URI)
             result.update(provider.discovery_extras())
             return result
-        except Exception:
+        except Exception:  # folds DbError: no DB access
             return {"error": "OAuth provider not configured"}
 
     def _create_mcp_info_response(self) -> dict[str, Any]:

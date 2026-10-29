@@ -129,7 +129,7 @@ class BaseHandler:
                 except TypeError:
                     # Framework doesn't support cookie parameter
                     is_web_ui_request = False
-        except Exception:
+        except Exception:  # folds DbError: cookie detection, no DB access
             # Fallback to basic auth if cookie detection fails
             is_web_ui_request = False
 

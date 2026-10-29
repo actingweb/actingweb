@@ -6,6 +6,8 @@ from typing import TYPE_CHECKING, Any
 from actingweb import auth
 from actingweb.handlers import base_handler
 
+from ..db.exceptions import DbError
+
 if TYPE_CHECKING:
     from actingweb.aw_proxy import AwProxy
     from actingweb.interface.actor_interface import ActorInterface
@@ -129,7 +131,7 @@ class CallbacksHandler(base_handler.BaseHandler):
                         logger.info(
                             f"Successfully executed subscription_deleted hook for {peerid}"
                         )
-                    except Exception as e:
+                    except Exception as e:  # folds DbError: notification after the subscription was deleted
                         logger.warning(
                             f"Error executing subscription_deleted hook: {e}",
                             exc_info=True,
@@ -292,7 +294,7 @@ class CallbacksHandler(base_handler.BaseHandler):
                             f"Incremental sync completed for {granting_actor_id}: "
                             f"{len(granted_patterns)} pattern(s) synced"
                         )
-                    except Exception as sync_error:
+                    except Exception as sync_error:  # folds DbError: sync after the permissions were stored; a retried callback sees no new grant
                         logger.error(
                             f"Error during incremental sync for {granting_actor_id}: {sync_error}",
                             exc_info=True,
@@ -304,6 +306,8 @@ class CallbacksHandler(base_handler.BaseHandler):
                         f"(subscription processing not enabled or auto_storage disabled)"
                     )
 
+            except DbError:
+                raise
             except Exception as e:
                 logger.error(f"Error storing permission callback: {e}")
                 self.response.set_status(500, "Internal error")
@@ -539,6 +543,8 @@ class CallbacksHandler(base_handler.BaseHandler):
                     else:
                         logger.warning(f"Failed to fetch resync baseline for {target}")
                         callback_data = {}
+                except DbError:
+                    raise
                 except Exception as e:
                     logger.error(f"Error fetching resync baseline: {e}")
                     callback_data = {}
@@ -578,6 +584,8 @@ class CallbacksHandler(base_handler.BaseHandler):
                             f"Failed to fetch low-granularity data: {response.status_code}"
                         )
                         callback_data = {}
+                except DbError:
+                    raise
                 except Exception as e:
                     logger.error(f"Error fetching low-granularity callback data: {e}")
                     callback_data = {}
@@ -644,7 +652,7 @@ class CallbacksHandler(base_handler.BaseHandler):
                                         cb.sequence,
                                         cb.callback_type.value,
                                     )
-                            except Exception as e:
+                            except Exception as e:  # folds DbError: consumer data hook, at-most-once; its error must not get the diff applied twice
                                 logger.error(
                                     f"Error in subscription_data_hook for {target}: {e}"
                                 )
@@ -675,7 +683,7 @@ class CallbacksHandler(base_handler.BaseHandler):
                                         cb.sequence,
                                         cb.callback_type.value,
                                     )
-                            except Exception as e:
+                            except Exception as e:  # folds DbError: consumer data hook, at-most-once; its error must not get the diff applied twice
                                 logger.error(
                                     f"Error in subscription_data_hook wildcard: {e}"
                                 )
@@ -768,7 +776,7 @@ class CallbacksHandler(base_handler.BaseHandler):
                                 f"Successfully acknowledged low-granularity callback "
                                 f"seq={sequence} to {peer_id}, diff cleared on publisher"
                             )
-                except Exception as e:
+                except Exception as e:  # folds DbError: ack after the callback was applied; the publisher keeps the diff for the next poll
                     logger.error(
                         f"Error sending PUT acknowledgment to {peer_id}: {e}",
                         exc_info=True,
@@ -794,11 +802,15 @@ class CallbacksHandler(base_handler.BaseHandler):
                         logger.warning(
                             f"Resync failed: {sync_result.error or 'unknown error'}"
                         )
+                except DbError:
+                    raise
                 except Exception as e:
                     logger.error(f"Error during automatic resync: {e}", exc_info=True)
 
             return success
 
+        except DbError:
+            raise
         except Exception as e:
             logger.error(
                 f"Error processing subscription callback: peer={peer_id}, "
@@ -929,6 +941,8 @@ class CallbacksHandler(base_handler.BaseHandler):
                     f"Unexpected response type for property {property_name} "
                     f"from {peer_id}: {type(response).__name__}"
                 )
+        except DbError:
+            raise
         except Exception as e:
             logger.error(
                 f"Error fetching property {property_name} from {peer_id}: {e}",
@@ -978,6 +992,8 @@ class CallbacksHandler(base_handler.BaseHandler):
             for prop_name in matching_props:
                 self._fetch_single_property(proxy, remote_store, peer_id, prop_name)
 
+        except DbError:
+            raise
         except Exception as e:
             logger.error(
                 f"Error fetching wildcard properties '{pattern}' from {peer_id}: {e}",
@@ -1026,7 +1042,7 @@ class CallbacksHandler(base_handler.BaseHandler):
                                 f"Deleted revoked peer data: {list_name} "
                                 f"from peer {peer_id}"
                             )
-                        except Exception as e:
+                        except Exception as e:  # folds DbError: cleanup after the permissions were stored; a retried callback sees no revocation
                             logger.error(
                                 f"Failed to delete revoked data {list_name} "
                                 f"from peer {peer_id}: {e}"
@@ -1039,5 +1055,5 @@ class CallbacksHandler(base_handler.BaseHandler):
                     f"due to permission revocation"
                 )
 
-        except Exception as e:
+        except Exception as e:  # folds DbError: cleanup after the permissions were stored; a retried callback sees no revocation
             logger.error(f"Error during revoked peer data deletion: {e}")

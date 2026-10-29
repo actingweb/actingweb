@@ -17,6 +17,8 @@ from actingweb.permission_evaluator import PermissionResult, get_permission_eval
 from actingweb.property_list import ListCorruptionError
 from actingweb.secret_compare import secret_digest_equals, secret_equals
 
+from .db.exceptions import DbError
+
 logger = logging.getLogger(__name__)
 
 # Rate limit for the suspension-check failure ERROR (see
@@ -113,6 +115,8 @@ class Actor:
         # Set by get_from_creator: the other actors with this creator that are
         # marked for replacement (``factory``), for a sign-in to sweep.
         self.factory_sibling_ids: list[str] = []
+        self.creator_ids: list[str] = []
+        self.creator_classes: dict[str, str] = {}
         if self.config:
             self.handle = get_actor(self.config)
         else:
@@ -305,84 +309,95 @@ class Actor:
             return
         self.get(actor_id=actor_id)
 
-    def _candidate_rank(self, actor_id: str) -> int:
-        """Sort key for a ``get_by_creator`` row: 0 vouched, 1 any other
-        unvouched actor (or one whose ``_internal`` bucket cannot be read),
-        2 ``factory``."""
-        from actingweb.oauth2 import classify_marker
-
-        if not self.config:
-            return 1
-        return {"vouched": 0, "replace": 2}.get(
-            classify_marker(self.config, actor_id) or "", 1
-        )
-
     def get_from_creator(self, creator: str | None = None) -> bool:
         """Initialise an actor by matching on creator/email.
 
-        Returns True if an actor could be loaded, otherwise False. When multiple actors
-        share the same creator (possible when unique_creator is disabled), the first
-        deterministic match will be selected in order to provide stable behaviour for
-        login flows that do not specify an explicit actor ID.
+        Returns True if an actor could be loaded, otherwise False. When
+        several actors share the creator (possible with ``unique_creator``
+        off) the pick is, in order: a vouched actor, any other unvouched
+        actor, a ``factory`` one; the lowest id within each group.
+
+        The actors are listed by id only and read in id order: each is
+        loaded (one gone since the listing is left out) and its marker
+        classified, until the first vouched actor, which is the pick. After
+        it at most :data:`actingweb.oauth2.SWEEP_LIMIT` more markers are read
+        to find the ``factory`` actors a sign-in removes beside it, so the
+        reads are bounded by the ranked prefix plus that limit.
+
+        Raises ``DbError`` on a read fault, and when a marker in the ranked
+        prefix cannot be read: ranking an unreadable actor like an unvouched
+        one could strand the owner's actor behind it (BR).
+
+        Sets ``factory_sibling_ids`` (the ``factory`` actors classified beside
+        the pick), ``creator_ids`` (every id the listing returned) and
+        ``creator_classes`` (the class of every actor read) for the sign-in to
+        reuse instead of listing again.
         """
+        from .oauth2 import SWEEP_LIMIT, classify_marker
 
         self.id = None
         self.creator = None
         self.passphrase = None
         self.factory_sibling_ids = []
+        self.creator_ids = []
+        self.creator_classes = {}
 
         if not self.config or not creator:
             return False
 
         lookup_creator = creator.lower() if "@" in creator else creator
-        exists = get_actor(self.config).get_by_creator(creator=lookup_creator)
-        if not exists:
+        db = get_actor(self.config)
+        listed = db.get_by_creator(creator=lookup_creator, ids_only=True) or []
+        rows: list[dict[str, Any]] = [listed] if isinstance(listed, dict) else listed
+        ids = sorted({str(r["id"]) for r in rows if r and r.get("id")})
+        self.creator_ids = ids
+        if not ids:
             return False
+        if len(ids) == 1:
+            self.get(actor_id=ids[0])
+            return bool(self.id)
 
-        # Normalise return to a list of candidate records
-        candidates: list[dict[str, Any]]
-        if isinstance(exists, list):
-            candidates = [c for c in exists if c]
-        else:
-            candidates = [exists]
-
-        if not candidates:
-            return False
-
-        # Ensure deterministic selection order even when DynamoDB returns arbitrary order
-        candidates.sort(key=lambda item: item.get("id", ""))
-
-        if len(candidates) > 1:
-            candidate_ids = [c.get("id") for c in candidates]
-            logger.warning(
-                f"Multiple actors share creator {lookup_creator!r}: {candidate_ids}"
-            )
-            # A vouched actor first: unvouched siblings (an open factory lets
-            # anyone add one) must not take a sign-in from the owner's actor.
-            # Factory actors last: one an owner's actor from before 3.16 sits
-            # beside is the one a sign-in replaces, and the owner's would then
-            # be left behind its successor. Stable, so the lowest id still
-            # wins within each group.
-            ranks = {
-                str(c.get("id")): self._candidate_rank(str(c.get("id")))
-                for c in candidates
-                if c.get("id")
-            }
-            candidates.sort(key=lambda item: ranks.get(str(item.get("id")), 1))
-            factory_ids = [i for i, rank in ranks.items() if rank == 2]
-        else:
-            factory_ids = []
-
-        for candidate in candidates:
-            actor_id = candidate.get("id")
-            if not actor_id:
+        logger.warning(f"Multiple actors share creator {lookup_creator!r}: {ids}")
+        rank_of = {"vouched": 0, "unvouched": 1, "replace": 2}
+        classes: dict[str, str] = {}
+        ranked: list[tuple[int, str]] = []
+        tail_left: int | None = None
+        for candidate_id in ids:
+            if tail_left is not None:
+                # Past the pick: only factory actors to remove beside it
+                # matter, and one whose marker cannot be read is not touched.
+                if tail_left <= 0:
+                    break
+                tail_left -= 1
+                tail_class = classify_marker(self.config, candidate_id)
+                if tail_class is not None:
+                    classes[candidate_id] = tail_class
+                    # A fallback if the pick vanishes before its load.
+                    ranked.append((rank_of[tail_class], candidate_id))
                 continue
-            self.get(actor_id=actor_id)
+            if not db.get(actor_id=candidate_id):
+                continue  # deleted since the index listed it
+            marker = classify_marker(self.config, candidate_id)
+            if marker is None:
+                raise DbError("actor marker read", candidate_id)
+            classes[candidate_id] = marker
+            rank = rank_of[marker]
+            ranked.append((rank, candidate_id))
+            if rank == 0:
+                tail_left = SWEEP_LIMIT
+        self.creator_classes = classes
+        # Best first; an actor deleted between the ranking and its load is
+        # passed over for the next one, as the per-row loop did before 3.16.
+        for _rank, candidate_id in sorted(ranked):
+            self.get(actor_id=candidate_id)
             if self.id:
-                self.factory_sibling_ids = [i for i in factory_ids if i != self.id]
-                return True
-
-        return False
+                break
+        if not self.id:
+            return False
+        self.factory_sibling_ids = [
+            i for i, c in classes.items() if c == "replace" and i != self.id
+        ]
+        return True
 
     def create(
         self,
@@ -418,11 +433,11 @@ class Actor:
             self.creator = DEFAULT_CREATOR
         if self.config and self.config.unique_creator:
             in_db = get_actor(self.config)
-            exists = in_db.get_by_creator(creator=self.creator)
+            # Strict and consistent: a read fault raises DbError and the
+            # create is refused, never read as "no such creator" (B4), and an
+            # actor the index still lists after its deletion is left out.
+            exists = in_db.get_by_creator(creator=self.creator, consistent=True)
             if isinstance(exists, list):
-                # DynamoDB's creator index is eventually consistent: an actor
-                # deleted a moment ago can still be listed, and its consistent
-                # read then answers None.
                 exists = [c for c in exists if c]
             if exists:
                 # If uniqueness is turned on at a later point, we may have multiple accounts
@@ -445,6 +460,11 @@ class Actor:
                                 anactor.modify(creator=em.lower())
                     for c in exists:
                         if secret_equals(c["passphrase"], passphrase):
+                            # Load the row into the handle: the consistent
+                            # listing does not, and modify()/delete() on this
+                            # actor would otherwise act on no row.
+                            if not in_db.get(actor_id=c["id"]):
+                                return False
                             self.handle = in_db
                             self.id = c["id"]
                             self.passphrase = c["passphrase"]
@@ -501,7 +521,16 @@ class Actor:
         # Record how the actor was created, before anything else lands in
         # its bucket, so a rollback has only the row to remove.
         if self.store and auth_method:
-            if not self.store.set_confirmed("auth_method", auth_method):
+            try:
+                marked = self.store.set_confirmed(
+                    "auth_method", auth_method, raise_on_fault=True
+                )
+                fault: DbError | None = None
+            except DbError as e:  # folds DbError: re-raised after the rollback
+                # A store fault answers 503, like the trustee_root write
+                # below; a mismatch stays the False refusal.
+                marked, fault = False, e
+            if not marked:
                 # An actor without its marker reads as legacy, and the next
                 # sign-in would wipe it. Undo the creation: only the row, since
                 # a fixed id (a system actor) can own buckets that predate it.
@@ -511,7 +540,7 @@ class Actor:
                 )
                 try:
                     rolled_back = bool(self.handle and self.handle.delete())
-                except Exception as e:
+                except Exception as e:  # folds DbError: rollback of a create whose marker did not land; logged, next sign-in cleans the row
                     logger.error(f"Actor {self.id}: row removal raised: {e}")
                     rolled_back = False
                 if not rolled_back:
@@ -523,6 +552,8 @@ class Actor:
                 self.passphrase = None
                 self.handle = None
                 self.store = None
+                if fault is not None:
+                    raise fault
                 return False
 
         if (
@@ -531,7 +562,27 @@ class Actor:
             and len(trustee_root) > 0
             and self.store
         ):
-            self.store.trustee_root = trustee_root
+            try:
+                self.store.trustee_root = trustee_root
+            except DbError:
+                # The actor would exist without its trustee_root and without
+                # actor_created having fired. Remove the row, as for a lost
+                # marker, and let the fault reach the caller (503): a retry
+                # starts clean instead of leaving an unannounced actor.
+                logger.error(
+                    f"Actor {self.id}: the trustee_root write faulted; "
+                    "removing the new actor row"
+                )
+                try:
+                    if self.handle:
+                        self.handle.delete()
+                except Exception as e:  # folds DbError: rollback inside the DbError handler, which re-raises the original fault
+                    logger.error(f"Actor {self.id}: row removal raised: {e}")
+                self.id = None
+                self.passphrase = None
+                self.handle = None
+                self.store = None
+                raise
 
         # Execute actor_created lifecycle hook if hooks are provided
         if hooks:
@@ -541,7 +592,7 @@ class Actor:
                 registry = getattr(self.config, "service_registry", None)
                 actor_interface = ActorInterface(self, service_registry=registry)
                 hooks.execute_lifecycle_hooks("actor_created", actor_interface)
-            except Exception as e:
+            except Exception as e:  # folds DbError: notification after commit
                 # Log hook execution error but don't fail actor creation
                 logger.warning(
                     f"Actor created successfully but lifecycle hook failed: {e}"
@@ -585,7 +636,7 @@ class Actor:
         :meth:`creator_change_pinned` refuses it. The previous marker is
         restored then, but only once a fresh read shows the stored creator
         unchanged (a failure can be a lost acknowledgement of a write that
-        landed). Never raises.
+        landed). Raises only ``DbError``, with the actor left unvouched.
         """
         from actingweb.oauth2 import REPLACE_AUTH_METHODS
 
@@ -617,16 +668,23 @@ class Actor:
             )
             return False
         original = self.creator
+        fault: DbError | None = None
         try:
             if self.modify(creator=creator):
                 return True
+        except DbError as e:  # folds DbError: raised after the marker restore below
+            # Ambiguous: the creator may have landed. Put the marker back
+            # only if the stored creator is unchanged, then raise.
+            fault = e
         except Exception as e:
-            # DynamoDB raises on a failed save; PostgreSQL answers False.
             logger.error(f"Actor {self.id}: creator change failed: {e}")
         if unvouch:
             try:
                 row = get_actor(self.config).get(actor_id=self.id)
-            except Exception:
+            except DbError as e:  # folds DbError: unconfirmed, so the marker stays
+                if fault is None:
+                    raise
+                logger.error(f"Actor {self.id}: creator re-read faulted: {e}")
                 row = None
             if not row or row.get("creator") != original:
                 logger.error(
@@ -640,6 +698,8 @@ class Actor:
                     f"Actor {self.id}: creator unchanged but auth_method is "
                     f"still 'creator_changed' (was {previous_marker!r})"
                 )
+        if fault is not None:
+            raise fault
         return False
 
     def modify(self, creator: str | None = None, passphrase: str | None = None) -> bool:
@@ -678,18 +738,28 @@ class Actor:
         trustees (``requests.delete``) and keeps every local cleanup. Use it
         when the peer URLs are not trustworthy.
 
-        Returns whether the backend reported the actor row removed (PostgreSQL
-        answers ``False`` on a caught fault; DynamoDB raises).
+        Returns True when the actor row is gone. A backend fault raises
+        ``DbError``.
+
+        The trust and subscription lists are read **first**, strictly: a read
+        fault raises before anything is deleted and before the tombstone is
+        written, so a throttle never deletes an actor without notifying its
+        peers (B8). Once the reads pass, the tombstone is written and the wipe
+        runs; a fault after that point is the tombstone path's to finish.
 
         The actor row is removed **last**, so the actor keeps resolving for the
         duration of the wipe. Existence checks therefore fail open here, and
-        that is why the tombstone is written first: it is readable throughout
-        the wipe, whereas ``get()`` cannot distinguish mid-deletion from live.
-        See :mod:`actingweb.deletion`.
+        that is why the tombstone is written before the first destructive
+        step: it is readable throughout the wipe, whereas ``get()`` cannot
+        distinguish mid-deletion from live. See :mod:`actingweb.deletion`.
         """
         if not self.handle:
             logger.debug("Attempted delete of actor with no handle")
             return False
+        subs = subscription.Subscriptions(actor_id=self.id, config=self.config)
+        subs.fetch()  # strict: raises DbError before anything is removed
+        trusts = trust.Trusts(actor_id=self.id, config=self.config)
+        relationships = trusts.fetch()  # strict, same
         deletion.mark_actor_deleted(self.id, self.config)
         self.delete_peer_trustee(shorttype="*", notify_peers=notify_peers)
         if not self.property_list:
@@ -697,11 +767,7 @@ class Actor:
                 actor_id=self.id, config=self.config
             )
         self.property_list.delete()
-        subs = subscription.Subscriptions(actor_id=self.id, config=self.config)
-        subs.fetch()
         subs.delete()
-        trusts = trust.Trusts(actor_id=self.id, config=self.config)
-        relationships = trusts.fetch()
         if relationships:
             for rel in relationships:
                 if isinstance(rel, dict) and "peerid" in rel:
@@ -804,7 +870,7 @@ class Actor:
                     if isinstance(response.content, bytes)
                     else str(response.content)
                 )
-            except Exception:
+            except Exception:  # folds DbError: peer HTTP only
                 logger.debug(
                     "Not able to delete peer actor remotely due to network issues"
                 )
@@ -896,7 +962,7 @@ class Actor:
                         if isinstance(response.content, bytes)
                         else str(response.content)
                     )
-            except Exception:
+            except Exception:  # folds DbError: peer HTTP only
                 logger.debug("Not able to create new peer actor")
                 self.last_response_code = 408
             logger.info(f"Created peer actor, response code: {self.last_response_code}")
@@ -1006,7 +1072,7 @@ class Actor:
                         if isinstance(response.content, bytes)
                         else str(response.content)
                     )
-            except Exception:
+            except Exception:  # folds DbError: peer HTTP only
                 self.last_response_code = 408
                 self.last_response_message = (
                     "Not able to approve peer actor trust remotely"
@@ -1089,6 +1155,8 @@ class Actor:
                 last_accessed=last_accessed,
                 last_connected_via=last_connected_via,
             )
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Exception in dbtrust.modify: {e}", exc_info=True)
             return False
@@ -1124,7 +1192,7 @@ class Actor:
                     if isinstance(response.content, bytes)
                     else str(response.content)
                 )
-            except Exception:
+            except Exception:  # folds DbError: peer HTTP only
                 logger.debug("Not able to notify peer at url(" + requrl + ")")
                 self.last_response_code = 500
         return result
@@ -1208,7 +1276,7 @@ class Actor:
                     if isinstance(proxy.last_response_message, bytes)
                     else str(proxy.last_response_message)
                 )
-            except Exception as e:
+            except Exception as e:  # folds DbError: peer HTTP only
                 logger.debug(f"Not able to notify peer async: {e}")
                 self.last_response_code = 500
         return result
@@ -1300,7 +1368,7 @@ class Actor:
                 if isinstance(response.content, bytes)
                 else str(response.content)
             )
-        except Exception:
+        except Exception:  # folds DbError: peer HTTP only
             logger.debug("Not able to create trust with peer, deleting my trust.")
             dbtrust.delete()
             return False
@@ -1514,7 +1582,7 @@ class Actor:
                         + ")"
                     )
                     verified = False
-            except Exception:
+            except Exception:  # folds DbError: peer HTTP only
                 logger.debug("No response when verifying trust at url" + requrl + ")")
                 verified = False
         new_trust = trust.Trust(actor_id=self.id, peerid=peerid, config=self.config)
@@ -1580,7 +1648,7 @@ class Actor:
                     response = requests.delete(
                         url=url, headers=headers, timeout=(5, 10)
                     )
-                except Exception:
+                except Exception:  # folds DbError: peer HTTP only
                     logger.debug(
                         "Failed to delete reciprocal relationship at url(" + url + ")"
                     )
@@ -1608,9 +1676,11 @@ class Actor:
                 )
                 success_once = True
             if not self.subs_list:
+                # strict=False: a fault leaves this peer's subscriptions as
+                # orphans rather than failing the trust deletion.
                 self.subs_list = subscription.Subscriptions(
                     actor_id=self.id, config=self.config
-                ).fetch()
+                ).fetch(strict=False)
             # Delete this peer's subscriptions
             if self.subs_list:
                 for sub in self.subs_list:
@@ -1634,6 +1704,8 @@ class Actor:
                 if self.config is not None and self.id is not None:
                     permission_store = TrustPermissionStore(self.config)
                     permission_store.delete_permissions(self.id, rel["peerid"])
+            except DbError:
+                raise
             except Exception as e:
                 logger.warning(
                     f"Failed to delete trust permissions for {rel['peerid']}: {e}"
@@ -1655,6 +1727,8 @@ class Actor:
                 logger.info(f"Cleaned up RemotePeerStore for peer {rel['peerid']}")
             except ImportError:
                 pass  # RemotePeerStore not available
+            except DbError:
+                raise
             except Exception as e:
                 logger.warning(
                     f"Failed to cleanup RemotePeerStore for {rel['peerid']}: {e}"
@@ -1672,6 +1746,8 @@ class Actor:
                 )
             except ImportError:
                 pass  # CallbackProcessor not available
+            except DbError:
+                raise
             except Exception as e:
                 logger.warning(
                     f"Failed to cleanup callback state for {rel['peerid']}: {e}"
@@ -1688,6 +1764,8 @@ class Actor:
                     logger.info(f"Cleaned up peer profile for peer {rel['peerid']}")
                 except ImportError:
                     pass  # Peer profile system not available
+                except DbError:
+                    raise
                 except Exception as e:
                     logger.warning(
                         f"Failed to cleanup peer profile for {rel['peerid']}: {e}"
@@ -1706,6 +1784,8 @@ class Actor:
                     )
                 except ImportError:
                     pass  # Peer capabilities system not available
+                except DbError:
+                    raise
                 except Exception as e:
                     logger.warning(
                         f"Failed to cleanup peer capabilities for {rel['peerid']}: {e}"
@@ -1724,6 +1804,8 @@ class Actor:
                     )
                 except ImportError:
                     pass  # Peer permissions caching not available
+                except DbError:
+                    raise
                 except Exception as e:
                     logger.warning(
                         f"Failed to cleanup peer permissions cache for {rel['peerid']}: {e}"
@@ -1780,6 +1862,8 @@ class Actor:
             relationships = (
                 get_trust_list(config).fetch(actor_id=self.id, strict=True) or []
             )
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Purge of actor {self.id}: could not read its lists: {e}")
             return unconfirmed
@@ -1807,6 +1891,8 @@ class Actor:
         try:
             if peer_list.fetch(actor_id=self.id, strict=True):
                 peer_list.delete()
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Purge of actor {self.id}: peer trustees not removed: {e}")
 
@@ -1819,6 +1905,8 @@ class Actor:
                 actor_id=self.id, strict=True
             )
             confirmed = not trusts_left and not subs_left and not peers_left
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Purge of actor {self.id}: could not re-read its lists: {e}")
             confirmed = False
@@ -1905,7 +1993,7 @@ class Actor:
                 if isinstance(response.content, bytes)
                 else str(response.content)
             )
-        except Exception:
+        except Exception:  # folds DbError: peer HTTP only
             return None
         try:
             logger.debug(
@@ -1951,6 +2039,8 @@ class Actor:
         subtarget: str | None = None,
         resource: str | None = None,
         callback: bool | None = None,
+        *,
+        strict: bool = True,
     ) -> list[dict[str, Any]] | None:
         """Retrieves subscriptions from db.
 
@@ -1960,16 +2050,20 @@ class Actor:
             subtarget: Filter by subtarget (None = all subtargets)
             resource: Filter by resource (None = all resources)
             callback: Filter by callback flag (None = all, False = inbound, True = outbound)
+            strict: When False, a read fault answers ``[]`` instead of raising
 
         Returns:
             List of subscription dictionaries, or None if actor has no ID
+
+        Raises:
+            DbError: on a read fault (unless ``strict=False``)
         """
         if not self.id:
             return None
         if not self.subs_list:
             self.subs_list = subscription.Subscriptions(
                 actor_id=self.id, config=self.config
-            ).fetch()
+            ).fetch(strict=strict)
         ret = []
         if self.subs_list:
             for sub in self.subs_list:
@@ -2045,7 +2139,7 @@ class Actor:
             else:
                 logger.debug("Failed to delete remote subscription at url(" + url + ")")
                 return False
-        except Exception:
+        except Exception:  # folds DbError: peer HTTP only
             return False
 
     def delete_subscription(self, peerid=None, subid=None, callback=False):
@@ -2079,6 +2173,8 @@ class Actor:
                 else:
                     # Mark for cleanup after successful deletion
                     should_cleanup_remote_peer_store = True
+            except DbError:
+                raise
             except Exception as e:
                 logger.warning(
                     f"Failed to check RemotePeerStore cleanup for {peerid}: {e}"
@@ -2114,7 +2210,7 @@ class Actor:
                 logger.info(f"Cleaned up RemotePeerStore for peer {peerid}")
             except ImportError:
                 pass  # RemotePeerStore not available
-            except Exception as e:
+            except Exception as e:  # folds DbError: best-effort cleanup after the subscription delete committed
                 logger.warning(f"Failed to clean up RemotePeerStore for {peerid}: {e}")
 
         return result
@@ -2431,6 +2527,8 @@ class Actor:
                 return None
 
             return json.dumps(filtered_data)
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Permission filtering failed for subscription callback: {e}")
             return None  # Fail-closed: don't send data on error
@@ -2456,7 +2554,7 @@ class Actor:
         try:
             db = get_subscription_suspension(self.config, self.id)
             return db.is_suspended(target, subtarget)
-        except Exception as e:
+        except Exception as e:  # folds DbError: diff registration after the property write committed; logged as not suspended
             # "Not suspended" and "could not tell" must not look the same:
             # a missing suspensions table (TableDoesNotExist) or a denied
             # read makes every target look un-suspended, so a bulk import's
@@ -2516,6 +2614,8 @@ class Actor:
         try:
             db = get_subscription_suspension(self.config, self.id)
             return db.suspend(target, subtarget)
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Error suspending subscriptions: {e}")
             return False
@@ -2537,30 +2637,67 @@ class Actor:
             return 0
         try:
             db = get_subscription_suspension(self.config, self.id)
-            if not db.resume(target, subtarget):
+            # The resync is the only recovery for the changes made while
+            # suspended (they stored no diff and moved no sequence), so read
+            # the subscribers strictly before the marker goes: a fault then
+            # answers 503 with the suspension still in place.
+            subs = self.get_subscriptions(
+                target=target, subtarget=None, callback=False, strict=True
+            )
+            try:
+                resumed = db.resume(target, subtarget)
+            except DbError:
+                # The delete may have landed with its answer lost; put the
+                # marker back so the retry finds something to resume.
+                self._restore_suspension(db, target, subtarget)
+                raise
+            if not resumed:
                 return 0  # Wasn't suspended
 
             # Find all affected subscriptions and send resync callbacks
-            return self._send_resync_callbacks(target, subtarget)
+            return self._send_resync_callbacks(target, subtarget, subs, db)
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Error resuming subscriptions: {e}")
             return 0
 
-    def _send_resync_callbacks(self, target: str, subtarget: str | None) -> int:
+    def _send_resync_callbacks(
+        self,
+        target: str,
+        subtarget: str | None,
+        subs: list[dict[str, Any]] | None = None,
+        suspension: Any = None,
+    ) -> int:
         """Send resync callbacks to all subscriptions on target/subtarget.
+
+        Every subscriber gets its attempt. If any hit a transient fault, the
+        suspension is put back (when ``suspension`` is given) and the first
+        such fault raised, so the caller's retry resends to all of them. A
+        permanent fault (one a retry cannot fix, such as an item over the
+        backend's size limit) is logged as that subscriber's failure: putting
+        the suspension back for it would keep the target suspended for good.
+        A resync that fails over HTTP is not counted either; a return value
+        below the number of subscribers means some missed the resync.
 
         Args:
             target: Target resource
             subtarget: Optional subtarget
+            subs: The subscriptions, read strictly by the caller
+            suspension: The suspension store to restore on a fault
 
         Returns:
             Number of callbacks sent successfully
         """
-        subs = self.get_subscriptions(target=target, subtarget=None, callback=False)
+        if subs is None:
+            subs = self.get_subscriptions(
+                target=target, subtarget=None, callback=False, strict=True
+            )
         if not subs:
             return 0
 
         count = 0
+        fault: DbError | None = None
         for sub in subs:
             sub_target = sub.get("target", "")
             sub_subtarget = sub.get("subtarget")
@@ -2578,11 +2715,42 @@ class Actor:
             # If we resumed a specific subtarget, use that for the resync
             # (even if the subscription itself has no subtarget or a different one)
             resync_subtarget = subtarget if subtarget else sub_subtarget
-            if self._callback_subscription_resync(sub, resync_subtarget):
-                count += 1
+            try:
+                if self._callback_subscription_resync(sub, resync_subtarget):
+                    count += 1
+            except DbError as e:  # folds DbError: transient ones raised after the loop
+                from .interface.integrations._errors import is_permanent
+
+                if is_permanent(e):
+                    logger.error(
+                        f"Resync of subscription {sub.get('subscriptionid')} hit a "
+                        f"permanent store error; that subscriber missed it: {e}"
+                    )
+                    continue
+                logger.error(
+                    f"Resync of subscription {sub.get('subscriptionid')} faulted: {e}"
+                )
+                fault = fault or e
 
         logger.info(f"Sent {count} resync callbacks for {target}/{subtarget}")
+        if fault is not None:
+            if suspension is not None:
+                self._restore_suspension(suspension, target, subtarget)
+            raise fault
         return count
+
+    def _restore_suspension(
+        self, suspension: Any, target: str, subtarget: str | None
+    ) -> None:
+        """Put a suspension back after a resume faulted, best effort."""
+        try:
+            suspension.suspend(target, subtarget)
+        except DbError as e:  # folds DbError: the caller raises the original fault
+            logger.error(
+                f"Could not confirm the suspension of {target}/{subtarget} is "
+                f"back after a resume fault; a retry may find nothing to "
+                f"resume: {e}"
+            )
 
     def _send_resync_callback_sync(
         self, callback_url: str, payload: dict, secret: str, peer_id: str
@@ -2623,7 +2791,7 @@ class Actor:
                 )
                 return False
 
-        except Exception as e:
+        except Exception as e:  # folds DbError: peer HTTP only
             logger.error(f"Error sending resync callback to {peer_id}: {e}")
             return False
 
@@ -2663,7 +2831,7 @@ class Actor:
                         f"Resync callback to {peer_id} failed: {response.status_code}"
                     )
 
-            except Exception as e:
+            except Exception as e:  # folds DbError: peer HTTP only
                 logger.error(f"Error sending resync callback to {peer_id}: {e}")
 
         try:
@@ -2768,7 +2936,7 @@ class Actor:
                         logger.debug(
                             f"Background refresh of capabilities for {peer_id}"
                         )
-                    except Exception as e:
+                    except Exception as e:  # folds DbError: background capability-cache refresh, best-effort
                         logger.debug(
                             f"Background capability refresh failed for {peer_id}: {e}"
                         )
@@ -2821,6 +2989,8 @@ class Actor:
             diff_url = self._store_subscription_diff(
                 peer_id, sub_id, new_seq, full_state
             )
+            if not diff_url:
+                return False
 
             # Send low-granularity callback with URL to subscription diff
             payload = {
@@ -2954,7 +3124,7 @@ class Actor:
             data: Diff data to store
 
         Returns:
-            URL to fetch this diff
+            URL to fetch this diff, or "" when it was not stored
         """
         import json
 
@@ -2982,15 +3152,17 @@ class Actor:
             seqnr=sequence,
         )
 
-        if success:
-            logger.info(
-                f"Successfully stored subscription diff for {subscription_id} seq={sequence}"
-            )
-        else:
+        if not success:
+            # Refused (the number already has a diff) or missing arguments: a
+            # URL here would point the subscriber at another change's diff.
             logger.error(
                 f"Failed to store subscription diff for {subscription_id} seq={sequence}, "
                 f"actor_id={self.id}"
             )
+            return ""
+        logger.info(
+            f"Successfully stored subscription diff for {subscription_id} seq={sequence}"
+        )
 
         # Build URL to this diff
         # Format: /{actor_id}/subscriptions/{peer_id}/{subscription_id}/{sequence}
@@ -3021,6 +3193,36 @@ class Actor:
         new_seq = sub_obj.increase_seq()
         return new_seq if new_seq else 1
 
+    def _leave_sequence_gap(self, sub: dict[str, Any]) -> None:
+        """Move a subscription's sequence on without a diff, so the
+        subscriber sees a gap at the next diff and recovers (the protocol's
+        "MUST continue incrementing sequence numbers for each change").
+
+        Used when a change got no diff because a read faulted. If the
+        increment faults too, nothing can mark the change and it is lost.
+        """
+        if not self.config or not self.id:
+            return
+        from .db import get_subscription
+
+        try:
+            moved = get_subscription(self.config).increment_seq(
+                actor_id=self.id,
+                peerid=sub.get("peerid"),
+                subid=sub.get("subscriptionid"),
+            )
+        except DbError as e:  # folds DbError: change lost; the write stands
+            logger.error(
+                f"Diff for subscription {sub.get('subscriptionid')} lost: no gap "
+                f"could be left either: {e}"
+            )
+            return
+        if moved:
+            logger.warning(
+                f"Left a gap at sequence {moved} of subscription "
+                f"{sub.get('subscriptionid')} for a diff that was not registered"
+            )
+
     # =========================================================================
     # Diff Registration
     # =========================================================================
@@ -3045,8 +3247,12 @@ class Actor:
         # for an actor that is both subscribed and suspended; that fetch is
         # memoised per actor instance and is dwarfed by the callback fan-out
         # suspension exists to avoid.)
+        # strict=False: the write that produced the diff has committed, so a
+        # fault reading the subscriptions does not fail it. No sequence moves,
+        # so no subscriber can detect the lost diff; only a periodic poll or
+        # resync recovers it.
         subs = self.get_subscriptions(
-            target=target, subtarget=None, resource=None, callback=False
+            target=target, subtarget=None, resource=None, callback=False, strict=False
         )
         if not subs:
             return
@@ -3082,144 +3288,161 @@ class Actor:
                 len(subs),
             )
         for sub in subs:
-            # Skip the ones without correct subtarget
-            if subtarget and sub["subtarget"] and sub["subtarget"] != subtarget:
-                logger.debug("     - no match on subtarget, skipping...")
-                continue
-            # Skip the ones without correct resource
-            if resource and sub["resource"] and sub["resource"] != resource:
-                logger.debug("     - no match on resource, skipping...")
-                continue
-            sub_obj = self.get_subscription_obj(
-                peerid=sub["peerid"], subid=sub["subscriptionid"]
-            )
-            if not sub_obj:
-                continue
-            sub_obj_data = sub_obj.get()
-            logger.debug(
-                "     - processing subscription(%s) for peer(%s) with target(%s) subtarget(%s) and resource(%s)",
-                sub["subscriptionid"],
-                sub["peerid"],
-                sub_obj_data["target"],
-                sub_obj_data["subtarget"] or "",
-                sub_obj_data["resource"] or "",
-            )
-            # Subscription with a resource, but this diff is on a higher level
-            if (
-                (not resource or not subtarget)
-                and sub_obj_data["subtarget"]
-                and sub_obj_data["resource"]
-            ):
-                # Create a json diff on the subpart that this subscription
-                # covers
-                try:
-                    jsonblob = json.loads(blob)
-                    if not subtarget:
-                        subblob = json.dumps(
-                            jsonblob[sub_obj_data["subtarget"]][
-                                sub_obj_data["resource"]
-                            ]
-                        )
-                    else:
-                        subblob = json.dumps(jsonblob[sub_obj_data["resource"]])
-                except (TypeError, ValueError, KeyError):
-                    # The diff does not contain the resource
-                    logger.debug(
-                        "         - subscription has resource(%s), no matching blob found in diff",
-                        sub_obj_data["resource"],
-                    )
+            registered = False
+            try:
+                # Skip the ones without correct subtarget
+                if subtarget and sub["subtarget"] and sub["subtarget"] != subtarget:
+                    logger.debug("     - no match on subtarget, skipping...")
                     continue
-                logger.debug(
-                    "         - subscription has resource(%s), adding diff(%s chars)",
-                    sub_obj_data["resource"],
-                    len(subblob),
+                # Skip the ones without correct resource
+                if resource and sub["resource"] and sub["resource"] != resource:
+                    logger.debug("     - no match on resource, skipping...")
+                    continue
+                sub_obj = self.get_subscription_obj(
+                    peerid=sub["peerid"], subid=sub["subscriptionid"]
                 )
-                finblob = subblob
-            # The diff is on the resource, but the subscription is on a
-            # higher level
-            elif resource and not sub_obj_data["resource"]:
-                # Since we have a resource, we know the blob is the entire resource, not a diff
-                # If the subscription is for a sub-target, send [resource] = blob
-                # If the subscription is for a target, send [subtarget][resource] = blob
-                upblob = {}
-                try:
-                    jsonblob = json.loads(blob)
-                    if not sub_obj_data["subtarget"]:
-                        upblob[subtarget] = {}
-                        upblob[subtarget][resource] = jsonblob
-                    else:
-                        upblob[resource] = jsonblob
-                except (TypeError, ValueError, KeyError):
-                    if not sub_obj_data["subtarget"]:
-                        upblob[subtarget] = {}
-                        upblob[subtarget][resource] = blob
-                    else:
-                        upblob[resource] = blob
-                finblob = json.dumps(upblob)
+                if not sub_obj:
+                    continue
+                sub_obj_data = sub_obj.get()
                 logger.debug(
-                    "         - diff has resource(%s), subscription has not, adding diff(%s bytes)",
-                    resource,
-                    len(finblob),
-                )
-            # Subscriptions with subtarget, but this diff is on a higher level
-            elif not subtarget and sub_obj_data["subtarget"]:
-                # Create a json diff on the subpart that this subscription
-                # covers
-                subblob = None
-                try:
-                    jsonblob = json.loads(blob)
-                    subblob = json.dumps(jsonblob[sub_obj_data["subtarget"]])
-                except (TypeError, ValueError, KeyError):
-                    # The diff blob does not contain the subtarget
-                    pass
-                logger.debug(
-                    "         - subscription has subtarget(%s), adding diff(%s bytes)",
-                    sub_obj_data["subtarget"],
-                    len(subblob) if subblob else 0,
-                )
-                finblob = subblob
-            # The diff is on the subtarget, but the subscription is on the
-            # higher level
-            elif subtarget and not sub_obj_data["subtarget"]:
-                # Create a data["subtarget"] = blob diff to give correct level
-                # of diff to subscriber
-                upblob = {}
-                try:
-                    jsonblob = json.loads(blob)
-                    upblob[subtarget] = jsonblob
-                except (TypeError, ValueError, KeyError):
-                    upblob[subtarget] = blob
-                finblob = json.dumps(upblob)
-                logger.debug(
-                    "         - diff has subtarget(%s), subscription has not, adding diff(%s chars)",
-                    subtarget,
-                    len(finblob),
-                )
-            else:
-                # The diff is correct for the subscription
-                logger.debug(
-                    "         - exact target/subtarget match, adding diff(%s chars)",
-                    len(blob),
-                )
-                finblob = blob
-            if sub_obj:
-                diff = sub_obj.add_diff(blob=finblob)
-            else:
-                diff = None
-            if not diff:
-                logger.warning(
-                    "Failed when registering a diff to subscription (%s). Will not send callback.",
+                    "     - processing subscription(%s) for peer(%s) with target(%s) subtarget(%s) and resource(%s)",
                     sub["subscriptionid"],
+                    sub["peerid"],
+                    sub_obj_data["target"],
+                    sub_obj_data["subtarget"] or "",
+                    sub_obj_data["resource"] or "",
                 )
-            else:
-                # Direct call - callback_subscription handles sync/async internally
-                self.callback_subscription(
-                    peerid=sub["peerid"],
-                    sub_obj=sub_obj,
-                    sub=sub_obj_data,
-                    diff=diff,
-                    blob=finblob,
+                # Subscription with a resource, but this diff is on a higher level
+                if (
+                    (not resource or not subtarget)
+                    and sub_obj_data["subtarget"]
+                    and sub_obj_data["resource"]
+                ):
+                    # Create a json diff on the subpart that this subscription
+                    # covers
+                    try:
+                        jsonblob = json.loads(blob)
+                        if not subtarget:
+                            subblob = json.dumps(
+                                jsonblob[sub_obj_data["subtarget"]][
+                                    sub_obj_data["resource"]
+                                ]
+                            )
+                        else:
+                            subblob = json.dumps(jsonblob[sub_obj_data["resource"]])
+                    except (TypeError, ValueError, KeyError):
+                        # The diff does not contain the resource
+                        logger.debug(
+                            "         - subscription has resource(%s), no matching blob found in diff",
+                            sub_obj_data["resource"],
+                        )
+                        continue
+                    logger.debug(
+                        "         - subscription has resource(%s), adding diff(%s chars)",
+                        sub_obj_data["resource"],
+                        len(subblob),
+                    )
+                    finblob = subblob
+                # The diff is on the resource, but the subscription is on a
+                # higher level
+                elif resource and not sub_obj_data["resource"]:
+                    # Since we have a resource, we know the blob is the entire resource, not a diff
+                    # If the subscription is for a sub-target, send [resource] = blob
+                    # If the subscription is for a target, send [subtarget][resource] = blob
+                    upblob = {}
+                    try:
+                        jsonblob = json.loads(blob)
+                        if not sub_obj_data["subtarget"]:
+                            upblob[subtarget] = {}
+                            upblob[subtarget][resource] = jsonblob
+                        else:
+                            upblob[resource] = jsonblob
+                    except (TypeError, ValueError, KeyError):
+                        if not sub_obj_data["subtarget"]:
+                            upblob[subtarget] = {}
+                            upblob[subtarget][resource] = blob
+                        else:
+                            upblob[resource] = blob
+                    finblob = json.dumps(upblob)
+                    logger.debug(
+                        "         - diff has resource(%s), subscription has not, adding diff(%s bytes)",
+                        resource,
+                        len(finblob),
+                    )
+                # Subscriptions with subtarget, but this diff is on a higher level
+                elif not subtarget and sub_obj_data["subtarget"]:
+                    # Create a json diff on the subpart that this subscription
+                    # covers
+                    subblob = None
+                    try:
+                        jsonblob = json.loads(blob)
+                        subblob = json.dumps(jsonblob[sub_obj_data["subtarget"]])
+                    except (TypeError, ValueError, KeyError):
+                        # The diff blob does not contain the subtarget
+                        pass
+                    logger.debug(
+                        "         - subscription has subtarget(%s), adding diff(%s bytes)",
+                        sub_obj_data["subtarget"],
+                        len(subblob) if subblob else 0,
+                    )
+                    finblob = subblob
+                # The diff is on the subtarget, but the subscription is on the
+                # higher level
+                elif subtarget and not sub_obj_data["subtarget"]:
+                    # Create a data["subtarget"] = blob diff to give correct level
+                    # of diff to subscriber
+                    upblob = {}
+                    try:
+                        jsonblob = json.loads(blob)
+                        upblob[subtarget] = jsonblob
+                    except (TypeError, ValueError, KeyError):
+                        upblob[subtarget] = blob
+                    finblob = json.dumps(upblob)
+                    logger.debug(
+                        "         - diff has subtarget(%s), subscription has not, adding diff(%s chars)",
+                        subtarget,
+                        len(finblob),
+                    )
+                else:
+                    # The diff is correct for the subscription
+                    logger.debug(
+                        "         - exact target/subtarget match, adding diff(%s chars)",
+                        len(blob),
+                    )
+                    finblob = blob
+                if sub_obj:
+                    diff = sub_obj.add_diff(blob=finblob)
+                else:
+                    diff = None
+                # add_diff returned, so it used a sequence number: a failure
+                # from here on leaves a stored diff or a gap already.
+                registered = True
+                if not diff:
+                    logger.warning(
+                        "Failed when registering a diff to subscription (%s). Will not send callback.",
+                        sub["subscriptionid"],
+                    )
+                else:
+                    # Direct call - callback_subscription handles sync/async internally
+                    self.callback_subscription(
+                        peerid=sub["peerid"],
+                        sub_obj=sub_obj,
+                        sub=sub_obj_data,
+                        diff=diff,
+                        blob=finblob,
+                    )
+            except DbError as e:  # folds DbError: one subscriber skipped; gap tried
+                # One subscriber's fault must not stop the others or fail the
+                # write that produced the diff, which has committed.
+                logger.error(
+                    f"Diff registration for subscription {sub.get('subscriptionid')} "
+                    f"skipped on a store fault: {e}"
                 )
+                if not registered:
+                    # The read faulted before the resource checks below it,
+                    # so a subscriber that would have got no diff can get a
+                    # gap too; it resyncs needlessly, which is safe.
+                    self._leave_sequence_gap(sub)
 
 
 class Actors:

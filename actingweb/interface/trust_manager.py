@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any, Optional
 
 from actingweb.db import get_trust
+from actingweb.db.exceptions import DbError
 
 from ..actor import Actor as CoreActor
 from ..trust import canonical_connection_method
@@ -183,6 +184,8 @@ class TrustManager:
                 trust_data=trust_data or {},
             )
             logger.debug(f"Lifecycle hook '{event}' executed for peer {peer_id}")
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Error executing lifecycle hook '{event}': {e}")
 
@@ -269,14 +272,26 @@ class TrustManager:
         )
 
         if result:
-            # Get updated trust data and trigger lifecycle hook
-            updated_trust = self.get_relationship(peer_id)
-            if updated_trust and updated_trust.approved and updated_trust.peer_approved:
-                self._execute_lifecycle_hook(
-                    "trust_approved",
-                    peer_id=peer_id,
-                    relationship=relationship.relationship,
-                    trust_data=updated_trust.to_dict(),
+            # The approval committed and the peer was told: a fault from here
+            # on must not answer 503, or the client's retry runs the hook
+            # twice.
+            try:
+                updated_trust = self.get_relationship(peer_id)
+                if (
+                    updated_trust
+                    and updated_trust.approved
+                    and updated_trust.peer_approved
+                ):
+                    self._execute_lifecycle_hook(
+                        "trust_approved",
+                        peer_id=peer_id,
+                        relationship=relationship.relationship,
+                        trust_data=updated_trust.to_dict(),
+                    )
+            except DbError as e:  # folds DbError: hook after the approval committed
+                logger.error(
+                    f"trust_approved for {peer_id} skipped on a store fault "
+                    f"after the approval committed: {e}"
                 )
 
         return bool(result)
@@ -440,6 +455,8 @@ class TrustManager:
                 "Trust type registry not initialized - using provided trust_type as-is"
             )
             pass
+        except DbError:
+            raise
         except Exception as e:
             logger.debug(f"Error accessing trust type registry: {e}")
             pass
@@ -525,6 +542,8 @@ class TrustManager:
                     logger.debug(
                         f"Updated existing OAuth trust: peer_id={peer_id}, established_via={source}"
                     )
+            except DbError:
+                raise
             except Exception as e:
                 logger.error(
                     f"Failed to update OAuth trust relationship: peer_id={peer_id}, error={e}"
@@ -557,7 +576,7 @@ class TrustManager:
                             baseuri = (
                                 f"{self._core_actor.config.root}{self._core_actor.id}"
                             )
-                    except Exception:
+                    except Exception:  # folds DbError: no DB access
                         baseuri = ""
 
                 # For OAuth2 clients, determine approval based on established_via
@@ -616,6 +635,8 @@ class TrustManager:
                         f"Failed to create OAuth trust relationship in database: peer_id={peer_id}"
                     )
                     return False
+            except DbError:
+                raise
             except Exception as e:
                 logger.error(f"Exception creating OAuth trust relationship: {e}")
                 return False
@@ -636,6 +657,8 @@ class TrustManager:
                         "token_type": oauth_tokens.get("token_type", "Bearer"),
                     }
                     logger.debug(f"Stored OAuth tokens for peer_id={peer_id}")
+            except DbError:
+                raise
             except Exception as e:
                 logger.warning(
                     f"Failed to store OAuth tokens for peer_id={peer_id}: {e}"
@@ -830,6 +853,8 @@ class TrustManager:
                 capabilities_fetched_at=capabilities_fetched_at,
                 **kwargs,
             )
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Error modifying trust for {peer_id}: {e}")
             return False
@@ -863,6 +888,8 @@ class TrustManager:
 
             store = get_peer_profile_store(self._core_actor.config)
             return store.get_profile(self._core_actor.id, peer_id)
+        except DbError:
+            raise
         except Exception as e:
             logger.warning(f"Error getting peer profile for {peer_id}: {e}")
             return None
@@ -908,6 +935,8 @@ class TrustManager:
             store.store_profile(profile)
             logger.debug(f"Refreshed peer profile for {peer_id}")
             return profile
+        except DbError:
+            raise
         except Exception as e:
             logger.warning(f"Error refreshing peer profile for {peer_id}: {e}")
             return None
@@ -954,6 +983,8 @@ class TrustManager:
             store.store_profile(profile)
             logger.debug(f"Refreshed peer profile (async) for {peer_id}")
             return profile
+        except DbError:
+            raise
         except Exception as e:
             logger.warning(f"Error refreshing peer profile async for {peer_id}: {e}")
             return None
@@ -988,6 +1019,8 @@ class TrustManager:
 
             store = get_cached_capabilities_store(self._core_actor.config)
             return store.get_capabilities(self._core_actor.id, peer_id)
+        except DbError:
+            raise
         except Exception as e:
             logger.warning(f"Error getting peer capabilities for {peer_id}: {e}")
             return None
@@ -1074,6 +1107,8 @@ class TrustManager:
             store.store_capabilities(capabilities)
             logger.debug(f"Refreshed peer capabilities for {peer_id}")
             return capabilities
+        except DbError:
+            raise
         except Exception as e:
             logger.warning(f"Error refreshing peer capabilities for {peer_id}: {e}")
             return None
@@ -1121,6 +1156,8 @@ class TrustManager:
             store.store_capabilities(capabilities)
             logger.debug(f"Refreshed peer capabilities (async) for {peer_id}")
             return capabilities
+        except DbError:
+            raise
         except Exception as e:
             logger.warning(
                 f"Error refreshing peer capabilities async for {peer_id}: {e}"

@@ -23,6 +23,7 @@ from . import actor as actor_module
 from . import config as config_class
 from . import deletion
 from .constants import ESTABLISHED_VIA_OAUTH2_INTERACTIVE
+from .db.exceptions import DbError
 from .interface.actor_interface import ActorInterface
 from .oauth2_id_token import JWKSIdTokenValidator
 
@@ -679,7 +680,7 @@ class OAuth2Authenticator:
 
             return dict(token_data)
 
-        except Exception as e:
+        except Exception as e:  # folds DbError: provider HTTP only
             logger.error(f"Exception during token exchange: {e}")
             return None
 
@@ -737,7 +738,7 @@ class OAuth2Authenticator:
 
             return dict(token_data)
 
-        except Exception as e:
+        except Exception as e:  # folds DbError: provider HTTP only
             logger.error(f"Exception during token refresh: {e}")
             return None
 
@@ -789,7 +790,7 @@ class OAuth2Authenticator:
             userinfo = response.json()
             return dict(userinfo)
 
-        except Exception as e:
+        except Exception as e:  # folds DbError: provider HTTP only
             logger.error(f"Exception during token validation: {e}")
             # Cache this invalid token to avoid future network requests
             _invalid_token_cache[token_hash] = current_time
@@ -852,7 +853,7 @@ class OAuth2Authenticator:
         except ImportError:
             logger.warning("httpx not available, falling back to sync validation")
             return self.validate_token_and_get_user_info(access_token)
-        except Exception as e:
+        except Exception as e:  # folds DbError: provider HTTP only
             logger.error(f"Exception during async token validation: {e}")
             # Cache this invalid token to avoid future network requests
             _invalid_token_cache[token_hash] = current_time
@@ -1051,12 +1052,16 @@ class OAuth2Authenticator:
                     effective_hooks,
                     auth_method=auth_method,
                 )
+            except DbError:
+                raise
             except Exception as create_error:
                 logger.error(
                     f"Failed to create actor for identifier {identifier}: {create_error}"
                 )
                 return None
 
+        except DbError:
+            raise
         except Exception as e:
             logger.error(
                 f"Exception during actor lookup/creation for {identifier}: {e}"
@@ -1188,7 +1193,7 @@ class OAuth2Authenticator:
                 )
                 return False
 
-        except Exception as e:
+        except Exception as e:  # folds DbError: provider HTTP only
             logger.error(f"Error during token revocation: {e}")
             return False
 
@@ -1240,7 +1245,7 @@ def _get_github_primary_email(access_token: str) -> str | None:
 
         return None
 
-    except Exception as e:
+    except Exception as e:  # folds DbError: provider HTTP only
         logger.warning(f"Failed to get GitHub primary email: {e}")
         return None
 
@@ -1289,7 +1294,7 @@ def _get_github_verified_emails(access_token: str) -> list[str] | None:
         logger.debug(f"Found {len(verified)} verified emails from GitHub")
         return verified
 
-    except Exception as e:
+    except Exception as e:  # folds DbError: provider HTTP only
         logger.warning(f"Failed to get GitHub verified emails: {e}")
         return None
 
@@ -1471,7 +1476,7 @@ def validate_redirect_url(redirect_url: str, allowed_domains: list[str]) -> bool
 
         return False
 
-    except Exception:
+    except Exception:  # folds DbError: no DB access
         return False
 
 
@@ -1522,6 +1527,8 @@ def create_oauth2_trust_relationship(
             client_version=client_version,
             client_platform=client_platform,
         )
+    except DbError:
+        raise
     except Exception as e:
         logger.error(f"Error creating OAuth2 trust relationship: {e}")
         return False
@@ -1633,7 +1640,7 @@ def classify_marker(config: config_class.Config, actor_id: str) -> MarkerClass |
         if not store.loaded:
             return None
         return classify_store(store)
-    except Exception as e:
+    except Exception as e:  # folds DbError: None means unreadable; every caller fails closed (raises, skips or retries)
         logger.warning(f"Could not read the marker of {actor_id}: {e}")
         return None
 
@@ -1704,9 +1711,9 @@ def _revoke_spa_tokens(config: config_class.Config, actor_ids: list[str]) -> int
 
 
 def _actor_client_ids(config: config_class.Config, actor_id: str) -> list[str]:
-    """Ids of the OAuth2 clients registered under an actor. Raises if the
-    bucket cannot be read (``list_clients_for_actor`` answers a fault with
-    an empty list)."""
+    """Ids of the OAuth2 clients registered under an actor. Raises
+    ``DbError`` if the bucket cannot be read (``list_clients_for_actor``
+    answers a fault with an empty list)."""
     from . import attribute
     from .oauth2_server.client_registry import MCPClientRegistry
 
@@ -1715,9 +1722,7 @@ def _actor_client_ids(config: config_class.Config, actor_id: str) -> list[str]:
         bucket=MCPClientRegistry(config).clients_bucket,
         config=config,
     )
-    rows = bucket.get_bucket()
-    if not bucket.loaded:
-        raise RuntimeError(f"OAuth2 clients of actor {actor_id} could not be read")
+    rows = bucket.get_bucket()  # strict: a fault raises DbError
     return sorted(str(k) for k in (rows or {}))
 
 
@@ -1742,7 +1747,17 @@ def _fire_lifecycle(
     config: config_class.Config,
     **kwargs: Any,
 ) -> None:
-    """Run a lifecycle hook; ``None`` hooks fire nothing, failures are logged."""
+    """Run a lifecycle hook; ``None`` hooks fire nothing, failures are logged.
+
+    A ``DbError`` from ``actor_deleted``, which fires before the wipe, is
+    raised: the sign-in fails before anything is removed. The replacement
+    has already written its tombstone by then (on purpose, so callbacks the
+    hook triggers are suppressed), and the next sign-in finishes it. One
+    from a notification
+    fired after the work committed (``actor_adopted``,
+    ``actor_deleted_complete``) is logged: a 503 would tell the client to
+    retry a sign-in that already completed.
+    """
     if hooks is None:
         return
     try:
@@ -1751,8 +1766,16 @@ def _fire_lifecycle(
             registry = getattr(config, "service_registry", None)
             wrapper = ActorInterface(actor_instance, service_registry=registry)
         hooks.execute_lifecycle_hooks(event, wrapper, **kwargs)
+    except DbError as e:
+        if event in _POST_COMMIT_EVENTS:
+            logger.error(f"Lifecycle hook {event} hit a store fault: {e}")
+            return
+        raise
     except Exception as e:
         logger.error(f"Lifecycle hook {event} failed: {e}")
+
+
+_POST_COMMIT_EVENTS = frozenset({"actor_adopted", "actor_deleted_complete"})
 
 
 def _remove_for_replacement(
@@ -1776,6 +1799,16 @@ def _remove_for_replacement(
         "reason": "replaced_at_adoption",
         "replaced_by_identifier": creator,
     }
+    from . import subscription as subscription_module
+    from . import trust as trust_module
+
+    # Actor.delete reads these first, strictly; read them here too, before
+    # the tombstone and the hook, so a fault raises DbError with nothing
+    # written and actor_deleted not fired (the next sign-in retries). A fault
+    # in actor_deleted itself comes after the tombstone, which the next
+    # sign-in's replacement then finds and finishes.
+    trust_module.Trusts(actor_id=actor_id, config=config).fetch()
+    subscription_module.Subscriptions(actor_id=actor_id, config=config).fetch()
     deletion.mark_actor_deleted(actor_id, config)
     _fire_lifecycle(hooks, "actor_deleted", victim, config, **reason)
     if not victim.delete(notify_peers=False):
@@ -1790,7 +1823,7 @@ def _remove_for_replacement(
     # for the next sign-in to resume.
     try:
         _delete_actor_clients(config, actor_id, client_ids)
-    except Exception as e:
+    except Exception as e:  # folds DbError: client index cleanup after the actor row was removed; next sign-in cannot resume it
         logger.error(
             f"Adoption of actor {actor_id}: client index rows remain "
             f"after the replacement: {e}"
@@ -1802,59 +1835,69 @@ def _remove_for_replacement(
 
 
 def _creator_rows(config: config_class.Config, creator: str) -> list[dict[str, Any]]:
-    """The actors with this creator, from a strict read: a backend fault
-    raises, and an actor deleted since the index listed it is left out."""
+    """The ids of the actors with this creator, as ``[{"id": ...}]`` from the
+    index alone: no per-row read. A backend fault raises ``DbError``. The
+    index can still list an actor deleted a moment ago; callers that act on
+    a row read it first."""
     from .db import get_actor
 
     lookup = creator.lower() if "@" in creator else creator
-    rows = get_actor(config).get_by_creator(creator=lookup, strict=True)
+    rows = get_actor(config).get_by_creator(creator=lookup, ids_only=True)
     if isinstance(rows, dict):
         rows = [rows]
     return [r for r in (rows or []) if r and r.get("id")]
 
 
 def _factory_siblings(
-    config: config_class.Config, creator: str, *, exclude: str
+    config: config_class.Config,
+    creator: str,
+    *,
+    exclude: str,
+    ids: list[str] | None = None,
+    classes: dict[str, str] | None = None,
 ) -> list[str] | None:
-    """The ids of the other actors with this creator whose marker is in
-    :data:`REPLACE_AUTH_METHODS`.
+    """The ids of up to :data:`SWEEP_LIMIT` other actors with this creator
+    whose marker is in :data:`REPLACE_AUTH_METHODS`, lowest id first.
 
-    Call while ``exclude`` (the actor being replaced) still exists: a listing
-    that does not include it is incomplete, and returns None. None also when
-    a candidate's marker cannot be read: deciding from an absent marker could
-    delete a vouched actor or keep a factory one. Raises when the list itself
+    ``ids`` and ``classes`` are the listing and the classification
+    :meth:`Actor.get_from_creator` made; without them the actors are listed
+    here. A listing that does not include ``exclude`` (the actor being
+    replaced, which still exists) is incomplete, and returns None. Only the
+    ids this returns are touched, so only they must be readable: each is
+    loaded here, before anything is removed, and a fault raises ``DbError``.
+    An unreadable marker is skipped and decided by the successor step, which
+    creates nothing while it stays unreadable. Raises when the list itself
     cannot be read.
     """
-    seen_exclude = False
-    siblings: list[str] = []
-    for row in _creator_rows(config, creator):
-        sibling_id = str(row["id"])
-        if sibling_id == exclude:
-            seen_exclude = True
-            continue
-        marker = classify_marker(config, sibling_id)
-        if marker is None:
-            logger.error(
-                f"Adoption for {creator!r}: the marker of sibling {sibling_id} "
-                "could not be read; failing closed"
-            )
-            return None
-        if marker == "replace":
-            if not actor_module.Actor(actor_id=sibling_id, config=config).id:
-                # The strict list says the row exists; a load that misses it
-                # is a fault (both backends answer one with None).
-                logger.error(
-                    f"Adoption for {creator!r}: sibling {sibling_id} could not "
-                    "be read; failing closed"
-                )
-                return None
-            siblings.append(sibling_id)
-    if not seen_exclude:
+    listed = (
+        sorted(ids)
+        if ids
+        else sorted(str(r["id"]) for r in _creator_rows(config, creator))
+    )
+    if exclude not in listed:
         logger.error(
             f"Adoption for {creator!r}: actor {exclude} is missing from the "
             "actors with this creator; failing closed"
         )
         return None
+    from .db import get_actor
+
+    db_actor = get_actor(config)
+    known = classes or {}
+    siblings: list[str] = []
+    for sibling_id in listed:
+        if sibling_id == exclude:
+            continue
+        if len(siblings) >= SWEEP_LIMIT:
+            break
+        marker = known.get(sibling_id) or classify_marker(config, sibling_id)
+        if marker != "replace":
+            continue
+        # Read before anything is removed: a fault raises DbError here, with
+        # every actor still in place; None is a row deleted since the listing.
+        if not db_actor.get(actor_id=sibling_id):
+            continue
+        siblings.append(sibling_id)
     return siblings
 
 
@@ -1958,9 +2001,12 @@ def adopt_actor(
       token removed, data kept, and marked vouched.
 
     No request leaves the process: the peer URLs on an unvouched actor were
-    chosen by whoever created it. Never raises; returns ``None`` when the
-    adoption could not be completed, so the caller fails the sign-in closed
-    and the next one retries. ``actor_adopted`` fires once on success.
+    chosen by whoever created it. Returns ``None`` when the adoption could
+    not be completed, so the caller fails the sign-in closed and the next one
+    retries. ``actor_adopted`` fires once on success. A backend fault raises
+    ``DbError`` (``CreatorTaken`` included), which the integrations answer
+    with 503 (409): the sign-in fails closed as "retry", not as a failed
+    login.
     """
     try:
         return _adopt_actor(
@@ -1971,6 +2017,8 @@ def adopt_actor(
             user_info=user_info,
             verified_by_email=verified_by_email,
         )
+    except DbError:
+        raise
     except Exception as e:
         logger.error(
             f"Adoption of actor {getattr(existing, 'id', None)} failed: {e}",
@@ -2005,8 +2053,15 @@ def _adopt_actor(
     if is_vouched_actor(existing):
         if provider is not None and store:
             # Record the most recent provider on every sign-in (not only on
-            # create) so revocation logic can rely on it.
-            store.oauth_provider = provider.name
+            # create) so revocation logic can rely on it. Bookkeeping: a
+            # fault keeps the previous value and must not fail a sign-in that
+            # nothing else blocked.
+            try:
+                store.oauth_provider = provider.name
+            except DbError as e:  # folds DbError: provider bookkeeping write
+                logger.error(
+                    f"Sign-in to {existing.id}: recording the provider faulted: {e}"
+                )
         if existing.factory_sibling_ids and existing.creator:
             # The lookup found factory actors beside this one. No lookup
             # reaches them, but each one costs every later sign-in a read;
@@ -2022,7 +2077,7 @@ def _adopt_actor(
                         f"Sign-in to {existing.id}: factory actors beside it "
                         "remain; the next sign-in retries"
                     )
-            except Exception as e:
+            except Exception as e:  # folds DbError: best-effort factory sweep after the sign-in succeeded; next sign-in retries
                 logger.error(
                     f"Sign-in to {existing.id}: factory actors beside it remain: {e}"
                 )
@@ -2069,12 +2124,22 @@ def _adopt_actor(
         # would spread the owner's sign-ins over a new actor each time. Listed
         # before anything is removed, so a read fault fails the sign-in with
         # every actor still in place.
-        siblings = _factory_siblings(config, creator, exclude=actor_id)
+        siblings = _factory_siblings(
+            config,
+            creator,
+            exclude=actor_id,
+            ids=existing.creator_ids or None,
+            classes=existing.creator_classes,
+        )
         if siblings is None:
             return None
+        # The actor_adopted summary only: a fault leaves it empty, not the
+        # sign-in failed.
         removed_trusts, subscription_peers = actor_module.relationship_summary(
-            trust_module.Trusts(actor_id=actor_id, config=config).fetch(),
-            subscription_module.Subscriptions(actor_id=actor_id, config=config).fetch(),
+            trust_module.Trusts(actor_id=actor_id, config=config).fetch(strict=False),
+            subscription_module.Subscriptions(actor_id=actor_id, config=config).fetch(
+                strict=False
+            ),
         )
         property_names: list[str] = []
         removed = _remove_for_replacement(
@@ -2093,29 +2158,53 @@ def _adopt_actor(
         # ones (get_from_creator prefers it). This narrows the race to the
         # gap between two statements; nothing enforces creator uniqueness in
         # the database yet (thoughts/todo/creator-uniqueness-not-enforced.md).
-        # A new actor is created only when a strict read says none is left:
-        # one that is listed but cannot be read fails the sign-in, since a new
-        # vouched actor would outrank the owner's unvouched one for good.
+        # A new actor is created only when every actor left is a factory one
+        # (BR): one whose marker cannot be read fails the sign-in, since a new
+        # vouched actor would outrank the owner's unvouched one for good. The
+        # ids are listed again (index only, no per-row read) because a
+        # concurrent first sign-in may have created one since the listing;
+        # actors the listing classified keep their class, new ones are read.
         removed_ids = {actor_id, *swept_ids}
-        remaining = [
-            r for r in _creator_rows(config, creator) if r["id"] not in removed_ids
-        ]
+        known = existing.creator_classes
+        remaining: dict[str, str] = {}
+        from .db import get_actor as _get_db_actor
+
+        db_actor = _get_db_actor(config)
+        for row in _creator_rows(config, creator):
+            rid = str(row["id"])
+            if rid in removed_ids or rid in remaining:
+                continue
+            if rid in known:
+                remaining[rid] = known[rid]
+                continue
+            if not db_actor.get(actor_id=rid):
+                continue  # deleted since the index listed it
+            marker = classify_marker(config, rid)
+            if marker is None:
+                logger.error(
+                    f"Adoption of actor {actor_id}: the marker of {rid} for "
+                    f"{creator!r} could not be read; next sign-in retries"
+                )
+                return None
+            remaining[rid] = marker
+        marker_class: str | None = None
         successor = actor_module.Actor(config=config)
-        if remaining and not (
-            successor.get_from_creator(creator)
-            and successor.store is not None
-            and successor.store.loaded
-        ):
-            logger.error(
-                f"Adoption of actor {actor_id}: an actor for {creator!r} remains "
-                "but could not be read; next sign-in retries"
-            )
-            return None
-        marker_class = (
-            classify_store(successor.store)
-            if remaining and successor.store is not None
-            else None
-        )
+        for wanted in ("vouched", "unvouched"):
+            picks = sorted(i for i, c in remaining.items() if c == wanted)
+            if not picks:
+                continue
+            successor = actor_module.Actor(actor_id=picks[0], config=config)
+            if not (
+                successor.id and successor.store is not None and successor.store.loaded
+            ):
+                logger.error(
+                    f"Adoption of actor {actor_id}: actor {picks[0]} for "
+                    f"{creator!r} remains but could not be read; next sign-in "
+                    "retries"
+                )
+                return None
+            marker_class = wanted
+            break
         if marker_class == "vouched":
             result = successor
             if result.store is not None:
@@ -2162,7 +2251,10 @@ def _adopt_actor(
             logger.error(f"Adoption of actor {actor_id}: passphrase rotation failed")
             return None
         tokens_revoked = _revoke_all_actor_tokens(config, actor_id)
-        fetched = property_module.Properties(actor_id=actor_id, config=config).fetch()
+        # The actor_adopted summary only (strict=False).
+        fetched = property_module.Properties(actor_id=actor_id, config=config).fetch(
+            strict=False
+        )
         property_names = (
             sorted(str(k) for k in fetched) if isinstance(fetched, dict) else []
         )

@@ -6,25 +6,14 @@
 Issues H-L. Issues A-G and two L items landed (the plan's Iterations entries
 8-13). This file lists only what is still owed.
 **Plan:** thoughts/plans/2026-10-26-oauth-adoption-vouching-and-open-factory.md
+**Constraint:** since the fault contract
+(`thoughts/plans/2026-10-28-db-fault-semantics-and-creator-uniqueness.md`,
+Phases 1-2) every backend read and delete raises `DbError` on a fault, and the
+integrations answer it with 503. Fixes here should let it propagate rather
+than catch and fold it.
 
 ## What is still owed
 
-- **Replace path: client rows after a bucket-delete fault** (Issue I,
-  Medium).
-  - `oauth2._adopt_actor` treats a failed `_delete_actor_clients` as
-    non-fatal, on the grounds that the bucket delete already removed the
-    client rows.
-  - But `buckets.delete()`'s result is ignored (`actor.py`, `Actor.delete`),
-    and `Buckets.delete` answers `True` unconditionally (`attribute.py`).
-  - So if the bucket delete and the client delete both fail while the row
-    delete succeeds, a client that can still authenticate survives, with only
-    a log line.
-  - Confirm the client rows with `delete_confirmed`. If they are not gone,
-    leave the tombstone so the next sign-in resumes.
-- **`DELETE /<id>` ignores `Actor.delete() -> bool`** (Issue H).
-  `handlers/root.py` answers 204 and fires `actor_deleted_complete` even on a
-  PostgreSQL row-delete fault. Return 500 and skip the completion hook. This
-  is older than 3.16.
 - **Tokens issued between the revoke and the purge** (Issue J). The clean
   path revokes before purging. A token an MCP client obtains inside that
   window survives. Revoke again after `_delete_actor_clients`.
@@ -35,19 +24,16 @@ Issues H-L. Issues A-G and two L items landed (the plan's Iterations entries
 - **Hygiene** (Issue L, the rest):
   - **Duplicate tombstone:** the replace path calls
     `deletion.mark_actor_deleted` before `delete()`, which writes it again.
-  - **Non-strict reads:** the replace path's summary reads (trusts,
-    subscriptions) are not strict, so a PostgreSQL fault reports nothing
-    removed in the hook and the log.
+  - **Summary reads fold:** the replace path's `actor_adopted` summary
+    reads (trusts, subscriptions, properties) pass `strict=False` by design,
+    so a fault reports nothing removed in the hook and the log.
   - **Lost successor mapping:** if creating the successor raises,
     `actor_adopted` never fires and the old-to-new id mapping is lost.
   - **`purge_relationships`** issues about 4+N list reads where 2 would do.
   - **Redundant cleanup:** on the replace path `delete_client` re-runs token
     and trust cleanup against a deleted actor. Only the index row is needed.
-  - **Meaning of the return value:** `Actor.delete`'s `True` means "no
-    fault", not "a row was removed". Neither backend checks the row count;
-    document it or check it.
   - **Missing type hints** on `delete_peer_trustee`, `delete_reciprocal_trust`
-    and the DynamoDB list `fetch(..., strict=False)`.
+    and the DynamoDB trust and subscription list `fetch(..., strict=True)`.
 - **`force_email_prop_as_creator` rewrites an unvouched actor's creator at
   load** (found in the fourth verification's iteration; older than 3.16).
   - `Actor.get` copies `store.email` into the creator whenever they differ
@@ -61,18 +47,17 @@ Issues H-L. Issues A-G and two L items landed (the plan's Iterations entries
     cover the pin being on at load.
   - Skip the rewrite for an unvouched actor, or pass the proven identifier
     into `adopt_actor`.
-- **No test for `DbActor.modify` leaving the handle as stored on a failed
-  save** (both backends; the change landed in the fourth iteration). It
-  needs a backend-specific fault injection (`get_connection` on PostgreSQL,
-  `Model.save` on DynamoDB).
+- **No DynamoDB test for `DbActor.modify` leaving the handle as stored on a
+  failed save** (the change landed in the fourth iteration). PostgreSQL's is
+  in `tests/test_db_fault_contract.py`; DynamoDB needs `Model.save` to raise.
 - **A tombstone on a live vouched actor** (sixth verification, Issue AW;
   the 3.16 attempt to act on it was reverted).
   - Two paths leave one:
     - a `DELETE /<id>` whose wipe stalls or raises after `handlers/root.py`
       wrote the tombstone and fired `actor_deleted`;
     - a create over a fixed id whose `clear_actor_tombstone` faulted
-      (`actor.py` ignores its result, and DynamoDB's `delete_attr` answers
-      True on a fault).
+      (`actor.py` ignores its result; since 3.16 the delete raises on a
+      fault, so check where the create path swallows it).
   - The actor stays live, and its late writes are suppressed for the
     retention window. Sign-ins return it as is.
   - Confirm the clear on create (`get_attr_strict`). Let a resumed user
@@ -98,20 +83,93 @@ Issues H-L. Issues A-G and two L items landed (the plan's Iterations entries
   - **BL:** two concurrent sign-ins to a vouched actor fire
     `actor_deleted`/`actor_deleted_complete` twice per factory sibling. Skip
     a sibling that is already tombstoned.
-  - **BM:** `tests/test_adoption_fifth_iteration.py` (`TestSweepReadFaults`,
-    the None-listing test) patches `get_by_creator` without `strict`, so it
-    passes through a `TypeError` instead of the `seen_exclude` path.
   - **BN:** a nested hand-off in `_adopt_actor` drops the incoming
     `carried`.
-  - **BO:** under `unique_creator`, `Actor.create` filters None rows, so a
-    faulted DynamoDB row read counts as "no existing actor". Use the strict
-    listing.
   - **BP:** a replacement scans the global SPA token buckets twice (victim,
-    then siblings), and reads each sibling's marker and row up to three
-    times.
+    then siblings).
   - **BQ:** `oauth2_spa.py` repeats the resolver's `get_from_creator` →
     `adopt_actor` → `lookup_or_create_actor_by_identifier` in both
     completion paths.
+- **Fault-contract follow-ups** (verification
+  `thoughts/verifications/2026-10-29-db-fault-semantics-and-creator-uniqueness.md`,
+  Issues N and P):
+  - **Revocation cleanup after a fault:** the permission callback stores the
+    new permissions, then lists the peer's cached lists to delete revoked
+    ones (`handlers/callbacks.py` `_delete_revoked_peer_data`, through
+    `attribute_list_store.list_all`, which folds). A fault there leaves the
+    revoked data, and a 503 would not help, because the retried callback sees
+    no revocation. Run the cleanup before storing, or record the pending
+    revocation.
+  - **`clear_all_state_for_peer`** folds its bucket read, so trust deletion
+    during a throttle leaves callback state behind (logged at ERROR).
+  - **One read-and-classify helper:** `Actor.get_from_creator`,
+    `oauth2._factory_siblings` and the successor step each load a row and
+    classify its marker, and the pick and the siblings are read twice.
+  - **Deliberate folds to document:** `callback_processor` `handler(cb)`
+    errors (at-most-once) and the owner's factory sweep (`oauth2.py`, "the
+    owner is in") swallow `DbError` by design.
+  - **`_errors.find_db_error` follows `__context__`:** a bug raised while
+    handling a `DbError` answers 503 instead of 500.
+- **Fault-contract follow-ups from the guarded sweep**
+  (`thoughts/verifications/2026-10-29-db-fault-semantics-and-creator-uniqueness-2.md`,
+  the per-file classification of `tests/test_db_fault_guard.py`'s sites, and
+  the fourth verification's K4). Plan entry 28 fixed the creator fallback,
+  the `InternalStore` write order, the registry retry and the maintenance
+  exit codes; entry 32 retired the sequence rollback.
+  - **The callback version check is not conditional**
+    (`callback_processor.py` `_set_state`: read, compare, write). Two
+    concurrent in-order deliveries can both pass and run the handler twice.
+    Use `conditional_update_attr`. This is older than 3.16.
+  - **Ordering windows on the sign-in and replace paths (O2):**
+    - the replacement revokes tokens before its pre-reads;
+    - `Actor.delete` re-reads the lists after `actor_deleted` fired;
+    - the OAuth callback and the email-form completion raise after their
+      store writes.
+  - **Deliberate post-commit folds that lose a side effect:**
+    - `property_store` diff registration (since entry 32 a skipped
+      subscriber gets a gap where the store allows one);
+    - `oauth_email` verification-email notification (the email may not be
+      sent);
+    - the provider-token clear at logout (`oauth2_endpoints`, `oauth2_spa`),
+      where the token can stay behind while the logout reports success.
+  - **`DeletionStatus.UNKNOWN` proceeds** in `handlers/mcp.py` and
+    `oauth2._race_winner` (`!= DELETED`). This is by design per
+    `deletion.py`, and related to K above.
+  - **Possible pre-existing bug:** `actor.py`
+    `modify_trust_and_notify_async` builds
+    `AwProxy(peer_target={"baseuri", "secret"})`, but `AwProxy.__init__`
+    reads `peer_target["id"]`. The `KeyError` is caught, so the async peer
+    notification looks like it always fails. Not reproduced.
+  - **The property handlers fall back to the legacy grant on a non-`DbError`
+    from the evaluator** (`handlers/properties.py`, "Fall back to legacy
+    authorization on errors"). Older than 3.16, and since entry 30 no
+    database fault reaches it; denying would be the fail-closed choice.
+  - **DynamoDB `DbSubscription.modify` saves the whole item**, so a
+    concurrent `modify` of another field writes back a stale `seqnr`. Only
+    the subscriber's own rows still pass `seqnr` through `modify`; the
+    publisher uses `increment_seq`.
+  - **A resync that fails over HTTP loses the suspension window for that
+    subscriber** (verification 6, D6). `_callback_subscription_resync`
+    returns False on a network failure; the suspension stays lifted, no diff
+    is stored at the allocated number on the resync-capable path, and a
+    retry of `resume_subscriptions` resends to every subscriber at a new
+    sequence (storing another fallback diff each time). A per-cycle record
+    of who was resynced would let a retry resend only to the ones that
+    missed it. Older than 3.16 in kind; the returned count is the only
+    signal, now documented.
+  - **K4 leftovers:**
+    - three more `oauth_provider` bookkeeping writes fail a sign-in
+      (`oauth2.py` vouched successor, after the marker landed, after
+      `actor_created` fired); plan entry 27 folded one;
+    - public `SubscriptionManager.is_suspended()` answers False on a fault;
+    - the create rollback removes only the row, so an ambiguous marker
+      write can leave `_internal` attributes under the id;
+    - `fanout.py`'s "the in-memory breaker still applies" holds within one
+      process only;
+    - with no vouched actor the ranked creator prefix is every actor, and a
+      replacement reads the victim's lists three times;
+    - type hints are still missing on the DynamoDB signatures this work
+      changed.
 - **Benchmarks on a fresh DynamoDB container:** the attribute benchmarks fail
   with `ResourceNotFoundException ... test_attributes` until some other test
   has created the table. The performance fixtures should create the tables
@@ -124,6 +182,5 @@ Issues H-L. Issues A-G and two L items landed (the plan's Iterations entries
 
 ## Why it waits
 
-None of these lets an attacker in. I and H can leave a disabled client's
-index row, or report a delete that did not finish, but only under a
-coinciding backend fault. The rest is cost and tidiness.
+None of these lets an attacker in. J and K need a coinciding backend fault
+or a race; the rest is cost and tidiness.

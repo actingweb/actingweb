@@ -9,6 +9,7 @@ import logging
 from typing import Any
 
 from .attribute_list import ListAttribute
+from .db.exceptions import DbError
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +44,8 @@ class AttributeListStore:
                 )
                 meta = db.get_attr(name=f"list:{name}:meta")
                 return meta is not None
+        except DbError:
+            raise
         except Exception:
             pass
         return False
@@ -57,7 +60,7 @@ class AttributeListStore:
                 db = Attributes(
                     actor_id=self._actor_id, bucket=self._bucket, config=self._config
                 )
-                all_attrs = db.get_bucket() or {}
+                all_attrs = db.get_bucket(strict=False) or {}
                 for attr_name in all_attrs.keys():
                     if attr_name.startswith("list:") and attr_name.endswith(":meta"):
                         # Extract list name: "list:name:meta" -> "name"
@@ -67,6 +70,8 @@ class AttributeListStore:
                             # Join all parts between "list" and "meta"
                             list_name = ":".join(parts[1:-1])
                             list_names.append(list_name)
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Error in list_all(): {e}")
         return list_names

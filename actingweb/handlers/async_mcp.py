@@ -17,6 +17,8 @@ from actingweb.handlers.mcp import (
 )
 from actingweb.oauth2_server.token_manager import TokenStoreUnavailable
 
+from ..db.exceptions import DbError
+
 logger = logging.getLogger(__name__)
 
 
@@ -144,6 +146,8 @@ class AsyncMCPHandler(MCPHandler):
                     request_id, -32601, f"Method not found: {method}"
                 )
 
+        except DbError as e:  # folds DbError: answered by _db_fault_response
+            return self._db_fault_response(data.get("id"), e)
         except Exception as e:
             logger.error(f"Error handling MCP POST request: {e}")
             return self._create_jsonrpc_error(
@@ -200,6 +204,8 @@ class AsyncMCPHandler(MCPHandler):
                     -32003,
                     f"Access denied: You don't have permission to use tool '{tool_name}'",
                 )
+        except DbError:
+            raise
         except Exception as e:
             # Fail closed: an evaluator that raises cannot vouch for this
             # request, and serving it anyway would hand out whatever the broken
@@ -242,6 +248,8 @@ class AsyncMCPHandler(MCPHandler):
                                         tool_name=tool_name,
                                     ),
                                 }
+                            except DbError:
+                                raise
                             except Exception as e:
                                 logger.error(f"Error executing tool {tool_name}: {e}")
                                 return self._create_jsonrpc_error(
@@ -299,6 +307,8 @@ class AsyncMCPHandler(MCPHandler):
                     -32003,
                     f"Access denied: You don't have permission to use prompt '{prompt_name}'",
                 )
+        except DbError:
+            raise
         except Exception as e:
             # Fail closed: an evaluator that raises cannot vouch for this
             # request, and serving it anyway would hand out whatever the broken
@@ -359,6 +369,8 @@ class AsyncMCPHandler(MCPHandler):
                                         ],
                                     },
                                 }
+                            except DbError:
+                                raise
                             except Exception as e:
                                 logger.error(
                                     f"Error executing prompt {prompt_name}: {e}"
@@ -419,6 +431,8 @@ class AsyncMCPHandler(MCPHandler):
                     -32003,
                     f"Access denied: You don't have permission to access resource '{uri}'",
                 )
+        except DbError:
+            raise
         except Exception as e:
             # Fail closed: an evaluator that raises cannot vouch for this
             # request, and serving it anyway would hand out whatever the broken
@@ -507,6 +521,8 @@ class AsyncMCPHandler(MCPHandler):
                                                     ]
                                                 },
                                             }
+                                    except DbError as e:  # folds DbError: answered by _db_fault_response
+                                        return self._db_fault_response(request_id, e)
                                     except Exception as e:
                                         logger.error(
                                             f"Error executing resource read for {uri}: {e}"
@@ -519,6 +535,8 @@ class AsyncMCPHandler(MCPHandler):
 
         except ImportError:
             logger.warning("Failed to import URI template matching helper")
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Unexpected error during resource lookup: {e}", exc_info=True)
 

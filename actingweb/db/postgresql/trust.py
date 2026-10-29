@@ -4,6 +4,7 @@ import logging
 from datetime import datetime
 from typing import Any
 
+from actingweb.db.exceptions import DbError
 from actingweb.db.postgresql.connection import get_connection
 from actingweb.db.utils import ensure_timezone_aware_iso
 from actingweb.trust import canonical_connection_method
@@ -57,6 +58,8 @@ class DbTrust:
         actor_id: str | None = None,
         peerid: str | None = None,
         token: str | None = None,
+        *,
+        strict: bool = True,
     ) -> dict[str, Any] | None:
         """
         Retrieve trust from the database.
@@ -68,9 +71,13 @@ class DbTrust:
             actor_id: The actor ID
             peerid: The peer ID (takes precedence over token)
             token: The secret token (used if peerid not provided)
+            strict: When False, a read fault answers None instead of raising
 
         Returns:
             Dict with trust data, or None if not found
+
+        Raises:
+            DbError: on a read fault (unless ``strict=False``)
         """
         if not actor_id:
             return None
@@ -178,6 +185,8 @@ class DbTrust:
                     return result
 
         except Exception as e:
+            if strict:
+                raise DbError("trust get") from e
             logger.error(f"Error retrieving trust {actor_id}/{peerid or token}: {e}")
             return None
 
@@ -236,7 +245,10 @@ class DbTrust:
             oauth_client_id: OAuth2 client ID
 
         Returns:
-            True on success, False on failure
+            True on success, False only for missing arguments or handle
+
+        Raises:
+            DbError: on a backend fault
         """
         if not actor_id or not peerid:
             return False
@@ -381,8 +393,7 @@ class DbTrust:
             return True
 
         except Exception as e:
-            logger.error(f"Error creating trust {actor_id}/{peerid}: {e}")
-            return False
+            raise DbError("trust create") from e
 
     def modify(
         self,
@@ -433,7 +444,10 @@ class DbTrust:
             oauth_client_id: OAuth2 client ID
 
         Returns:
-            True on success, False on failure
+            True on success, False only for missing arguments or handle
+
+        Raises:
+            DbError: on a backend fault
         """
         if not self.handle:
             logger.debug("Attempted modification of DbTrust without db handle")
@@ -583,15 +597,17 @@ class DbTrust:
             return True
 
         except Exception as e:
-            logger.error(f"Error modifying trust {actor_id}/{peerid}: {e}")
-            return False
+            raise DbError("trust modify") from e
 
     def delete(self) -> bool:
         """
         Delete trust using self.handle.
 
         Returns:
-            True on success, False on failure
+            True on success, False only for missing arguments or handle
+
+        Raises:
+            DbError: on a backend fault
         """
         if not self.handle:
             return False
@@ -619,8 +635,7 @@ class DbTrust:
             return True
 
         except Exception as e:
-            logger.error(f"Error deleting trust {actor_id}/{peerid}: {e}")
-            return False
+            raise DbError("trust delete") from e
 
     @staticmethod
     def is_token_in_db(actor_id: str | None = None, token: str | None = None) -> bool:
@@ -653,8 +668,7 @@ class DbTrust:
                     return row is not None
 
         except Exception as e:
-            logger.error(f"Error checking token {actor_id}/{token}: {e}")
-            return False
+            raise DbError("trust is_token_in_db") from e
 
 
 class DbTrustList:
@@ -675,16 +689,20 @@ class DbTrustList:
         self.trusts = []
 
     def fetch(
-        self, actor_id: str | None = None, *, strict: bool = False
+        self, actor_id: str | None = None, *, strict: bool = True
     ) -> list[dict[str, Any]] | list[Any]:
         """
         Retrieve all trusts for an actor.
 
         Args:
             actor_id: The actor ID
+            strict: When False, a read fault answers ``[]`` instead of raising
 
         Returns:
             List of trust dicts, or empty list if none found
+
+        Raises:
+            DbError: on a read fault (unless ``strict=False``)
         """
         if not actor_id:
             return []
@@ -773,9 +791,9 @@ class DbTrustList:
                     return self.trusts
 
         except Exception as e:
-            logger.error(f"Error fetching trusts for actor {actor_id}: {e}")
             if strict:
-                raise
+                raise DbError("trust list fetch") from e
+            logger.error(f"Error fetching trusts for actor {actor_id}: {e}")
             return []
 
     def delete(self) -> bool:
@@ -783,7 +801,10 @@ class DbTrustList:
         Delete all trusts for the actor.
 
         Returns:
-            True on success, False on failure
+            True on success, False only for missing arguments or handle
+
+        Raises:
+            DbError: on a backend fault
         """
         if not self.actor_id:
             return False
@@ -804,5 +825,4 @@ class DbTrustList:
             return True
 
         except Exception as e:
-            logger.error(f"Error deleting trusts for actor {self.actor_id}: {e}")
-            return False
+            raise DbError("trust list delete") from e

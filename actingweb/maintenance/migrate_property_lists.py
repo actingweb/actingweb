@@ -65,7 +65,8 @@ downgrade. Rolling the application back first also removes that race,
 which is the other reason to do it in that order.
 
 Exit code 0 if every eligible list was migrated (or already was) by the
-end of the run, 1 if any list was refused or errored.
+end of the run, 1 if any list was refused or errored. 2 if the actor list
+could not be read (nothing was scanned).
 """
 
 import argparse
@@ -76,6 +77,8 @@ import sys
 import threading
 import time
 from typing import Any
+
+from actingweb.db.exceptions import DbError
 
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
@@ -119,7 +122,7 @@ class Checkpoint:
                     f"Resuming from checkpoint {path} "
                     f"({len(self._done)} actors already swept)"
                 )
-            except Exception as e:
+            except Exception as e:  # folds DbError: no DB access (checkpoint file)
                 logger.warning(f"Could not read checkpoint {path}: {e}")
 
     def is_done(self, actor_id: str) -> bool:
@@ -204,7 +207,7 @@ def migrate_actor(
             # actor's whole property partition per list purely to learn the
             # format -- ~13 partition dumps per actor on a typical one.
             already_v2 = list_prop.storage_format() == 2
-        except Exception as e:
+        except Exception as e:  # folds DbError: counted as error, exit 1
             logger.error(f"actor={actor_id} list={name}: format check failed: {e}")
             errored += 1
             continue
@@ -219,7 +222,7 @@ def migrate_actor(
             if migrate:
                 try:
                     swept = list_prop.sweep_foreign_format_rows()
-                except Exception as e:
+                except Exception as e:  # folds DbError: counted as error, exit 1
                     logger.error(
                         f"actor={actor_id} list={name}: sweeping leftover v1 "
                         f"rows failed: {e}"
@@ -295,7 +298,7 @@ def migrate_actor(
 
         try:
             result = list_prop.migrate_to_v2(allow_damaged=allow_damaged)
-        except Exception as e:
+        except Exception as e:  # folds DbError: counted as error, exit 1
             logger.error(f"actor={actor_id} list={name}: migrate_to_v2() failed: {e}")
             errored += 1
             continue
@@ -480,11 +483,18 @@ def main() -> int:
             "healthy afterwards with no record of what went missing."
         )
 
-    actors = get_actor_list(config).fetch()
+    try:
+        actors = get_actor_list(config).fetch()
+    except DbError as e:  # folds DbError: exit 2, store unreadable
+        logger.error(f"The actor list could not be read; nothing scanned: {e}")
+        return 2
+    if not isinstance(actors, list):
+        # A backend that answers a fault with False must not read as "none".
+        logger.error("The actor list could not be read; nothing scanned")
+        return 2
     if not actors:
         logger.info("No actors found")
         return 0
-    assert isinstance(actors, list)
 
     checkpoint = Checkpoint(args.checkpoint_file if args.migrate else None)
     limiter = RateLimiter(args.rps)

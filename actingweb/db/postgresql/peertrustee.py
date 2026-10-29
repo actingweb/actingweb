@@ -3,6 +3,9 @@
 import logging
 from typing import Any
 
+import psycopg
+
+from actingweb.db.exceptions import DbError
 from actingweb.db.postgresql.connection import get_connection
 
 logger = logging.getLogger(__name__)
@@ -26,6 +29,8 @@ class DbPeerTrustee:
         actor_id: str | None = None,
         peer_type: str | None = None,
         peerid: str | None = None,
+        *,
+        strict: bool = True,
     ) -> dict[str, Any] | bool | None:
         """
         Retrieve peertrustee from the database.
@@ -38,6 +43,9 @@ class DbPeerTrustee:
         Returns:
             Dict with peertrustee data, False if multiple peers found with same type,
             or None if not found
+
+        Raises:
+            DbError: on a read fault (unless ``strict=False``)
         """
         if not actor_id:
             return None
@@ -107,6 +115,8 @@ class DbPeerTrustee:
                         return self.handle
 
         except Exception as e:
+            if strict:
+                raise DbError("peertrustee get") from e
             logger.error(
                 f"Error retrieving peertrustee {actor_id}/{peerid or peer_type}: {e}"
             )
@@ -131,7 +141,10 @@ class DbPeerTrustee:
             passphrase: Passphrase
 
         Returns:
-            True on success, False on failure
+            True on success, False only for missing arguments or handle
+
+        Raises:
+            DbError: on a backend fault
         """
         if not actor_id or not peerid or not peer_type:
             logger.debug(
@@ -166,9 +179,14 @@ class DbPeerTrustee:
             }
             return True
 
-        except Exception as e:
-            logger.error(f"Error creating peertrustee {actor_id}/{peerid}: {e}")
+        except psycopg.errors.UniqueViolation:
+            # A concurrent create won: the row exists, as the pre-check would
+            # have said. Answer False like DbActor.create, not a 503 that
+            # every retry would repeat.
+            logger.warning(f"Trying to create a peertrustee that exists ({actor_id})")
             return False
+        except Exception as e:
+            raise DbError("peertrustee create") from e
 
     def modify(
         self,
@@ -185,7 +203,10 @@ class DbPeerTrustee:
             passphrase: New passphrase
 
         Returns:
-            True on success, False on failure
+            True on success, False only for missing arguments or handle
+
+        Raises:
+            DbError: on a backend fault
         """
         if not self.handle:
             logger.debug("Attempted modification of DbPeerTrustee without db handle")
@@ -238,15 +259,17 @@ class DbPeerTrustee:
             return True
 
         except Exception as e:
-            logger.error(f"Error modifying peertrustee {actor_id}/{peerid}: {e}")
-            return False
+            raise DbError("peertrustee modify") from e
 
     def delete(self) -> bool:
         """
         Delete peertrustee using self.handle.
 
         Returns:
-            True on success, False on failure
+            True on success, False only for missing arguments or handle
+
+        Raises:
+            DbError: on a backend fault
         """
         if not self.handle:
             return False
@@ -274,8 +297,7 @@ class DbPeerTrustee:
             return True
 
         except Exception as e:
-            logger.error(f"Error deleting peertrustee {actor_id}/{peerid}: {e}")
-            return False
+            raise DbError("peertrustee delete") from e
 
 
 class DbPeerTrusteeList:
@@ -296,14 +318,15 @@ class DbPeerTrusteeList:
         self.peertrustees = []
 
     def fetch(
-        self, actor_id: str | None = None, *, strict: bool = False
+        self, actor_id: str | None = None, *, strict: bool = True
     ) -> list[dict[str, Any]] | list[Any]:
         """
         Retrieve all peertrustees for an actor.
 
         Args:
             actor_id: The actor ID
-            strict: Raise on a read fault instead of answering ``[]``
+            strict: When False, a read fault answers ``[]`` instead of
+                raising ``DbError``
 
         Returns:
             List of peertrustee dicts, or empty list if none found
@@ -342,9 +365,9 @@ class DbPeerTrusteeList:
                     return self.peertrustees
 
         except Exception as e:
-            logger.error(f"Error fetching peertrustees for actor {actor_id}: {e}")
             if strict:
-                raise
+                raise DbError("peertrustee list fetch") from e
+            logger.error(f"Error fetching peertrustees for actor {actor_id}: {e}")
             return []
 
     def delete(self) -> bool:
@@ -352,7 +375,10 @@ class DbPeerTrusteeList:
         Delete all peertrustees for the actor.
 
         Returns:
-            True on success, False on failure
+            True on success, False only for missing arguments or handle
+
+        Raises:
+            DbError: on a backend fault
         """
         if not self.actor_id:
             return False
@@ -373,5 +399,4 @@ class DbPeerTrusteeList:
             return True
 
         except Exception as e:
-            logger.error(f"Error deleting peertrustees for actor {self.actor_id}: {e}")
-            return False
+            raise DbError("peertrustee list delete") from e

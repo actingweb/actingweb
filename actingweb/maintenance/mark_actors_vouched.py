@@ -111,7 +111,7 @@ def _mark_one(
                 f"{actor_id} has a pending email verification and stays "
                 "unvouched until the address is proven"
             )
-    except Exception as e:
+    except Exception as e:  # folds DbError: counted as error, exit 1
         counts["errors"] += 1
         logger.error(f"could not mark {actor_id}: {e}")
 
@@ -140,7 +140,7 @@ def mark_actors(
         raise ValueError(f"{marker!r} does not vouch for an actor")
     try:
         rows = get_actor_list(config).fetch()
-    except Exception as e:
+    except Exception as e:  # folds DbError: becomes ActorListUnavailable (exit 2)
         # DynamoDB's scan is lazy: a fault raises while it is iterated.
         raise ActorListUnavailable(f"the actor list could not be read: {e}") from e
     if not isinstance(rows, list):

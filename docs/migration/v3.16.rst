@@ -11,8 +11,9 @@ Migrating to ActingWeb 3.16
 Start here
 ==========
 
-3.16 closes a squat on the actor factory and adds ``prompt`` to the SPA
-sign-in. Most applications need to check only the first three items:
+3.16 closes a squat on the actor factory, makes a database fault an error
+instead of a guess, and adds ``prompt`` to the SPA sign-in. Most applications
+need to check only the first three items and item 11:
 
 1. **An actor created before 3.16 with no marker is cleaned at its first
    sign-in after the upgrade.** That covers the factory, the email form,
@@ -53,12 +54,19 @@ sign-in. Most applications need to check only the first three items:
 7. ``Actor.modify`` now takes a passphrase and returns the backend result;
    ``Actor.delete`` returns a bool.
 8. SPA clients can ask for account selection with ``prompt``.
-9. A custom database backend must accept ``strict`` on the trust,
-   subscription and peer-trustee list ``fetch`` and on
-   ``DbActor.get_by_creator``.
+9. A custom database backend must accept ``strict`` on every ``get``,
+   ``fetch`` and ``get_bucket``, raise ``DbError`` on a fault, and accept
+   ``consistent`` and ``ids_only`` on ``DbActor.get_by_creator`` (see
+   `Fault contract`_).
 10. ``PUT /<id>/trust/trustee`` with a new ``creator`` unvouches the actor;
     with ``force_email_prop_as_creator`` on it refuses an address other than
     the stored email.
+11. **A database fault now answers 503, not a guess.** Reads that decide
+    something raise ``DbError`` on a throttle or timeout instead of reading
+    as "not found", and both integrations answer it with ``503`` and
+    ``Retry-After: 5``. Code that catches ``Exception`` around
+    ``ActorInterface`` calls and treats it as "absent" should let
+    ``DbError`` through (see `Fault contract`_).
 
 What changed and why
 ====================
@@ -285,13 +293,125 @@ passes user input to it should ask for the endpoint's rules::
 
     actor.modify_creator(new_address, unvouch=True)
 
+Fault contract
+--------------
+
+Before 3.16 a database fault usually read like an answer: PostgreSQL caught
+it and returned ``None``, ``[]`` or ``False``; DynamoDB did the same on most
+single-row reads and raised on list reads. A caller could not tell "no such
+trust" from "the read failed", and eleven callers acted on the guess: they
+issued a new trust secret, overwrote a permission override, created a
+duplicate actor, deleted an actor without notifying its peers, reset an open
+circuit breaker. In 3.16 the decision reads raise, and those callers stop.
+
+**What raises now.** On both backends, every single-row ``get``, every list
+``fetch``, ``get_by_creator``, ``get_bucket``, ``get_attr``, the reverse
+lookups and ``get_attr_strict`` raise ``actingweb.db.exceptions.DbError`` on
+a fault. Writes and deletes raise too, and a delete through a loaded handle
+answers ``True`` when the row is gone, including a row that was already
+absent. Conditional deletes keep "``True`` only if this call removed it".
+Pass ``strict=False`` to a read to get the old folded answer; only display
+reads should.
+
+**Public APIs that raise ``DbError`` on a fault:**
+
+- ``Attributes.get_bucket()`` and ``get_attr()`` (``strict=False`` folds);
+  ``actor.store`` (``InternalStore``) still never raises on a read and keeps
+  ``loaded`` as its signal;
+- ``Actor`` lookups (``Actor(actor_id=...)``, ``get_from_creator``,
+  ``get_trust_relationship(s)``, ``get_subscriptions``, ``get_peer_trustee``)
+  and ``Actor.delete``, which now reads its trusts and subscriptions before
+  removing anything;
+- the ``ActorInterface`` property, trust and subscription accessors built on
+  them, and the property list container (``len()``, ``[]`` and iteration on
+  ``actor.property_lists``), which no longer reads a fault as an empty list;
+- the OAuth2 sign-in lookup and adoption, the SPA token check and the
+  permission stores.
+
+**What the HTTP layer does.** Both integrations register an app-level
+handler: a ``DbError`` that reaches Flask or FastAPI, from a library route or
+from your own route, answers ``503`` with ``Retry-After: 5`` and
+``{"error": "temporarily_unavailable", "message": "Service temporarily
+unavailable"}``. The exception text is logged, never sent. A sign-in that
+hits a fault answers 503 too, not a failed login, and a token-store fault no
+longer signs a SPA user out. ``CreatorTaken`` (a ``DbError`` subclass,
+raised once creator uniqueness is enforced) answers ``409``.
+
+A backend error a retry cannot fix (a validation, size or constraint error,
+such as an item over DynamoDB's 400 KB limit) answers ``500`` with
+``{"error": "internal_error"}`` and no ``Retry-After``.
+
+**Hooks.** The hook runners let a ``DbError`` through. A hook whose own
+store read faults (an ``oauth_success`` allowlist kept in an attribute
+bucket, a property hook that reads another property) fails the request with
+503. Before 3.16 the runner logged the exception and carried on with "no
+answer", which ``oauth_success`` treated as "accepted". The notifications
+fired after the work committed (``actor_created``, ``actor_adopted``,
+``actor_deleted_complete``, ``trust_approved``) still log a fault and let the
+request succeed.
+
+**Subscription callbacks.** A callback whose storage write faults answers
+503. The publisher does not retry a callback (the protocol's delivery is
+at-most-once); the diff stays on the publisher and comes back through a poll
+or a gap resync, which runs the handler again. Once its handlers have run, a
+fault recording the callback's sequence is logged and the callback answers
+as processed, so ``subscription_data_hook`` handlers are not run twice for
+it. The next callback then sees a gap, which the gap timeout resyncs.
+
+**Subscription sequence numbers.** As a publisher, the library allocates
+each diff's sequence number with one atomic update, so two concurrent
+changes to one subscription get two numbers (before, both could read N and
+write N + 1: PostgreSQL then rejected the second diff, DynamoDB overwrote the
+first). A number whose diff could not be stored is no longer handed out
+again; it stays a gap, which the subscriber detects at the next diff and
+recovers from by polling or resyncing. A subscriber skipped on a store fault
+gets a gap the same way. When the sequence row itself cannot be reached, no
+gap can be made and the diff is lost; only a periodic poll recovers it. Both
+backends refuse a diff whose number already has one. Upgrade every worker
+before the new ones publish diffs: a 3.15 worker still writes the sequence as
+``previous + 1`` and can move it back under a 3.16 one.
+
+**Resuming suspended subscriptions.** ``resume_subscriptions()`` reads the
+subscribers before it removes the suspension, and if a resync faults it puts
+the suspension back and raises ``DbError`` (503), so the call can be retried
+without losing the changes made while suspended. A permanent store error for
+one subscriber and a resync that fails over HTTP do not put it back; check
+the returned count against the number of subscribers.
+
+**Consumer code to check:**
+
+- An ``except Exception`` that treats a failed read as "absent" and then
+  creates or deletes: re-raise ``DbError`` ahead of it.
+- A custom route that should degrade instead of failing: catch ``DbError``
+  and render what you have, or read with ``strict=False``.
+- Code that checked ``store.loaded`` after ``Attributes.get_bucket()``: the
+  read raises now; pass ``strict=False`` to keep checking ``loaded``.
+- A hook that must degrade instead of failing the request on a fault: catch
+  ``DbError`` inside the hook.
+
 Custom database backends
 ------------------------
 
-The trust and subscription list protocols in ``actingweb.db.protocols`` take
-``fetch(actor_id, *, strict=False)``. With ``strict=True`` a read fault must
-raise instead of answering ``[]``; the adoption rule depends on it. Both
-bundled backends implement it.
+A backend must live inside ``actingweb.db`` and follow the contract the
+module docstring of ``actingweb.db.protocols`` states:
+
+- accept ``*, strict: bool = True`` on every ``get``, ``fetch`` and
+  ``get_bucket``, and ``consistent`` and ``ids_only`` on
+  ``DbActor.get_by_creator``;
+- raise ``DbError`` on a fault (``raise DbError(op) from e``), and answer it
+  as absence only when ``strict=False``;
+- answer ``True`` from a delete through a loaded handle when the row is gone,
+  absent rows included;
+- keep ``delete_attr_conditional`` and ``conditional_update_attr`` answering
+  ``True`` only when that call changed the row;
+- implement ``DbSubscription.increment_seq(actor_id=None, peerid=None,
+  subid=None)`` as one atomic update that returns the new sequence number
+  (None when the row is gone). The library no longer writes ``previous + 1``
+  through ``modify(seqnr=...)``, which let two concurrent changes share a
+  number.
+
+A backend without ``strict`` fails with ``TypeError`` at its first call; one
+without ``increment_seq`` fails with ``AttributeError`` at its first diff.
 
 SPA ``prompt``
 --------------

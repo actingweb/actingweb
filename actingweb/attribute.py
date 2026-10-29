@@ -2,6 +2,7 @@ import logging
 from typing import Any, cast
 
 from actingweb.db import get_attribute, get_attribute_bucket_list
+from actingweb.db.exceptions import DbError
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +35,9 @@ class InternalStore:
         if self.__dict__.get("_loaded"):
             return
         self.__dict__["_loaded"] = True
-        d = self.__dict__["_db"].get_bucket()
+        # The one folding read: ``actor.store.x`` never raises on a fault.
+        # ``loaded`` stays False after one, and is the caller's signal.
+        d = self.__dict__["_db"].get_bucket(strict=False)
         if d:
             for k, v in d.items():
                 # Populate directly — no write-through back to the database
@@ -44,9 +47,10 @@ class InternalStore:
     def loaded(self) -> bool:
         """Whether the bucket was read and the backend answered.
 
-        A caught backend fault (PostgreSQL returns ``None``) leaves every
-        attribute reading ``None`` for the life of this instance; a caller
-        that acts on an absent value must check this first.
+        The store reads its bucket with ``strict=False``, so a backend fault
+        leaves every attribute reading ``None`` for the life of this
+        instance; a caller that acts on an absent value must check this
+        first.
         """
         self._ensure_loaded()
         return self.__dict__["_db"].loaded
@@ -59,20 +63,22 @@ class InternalStore:
         self.__dict__["_loaded"] = True
         self.__dict__["_db"].mark_loaded_empty()
 
-    def set_confirmed(self, k: str, v: Any) -> bool:
+    def set_confirmed(self, k: str, v: Any, *, raise_on_fault: bool = False) -> bool:
         """Write ``k`` and confirm it landed with a strict read-back.
 
-        A plain assignment cannot report a fault (PostgreSQL's ``set_attr``
-        answers ``False``, which the assignment discards). Use this where a
-        value that silently fails to land changes a security decision, such
-        as the ``auth_method`` marker. ``v=None`` deletes ``k`` and confirms
-        it is gone. Returns ``False`` on a fault or a mismatch; never raises.
+        A plain assignment raises ``DbError`` on a fault but cannot catch a
+        lost acknowledgement. Use this where a value that silently fails to
+        land changes a security decision, such as the ``auth_method``
+        marker. ``v=None`` deletes ``k`` and confirms it is gone. Returns
+        ``False`` on a fault or a mismatch and never raises, unless
+        ``raise_on_fault`` is set: then a fault raises ``DbError`` (a
+        mismatch still answers False).
         """
         db = self.__dict__["_db"]
         try:
             self._ensure_loaded()
             if v is None:
-                # DynamoDB answers True on a failed delete; the read decides.
+                # The read decides, whatever the delete answered.
                 db.delete_attr(name=k)
             elif not db.set_attr(name=k, data=v):
                 return False
@@ -82,7 +88,12 @@ class InternalStore:
             row = backend.get_attr_strict(
                 actor_id=db.actor_id, bucket=db.bucket, name=k
             )
-        except Exception as e:
+        except DbError:  # folds DbError: False unless raise_on_fault
+            if raise_on_fault:
+                raise
+            logger.error(f"Could not confirm the write of {k}: a store fault")
+            return False
+        except Exception as e:  # folds DbError: returns False (not confirmed); every caller fails closed or rolls back
             logger.error(f"Could not confirm the write of {k}: {e}")
             return False
         if v is None:
@@ -112,8 +123,10 @@ class InternalStore:
             if k in self.__dict__:
                 self.__delattr__(k)
         else:
-            self.__dict__[k] = v
+            # Write first: the write raises DbError on a fault, and the store
+            # must not then answer the value storage never got.
             self.__dict__["_db"].set_attr(name=k, data=v)
+            self.__dict__[k] = v
 
     def __getattr__(self, k: str) -> Any:
         # Only reached when k is not in __dict__. Avoid triggering a load
@@ -132,44 +145,43 @@ class Attributes:
 
     """
 
-    def get_bucket(self) -> dict[str, Any] | None:
+    def get_bucket(self, strict: bool = True) -> dict[str, Any] | None:
         """Retrieves the attribute bucket from the database.
+
+        A read fault raises ``DbError``. With ``strict=False`` it answers
+        ``{}`` instead and leaves :attr:`loaded` False, so a caller can tell
+        an empty bucket from one that could not be read. Display reads pass
+        it; a read whose "absent" branch is a decision must not.
 
         Tracks full-bucket loads with a flag rather than data emptiness:
         a set_attr()/get_attr() may have cached individual entries, and
         treating a partially-cached dict as "loaded" would silently return
         an incomplete bucket.
 
-        ``_bucket_loaded`` is set only when the backend actually RETURNED A
-        DICT, and it means "loaded, and the backend answered". That
-        distinction is load-bearing now that ``get_attr()`` treats the flag
-        as authoritative about ABSENCE: a bucket that could not be read
-        must not become "the bucket has no such attribute", permanently,
-        for the life of this instance.
-
-        Both backends return ``{}`` for an empty bucket and reserve
-        ``None`` for a caught fault (PostgreSQL joined DynamoDB in 3.14.4;
-        before that it returned ``None`` for empty too). So an empty bucket
-        is authoritative on both: ``get_attr(name)`` after
-        ``get_bucket() == {}`` answers ``None`` without a backend read for
-        the life of this instance. Every ``Attributes`` instance in the
-        library is request-local except ``InternalStore._db``, which loads
-        once via ``_ensure_loaded`` on both backends regardless and does
-        not use this path.
-
-        Note that on DynamoDB most real faults do not arrive as ``None`` at
-        all: ``DbAttribute.get_bucket()`` wraps only the Query
-        CONSTRUCTION, and PynamoDB fires the request lazily during
-        iteration, so a throttle mid-page raises straight through this
-        method with the flag still unset — already the safe outcome.
+        ``_bucket_loaded`` is set only when the backend answered, and it
+        means "loaded, and the backend answered". ``get_attr()`` treats the
+        flag as authoritative about ABSENCE: a bucket that could not be read
+        must never become "the bucket has no such attribute" for the life of
+        this instance. Expired rows are returned, as the backend returns
+        them.
         """
         if not self._bucket_loaded:
             if self.dbprop:
-                fetched_data = self.dbprop.get_bucket(
-                    actor_id=self.actor_id, bucket=self.bucket
-                )
-                # None is a caught backend fault (either backend): the
-                # bucket stays unloaded so absence is never inferred from it.
+                try:
+                    fetched_data = self.dbprop.get_bucket(
+                        actor_id=self.actor_id, bucket=self.bucket
+                    )
+                except DbError:  # folds DbError: strict=False read, the caller asked
+                    if strict:
+                        raise
+                    logger.error(
+                        f"Bucket {self.bucket} of {self.actor_id} could not be "
+                        "read; answering {} (strict=False)"
+                    )
+                    self.data = {}
+                    return self.data
+                # None only for missing arguments (or a backend double that
+                # folds a fault): the bucket stays unloaded.
                 if fetched_data is None:
                     self.data = {}
                 else:
@@ -185,10 +197,11 @@ class Attributes:
     def loaded(self) -> bool:
         """True once :meth:`get_bucket` got an answer from the backend.
 
-        ``get_bucket()`` returns ``{}`` both for an empty bucket and after a
-        backend fault. Check this after calling it to tell them apart: an
-        empty bucket leaves ``loaded`` True, a faulted read leaves it False
-        (as it is before any read).
+        ``get_bucket(strict=False)`` returns ``{}`` both for an empty bucket
+        and after a backend fault. Check this after calling it to tell them
+        apart: an empty bucket leaves ``loaded`` True, a faulted read leaves
+        it False (as it is before any read). After a strict read that
+        returned, it is always True.
         """
         return self._bucket_loaded
 
@@ -197,8 +210,15 @@ class Attributes:
         self.data = {}
         self._bucket_loaded = True
 
-    def get_attr(self, name: str | None = None) -> dict[str, Any] | None:
+    def get_attr(
+        self, name: str | None = None, strict: bool = True
+    ) -> dict[str, Any] | None:
         """Retrieves a single attribute.
+
+        A read fault raises ``DbError``; ``strict=False`` answers it with
+        ``None`` (and caches nothing). An expired row is returned, as
+        ``get_bucket()[name]`` would return it: only the backend's
+        ``get_attr_strict`` hides expired rows.
 
         A fully-loaded bucket is AUTHORITATIVE: once ``get_bucket()`` has
         returned a dict, a name absent from it is absent from storage, and
@@ -224,9 +244,19 @@ class Attributes:
             if self._bucket_loaded:
                 return None
             if self.dbprop:
-                self.data[name] = self.dbprop.get_attr(
-                    actor_id=self.actor_id, bucket=self.bucket, name=name
-                )
+                try:
+                    row = self.dbprop.get_attr(
+                        actor_id=self.actor_id, bucket=self.bucket, name=name
+                    )
+                except DbError:  # folds DbError: strict=False read, the caller asked
+                    if strict:
+                        raise
+                    logger.error(
+                        f"Attribute {self.bucket}/{name} of {self.actor_id} could "
+                        "not be read; answering None (strict=False)"
+                    )
+                    return None
+                self.data[name] = row
             else:
                 self.data[name] = None
         return self.data[name]
@@ -269,14 +299,20 @@ class Attributes:
             attr_data["data"] = data
             attr_data["timestamp"] = timestamp
         if self.dbprop:
-            ok = self.dbprop.set_attr(
-                actor_id=self.actor_id,
-                bucket=self.bucket,
-                name=name,
-                data=data,
-                timestamp=timestamp,
-                ttl_seconds=ttl_seconds,
-            )
+            try:
+                ok = self.dbprop.set_attr(
+                    actor_id=self.actor_id,
+                    bucket=self.bucket,
+                    name=name,
+                    data=data,
+                    timestamp=timestamp,
+                    ttl_seconds=ttl_seconds,
+                )
+            except Exception:
+                # The cache was updated before the call; storage may hold
+                # either value now.
+                self._unload_after_failed_delete(name)
+                raise
             if not ok and not data:
                 self._unload_after_failed_delete(name)
             return ok
@@ -286,15 +322,12 @@ class Attributes:
         """A delete the backend did not confirm must not leave the loaded
         bucket asserting absence.
 
-        The cache entry is dropped BEFORE the backend call, so if the backend
-        then reports failure (PostgreSQL returns ``False`` on a caught
-        exception; DynamoDB swallows and returns ``True``, so this never
-        fires there) the dict says "absent" while storage still holds the
-        row -- and ``get_attr()`` would answer ``None`` from the
-        authoritative dict for the life of this instance, where before the
-        bucket was authoritative a cache miss point-read and recovered it.
-        Clearing the flag is the fail-safe repair: the next ``get_attr()``
-        or ``get_bucket()`` reads through again.
+        The cache entry is changed BEFORE the backend call, so if the
+        backend then raises or reports failure the dict disagrees with
+        storage -- and ``get_attr()`` would answer from the authoritative
+        dict for the life of this instance. Clearing the flag is the
+        fail-safe repair: the next ``get_attr()`` or ``get_bucket()`` reads
+        through again.
         """
         self.data.pop(name, None)
         self._bucket_loaded = False
@@ -362,9 +395,13 @@ class Attributes:
         if self.data and name in self.data:
             del self.data[name]
         if self.dbprop:
-            ok = self.dbprop.delete_attr(
-                actor_id=self.actor_id, bucket=self.bucket, name=name
-            )
+            try:
+                ok = self.dbprop.delete_attr(
+                    actor_id=self.actor_id, bucket=self.bucket, name=name
+                )
+            except Exception:
+                self._unload_after_failed_delete(name)
+                raise
             if not ok:
                 self._unload_after_failed_delete(name)
             return ok

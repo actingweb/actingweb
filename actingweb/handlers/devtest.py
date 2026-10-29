@@ -140,7 +140,7 @@ class DevtestHandler(base_handler.BaseHandler):
                 bucket = attribute.Attributes(
                     actor_id=myself.id, bucket=paths[1], config=self.config
                 )
-                attr = bucket.get_attr(paths[2])
+                attr = bucket.get_attr(paths[2], strict=False)
                 if attr:
                     # Return the attribute with timestamp formatted
                     if "timestamp" in attr and attr["timestamp"]:
@@ -166,7 +166,7 @@ class DevtestHandler(base_handler.BaseHandler):
                 bucket = attribute.Attributes(
                     actor_id=myself.id, bucket=paths[1], config=self.config
                 )
-                params = bucket.get_bucket()
+                params = bucket.get_bucket(strict=False)
                 if params:
                     for k, v in params.items():
                         if v.get("timestamp"):

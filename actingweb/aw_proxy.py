@@ -167,7 +167,7 @@ class AwProxy:
                         headers={**bh, "Content-Type": "application/json"},
                         timeout=self.timeout,
                     )
-        except Exception:
+        except Exception:  # folds DbError: peer HTTP only
             return None
         return None
 
@@ -192,7 +192,7 @@ class AwProxy:
                     response = retry
             self.last_response_code = response.status_code
             self.last_response_message = response.content
-        except Exception:
+        except Exception:  # folds DbError: peer HTTP only
             logger.debug("Not able to get peer resource")
             self.last_response_code = 408
             return {
@@ -263,7 +263,7 @@ class AwProxy:
                     response = retry
             self.last_response_code = response.status_code
             self.last_response_message = response.content
-        except Exception:
+        except Exception:  # folds DbError: peer HTTP only
             logger.debug("Not able to create new peer resource")
             self.last_response_code = 408
             return {
@@ -326,7 +326,7 @@ class AwProxy:
                     response = retry
             self.last_response_code = response.status_code
             self.last_response_message = response.content
-        except Exception:
+        except Exception:  # folds DbError: peer HTTP only
             logger.debug("Not able to change peer resource")
             self.last_response_code = 408
             return {
@@ -371,7 +371,7 @@ class AwProxy:
                     response = retry
             self.last_response_code = response.status_code
             self.last_response_message = response.content
-        except Exception:
+        except Exception:  # folds DbError: peer HTTP only
             logger.debug("Not able to delete peer resource")
             self.last_response_code = 408
             return {
@@ -418,7 +418,7 @@ class AwProxy:
                         return await client.put(
                             url, content=data, headers=final_headers
                         )
-        except Exception:
+        except Exception:  # folds DbError: peer HTTP only
             return None
         return None
 
@@ -487,7 +487,7 @@ class AwProxy:
                     "message": "Network error communicating with trust peer service.",
                 },
             }
-        except Exception as e:
+        except Exception as e:  # folds DbError: peer HTTP only
             logger.warning(f"Unexpected error getting peer resource async: {e}")
             self.last_response_code = 500
             return {
@@ -590,7 +590,7 @@ class AwProxy:
                     "message": "Network error communicating with trust peer service.",
                 },
             }
-        except Exception as e:
+        except Exception as e:  # folds DbError: peer HTTP only
             logger.warning(f"Unexpected error creating peer resource async: {e}")
             self.last_response_code = 500
             return {
@@ -694,7 +694,7 @@ class AwProxy:
                     "message": "Network error communicating with trust peer service.",
                 },
             }
-        except Exception as e:
+        except Exception as e:  # folds DbError: peer HTTP only
             logger.warning(f"Unexpected error changing peer resource async: {e}")
             self.last_response_code = 500
             return {
@@ -783,7 +783,7 @@ class AwProxy:
                     "message": "Network error communicating with trust peer service.",
                 },
             }
-        except Exception as e:
+        except Exception as e:  # folds DbError: peer HTTP only
             logger.warning(f"Unexpected error deleting peer resource async: {e}")
             self.last_response_code = 500
             return {

@@ -8,8 +8,6 @@ sign-in must not report an adoption that did not happen, and an actor must
 not be created without its marker.
 """
 
-from collections.abc import Callable, Iterator
-from contextlib import contextmanager
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -18,15 +16,19 @@ import pytest
 from actingweb.actor import Actor
 from actingweb.attribute import InternalStore
 from actingweb.constants import OAUTH2_SYSTEM_ACTOR
-from actingweb.db import get_actor, get_attribute
+from actingweb.db import get_actor
+from actingweb.db.exceptions import DbError
 from actingweb.maintenance import mark_actors_vouched as script
 from actingweb.oauth2 import OAuth2Authenticator, OAuth2Provider
 from actingweb.oauth_session import get_oauth2_session_manager
 from tests._adoption_helpers import (
+    _raise,
     aid,
+    backend_fault,
     create_core_actor,
     istore,
     make_config,
+    marker_write_fault,
     uuid_email,
 )
 
@@ -46,50 +48,6 @@ def auth() -> OAuth2Authenticator:
         },
     )
     return OAuth2Authenticator(make_config(), provider)
-
-
-@contextmanager
-def backend_fault(
-    config: Any,
-    method: str,
-    matches: Callable[[Any, Any, Any], bool],
-    answer: Callable[[], Any],
-) -> Iterator[None]:
-    """Replace one attribute-backend method for the (actor, bucket, name)
-    calls ``matches`` accepts; every other call is real."""
-    unpatched = get_attribute(config)
-    cls = type(unpatched)
-    real = getattr(unpatched, method)  # bound before patching
-
-    def fake(*args: Any, **kw: Any) -> Any:
-        if args and isinstance(args[0], cls):
-            args = args[1:]
-        names = ("actor_id", "bucket", "name")
-        values = dict(zip(names, args, strict=False))
-        values.update({k: v for k, v in kw.items() if k in names})
-        if matches(values.get("actor_id"), values.get("bucket"), values.get("name")):
-            return answer()
-        return real(*args, **kw)
-
-    with patch.object(cls, method, fake):
-        yield
-
-
-def _raise() -> Any:
-    raise RuntimeError("throttled")
-
-
-def marker_write_fault(config: Any, actor_id: str | None = None) -> Any:
-    """``set_attr`` of ``_internal/auth_method`` answers False and writes
-    nothing (PostgreSQL's caught fault)."""
-    return backend_fault(
-        config,
-        "set_attr",
-        lambda a, b, n: (
-            b == "_internal" and n == "auth_method" and actor_id in (None, a)
-        ),
-        lambda: False,
-    )
 
 
 class TestSwallowedTokenDelete:
@@ -121,15 +79,16 @@ class TestMarkerWriteFault:
         creator = uuid_email()
         actor = Actor(config=config)
 
-        with marker_write_fault(config):
-            created = actor.create(
+        # 3.16: a marker-write fault rolls the row back and raises (503).
+        with marker_write_fault(config), pytest.raises(DbError):
+            actor.create(
                 url="https://test.example.com/",
                 creator=creator,
                 passphrase="own-pass",
                 auth_method="google_oauth2",
             )
 
-        assert created is False
+        assert actor.id is None
         assert not Actor(config=config).get_from_creator(creator)
 
     def test_clean_in_place_fails_when_the_vouched_marker_does_not_land(
@@ -230,7 +189,12 @@ class TestThirdIterationFaults:
         with backend_fault(
             config, "get_bucket", lambda a, b, _n: a == aid(actor), _raise
         ):
-            assert store.set_confirmed("auth_method", "operator") is False
+            # 3.16: the store's load folds (strict=False), so the fault leaves
+            # it unloaded; the write and its strict read-back still decide.
+            confirmed = store.set_confirmed("auth_method", "operator")
+        assert store.loaded is False
+        assert confirmed is True
+        assert istore(actor_reloaded(config, actor)).auth_method == "operator"
 
 
 class TestBackfillResume:
@@ -259,3 +223,9 @@ class TestBackfillResume:
         assert counts["errors"] == 1
         assert "re-run without --start-after" in caplog.text
         assert f"resume with --start-after {aid(legacy)}" not in caplog.text
+
+
+def actor_reloaded(config: Any, actor: Any) -> Any:
+    from actingweb.actor import Actor as _Actor
+
+    return _Actor(actor_id=aid(actor), config=config)

@@ -72,7 +72,7 @@ class JWKSIdTokenValidator:
         # Read the unverified header to find the signing key.
         try:
             header = jwt.get_unverified_header(id_token)
-        except Exception as e:
+        except Exception as e:  # folds DbError: no DB access
             logger.warning("id_token header could not be parsed: %s", e)
             return None
 
@@ -95,7 +95,7 @@ class JWKSIdTokenValidator:
 
         try:
             public_key = RSAAlgorithm.from_jwk(jwk)
-        except Exception as e:
+        except Exception as e:  # folds DbError: no DB access
             logger.warning("Could not build public key from JWK: %s", e)
             return None
 
@@ -116,7 +116,7 @@ class JWKSIdTokenValidator:
                     "require": ["exp", "iss", "sub"],
                 },
             )
-        except Exception as e:
+        except Exception as e:  # folds DbError: no DB access
             logger.warning("id_token signature/claim verification failed: %s", e)
             return None
 

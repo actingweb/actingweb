@@ -12,6 +12,7 @@ from typing import Any
 from actingweb import auth
 from actingweb.handlers import base_handler
 
+from ..db.exceptions import DbError
 from ..permission_evaluator import (
     PermissionResult,
     get_permission_evaluator,
@@ -65,6 +66,8 @@ class ActionsHandler(base_handler.BaseHandler):
                     path="actions", subpath=action_name, method="GET"
                 )
 
+        except DbError:
+            raise
         except Exception as e:
             logger.error(
                 f"Error in action permission evaluation for {actor_id}:{peer_id}:{action_name}: {e}"
@@ -142,6 +145,8 @@ class ActionsHandler(base_handler.BaseHandler):
                                 if perm_result == PermissionResult.ALLOWED:
                                     filtered_actions.append(action)
                             result = {"actions": filtered_actions}
+                        except DbError:
+                            raise
                         except Exception as e:
                             logger.error(f"Error filtering actions by permission: {e}")
                             # Fall back to returning all actions on error

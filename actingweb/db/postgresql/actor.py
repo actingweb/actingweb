@@ -3,6 +3,9 @@
 import logging
 from typing import Any
 
+import psycopg
+
+from actingweb.db.exceptions import DbError
 from actingweb.db.postgresql.connection import get_connection
 
 logger = logging.getLogger(__name__)
@@ -17,15 +20,21 @@ class DbActor:
         """Initialize DbActor (no auto-table creation, use migrations)."""
         self.handle = None
 
-    def get(self, actor_id: str | None = None) -> dict[str, Any] | None:
+    def get(
+        self, actor_id: str | None = None, *, strict: bool = True
+    ) -> dict[str, Any] | None:
         """
         Retrieve actor by ID.
 
         Args:
             actor_id: The actor ID to retrieve
+            strict: When False, a read fault answers None instead of raising
 
         Returns:
             dict with keys: id, creator, passphrase, or None if not found
+
+        Raises:
+            DbError: on a read fault (unless ``strict=False``)
         """
         if not actor_id:
             return None
@@ -53,23 +62,34 @@ class DbActor:
                     else:
                         return None
         except Exception as e:
+            if strict:
+                raise DbError("actor get") from e
             logger.error(f"Error retrieving actor {actor_id}: {e}")
             return None
 
     def get_by_creator(
-        self, creator: str | None = None, *, strict: bool = False
+        self,
+        creator: str | None = None,
+        *,
+        strict: bool = True,
+        consistent: bool = False,
+        ids_only: bool = False,
     ) -> dict[str, Any] | list[dict[str, Any]] | None:
         """
         Get actors by creator field.
 
         Args:
             creator: The creator email to search for
-
-            strict: Raise on a read fault instead of answering None, and
-                answer ``[]`` when none was found
+            strict: When False, a read fault answers None instead of raising
+            consistent: Accepted for parity with DynamoDB; a PostgreSQL
+                read is always consistent
+            ids_only: Answer ``[{"id": ...}]`` only
 
         Returns:
-            Single dict if one found, list of dicts if multiple found, None if none found
+            A list of actor dicts, ``[]`` when none was found
+
+        Raises:
+            DbError: on a read fault (unless ``strict=False``)
         """
         if not creator:
             return None
@@ -92,7 +112,9 @@ class DbActor:
                     rows = cur.fetchall()
 
                     if not rows:
-                        return [] if strict else None
+                        return []
+                    if ids_only:
+                        return [{"id": row[0]} for row in rows]
 
                     ret = []
                     for row in rows:
@@ -106,9 +128,9 @@ class DbActor:
 
                     return ret
         except Exception as e:
-            logger.error(f"Error retrieving actors by creator {creator}: {e}")
             if strict:
-                raise
+                raise DbError("actor get_by_creator") from e
+            logger.error(f"Error retrieving actors by creator {creator}: {e}")
             return None
 
     def create(
@@ -126,7 +148,10 @@ class DbActor:
             passphrase: Actor passphrase
 
         Returns:
-            True on success, False on failure
+            True when created, False when the id is taken
+
+        Raises:
+            DbError: on a backend fault
         """
         if not actor_id:
             return False
@@ -165,9 +190,11 @@ class DbActor:
                 "passphrase": passphrase,
             }
             return True
-        except Exception as e:
-            logger.error(f"Error creating actor {actor_id}: {e}")
+        except psycopg.errors.UniqueViolation:
+            logger.warning(f"Trying to create actor that exists({actor_id})")
             return False
+        except Exception as e:
+            raise DbError("actor create") from e
 
     def modify(
         self, creator: str | None = None, passphrase: bytes | None = None
@@ -180,7 +207,10 @@ class DbActor:
             passphrase: New passphrase bytes (optional)
 
         Returns:
-            True on success, False on failure
+            True on success, False without a handle or when no row matched
+
+        Raises:
+            DbError: on a backend fault
         """
         if not self.handle:
             logger.debug("Attempted modification of DbActor without db handle")
@@ -230,8 +260,7 @@ class DbActor:
                         return False
                 conn.commit()
         except Exception as e:
-            logger.error(f"Error modifying actor {actor_id}: {e}")
-            return False
+            raise DbError("actor modify") from e
         # Only after the commit: a failed modify leaves the handle as stored.
         if creator:
             self.handle["creator"] = creator
@@ -244,7 +273,11 @@ class DbActor:
         Delete actor using self.handle.
 
         Returns:
-            True on success, False on failure
+            True when the row is gone after the call (an already-absent row
+            counts), False without a handle
+
+        Raises:
+            DbError: on a backend fault
         """
         if not self.handle:
             logger.debug("Attempted delete of DbActor without db handle")
@@ -270,8 +303,7 @@ class DbActor:
             self.handle = None
             return True
         except Exception as e:
-            logger.error(f"Error deleting actor {actor_id}: {e}")
-            return False
+            raise DbError("actor delete") from e
 
 
 class DbActorList:
@@ -283,12 +315,16 @@ class DbActorList:
         """Initialize DbActorList."""
         self.handle = None
 
-    def fetch(self) -> list[dict[str, Any]] | bool:
+    def fetch(self, *, strict: bool = True) -> list[dict[str, Any]] | bool:
         """
         Fetch all actors.
 
         Returns:
-            List of actor dicts, or False on error
+            List of actor dicts (``[]`` when there are none); False on a read
+            fault with ``strict=False``
+
+        Raises:
+            DbError: on a read fault (unless ``strict=False``)
         """
         try:
             with get_connection() as conn:
@@ -302,18 +338,9 @@ class DbActorList:
                     )
                     rows = cur.fetchall()
 
-                    if rows:
-                        ret = []
-                        for row in rows:
-                            ret.append(
-                                {
-                                    "id": row[0],
-                                    "creator": row[1],
-                                }
-                            )
-                        return ret
-                    else:
-                        return False
+                    return [{"id": row[0], "creator": row[1]} for row in rows]
         except Exception as e:
+            if strict:
+                raise DbError("actor list fetch") from e
             logger.error(f"Error fetching actor list: {e}")
             return False

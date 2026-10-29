@@ -1,13 +1,16 @@
 import logging
 import os
 from datetime import datetime
+from typing import Any
 
 from pynamodb.attributes import BooleanAttribute, UnicodeAttribute, UTCDateTimeAttribute
 from pynamodb.constants import PAY_PER_REQUEST_BILLING_MODE
+from pynamodb.exceptions import DoesNotExist
 from pynamodb.indexes import AllProjection, GlobalSecondaryIndex
 from pynamodb.models import Model
 
 from actingweb.db.dynamodb._ensure import ensure_table
+from actingweb.db.exceptions import DbError
 from actingweb.db.utils import ensure_timezone_aware_iso
 from actingweb.trust import canonical_connection_method
 
@@ -121,11 +124,13 @@ class DbTrust:
     The  actor_id must always be set.
     """
 
-    def get(self, actor_id=None, peerid=None, token=None):
+    def get(self, actor_id=None, peerid=None, token=None, *, strict=True):
         """Retrieves the trust from the database
 
         Either peerid or token must be set.
         If peerid is set, token will be ignored.
+        None when absent. A read fault raises ``DbError``; ``strict=False``
+        answers it with None.
         """
         if not actor_id:
             return None
@@ -138,7 +143,12 @@ class DbTrust:
                     if actor_id == h.id:
                         self.handle = h
                         break
-        except Exception:  # PynamoDB DoesNotExist exception
+        except DoesNotExist:
+            return None
+        except Exception as e:
+            if strict:
+                raise DbError("trust get") from e
+            logger.error(f"Error reading trust of {actor_id}: {e}")
             return None
         if not self.handle:
             return None
@@ -294,7 +304,10 @@ class DbTrust:
                 logger.warning(f"Invalid capabilities_fetched_at timestamp: {e}")
                 # Keep existing value if parsing fails
 
-        self.handle.save()
+        try:
+            self.handle.save()
+        except Exception as e:
+            raise DbError("trust modify") from e
         return True
 
     def create(
@@ -400,14 +413,24 @@ class DbTrust:
                 trust_kwargs["capabilities_fetched_at"] = capabilities_fetched_at
 
         self.handle = Trust(**trust_kwargs)
-        self.handle.save()
+        try:
+            self.handle.save()
+        except Exception as e:
+            raise DbError("trust create") from e
         return True
 
     def delete(self):
-        """Deletes the property in the database"""
+        """Deletes the trust in the database.
+
+        True when the row is gone after the call (an already-absent row
+        counts); a fault raises ``DbError``. False only without a handle.
+        """
         if not self.handle:
             return False
-        self.handle.delete()
+        try:
+            self.handle.delete()
+        except Exception as e:
+            raise DbError("trust delete") from e
         self.handle = None
         return True
 
@@ -418,11 +441,12 @@ class DbTrust:
             return False
         if not token or len(token) == 0:
             return False
-        for r in Trust.secret_index.query(token):
-            if r.id != actor_id:
-                continue
-            else:
-                return True
+        try:
+            for r in Trust.secret_index.query(token):
+                if r.id == actor_id:
+                    return True
+        except Exception as e:
+            raise DbError("trust is_token_in_db") from e
         return False
 
     def __init__(self):
@@ -437,16 +461,26 @@ class DbTrustList:
     The  actor_id must always be set.
     """
 
-    def fetch(self, actor_id, *, strict=False):
+    def fetch(self, actor_id, *, strict=True):
         """Retrieves the trusts of an actor_id from the database as an array
 
-        A read fault raises (the Query runs lazily during iteration), so
-        ``strict`` changes nothing here; it exists for protocol parity.
+        ``[]`` when there are none. A read fault raises ``DbError``;
+        ``strict=False`` answers it with ``[]``.
         """
         if not actor_id:
             return None
         self.actor_id = actor_id
-        self.handle = Trust.query(self.actor_id, consistent_read=True)
+        try:
+            return self._fetch(actor_id)
+        except Exception as e:
+            if strict:
+                raise DbError("trust list fetch") from e
+            logger.error(f"Error fetching the trusts of {actor_id}: {e}")
+            self.trusts = []
+            return []
+
+    def _fetch(self, actor_id: str) -> list[dict[str, Any]]:
+        self.handle = Trust.query(actor_id, consistent_read=True)
         self.trusts = []
         if self.handle:
             for t in self.handle:
@@ -514,11 +548,11 @@ class DbTrustList:
         """Deletes all the trusts in the database"""
         if not self.actor_id:
             return False
-        self.handle = Trust.query(self.actor_id, consistent_read=True)
-        if not self.handle:
-            return False
-        for p in self.handle:
-            p.delete()
+        try:
+            for p in Trust.query(self.actor_id, consistent_read=True):
+                p.delete()
+        except Exception as e:
+            raise DbError("trust list delete") from e
         self.handle = None
         return True
 

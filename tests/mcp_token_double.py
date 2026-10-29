@@ -53,6 +53,7 @@ from unittest.mock import MagicMock
 
 from actingweb.config import Config
 from actingweb.constants import OAUTH2_SYSTEM_ACTOR, TTL_CLOCK_SKEW_BUFFER
+from actingweb.db.exceptions import DbError
 
 
 class MemoryStore:
@@ -128,14 +129,14 @@ def make_config() -> tuple[Config, MemoryStore]:
     class MockDbAttribute:
         def get_bucket(self, actor_id: str, bucket: str) -> dict[str, Any] | None:
             if bucket in store.raising_buckets:
-                raise RuntimeError(f"throttled reading {bucket}")
+                raise DbError(f"throttled reading {bucket}")
             if bucket in store.faulty_buckets:
                 return None
             return copy.deepcopy(store.rows.get(f"{actor_id}:{bucket}", {}))
 
         def get_attr_strict(self, actor_id: str, bucket: str, name: str) -> Any:
             if bucket in store.faulty_buckets:
-                raise RuntimeError(f"backend fault reading {bucket}")
+                raise DbError(f"backend fault reading {bucket}")
             if store.expired(actor_id, bucket, name):
                 return None
             return copy.deepcopy(store.rows.get(f"{actor_id}:{bucket}", {}).get(name))

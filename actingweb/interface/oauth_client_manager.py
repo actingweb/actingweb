@@ -11,6 +11,7 @@ import time
 from datetime import datetime
 from typing import Any
 
+from ..db.exceptions import DbError
 from ..oauth2_server.client_registry import MCPClientRegistry
 
 logger = logging.getLogger(__name__)
@@ -114,6 +115,8 @@ class OAuth2ClientManager:
                 return client_data
             return None
 
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Error retrieving OAuth2 client {client_id}: {e}")
             return None
@@ -144,6 +147,8 @@ class OAuth2ClientManager:
 
             return clients
 
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Error listing OAuth2 clients for actor {self.actor_id}: {e}")
             return []
@@ -182,6 +187,8 @@ class OAuth2ClientManager:
 
             return success
 
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Error deleting OAuth2 client {client_id}: {e}")
             return False
@@ -203,6 +210,8 @@ class OAuth2ClientManager:
                 client_data is not None and client_data.get("actor_id") == self.actor_id
             )
 
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Error validating OAuth2 client {client_id}: {e}")
             return False
@@ -281,6 +290,8 @@ class OAuth2ClientManager:
 
         except ValueError:
             raise
+        except DbError:
+            raise
         except Exception as e:
             logger.error(
                 f"Error regenerating OAuth2 client secret for {client_id}: {e}"
@@ -311,6 +322,8 @@ class OAuth2ClientManager:
                 "active_clients": total_clients,  # Could be enhanced with actual activity tracking
             }
 
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Error getting OAuth2 client stats: {e}")
             return {"total_clients": 0, "trust_types": {}, "active_clients": 0}
@@ -383,6 +396,8 @@ class OAuth2ClientManager:
                 logger.error(f"Failed to create access token for client {client_id}")
                 return None
 
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Error generating access token for client {client_id}: {e}")
             return None

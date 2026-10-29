@@ -6,6 +6,27 @@ implementing these methods will be compatible, without explicit inheritance.
 
 All database backends (DynamoDB, PostgreSQL, etc.) must implement these protocols
 to ensure consistent interfaces across the ActingWeb codebase.
+
+The fault contract (3.16), which every method below follows unless its own
+docstring says otherwise:
+
+- **Absence is an answer.** A read that finds nothing answers ``None``,
+  ``[]``, ``{}`` or ``False`` as documented per method.
+- **A fault raises.** A backend fault (throttle, timeout, connection error,
+  a query error) raises ``actingweb.db.exceptions.DbError``, chained to the
+  backend exception. It is never answered like absence.
+- **``strict=False`` restores the folded answer** on the reads that take it
+  (every ``get``, ``fetch`` and ``get_bucket``): the fault is logged at ERROR
+  and answered as absence. Only display reads should pass it.
+- **A delete on a loaded handle is confirmed.** It answers True when the row
+  is gone after the call; a row that was already absent counts. A fault
+  raises ``DbError``. A delete without a handle answers False.
+- **Conditional operations are exempt.** ``delete_attr_conditional``,
+  ``conditional_update_attr`` and every ``*_if_*`` method answer True only
+  when THIS call changed the row; single-use consumption depends on it.
+- **Writes raise.** A ``create``, ``modify`` or ``set`` that faults raises
+  ``DbError``; False is reserved for the documented non-fault refusals
+  (missing arguments or handle, an id that is taken).
 """
 
 from datetime import datetime
@@ -22,12 +43,15 @@ class DbActorProtocol(Protocol):
 
     handle: Any | None
 
-    def get(self, actor_id: str | None = None) -> dict[str, Any] | None:
+    def get(
+        self, actor_id: str | None = None, *, strict: bool = True
+    ) -> dict[str, Any] | None:
         """
         Retrieve actor by ID.
 
         Args:
             actor_id: The actor ID to retrieve
+            strict: When False, a read fault answers None instead of raising
 
         Returns:
             dict with keys: id, creator, passphrase, or None if not found
@@ -35,20 +59,28 @@ class DbActorProtocol(Protocol):
         ...
 
     def get_by_creator(
-        self, creator: str | None = None, *, strict: bool = False
+        self,
+        creator: str | None = None,
+        *,
+        strict: bool = True,
+        consistent: bool = False,
+        ids_only: bool = False,
     ) -> list[dict[str, Any]] | None:
         """
         Get actors by creator field.
 
         Args:
             creator: The creator email to search for
-            strict: Raise on a backend read fault instead of answering None,
-                and leave out (never as None) an actor the index lists whose
-                row is gone. The adoption rule passes it: "no actor for this
-                address" must be an answer, not a fault.
+            strict: When False, a read fault answers None instead of raising
+            consistent: Re-read each listed row consistently and leave out an
+                actor the index lists whose row is gone (DynamoDB's creator
+                index is eventually consistent; PostgreSQL always is). The
+                adoption rule passes it.
+            ids_only: Answer ``[{"id": ...}]`` with no per-row read; a
+                caller that reads only some rows lists them cheaply.
 
         Returns:
-            List of dicts (possibly empty), or None if error or no creator provided
+            List of dicts (possibly empty), or None if no creator provided
         """
         ...
 
@@ -67,7 +99,7 @@ class DbActorProtocol(Protocol):
             passphrase: Actor passphrase
 
         Returns:
-            True on success, False on failure
+            True when created, False when the id is taken
         """
         ...
 
@@ -82,7 +114,8 @@ class DbActorProtocol(Protocol):
             passphrase: New passphrase bytes (optional)
 
         Returns:
-            True on success, False on failure
+            True on success; False only without a handle or arguments.
+            A fault raises ``DbError``.
         """
         ...
 
@@ -91,7 +124,8 @@ class DbActorProtocol(Protocol):
         Delete actor using self.handle.
 
         Returns:
-            True on success, False on failure
+            True on success; False only without a handle or arguments.
+            A fault raises ``DbError``.
         """
         ...
 
@@ -102,12 +136,13 @@ class DbActorListProtocol(Protocol):
 
     handle: Any | None
 
-    def fetch(self) -> list[dict[str, Any]] | bool:
+    def fetch(self, *, strict: bool = True) -> list[dict[str, Any]] | bool:
         """
         Fetch all actors.
 
         Returns:
-            List of actor dicts, or False on error
+            List of actor dicts (``[]`` when there are none); False on a read
+            fault with ``strict=False``
         """
         ...
 
@@ -141,7 +176,11 @@ class DbPropertyProtocol(Protocol):
         ...
 
     def get_actor_id_from_property(
-        self, name: str | None = None, value: str | None = None
+        self,
+        name: str | None = None,
+        value: str | None = None,
+        *,
+        strict: bool = True,
     ) -> str | None:
         """
         Reverse lookup: find actor by property value.
@@ -184,7 +223,8 @@ class DbPropertyProtocol(Protocol):
         Delete property using self.handle.
 
         Returns:
-            True on success, False on failure
+            True on success; False only without a handle or arguments.
+            A fault raises ``DbError``.
         """
         ...
 
@@ -526,7 +566,9 @@ class DbPropertyListProtocol(Protocol):
     actor_id: str | None
     props: dict[str, str] | None
 
-    def fetch(self, actor_id: str | None = None) -> dict[str, str] | None:
+    def fetch(
+        self, actor_id: str | None = None, *, strict: bool = True
+    ) -> dict[str, str] | None:
         """
         Retrieve all properties for an actor (excluding list: properties).
 
@@ -539,7 +581,7 @@ class DbPropertyListProtocol(Protocol):
         ...
 
     def fetch_all_including_lists(
-        self, actor_id: str | None = None
+        self, actor_id: str | None = None, *, strict: bool = True
     ) -> dict[str, str] | None:
         """
         Retrieve ALL properties including list properties.
@@ -557,7 +599,8 @@ class DbPropertyListProtocol(Protocol):
         Delete all properties for the actor.
 
         Returns:
-            True on success, False on failure
+            True on success; False only without a handle or arguments.
+            A fault raises ``DbError``.
         """
         ...
 
@@ -578,6 +621,8 @@ class DbTrustProtocol(Protocol):
         actor_id: str | None = None,
         peerid: str | None = None,
         token: str | None = None,
+        *,
+        strict: bool = True,
     ) -> dict[str, Any] | None:
         """
         Retrieve trust from database.
@@ -621,7 +666,8 @@ class DbTrustProtocol(Protocol):
         Modify trust using self.handle.
 
         Returns:
-            True on success, False on failure
+            True on success; False only without a handle or arguments.
+            A fault raises ``DbError``.
         """
         ...
 
@@ -649,12 +695,17 @@ class DbTrustProtocol(Protocol):
         client_version: str | None = None,
         client_platform: str | None = None,
         oauth_client_id: str | None = None,
+        # Peer capability tracking
+        aw_supported: str | None = None,
+        aw_version: str | None = None,
+        capabilities_fetched_at: str | datetime | None = None,
     ) -> bool:
         """
         Create new trust.
 
         Returns:
-            True on success, False on failure
+            True on success; False only without a handle or arguments.
+            A fault raises ``DbError``.
         """
         ...
 
@@ -663,7 +714,8 @@ class DbTrustProtocol(Protocol):
         Delete trust using self.handle.
 
         Returns:
-            True on success, False on failure
+            True on success; False only without a handle or arguments.
+            A fault raises ``DbError``.
         """
         ...
 
@@ -691,7 +743,7 @@ class DbTrustListProtocol(Protocol):
     trusts: list[dict[str, Any]]
 
     def fetch(
-        self, actor_id: str | None, *, strict: bool = False
+        self, actor_id: str | None, *, strict: bool = True
     ) -> list[dict[str, Any]] | list[Any]:
         """
         Retrieve all trusts for an actor.
@@ -712,7 +764,8 @@ class DbTrustListProtocol(Protocol):
         Delete all trusts for the actor.
 
         Returns:
-            True on success, False on failure
+            True on success; False only without a handle or arguments.
+            A fault raises ``DbError``.
         """
         ...
 
@@ -733,6 +786,8 @@ class DbPeerTrusteeProtocol(Protocol):
         actor_id: str | None = None,
         peer_type: str | None = None,
         peerid: str | None = None,
+        *,
+        strict: bool = True,
     ) -> dict[str, Any] | bool | None:
         """
         Retrieve peer trustee from database.
@@ -743,7 +798,8 @@ class DbPeerTrusteeProtocol(Protocol):
             peerid: Peer ID
 
         Returns:
-            PeerTrustee dict, False on error, or None if not found
+            PeerTrustee dict, False when several peers match ``peer_type``
+            (pass ``peerid``), or None if not found
         """
         ...
 
@@ -759,7 +815,8 @@ class DbPeerTrusteeProtocol(Protocol):
         Create new peer trustee.
 
         Returns:
-            True on success, False on failure
+            True on success; False only without a handle or arguments.
+            A fault raises ``DbError``.
         """
         ...
 
@@ -773,7 +830,8 @@ class DbPeerTrusteeProtocol(Protocol):
         Modify peer trustee using self.handle.
 
         Returns:
-            True on success, False on failure
+            True on success; False only without a handle or arguments.
+            A fault raises ``DbError``.
         """
         ...
 
@@ -782,7 +840,8 @@ class DbPeerTrusteeProtocol(Protocol):
         Delete peer trustee using self.handle.
 
         Returns:
-            True on success, False on failure
+            True on success; False only without a handle or arguments.
+            A fault raises ``DbError``.
         """
         ...
 
@@ -796,7 +855,7 @@ class DbPeerTrusteeListProtocol(Protocol):
     peertrustees: list[dict[str, Any]] | None
 
     def fetch(
-        self, actor_id: str | None = None, *, strict: bool = False
+        self, actor_id: str | None = None, *, strict: bool = True
     ) -> list[dict[str, Any]] | list[Any]:
         """
         Retrieve all peer trustees for an actor.
@@ -815,7 +874,8 @@ class DbPeerTrusteeListProtocol(Protocol):
         Delete all peer trustees for the actor.
 
         Returns:
-            True on success, False on failure
+            True on success; False only without a handle or arguments.
+            A fault raises ``DbError``.
         """
         ...
 
@@ -836,6 +896,8 @@ class DbSubscriptionProtocol(Protocol):
         actor_id: str | None = None,
         peerid: str | None = None,
         subid: str | None = None,
+        *,
+        strict: bool = True,
     ) -> dict[str, Any] | None:
         """
         Retrieve subscription from database.
@@ -865,7 +927,30 @@ class DbSubscriptionProtocol(Protocol):
         Modify subscription using self.handle.
 
         Returns:
-            True on success, False on failure
+            True on success; False only without a handle or arguments.
+            A fault raises ``DbError``.
+        """
+        ...
+
+    def increment_seq(
+        self,
+        actor_id: str | None = None,
+        peerid: str | None = None,
+        subid: str | None = None,
+    ) -> int | None:
+        """
+        Atomically add 1 to the stored sequence number and return the new one.
+
+        Must be a single atomic update on the backend (an ``ADD`` or a
+        ``seqnr = seqnr + 1``), never a read followed by a write: concurrent
+        changes to one subscription must each get their own number, as the
+        protocol requires a sequence number per change. Works on the loaded
+        handle, or, with all three keys, on that row without reading it
+        first.
+
+        Returns:
+            The new sequence number; None when the row does not exist.
+            A fault raises ``DbError`` (the increment may have landed).
         """
         ...
 
@@ -885,7 +970,8 @@ class DbSubscriptionProtocol(Protocol):
         Create new subscription.
 
         Returns:
-            True on success, False on failure
+            True on success; False only without a handle or arguments.
+            A fault raises ``DbError``.
         """
         ...
 
@@ -894,7 +980,8 @@ class DbSubscriptionProtocol(Protocol):
         Delete subscription using self.handle.
 
         Returns:
-            True on success, False on failure
+            True on success; False only without a handle or arguments.
+            A fault raises ``DbError``.
         """
         ...
 
@@ -908,7 +995,7 @@ class DbSubscriptionListProtocol(Protocol):
     subscriptions: list[dict[str, Any]]
 
     def fetch(
-        self, actor_id: str | None, *, strict: bool = False
+        self, actor_id: str | None, *, strict: bool = True
     ) -> list[dict[str, Any]] | list[Any]:
         """
         Retrieve all subscriptions for an actor.
@@ -929,7 +1016,8 @@ class DbSubscriptionListProtocol(Protocol):
         Delete all subscriptions for the actor.
 
         Returns:
-            True on success, False on failure
+            True on success; False only without a handle or arguments.
+            A fault raises ``DbError``.
         """
         ...
 
@@ -950,6 +1038,8 @@ class DbSubscriptionDiffProtocol(Protocol):
         actor_id: str | None = None,
         subid: str | None = None,
         seqnr: int | None = None,
+        *,
+        strict: bool = True,
     ) -> dict[str, Any] | None:
         """
         Retrieve subscription diff from database.
@@ -975,7 +1065,8 @@ class DbSubscriptionDiffProtocol(Protocol):
         Create new subscription diff.
 
         Returns:
-            True on success, False on failure
+            True on success; False only without a handle or arguments.
+            A fault raises ``DbError``.
         """
         ...
 
@@ -984,7 +1075,8 @@ class DbSubscriptionDiffProtocol(Protocol):
         Delete subscription diff using self.handle.
 
         Returns:
-            True on success, False on failure
+            True on success; False only without a handle or arguments.
+            A fault raises ``DbError``.
         """
         ...
 
@@ -999,7 +1091,11 @@ class DbSubscriptionDiffListProtocol(Protocol):
     subid: str | None
 
     def fetch(
-        self, actor_id: str | None = None, subid: str | None = None
+        self,
+        actor_id: str | None = None,
+        subid: str | None = None,
+        *,
+        strict: bool = True,
     ) -> list[dict[str, Any]] | list[Any]:
         """
         Retrieve subscription diffs for an actor.
@@ -1021,7 +1117,8 @@ class DbSubscriptionDiffListProtocol(Protocol):
             seqnr: Optional sequence number (deletes up to and including this seqnr)
 
         Returns:
-            True on success, False on failure
+            True on success; False only without a handle or arguments.
+            A fault raises ``DbError``.
         """
         ...
 
@@ -1037,7 +1134,7 @@ class DbAttributeProtocol(Protocol):
 
     @staticmethod
     def get_bucket(
-        actor_id: str | None = None, bucket: str | None = None
+        actor_id: str | None = None, bucket: str | None = None, *, strict: bool = True
     ) -> dict[str, dict[str, Any]] | None:
         """
         Get all attributes from a bucket.
@@ -1048,18 +1145,19 @@ class DbAttributeProtocol(Protocol):
 
         Returns:
             Dict of {attr_name: {"data": ..., "timestamp": ...}}. An empty
-            bucket is ``{}`` on both backends. ``None`` is reserved for
-            missing arguments and for a backend fault the implementation
-            caught -- on PostgreSQL every query error; on DynamoDB only a
-            failure to construct the Query, because PynamoDB fires the
-            request lazily during iteration and a fault there raises
-            straight through the caller.
+            bucket is ``{}``. ``None`` only for missing arguments, or a read
+            fault with ``strict=False``. Expired rows are returned: a sweep
+            that reads a bucket to find what to delete must find them.
         """
         ...
 
     @staticmethod
     def get_attr(
-        actor_id: str | None = None, bucket: str | None = None, name: str | None = None
+        actor_id: str | None = None,
+        bucket: str | None = None,
+        name: str | None = None,
+        *,
+        strict: bool = True,
     ) -> dict[str, Any] | None:
         """
         Get single attribute from bucket.
@@ -1068,9 +1166,11 @@ class DbAttributeProtocol(Protocol):
             actor_id: The actor ID
             bucket: Bucket name
             name: Attribute name
+            strict: When False, a read fault answers None instead of raising
 
         Returns:
-            Dict with "data" and "timestamp", or None
+            Dict with "data" and "timestamp", or None when absent. An
+            expired row is returned; only ``get_attr_strict`` hides it.
         """
         ...
 
@@ -1081,17 +1181,16 @@ class DbAttributeProtocol(Protocol):
         """
         Get single attribute, distinguishing absence from failure.
 
-        Unlike ``get_attr``, which returns None for every outcome including a
-        throttle or a missing table, this returns None only for a confirmed
-        absence and raises otherwise. Expired rows (``ttl_timestamp`` in the
-        past) count as absent on both backends.
+        The one read that hides expired rows (``ttl_timestamp`` in the past),
+        for decision reads that must not act on a stale token. None for an
+        absent or expired row; a fault raises.
 
         Returns:
             Dict with "data" and "timestamp", or None if the attribute does
             not exist or has expired.
 
         Raises:
-            Exception: Any backend/operational error.
+            DbError: on a read fault.
         """
         ...
 
@@ -1116,7 +1215,8 @@ class DbAttributeProtocol(Protocol):
             ttl_seconds: Optional TTL in seconds
 
         Returns:
-            True on success, False on failure
+            True on success; False only without a handle or arguments.
+            A fault raises ``DbError``.
         """
         ...
 
@@ -1130,7 +1230,8 @@ class DbAttributeProtocol(Protocol):
         Delete single attribute.
 
         Returns:
-            True on success, False on failure
+            True on success; False only without a handle or arguments.
+            A fault raises ``DbError``.
         """
         ...
 
@@ -1204,7 +1305,8 @@ class DbAttributeProtocol(Protocol):
             bucket: Bucket name
 
         Returns:
-            True on success, False on failure
+            True on success; False only without a handle or arguments.
+            A fault raises ``DbError``.
         """
         ...
 
@@ -1268,7 +1370,7 @@ class DbAttributeBucketListProtocol(Protocol):
 
     @staticmethod
     def fetch(
-        actor_id: str | None = None,
+        actor_id: str | None = None, *, strict: bool = True
     ) -> dict[str, dict[str, dict[str, Any]]] | None:
         """
         Retrieve all attributes for an actor grouped by bucket.
@@ -1283,8 +1385,8 @@ class DbAttributeBucketListProtocol(Protocol):
 
     @staticmethod
     def fetch_timestamps(
-        actor_id: str | None = None,
-    ) -> dict[str, Any] | bool:
+        actor_id: str | None = None, *, strict: bool = True
+    ) -> dict[str, Any] | None:
         """
         Retrieve timestamps for all attribute buckets.
 
@@ -1292,7 +1394,8 @@ class DbAttributeBucketListProtocol(Protocol):
             actor_id: The actor ID
 
         Returns:
-            Dict of {bucket: timestamp}, or False on error
+            Dict of {bucket: timestamp}, or None (no actor id, no rows on
+            PostgreSQL, or a read fault with ``strict=False``)
         """
         ...
 
@@ -1305,7 +1408,8 @@ class DbAttributeBucketListProtocol(Protocol):
             actor_id: The actor ID
 
         Returns:
-            True on success, False on failure
+            True on success; False only without a handle or arguments.
+            A fault raises ``DbError``.
         """
         ...
 

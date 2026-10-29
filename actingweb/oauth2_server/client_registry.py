@@ -15,6 +15,7 @@ from .. import attribute
 from .. import config as config_class
 from ..client_text import sanitize_client_name
 from ..constants import CLIENT_INDEX_BUCKET, OAUTH2_SYSTEM_ACTOR
+from ..db.exceptions import DbError
 from ..secret_compare import secret_equals
 
 logger = logging.getLogger(__name__)
@@ -268,8 +269,8 @@ class MCPClientRegistry:
                 actor_id=actor_id, bucket="mcp_clients", config=self.config
             )
 
-            # Get all client attributes from the bucket
-            bucket_data = bucket.get_bucket()
+            # Get all client attributes from the bucket (a listing for display)
+            bucket_data = bucket.get_bucket(strict=False)
             if not bucket_data:
                 return []
 
@@ -280,7 +281,7 @@ class MCPClientRegistry:
                     clients.append(attr_data["data"])
             return clients
 
-        except Exception as e:
+        except Exception as e:  # folds DbError: display listing (strict=False)
             logger.error(f"Error listing clients for actor {actor_id}: {e}")
             return []
 
@@ -385,6 +386,8 @@ class MCPClientRegistry:
             )
             return True
 
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Error deleting client {client_id}: {e}")
             return False
@@ -432,6 +435,8 @@ class MCPClientRegistry:
             )
             return client_data
 
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Error loading client {client_id}: {e}")
             return None
@@ -495,6 +500,8 @@ class MCPClientRegistry:
 
             return client_data
 
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Error loading client from global index: {e}")
             return None
@@ -573,6 +580,8 @@ class MCPClientRegistry:
                     f"Failed to create trust relationship for OAuth2 client {client_id}"
                 )
 
+        except DbError:
+            raise
         except Exception as e:
             logger.error(
                 f"Error creating trust relationship for client {client_id}: {e}"
@@ -635,6 +644,8 @@ class MCPClientRegistry:
                                     logger.warning(
                                         f"Failed to delete trust relationship {peer_id} for client {client_id}"
                                     )
+                            except DbError:
+                                raise
                             except Exception as e:
                                 logger.error(
                                     f"Error deleting trust relationship {peer_id} for client {client_id}: {e}"
@@ -648,6 +659,8 @@ class MCPClientRegistry:
                     f"No trust relationship found to delete for OAuth2 client {client_id}"
                 )
 
+        except DbError:
+            raise
         except Exception as e:
             logger.error(
                 f"Error deleting trust relationship for client {client_id}: {e}"

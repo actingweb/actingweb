@@ -9,6 +9,8 @@ from actingweb.db import (
     get_subscription_list,
 )
 
+from .db.exceptions import DbError
+
 logger = logging.getLogger(__name__)
 
 
@@ -110,7 +112,7 @@ class Subscription:
                 )
             except ImportError:
                 pass  # CallbackProcessor not available
-            except Exception as e:
+            except Exception as e:  # folds DbError: best-effort state cleanup; the row is deleted next either way
                 logger.warning(f"Failed to clear callback state for {self.subid}: {e}")
 
         # NOTE: RemotePeerStore cleanup is handled at a higher level in Actor.delete_subscription()
@@ -121,39 +123,35 @@ class Subscription:
         return True
 
     def increase_seq(self):
+        """Allocate the next sequence number and return it (False when the
+        subscription row is gone).
+
+        The backend increments atomically, so concurrent writers on one
+        subscription each get their own number: the protocol requires a
+        sequence number per change (``docs/protocol/actingweb-spec.rst``,
+        "Sequence Number Handling During Back-Pressure"). A fault raises
+        ``DbError``; the increment may have landed, so the cached value is
+        left alone rather than guessed.
+        """
         if not self.handle:
             logger.debug(
                 "Attempted increase_seq without subscription retrieved from storage"
             )
             return False
         assert self.subscription is not None  # Always initialized in __init__
-        self.subscription["sequence"] += 1
-        if not self.handle.modify(seqnr=self.subscription["sequence"]):
-            # Failed to update database
+        new_sequence = self.handle.increment_seq()
+        if not new_sequence:
             return False
-        return self.subscription["sequence"]
-
-    def decrease_seq(self):
-        """Rollback sequence number by 1 (used when diff creation fails after seq increment)"""
-        if not self.handle:
-            logger.debug(
-                "Attempted decrease_seq without subscription retrieved from storage"
-            )
-            return False
-        assert self.subscription is not None  # Always initialized in __init__
-        if self.subscription["sequence"] <= 0:
-            logger.warning(
-                f"Attempted decrease_seq when sequence is already {self.subscription['sequence']}"
-            )
-            return False
-        self.subscription["sequence"] -= 1
-        if not self.handle.modify(seqnr=self.subscription["sequence"]):
-            # Failed to update database
-            return False
-        return self.subscription["sequence"]
+        self.subscription["sequence"] = new_sequence
+        return new_sequence
 
     def add_diff(self, blob=None):
-        """Add a new diff for this subscription"""
+        """Add a new diff for this subscription.
+
+        Returns the stored diff, or False. A fault allocating the sequence
+        number raises ``DbError``; once a number is allocated it stays used,
+        and a diff that is not stored answers False and leaves a gap.
+        """
         if not self.actor_id or not self.subid or not blob:
             logger.debug("Attempted add_diff without actorid, subid, or blob")
             return False
@@ -161,7 +159,10 @@ class Subscription:
             return False
         assert self.subscription is not None  # Always initialized in __init__
 
-        # Increment sequence BEFORE creating diff so first diff gets sequence=1 per spec
+        # Increment sequence BEFORE creating diff so first diff gets sequence=1
+        # per spec. A fault here raises: either no number was used or the
+        # one used is already a gap, and the caller (register_diffs) tries to
+        # leave a gap.
         new_sequence = self.increase_seq()
         if not new_sequence:
             logger.error(
@@ -169,21 +170,29 @@ class Subscription:
             )
             return False
 
-        # Now create diff with the incremented sequence number
+        # Now create diff with the incremented sequence number. Whatever
+        # happens next, the number stays used: a diff that is not stored
+        # leaves a gap, which the subscriber detects when the next diff
+        # arrives and recovers from by polling or resyncing.
         diff = get_subscription_diff(self.config)
-        success = diff.create(
-            actor_id=self.actor_id,
-            subid=self.subid,
-            diff=blob,
-            seqnr=self.subscription["sequence"],
-        )
-
-        # If diff creation failed, rollback the sequence increment
+        try:
+            success = diff.create(
+                actor_id=self.actor_id,
+                subid=self.subid,
+                diff=blob,
+                seqnr=new_sequence,
+            )
+        except DbError as e:  # folds DbError: ambiguous; the number stays used
+            logger.error(
+                f"Diff write {new_sequence} for {self.subid} faulted; if it "
+                f"did not land, the next diff shows the subscriber a gap: {e}"
+            )
+            return False
         if not success:
             logger.error(
-                f"Failed creating diff for subscription {self.subid}, rolling back sequence from {new_sequence}"
+                f"Diff {new_sequence} for {self.subid} was not stored; the "
+                "next diff shows the subscriber a gap"
             )
-            self.decrease_seq()
             return False
 
         return diff.get()
@@ -248,19 +257,32 @@ class Subscriptions:
     in .subscriptions as a dictionary
     """
 
-    def fetch(self):
+    def fetch(self, strict: bool = True):
+        """The actor's subscriptions. A read fault raises ``DbError``;
+        ``strict=False`` answers ``[]`` instead (and caches nothing)."""
         if self.subscriptions is not None:
             return self.subscriptions
         if not self.list and self.config:
             self.list = get_subscription_list(self.config)
         if not self.subscriptions and self.list:
-            self.subscriptions = self.list.fetch(actor_id=self.actor_id)
+            try:
+                self.subscriptions = self.list.fetch(actor_id=self.actor_id)
+            except DbError:  # folds DbError: strict=False read, the caller asked
+                if strict:
+                    raise
+                logger.error(
+                    f"Subscriptions of {self.actor_id} could not be read; "
+                    "answering [] (strict=False)"
+                )
+                return []
         return self.subscriptions
 
     def delete(self):
         if not self.list:
             logger.debug("Already deleted list in subscriptions")
             return False
+        if self.subscriptions is None:
+            self.fetch()  # strict: the diffs are found through this list
         if self.subscriptions:
             for sub in self.subscriptions:
                 if not self.config:
@@ -286,4 +308,11 @@ class Subscriptions:
             self.list = None
         self.actor_id = actor_id
         self.subscriptions = None
-        self.fetch()
+        # The caller's own fetch() decides: a failed read caches nothing,
+        # so fetch() re-reads and raises, or folds with strict=False. A
+        # strict read here made every strict=False fold on this list
+        # unreachable.
+        try:
+            self.fetch()
+        except DbError:  # folds DbError: the caller's fetch() re-reads and decides
+            pass

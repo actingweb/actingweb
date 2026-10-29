@@ -19,18 +19,19 @@ from actingweb import oauth2 as oauth2_module
 from actingweb.actor import Actor
 from actingweb.attribute import InternalStore
 from actingweb.db import get_actor
+from actingweb.db.exceptions import DbError
 from actingweb.interface.actor_interface import ActorInterface
 from actingweb.maintenance import mark_actors_vouched as script
 from actingweb.oauth2 import OAuth2Authenticator, OAuth2Provider
 from tests._adoption_helpers import (
     aid,
+    backend_fault,
     create_core_actor,
     istore,
     make_config,
     uuid_email,
 )
 from tests.mcp_helpers import make_mcp_config, make_mcp_handler
-from tests.test_adoption_write_faults import backend_fault
 
 
 @pytest.fixture
@@ -158,12 +159,22 @@ class TestSweepReadFaults:
         squat = create_core_actor(config, creator, auth_method="factory")
         cls = type(get_actor(config))
 
-        # PostgreSQL's shape: a caught fault answers None.
-        with patch.object(cls, "get_by_creator", lambda self, creator=None: None):
+        def faulting(self: Any, creator: str | None = None, **kw: Any) -> Any:
+            raise DbError("simulated listing fault")  # 3.16: a fault raises
+
+        def empty(self: Any, creator: str | None = None, **kw: Any) -> Any:
+            return []  # a listing that misses the actor being replaced
+
+        with patch.object(cls, "get_by_creator", faulting), pytest.raises(DbError):
+            oauth2_module.adopt_actor(
+                squat, provider=auth.provider, config=config, hooks=None
+            )
+        assert Actor(actor_id=aid(squat), config=config).id == squat.id
+
+        with patch.object(cls, "get_by_creator", empty):
             result = oauth2_module.adopt_actor(
                 squat, provider=auth.provider, config=config, hooks=None
             )
-
         assert result is None
         assert Actor(actor_id=aid(squat), config=config).id == squat.id
 
@@ -175,17 +186,16 @@ class TestSweepReadFaults:
         cls = type(get_actor(config))
         real_get = cls.get
 
-        def get(self: Any, actor_id: str | None = None) -> Any:
+        def get(self: Any, actor_id: str | None = None, **kw: Any) -> Any:
             if actor_id == sibling.id:
-                return None  # both backends answer a fault with None
-            return real_get(self, actor_id=actor_id)
+                raise DbError("simulated read fault")  # 3.16: a fault raises
+            return real_get(self, actor_id=actor_id, **kw)
 
-        with patch.object(cls, "get", get):
-            result = oauth2_module.adopt_actor(
+        with patch.object(cls, "get", get), pytest.raises(DbError):
+            oauth2_module.adopt_actor(
                 squat, provider=auth.provider, config=config, hooks=None
             )
 
-        assert result is None
         assert Actor(actor_id=aid(squat), config=config).id == squat.id
         assert Actor(actor_id=aid(sibling), config=config).id == sibling.id
 

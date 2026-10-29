@@ -4,9 +4,11 @@ from typing import Any
 
 from pynamodb.attributes import UnicodeAttribute
 from pynamodb.constants import PAY_PER_REQUEST_BILLING_MODE
+from pynamodb.exceptions import DoesNotExist
 from pynamodb.models import Model
 
 from actingweb.db.dynamodb._ensure import ensure_table
+from actingweb.db.exceptions import DbError
 
 """
     DbPeerTrustee handles all db operations for a peer we are a trustee for.
@@ -37,8 +39,12 @@ class DbPeerTrustee:
     The actor_id must always be set.
     """
 
-    def get(self, actor_id=None, peer_type=None, peerid=None):
-        """Retrieves the peertrustee from the database"""
+    def get(self, actor_id=None, peer_type=None, peerid=None, *, strict=True):
+        """Retrieves the peertrustee from the database.
+
+        None when absent, False when several match ``peer_type``. A read
+        fault raises ``DbError``; ``strict=False`` answers it with None.
+        """
         if not actor_id:
             return None
         if not peerid and not peer_type:
@@ -64,8 +70,13 @@ class DbPeerTrustee:
                     return False
                 if count == 0:
                     self.handle = None
-        except Exception:  # PynamoDB DoesNotExist exception
+        except DoesNotExist:
             self.handle = None
+        except Exception as e:
+            self.handle = None
+            if strict:
+                raise DbError("peertrustee get") from e
+            logger.error(f"Error reading peertrustee of {actor_id}: {e}")
         if self.handle:
             t = self.handle
             return {
@@ -98,7 +109,10 @@ class DbPeerTrustee:
             baseuri=baseuri,
             passphrase=passphrase,
         )
-        self.handle.save()
+        try:
+            self.handle.save()
+        except Exception as e:
+            raise DbError("peertrustee create") from e
         return True
 
     def modify(self, peer_type=None, baseuri=None, passphrase=None):
@@ -115,14 +129,24 @@ class DbPeerTrustee:
             self.handle.passphrase = passphrase  # type: ignore[arg-type]
         if peer_type and len(peer_type) > 0:
             self.handle.type = peer_type
-        self.handle.save()
+        try:
+            self.handle.save()
+        except Exception as e:
+            raise DbError("peertrustee modify") from e
         return True
 
     def delete(self):
-        """Deletes the peertrustee in the database after a get()"""
+        """Deletes the peertrustee in the database after a get().
+
+        True when the row is gone after the call (an already-absent row
+        counts); a fault raises ``DbError``. False only without a handle.
+        """
         if not self.handle:
             return False
-        self.handle.delete()
+        try:
+            self.handle.delete()
+        except Exception as e:
+            raise DbError("peertrustee delete") from e
         self.handle = None
         return True
 
@@ -139,22 +163,21 @@ class DbPeerTrusteeList:
     """
 
     def fetch(
-        self, actor_id: str | None = None, *, strict: bool = False
+        self, actor_id: str | None = None, *, strict: bool = True
     ) -> list[dict[str, Any]] | None:
         """Retrieves the peer trustees of an actor_id from the database.
 
         A consistent read, like the trust and subscription lists: a caller
         that deletes and re-reads must not see the rows it just removed. A
-        read fault raises (the query is not caught), so ``strict`` changes
-        nothing here; it is accepted for the protocol."""
+        read fault raises ``DbError``; ``strict=False`` answers it with
+        ``[]``."""
         if not actor_id:
             return None
         self.actor_id = actor_id
-        self.peertrustees = []
-        self.handle = PeerTrustee.query(self.actor_id, consistent_read=True)
-        if self.handle:
-            for t in self.handle:
-                self.peertrustees.append(
+        rows: list[dict[str, Any]] = []
+        try:
+            for t in PeerTrustee.query(self.actor_id, consistent_read=True):
+                rows.append(
                     {
                         "id": t.id,
                         "peerid": t.peerid,
@@ -163,19 +186,23 @@ class DbPeerTrusteeList:
                         "passphrase": t.passphrase,
                     }
                 )
-            return self.peertrustees
-        else:
-            return []
+        except Exception as e:
+            if strict:
+                raise DbError("peertrustee list fetch") from e
+            logger.error(f"Error fetching the peertrustees of {actor_id}: {e}")
+            rows = []
+        self.peertrustees = rows
+        return rows
 
     def delete(self):
         """Deletes all the peertrustees in the database"""
         if not self.actor_id:
             return False
-        self.handle = PeerTrustee.query(self.actor_id, consistent_read=True)
-        if not self.handle:
-            return False
-        for p in self.handle:
-            p.delete()
+        try:
+            for p in PeerTrustee.query(self.actor_id, consistent_read=True):
+                p.delete()
+        except Exception as e:
+            raise DbError("peertrustee list delete") from e
         self.handle = None
         return True
 

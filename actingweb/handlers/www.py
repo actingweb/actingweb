@@ -6,6 +6,8 @@ from actingweb.db import get_property
 from actingweb.handlers import base_handler
 from actingweb.property_list import ListCorruptionError, ListMetadataContentionError
 
+from ..db.exceptions import DbError
+
 logger = logging.getLogger(__name__)
 
 
@@ -188,6 +190,8 @@ class WwwHandler(base_handler.BaseHandler):
                         display_properties[prop_name] = (
                             f"[List with {list_length} items]"
                         )
+                    except DbError:
+                        raise
                     except Exception as e:
                         logger.error(
                             f"Error getting length for list property '{prop_name}': {e}"
@@ -277,6 +281,8 @@ class WwwHandler(base_handler.BaseHandler):
                             target="properties", subtarget=prop_name, blob=""
                         )
                         deleted = True
+                    except DbError:
+                        raise
                     except Exception as e:
                         logger.error(f"Error deleting list property '{prop_name}': {e}")
                         self.response.set_status(
@@ -371,6 +377,8 @@ class WwwHandler(base_handler.BaseHandler):
                         "verify()/compact() to repair]"
                     )
                     list_items = []
+                except DbError:
+                    raise
                 except Exception as e:
                     logger.error(f"Error loading list items for '{prop_name}': {e}")
                     display_value = "[List property - error loading items]"
@@ -398,6 +406,8 @@ class WwwHandler(base_handler.BaseHandler):
                                 display_value = f"List with {list_length} items (Created: {created_at}) - Legacy Format"
                             except (json.JSONDecodeError, TypeError):
                                 display_value = "[List property - metadata error]"
+                except DbError:
+                    raise
                 except Exception:
                     # If anything goes wrong, use original value
                     pass
@@ -523,6 +533,8 @@ class WwwHandler(base_handler.BaseHandler):
                         t.has_custom_permissions = self._has_custom_permissions(
                             myself.id or "", peerid
                         )
+                    except DbError:
+                        raise
                     except Exception:
                         pass
 
@@ -665,6 +677,8 @@ class WwwHandler(base_handler.BaseHandler):
             permission_store = get_trust_permission_store(self.config)
             permissions = permission_store.get_permissions(actor_id, peer_id)
             return permissions is not None
+        except DbError:
+            raise
         except Exception:
             # If permission system is not available or there's an error, assume no custom permissions
             return False
@@ -690,6 +704,8 @@ class WwwHandler(base_handler.BaseHandler):
 
             return available_types
 
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Error accessing trust type registry: {e}")
             # No fallback - this is a configuration error that should be fixed
@@ -719,6 +735,8 @@ class WwwHandler(base_handler.BaseHandler):
 
             return processed_clients
 
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Error getting OAuth2 clients for actor {actor_id}: {e}")
             return []
@@ -785,6 +803,8 @@ class WwwHandler(base_handler.BaseHandler):
                     "Error: Unable to create trust relationship. Please check the peer URL and try again."
                 )
 
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Error creating trust relationship: {e}")
             self.response.set_status(500, "Internal Server Error")
@@ -838,6 +858,8 @@ class WwwHandler(base_handler.BaseHandler):
                             )
                             return
 
+                        except DbError:
+                            raise
                         except Exception as e:
                             logger.error(
                                 f"Error updating list metadata for '{prop_name}': {e}"
@@ -1033,6 +1055,8 @@ class WwwHandler(base_handler.BaseHandler):
                     self.response.set_status(503, "List metadata contended -- retry")
                     self.response.headers["Retry-After"] = "1"
                     return
+                except DbError:
+                    raise
                 except Exception as e:
                     logger.error(f"Error in list item management: {e}")
                     self.response.set_status(
@@ -1182,6 +1206,8 @@ class WwwHandler(base_handler.BaseHandler):
                 self.response.set_redirect(redirect_path)
                 return
 
+            except DbError:
+                raise
             except Exception as e:
                 self.response.set_status(500, f"Error processing property: {str(e)}")
                 return

@@ -18,17 +18,20 @@ import pytest
 from actingweb import oauth2 as oauth2_module
 from actingweb.actor import Actor
 from actingweb.db import get_actor, get_peer_trustee, get_peer_trustee_list
+from actingweb.db.exceptions import DbError
 from actingweb.oauth2 import OAuth2Authenticator, OAuth2Provider, classify_marker
 from actingweb.oauth_session import OAuth2SessionManager
 from tests._adoption_helpers import (
     aid,
+    backend_fault,
     create_core_actor,
     istore,
     make_config,
+    marker_write_fault,
+    raise_db_error,
     uuid_email,
 )
 from tests.mcp_helpers import make_mcp_config, make_mcp_handler
-from tests.test_adoption_write_faults import marker_write_fault
 
 
 @pytest.fixture
@@ -135,7 +138,14 @@ class TestStrictCreatorListing:
         squat = _with_id(config, creator, "00", "factory")
         owner = _with_id(config, creator, "ff", None)
 
-        with patch.object(Actor, "get_from_creator", lambda self, creator=None: False):
+        # The owner's marker cannot be read (a backend fault): the successor
+        # step must create nothing while it stays unreadable (BR).
+        with backend_fault(
+            config,
+            "get_bucket",
+            lambda a, b, _n: a == aid(owner) and b == "_internal",
+            raise_db_error,
+        ):
             result = oauth2_module.adopt_actor(
                 squat, provider=auth.provider, config=config, hooks=None
             )
@@ -215,15 +225,13 @@ class TestCreateRollbackAndTheBridgeWinner:
             with (
                 marker_write_fault(config, actor_id),
                 patch.object(type(get_actor(config)), "delete", lambda self: False),
+                pytest.raises(DbError),  # 3.16: the fault is raised after the rollback
             ):
-                assert (
-                    actor.create(
-                        url="https://test.example.com/",
-                        creator=uuid_email(),
-                        passphrase="p",
-                        actor_id=actor_id,
-                    )
-                    is False
+                actor.create(
+                    url="https://test.example.com/",
+                    creator=uuid_email(),
+                    passphrase="p",
+                    actor_id=actor_id,
                 )
 
             assert actor.id is None and actor.handle is None and actor.store is None

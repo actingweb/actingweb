@@ -11,6 +11,7 @@ import re
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlencode
 
+from ..db.exceptions import DbError
 from ..oauth2 import create_oauth2_authenticator
 from ..secret_compare import secret_equals
 from .client_registry import get_mcp_client_registry
@@ -109,6 +110,9 @@ class ActingWebOAuth2Server:
 
         except ValueError as e:
             raise ValueError(f"Client registration failed: {str(e)}") from e
+        except DbError:
+            # A store fault is not a bad registration request (400).
+            raise
         except Exception as e:
             logger.error(f"Client registration error: {e}")
             raise ValueError("Internal server error during client registration") from e
@@ -279,6 +283,8 @@ class ActingWebOAuth2Server:
             else:
                 return self._error_response("invalid_request", "Method not allowed")
 
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Authorization request error: {e}")
             return self._error_response("server_error", "Internal server error")
@@ -414,6 +420,8 @@ class ActingWebOAuth2Server:
                     logger.warning(
                         f"Failed to create trust for actor {actor_obj.id} and user {email} (via={established_via}, type={effective_trust_type})"
                     )
+            except DbError:
+                raise
             except Exception as trust_error:
                 logger.error(
                     f"Exception while creating trust for actor {actor_obj.id}: {trust_error}"
@@ -450,6 +458,8 @@ class ActingWebOAuth2Server:
 
             return {"action": "redirect", "url": callback_url}
 
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"OAuth2 callback error: {e}")
             return self._error_response("server_error", "Internal server error")
@@ -478,6 +488,8 @@ class ActingWebOAuth2Server:
                     "unsupported_grant_type", f"Grant type '{grant_type}' not supported"
                 )
 
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Token request error: {e}")
             return self._error_response("server_error", "Internal server error")
@@ -773,6 +785,8 @@ class ActingWebOAuth2Server:
                         "message": "Token store temporarily unavailable; retry the logout",
                         "retry_after": 5,
                     }
+                except DbError:
+                    raise
                 except Exception as revoke_error:
                     logger.error(
                         f"Token revocation failed with exception: {revoke_error}"
@@ -800,6 +814,8 @@ class ActingWebOAuth2Server:
                 "redirect_url": f"{self.config.proto}{self.config.fqdn}/",
             }
 
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Logout request error: {e}")
             import traceback
@@ -830,6 +846,8 @@ class ActingWebOAuth2Server:
             return self._get_authenticator(
                 provider_name
             ).lookup_or_create_actor_by_identifier(email)
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Error creating actor for email {email}: {e}")
             return None
@@ -881,7 +899,7 @@ class ActingWebOAuth2Server:
 
             return str(authorization_url)
 
-        except Exception as e:
+        except Exception as e:  # folds DbError: no DB access
             logger.error(f"Error creating Google OAuth2 URL for MCP: {e}")
             import traceback
 

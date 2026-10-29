@@ -13,6 +13,8 @@ from typing import Any
 from actingweb import auth
 from actingweb.handlers.methods import MethodsHandler
 
+from ..db.exceptions import DbError
+
 logger = logging.getLogger(__name__)
 
 
@@ -264,6 +266,8 @@ class AsyncMethodsHandler(MethodsHandler):
                     "error": {"code": -32601, "message": "Method not found"},
                     "id": params.get("id"),
                 }
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Error executing method {params['method']}: {e}")
             return {

@@ -11,6 +11,8 @@ from datetime import UTC
 from re import Pattern
 from typing import TYPE_CHECKING, Any
 
+from .db.exceptions import DbError
+
 if TYPE_CHECKING:
     from .interface.actor_interface import ActorInterface
 
@@ -197,7 +199,7 @@ class RemotePeerStore:
             List of scalar property names (excludes list properties and their metadata)
         """
         db = self._get_attributes()
-        all_attrs = db.get_bucket() or {}
+        all_attrs = db.get_bucket(strict=False) or {}
 
         scalar_names = []
         for name in all_attrs.keys():
@@ -248,11 +250,15 @@ class RemotePeerStore:
                         "value": items,
                         "item_count": len(items),
                     }
+                except DbError:
+                    raise
                 except Exception as e:
                     logger.warning(
                         f"Error reading list '{list_name}' for peer {self._peer_id}: {e}"
                     )
                     continue
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Error listing list properties for peer {self._peer_id}: {e}")
 
@@ -266,11 +272,15 @@ class RemotePeerStore:
                             "type": "scalar",
                             "value": value,
                         }
+                except DbError:
+                    raise
                 except Exception as e:
                     logger.warning(
                         f"Error reading scalar '{scalar_name}' for peer {self._peer_id}: {e}"
                     )
                     continue
+        except DbError:
+            raise
         except Exception as e:
             logger.error(
                 f"Error listing scalar properties for peer {self._peer_id}: {e}"
@@ -294,7 +304,7 @@ class RemotePeerStore:
     def get_storage_stats(self) -> dict[str, Any]:
         """Get storage statistics for this peer."""
         db = self._get_attributes()
-        all_attrs = db.get_bucket() or {}
+        all_attrs = db.get_bucket(strict=False) or {}
 
         list_count = 0
         scalar_count = 0
@@ -373,6 +383,8 @@ class RemotePeerStore:
                             "type": "scalar",
                             "wrapped": True,
                         }
+            except DbError:
+                raise
             except Exception as e:
                 logger.error(f"Error applying callback data for {key}: {e}")
                 results[key] = {"error": str(e)}
@@ -584,6 +596,8 @@ class RemotePeerStore:
                 else:
                     self.set_value(key, {"value": value})
                     results[key] = {"operation": "resync", "success": True}
+            except DbError:
+                raise
             except Exception as e:
                 logger.error(f"Error applying resync data for {key}: {e}")
                 results[key] = {"error": str(e)}
@@ -647,6 +661,8 @@ class RemotePeerStore:
             success = store.store_permissions(peer_perms)
             return {"operation": "permission_update", "success": success}
 
+        except DbError:
+            raise
         except Exception as e:
             logger.error(f"Error applying permission data from {self._peer_id}: {e}")
             return {"operation": "permission_update", "success": False, "error": str(e)}

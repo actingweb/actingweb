@@ -14,6 +14,7 @@ from pynamodb.exceptions import DoesNotExist
 from pynamodb.models import Model
 
 from actingweb.db.dynamodb._ensure import ensure_table
+from actingweb.db.exceptions import DbError
 
 # ``delete_by_chain`` scans whole token buckets; past this many rows in one
 # bucket it logs a WARNING that the scan is outgrowing its budget (see the
@@ -72,8 +73,12 @@ class DbAttribute:
     """
 
     @staticmethod
-    def get_bucket(actor_id=None, bucket=None):
+    def get_bucket(actor_id=None, bucket=None, *, strict=True):
         """Returns a dict of attributes from a bucket, each with data and timestamp
+
+        ``{}`` for an empty bucket. A read fault raises ``DbError``;
+        ``strict=False`` answers it with None. Expired rows are returned:
+        a sweep that reads a bucket to find what to delete must find them.
 
         ``bucket_name`` is ``bucket + ":" + name``, so ``begins_with(bucket)``
         would also match every bucket that has this one as a prefix — bucket
@@ -88,32 +93,45 @@ class DbAttribute:
         """
         if not actor_id or not bucket:
             return None
+        ret = {}
         try:
-            query = Attribute.query(
+            # The pages are fetched while iterating, so the try covers the
+            # loop, not just the lazy query() call.
+            for t in Attribute.query(
                 actor_id,
                 Attribute.bucket_name.startswith(bucket + ":"),
                 consistent_read=True,
-            )
-        except Exception:  # PynamoDB DoesNotExist exception
+            ):
+                if t.bucket != bucket:
+                    continue
+                ret[t.name] = {
+                    "data": t.data,
+                    "timestamp": t.timestamp,
+                }
+        except Exception as e:
+            if strict:
+                raise DbError("attribute get_bucket") from e
+            logger.error(f"Error reading bucket {bucket} of {actor_id}: {e}")
             return None
-        ret = {}
-        for t in query:
-            if t.bucket != bucket:
-                continue
-            ret[t.name] = {
-                "data": t.data,
-                "timestamp": t.timestamp,
-            }
         return ret
 
     @staticmethod
-    def get_attr(actor_id=None, bucket=None, name=None):
-        """Returns a dict of attributes from a bucket, each with data and timestamp"""
+    def get_attr(actor_id=None, bucket=None, name=None, *, strict=True):
+        """One attribute as ``{"data", "timestamp"}``, None when absent.
+
+        A read fault raises ``DbError``; ``strict=False`` answers it with
+        None. An expired row is returned (only ``get_attr_strict`` hides it).
+        """
         if not actor_id or not bucket or not name:
             return None
         try:
             r = Attribute.get(actor_id, bucket + ":" + name, consistent_read=True)
-        except Exception:  # PynamoDB DoesNotExist exception
+        except DoesNotExist:
+            return None
+        except Exception as e:
+            if strict:
+                raise DbError("attribute get_attr") from e
+            logger.error(f"Error reading attribute {bucket}/{name} of {actor_id}: {e}")
             return None
         # Same guard as get_bucket(): the composite key can collide across
         # buckets, and the stored ``bucket`` is what says whose row it is.
@@ -134,8 +152,8 @@ class DbAttribute:
         caller whose "row is absent" branch is a decision rather than a
         fallback — the deletion tombstone read being the case in the library.
 
-        Absence returns ``None``; anything else raises so the caller can tell
-        "I looked and it is not there" from "I could not look".
+        Absence returns ``None``; a fault raises ``DbError`` so the caller can
+        tell "I looked and it is not there" from "I could not look".
 
         An expired row reads as absent. DynamoDB's TTL sweep may lag by up to
         48 hours, and a tombstone past its window must stop suppressing writes
@@ -147,6 +165,8 @@ class DbAttribute:
             r = Attribute.get(actor_id, bucket + ":" + name, consistent_read=True)
         except DoesNotExist:
             return None
+        except Exception as e:
+            raise DbError("attribute get_attr_strict") from e
         if r.bucket != bucket:
             return None
         if r.ttl_timestamp is not None and r.ttl_timestamp <= int(time.time()):
@@ -176,6 +196,9 @@ class DbAttribute:
             ttl_seconds: Optional TTL in seconds from now. If provided,
                          DynamoDB will automatically delete this item after expiry.
                          Note: A 1-hour buffer is added for clock skew safety.
+
+        A falsy ``data`` deletes the row: True when it is gone after the call
+        (an absent row counts). A fault raises ``DbError``.
         """
         if not actor_id or not name or not bucket:
             return False
@@ -186,8 +209,10 @@ class DbAttribute:
                 )
                 if item.bucket == bucket:
                     item.delete()
-            except Exception:  # PynamoDB DoesNotExist exception
+            except DoesNotExist:
                 pass
+            except Exception as e:
+                raise DbError("attribute delete") from e
             return True
 
         # Calculate TTL timestamp if provided
@@ -209,7 +234,10 @@ class DbAttribute:
             timestamp=timestamp,
             ttl_timestamp=ttl_timestamp,
         )
-        new.save()
+        try:
+            new.save()
+        except Exception as e:
+            raise DbError("attribute set") from e
         return True
 
     def delete_attr(self, actor_id=None, bucket=None, name=None):
@@ -353,17 +381,16 @@ class DbAttribute:
         if not actor_id or not bucket:
             return False
         try:
-            query = Attribute.query(
+            for t in Attribute.query(
                 actor_id,
                 Attribute.bucket_name.startswith(bucket + ":"),
                 consistent_read=True,
-            )
-        except Exception:  # PynamoDB DoesNotExist exception
-            return True
-        for t in query:
-            if t.bucket != bucket:
-                continue
-            t.delete()
+            ):
+                if t.bucket != bucket:
+                    continue
+                t.delete()
+        except Exception as e:
+            raise DbError("attribute delete_bucket") from e
         return True
 
     @staticmethod
@@ -468,50 +495,59 @@ class DbAttributeBucketList:
     """
 
     @staticmethod
-    def fetch(actor_id=None):
-        """Retrieves all the attributes of an actor_id from the database"""
+    def fetch(actor_id=None, *, strict=True):
+        """Retrieves all the attributes of an actor_id from the database.
+
+        A read fault raises ``DbError``; ``strict=False`` answers it with None.
+        """
         if not actor_id:
             return None
-        try:
-            query = Attribute.query(actor_id)
-        except Exception:  # PynamoDB DoesNotExist exception
-            return None
         ret = {}
-        for t in query:
-            if t.bucket not in ret:
-                ret[t.bucket] = {}
-            ret[t.bucket][t.name] = {
-                "data": t.data,
-                "timestamp": t.timestamp,
-            }
+        try:
+            for t in Attribute.query(actor_id):
+                if t.bucket not in ret:
+                    ret[t.bucket] = {}
+                ret[t.bucket][t.name] = {
+                    "data": t.data,
+                    "timestamp": t.timestamp,
+                }
+        except Exception as e:
+            if strict:
+                raise DbError("attribute bucket list fetch") from e
+            logger.error(f"Error reading the attributes of {actor_id}: {e}")
+            return None
         return ret
 
     @staticmethod
-    def fetch_timestamps(actor_id=None):
-        """Retrieves timestamps for all buckets of an actor_id"""
+    def fetch_timestamps(actor_id=None, *, strict=True):
+        """Retrieves timestamps for all buckets of an actor_id.
+
+        A read fault raises ``DbError``; ``strict=False`` answers it with None.
+        """
         if not actor_id:
             return None
-        try:
-            query = Attribute.query(actor_id)
-        except Exception:  # PynamoDB DoesNotExist exception
-            return None
         ret = {}
-        for t in query:
-            if t.bucket not in ret:
-                ret[t.bucket] = t.timestamp
+        try:
+            for t in Attribute.query(actor_id):
+                if t.bucket not in ret:
+                    ret[t.bucket] = t.timestamp
+        except Exception as e:
+            if strict:
+                raise DbError("attribute bucket list fetch_timestamps") from e
+            logger.error(f"Error reading the attribute timestamps of {actor_id}: {e}")
+            return None
         return ret
 
     @staticmethod
     def delete(actor_id=None):
-        """Deletes all the attributes in the database"""
+        """Deletes all the attributes of an actor. A fault raises ``DbError``."""
         if not actor_id:
             return False
         try:
-            query = Attribute.query(actor_id)
-        except Exception:  # PynamoDB DoesNotExist exception
-            return False
-        for t in query:
-            t.delete()
+            for t in Attribute.query(actor_id):
+                t.delete()
+        except Exception as e:
+            raise DbError("attribute bucket list delete") from e
         return True
 
     def __init__(self):

@@ -4,6 +4,8 @@ import logging
 from actingweb import deletion
 from actingweb.handlers import base_handler
 
+from ..db.exceptions import DbError
+
 logger = logging.getLogger(__name__)
 
 
@@ -120,9 +122,17 @@ class RootHandler(base_handler.BaseHandler):
         # resolves, writing rows that outlive the actor. There is deliberately
         # no ActorInterface to hand over — the actor is gone.
         if self.hooks and deleted_actor_id:
-            self.hooks.execute_lifecycle_hooks(
-                "actor_deleted_complete", None, actor_id=deleted_actor_id
-            )
+            try:
+                self.hooks.execute_lifecycle_hooks(
+                    "actor_deleted_complete", None, actor_id=deleted_actor_id
+                )
+            except DbError as e:  # folds DbError: notification after delete committed
+                # The actor is gone: a 503 would have the client retry a
+                # delete that completed (and get a 404).
+                logger.error(
+                    f"actor_deleted_complete for {deleted_actor_id} hit a store "
+                    f"fault: {e}"
+                )
 
         self.response.set_status(204)
         return

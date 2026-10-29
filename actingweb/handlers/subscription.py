@@ -505,7 +505,7 @@ class SubscriptionHandler(base_handler.BaseHandler):
                     logger.info(
                         f"Successfully executed subscription_deleted hook for {peerid}"
                     )
-                except Exception as e:
+                except Exception as e:  # folds DbError: hook after the delete committed
                     logger.warning(
                         f"Error executing subscription_deleted hook: {e}", exc_info=True
                     )

@@ -52,6 +52,6 @@ class BotHandler(base_handler.BaseHandler):
             bot_cfg = getattr(self.config, "bot", None)
             if isinstance(bot_cfg, dict):
                 return bot_cfg.get("token", "") or ""
-        except Exception:
+        except Exception:  # folds DbError: config lookup, no DB access
             pass
         return ""

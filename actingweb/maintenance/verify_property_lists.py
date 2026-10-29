@@ -28,7 +28,8 @@ residue intact (a duplicate always means a destroyed item, and silently
 collapsing one copy would bless the data loss as intentional).
 
 Exit code 0 if every list is healthy (or was repaired to healthy) by the
-end of the run, 1 if any list is still unhealthy or errored.
+end of the run, 1 if any list is still unhealthy or errored. 2 if the actor list
+could not be read (nothing was scanned).
 """
 
 import argparse
@@ -39,6 +40,8 @@ import sys
 import threading
 import time
 from typing import Any
+
+from actingweb.db.exceptions import DbError
 
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
@@ -83,7 +86,7 @@ class Checkpoint:
                     f"Resuming from checkpoint {path} "
                     f"({len(self._done)} actors already swept)"
                 )
-            except Exception as e:
+            except Exception as e:  # folds DbError: no DB access (checkpoint file)
                 logger.warning(f"Could not read checkpoint {path}: {e}")
 
     def is_done(self, actor_id: str) -> bool:
@@ -166,7 +169,7 @@ def sweep_actor(
             # (which is this script's job) -- unlike the migrate script,
             # which only needs the format and uses storage_format().
             report = list_prop.verify(identity_key=identity_key)
-        except Exception as e:
+        except Exception as e:  # folds DbError: counted as error, exit 1
             logger.error(f"actor={actor_id} list={name}: verify() failed: {e}")
             errored += 1
             continue
@@ -287,7 +290,7 @@ def sweep_actor(
 
         try:
             compact_report = list_prop.compact(allow_reverted=repair_reverted)
-        except Exception as e:
+        except Exception as e:  # folds DbError: counted as error, exit 1
             logger.error(f"actor={actor_id} list={name}: compact() failed: {e}")
             errored += 1
             continue
@@ -360,11 +363,18 @@ def main() -> int:
     config = Config()
     _log_target(config, "REPAIR" if args.repair else "dry-run", args.rps)
 
-    actors = get_actor_list(config).fetch()
+    try:
+        actors = get_actor_list(config).fetch()
+    except DbError as e:  # folds DbError: exit 2, store unreadable
+        logger.error(f"The actor list could not be read; nothing scanned: {e}")
+        return 2
+    if not isinstance(actors, list):
+        # A backend that answers a fault with False must not read as "none".
+        logger.error("The actor list could not be read; nothing scanned")
+        return 2
     if not actors:
         logger.info("No actors found")
         return 0
-    assert isinstance(actors, list)
 
     checkpoint = Checkpoint(args.checkpoint_file if args.repair else None)
     limiter = RateLimiter(args.rps)

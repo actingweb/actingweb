@@ -235,8 +235,10 @@ CHANGED
     write units instead of 1, on opted-in tables only.
 
   **Check:** the migration guide's "Creator uniqueness" section has the
-  rollout order; the demo application and ``actingweb_mcp`` run the flag on
-  and need it before they serve 3.16. ``unique_creator`` stays off by default
+  rollout order (Step 0: ``report``, ``resolve --apply``, ``enable --apply``
+  before the deploy) and the IAM grants (``ConditionCheckItem`` on the actor
+  table); the demo application and ``actingweb_mcp`` run the flag on and
+  need both before they serve 3.16, or they refuse to start. ``unique_creator`` stays off by default
   in 3.16 and turns on at the next major.
 
 - **Breaking: the factory form no longer redirects to an existing actor.**

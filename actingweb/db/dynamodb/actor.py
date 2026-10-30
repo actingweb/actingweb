@@ -417,7 +417,6 @@ class DbActor:
     def delete(self) -> bool:
         """Deletes the actor in the database.
 
-
         True when the row is gone after the call (an already-absent row
         counts); a fault raises ``DbError``. False only without a handle.
         With ``unique_creator`` the creator's record is then removed only if

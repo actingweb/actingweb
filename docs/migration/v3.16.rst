@@ -319,7 +319,9 @@ vouched before 3.16 has no recorded address and is judged by its marker
 alone until a sign-in or ``actingweb-mark-actors-vouched`` records one. The
 emailed verification link proves only the address it was sent to: an actor
 whose creator changed since the link was sent answers ``409`` and the link
-stays unused.
+stays unused. A link sent before the upgrade carries no recorded address
+and is checked against the actor's stored ``email``; an actor with neither
+answers ``409`` too, and the user signs in again for a new link.
 
 **Behavior change, with or without the flag:** a ``modify`` through a stale
 handle (another process renamed the actor since it was loaded) returns

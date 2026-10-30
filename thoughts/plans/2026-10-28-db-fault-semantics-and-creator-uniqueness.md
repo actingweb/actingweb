@@ -1,5 +1,6 @@
 ---
-status: active
+status: done
+verified: thoughts/verifications/2026-10-30-db-fault-semantics-and-creator-uniqueness-9.md
 ---
 
 # Implementation Plan: DB-layer fault semantics and opt-in creator uniqueness
@@ -24,6 +25,26 @@ before changing it.
 
 ## Update Log
 
+- **2026-10-30**: owner confirmed the last two deduced decisions (reserved creators; a vouch bound to its address).
+- **2026-10-30**: PR 2 opened as #161 (`a8d899e`); end-to-end review of the plan against PR 1 and PR 2: code and tests complete, documentation drift and plan-only deferrals fixed in a follow-up commit.
+- **2026-10-30**: verification -9: nothing of Medium or higher; three Lows filed in `thoughts/todo/unique-creator-small-followups.md`; `verified:` set.
+- **2026-10-30**: verification -8 (A14 High, B14 Medium, C14 Low); Iterations 80-82 fix them; the built-in security review found nothing above its bar.
+- **2026-10-30**: verification -7 (A13, B13 Medium); Iterations 78-79 bind the vouch to its address (replacing 76); audit addendum third part.
+- **2026-10-30**: verification -6 (A12 Medium, B12 Low); Iterations 76-77 fix them.
+- **2026-10-30**: Iterations 71-75 after verification -5 (A11-F11).
+- **2026-10-30**: verification -5 (A11, B11, C11 Medium; Lows D11-F11).
+- **2026-10-30**: Iterations 66-70 after verification -4 (A10, B10, D10-F10; C10 unreachable); audit addendum second part.
+- **2026-10-30**: owner accepted the five deduced decisions (PostgreSQL fail-closed at startup, one retry after a lost swap, repair at sign-in, 409 for an unmarked winner, `ConditionCheckItem`).
+- **2026-10-30**: verification -4 (A10, B10 Medium; Lows C10-F10).
+- **2026-10-30**: Iterations 59-65 after the audit's addendum (rules 8-10, rule 2 amended): A9-J9.
+- **2026-10-30**: verification -3 (A9 High, B9, C9, I9 Medium; Lows D9-H9, J9); owner confirmed the deletion status on the replace branch.
+- **2026-10-30**: Iterations 52-58, the audit's rules as one batch.
+- **2026-10-30**: verification -2 of PR 2 (A8-L8); invariant audit
+  thoughts/research/2026-10-30-creator-record-invariant-audit.md; owner: K8
+  fails closed.
+- **2026-10-30**: verification of PR 2 (A7-P7); Iterations 45-51 fix them.
+- **2026-10-29**: Phases 3-4 (PR 2) implemented on
+  `release/3.16.0-creator-uniqueness` from `c7cef70` (PR #160 merged).
 - **2026-10-29**: PR 1 opened as #160 from `release/3.16.0-db-fault-semantics`
   (commit `4275401`, master merged in). Phases 3-4 next, on
   `release/3.16.0-creator-uniqueness`.
@@ -157,7 +178,13 @@ It also closes the eighth verification's BR, BS, BU, BV and BW on the default
     partial predicate.
   - `UniqueViolation` on that index maps to `CreatorTaken` whether the flag is
     on or off, so a rolled-back flag never fails silently.
-- **Startup check** (owner; the fault rule was refined in evaluation):
+- **Startup check** (owner; the fault rule was refined in evaluation)
+  [Updated 2026-10-30] (owner): a probe fault now **fails closed** on
+  DynamoDB like definite absence (verification -2, K8: with an empty
+  auto-created table every existing user's sign-in would create a
+  duplicate). PostgreSQL the same (confirmed by the owner 2026-10-30). See
+  thoughts/research/2026-10-30-creator-record-invariant-audit.md, rule 5.
+  The original wording follows:
   - With the flag on, the app refuses to start when it finds definite
     absence: the DynamoDB `creators` table or its backfill-complete item is
     missing, or the PostgreSQL index is missing or `indisvalid = false`. The
@@ -201,12 +228,56 @@ It also closes the eighth verification's BR, BS, BU, BV and BW on the default
   adoption path takes a direct single-actor branch.
 - **Exit for the opt-in default** [Added 2026-10-28] (owner): `unique_creator`
   defaults to **on at the next major**, and the duplicate-handling code the
-  research's §6 lists (`_candidate_rank`, the ranking in `get_from_creator`,
+  research's §6 lists (`_candidate_rank` (removed in PR 1), the ranking in `get_from_creator`,
   `factory_sibling_ids`, `_factory_siblings`, `_sweep_factory_actors`,
   `SWEEP_LIMIT`, the successor step's `remaining` logic, the recursive
   hand-off and `carried`) is deleted then. Both known consumers already run
   the flag on, so in 3.16 the most complex path is the least exercised; the
   exit makes that transitional. Phase 3 files the todo.
+- **Deletion status on the enforced replace branch** [Added 2026-10-29;
+  Updated 2026-10-30: confirmed by the owner, "keep the squatter
+  mid-deletion fix as now"]. UNKNOWN fails the
+  sign-in with 503; DELETED (a wipe that stalled after its tombstone) is
+  finished by the swap and the removal, as the flag-off path finishes it,
+  instead of the 503 the Phase 4 diagram shows, which would lock the owner
+  out for good. The vouched branch is unchanged (AW). Phase 4 "Deviations"
+  has the reasoning.
+- **Record writes check the actor row; no full-row write through a stale
+  handle** [Added 2026-10-30] (from the audit's addendum, rules 8-9, which
+  the owner asked to fix in one batch). On DynamoDB a stale handle's
+  `modify` answers False with the flag in either state (a conditional
+  `PutItem`, no new permission); a record write that depends on the actor
+  row carries a `condition_check`, which needs `ConditionCheckItem` on the
+  actor table for flag-on roles (confirmed by the owner 2026-10-30; the alternative,
+  no check, leaves E9-G9 open).
+- **A race retry never adopts an unmarked winner** [Added 2026-10-30]
+  (confirmed by the owner 2026-10-30). It answers 409, and the next attempt signs in;
+  a short wait and re-read was not added because it would sleep on the
+  request path.
+- **A vouch is bound to the address it proved** [Added 2026-10-30]
+  (confirmed by the owner 2026-10-30; from verification -7 and the audit's third
+  addendum part). Every vouched marker is written with `vouched_creator`;
+  an actor whose creator differs from it (and from its own stored email)
+  reads as unvouched. Chosen over a cross-table compare-and-set, which
+  would need a new protocol method on both backends and for custom ones.
+  Pre-3.16 vouched actors keep the marker-only rule until a sign-in or
+  `mark_actors_vouched` binds them.
+- **Reserved creators** [Added 2026-10-30] (confirmed by the owner 2026-10-30; from
+  verification 2026-10-30, C7 and I7). `#…` and `#dup-` are checked on the
+  value as stored and refused by `Actor.create` too; `system` and
+  `oauth2-system` are refused by the factory and `PUT /trust/trustee`, with
+  the flag on or off.
+- **A stale creator record is repaired by the sign-in** [Added 2026-10-30,
+  updated the same day] (confirmed by the owner 2026-10-30): a record whose actor is
+  gone or holds another creator on a consistent read is removed and the
+  sign-in creates the owner's actor (entry 52; the earlier fail-closed of
+  entry 45 is withdrawn). Records are only ever deleted through that
+  check (audit rule 1).
+- **One retry after a lost swap** [Added 2026-10-30] (confirmed by the owner 2026-10-30):
+  relaxes "There is no look up again retry" in the swap
+  decision; a `CreatorTaken` from the swap or a first create is followed by
+  one more lookup, and a renamed squatter still fails closed (entries 50,
+  57).
 - **`Attributes` reads are strict by default** [Added 2026-10-28] (owner).
   `Attributes.get_bucket()` and `get_attr()` raise `DbError` unless called
   with `strict=False`; `InternalStore` is the one folding wrapper (it
@@ -260,8 +331,8 @@ It also closes the eighth verification's BR, BS, BU, BV and BW on the default
 - **Deleting duplicate actors automatically.** They hold user data, so `resolve` renames them instead.
 - **Fixing `actingweb_mcp/scripts/restore_actor.py`.** It is a consumer script; the migration guide names it, and `report` finds what it leaves behind.
 - **Flipping the `unique_creator` default in 3.16.** It is a forced migration for every deployment with duplicates; the flip is recorded for the next major instead.
-- **The deletion wipe as a root cause.** `Actor.delete` is a multi-step wipe behind a tombstone, and the adoption todo's H, I, J, K and AW all come from it. It is named here so the next verification does not rediscover it; a resumable, idempotent deletion job is its own plan.
-- **Renaming the adoption branch's iteration-numbered test files.** `tests/test_adoption_{fourth,fifth,sixth}_iteration.py` should be named by behaviour, but that is the adoption PR's review, not this plan.
+- **The deletion wipe as a root cause.** `Actor.delete` is a multi-step wipe behind a tombstone, and the adoption todo's H, I, J, K and AW all come from it. It is named here so the next verification does not rediscover it; a resumable, idempotent deletion job is its own plan. [Filed 2026-10-30: thoughts/todo/resumable-actor-deletion.md]
+- **Renaming the adoption branch's iteration-numbered test files.** `tests/test_adoption_{fourth,fifth,sixth}_iteration.py` should be named by behaviour, but that is the adoption PR's review, not this plan. [Filed 2026-10-30: thoughts/todo/unique-creator-small-followups.md]
 - **The spanned-list-items work.** It has its own plan and PR (owner).
 - **BK-BQ in `thoughts/todo/adoption-fault-and-hygiene-followups.md`.** They are unrelated to the two root causes and stay filed.
 - **Flask `GET /?format=json` reflecting `Origin` with credentials** (`factory.py:134-141`). It is older than 3.16, low impact, and not a fault or uniqueness issue; filed with BK-BQ.
@@ -748,7 +819,7 @@ test patches `classify_marker`, because a mock config has no readable marker.
 - **Default pin:** the test that pins `unique_creator` to False fails if the default is flipped.
 - **Startup:**
   - flag on with the index missing, INVALID, or `#meta#backfill` absent raises with the command name;
-  - a probe fault logs and continues;
+  - a probe fault logs and continues; [Superseded by entry 56: a probe fault fails closed]
   - flag off never checks.
 
 ### Failure Scenarios
@@ -761,11 +832,89 @@ test patches `classify_marker`, because a mock config has no readable marker.
 
 ### Verification
 
-- [ ] Run the contract's `### Checks` fast tier verbatim
-- [ ] `actingweb-unique-creators report|resolve|enable|disable` by hand against
+- [x] Run the contract's `### Checks` fast tier verbatim (2026-10-29: ruff,
+  format, pyright 0/0/0; 3265 passed, 23 skipped)
+- [x] `actingweb-unique-creators report|resolve|enable|disable` by hand against
   DynamoDB Local and the PostgreSQL test container, with seeded duplicates
+  (2026-10-29: a vouched and a `factory` actor on one address; report exit 1,
+  resolve keeps the vouched one and renames the other, enable refuses before
+  resolve and builds/backfills after, a second enable is a no-op, disable
+  reverses it; both backends)
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+**Where things landed:**
+- The exemption and reservation rules, the `#dup-` value, the index name and
+  predicate: `actingweb/db/creator_rules.py`, imported by both backends, the
+  command, the factory and `PUT /trust/trustee`.
+- DynamoDB: `actingweb/db/dynamodb/creator.py` (`Creator`), and in
+  `dynamodb/actor.py` the transactional `create`, `_modify_unique`,
+  `replace_creator_holder`, `get_creator_holder`, `_release_record` and
+  `_run_transaction` (three attempts, same client request token).
+- PostgreSQL: `_is_creator_violation` maps a `UniqueViolation` on
+  `ux_actors_creator` to `CreatorTaken` in `create`, `modify` and
+  `replace_creator_holder`, whatever the flag says.
+- The command: `actingweb/maintenance/unique_creators.py` (also home of
+  `missing_enforcement`, the startup probe). The check:
+  `ActingWebApp.check_ready()` / `_check_unique_creator_ready()`, raising
+  `UniqueCreatorNotReady` (exported from `actingweb.interface`).
+- Alembic: `include_object` lives in `postgresql/schema.py` (importable by
+  the test) and both `context.configure` calls in `env.py` pass it.
+
+**Deviations:**
+- **`get_creator_holder`** was added to the protocol and both backends now
+  (advisor): Phase 4's "consistent read of the record / the unique row" is
+  that method.
+- **DynamoDB Local reports a cancelled condition on the first item** whatever
+  failed (confirmed with a two-item transaction in both orders). The backend
+  therefore confirms which condition failed with one consistent read on the
+  refused path (`_actor_exists`, `_record_names_other`) instead of trusting
+  the index in `cancellation_reasons`. Real DynamoDB reports the right index;
+  the read is correct on both and only the refused path pays it.
+- **A record-release fault is logged, not raised.** `delete` and a rename
+  release the old record with a separate conditional delete after the actor
+  change committed; a fault there leaves an orphan that `report` lists, and
+  raising would report a committed change as failed.
+- **The command runs with `unique_creator` off** (the plan said on): it writes
+  the records itself in `enable`, and a `#dup-` value is never recorded, so
+  `resolve`'s renames are plain creator changes. They then work before
+  `enable` (no `creators` table yet) and after it (the kept actor's record is
+  left alone). `force_email_prop_as_creator` is also off while it reads.
+- **`resolve` lowercases the kept actor of a case-only group**, so its stored
+  value matches what lookups and the DynamoDB record use.
+- **`report` also lists actors without a record once enabled** (DynamoDB,
+  `unrecorded`, exit 1): the rollout's step 6 needs to see actors old
+  processes created during the deploy; `enable --apply` again records them.
+- **A missing DynamoDB actor table is exit 2**, not an empty clean store: a
+  wrong `AWS_DB_PREFIX` must not let `enable` write a backfill item.
+- **The flag-on test substrate is an isolated store, not a port on the shared
+  one.** The PostgreSQL index covers the whole worker schema and `enable`
+  refuses while the shared store holds the adoption tests' deliberate
+  duplicates. `tests/integration/_isolated_store.py` repoints the DynamoDB
+  table names (`<prefix>uc_…`) or `PG_DB_PREFIX` (a fresh Alembic schema)
+  per module; the tests share the `unique_creator` xdist group because the
+  swap is process-wide. Fixtures: `unique_creator_store`, `fresh_store`,
+  `enforced_store`, `unique_creator_app` (a stoppable uvicorn server, port
+  base 5560).
+- **`tests/test_demo_example.py` stubs the probe** (the demo runs the flag on
+  and integrates at import; enabling for real in the shared unit tables is
+  impossible for the same reason) and adds
+  `test_demo_refuses_to_start_without_enforcement`. Phase 4's "passes with
+  the enabled schema" is this. **The demo deployment needs Step 0 before it
+  runs 3.16.**
+- **Two tests changed on purpose:** `test_db_fault_partial_state.py`
+  `TestIUniqueCreatorMatch` pinned the passphrase match (now pins
+  `CreatorTaken`), and `test_verify_tables.py`'s stubs take the new
+  `unique_creator` argument.
+- **`Actor.create(delete=True)` loads each existing actor before deleting it**
+  [Corrected 2026-10-30, end-to-end review: the old loop did delete; at
+  `c7cef70` `Actor.__init__` already called `self.get()`, so the claim that
+  it deleted nothing was wrong and no CHANGELOG entry is owed]. The
+  `DEFAULT_CREATOR` rewrite now loads each actor and
+  lets `Actor.get`'s own rewrite (which catches `CreatorTaken`) do it.
+- **E5 (CORS on a 409 at `/`)**: the factory keeps its 403 "Creator already
+  exists", which the flag-on factory already answered before 3.16; nothing
+  new is disclosed. Closed here.
 
 ---
 
@@ -775,9 +924,9 @@ test patches `classify_marker`, because a mock config has no readable marker.
 
 - **`actingweb/oauth2.py`.** With the flag on, the adoption path skips ranking and the sibling sweep:
   - **The lookup:** under the flag, the actor is resolved by a consistent `GetItem` on the `creators` table (DynamoDB) or by the unique row (PostgreSQL), not through the lagging index.
-  - **The deletion check:** `get_deletion_status` runs on the found actor. DELETED or UNKNOWN fails closed with a 503.
+  - **The deletion check:** `get_deletion_status` runs on the found actor. DELETED or UNKNOWN fails closed with a 503. [Superseded: UNKNOWN answers 503 and DELETED is finished by the swap, see Deviations; owner confirmed 2026-10-30]
   - **The branches:** vouched → sign in; unvouched → clean in place.
-  - **`factory`:** the successor is created with `replace_holder=squatter_id`, so `replace_creator_holder` runs first, then `_remove_for_replacement(squatter)`. If it raises `CreatorTaken` (the record no longer names the squatter), the sign-in fails closed.
+  - **`factory`:** the successor is created with `replace_holder=squatter_id`, so `replace_creator_holder` runs first, then `_remove_for_replacement(squatter)`. If it raises `CreatorTaken` (the record no longer names the squatter), the sign-in fails closed. [Superseded by entry 57: one more lookup adopts a different winner; owner confirmed 2026-10-30]
 - **`CHANGELOG.rst`** (PR 2's entries; the fault entries are PR 1's, Phase 2).
   - **Breaking:** under CHANGED:
     - the passphrase match is gone: keep the id and URL from the first 201 and use basic auth on `/{id}`, or sign in through OAuth;
@@ -816,10 +965,10 @@ sequenceDiagram
     participant Q as squatter factory actor
     participant N as successor
     S->>C: consistent read: creator → Q
-    S->>S: deletion status of Q (DELETED/UNKNOWN → 503)
+    S->>S: deletion status of Q (UNKNOWN → 503; DELETED finished by the swap)
     S->>C: one transaction: put N, record Q→N (cond. actor_id = Q)
     alt condition failed
-        C-->>S: CreatorTaken → fail closed
+        C-->>S: CreatorTaken → look up once more, adopt the winner (entry 57)
     else committed
         S->>Q: _remove_for_replacement (revoke, hooks, delete)
         S->>N: sign in
@@ -843,13 +992,126 @@ sequenceDiagram
 
 ### Verification
 
-- [ ] Run the contract's `### Checks` full tier verbatim, then open PR 2
-- [ ] Benchmarks alone on a quiet machine (`-m benchmark`): actor create and
-  delete with the flag on and off, p50 and p99
+- [x] Run the contract's `### Checks` full tier verbatim (2026-10-29, see
+  Implementation Summary)
+- [x] Open PR 2: #161, after nine verifications (commit `a8d899e`).
+- [x] Benchmarks alone on a quiet machine: actor create and delete with the
+  flag on and off, p50 and p99 (2026-10-29, 200 cycles each through
+  `DbActor`, scratch tables and schema; a scratch script, since the
+  `-m benchmark` suite shares one creator across iterations and cannot run
+  with the flag on):
 
-### Implementation Status: Not Started
+  | Backend | Flag | Create p50 / p99 | Delete p50 / p99 |
+  | --- | --- | --- | --- |
+  | DynamoDB Local | off | 349 / 357 ms | 174 / 181 ms |
+  | DynamoDB Local | on | 365 / 392 ms | 350 / 357 ms |
+  | PostgreSQL | off (index present) | 2.43 / 2.86 ms | 1.43 / 1.75 ms |
+  | PostgreSQL | on | 2.40 / 3.61 ms | 1.41 / 1.83 ms |
+
+  DynamoDB Local's latency is per call (about 175 ms here), so the numbers
+  count calls, not write units: a delete becomes two calls (the actor, then
+  the conditional record release), a create stays one transaction. The
+  migration guide's 4-6 WCU figure is AWS's transaction pricing, not
+  measured here. PostgreSQL shows no measurable difference.
+
+### Implementation Status: Complete
+
+**Where things landed:** `Actor.get_from_creator` reads the holder through
+`get_creator_holder` under the flag for non-exempt values (no ranking, no
+`factory_sibling_ids`); `oauth2._replace_enforced` is the swap (successor
+created with `replace_holder=`, then `_remove_for_replacement`), entered from
+`_adopt_actor` before the duplicate-tolerant replace branch;
+`_create_actor_for_identifier` and `ActorInterface.create` take
+`replace_holder`. Tests: `tests/integration/test_unique_creator_adoption.py`
+(12 on DynamoDB, 11 + 1 DynamoDB-only skip on PostgreSQL).
+
+**Deviations:**
+- **Deletion status under the flag: UNKNOWN answers 503, DELETED takes the
+  swap** (confirmed by the owner 2026-10-30; see Decisions Made). The diagram said
+  "DELETED/UNKNOWN → 503" for the squatter. A DELETED squatter is a wipe
+  that stalled after its tombstone; the flag-off path finishes it at the
+  next sign-in, and a 503 would instead lock the owner out for good (every
+  retry would see the same tombstone). The swap and the removal that follow
+  are exactly that finish, and the swap's condition already protects a
+  concurrent finish (`CreatorTaken`). The check is applied on the replace
+  branch only: the vouched branch keeps AW (a tombstone alone never blocks or
+  wipes a live vouched actor, `TestVouchedActorMidDeletion`, and its
+  flag-on twin in the new file), and cleaning in place keeps the flag-off
+  rule. Tests: `test_an_unfinished_wipe_is_finished_by_the_swap`,
+  `test_an_unknown_status_answers_503_and_writes_nothing`,
+  `test_a_vouched_actor_with_a_tombstone_still_signs_in_untouched`.
+- **The removal fault after the swap fails the sign-in** (`DbError`, 503) or
+  returns None, as the flag-off path does; the next sign-in finds the
+  successor. On DynamoDB the left squatter still names the creator without a
+  record, so `report` shows it as a duplicate of the successor and `enable
+  --apply` stops on it until `resolve --apply` renames it; the migration
+  guide's step 6 says so. (Test:
+  `test_a_removal_fault_after_the_swap_leaves_the_successor`.)
+- **An orphaned record blocks its address** with `CreatorTaken` (409) at
+  sign-in until `resolve --apply` removes it (test on DynamoDB), as Phase 3's
+  failure scenario accepted.
+- **`tests/test_actor_get_from_creator_warning.py`** pins `unique_creator =
+  False` on its `MagicMock` config: a mock attribute is truthy, and those
+  tests describe the flag-off path.
+- **The demo test** is Phase 3's stubbed probe (see Phase 3).
+- **BO** was no longer in the follow-ups todo; BK and BL now say they hold
+  with the flag off only. The two CHANGELOG references to the deleted todo
+  are in released sections and stay as history.
 
 ---
+
+## Implementation Summary
+
+**Completed:** 2026-10-29 (Phases 1-2), 2026-10-30 (Phases 3-4)
+**All phases:** Complete (Phases 1-2 in PR #160, merged as `c7cef70`;
+Phases 3-4 in PR #161, commit `a8d899e`, verified by
+thoughts/verifications/2026-10-30-db-fault-semantics-and-creator-uniqueness-9.md;
+the latest full tier is under Iterations 80-82)
+**Test status:** All passing (full tier 2026-10-29: ruff, format, pyright
+0/0/0; fast 3265 passed; verify_groups 51 documented; DynamoDB 4324 passed,
+37 skipped; PostgreSQL 4210 passed, 151 skipped; docs build clean)
+
+### Deviations from Plan
+- Phases 1-2: see their sections and Iterations 1-44.
+- Phase 3: `get_creator_holder` added to the protocol; DynamoDB confirms a
+  refused condition with one read (DynamoDB Local misreports the item);
+  record-release faults are logged; the command runs with the flag off;
+  `report` also lists unrecorded actors; the test substrate is an isolated
+  store per module, not a port on the shared one; the demo test stubs the
+  probe. Details under Phase 3.
+- Phase 4: on the enforced replace branch UNKNOWN deletion status answers
+  503 and DELETED is finished by the swap (confirmed by the owner 2026-10-30); details
+  under Phase 4.
+- Phases 3-4 after verification 2026-10-30: Iterations 45-51 (stale
+  records fail closed, rollback after the swap, reserved values as stored,
+  the command keeps records true, DynamoDB delete under the stored creator,
+  the concurrent first sign-in).
+- Phases 3-4, Iterations 52-82, following the invariant audit and its three
+  addendum parts: stale records are repaired at sign-in (52 replaces 45's
+  fail-closed); every record write checks the actor row; the marker is
+  written before the row for a generated id, with random bytes in the id
+  seed (66, 71); a vouch is bound to the address it proved (78 replaces
+  76); the emailed link proves only its address (80).
+
+### Learnings
+- DynamoDB Local reports a `TransactWriteItems` cancellation on the first
+  item whatever condition failed; never rely on the reasons' index without
+  a confirming read when the code must run against it.
+- A PostgreSQL unique index is schema-wide, so any test that turns it on
+  needs a schema of its own; the worker schema holds deliberate duplicates.
+- The DynamoDB model table names freeze at first import, under the unit
+  tests' `test` prefix when unit tests ran first in a worker, so an
+  isolated store must derive the prefix from the frozen names. The first
+  full run replaced the worker prefix in names that did not contain it and
+  wiped the shared unit tables (569 failures); `_isolated_store.py` now
+  derives it and refuses to wipe any table or schema without `uc_`.
+- A uniqueness record is a second source of truth: every reader of it
+  (the sign-in lookup, `enable`, a release) must check it against the actor
+  row, or a stale record silently redirects instead of only blocking.
+- `Actor(actor_id=…).delete()` on an actor that was never loaded answers
+  False and deletes nothing (its `DbActor` handle is empty). [Corrected
+  2026-10-30: the old `Actor.create(delete=True)` path did not rely on it,
+  since the constructor loads the actor.]
 
 ## Iterations
 
@@ -1886,6 +2148,742 @@ The owner asked for the review's three blocking items as a follow-up commit.
 log marker for the silent-loss path, `increase_seq`'s return type, a
 risk list in the PR description) are not taken here.
 
+### 2026-10-30, after verification thoughts/verifications/2026-10-30-db-fault-semantics-and-creator-uniqueness.md
+
+The owner said to fix the issues. Every High and Medium item is fixed; the
+Low items are fixed or documented (M7). Each new test was run with its fix
+disabled and failed (8 of 8 in the backend, HTTP and adoption files).
+Full tier after the batch: ruff, format, pyright 0/0/0; fast 3265 passed;
+verify_groups 51; DynamoDB 4346 passed, 37 skipped; PostgreSQL 4225 passed,
+158 skipped; docs build clean.
+
+#### 45. A stale creator record fails the sign-in closed (A7)
+
+**Category**: Verification fix (security)
+
+**What changed**: under the flag, `Actor.get_from_creator` loads the holder
+the record names and, if that actor's creator (normalised) is no longer the
+looked-up value, logs an ERROR naming the command and raises
+`DbError("creator record mismatch")` (503). The sign-in never lands on that
+actor, and the swap never runs, so it can no longer hand the actor's new
+address to the person signing in. One source of such records is closed:
+`resolve`'s `_rename` (flag off) now releases the renamed actor's record on
+DynamoDB, so `enable --apply` records the kept actor instead.
+
+**Files affected**:
+- `actingweb/actor.py`: the check in the enforced branch.
+- `actingweb/maintenance/unique_creators.py`: `_rename` releases the record.
+- `tests/integration/test_unique_creator_adoption.py`: `TestMismatchedRecord`
+  (vouched and factory, DynamoDB only: on PostgreSQL the holder is the row).
+- `tests/integration/test_unique_creators_command.py`:
+  `test_renaming_the_recorded_actor_releases_its_record`.
+
+**Rationale**: the design assumed a stale record only blocks its address;
+nothing compared it with the actor row, so it redirected sign-ins.
+Fail-closed rather than self-repair, because the actor read is not
+guaranteed consistent and a repair from a stale read could delete a valid
+record.
+
+#### 46. A create that fails after the swap keeps the successor and removes the squatter (B7)
+
+**Category**: Verification fix
+
+**What changed**: with `replace_holder` set, `Actor.create`'s two rollbacks
+(lost marker, faulted trustee_root) keep the row, which now holds the
+creator; unmarked, the next sign-in cleans it in place. `_replace_enforced`
+catches a failed create, reads the holder, and if it is no longer the
+squatter runs `_remove_for_replacement` (revoking its tokens) before
+re-raising.
+
+**Files affected**: `actingweb/actor.py`, `actingweb/oauth2.py`,
+`tests/integration/test_unique_creator_adoption.py`
+(`TestCreateFaultAfterTheSwap`).
+
+**Rationale**: the rollback deleted the row that held the creator, leaving
+it held by nobody (DynamoDB: a second actor at the next sign-in) and the
+squatter alive with its tokens.
+
+#### 47. Reserved values are checked as stored; the system creators are reserved (C7, I7)
+
+**Category**: Verification fix (security)
+
+**What changed**: `is_reserved` normalises first, so `#DUP-` in an address
+counts. New `SYSTEM_CREATORS` and `is_refused_from_callers` (reserved plus
+`system`, `oauth2-system`), used by the factory and `PUT /trust/trustee`.
+`Actor.create` refuses reserved values (returns False), so
+`ActorInterface`, OAuth and MCP creates are covered; the command still
+writes `#dup-` through `modify()`.
+
+**Files affected**: `actingweb/db/creator_rules.py`,
+`actingweb/handlers/factory.py`, `actingweb/handlers/trust.py`,
+`actingweb/actor.py`, `CHANGELOG.rst` (the reserved entry),
+`docs/migration/v3.16.rst` (item 13), and tests in
+`test_unique_creator_http.py` and `test_unique_creator_backend.py`.
+
+**Rationale**: the trustee check ran before lowercasing, letting a squatter
+take the exact value the PostgreSQL swap renames it to and block the
+owner's sign-in for good; an open factory could take the system actors'
+creators before their bootstrap.
+
+#### 48. The command keeps records true (D7, E7, G7)
+
+**Category**: Verification fix
+
+**What changed**:
+- `enable` scans consistently, re-reads each actor consistently before its
+  put (skipping one deleted or renamed since the scan), and refuses while
+  orphaned records or addresses stored with capitals remain.
+- `disable --apply` on DynamoDB deletes the backfill-complete item and
+  every record; a later `enable` starts from the actors.
+- `report` lists `@` addresses stored with capitals outside a group
+  (`unnormalised`, exit 1); `resolve --apply` lowercases them, and in a
+  case group lowercases the kept actor after the others gave up the value.
+  Lowercasing keeps the stored email and the record; the target check
+  re-reads listed rows consistently.
+
+**Files affected**: `actingweb/maintenance/unique_creators.py`,
+`tests/integration/test_unique_creators_command.py` (`TestCapitalsAndOrder`,
+`TestRecordsStayTrue`).
+
+**Rationale**: `enable` wrote records from a lagging scan of a live store;
+`disable` left records that went stale with the flag off; a kept mixed-case
+actor could not be lowercased (the loser still held the value), and the
+lowercasing also cleared its email.
+
+#### 49. DynamoDB releases the record of the creator the row had; PostgreSQL parity (F7, P7)
+
+**Category**: Verification fix
+
+**What changed**: under the flag, `DbActor.delete` conditions the actor
+delete on the handle's creator and, when another process renamed the actor,
+re-reads it and deletes under the current creator (`_delete_as_stored`);
+`_release_record` normalises the key. PostgreSQL `modify` normalises with
+`normalise_creator`, and its `replace_creator_holder` and
+`get_creator_holder` raise `ValueError` with the flag off, as DynamoDB's do.
+
+**Files affected**: `actingweb/db/dynamodb/actor.py`,
+`actingweb/db/postgresql/actor.py`, `docs/reference/database-backends.rst`,
+`tests/integration/test_unique_creator_backend.py`
+(`TestReleasesTheStoredCreator`, `TestFlagAndReservedParity`).
+
+**Rationale**: a stale handle or a legacy mixed-case row released the wrong
+key and left an orphan that locks the address.
+
+#### 50. A concurrent first sign-in loads the winner (H7)
+
+**Category**: Verification fix
+
+**What changed**: `lookup_or_create_actor_by_identifier` catches
+`CreatorTaken` from the create when the flag is on (not for
+`create_only`), looks the identifier up once more and adopts the winner.
+
+**Files affected**: `actingweb/oauth2.py`,
+`tests/integration/test_unique_creator_adoption.py`
+(`TestConcurrentFirstSignIn`).
+
+**Rationale**: two tabs or a retried callback answered 409 to the owner.
+
+#### 51. Docs, and the small items (J7, K7, L7, M7, N7, O7)
+
+**Category**: Verification fix
+
+**What changed**:
+- J7: the migration guide's Step 0 names the IAM permissions for
+  `<prefix>_creators`; `configuration.rst`'s least-privilege line mentions
+  the table.
+- K7: the guide, the CHANGELOG and `configuration.rst` say exactly what is
+  transactional (create and creator change) and that the old record is
+  released separately.
+- L7: `check_ready`'s docstring, the guide and the CHANGELOG say what a
+  probe fault means on each backend ("treat that WARNING as a failed
+  deploy").
+- M7: documented in the guide (a lost commit answer reads 503; the actor
+  exists).
+- N7: `create(delete=True)` finds a held creator's holder through
+  `get_creator_holder`.
+- O7: the default-creator loop no longer loads each actor twice.
+
+**Files affected**: `docs/migration/v3.16.rst`,
+`docs/quickstart/configuration.rst`, `CHANGELOG.rst`,
+`actingweb/interface/app.py`, `actingweb/actor.py`.
+
+**Rationale**: wording that overclaimed, and two small inefficiencies.
+
+### 2026-10-30, after verification thoughts/verifications/2026-10-30-db-fault-semantics-and-creator-uniqueness-2.md
+
+Built on the invariant audit,
+thoughts/research/2026-10-30-creator-record-invariant-audit.md (its rules
+1-7), as one batch; the owner decided K8 (fail closed). Tests are organised
+by state in the new `tests/integration/test_unique_creator_states.py`.
+Full tier after the batch: ruff, format, pyright 0/0/0; fast 3265 passed;
+verify_groups 51; DynamoDB 4363 passed, 37 skipped; PostgreSQL 4231 passed,
+169 skipped; docs build clean.
+Each new test was run with its fix disabled and failed, except the H8
+test, which checks only the log line.
+
+#### 52. The sign-in lookup repairs a stale record and compares as stored (rules 1, 4; A7 revisited, G8)
+
+**Category**: Decision changed (replaces entry 45's fail-closed)
+
+**What changed**: under the flag, `get_from_creator` reads the holder's row
+as stored (consistently, before any rewrite). When the actor is gone or
+holds another creator, `release_stale_creator` removes the record (a
+consistent re-read, then a delete conditioned on the actor id) and the
+lookup answers False, so the sign-in creates the owner's actor. A matching
+holder is loaded with `get(rewrite_email=False)`: the force-email rewrite no
+longer runs inside a lookup. New protocol method `release_stale_creator`
+(DynamoDB: the shared `release_stale_record`; PostgreSQL: always False, the
+row is the holder).
+
+**Files affected**: `actingweb/actor.py` (`get(rewrite_email=)`, the lookup),
+`actingweb/db/protocols.py`, `actingweb/db/dynamodb/actor.py`,
+`actingweb/db/postgresql/actor.py`; tests `TestLookup` (states), and
+`TestMismatchedRecord` and the orphan test in
+`test_unique_creator_adoption.py`, rewritten to the new outcome.
+
+**Rationale**: the lookup's actor read is consistent, so a stale record is
+provably stale; failing closed locked the owner out until someone ran
+`resolve`.
+
+#### 53. A case-only rename keeps the record it claimed (rule 1 exception, A8)
+
+**Category**: Bug fix (regression from entry 49)
+
+**What changed**: `_modify_unique` skips the release when
+`normalise_creator(old) == new`.
+
+**Files affected**: `actingweb/db/dynamodb/actor.py`; test
+`test_a8_a_case_only_rename_keeps_the_record_it_claimed`.
+
+#### 54. The command confirms damage on the row, and moves records (rules 1-3; B8, C8, D8, E8)
+
+**Category**: Verification fix
+
+**What changed**:
+- `report`'s orphan, mismatch and unrecorded classes are confirmed by a
+  consistent read (`_record_problem`, `_unrecorded_now`), so an actor
+  created or renamed between the two scans is not listed.
+- `_repair_record` uses `release_stale_record`, so it never deletes a live
+  actor's record.
+- `resolve` settles each group's record afterwards (`_settle_record`): moves
+  it from a renamed actor to the kept one, or removes it as stale.
+  `_rename` no longer deletes records.
+- `enable` lists a creator recorded for another actor and carries on,
+  writing the backfill-complete item only when nothing was listed.
+- `--creator` is refused for `enable` and `disable`.
+
+**Files affected**: `actingweb/maintenance/unique_creators.py`; tests
+`TestReportAndResolveUnderLiveTraffic`, `TestEnable`, and the command
+test, which now expects the record moved.
+
+**Rationale**: the command treated allowed gaps (scan skew, a swap in
+flight) as damage and deleted records instead of moving them.
+
+#### 55. `disable` after the flag-on processes stop, and resumable (rule 6, J8)
+
+**Category**: Verification fix
+
+**What changed**: `disable --apply` documents (help, migration guide,
+CHANGELOG) that it runs only once every flag-on process has stopped. It
+deletes the backfill-complete item and the records even when a previous
+run removed the item, and confirms with a consistent scan that the table
+is empty (exit 2 otherwise).
+
+**Files affected**: `actingweb/maintenance/unique_creators.py`,
+`docs/migration/v3.16.rst`, `CHANGELOG.rst`; test
+`test_disable_finishes_a_partial_run`.
+
+#### 56. The startup probe fails closed (rule 5, K8)
+
+**Category**: Decision changed (owner, 2026-10-30)
+
+**What changed**: a fault in `missing_enforcement` raises
+`UniqueCreatorNotReady` naming the fault, on both backends. PostgreSQL is
+included deduced, not confirmed, for one rule.
+
+**Files affected**: `actingweb/interface/app.py`,
+`docs/migration/v3.16.rst`, `CHANGELOG.rst`; test
+`test_a_probe_fault_refuses_to_start`, which replaces
+`test_a_probe_fault_logs_and_starts`.
+
+#### 57. The sign-in path: a lost swap, a strict recovery read, reserved values through the SDK (F8, H8, I8)
+
+**Category**: Verification fix
+
+**What changed**:
+- `_replace_enforced` re-raises a `CreatorTaken` from the swap before its
+  recovery branch.
+- `lookup_or_create_actor_by_identifier` catches it under the flag, looks
+  up once more and adopts the winner's successor. The original "no look
+  up again retry" decision is relaxed to one retry, deduced, not
+  confirmed.
+- The recovery read is strict; on a fault it logs that the squatter may
+  still be live.
+- `modify_creator_unvouched` refuses `is_refused_from_callers` values, and
+  `ActorInterface.modify_creator` refuses `is_reserved` ones.
+
+**Files affected**: `actingweb/oauth2.py`, `actingweb/actor.py`,
+`actingweb/interface/actor_interface.py`, `CHANGELOG.rst`; tests
+`TestSwapRaces` (the F8 test asserts a single removal) and
+`TestReservedThroughTheSdk`.
+
+#### 58. PostgreSQL: a stale handle's rename answers False
+
+**Category**: Verification fix (L8)
+
+**What changed**: PostgreSQL `modify(creator=)` adds
+`AND creator IS NOT DISTINCT FROM <the handle's creator>`, so a handle
+loaded before another process's rename answers False, as on DynamoDB.
+This holds with the flag off too, and is a behaviour change noted in the
+CHANGELOG and the migration guide.
+
+**Files affected**: `actingweb/db/postgresql/actor.py`; test
+`TestStaleHandleRename` (both backends).
+
+Not done (L8 items, small): `actor_created` for a successor kept after a
+failed create; the force-email rewrite retried on every load of an actor
+whose email is held elsewhere; the default-creator sweep on the create
+path; passing `unique_creator=` to custom backends only when it is on; the
+inline normalisation copies; `#…` addresses refused with the flag off. They
+are filed in `thoughts/todo/unique-creator-small-followups.md`.
+
+### 2026-10-30, after verification thoughts/verifications/2026-10-30-db-fault-semantics-and-creator-uniqueness-3.md
+
+The owner asked how A9-J9 relate to the invariant audit. Three of the
+audit's assumptions were wrong: its writer list was built by intent and
+missed the full-row save (A9); its rules read the actor row and then wrote
+the record conditioned on the record only (D9-G9); and entry 52's sign-in
+repair was a new writer it never checked (B9). C9 is a second invariant, the
+`auth_method` marker. The audit's addendum
+(thoughts/research/2026-10-30-creator-record-invariant-audit.md, "Addendum")
+lists every writer by mechanism and adds rules 8-10 and an amended rule 2;
+the owner then asked for the fixes in one batch.
+
+#### 59. No full-row write of the actor through a stale handle (rule 8, A9)
+
+**Category**: Verification fix (A9, High)
+
+**What changed**: DynamoDB `DbActor.modify` outside the transactional
+rename (a password change, or any change with the flag off) saves
+conditioned on the creator the handle was loaded with (or on the row
+existing). A stale handle answers False and writes nothing, instead of
+writing its copy back over a concurrent rename (under the flag: a creator
+with no record) or re-creating a deleted actor. A conditional `PutItem`
+rather than an `UpdateItem`, so flag-off deployments need no new IAM
+permission. **Behavior change** on DynamoDB with the flag off too, as entry
+58 made it on PostgreSQL; in the CHANGELOG.
+
+**Files affected**: `actingweb/db/dynamodb/actor.py` (`modify`); tests
+`TestWriters::test_a9_*` (two).
+
+#### 60. A record write checks the actor row in its own transaction (rule 9; E9, F9, G9)
+
+**Category**: Verification fix (E9, F9, G9)
+
+**What changed**: new `actor_as_read(row)` (the condition that a row still
+has the creator a read found, or is still absent) and
+`record_for_actor_as_read(creator, row, moving_from=)` (put if absent, or
+move from an actor, plus a `condition_check` on the row).
+`release_stale_record` deletes in a transaction with the same check, so a
+rename back between its read and its delete keeps the record. `enable`'s
+backfill and `resolve`'s settle use `record_for_actor_as_read`; a failed
+backfill write is classified by reads (the actor changed, or a collision).
+`DbActor._run_transaction` became a classmethod for these module
+functions. **Deployment:** the `condition_check` needs `ConditionCheckItem`
+on the actor table, for the application's role (the sign-in's repair) and
+the command's; the migration guide's IAM paragraph, the configuration
+guide and the CHANGELOG say so.
+
+**Files affected**: `actingweb/db/dynamodb/actor.py`,
+`actingweb/maintenance/unique_creators.py`; tests
+`TestWritesCheckTheActorRow::test_e9_*`, `::test_f9_g9_*`.
+
+#### 61. The lookup compares again after its load (rule 9, D9)
+
+**Category**: Verification fix (D9)
+
+**What changed**: `get_from_creator` under the flag checks the loaded
+actor's normalised creator against the lookup; a rename between the check
+and the load answers False and clears the loaded handle and stores. The
+stale comment above the lookup (J9) now describes the repair.
+
+**Files affected**: `actingweb/actor.py`; test
+`TestWritesCheckTheActorRow::test_d9_*`.
+
+#### 62. `resolve` settles the record before it renames (amended rule 2, B9)
+
+**Category**: Verification fix (B9)
+
+**What changed**: per group, `_settle_record` runs first: a record naming
+a loser is moved to the kept actor, a missing record is written for it
+(both through `record_for_actor_as_read`), and a record naming an actor
+outside the group is left and logged. Only then are the losers renamed. A
+settle fault skips the group (exit 1) rather than rename with the record
+unsettled. If the kept actor no longer holds the key, the old fallback
+(`_release_losers_record`, rule 1's helper) runs after the renames. The
+migration guide's "safe against live traffic" paragraph says how.
+
+**Files affected**: `actingweb/maintenance/unique_creators.py`
+(`_settle_record`, `_release_losers_record`, `resolve`); test
+`TestResolveUnderSignIn::test_b9_*`.
+
+#### 63. A race retry adopts only a marked winner (rule 10, C9)
+
+**Category**: Verification fix (C9)
+
+**What changed**: new `_winner_is_marked` in `oauth2.py`. Both retries in
+`lookup_or_create_actor_by_identifier` (the lost swap and the concurrent
+first sign-in) re-raise `CreatorTaken` (409) when the winner has no
+`auth_method` yet, instead of adopting it as a legacy actor and cleaning
+it in place. Logged. A wait-and-re-read was not added (deduced, not
+confirmed: it would sleep on the request path).
+
+**Files affected**: `actingweb/oauth2.py`; test
+`TestRetryAdoptsOnlyAMarkedWinner::test_c9_*`.
+
+#### 64. A failed condition on the last attempt wins over a conflict (H9)
+
+**Category**: Verification fix (H9)
+
+**What changed**: `_run_transaction` returns the cancellation codes when
+any is `ConditionalCheckFailed`, conflict or not, on the last attempt, so a
+real `CreatorTaken` or "changed meanwhile" is not reported as an outage.
+
+**Files affected**: `actingweb/db/dynamodb/actor.py`; test
+`test_a_condition_failure_on_the_last_attempt_wins_over_a_conflict`.
+
+#### 65. The custom-backend lists name `release_stale_creator` (I9)
+
+**Category**: Verification fix (I9)
+
+**What changed**: the migration guide's custom-backend checklist, the
+CHANGELOG's breaking entry and the database-backends reference list
+`release_stale_creator` (a backend whose uniqueness lives on the row
+returns False, as PostgreSQL does).
+
+**Files affected**: `docs/migration/v3.16.rst`, `CHANGELOG.rst`,
+`docs/reference/database-backends.rst`.
+
+Each new test failed with its fix disabled and passes with it
+(`scratchpad/disable_check.py`, which restores each file and checks its
+hash).
+
+Full tier after the batch (`scratchpad/full18.sh`): ruff, format (449
+files) and pyright pass with 0 errors and 0 warnings; fast tier 3266
+passed, 23 skipped; `verify_groups` 51 documented; DynamoDB 4371 passed,
+37 skipped; PostgreSQL 4233 passed, 175 skipped; docs build succeeded.
+
+
+### 2026-10-30, after verification thoughts/verifications/2026-10-30-db-fault-semantics-and-creator-uniqueness-4.md
+
+A10 and B10 were rules applied to too few sites; the audit's addendum has
+a second part (M widened to every sign-in, rules 1 and 2 extended). The
+owner accepted the five deduced decisions before this batch (Decisions
+Made).
+
+#### 66. The marker is written before the row (M widened, A10)
+
+**Category**: Verification fix (A10)
+
+**What changed**: `Actor.create` with a generated id writes the
+`auth_method` marker before `handle.create`, so the row (and its record)
+is never visible to a sign-in without it; the first lookup can no longer
+take a brand-new actor for a legacy one and clean it in place. A fault
+there raises with nothing created; a create that then fails
+(`CreatorTaken`, `DbError`, id taken) removes the marker
+(`_drop_pre_marker`, best effort). Caller-supplied ids keep the marker
+after the row. B7's state (a marker fault after the swap) no longer arises
+for a generated successor: the fault comes before the swap, and the
+squatter keeps the creator until the next sign-in.
+
+**Files affected**: `actingweb/actor.py`; tests
+`TestMarkerBeforeRow::test_a10_*` (two, both backends); the B7 test in
+`test_unique_creator_adoption.py` now asserts the new outcome
+(`test_a_marker_fault_swaps_nothing_and_the_next_sign_in_replaces`).
+
+#### 67. `resolve` settles outside records, and records a lone holder (rules 1, 2; B10)
+
+**Category**: Verification fix (B10)
+
+**What changed**: `_settle_record` returns `settled`, `skip` or
+`conflict`. A stale record naming an actor outside the group is released
+and written for the kept actor; a live holder outside the group, or a
+change meanwhile, is a conflict: the group is skipped and counted
+(exit 1). After the orphan pass removes a record, `_record_lone_holder`
+writes it for the one live actor holding the key, if there is exactly one.
+
+**Files affected**: `actingweb/maintenance/unique_creators.py`; tests
+`TestResolveOutsideRecords` (two).
+
+#### 68. One condition helper for the stored creator (C10, D10)
+
+**Category**: Verification fix (D10; C10 unreachable)
+
+**What changed**: `creator_is(value)` renders None as "absent" and is used
+by `modify`, `_modify_unique`, `_delete_as_stored` and `actor_as_read`, so
+an actor stored without a creator can be renamed and deleted under the
+flag. C10 (the empty creator) cannot occur on DynamoDB: the creator index
+rejects an empty key, which the attempted test showed; the helper still
+treats `""` as an exact value.
+
+**Files affected**: `actingweb/db/dynamodb/actor.py`; test
+`TestCreatorValues::test_d10_*`.
+
+#### 69. An unreadable marker is a fault, not a conflict (E10)
+
+**Category**: Verification fix (E10)
+
+**What changed**: `_winner_is_marked` raises `DbError` (503) when the
+winner's store did not load, instead of answering "creator taken".
+
+**Files affected**: `actingweb/oauth2.py`; test
+`test_e10_an_unreadable_marker_is_a_fault_not_a_conflict`.
+
+#### 70. A lost race on `PUT /<id>/trust/trustee` answers 409 (F10)
+
+**Category**: Verification fix (F10)
+
+**What changed**: when the creator change returns False and a re-read
+shows another creator, the handler answers 409 ("the actor's creator
+changed meanwhile") instead of 500; the 409 body is shared with the
+`CreatorTaken` answer (`_conflict`). In the CHANGELOG.
+
+**Files affected**: `actingweb/handlers/trust.py`, `CHANGELOG.rst`; test
+`tests/test_trust_creator_rename.py::TestStaleHandle` (its `_put` helper
+now uses a `MagicMock` response, so headers can be set).
+
+Each new test failed with its fix disabled and passes with it
+(`scratchpad/disable_check2.py`, restoring each file and checking its
+hash). A first fast-tier run hung because DynamoDB Local had been stopped
+by the previous full tier's `make` target; restarted, not a code fault.
+
+Full tier after the batch (`scratchpad/full20.sh`): ruff, format (449
+files) and pyright pass with 0 errors and 0 warnings; fast tier 3267
+passed, 23 skipped; `verify_groups` 51 documented; DynamoDB 4378 passed,
+37 skipped; PostgreSQL 4237 passed, 178 skipped; docs build succeeded.
+
+
+### 2026-10-30, after verification thoughts/verifications/2026-10-30-db-fault-semantics-and-creator-uniqueness-5.md
+
+The owner asked to keep iterating and verifying until the branch is ready
+to commit. A11 is a regression from entry 66; this batch also fixes the
+Lows rather than filing them.
+
+#### 71. Generated ids carry random bytes; the marker is kept unless the create was refused (A11, B11)
+
+**Category**: Verification fix (A11, a regression from 66; B11)
+
+**What changed**: `Actor.create` adds 16 random bytes to the id seed, so
+two creates in the same microsecond no longer share an id and the
+pre-written marker cannot land in another actor's bucket. The marker is
+now removed only after `CreatorTaken` (the condition failed, nothing
+committed). After a `DbError` it stays: the create may have committed, and
+a committed row without it would be cleaned as legacy; on an unused id it
+is an orphan bucket. After "id taken" the bucket is not touched.
+
+**Files affected**: `actingweb/actor.py`; tests
+`TestMarkerBeforeRow::test_a11_*`, `::test_b11_*`.
+
+#### 72. An outside stale record is moved in one transaction (C11)
+
+**Category**: Verification fix (C11)
+
+**What changed**: new `move_stale_record(creator, stale_id, actor)` in
+`dynamodb/actor.py`: the record update (conditioned on `stale_id`), a
+`condition_check` that `stale_id` is still gone or holds another creator,
+and one that the kept actor is as read, in one transaction.
+`_settle_record` uses it, so the record never disappears while `resolve`
+moves it.
+
+**Files affected**: `actingweb/db/dynamodb/actor.py`,
+`actingweb/maintenance/unique_creators.py`; test
+`TestResolveOutsideRecords::test_c11_*`, which checks the record at every
+transaction.
+
+#### 73. The lone holder is found from the scan as well as the index (D11)
+
+**Category**: Verification fix (D11)
+
+**What changed**: `_record_lone_holder` takes the report; its candidates
+are the scan's actors whose creator normalises to the key (the same run's
+lowercasings included) plus the index listing, each re-read consistently.
+The key is normalised; "no actor holds it" is logged.
+
+**Files affected**: `actingweb/maintenance/unique_creators.py`; test
+`test_d11_*` (the index patched to lag).
+
+#### 74. `_winner_is_marked` describes the new order (E11)
+
+**Category**: Verification fix (E11)
+
+**What changed**: the docstring names what an unmarked winner is now (a
+pre-3.16 actor, an old process's row, a lost answer), and the log is at
+error level.
+
+**Files affected**: `actingweb/oauth2.py`.
+
+#### 75. The trustee change: its own lost answer succeeds, a deleted actor is 404 (F11)
+
+**Category**: Verification fix (F11)
+
+**What changed**: after a False change, the handler re-reads the row: the
+requested value stored means this request's write landed (success); no
+row answers 404; another value answers 409. In the CHANGELOG.
+
+**Files affected**: `actingweb/handlers/trust.py`, `CHANGELOG.rst`; tests
+`TestStaleHandle::test_f11_*` (two).
+
+Each new test failed with its fix disabled and passes with it
+(`scratchpad/disable_check3.py`).
+
+Full tier after the batch (`scratchpad/full22.sh`): ruff, format (449
+files) and pyright pass with 0 errors and 0 warnings; fast tier 3269
+passed, 23 skipped; `verify_groups` 51 documented; DynamoDB 4384 passed,
+37 skipped; PostgreSQL 4241 passed, 180 skipped; docs build succeeded.
+
+
+### 2026-10-30, after verification thoughts/verifications/2026-10-30-db-fault-semantics-and-creator-uniqueness-6.md
+
+#### 76. A landed unvouching change writes its marker again (A12)
+
+**Category**: Verification fix (A12; security)
+
+**What changed**: `modify_creator_unvouched` writes and confirms
+`creator_changed` again after a change that landed and unvouched. A
+concurrent failed change restores the old marker after its re-read, and
+that restore could land between this change's first marker write and its
+rename, leaving the actor vouched under an address nobody proved. With
+the flag the failing change is available on demand (`CreatorTaken`). The
+restore itself predates the branch. In the CHANGELOG's unvouch entry.
+
+**Files affected**: `actingweb/actor.py`, `CHANGELOG.rst`; test
+`tests/test_trust_creator_rename.py::TestConcurrentRestore`.
+
+#### 77. The orphan pass reports a failed holder write as such (B12)
+
+**Category**: Verification fix (B12)
+
+**What changed**: the repair and the lone-holder write have their own
+`try` and message ("removed the record of ..., but its holder's record
+could not be written; run enable --apply").
+
+**Files affected**: `actingweb/maintenance/unique_creators.py`; test
+`TestResolveOutsideRecords::test_b12_*`.
+
+Both tests failed with their fix disabled (`scratchpad/disable_check4.py`).
+
+Full tier after the batch (`scratchpad/full23.sh`): ruff, format (449
+files) and pyright pass with 0 errors and 0 warnings; fast tier 3270
+passed, 23 skipped; `verify_groups` 51 documented; DynamoDB 4386 passed,
+37 skipped; PostgreSQL 4242 passed, 181 skipped; docs build succeeded.
+
+
+### 2026-10-30, after verification thoughts/verifications/2026-10-30-db-fault-semantics-and-creator-uniqueness-7.md
+
+Entry 76 was a write-again patch on a compare-and-set problem (A13), and
+the clean-in-place sign-in has the same flaw (B13). The audit's third
+addendum part states invariant V and rule 11; this batch replaces 76.
+
+#### 78. A vouch is bound to the address it proved (A13, B13; replaces 76)
+
+**Category**: Verification fix (A13, B13; security); Decision changed
+
+**What changed**: every vouched-marker write records the address first
+(`VOUCHED_CREATOR = "vouched_creator"` in the `_internal` bucket):
+`Actor._write_marker` in `create` (both the pre-row and the fixed-id
+path), `Actor._restore_marker` in `modify_creator_unvouched` (bound to the
+creator its re-read confirmed), the clean-in-place sign-in
+(`resets[VOUCHED_CREATOR]`, the address the sign-in proved), and
+`mark_actors_vouched` (the listed creator). `is_vouched_store(store,
+creator=None)` requires, when given a creator, the recorded address or the
+actor's own stored email to match it; a missing address (vouched before
+3.16) falls back to the marker. `is_vouched_actor` passes the actor's
+creator; `classify_store`/`classify_marker` take an optional creator, which
+the sign-in ranking (`get_from_creator`) and the adoption's remaining
+classes pass. Entry 76's re-write is removed. `_drop_pre_marker` removes the
+address too.
+
+**Files affected**: `actingweb/oauth2.py`, `actingweb/actor.py`,
+`actingweb/maintenance/mark_actors_vouched.py`, `CHANGELOG.rst`; tests
+`tests/test_trust_creator_rename.py::TestConcurrentRestore` (the restore
+landing before and after the rename, and a pre-3.16 actor),
+`TestVouchBoundToItsAddress` (a rename during the clean, both backends).
+
+#### 79. A stale handle's save is conditioned on the passphrase too (A9 completed)
+
+**Category**: Verification fix (B13's DynamoDB part)
+
+**What changed**: DynamoDB `modify` outside the transactional rename adds
+`passphrase == <the handle's>` to its condition when it is not changing
+the passphrase, so a rename through a handle loaded before a rotation
+answers False instead of writing the old passphrase back. In the CHANGELOG.
+
+**Files affected**: `actingweb/db/dynamodb/actor.py`; test
+`TestWriters::test_a_stale_handles_rename_does_not_undo_a_rotation`.
+
+Each piece failed its test when disabled (`scratchpad/disable_check5.py`:
+the reader's binding, the clean's binding, the restore's binding, the
+passphrase condition).
+
+Full tier after the batch (`scratchpad/full24.sh`): ruff, format (449
+files) and pyright pass with 0 errors and 0 warnings; fast tier 3272
+passed, 23 skipped; `verify_groups` 51 documented; DynamoDB 4390 passed,
+37 skipped; PostgreSQL 4245 passed, 182 skipped; docs build succeeded.
+The built-in security review ran on the whole branch afterwards and found
+nothing above its 0.8 confidence bar. The browser cookie (`oauth_token`)
+carries the same bearer token as the SPA, resolved to an actor id, so B13
+reached browser sessions too; with the binding the victim's sign-in cleans
+the actor and revokes them.
+
+
+### 2026-10-30, after verification thoughts/verifications/2026-10-30-db-fault-semantics-and-creator-uniqueness-8.md
+
+#### 80. The emailed link proves only the address it was sent to (A14)
+
+**Category**: Verification fix (A14; security)
+
+**What changed**: issuing a link records `email_verification_address`; the
+verify handler answers 409 ("This link was sent to another address; sign
+in again"), with the link left unused, when the actor's normalised creator
+is not that address (or, for a link issued before this change, the stored
+`email`). The address is cleared with the token. In the CHANGELOG.
+
+**Files affected**: `actingweb/handlers/oauth_email.py`, `CHANGELOG.rst`;
+test `tests/test_oauth_email_verify_link.py::TestLinkProvesOnlyItsAddress`.
+Two fixtures that build a pending link by hand (`pending_actor`, and
+`TestEmailedLink` in `test_adoption_fourth_iteration.py`) now record the
+address, as the real issue path does.
+
+#### 81. An application rename moves the recorded address (B14, a regression from 78)
+
+**Category**: Verification fix (B14)
+
+**What changed**: `ActorInterface.modify_creator` without `unvouch`, after
+the rename lands, writes `vouched_creator` for the new address when the
+actor is vouched and bound (`_rebind_vouch`); a pre-3.16 unbound actor is
+left as it is. False when the address cannot be confirmed.
+
+**Files affected**: `actingweb/interface/actor_interface.py`; test
+`tests/test_trust_creator_rename.py::TestApplicationRename`.
+
+#### 82. The restore is a compare-and-set on the marker (C14)
+
+**Category**: Verification fix (C14)
+
+**What changed**: `Actor._restore_marker` replaces the marker through the
+attribute layer's `conditional_update_attr` (old `creator_changed`), so a
+marker a sign-in wrote meanwhile is never overwritten by a stale one.
+
+**Files affected**: `actingweb/actor.py`; test
+`TestConcurrentRestore::test_r8_a_clean_that_landed_meanwhile_is_not_restored_over`.
+
+Each fix failed its test when disabled (`scratchpad/disable_check6.py`).
+
+Full tier after the batch (`scratchpad/full25.sh`): ruff, format (449
+files) and pyright pass with 0 errors and 0 warnings; fast tier 3275
+passed, 23 skipped; `verify_groups` 51 documented; DynamoDB 4393 passed,
+37 skipped; PostgreSQL 4248 passed, 182 skipped; docs build succeeded.
+
 ## Evaluation Notes
 
 ### Architecture
@@ -1913,7 +2911,7 @@ risk list in the PR description) are not taken here.
 
 ### Scalability
 - **The BS fix still read every row.** Folded: the `ids_only` listing, one listing per sign-in, and a test that counts `Actor.get` calls.
-- **The startup check could fail every cold start on a throttle.** Folded: it raises only on definite absence.
+- **The startup check could fail every cold start on a throttle.** Folded: it raises only on definite absence. [Superseded by entry 56 (owner, K8): a probe fault fails closed too]
 - **Transaction retries were not idempotent and stacked on PynamoDB's own.** Folded.
 - **The WCU table left out delete.** Folded.
 - **The maintenance scans held the whole table in memory.** Folded: `GROUP BY` on PostgreSQL, a paged projected scan on DynamoDB, consistent reads opt-in.
@@ -1949,7 +2947,7 @@ Codex (`codex exec -s read-only`, unsandboxed) and a fresh-context Claude. Findi
 - **"An absent row counts as deleted" cannot hold for handle-less deletes.** Folded: the contract is scoped to loaded handles.
 - **Orphaned `creators` records, and no reaper or off switch.** Folded: `report` and `resolve` find and repair them, and `disable` is added.
 - **The PostgreSQL index enforcing silently after a flag rollback.** Folded: `UniqueViolation` is mapped whatever the flag says.
-- **The expiry rule for strict reads.** Folded: expired rows are absent.
+- **The expiry rule for strict reads.** Folded: expired rows are absent. [Refined in Decisions Made: only `get_attr_strict` hides expired rows; `get_attr` and `get_bucket` return them]
 - **Signing in to an actor that is mid-deletion.** Folded: a deletion-status check on the enforced lookup.
 - **Split the release.** The owner kept one PR, after a detailed trade-off; reverted to two PRs on 2026-10-28 (Update Log).
 - **Line numbers come from uncommitted files.** Folded: symbol names are the anchor.
@@ -1978,9 +2976,12 @@ A read of the plan against the uncommitted tree before `/implement_plan`, after 
   - `thoughts/todo/db-layer-get-bucket-or-empty.md` is this work and lists four more sites: folded and deleted at the PR 1 boundary, with the adoption todo trimmed;
   - the MCP bridge's cross-id `CreatorTaken` case, the list-container protocol (`attribute_list.py`) joining the raising API, the CHANGELOG pointing at a todo, the autogenerate test littering `migrations/versions/`, `InternalStore` being a wrapper not a subclass, the `oauth_session.py:409-412` cleanup not being a display read, `devtest.py` missing from the display list, the name-only `include_object` filter, the catch-all policy at fault-aware sites, the next-major exit lacking a pin, and `CreatorTaken` being referenced in PR 1 but defined in PR 2.
   - Unverified by the reviewers: whether the refresh-token grace classification (`single_use.classify_reuse`) reads an expiring row through a path the TTL rule changes; whether `actingweb_mcp` catches `RuntimeError`/`IndexError` from list properties. Both are checked in Phase 1's grep step.
-- Smaller, recorded: the two-step record move on a DynamoDB rename leaves a window in which the freed old creator still answers `CreatorTaken` until the separate conditional delete runs (default path unaffected; add to Phase 3's failure scenarios when implementing). BS's "rank until the first vouched" reads every row when the owner's actor has the highest id (default path only, bounded by the exit decision).
+- Smaller, recorded: the two-step record move on a DynamoDB rename leaves a window in which the freed old creator still answers `CreatorTaken` until the separate conditional delete runs (default path unaffected; add to Phase 3's failure scenarios when implementing) [not done then; filed 2026-10-30 in thoughts/todo/unique-creator-small-followups.md]. BS's "rank until the first vouched" reads every row when the owner's actor has the highest id (default path only, bounded by the exit decision).
 
 ### Unverified notes
+
+[2026-10-30: still unverified; the first and third are filed in thoughts/todo/unique-creator-small-followups.md, the second in thoughts/todo/resumable-actor-deletion.md.]
+
 - A creator containing `#` might break a route or template that puts the creator in a URL. The reserved prefixes reduce the exposure, but templates were not checked.
 - A user who deletes their account and signs up again at once is refused while the wipe runs, because the record is freed only when the actor row goes. On a large actor that can take a while.
 - Records edited by hand in the console that point at the wrong actor id can be found only by `report`'s orphan pass.

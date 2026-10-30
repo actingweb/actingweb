@@ -2,6 +2,7 @@ import base64
 import datetime
 import json
 import logging
+import os
 import time
 from typing import Any
 
@@ -15,9 +16,15 @@ from actingweb.db import get_actor, get_actor_list, get_subscription_suspension
 from actingweb.log_summary import summarize_payload
 from actingweb.permission_evaluator import PermissionResult, get_permission_evaluator
 from actingweb.property_list import ListCorruptionError
-from actingweb.secret_compare import secret_digest_equals, secret_equals
+from actingweb.secret_compare import secret_digest_equals
 
-from .db.exceptions import DbError
+from .db.creator_rules import (
+    is_exempt,
+    is_refused_from_callers,
+    is_reserved,
+    normalise_creator,
+)
+from .db.exceptions import CreatorTaken, DbError
 
 logger = logging.getLogger(__name__)
 
@@ -257,8 +264,78 @@ class Actor:
                 "data": {},
             }
 
-    def get(self, actor_id: str | None = None) -> dict[str, Any] | None:
-        """Retrieves an actor from storage or initialises if it does not exist"""
+    def _write_marker(self, store: "attribute.InternalStore", auth_method: str) -> bool:
+        """Write ``auth_method``, and first, for a vouched one, the address
+        it vouches for (:data:`actingweb.oauth2.VOUCHED_CREATOR`), both
+        confirmed. Bound first: a marker without its address would be judged
+        by the marker alone. Raises ``DbError`` on a fault."""
+        from .oauth2 import UNVOUCHED_AUTH_METHODS, VOUCHED_CREATOR
+
+        if auth_method not in UNVOUCHED_AUTH_METHODS and not store.set_confirmed(
+            VOUCHED_CREATOR, normalise_creator(self.creator), raise_on_fault=True
+        ):
+            return False
+        return store.set_confirmed("auth_method", auth_method, raise_on_fault=True)
+
+    @staticmethod
+    def _restore_marker(
+        store: "attribute.InternalStore", marker: Any, creator: str | None
+    ) -> bool:
+        """Put back the marker a failed creator change replaced. A vouched
+        one is bound to ``creator`` (the one the re-read confirmed) first,
+        so a concurrent change that lands after this restore leaves the
+        actor unvouched, whatever order the writes take."""
+        from .oauth2 import UNVOUCHED_AUTH_METHODS, VOUCHED_CREATOR
+
+        if (
+            isinstance(marker, str)
+            and marker
+            and marker not in UNVOUCHED_AUTH_METHODS
+            and not store.set_confirmed(VOUCHED_CREATOR, normalise_creator(creator))
+        ):
+            return False
+        # Only while it still reads this change's "creator_changed": a
+        # sign-in that cleaned the actor meanwhile wrote its own marker, and
+        # an unconditional restore would put the stale one back over it.
+        db = store.__dict__["_db"]
+        if not db.conditional_update_attr(
+            name="auth_method", old_data="creator_changed", new_data=marker or None
+        ):
+            logger.warning(
+                "auth_method changed since this creator change wrote it; not restored"
+            )
+            return False
+        store.__dict__["auth_method"] = marker or None
+        return True
+
+    @staticmethod
+    def _drop_pre_marker(
+        store: "attribute.InternalStore | None", actor_id: str | None
+    ) -> None:
+        """Remove the marker written ahead of a create refused with
+        ``CreatorTaken`` (its condition failed, so nothing committed), so no
+        bucket is left for an id with no actor. Best effort: a
+        leftover is an orphan bucket for an id nobody uses, which
+        ``verify_orphans`` lists."""
+        if store is None:
+            return
+        from .oauth2 import VOUCHED_CREATOR
+
+        try:
+            store.set_confirmed(VOUCHED_CREATOR, None)
+            if not store.set_confirmed("auth_method", None):
+                logger.warning(f"Marker for {actor_id} left behind a failed create")
+        except Exception as e:  # folds DbError: best-effort cleanup of an unused id
+            logger.warning(f"Marker for {actor_id} left behind: {e}")
+
+    def get(
+        self, actor_id: str | None = None, *, rewrite_email: bool = True
+    ) -> dict[str, Any] | None:
+        """Retrieves an actor from storage or initialises if it does not exist.
+
+        ``rewrite_email=False`` skips the ``force_email_prop_as_creator``
+        rewrite, for a lookup that just matched the stored creator.
+        """
         if not actor_id and not self.id:
             return None
         elif not actor_id:
@@ -278,10 +355,20 @@ class Actor:
             self.property_lists = property.PropertyListStore(
                 actor_id=self.id, config=self.config
             )
-            if self.config and self.config.force_email_prop_as_creator:
+            if (
+                rewrite_email
+                and self.config
+                and self.config.force_email_prop_as_creator
+            ):
                 em = self.store.email
                 if em and em.lower() != self.creator:
-                    self.modify(creator=em.lower())
+                    try:
+                        self.modify(creator=em.lower())
+                    except CreatorTaken:  # folds DbError: email held elsewhere
+                        logger.warning(
+                            f"Actor {self.id}: stored email is another actor's "
+                            "creator; creator left unchanged"
+                        )
         else:
             self.id = None
             self.creator = None
@@ -312,7 +399,10 @@ class Actor:
     def get_from_creator(self, creator: str | None = None) -> bool:
         """Initialise an actor by matching on creator/email.
 
-        Returns True if an actor could be loaded, otherwise False. When
+        Returns True if an actor could be loaded, otherwise False. With
+        ``unique_creator`` on, the one holder of a non-exempt creator is read
+        consistently (:meth:`DbActorProtocol.get_creator_holder`) and the rest
+        of this docstring does not apply. When
         several actors share the creator (possible with ``unique_creator``
         off) the pick is, in order: a vouched actor, any other unvouched
         actor, a ``factory`` one; the lowest id within each group.
@@ -347,6 +437,53 @@ class Actor:
 
         lookup_creator = creator.lower() if "@" in creator else creator
         db = get_actor(self.config)
+        if self.config.unique_creator and not is_exempt(lookup_creator):
+            # Enforced: one holder, read consistently from the creators
+            # record (DynamoDB) or the unique row (PostgreSQL), not from the
+            # lagging index; nothing to rank and no siblings to sweep. A
+            # stale record (its actor gone, or holding another creator) is
+            # removed and answers False, so the create that follows takes
+            # the address.
+            holder = db.get_creator_holder(lookup_creator)
+            self.creator_ids = [holder] if holder else []
+            if not holder:
+                return False
+            # The row as stored, read consistently, before any force-email
+            # rewrite could change the creator being looked up.
+            row = get_actor(self.config).get(actor_id=holder)
+            if not row or normalise_creator(row.get("creator")) != lookup_creator:
+                # A stale record: its actor is gone, or holds another creator
+                # now (a release that faulted, an old process's delete or
+                # rename). Loading it would sign this identity into that
+                # actor; repairing it lets the create that follows take the
+                # address.
+                repaired = db.release_stale_creator(lookup_creator, holder)
+                logger.warning(
+                    f"The creator record of {lookup_creator!r} named actor "
+                    f"{holder}, which no longer holds it; "
+                    + ("removed" if repaired else "it changed meanwhile")
+                )
+                self.creator_ids = []
+                return False
+            self.get(actor_id=holder, rewrite_email=False)
+            if self.id and normalise_creator(self.creator) != lookup_creator:
+                # Renamed between the check and the load: not this identity's
+                # actor any more. The create that follows settles the record.
+                logger.warning(
+                    f"Actor {holder} was renamed away from {lookup_creator!r} "
+                    "during the sign-in lookup; not loaded"
+                )
+                self.id = None
+                self.creator = None
+                self.passphrase = None
+                self.actor = None
+                self.store = None
+                self.property = None
+                self.property_lists = None
+                self.creator_ids = []
+                return False
+            return bool(self.id)
+
         listed = db.get_by_creator(creator=lookup_creator, ids_only=True) or []
         rows: list[dict[str, Any]] = [listed] if isinstance(listed, dict) else listed
         ids = sorted({str(r["id"]) for r in rows if r and r.get("id")})
@@ -369,7 +506,7 @@ class Actor:
                 if tail_left <= 0:
                     break
                 tail_left -= 1
-                tail_class = classify_marker(self.config, candidate_id)
+                tail_class = classify_marker(self.config, candidate_id, lookup_creator)
                 if tail_class is not None:
                     classes[candidate_id] = tail_class
                     # A fallback if the pick vanishes before its load.
@@ -377,7 +514,7 @@ class Actor:
                 continue
             if not db.get(actor_id=candidate_id):
                 continue  # deleted since the index listed it
-            marker = classify_marker(self.config, candidate_id)
+            marker = classify_marker(self.config, candidate_id, lookup_creator)
             if marker is None:
                 raise DbError("actor marker read", candidate_id)
             classes[candidate_id] = marker
@@ -409,12 +546,19 @@ class Actor:
         trustee_root: str | None = None,
         hooks: Any = None,
         auth_method: str = "app",
+        *,
+        replace_holder: str | None = None,
     ) -> bool:
         """ "Creates a new actor and persists it.
 
-        If delete is True, any existing actors with same creator value
-        will be deleted. If it is False, the one with the correct passphrase
-        will be chosen (if any)
+        With ``unique_creator`` a non-exempt creator another actor holds
+        raises :class:`~actingweb.db.exceptions.CreatorTaken`. If delete is
+        True, the existing actors with the same creator are deleted first
+        (not atomically). ``replace_holder`` names the actor that holds the
+        creator now: the backend moves the creator to the new actor in the
+        same step as the create (:meth:`DbActorProtocol.replace_creator_holder`),
+        and the caller removes the old actor afterwards. Without the flag, a
+        create never returns an existing actor.
 
         ``auth_method`` records how the actor came to exist and is written to
         the ``_internal`` store before ``actor_created`` fires, only when a
@@ -427,50 +571,65 @@ class Actor:
         seed = url
         now = datetime.datetime.now(datetime.UTC)
         seed += now.strftime("%Y%m%dT%H%M%S%f")
+        # Random bytes too: two creates in the same microsecond (two
+        # processes) would otherwise get the same id, and the marker written
+        # ahead of the row would land in the other actor's bucket.
+        seed += os.urandom(16).hex()
         if len(creator) > 0:
             self.creator = creator
         else:
             self.creator = DEFAULT_CREATOR
+        if is_reserved(self.creator):
+            # "#…" and "#dup-" belong to the uniqueness bookkeeping; only
+            # actingweb-unique-creators writes them, through modify().
+            logger.warning(
+                f"Refusing to create an actor with reserved creator {self.creator!r}"
+            )
+            self.creator = None
+            return False
         if self.config and self.config.unique_creator:
-            in_db = get_actor(self.config)
-            # Strict and consistent: a read fault raises DbError and the
-            # create is refused, never read as "no such creator" (B4), and an
-            # actor the index still lists after its deletion is left out.
-            exists = in_db.get_by_creator(creator=self.creator, consistent=True)
-            if isinstance(exists, list):
-                exists = [c for c in exists if c]
-            if exists:
-                # If uniqueness is turned on at a later point, we may have multiple accounts
-                # with creator as "creator". Check if we have an internal value "email" and then
-                # set creator to the email address.
-                if delete:
-                    for c in exists:
-                        anactor = Actor(actor_id=c["id"], config=self.config)
-                        anactor.delete()
+            # The backend enforces uniqueness: a create for a held creator
+            # raises CreatorTaken, which propagates. There is no passphrase
+            # match any more (it returned the existing actor to whoever
+            # guessed its passphrase).
+            if delete:
+                # Not atomic: the caller asked for the existing actors to go.
+                # A held creator has one holder, read consistently (the
+                # index can still miss a just-created one).
+                db = get_actor(self.config)
+                if is_exempt(self.creator):
+                    ids = [
+                        c["id"]
+                        for c in db.get_by_creator(
+                            creator=self.creator, consistent=True
+                        )
+                        or []
+                        if c
+                    ]
                 else:
-                    if (
-                        self.config
-                        and self.config.force_email_prop_as_creator
-                        and self.creator == DEFAULT_CREATOR
-                    ):
-                        for c in exists:
-                            anactor = Actor(actor_id=c["id"], config=self.config)
-                            em = anactor.store.email if anactor.store else None
-                            if em:
-                                anactor.modify(creator=em.lower())
-                    for c in exists:
-                        if secret_equals(c["passphrase"], passphrase):
-                            # Load the row into the handle: the consistent
-                            # listing does not, and modify()/delete() on this
-                            # actor would otherwise act on no row.
-                            if not in_db.get(actor_id=c["id"]):
-                                return False
-                            self.handle = in_db
-                            self.id = c["id"]
-                            self.passphrase = c["passphrase"]
-                            self.creator = c["creator"]
-                            return True
-                    return False
+                    holder = db.get_creator_holder(self.creator)
+                    ids = [holder] if holder else []
+                for victim_id in ids:
+                    # The constructor loads it; delete() acts on a loaded row.
+                    victim = Actor(actor_id=victim_id, config=self.config)
+                    if victim.id:
+                        victim.delete()
+            elif (
+                self.config.force_email_prop_as_creator
+                and self.creator == DEFAULT_CREATOR
+            ):
+                # Uniqueness turned on later can leave many actors with the
+                # default creator: move each to its stored email.
+                existing = get_actor(self.config).get_by_creator(
+                    creator=self.creator, consistent=True
+                )
+                # Loading each (the constructor does) moves it to its stored
+                # email; get()'s rewrite leaves an address another actor
+                # holds alone.
+                for c in existing or []:
+                    if c:
+                        Actor(actor_id=c["id"], config=self.config)
+
         if passphrase and len(passphrase) > 0:
             self.passphrase = passphrase
         else:
@@ -481,11 +640,55 @@ class Actor:
             self.id = self.config.new_uuid(seed) if self.config else ""
         if not self.handle and self.config:
             self.handle = get_actor(self.config)
+        # A generated id is new, so its bucket is empty and nobody else
+        # writes it: the marker goes in before the row. The row (and under
+        # unique_creator its record) then never becomes visible to a sign-in
+        # without it; unmarked, a sign-in arriving in between would take the
+        # new actor for a legacy one and clean it in place. A caller-supplied
+        # id (a system actor) can own older buckets, and keeps the marker
+        # after the row (below).
+        pre_marked: attribute.InternalStore | None = None
+        if self.handle and not actor_id and auth_method and self.config:
+            pre_marked = attribute.InternalStore(actor_id=self.id, config=self.config)
+            pre_marked.mark_empty()
+            try:
+                marked = self._write_marker(pre_marked, auth_method)
+            except DbError:  # folds DbError: re-raised (503), nothing created
+                self.id = None
+                self.passphrase = None
+                self.handle = None
+                raise
+            if not marked:
+                logger.error(
+                    f"Actor {self.id}: the auth_method marker did not land; "
+                    "nothing created"
+                )
+                self.id = None
+                self.passphrase = None
+                self.handle = None
+                return False
         created = False
         if self.handle:
-            created = self.handle.create(
-                creator=self.creator, passphrase=self.passphrase, actor_id=self.id
-            )
+            try:
+                created = self.handle.create(
+                    creator=self.creator,
+                    passphrase=self.passphrase,
+                    actor_id=self.id,
+                    replace_holder=replace_holder,
+                )
+            except CreatorTaken:
+                self._drop_pre_marker(pre_marked, self.id)
+                self.id = None
+                self.passphrase = None
+                self.handle = None
+                self.store = None
+                raise
+            except DbError:
+                # Ambiguous: the create may have committed (a lost
+                # acknowledgement). Keep the marker: on an unused id it is an
+                # orphan bucket, on a committed row it is what keeps the next
+                # sign-in from cleaning it as legacy.
+                raise
         # Generated ids are never reused, but create(actor_id=...) accepts a
         # caller-supplied one. A stale tombstone would report the new actor as
         # deleted for the rest of the retention window.
@@ -502,29 +705,34 @@ class Actor:
             # The id was taken (by a live actor, or one mid-deletion) or the
             # insert failed: nothing was created, and the bucket under this id
             # is not ours to write. Unbind, so a caller that ignores the False
-            # cannot modify or delete the actor that holds the id.
+            # cannot modify or delete the actor that holds the id. With a
+            # generated id that bucket is not touched either: nothing here
+            # proves the marker in it is the one this create wrote.
             self.id = None
             self.passphrase = None
             self.handle = None
             self.store = None
             return False
-        self.store = attribute.InternalStore(actor_id=self.id, config=self.config)
-        if not actor_id:
-            # A generated id is new, so its bucket is empty; skip the read. A
-            # caller-supplied one (a system actor) can own older buckets.
-            self.store.mark_empty()
+        if pre_marked is not None:
+            self.store = pre_marked
+        else:
+            self.store = attribute.InternalStore(actor_id=self.id, config=self.config)
+            if not actor_id:
+                # A generated id is new, so its bucket is empty; skip the
+                # read. A caller-supplied one (a system actor) can own older
+                # buckets.
+                self.store.mark_empty()
         self.property = property.PropertyStore(actor_id=self.id, config=self.config)
         self.property_lists = property.PropertyListStore(
             actor_id=self.id, config=self.config
         )
 
         # Record how the actor was created, before anything else lands in
-        # its bucket, so a rollback has only the row to remove.
-        if self.store and auth_method:
+        # its bucket, so a rollback has only the row to remove (a generated
+        # id already has it, written before the row).
+        if self.store and auth_method and pre_marked is None:
             try:
-                marked = self.store.set_confirmed(
-                    "auth_method", auth_method, raise_on_fault=True
-                )
+                marked = self._write_marker(self.store, auth_method)
                 fault: DbError | None = None
             except DbError as e:  # folds DbError: re-raised after the rollback
                 # A store fault answers 503, like the trustee_root write
@@ -534,12 +742,28 @@ class Actor:
                 # An actor without its marker reads as legacy, and the next
                 # sign-in would wipe it. Undo the creation: only the row, since
                 # a fixed id (a system actor) can own buckets that predate it.
-                logger.error(
-                    f"Actor {self.id}: the auth_method marker did not land; "
-                    "removing the new actor row"
-                )
+                if replace_holder is not None:
+                    # The swap moved the creator to this row: deleting it
+                    # would leave the creator held by nobody while the old
+                    # holder lives on. Keep it; unmarked, the next sign-in
+                    # cleans it in place.
+                    logger.error(
+                        f"Actor {self.id}: the auth_method marker did not land "
+                        f"after taking the creator from {replace_holder}; "
+                        "keeping the row"
+                    )
+                    rolled_back = True
+                else:
+                    logger.error(
+                        f"Actor {self.id}: the auth_method marker did not land; "
+                        "removing the new actor row"
+                    )
+                    rolled_back = False
+
                 try:
-                    rolled_back = bool(self.handle and self.handle.delete())
+                    rolled_back = rolled_back or bool(
+                        self.handle and self.handle.delete()
+                    )
                 except Exception as e:  # folds DbError: rollback of a create whose marker did not land; logged, next sign-in cleans the row
                     logger.error(f"Actor {self.id}: row removal raised: {e}")
                     rolled_back = False
@@ -574,7 +798,9 @@ class Actor:
                     "removing the new actor row"
                 )
                 try:
-                    if self.handle:
+                    # Not after a swap: the row holds the creator now (see
+                    # the marker rollback above).
+                    if self.handle and replace_holder is None:
                         self.handle.delete()
                 except Exception as e:  # folds DbError: rollback inside the DbError handler, which re-raises the original fault
                     logger.error(f"Actor {self.id}: row removal raised: {e}")
@@ -650,6 +876,11 @@ class Actor:
                 "(force_email_prop_as_creator); creator not changed"
             )
             return False
+        if is_refused_from_callers(creator):
+            # The uniqueness bookkeeping's values and the system actors'.
+            logger.warning(f"Actor {self.id}: creator {creator!r} is reserved")
+            return False
+
         target = creator.lower() if "@" in creator else creator
         own_email = store.email
         previous_marker = store.auth_method
@@ -692,7 +923,7 @@ class Actor:
                     "creator could not be confirmed unchanged; auth_method left "
                     "'creator_changed'"
                 )
-            elif not store.set_confirmed("auth_method", previous_marker or None):
+            elif not self._restore_marker(store, previous_marker, original):
                 # Unvouched, so the owner's next sign-in cleans it.
                 logger.error(
                     f"Actor {self.id}: creator unchanged but auth_method is "

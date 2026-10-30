@@ -81,9 +81,14 @@ def _mark_one(
     dry_run: bool,
     include_factory: bool,
     counts: dict[str, int],
+    creator: str = "",
 ) -> None:
-    """Mark one actor if it qualifies, counting the outcome."""
+    """Mark one actor if it qualifies, counting the outcome. The address
+    the marker vouches for (``creator``, from the listing) is recorded
+    first, so a rename since the listing leaves the actor unvouched."""
     from actingweb.attribute import InternalStore
+    from actingweb.db.creator_rules import normalise_creator
+    from actingweb.oauth2 import VOUCHED_CREATOR
 
     try:
         store = InternalStore(actor_id=actor_id, config=config)
@@ -99,7 +104,9 @@ def _mark_one(
         if dry_run:
             logger.info(f"[dry-run] would mark {actor_id} ({current!r} -> {marker!r})")
         else:
-            if not store.set_confirmed("auth_method", marker):
+            if not store.set_confirmed(
+                VOUCHED_CREATOR, normalise_creator(creator)
+            ) or not store.set_confirmed("auth_method", marker):
                 counts["errors"] += 1
                 logger.error(f"marker write for {actor_id} did not read back")
                 return
@@ -169,6 +176,7 @@ def mark_actors(
             dry_run=dry_run,
             include_factory=include_factory,
             counts=counts,
+            creator=row_creator,
         )
         # Only once the actor is handled (an interrupt skips this), so
         # resuming after it skips nothing; an interrupted run never reaches

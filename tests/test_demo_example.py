@@ -25,6 +25,36 @@ import pytest
 DEMO_DIR = Path(__file__).resolve().parent.parent / "examples" / "demo"
 
 
+@pytest.fixture(autouse=True)
+def _enforcement_in_place(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The demo runs ``with_unique_creator()``, so ``integrate_flask`` at
+    import refuses to start until ``actingweb-unique-creators enable`` has run.
+    The shared unit-test tables hold deliberate duplicates (the adoption
+    tests), so enforcement cannot be enabled there for real: the probe
+    reports it in place. ``test_demo_refuses_to_start_without_enforcement``
+    covers the refusal."""
+    monkeypatch.setattr(
+        "actingweb.maintenance.unique_creators.missing_enforcement",
+        lambda config: None,
+    )
+
+
+def test_demo_refuses_to_start_without_enforcement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from actingweb.interface import UniqueCreatorNotReady
+
+    module = _import_demo_application()
+    assert module.aw_app.get_config().unique_creator is True
+    monkeypatch.setattr(
+        "actingweb.maintenance.unique_creators.missing_enforcement",
+        lambda config: "the DynamoDB table x_creators is not backfilled",
+    )
+    module.aw_app._unique_creator_checked = False
+    with pytest.raises(UniqueCreatorNotReady, match="actingweb-unique-creators"):
+        module.aw_app.check_ready()
+
+
 def _import_demo_application():
     sys.path.insert(0, str(DEMO_DIR))
     try:

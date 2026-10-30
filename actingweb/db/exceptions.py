@@ -7,9 +7,9 @@ class DbError(Exception):
     Distinct from a backend returning ``None`` (property absence) or
     ``False`` (a reported write failure): this means the backend itself
     faulted (timeout, throttle, connection error, ...). The message is
-    sanitized — no backend-internal detail — so it is safe to reach an
-    HTTP response; the original exception is chained via ``raise ... from e``
-    for logs.
+    sanitized (no backend-internal detail) but can name an actor id, so the
+    integrations answer with a fixed body and never ``str(e)``; the original
+    exception is chained via ``raise ... from e`` for logs.
     """
 
     def __init__(self, op: str, actor_id: str | None = None) -> None:
@@ -21,10 +21,12 @@ class CreatorTaken(DbError):
     """A create or creator change was refused because another actor holds
     the creator.
 
-    Reserved for enforced creator uniqueness; nothing raises it yet. It
+    Raised by the actor backends under ``with_unique_creator()`` (and by
+    PostgreSQL whenever its unique index exists, flag or not). It
     subclasses ``DbError`` so code that fails closed on a fault also stops
     here, but it is a conflict, not an availability fault: the HTTP layer
-    answers it with 409, never 503. Test for it before ``DbError``.
+    answers it with 409 (the factory keeps its 403), never 503. Test for it
+    before ``DbError``.
     """
 
     def __init__(self, creator: str | None = None) -> None:

@@ -2,7 +2,8 @@ import json
 import logging
 
 from actingweb import actor
-from actingweb.db import get_actor
+from actingweb.db.creator_rules import is_refused_from_callers
+from actingweb.db.exceptions import CreatorTaken
 from actingweb.handlers import base_handler
 
 logger = logging.getLogger(__name__)
@@ -255,49 +256,56 @@ class RootFactoryHandler(base_handler.BaseHandler):
             if "@" in creator:
                 creator = creator.lower()
 
+        if isinstance(creator, str) and is_refused_from_callers(creator):
+            # "#…" and "#dup-" belong to the uniqueness bookkeeping.
+            self._refuse(
+                400,
+                "Creator is reserved",
+                as_json=is_json or self._wants_json(),
+            )
+            return
+
         if not is_json and creator:
             existing_actor = actor.Actor(config=self.config)
             if existing_actor.get_from_creator(creator):
-                actor_id = existing_actor.id or ""
-                redirect_target = f"/{actor_id}/www"
+                # Sign in to reach it: the redirect names no actor id, so the
+                # form does not tell a caller which id an address has.
+                login_url = f"{self.config.root.rstrip('/')}/login"
                 if self.response:
-                    self.response.set_redirect(redirect_target)
-                    self.response.headers["Location"] = (
-                        f"{self.config.root}{actor_id}/www"
-                    )
+                    self.response.set_redirect(login_url)
+                    self.response.headers["Location"] = login_url
                     self.response.set_status(302, "Found")
                 return
 
         # Create actor using enhanced method with hooks and trustee_root
         myself = actor.Actor(config=self.config)
-        if not myself.create(
-            url=self.request.url or "",
-            creator=creator,
-            passphrase=passphrase,
-            trustee_root=trustee_root,
-            hooks=self.hooks,
-            auth_method="factory",
-        ):
-            # Check if this is a unique creator constraint violation
-            if self.config and self.config.unique_creator and creator:
-                # Check if creator already exists
-                in_db = get_actor(self.config)
-                exists = in_db.get_by_creator(creator=creator)
-                if exists:
-                    self._refuse(
-                        403,
-                        "Creator already exists",
-                        as_json=is_json or self._wants_json(),
-                    )
-                    logger.warning(
-                        "Creator already exists, cannot create new Actor("
-                        + str(self.request.url)
-                        + " "
-                        + str(creator)
-                        + ")"
-                    )
-                    return
-
+        try:
+            created = myself.create(
+                url=self.request.url or "",
+                creator=creator,
+                passphrase=passphrase,
+                trustee_root=trustee_root,
+                hooks=self.hooks,
+                auth_method="factory",
+            )
+        except CreatorTaken:  # folds DbError: answered as the 403 refusal
+            # Another actor holds the creator (with_unique_creator, or the
+            # PostgreSQL unique index with the flag rolled back). A matching
+            # passphrase no longer returns that actor.
+            self._refuse(
+                403,
+                "Creator already exists",
+                as_json=is_json or self._wants_json(),
+            )
+            logger.warning(
+                "Creator already exists, cannot create new Actor("
+                + str(self.request.url)
+                + " "
+                + str(creator)
+                + ")"
+            )
+            return
+        if not created:
             # Generic creation failure
             self.response.set_status(400, "Not created")
             self.response.template_values = {"base_path": self._base_path()}

@@ -19,7 +19,7 @@ import threading
 import time
 from typing import Any
 
-from ..db.exceptions import DbError
+from ..db.exceptions import CreatorTaken, DbError
 
 # Global cache for MCP client info during session establishment
 _mcp_client_info_cache: dict[str, dict[str, Any]] = {}
@@ -2486,13 +2486,19 @@ class MCPHandler(BaseHandler):
 
                 new_actor = actor_module.Actor(config=self.config)
                 actor_url = f"{self.config.proto}{self.config.fqdn}/{actor_id}"
-                created_actor = new_actor.create(
-                    url=actor_url,
-                    creator=user_email,
-                    passphrase="",  # OAuth2 actors don't need passphrases
-                    actor_id=actor_id,
-                    auth_method="oauth2_bearer",
-                )
+                try:
+                    created_actor = new_actor.create(
+                        url=actor_url,
+                        creator=user_email,
+                        passphrase="",  # OAuth2 actors don't need passphrases
+                        actor_id=actor_id,
+                        auth_method="oauth2_bearer",
+                    )
+                except CreatorTaken:  # folds DbError: _race_winner decides below
+                    # with_unique_creator: the creator is held. A concurrent
+                    # request for this id is the race winner below; another
+                    # actor holding the address is not, and is never loaded.
+                    created_actor = False
 
                 if created_actor:
                     logger.info(

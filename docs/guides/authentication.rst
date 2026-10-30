@@ -1039,6 +1039,15 @@ Email verification behavior is controlled by the ``force_email_prop_as_creator``
         .with_unique_creator(enable=True)
     )
 
+.. note::
+
+   Since 3.16 ``with_unique_creator()`` is enforced by the database: a second
+   actor for a creator raises ``CreatorTaken`` (409; the factory answers
+   403), and the application refuses to start until
+   ``actingweb-unique-creators enable --apply`` has run. Run ``report`` and
+   ``resolve --apply`` first if actors already share a creator. See
+   :doc:`../migration/v3.16` ("Creator uniqueness").
+
 When enabled (default):
     - Actor ``creator`` field must be a valid email address
     - System validates email ownership via OAuth provider OR verification link

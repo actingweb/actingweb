@@ -12,7 +12,7 @@ This module provides a single, reusable function to ensure the system actor exis
 import logging
 from typing import TYPE_CHECKING
 
-from ..db.exceptions import DbError
+from ..db.exceptions import CreatorTaken, DbError
 
 if TYPE_CHECKING:
     from .. import config as config_class
@@ -59,13 +59,18 @@ def ensure_oauth2_system_actor(config: "config_class.Config") -> str:
             )
 
             try:
-                created = sys_actor.create(
-                    url=url,
-                    creator="oauth2-system",
-                    passphrase=passphrase,
-                    actor_id=OAUTH2_SYSTEM_ACTOR,
-                    auth_method="system",
-                )
+                try:
+                    created = sys_actor.create(
+                        url=url,
+                        creator="oauth2-system",
+                        passphrase=passphrase,
+                        actor_id=OAUTH2_SYSTEM_ACTOR,
+                        auth_method="system",
+                    )
+                except CreatorTaken:  # folds DbError: the race winner is loaded below
+                    # with_unique_creator: a concurrent bootstrap holds the
+                    # creator. Load its actor, as for a False return.
+                    created = False
                 if created:
                     logger.info(f"Created OAuth2 system actor: {OAUTH2_SYSTEM_ACTOR}")
                 elif actor_module.Actor(OAUTH2_SYSTEM_ACTOR, config=config).actor:

@@ -143,10 +143,12 @@ class TestEmailedLink:
     def test_unconfirmed_flag_answers_500_and_keeps_the_link(self) -> None:
         config = make_config()
         token = f"verify-token-{uuid.uuid4()}"
-        actor = ActorInterface.create(creator=uuid_email(), config=config).core_actor
+        address = uuid_email()
+        actor = ActorInterface.create(creator=address, config=config).core_actor
         store = istore(actor)
         store.email_verified = "false"
         store.email_verification_token = token
+        store.email_verification_address = address  # where the link went
         store.email_verification_created_at = str(int(time.time()))
         index = Attributes(
             actor_id=ACTINGWEB_SYSTEM_ACTOR,

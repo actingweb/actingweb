@@ -141,7 +141,9 @@ class TestCli:
 
     def test_exit_zero_when_all_present(self, monkeypatch, capsys):
         monkeypatch.setattr(
-            verify_tables, "verify_tables", lambda use_lookup_table=None: (["a"], [])
+            verify_tables,
+            "verify_tables",
+            lambda use_lookup_table=None, unique_creator=False: (["a"], []),
         )
         assert verify_tables.main([]) == 0
         assert "All 1 required tables exist." in capsys.readouterr().out
@@ -150,7 +152,10 @@ class TestCli:
         monkeypatch.setattr(
             verify_tables,
             "verify_tables",
-            lambda use_lookup_table=None: (["a"], ["b_subscription_suspensions"]),
+            lambda use_lookup_table=None, unique_creator=False: (
+                ["a"],
+                ["b_subscription_suspensions"],
+            ),
         )
         assert verify_tables.main([]) == 1
         captured = capsys.readouterr()
@@ -158,12 +163,22 @@ class TestCli:
         assert "1 required table(s) missing" in captured.err
 
     def test_exit_two_when_check_fails(self, monkeypatch, capsys):
-        def boom(use_lookup_table=None):
+        def boom(use_lookup_table=None, unique_creator=False):
             raise RuntimeError("AccessDenied")
 
         monkeypatch.setattr(verify_tables, "verify_tables", boom)
         assert verify_tables.main([]) == 2
         assert "AccessDenied" in capsys.readouterr().err
+
+    def test_unique_creator_adds_the_creators_table(self, capsys):
+        with mock.patch("pynamodb.models.Model.exists") as exists:
+            rc = verify_tables.main(["--list", "--unique-creator"])
+        assert rc == 0
+        assert exists.call_count == 0
+        assert "_creators" in capsys.readouterr().out
+        assert not any(
+            n.endswith("_creators") for n in verify_tables.required_table_names()
+        )
 
     def test_exit_two_on_non_dynamodb_backend(self, monkeypatch, capsys):
         monkeypatch.setenv("DATABASE_BACKEND", "postgresql")

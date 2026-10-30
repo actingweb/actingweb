@@ -7,7 +7,9 @@ from actingweb.client_text import sanitize_client_name, sanitize_label
 from actingweb.handlers import base_handler
 from actingweb.permission_evaluator import PermissionResult, get_permission_evaluator
 
-from ..db.exceptions import DbError
+from ..db import get_actor
+from ..db.creator_rules import is_refused_from_callers, normalise_creator
+from ..db.exceptions import CreatorTaken, DbError
 
 # Import permission system with fallback
 try:
@@ -280,6 +282,11 @@ class TrustRelationshipHandler(base_handler.BaseHandler):
         # proved the caller owns the new address, so the change unvouches the
         # actor (Actor.modify_creator_unvouched has the rules, the pin too).
         # An unreadable _internal bucket fails there, as a 500.
+        if not isinstance(creator, str) or is_refused_from_callers(creator):
+            # "#…" and "#dup-" belong to the uniqueness bookkeeping.
+            if self.response:
+                self.response.set_status(400, "creator is reserved")
+            return False
         if myself.creator_change_pinned(creator):
             if self.response:
                 self.response.set_status(
@@ -288,11 +295,42 @@ class TrustRelationshipHandler(base_handler.BaseHandler):
                     "(force_email_prop_as_creator)",
                 )
             return False
-        if myself.modify_creator_unvouched(creator):
+        original = myself.creator
+        try:
+            if myself.modify_creator_unvouched(creator):
+                return True
+        except CreatorTaken:  # folds DbError: answered as the 409 conflict
+            # Another actor holds the address (with_unique_creator). Both
+            # actors are as they were.
+            self._conflict("creator is held by another actor")
+            return False
+        # A stale handle answers False (another request renamed the actor
+        # since it was loaded): a conflict, not a server error. Unless the
+        # stored value is the one asked for (this request's own write, whose
+        # answer was lost), or the actor is gone.
+        row = (
+            get_actor(myself.config).get(actor_id=myself.id) if myself.config else None
+        )
+        if myself.config and not row:
+            if self.response:
+                self.response.set_status(404, "Not found")
+            return False
+        if row and normalise_creator(row.get("creator")) == normalise_creator(creator):
             return True
+        if row and row.get("creator") != original:
+            self._conflict("the actor's creator changed meanwhile; reload and retry")
+            return False
         if self.response:
             self.response.set_status(500, "Internal error")
         return False
+
+    def _conflict(self, message: str) -> None:
+        if self.response:
+            self.response.set_status(409, "Conflict")
+            self.response.write(
+                json.dumps({"error": True, "status_code": 409, "message": message})
+            )
+            self.response.headers["Content-Type"] = "application/json"
 
     def delete(self, actor_id, relationship):
         # Use AuthResult for granular control since we need add_response=False

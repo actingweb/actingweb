@@ -79,10 +79,13 @@ than catch and fold it.
   (`thoughts/verifications/2026-10-28-oauth-adoption-vouching-and-open-factory-2.md`):
   - **BK:** the strict DynamoDB `get_by_creator` and the sweep do not
     compare a row's creator with the queried one. A stale index after a
-    rename can list a (factory) actor under its old creator.
+    rename can list a (factory) actor under its old creator. Holds with
+    `unique_creator` off only: with it on, the lookup reads the `creators`
+    record and there is no sweep.
   - **BL:** two concurrent sign-ins to a vouched actor fire
     `actor_deleted`/`actor_deleted_complete` twice per factory sibling. Skip
-    a sibling that is already tombstoned.
+    a sibling that is already tombstoned. Holds with `unique_creator` off
+    only: with it on there are no siblings to sweep.
   - **BN:** a nested hand-off in `_adopt_actor` drops the incoming
     `carried`.
   - **BP:** a replacement scans the global SPA token buckets twice (victim,

@@ -53,7 +53,9 @@ def lookup_mode_enabled() -> bool:
     )
 
 
-def required_models(use_lookup_table: bool | None = None) -> list[type[Model]]:
+def required_models(
+    use_lookup_table: bool | None = None, unique_creator: bool = False
+) -> list[type[Model]]:
     """The DynamoDB model classes whose tables must exist for this config.
 
     This is the single source of truth for "which tables does ActingWeb need"
@@ -62,6 +64,8 @@ def required_models(use_lookup_table: bool | None = None) -> list[type[Model]]:
 
     Args:
         use_lookup_table: Reverse-lookup mode. ``None`` reads the environment.
+        unique_creator: ``with_unique_creator()`` is on, which needs the
+            ``creators`` table.
 
     Returns:
         Model classes, in a stable order.
@@ -96,16 +100,26 @@ def required_models(use_lookup_table: bool | None = None) -> list[type[Model]]:
         from .dynamodb.property_lookup import PropertyLookupV2
 
         models.append(PropertyLookupV2)
+    if unique_creator:
+        from .dynamodb.creator import Creator
+
+        models.append(Creator)
     return models
 
 
-def required_table_names(use_lookup_table: bool | None = None) -> list[str]:
+def required_table_names(
+    use_lookup_table: bool | None = None, unique_creator: bool = False
+) -> list[str]:
     """Resolved table names (``AWS_DB_PREFIX`` applied) that must exist."""
-    return [str(m.Meta.table_name) for m in required_models(use_lookup_table)]
+    return [
+        str(m.Meta.table_name)
+        for m in required_models(use_lookup_table, unique_creator)
+    ]
 
 
 def verify_tables(
     use_lookup_table: bool | None = None,
+    unique_creator: bool = False,
 ) -> tuple[list[str], list[str]]:
     """Check each required table for existence.
 
@@ -125,7 +139,7 @@ def verify_tables(
     """
     present: list[str] = []
     missing: list[str] = []
-    for model in required_models(use_lookup_table):
+    for model in required_models(use_lookup_table, unique_creator):
         name = str(model.Meta.table_name)
         if model.exists():
             present.append(name)
@@ -160,6 +174,14 @@ def main(argv: list[str] | None = None) -> int:
         help="Assume deprecated legacy GSI reverse lookup.",
     )
     parser.add_argument(
+        "--unique-creator",
+        action="store_true",
+        help=(
+            "The app runs with_unique_creator(), which needs the creators "
+            "table (actingweb-unique-creators enable creates and fills it)."
+        ),
+    )
+    parser.add_argument(
         "--list",
         action="store_true",
         help="Print the required table names and exit without querying AWS.",
@@ -177,7 +199,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     try:
-        names = required_table_names(args.use_lookup_table)
+        names = required_table_names(args.use_lookup_table, args.unique_creator)
     except ImportError as e:
         print(f"Could not load the DynamoDB backend: {e}", file=sys.stderr)
         return 2
@@ -199,7 +221,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     try:
-        present, missing = verify_tables(args.use_lookup_table)
+        present, missing = verify_tables(args.use_lookup_table, args.unique_creator)
     except Exception as e:  # credentials, permissions, endpoint
         print(f"\nCheck could not be performed: {e}", file=sys.stderr)
         print(

@@ -5,7 +5,7 @@ from alembic import context
 from sqlalchemy import engine_from_config, pool, text
 
 # Import our schema models for autogenerate support
-from actingweb.db.postgresql.schema import Base
+from actingweb.db.postgresql.schema import Base, include_object
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
@@ -64,6 +64,8 @@ def run_migrations_offline() -> None:
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        # ux_actors_creator belongs to actingweb-unique-creators enable.
+        include_object=include_object,
     )
 
     with context.begin_transaction():
@@ -106,6 +108,8 @@ def run_migrations_online() -> None:
             connection=connection,
             target_metadata=target_metadata,
             version_table_schema=schema if schema != "public" else None,
+            # ux_actors_creator belongs to actingweb-unique-creators enable.
+            include_object=include_object,
         )
 
         with context.begin_transaction():

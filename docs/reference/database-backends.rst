@@ -542,8 +542,46 @@ Both integrations answer a ``DbError`` that reaches them with **503**,
 (``{"error": "temporarily_unavailable", ...}``); the exception text goes to
 the log only. A backend error a retry cannot fix (a validation, size or
 constraint error) answers **500** without ``Retry-After``. ``CreatorTaken``,
-a ``DbError`` subclass for a creator another actor holds, answers **409**; it
-is reserved for enforced creator uniqueness and nothing raises it yet.
+a ``DbError`` subclass for a creator another actor holds, answers **409**: the
+actor backends raise it under ``with_unique_creator()``, and PostgreSQL also
+whenever the ``ux_actors_creator`` index exists (see
+:ref:`creator-uniqueness-backends`).
+
+.. _creator-uniqueness-backends:
+
+Creator uniqueness
+~~~~~~~~~~~~~~~~~~
+
+With ``with_unique_creator()`` each backend holds one actor per creator other
+than ``trustee``, ``creator`` and the empty string (the rules are in
+``actingweb.db.creator_rules``):
+
+- **DynamoDB** keeps a ``<prefix>_creators`` table (hash key ``creator``,
+  attribute ``actor_id``). An actor create puts the actor and the record in
+  one ``TransactWriteItems``, each conditioned on not existing; a creator
+  change updates the actor (conditioned on the old creator) and puts the new
+  record in one transaction, then deletes the old record only if it names
+  this actor; a delete removes the actor (conditioned on the creator it was
+  loaded with, and re-read once if another process renamed it since), then
+  the record of the creator it had, if it names it. A
+  ``TransactionConflict`` is retried twice with the same client request
+  token. ``actingweb-unique-creators enable`` creates and backfills the
+  table and then writes the item ``#meta#backfill``, which the startup check
+  requires.
+- **PostgreSQL** relies on the partial unique index ``ux_actors_creator``
+  on ``actors (creator) WHERE lower(creator) NOT IN ('trustee', 'creator',
+  '')``, built ``CONCURRENTLY`` by ``actingweb-unique-creators enable``. It
+  is not in the Alembic metadata, and ``migrations/env.py`` filters it out
+  of autogenerate. ``ix_actors_creator`` stays: a parameterised
+  ``creator = %s`` cannot use the partial index.
+
+Both implement ``replace_creator_holder`` (the sign-in's atomic swap from a
+``factory`` actor to its successor), ``get_creator_holder`` (the
+consistent lookup of the one holder) and ``release_stale_creator`` (the
+sign-in's repair of a record whose actor is gone or renamed; PostgreSQL
+has no separate record and returns False). ``python -m
+actingweb.db.verify_tables --unique-creator`` includes the ``creators``
+table.
 
 Data Types
 ~~~~~~~~~~

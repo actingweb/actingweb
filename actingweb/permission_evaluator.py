@@ -674,7 +674,10 @@ class PermissionEvaluator:
         - Exact matches
         - Glob-style patterns with * (any characters) and ? (single character)
         - Special case: "*" matches everything
-        - Prefix matching: "notes://" matches "notes://work/projects"
+        - Prefix form: a pattern ending in "://" with no "*" or "?" is
+          matched as that pattern plus "*", so "notes://" matches
+          "notes://work/projects". ``..`` segments are not normalised: a
+          resource reader that maps URIs to storage validates its own path.
         """
         if pattern == "*":
             return True
@@ -682,9 +685,12 @@ class PermissionEvaluator:
         if pattern == target:
             return True
 
-        # Special handling for URI-like patterns that should match prefixes
-        if pattern.endswith("://") and target.startswith(pattern):
-            return True
+        # The prefix form goes through the glob path like every other
+        # pattern: one code path. A pattern that already holds a wildcard
+        # (such as "*://") is left as written, since appending "*" would
+        # widen what it matches.
+        if pattern.endswith("://") and "*" not in pattern and "?" not in pattern:
+            pattern = pattern + "*"
 
         # Use cached compiled regex if available
         if pattern in self._pattern_cache:

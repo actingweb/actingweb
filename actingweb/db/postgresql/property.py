@@ -46,6 +46,11 @@ class DbProperty:
 
     handle: dict[str, Any] | None
 
+    # PostgreSQL has no practical row cap for a property value, so the
+    # property-list layer never spans items and sets no ceiling here unless
+    # the application configures one (Config.list_item_max_bytes).
+    MAX_ROW_BYTES: int | None = None
+
     def __init__(
         self,
         use_lookup_table: bool | None = None,

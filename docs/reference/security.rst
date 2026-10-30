@@ -21,6 +21,14 @@ Access Control
 - **Permission merging**: Individual overrides UNION with base patterns (fail-safe).
 - To restrict access, use `excluded_patterns`; base `patterns` cannot be narrowed.
 - Use `merge_base=False` only when explicit full override is needed.
+- **Resource URI patterns are not normalised.** ``notes://`` is matched as
+  ``notes://*``, and a target such as ``notes://../../security/key`` matches
+  it: ``..`` segments and percent-encoding are not resolved. A resource
+  reader that maps URIs to storage validates its own path.
+- **MCP ``*/list`` filters fail closed.** When the permission evaluator
+  cannot be constructed, ``tools/list``, ``resources/list`` and
+  ``prompts/list`` answer an empty list; an item whose evaluation raises is
+  left out. A database fault still answers 503.
 
 MCP Multi-Client Trust
 ------------------------

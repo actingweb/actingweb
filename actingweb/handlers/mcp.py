@@ -1153,9 +1153,9 @@ class MCPHandler(BaseHandler):
 
         A list request from a client with no resolved trust is not a
         protocol-level error -- the client simply sees nothing -- so callers
-        return an empty result rather than ``-32003``. Callers must evaluate
-        this **before** the fail-open evaluator ``try/except``, for the reason
-        spelled out in ``_require_mcp_peer_id``.
+        return an empty result rather than ``-32003``. Callers evaluate this
+        before constructing the permission evaluator, for the reason spelled
+        out in ``_require_mcp_peer_id``.
         """
         peer_id = self._current_mcp_peer_id(actor)
         if not peer_id:
@@ -1179,22 +1179,25 @@ class MCPHandler(BaseHandler):
             )
 
             # No trust relationship resolved for this client -> fail-closed:
-            # an empty list, not every tool. Evaluated before the fail-open
-            # evaluator try/except below, so an unrelated exception there
-            # cannot revert this to "show every tool".
+            # an empty list, not every tool.
             peer_id = self._peer_id_for_list(actor, "tools/list")
             if not peer_id:
                 return {"jsonrpc": "2.0", "id": request_id, "result": {"tools": []}}
 
-            # Get evaluator if the permission system is initialized
-            evaluator = None
+            # Fail closed: without an evaluator no tool can be shown. A
+            # DbError still propagates to the 503, so a client can tell an
+            # outage from a denial.
             try:
                 evaluator = get_permission_evaluator(self.config)
             except DbError:
                 raise
-            except Exception as e:
-                logger.debug(f"Permission evaluator unavailable during tools/list: {e}")
-                evaluator = None
+            except Exception:
+                logger.error(
+                    "Permission evaluator unavailable during tools/list; "
+                    "answering an empty list",
+                    exc_info=True,
+                )
+                return {"jsonrpc": "2.0", "id": request_id, "result": {"tools": []}}
 
             # Detect client type for filtering
             client_type = None
@@ -1292,28 +1295,30 @@ class MCPHandler(BaseHandler):
                             )
                             continue
 
-                    # Filter by permissions when we have context
-                    if peer_id and evaluator:
-                        try:
-                            decision = evaluator.evaluate_permission(
-                                actor.id,
-                                peer_id,
-                                PermissionType.TOOLS,
-                                tool_name,
-                                operation="use",
-                            )
-                            if decision != PermissionResult.ALLOWED:
-                                logger.debug(
-                                    f"Tool '{tool_name}' filtered out for peer {peer_id} (actor {actor.id})"
-                                )
-                                continue
-                        except DbError:
-                            raise
-                        except Exception as e:
-                            logger.warning(
-                                f"Error evaluating tool permission for '{tool_name}': {e}"
-                            )
-                            # Fail-open on evaluation errors to avoid hard lockouts
+                    # Filter by permissions. An evaluation error skips the
+                    # tool (fail closed); a DbError propagates to the 503.
+                    try:
+                        decision = evaluator.evaluate_permission(
+                            actor.id,
+                            peer_id,
+                            PermissionType.TOOLS,
+                            tool_name,
+                            operation="use",
+                        )
+                    except DbError:
+                        raise
+                    except Exception:
+                        logger.error(
+                            f"Error evaluating tool permission for '{tool_name}'; "
+                            f"leaving it out of tools/list",
+                            exc_info=True,
+                        )
+                        continue
+                    if decision != PermissionResult.ALLOWED:
+                        logger.debug(
+                            f"Tool '{tool_name}' filtered out for peer {peer_id} (actor {actor.id})"
+                        )
+                        continue
 
                     # Description precedence (most specific wins):
                     #   1. description_predicate(actor) — per-actor override.
@@ -1432,8 +1437,7 @@ class MCPHandler(BaseHandler):
             )
 
             # No trust relationship resolved for this client -> fail-closed:
-            # an empty list, evaluated before the fail-open evaluator
-            # try/except below.
+            # an empty list.
             peer_id = self._peer_id_for_list(actor, "resources/list")
             if not peer_id:
                 return {
@@ -1442,16 +1446,22 @@ class MCPHandler(BaseHandler):
                     "result": {"resources": []},
                 }
 
-            evaluator = None
+            # Fail closed: see tools/list.
             try:
                 evaluator = get_permission_evaluator(self.config)
             except DbError:
                 raise
-            except Exception as e:
-                logger.debug(
-                    f"Permission evaluator unavailable during resources/list: {e}"
+            except Exception:
+                logger.error(
+                    "Permission evaluator unavailable during resources/list; "
+                    "answering an empty list",
+                    exc_info=True,
                 )
-                evaluator = None
+                return {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "result": {"resources": []},
+                }
 
             # Discover MCP resources from method hooks
             for method_name, hooks in self.hooks._method_hooks.items():
@@ -1467,27 +1477,30 @@ class MCPHandler(BaseHandler):
                         metadata.get("uri_template") or f"actingweb://{method_name}"
                     )
 
-                    # Filter by permissions when available
-                    if peer_id and evaluator:
-                        try:
-                            decision = evaluator.evaluate_permission(
-                                actor.id,
-                                peer_id,
-                                PermissionType.RESOURCES,
-                                uri_template,
-                                operation="read",
-                            )
-                            if decision != PermissionResult.ALLOWED:
-                                logger.debug(
-                                    f"Resource '{uri_template}' filtered out for peer {peer_id} (actor {actor.id})"
-                                )
-                                continue
-                        except DbError:
-                            raise
-                        except Exception as e:
-                            logger.warning(
-                                f"Error evaluating resource permission for '{uri_template}': {e}"
-                            )
+                    # Filter by permissions; an evaluation error skips the
+                    # resource (fail closed).
+                    try:
+                        decision = evaluator.evaluate_permission(
+                            actor.id,
+                            peer_id,
+                            PermissionType.RESOURCES,
+                            uri_template,
+                            operation="read",
+                        )
+                    except DbError:
+                        raise
+                    except Exception:
+                        logger.error(
+                            f"Error evaluating resource permission for "
+                            f"'{uri_template}'; leaving it out of resources/list",
+                            exc_info=True,
+                        )
+                        continue
+                    if decision != PermissionResult.ALLOWED:
+                        logger.debug(
+                            f"Resource '{uri_template}' filtered out for peer {peer_id} (actor {actor.id})"
+                        )
+                        continue
 
                     resource_def = {
                         "uri": uri_template,
@@ -1515,22 +1528,23 @@ class MCPHandler(BaseHandler):
             )
 
             # No trust relationship resolved for this client -> fail-closed:
-            # an empty list, evaluated before the fail-open evaluator
-            # try/except below.
+            # an empty list.
             peer_id = self._peer_id_for_list(actor, "prompts/list")
             if not peer_id:
                 return {"jsonrpc": "2.0", "id": request_id, "result": {"prompts": []}}
 
-            evaluator = None
+            # Fail closed: see tools/list.
             try:
                 evaluator = get_permission_evaluator(self.config)
             except DbError:
                 raise
-            except Exception as e:
-                logger.debug(
-                    f"Permission evaluator unavailable during prompts/list: {e}"
+            except Exception:
+                logger.error(
+                    "Permission evaluator unavailable during prompts/list; "
+                    "answering an empty list",
+                    exc_info=True,
                 )
-                evaluator = None
+                return {"jsonrpc": "2.0", "id": request_id, "result": {"prompts": []}}
 
             # Discover MCP prompts from method hooks
             for method_name, hooks in self.hooks._method_hooks.items():
@@ -1543,27 +1557,30 @@ class MCPHandler(BaseHandler):
 
                     prompt_name = metadata.get("name") or method_name
 
-                    # Filter by permissions when available
-                    if peer_id and evaluator:
-                        try:
-                            decision = evaluator.evaluate_permission(
-                                actor.id,
-                                peer_id,
-                                PermissionType.PROMPTS,
-                                prompt_name,
-                                operation="invoke",
-                            )
-                            if decision != PermissionResult.ALLOWED:
-                                logger.debug(
-                                    f"Prompt '{prompt_name}' filtered out for peer {peer_id} (actor {actor.id})"
-                                )
-                                continue
-                        except DbError:
-                            raise
-                        except Exception as e:
-                            logger.warning(
-                                f"Error evaluating prompt permission for '{prompt_name}': {e}"
-                            )
+                    # Filter by permissions; an evaluation error skips the
+                    # prompt (fail closed).
+                    try:
+                        decision = evaluator.evaluate_permission(
+                            actor.id,
+                            peer_id,
+                            PermissionType.PROMPTS,
+                            prompt_name,
+                            operation="invoke",
+                        )
+                    except DbError:
+                        raise
+                    except Exception:
+                        logger.error(
+                            f"Error evaluating prompt permission for "
+                            f"'{prompt_name}'; leaving it out of prompts/list",
+                            exc_info=True,
+                        )
+                        continue
+                    if decision != PermissionResult.ALLOWED:
+                        logger.debug(
+                            f"Prompt '{prompt_name}' filtered out for peer {peer_id} (actor {actor.id})"
+                        )
+                        continue
 
                     prompt_def = {
                         "name": prompt_name,

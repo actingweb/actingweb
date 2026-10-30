@@ -1,8 +1,10 @@
 """
 ListProperty implementation for ActingWeb distributed list storage.
 
-This module provides a list interface that stores list items as individual
-properties in DynamoDB, bypassing the 400KB limit while maintaining API compatibility.
+This module provides a list interface that stores each list item as its own
+property row, so the backend's row-size limit applies per item, not per list,
+while keeping a Python list API. An item larger than the configured limit is
+refused with ``ListItemTooLargeError`` before anything is written.
 """
 
 import json
@@ -20,6 +22,7 @@ import fractional_indexing as fi
 
 from actingweb.db import get_property
 from actingweb.db.exceptions import DbError
+from actingweb.property_list_span import encoded_size
 
 logger = logging.getLogger(__name__)
 
@@ -225,6 +228,31 @@ class ListMetadataContentionError(RuntimeError):
         )
         super().__init__(
             f"List '{list_name}' (actor {actor_id}) {clause} -- retry the request"
+        )
+
+
+class ListItemTooLargeError(ValueError):
+    """A list item's encoded size is over a configured limit.
+
+    Raised **before any write** (no item row, and on a never-created list
+    no meta row either), so a caller can split the item or raise the limit
+    and try again. A ``ValueError`` subclass; catch it ahead of any generic
+    ``except ValueError``. The REST handlers answer **413**.
+
+    ``limit`` is the limit that was exceeded: ``list_item_max_bytes``, or,
+    where a backend row cap applies and the item cannot be stored across
+    several rows, ``list_item_span_threshold``. The message carries the list
+    name, the sizes and the reason only, never item content.
+    """
+
+    def __init__(self, list_name: str, size: int, limit: int, reason: str) -> None:
+        self.list_name = list_name
+        self.bytes = size
+        self.limit = limit
+        self.reason = reason
+        super().__init__(
+            f"List '{list_name}' item is {size} bytes encoded, over the "
+            f"{limit}-byte limit ({reason})"
         )
 
 
@@ -453,6 +481,44 @@ class ListProperty:
         their first item write.
         """
         return self._pending_meta_read == (None, None)
+
+    def _limits(self) -> tuple[int | None, int | None]:
+        """``(span_threshold, max_bytes)`` from the config, each ``None``
+        unless it is a positive ``int``. A test's ``Mock()`` config (whose
+        attributes are ``Mock`` objects) therefore sets no limit."""
+
+        def _accept(value: Any) -> int | None:
+            if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+                return value
+            return None
+
+        return (
+            _accept(getattr(self.config, "list_item_span_threshold", None)),
+            _accept(getattr(self.config, "list_item_max_bytes", None)),
+        )
+
+    def _check_item_size(self, value_str: str) -> None:
+        """Raise ``ListItemTooLargeError`` if the encoded item is over a
+        limit. Called by every item write before anything is written.
+
+        Over ``list_item_max_bytes`` is refused on both formats. Over
+        ``list_item_span_threshold`` (set by default only where the backend
+        has a row cap) is refused as well: the row would fail at the
+        backend, untyped, otherwise.
+        """
+        span_threshold, max_bytes = self._limits()
+        size = encoded_size(value_str)
+        if max_bytes is not None and size > max_bytes:
+            raise ListItemTooLargeError(
+                self.name, size, max_bytes, "list_item_max_bytes"
+            )
+        if span_threshold is not None and size > span_threshold:
+            raise ListItemTooLargeError(
+                self.name,
+                size,
+                span_threshold,
+                "list_item_span_threshold, the largest item one row stores",
+            )
 
     def _decode_item(self, item_str: str) -> Any:
         try:
@@ -1162,7 +1228,7 @@ class ListProperty:
             - updated_at: ISO timestamp of last modification
             - version: Metadata schema version
             - item_type: Type of items stored (currently always "json")
-            - chunk_size: Internal chunk size (currently always 1)
+            - chunk_size: A legacy field, always ``1``
             - length: Number of items in the list. **v1: exact. v2:
               ADVISORY** -- served from `count_hint`, a value mutations
               maintain as a side effect rather than count() every time.
@@ -1385,6 +1451,8 @@ class ListProperty:
             )
 
     def _v2_setitem(self, index: int, value: Any) -> None:
+        value_str = self._encode_item(value)
+        self._check_item_size(value_str)
         # Force a fresh rank read: this is a DESTRUCTIVE positional write,
         # and a cached rank list can be arbitrarily old on a long-lived
         # instance. If another writer inserted an item earlier in the list
@@ -1402,7 +1470,6 @@ class ListProperty:
             raise IndexError(f"List index {orig_index} out of range (length: {length})")
 
         rank = ranks[index]
-        value_str = self._encode_item(value)
         item_db = get_property(self.config)
         if not item_db.set(
             actor_id=self.actor_id, name=self._v2_item_name(rank), value=value_str
@@ -1428,11 +1495,8 @@ class ListProperty:
         if not self._db:
             raise RuntimeError("No database connection available")
 
-        # Serialize the value
-        try:
-            value_str = json.dumps(value)
-        except (TypeError, ValueError):
-            value_str = str(value)
+        value_str = self._encode_item(value)
+        self._check_item_size(value_str)
 
         # Use fresh DB instance to avoid handle conflicts
         item_db = get_property(self.config)
@@ -1649,9 +1713,10 @@ class ListProperty:
         ``_v2_create_meta_row()`` -- see that method's docstring for the
         full write-order diagram.
         """
+        value_str = self._encode_item(item)
+        self._check_item_size(value_str)
         if self._dispatch_saw_no_row():
             self._v2_create_meta_row()
-        value_str = self._encode_item(item)
         last = self._v2_last_rank()
         for attempt in range(_V2_MAX_RANK_RETRIES):
             candidate = fi.generate_key_between(last, None)
@@ -1690,13 +1755,10 @@ class ListProperty:
             self._v2_append(item)
             return
 
-        length = len(self)
+        item_str = self._encode_item(item)
+        self._check_item_size(item_str)
 
-        # Serialize the item
-        try:
-            item_str = json.dumps(item)
-        except (TypeError, ValueError):
-            item_str = str(item)
+        length = len(self)
 
         # Store the new item - use fresh DB instance to avoid handle conflicts
         item_property_name = self._get_item_property_name(length)
@@ -1741,10 +1803,15 @@ class ListProperty:
         dispatch on an empty ``items``, so this never runs on a
         never-created list for an empty batch.
         """
+        # Every item is encoded and size-checked before the first write, so
+        # an oversized item anywhere in the batch writes nothing.
+        encoded = [self._encode_item(item) for item in items]
+        for value_str in encoded:
+            self._check_item_size(value_str)
         if self._dispatch_saw_no_row():
             self._v2_create_meta_row()
         last = self._v2_last_rank()
-        remaining = items
+        remaining = encoded
         created = 0
         created_ranks: list[str] = []
         for attempt in range(_V2_MAX_RANK_RETRIES):
@@ -1752,7 +1819,7 @@ class ListProperty:
                 break
             candidates = fi.generate_n_keys_between(last, None, len(remaining))
             collided_at = None
-            for i, (candidate, item) in enumerate(
+            for i, (candidate, value_str) in enumerate(
                 zip(candidates, remaining, strict=True)
             ):
                 if len(candidate) > _V2_RANK_MAX_LEN:
@@ -1764,7 +1831,7 @@ class ListProperty:
                 if not item_db.create_if_not_exists(
                     actor_id=self.actor_id,
                     name=self._v2_item_name(candidate),
-                    value=self._encode_item(item),
+                    value=value_str,
                 ):
                     # Collision: another writer took this rank. The items
                     # before it already landed; re-key from here.
@@ -1803,6 +1870,10 @@ class ListProperty:
             self._v2_extend(items)
             return
 
+        # Size-check the whole batch first, as the v2 path does, so an
+        # oversized item anywhere in it writes nothing.
+        for item in items:
+            self._check_item_size(self._encode_item(item))
         for item in items:
             self.append(item)
 
@@ -2190,9 +2261,10 @@ class ListProperty:
         """On a list whose dispatch found no meta row, creates it first via
         ``_v2_create_meta_row()`` -- see that method's docstring for the
         full write-order diagram."""
+        value_str = self._encode_item(item)
+        self._check_item_size(value_str)
         if self._dispatch_saw_no_row():
             self._v2_create_meta_row()
-        value_str = self._encode_item(item)
         for attempt in range(_V2_MAX_RANK_RETRIES):
             ranks = self._v2_ensure_rank_cache(force=(attempt > 0))
             length = len(ranks)
@@ -2242,6 +2314,9 @@ class ListProperty:
         if index > length:
             index = length
 
+        item_str = self._encode_item(item)
+        self._check_item_size(item_str)
+
         # Shift all items from index onwards up by one. Fresh DB instance
         # per call (like every other mutation method) — reusing self._db
         # across get()/set() calls for different item names left a stale
@@ -2265,11 +2340,6 @@ class ListProperty:
                     )
 
         # Insert the new item
-        try:
-            item_str = json.dumps(item)
-        except (TypeError, ValueError):
-            item_str = str(item)
-
         insert_db = get_property(self.config)
         if not insert_db.set(
             actor_id=self.actor_id,
@@ -2555,12 +2625,14 @@ class ListProperty:
                 f"update_by_handle() is v2-only -- list '{self.name}' is "
                 f"still v1. Call migrate_to_v2() first."
             )
+        value_str = self._encode_item(item)
+        self._check_item_size(value_str)
         db = get_property(self.config)
         if not db.set_if_value_equals(
             actor_id=self.actor_id,
             name=self._v2_item_name(handle.rank),
             expected=handle.raw_value,
-            value=self._encode_item(item),
+            value=value_str,
         ):
             return False
         self._v2_touch_metadata()

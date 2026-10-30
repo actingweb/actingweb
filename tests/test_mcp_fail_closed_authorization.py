@@ -525,6 +525,119 @@ class TestNoTrustDenialSurvivesBrokenEvaluator(unittest.TestCase):
         self.assertIn("no trust relationship", resp["error"]["message"])
 
 
+class TestListFiltersFailClosedOnEvaluatorErrors(unittest.TestCase):
+    """With a resolved peer, an evaluator that cannot be constructed yields
+    an empty list, and one that raises on an item drops that item only.
+    Before 3.16 both cases listed everything (fail-open). A DbError still
+    answers 503, so a client can tell an outage from a denial."""
+
+    LISTS = (
+        ("tools/list", "tools", "a_tool"),
+        ("resources/list", "resources", "notes://{id}"),
+        ("prompts/list", "prompts", "a_prompt"),
+    )
+
+    def setUp(self) -> None:
+        self.actor = FakeAuthedActor()
+
+    def _handler(self) -> MCPHandler:
+        handler = MCPHandler()
+        handler.hooks = _make_resource_prompt_tool_hooks()
+
+        @mcp_tool(description="another tool")
+        def b_tool(actor, action_name, data):
+            return {"content": [{"type": "text", "text": "ok"}]}
+
+        @mcp_prompt(description="another prompt")
+        def b_prompt(actor, method_name, data):
+            return {"prompt": "hi"}
+
+        @mcp_resource(uri_template="files://{id}", mime_type="text/plain")
+        def b_resource(actor, method_name, params):
+            return {"file": "hi"}
+
+        handler.hooks.register_action_hook("b_tool", b_tool)
+        handler.hooks.register_method_hook("b_prompt", b_prompt)
+        handler.hooks.register_method_hook("b_resource", b_resource)
+        return handler
+
+    def _call(self, method: str, evaluator_patch: Any) -> tuple[MCPHandler, dict]:
+        handler = self._handler()
+        with (
+            patch.object(
+                MCPHandler, "authenticate_and_get_actor_cached", return_value=self.actor
+            ),
+            patch("actingweb.handlers.mcp.RuntimeContext") as mock_rc,
+            evaluator_patch,
+        ):
+            ctx = Mock()
+            ctx.peer_id = "peer-1"
+            ctx.client_info = None
+            mock_rc.return_value.get_mcp_context.return_value = ctx
+            resp = _post(handler, method, {})
+        return handler, resp
+
+    @staticmethod
+    def _names(resp: dict, key: str) -> list[str]:
+        field = "uri" if key == "resources" else "name"
+        return [entry[field] for entry in resp["result"][key]]
+
+    def test_evaluator_construction_failure_yields_empty_list(self) -> None:
+        for method, key, _ in self.LISTS:
+            with self.subTest(method=method):
+                with self.assertLogs("actingweb.handlers.mcp", level="ERROR"):
+                    _, resp = self._call(
+                        method,
+                        patch(
+                            "actingweb.permission_evaluator.get_permission_evaluator",
+                            side_effect=RuntimeError("permission system unavailable"),
+                        ),
+                    )
+                self.assertEqual(resp["result"][key], [])
+
+    def test_item_evaluation_error_skips_only_that_item(self) -> None:
+        from actingweb.permission_evaluator import PermissionResult
+
+        for method, key, failing in self.LISTS:
+            with self.subTest(method=method):
+                evaluator = Mock()
+
+                def decide(
+                    actor_id, peer_id, ptype, target, operation="", failing=failing
+                ):
+                    if target == failing:
+                        raise RuntimeError("evaluator bug")
+                    return PermissionResult.ALLOWED
+
+                evaluator.evaluate_permission.side_effect = decide
+                with self.assertLogs("actingweb.handlers.mcp", level="ERROR"):
+                    _, resp = self._call(
+                        method,
+                        patch(
+                            "actingweb.permission_evaluator.get_permission_evaluator",
+                            return_value=evaluator,
+                        ),
+                    )
+                names = self._names(resp, key)
+                self.assertNotIn(failing, names)
+                self.assertEqual(len(names), 1, names)
+
+    def test_db_error_still_answers_503(self) -> None:
+        from actingweb.db.exceptions import DbError
+
+        for method, _, _ in self.LISTS:
+            with self.subTest(method=method):
+                handler, resp = self._call(
+                    method,
+                    patch(
+                        "actingweb.permission_evaluator.get_permission_evaluator",
+                        side_effect=DbError("trust read", "actor-1"),
+                    ),
+                )
+                self.assertIn("error", resp)
+                self.assertEqual(handler.response.status_code, 503)
+
+
 class TestNegativeTTL(unittest.TestCase):
     """A cached ``None`` trust re-resolves after the negative TTL, not the
     full 5-minute positive TTL.

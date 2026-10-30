@@ -45,6 +45,23 @@ Runtime Switches
 - ``open_factory``: Whether the actor factory (``POST /``) accepts requests (``with_open_factory()``; default ``True``). ``False`` closes the factory for an OAuth-only deployment: ``POST /`` answers 403 (the JSON error body, or the error page for a form), ``trustee_root`` instantiation and the form fallback are closed with it, and so is the existing-creator form redirect (which goes to ``/login`` and names no actor id since 3.16). Sign-in through OAuth is then the only way to get an actor. A deviation from the protocol's mandatory factory; a basic-auth deployment that needs the factory form login keeps it open. A value assigned on the Config survives until ``with_open_factory()`` is called, after which the builder's value wins. "Factory" here means the actor factory (``POST /``), not the authenticator factory functions. See :doc:`../reference/security`.
 - ``mcp``: Include MCP capability; toggle via ``with_mcp()``.
 - ``sync_subscription_callbacks``: Force synchronous subscription callbacks (``with_sync_callbacks()``). **Required for Lambda/serverless deployments** where async fire-and-forget callbacks may be lost when the function freezes. Affects both diff callbacks and resync callbacks. Do NOT enable in local/container deployments to avoid blocking and self-deadlock. See :doc:`deployment` for details.
+- ``list_item_span_threshold`` and ``list_item_max_bytes``: Property-list item size limits, in bytes of the item's encoded JSON (``with_list_item_limits(span_threshold=..., max_bytes=...)``). ``list_item_max_bytes`` is the largest item the library stores: a larger one raises ``ListItemTooLargeError`` before anything is written, and the REST handlers answer 413. ``list_item_span_threshold`` is the largest item one row holds on a backend with a row cap; an item over it is refused there as well, since the backend would reject the row. The defaults depend on the backend:
+
+  .. list-table::
+     :header-rows: 1
+     :widths: 30 35 35
+
+     * - Backend
+       - ``list_item_span_threshold``
+       - ``list_item_max_bytes``
+     * - DynamoDB (400 KB row cap)
+       - 390,000
+       - 4 MiB (4,194,304)
+     * - PostgreSQL (no row cap)
+       - ``None`` (off)
+       - ``None`` (no ceiling)
+
+  An omitted builder argument keeps the backend default and an explicit ``None`` turns that limit off. The threshold ranges from 1 to 390,000 and the ceiling must be positive and at least the threshold; a value outside that raises ``ValueError`` wherever it is set (builder, ``Config(...)``, or assignment). A deployment that develops on PostgreSQL and runs DynamoDB in production sets both explicitly, so the two behave alike. ``list_item_max_bytes`` is a **storage** bound, not an ingress guard: the request-size limit at the deployment's edge (Flask ``MAX_CONTENT_LENGTH``, an ASGI body-limit middleware, a reverse proxy's or gateway's body-size setting) refuses an oversized request before it is read, and is sized to ``list_item_max_bytes`` plus room for the JSON around the item. A custom backend declares its row cap with ``DbProperty.MAX_ROW_BYTES``; without it the defaults are off. See :doc:`../guides/property-lists`.
 - ``refresh_token_grace_period``: Seconds after a refresh token is consumed during which presenting it again rotates again instead of counting as theft (``with_refresh_token_grace(seconds)``). Applies to the SPA (``/oauth/spa/token``) and MCP (``/oauth/token``) refresh grants. Default and maximum 60, minimum 0; a value outside that range, or one that is not an integer, raises ``ValueError`` wherever it is set (builder, ``Config(...)``, or assignment). Set it with the builder: a value assigned on the Config survives only while the builder method is not called; after a builder call the builder's value wins. A lower value narrows the window in which a copied token is honoured; ``0`` means no grace: every reuse inside the reuse window is answered as theft, which also signs out a client's own concurrent duplicate refresh and a retry of a refresh that consumed its token but failed to store the new one, while a request presented at the same moment may still keep its new tokens. See :ref:`spa-refresh-grace`.
 
 Browser Redirect Behavior
@@ -588,7 +605,7 @@ While lookup tables remove hard limits, consider these guidelines for optimal pe
 For extremely large data (>100KB), consider:
 
 1. Storing the data in external storage (S3, Cloud Storage) and keeping only a reference in the property
-2. Using property lists for chunked storage of large datasets
+2. Using a property list, which stores each item as its own row, so the row limit applies per item rather than to the whole dataset (an item over the limit raises ``ListItemTooLargeError``; see ``list_item_max_bytes`` above)
 3. Using non-indexed properties for large values that don't require reverse lookups
 
 Best Practices

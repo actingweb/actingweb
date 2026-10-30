@@ -188,7 +188,9 @@ exact hint.
   metadata row read on a compare-and-swap retry, or a scalar property
   created under the list's name between dispatch and the touch, raises
   *after* the item write by design -- corruption and name collisions
-  stay visible, and the REST handlers map it to 400.
+  stay visible, and the REST handlers map it to 400. The exception is
+  ``ListItemTooLargeError``, which is raised before any write (see
+  `Item size limits`_ below).
 - ``extend()``, ``remove_where()`` and ``update_where()`` are batches: a
   raise part-way through means the earlier items landed, exactly as
   today.
@@ -584,6 +586,40 @@ projection saves no read capacity on DynamoDB -- it still pays for the
 whole item -- so it would break the ``list_all()``/``list_all_with_rows()``
 pairing for nothing.
 
+Item size limits
+----------------
+
+Each item is stored as its own row, so a backend's row-size limit applies
+per item. Two settings bound an item's size, in bytes of its encoded JSON
+(``json.dumps`` with ``ensure_ascii=True``, so a non-ASCII character costs
+up to six bytes as ``\uXXXX``):
+
+- ``list_item_max_bytes``: the largest item the library stores. A larger
+  item raises ``ListItemTooLargeError`` (``from actingweb import
+  ListItemTooLargeError``) before anything is written, on both storage
+  formats.
+- ``list_item_span_threshold``: the largest item one row holds where the
+  backend has a row cap. An item over it is refused there too, since the
+  backend would reject the row.
+
+The defaults depend on the backend: DynamoDB (400 KB rows) uses 390,000
+and 4 MiB; PostgreSQL sets neither. Change them with
+``ActingWebApp.with_list_item_limits(span_threshold=..., max_bytes=...)``;
+see :doc:`../quickstart/configuration`. ``ListItemTooLargeError``
+subclasses ``ValueError``, so catch it ahead of any generic ``except
+ValueError``. ``extend()`` checks every item before writing the first, so
+an oversized item anywhere in the batch writes nothing.
+
+.. code-block:: python
+
+    from actingweb import ListItemTooLargeError
+
+    try:
+        actor.property_lists.documents.append(document)
+    except ListItemTooLargeError as e:
+        # e.list_name, e.bytes, e.limit; nothing was written
+        ...
+
 REST API
 --------
 
@@ -701,6 +737,18 @@ relying on batch semantics:
   PUT /{actor_id}/properties/{list_name}/metadata
   Content-Type: application/json
   {"description": "...", "explanation": "..."}
+
+**Item too large (413 Payload Too Large)**
+
+Every item-writing path above (PUT ``?index=N``, the ``/items`` ``add``
+and ``update`` actions, and the bulk update) answers 413 when an item's
+encoded size is over the configured limit. Nothing is written::
+
+  {"error": "list_item_too_large", "list": "notes", "bytes": 4194306,
+   "limit": 4194304, "detail": "...",
+   "remedy": "split the item or raise list_item_max_bytes"}
+
+See `Item size limits`_ below.
 
 **Corrupted list (409 Conflict)**
 

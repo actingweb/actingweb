@@ -444,6 +444,18 @@ CHANGED
   in the built documentation moves from ``LICENSE.html`` to
   ``docs/license.html``.
 
+- **MCP ``tools/list``, ``resources/list`` and ``prompts/list`` listed
+  everything when the permission evaluator failed.** An evaluator that
+  could not be constructed left the filter off, and an item whose
+  evaluation raised was listed anyway, so an evaluator fault showed a
+  connected client every tool, resource and prompt. The three lists now
+  fail closed: an evaluator that cannot be constructed answers an empty
+  list, and an item whose evaluation raises is left out, each logged at
+  ERROR with the traceback. A database fault still answers 503.
+  **Behavior change:** a client connected while the permission system is
+  broken sees an empty server instead of every item; check the ERROR log
+  when a client reports an empty tool list.
+
 ADDED
 ~~~~~
 
@@ -550,6 +562,25 @@ ADDED
   ``--start-after``; the summary says so), 2 when the actor list could not be
   read and nothing was scanned, or when an argument such as ``--marker`` was
   refused. Run it as maintenance, with the application's environment.
+
+- **``ListItemTooLargeError``** (``from actingweb import
+  ListItemTooLargeError``), raised before any write when a property-list
+  item's encoded size is over a limit; it carries ``list_name``, ``bytes``,
+  ``limit`` and ``reason``, and its message never includes item content.
+  The REST handlers map it to 413 with ``{"error": "list_item_too_large",
+  "list", "bytes", "limit", "detail", "remedy"}``. It subclasses
+  ``ValueError``: catch it ahead of a generic ``except ValueError``.
+
+- **``ActingWebApp.with_list_item_limits(span_threshold=..., max_bytes=...)``**
+  and the ``Config`` settings ``list_item_span_threshold`` and
+  ``list_item_max_bytes``. Defaults follow the backend: DynamoDB 390,000
+  bytes and 4 MiB; PostgreSQL neither (unchanged behaviour there). An
+  omitted argument keeps the default and an explicit ``None`` turns the
+  limit off; out-of-range values raise ``ValueError`` wherever they are
+  set. A backend declares its row cap with ``DbProperty.MAX_ROW_BYTES``.
+  ``list_item_max_bytes`` is a storage bound: size the request-size limit
+  at the deployment's edge to match it. A deployment that develops on
+  PostgreSQL and runs DynamoDB in production sets both explicitly.
 
 FIXED
 ~~~~~
@@ -729,6 +760,37 @@ FIXED
 - **A generated OAuth2 state key was written to the log.** When the state
   manager could not store a key it generated one in memory and logged it in
   full. It now logs that a non-persistent key is in use, not the key.
+
+- **A list item over DynamoDB's 400 KB row cap failed with an untyped
+  ``DbError("property write")``.** Nothing checked an item's size before
+  the write, so the backend refused the row and the caller (and a REST
+  client, as a 500) could not tell an oversized item from an outage; a v2
+  list's first mutation had already created its meta row by then. Every
+  item write (``append``, ``extend``, ``insert``, ``__setitem__``,
+  ``update_by_handle``, on v1 and v2 lists) now measures the encoded item
+  first and raises ``ListItemTooLargeError`` before anything is written,
+  including the meta row of a never-created list; ``extend()`` checks the
+  whole batch before its first write. On DynamoDB the limit is 390,000
+  encoded bytes per item for now; an item over that is refused rather
+  than failing at the backend. The REST handlers answer 413 with a
+  structured body. **Behavior change:** a caller that caught ``DbError``
+  for an oversized item gets ``ListItemTooLargeError`` (a ``ValueError``)
+  instead, before any write.
+
+- The property-list module docstring said items were stored "bypassing the
+  400KB limit"; each item is one row, so the limit applies per item, and
+  the docstring now says so. ``get_metadata()``'s ``chunk_size`` is
+  documented as a legacy field that is always ``1``. The configuration
+  guide's "property lists for chunked storage" advice is reworded the same
+  way. No behaviour change.
+
+- The ``://`` prefix form of a permission pattern (``notes://``) is now
+  matched through the glob path as ``notes://*`` instead of a separate
+  ``startswith`` branch. No behaviour change: the two match the same
+  targets, ``..`` segments included, and a pattern that already holds a
+  wildcard (``*://``) is left as written. The access-control guide and the
+  security reference now say that resource URIs are not normalised and a
+  resource reader validates its own path.
 
 v3.15.1: September 29, 2026
 ---------------------------

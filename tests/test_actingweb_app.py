@@ -3,6 +3,8 @@
 import os
 from unittest.mock import patch
 
+import pytest
+
 from actingweb.interface.app import ActingWebApp
 
 
@@ -737,6 +739,69 @@ class TestGetConfig:
             config2 = app.get_config()
 
         assert config1 is config2
+
+
+class TestListItemLimits:
+    """with_list_item_limits(): backend defaults, explicit None, the pair
+    rule against the effective other value, and builder precedence."""
+
+    def _app(self, database: str) -> ActingWebApp:
+        with patch.object(ActingWebApp, "_initialize_permission_system"):
+            return ActingWebApp(aw_type="urn:actingweb:test:limits", database=database)
+
+    def test_omitted_arguments_keep_backend_defaults(self):
+        dynamo = self._app("dynamodb").with_list_item_limits()
+        assert dynamo.get_config().list_item_span_threshold == 390_000
+        assert dynamo.get_config().list_item_max_bytes == 4 * 2**20
+        pg = self._app("postgresql").with_list_item_limits()
+        assert pg.get_config().list_item_span_threshold is None
+        assert pg.get_config().list_item_max_bytes is None
+
+    def test_one_argument_keeps_the_other_default(self):
+        app = self._app("dynamodb").with_list_item_limits(max_bytes=8 * 2**20)
+        assert app.get_config().list_item_span_threshold == 390_000
+        assert app.get_config().list_item_max_bytes == 8 * 2**20
+
+    def test_explicit_none_turns_a_limit_off(self):
+        app = self._app("dynamodb").with_list_item_limits(
+            span_threshold=None, max_bytes=None
+        )
+        assert app.get_config().list_item_span_threshold is None
+        assert app.get_config().list_item_max_bytes is None
+
+    def test_postgresql_parity_values(self):
+        app = self._app("postgresql").with_list_item_limits(
+            span_threshold=390_000, max_bytes=4 * 2**20
+        )
+        assert app.get_config().list_item_span_threshold == 390_000
+        assert app.get_config().list_item_max_bytes == 4 * 2**20
+
+    def test_validated_against_the_effective_other_value(self):
+        app = self._app("dynamodb")
+        with pytest.raises(ValueError, match="at least"):
+            app.with_list_item_limits(max_bytes=100_000)
+        # Nothing was stored by the refused call.
+        assert app.get_config().list_item_max_bytes == 4 * 2**20
+        # Lowering both together is fine.
+        app.with_list_item_limits(span_threshold=50_000, max_bytes=100_000)
+        assert app.get_config().list_item_max_bytes == 100_000
+
+    @pytest.mark.parametrize(
+        "kwargs",
+        [{"span_threshold": 0}, {"span_threshold": 390_001}, {"max_bytes": -1}],
+    )
+    def test_out_of_range_refused(self, kwargs):
+        with pytest.raises(ValueError):
+            self._app("dynamodb").with_list_item_limits(**kwargs)
+
+    def test_config_value_survives_until_the_builder_is_called(self):
+        app = self._app("dynamodb")
+        app.get_config().list_item_max_bytes = 1_000_000
+        app.with_web_ui(enable=True)
+        assert app.get_config().list_item_max_bytes == 1_000_000
+        app.with_list_item_limits(max_bytes=2_000_000)
+        app.with_web_ui(enable=False)
+        assert app.get_config().list_item_max_bytes == 2_000_000
 
 
 class TestFluentChaining:

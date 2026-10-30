@@ -63,6 +63,10 @@ def create_test_app(
         .with_unique_creator(enable=unique_creator)
         .with_email_as_creator(enable=False)
         .with_open_factory(enable=open_factory)
+        # Explicit for both backends: PostgreSQL never spans and has no item
+        # ceiling at its defaults, so without this the PostgreSQL CI run
+        # would not exercise the span and 413 paths DynamoDB takes.
+        .with_list_item_limits(span_threshold=390_000, max_bytes=4 * 2**20)
     )
 
     # Optional: Add OAuth2 configuration for OAuth tests

@@ -8,6 +8,11 @@ from typing import TYPE_CHECKING, Any
 
 from .. import __version__
 from ..config import Config
+from ..property_list_span import (
+    validate_limit_pair,
+    validate_max_bytes,
+    validate_span_threshold,
+)
 from ..single_use import validate_refresh_token_grace
 from ..subscription_config import SubscriptionProcessingConfig
 from .hooks import HookMetadata, HookRegistry
@@ -15,6 +20,10 @@ from .hooks import HookMetadata, HookRegistry
 if TYPE_CHECKING:
     from .integrations.fastapi_integration import FastAPIIntegration
     from .integrations.flask_integration import FlaskIntegration
+
+
+# "Not given" for builder arguments where None is a meaningful value.
+_UNSET: Any = object()
 
 
 class UniqueCreatorNotReady(RuntimeError):
@@ -84,6 +93,11 @@ class ActingWebApp:
         # None = the builder was never asked: a value assigned on the Config
         # survives. After with_open_factory() the builder's value wins.
         self._open_factory: bool | None = None
+        # _UNSET = with_list_item_limits() was not given that argument: the
+        # backend default, or a value assigned on the Config, stays
+        # authoritative. None is a real value (spanning off / no ceiling).
+        self._list_item_span_threshold: Any = _UNSET
+        self._list_item_max_bytes: Any = _UNSET
         self._thread_pool_workers = (
             10  # Default thread pool size for FastAPI integration
         )
@@ -223,6 +237,7 @@ class ActingWebApp:
             self._config.refresh_token_grace_period = self._refresh_token_grace_period
         if self._open_factory is not None:
             self._config.open_factory = self._open_factory
+        self._apply_list_item_limits()
         # Peer profile caching configuration
         if hasattr(self, "_peer_profile_attributes"):
             self._config.peer_profile_attributes = self._peer_profile_attributes
@@ -582,6 +597,74 @@ class ActingWebApp:
             Self for method chaining.
         """
         self._sync_subscription_callbacks = enable
+        self._apply_runtime_changes_to_config()
+        return self
+
+    def _apply_list_item_limits(self) -> None:
+        """Stamp the list-item limits the builder was given onto the Config.
+        Only given values: an omitted argument leaves the backend default,
+        or a value assigned on the Config, in place."""
+        if self._config is None:
+            return
+        if self._list_item_span_threshold is not _UNSET:
+            self._config.list_item_span_threshold = self._list_item_span_threshold
+        if self._list_item_max_bytes is not _UNSET:
+            self._config.list_item_max_bytes = self._list_item_max_bytes
+
+    def with_list_item_limits(
+        self,
+        *,
+        span_threshold: int | None = _UNSET,
+        max_bytes: int | None = _UNSET,
+    ) -> "ActingWebApp":
+        """Set the property-list item size limits.
+
+        ``span_threshold`` is the encoded size, in bytes, above which a v2
+        list item is stored across several rows; ``max_bytes`` is the
+        largest encoded item the library stores at all. An item over
+        ``max_bytes`` raises ``ListItemTooLargeError`` before anything is
+        written, and the REST handlers answer 413.
+
+        An omitted argument keeps the backend default: on DynamoDB (a 400 KB
+        row cap) 390,000 bytes and 4 MiB; on PostgreSQL (no row cap) no
+        spanning and no ceiling. An explicit ``None`` turns spanning off or
+        removes the ceiling. A deployment that develops on PostgreSQL and
+        runs DynamoDB in production sets both, so the two behave alike.
+
+        ``max_bytes`` is a **storage** bound. The request-size limit at the
+        deployment's edge (Flask ``MAX_CONTENT_LENGTH``, an ASGI body-limit
+        middleware, a reverse proxy's or gateway's body-size setting) is the
+        ingress guard; size it consistently with ``max_bytes`` plus JSON
+        overhead.
+
+        Args:
+            span_threshold: ``None``, or an integer from 1 to 390,000.
+            max_bytes: ``None``, or a positive integer at least
+                ``span_threshold`` when both are set.
+
+        Returns:
+            Self for method chaining.
+
+        Raises:
+            ValueError: A value is out of range, or ``max_bytes`` would be
+                below the effective span threshold.
+        """
+        config = self.get_config()
+        span = (
+            validate_span_threshold(span_threshold)
+            if span_threshold is not _UNSET
+            else config.list_item_span_threshold
+        )
+        ceiling = (
+            validate_max_bytes(max_bytes)
+            if max_bytes is not _UNSET
+            else config.list_item_max_bytes
+        )
+        validate_limit_pair(span, ceiling)
+        if span_threshold is not _UNSET:
+            self._list_item_span_threshold = span_threshold
+        if max_bytes is not _UNSET:
+            self._list_item_max_bytes = max_bytes
         self._apply_runtime_changes_to_config()
         return self
 
@@ -1386,6 +1469,7 @@ class ActingWebApp:
                 )
             if self._open_factory is not None:
                 self._config.open_factory = self._open_factory
+            self._apply_list_item_limits()
             # Populate multi-provider OAuth config on initial creation
             named = {k: dict(v) for k, v in self._oauth_configs.items() if k}
             if named:

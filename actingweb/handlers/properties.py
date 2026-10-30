@@ -5,7 +5,11 @@ from typing import Any
 
 from actingweb.db import get_property_list
 from actingweb.handlers import base_handler
-from actingweb.property_list import ListCorruptionError, ListMetadataContentionError
+from actingweb.property_list import (
+    ListCorruptionError,
+    ListItemTooLargeError,
+    ListMetadataContentionError,
+)
 
 from ..db.exceptions import DbError
 from ..identifiers import first_control_character
@@ -49,6 +53,29 @@ def delete_dict(d1, path):
 logger = logging.getLogger(__name__)
 
 
+def _write_list_error(
+    response: Any,
+    status: int,
+    reason: str,
+    body: dict[str, Any],
+    *,
+    headers: dict[str, str] | None = None,
+) -> None:
+    """Write a structured JSON error for a list operation.
+
+    The one writer behind the 409 (corrupted list), the 413 (item too
+    large) and the 503 (metadata contention) responses, so every list error
+    has the same shape: a status, a reason phrase and a JSON body whose
+    ``error`` names the condition.
+    """
+    if response:
+        response.set_status(status, reason)
+        response.headers["Content-Type"] = "application/json"
+        for header, value in (headers or {}).items():
+            response.headers[header] = value
+        response.write(json.dumps(body))
+
+
 def _write_list_corrupted_response(response: Any, name: str, error: Exception) -> None:
     """Write the structured 409 response for a ListCorruptionError.
 
@@ -58,19 +85,42 @@ def _write_list_corrupted_response(response: Any, name: str, error: Exception) -
     the body.
     """
     logger.error(f"List '{name}' is corrupted: {error}")
-    if response:
-        response.set_status(409, "List corrupted")
-        response.headers["Content-Type"] = "application/json"
-        response.write(
-            json.dumps(
-                {
-                    "error": "list_corrupted",
-                    "list": name,
-                    "detail": str(error),
-                    "remedy": "compact",
-                }
-            )
-        )
+    _write_list_error(
+        response,
+        409,
+        "List corrupted",
+        {
+            "error": "list_corrupted",
+            "list": name,
+            "detail": str(error),
+            "remedy": "compact",
+        },
+    )
+
+
+def _write_list_item_too_large_response(
+    response: Any, name: str, error: ListItemTooLargeError
+) -> None:
+    """Write the structured 413 response for a ListItemTooLargeError.
+
+    Nothing was written: the size check runs before any row. The error's
+    message carries the list name, sizes and limit only, never item
+    content.
+    """
+    logger.warning(f"List '{name}' item refused: {error}")
+    _write_list_error(
+        response,
+        413,
+        "List item too large",
+        {
+            "error": "list_item_too_large",
+            "list": name,
+            "bytes": error.bytes,
+            "limit": error.limit,
+            "detail": str(error),
+            "remedy": "split the item or raise list_item_max_bytes",
+        },
+    )
 
 
 _LIST_METADATA_CONTENTION_RETRY_AFTER_SECONDS = "1"
@@ -87,18 +137,13 @@ def _write_list_metadata_contention_response(response: Any, error: Exception) ->
     clear.
     """
     logger.warning(f"List metadata contention: {error}")
-    if response:
-        response.set_status(503, "List metadata contended")
-        response.headers["Content-Type"] = "application/json"
-        response.headers["Retry-After"] = _LIST_METADATA_CONTENTION_RETRY_AFTER_SECONDS
-        response.write(
-            json.dumps(
-                {
-                    "error": "list_metadata_contended",
-                    "detail": str(error),
-                }
-            )
-        )
+    _write_list_error(
+        response,
+        503,
+        "List metadata contended",
+        {"error": "list_metadata_contended", "detail": str(error)},
+        headers={"Retry-After": _LIST_METADATA_CONTENTION_RETRY_AFTER_SECONDS},
+    )
 
 
 class PropertiesHandler(base_handler.BaseHandler):
@@ -186,6 +231,12 @@ class PropertiesHandler(base_handler.BaseHandler):
     def _respond_list_metadata_contended(self, error: Exception) -> None:
         """Write the structured 503 response for a ListMetadataContentionError."""
         _write_list_metadata_contention_response(self.response, error)
+
+    def _respond_list_item_too_large(
+        self, name: str, error: ListItemTooLargeError
+    ) -> None:
+        """Write the structured 413 response for a ListItemTooLargeError."""
+        _write_list_item_too_large_response(self.response, name, error)
 
     def _finish_bulk_list_update(
         self,
@@ -817,6 +868,9 @@ class PropertiesHandler(base_handler.BaseHandler):
                 # meta-row create, which is safe to retry). Map to 503
                 # rather than letting it fall through as an unhandled 500.
                 self._respond_list_metadata_contended(e)
+                return
+            except ListItemTooLargeError as e:
+                self._respond_list_item_too_large(name, e)
                 return
             except (ValueError, IndexError) as e:
                 logger.error(f"Error setting list item at index {index_param}: {e}")
@@ -1523,6 +1577,8 @@ class PropertiesHandler(base_handler.BaseHandler):
                                     # Store the complete object
                                     list_prop[index] = item_data
                                     items_updated += 1
+                                except ListItemTooLargeError:
+                                    raise
                                 except (IndexError, ValueError) as e:
                                     logger.error(
                                         f"Error updating item at index {index}: {e}"
@@ -1570,6 +1626,9 @@ class PropertiesHandler(base_handler.BaseHandler):
                             return
                         except ListMetadataContentionError as e:
                             self._respond_list_metadata_contended(e)
+                            return
+                        except ListItemTooLargeError as e:
+                            self._respond_list_item_too_large(key, e)
                             return
                         except DbError:
                             raise
@@ -2034,6 +2093,12 @@ class PropertyListItemsHandler(base_handler.BaseHandler):
         """Write the structured 503 response for a ListMetadataContentionError."""
         _write_list_metadata_contention_response(self.response, error)
 
+    def _respond_list_item_too_large(
+        self, name: str, error: ListItemTooLargeError
+    ) -> None:
+        """Write the structured 413 response for a ListItemTooLargeError."""
+        _write_list_item_too_large_response(self.response, name, error)
+
     def get(self, actor_id: str, name: str):
         """Get all items from a list property.
 
@@ -2307,6 +2372,9 @@ class PropertyListItemsHandler(base_handler.BaseHandler):
             return
         except ListMetadataContentionError as e:
             self._respond_list_metadata_contended(e)
+            return
+        except ListItemTooLargeError as e:
+            self._respond_list_item_too_large(name, e)
             return
         except DbError:
             raise

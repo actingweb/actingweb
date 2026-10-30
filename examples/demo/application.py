@@ -40,6 +40,10 @@ LOG.setLevel(os.getenv("LOG_LEVEL", "INFO"))
 logging.getLogger("urllib3.connectionpool").setLevel(logging.WARNING)
 
 # Create ActingWeb app with fluent configuration
+# Property-list item limits (see with_list_item_limits below).
+LIST_ITEM_SPAN_THRESHOLD = 390_000
+LIST_ITEM_MAX_BYTES = 4 * 2**20
+
 aw_app = (
     ActingWebApp(
         aw_type="urn:actingweb:actingweb.io:actingwebdemo",
@@ -96,6 +100,12 @@ aw_app = (
     .with_legacy_property_index(
         enable=False
     )  # Use new lookup table instead of legacy GSI
+    # Property-list item limits, set explicitly so the demo behaves the same
+    # on DynamoDB and PostgreSQL (PostgreSQL's own defaults never span and
+    # set no ceiling).
+    .with_list_item_limits(
+        span_threshold=LIST_ITEM_SPAN_THRESHOLD, max_bytes=LIST_ITEM_MAX_BYTES
+    )
 )
 
 # Configure OAuth2 provider and trust relationship settings
@@ -130,6 +140,11 @@ register_all_shared_hooks(aw_app)
 
 # Create Flask app
 app = Flask(__name__, static_url_path="/static")
+# The ingress guard for list_item_max_bytes, which is a storage bound only:
+# refuse a request body larger than one maximal item plus room for the JSON
+# around it, before it is read. (A FastAPI deployment uses an ASGI body-limit
+# middleware or its reverse proxy's body-size setting for the same purpose.)
+app.config["MAX_CONTENT_LENGTH"] = LIST_ITEM_MAX_BYTES + 64 * 1024
 
 # Trust proxy headers (X-Forwarded-Proto, X-Forwarded-Host, etc.) from ngrok/reverse proxies
 # This ensures request.url uses https:// when behind a proxy that terminates SSL

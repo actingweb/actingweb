@@ -7,6 +7,12 @@ import uuid
 from typing import TYPE_CHECKING, Any, Optional
 
 from .constants import REFRESH_TOKEN_GRACE_DEFAULT
+from .property_list_span import (
+    default_limits,
+    validate_limit_pair,
+    validate_max_bytes,
+    validate_span_threshold,
+)
 from .single_use import validate_refresh_token_grace
 
 if TYPE_CHECKING:
@@ -161,6 +167,28 @@ class Config:
         # write, including the kwargs below, is validated.
         self.refresh_token_grace_period = REFRESH_TOKEN_GRACE_DEFAULT
         #########
+        # Property-list item size limits
+        #########
+        # Defaults depend on the backend: one with a row cap (DynamoDB) spans
+        # an item over 390,000 encoded bytes across several rows and refuses
+        # one over 4 MiB; one without (PostgreSQL) never spans and sets no
+        # ceiling. The backend is the one the kwargs below select, so the
+        # defaults are resolved against it before the kwargs loop can
+        # override either value. Set them with
+        # ActingWebApp.with_list_item_limits(). Properties: every write is
+        # validated.
+        backend = kwargs.get("database", self.database)
+        backend_property = importlib.import_module(
+            "actingweb.db." + backend + ".property"
+        )
+        span_default, max_default = default_limits(
+            getattr(
+                getattr(backend_property, "DbProperty", None), "MAX_ROW_BYTES", None
+            )
+        )
+        self.list_item_span_threshold = span_default
+        self.list_item_max_bytes = max_default
+        #########
         # Trust settings for this app
         #########
         # Default relationship if not specified
@@ -291,6 +319,9 @@ class Config:
         # Pick up the config variables
         for k, v in kwargs.items():
             self.__setattr__(k, v)
+        # The pair rule is checked once, after every kwarg landed, so the two
+        # limits can be given in either order.
+        validate_limit_pair(self.list_item_span_threshold, self.list_item_max_bytes)
 
         # fqdn/proto are spliced into every URL the app emits and into the
         # WWW-Authenticate challenge, so they are checked here -- after the
@@ -415,6 +446,31 @@ class Config:
         # Every write is checked, like the builder's, so a bad value fails
         # where it is set rather than on the request that reads it.
         self._refresh_token_grace_period = validate_refresh_token_grace(value)
+
+    @property
+    def list_item_span_threshold(self) -> int | None:
+        """Encoded size, in bytes, above which a v2 property-list item is
+        stored across several rows (``None``: never span). Defaults to
+        390,000 on a backend with a row cap and ``None`` on one without.
+        Set it with ``ActingWebApp.with_list_item_limits()``."""
+        return self._list_item_span_threshold
+
+    @list_item_span_threshold.setter
+    def list_item_span_threshold(self, value: int | None) -> None:
+        self._list_item_span_threshold = validate_span_threshold(value)
+
+    @property
+    def list_item_max_bytes(self) -> int | None:
+        """The largest encoded property-list item, in bytes, the library
+        stores (``None``: no ceiling). A **storage** bound, checked before
+        any write; the request-size limit at the deployment's edge is the
+        ingress guard. Defaults to 4 MiB on a backend with a row cap and
+        ``None`` on one without."""
+        return self._list_item_max_bytes
+
+    @list_item_max_bytes.setter
+    def list_item_max_bytes(self, value: int | None) -> None:
+        self._list_item_max_bytes = validate_max_bytes(value)
 
     def _check_trust_permissions_available(self) -> bool:
         """Check if trust permission management system is available."""

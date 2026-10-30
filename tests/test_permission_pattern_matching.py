@@ -66,6 +66,46 @@ class TestMatchesPattern(unittest.TestCase):
         self.assertIn("one_more_*", self.ev._pattern_cache)
 
 
+class TestUriPrefixFold(unittest.TestCase):
+    """A pattern ending in ``://`` with no wildcard is matched as that
+    pattern plus ``*`` through the glob path (3.16): one code path instead
+    of a separate ``startswith`` branch, and the same matches it had."""
+
+    def setUp(self) -> None:
+        self.ev = _evaluator()
+
+    def test_prefix_form_matches_what_startswith_did(self) -> None:
+        self.assertTrue(self.ev._matches_pattern("notes://work/x", "notes://"))
+        self.assertTrue(self.ev._matches_pattern("notes://", "notes://"))
+        # ".." segments are not normalised, as before.
+        self.assertTrue(
+            self.ev._matches_pattern("notes://../../security/key", "notes://")
+        )
+
+    def test_shorter_target_does_not_match(self) -> None:
+        # (target, pattern) order.
+        self.assertFalse(self.ev._matches_pattern("notes:/", "notes://"))
+        self.assertFalse(self.ev._matches_pattern("other://x", "notes://"))
+
+    def test_control_character_target_is_denied(self) -> None:
+        result = self.ev._evaluate_rules(
+            {"allowed": ["notes://"]}, "notes://\nx", "read"
+        )
+        self.assertEqual(result, PermissionResult.DENIED)
+
+    def test_wildcard_pattern_is_left_alone(self) -> None:
+        self.assertEqual(self.ev._glob_to_regex("*://"), r"^.*://\Z")
+        self.assertTrue(self.ev._matches_pattern("a://", "*://"))
+        self.assertFalse(self.ev._matches_pattern("a://x", "*://"))
+        self.assertIn("*://", self.ev._pattern_cache)
+        self.assertNotIn("*://*", self.ev._pattern_cache)
+
+    def test_cache_holds_the_rewritten_key(self) -> None:
+        self.ev._matches_pattern("notes://work/x", "notes://")
+        self.assertIn("notes://*", self.ev._pattern_cache)
+        self.assertNotIn("notes://", self.ev._pattern_cache)
+
+
 class TestControlCharacterGuard(unittest.TestCase):
     """The two rule shapes from review, and why anchoring alone is not enough."""
 

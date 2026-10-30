@@ -357,3 +357,37 @@ class TestBulkPostIndexBound:
         response = requests.get(f"{test_app}/{actor_id}/properties/todos", auth=auth)
         assert response.status_code == 200
         assert response.json() == []
+
+
+class TestPutOverMaxBytes:
+    """An item over list_item_max_bytes is refused with a structured 413
+    before anything is written. The harness sets 4 MiB explicitly for both
+    backends (create_test_app), so this runs the same path on each."""
+
+    def test_put_index_over_max_bytes_answers_413(self, test_app, actor):
+        actor_id, auth = actor
+        _create_list(test_app, actor_id, auth, "big")
+        response = requests.put(
+            f"{test_app}/{actor_id}/properties/big?index=0",
+            json="first",
+            auth=auth,
+        )
+        assert response.status_code == 204
+
+        oversized = "x" * (4 * 2**20)  # encodes to 4 MiB + 2 bytes
+        response = requests.put(
+            f"{test_app}/{actor_id}/properties/big?index=0",
+            data=json.dumps(oversized),
+            headers={"Content-Type": "application/json"},
+            auth=auth,
+        )
+        assert response.status_code == 413
+        body = response.json()
+        assert body["error"] == "list_item_too_large"
+        assert body["list"] == "big"
+        assert body["bytes"] == 4 * 2**20 + 2
+        assert body["limit"] == 4 * 2**20
+        assert body["remedy"] == "split the item or raise list_item_max_bytes"
+
+        response = requests.get(f"{test_app}/{actor_id}/properties/big", auth=auth)
+        assert response.json() == ["first"]

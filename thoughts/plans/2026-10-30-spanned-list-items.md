@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: active
 ---
 
 # Implementation Plan: Spanned list items, idempotent appends, and the `://` permission branch
@@ -789,16 +789,68 @@ benchmark whose baseline Phase 2 is measured against.
 
 ### Verification
 
-- [ ] Run the contract's `### Checks` fast tier verbatim (unsandboxed; the
+- [x] Run the contract's `### Checks` fast tier verbatim (unsandboxed; the
       sandbox cannot reach DynamoDB Local)
-- [ ] `grep -n "fail-open\|Fail-open\|and evaluator" actingweb/handlers/mcp.py`
+- [x] `grep -n "fail-open\|Fail-open\|and evaluator" actingweb/handlers/mcp.py`
       returns nothing
-- [ ] `grep -n "startswith(pattern)" actingweb/permission_evaluator.py`
+- [x] `grep -n "startswith(pattern)" actingweb/permission_evaluator.py`
       returns nothing
-- [ ] Baseline: `poetry run pytest tests/performance -m benchmark --no-cov
+- [x] Baseline: `poetry run pytest tests/performance -m benchmark --no-cov
       -q -k list_property` on `master` and on the branch, numbers recorded
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+#### Implementation notes (2026-10-30)
+
+- **Baseline** (DynamoDB Local, taken before any library change; the
+  branch differed from `master` only under `thoughts/`), medians over the
+  pytest-benchmark rounds on a plain 1,000-item v2 list:
+
+  | Benchmark | Median | Mean |
+  | --- | --- | --- |
+  | `to_list()` | 14.88 ms | 16.82 ms |
+  | `items_with_handles()` | 15.45 ms | 16.70 ms |
+  | `append()` then `remove()` of the same value | 35.74 ms | 34.38 ms |
+
+  The benchmark is `TestListPropertyPerformance` (three tests, one
+  module-scoped list); `append` and `remove` are measured as one round so
+  the list stays at 1,000 items.
+- **Deviation, `Config` defaults:** the plan moved the backend `property`
+  import up to follow `self.database`. `Config(database=...)` sets the
+  backend through the kwargs loop, which runs after that line, so the
+  defaults are resolved against `kwargs.get("database", self.database)`
+  instead; the later `self.DbProperty` import is unchanged. The defaults,
+  validators and pair rule live in `property_list_span.py`
+  (`default_limits`, `validate_span_threshold`, `validate_max_bytes`,
+  `validate_limit_pair`) so the builder and `Config` share them.
+- **Phase 1 semantics for v2 over the span threshold:** with no spanning
+  yet, a v2 item over `list_item_span_threshold` is refused with
+  `ListItemTooLargeError` (limit = the threshold) exactly as a v1 item is,
+  rather than failing untyped at the backend. Phase 2 turns that branch
+  into spanning on v2. The changelog FIXED entry says "390,000 for now";
+  Phase 2 rewrites it.
+- `v1 extend()` also checks the whole batch before its first `append()`
+  (the plan named only the v2 batch); v1 `insert()` checks before its
+  shift loop.
+- Handlers: one `_write_list_error()` behind the 409, 413 and 503
+  writers; `ListItemTooLargeError` arms sit before the generic arms in
+  `PropertiesHandler.put` (index branch), the bulk POST (the v1 inner
+  `except (IndexError, ValueError)` re-raises it to the outer arm) and
+  `PropertyListItemsHandler.post`.
+- The bulk-POST 413 test lives in `tests/test_list_item_limits.py`
+  (DynamoDB Local, through `_post_bulk`/`_run_handler`), next to the PUT
+  and `/items` cases.
+- `tests/test_init_docstring.py` pins `__all__`; it gained
+  `ListItemTooLargeError`.
+- New todo `rest-permission-legacy-fallback.md` with its `INDEX.md` row
+  (replacing the deleted `permission-uri-prefix-branch.md` row).
+- Release class: new config options and a builder method, so a minor
+  (3.16.0 already is one).
+- Checks: fast tier green; full tier: docs build, `verify_groups`, lint,
+  format, pyright clean; DynamoDB `make test-all-parallel` 4,451 passed,
+  39 skipped; PostgreSQL `make test-all-parallel` 4,305 passed, 185
+  skipped.
+
 
 ---
 

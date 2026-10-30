@@ -990,7 +990,7 @@ sequenceDiagram
 
 - [x] Run the contract's `### Checks` full tier verbatim (2026-10-29, see
   Implementation Summary)
-- [ ] Open PR 2 (after `/verify_implementation`, on the owner's `/commit`)
+- [x] Open PR 2: #161, after nine verifications (commit `a8d899e`).
 - [x] Benchmarks alone on a quiet machine: actor create and delete with the
   flag on and off, p50 and p99 (2026-10-29, 200 cycles each through
   `DbActor`, scratch tables and schema; a scratch script, since the

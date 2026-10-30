@@ -28,7 +28,7 @@ exercised. This todo makes that transitional.
 
 The duplicate-handling code the flag-off path needs (research §6):
 
-- `actingweb/oauth2.py`: `_candidate_rank` (if still present), `_factory_siblings`,
+- `actingweb/oauth2.py`: `_factory_siblings`,
   `_sweep_factory_actors`, `SWEEP_LIMIT`, the successor step's `remaining`
   logic, the recursive hand-off to `_adopt_actor` and its `carried` argument.
 - `actingweb/actor.py`: the ranking in `get_from_creator` and

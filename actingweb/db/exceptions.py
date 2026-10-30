@@ -7,9 +7,9 @@ class DbError(Exception):
     Distinct from a backend returning ``None`` (property absence) or
     ``False`` (a reported write failure): this means the backend itself
     faulted (timeout, throttle, connection error, ...). The message is
-    sanitized — no backend-internal detail — so it is safe to reach an
-    HTTP response; the original exception is chained via ``raise ... from e``
-    for logs.
+    sanitized (no backend-internal detail) but can name an actor id, so the
+    integrations answer with a fixed body and never ``str(e)``; the original
+    exception is chained via ``raise ... from e`` for logs.
     """
 
     def __init__(self, op: str, actor_id: str | None = None) -> None:

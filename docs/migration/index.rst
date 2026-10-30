@@ -43,7 +43,11 @@ Version Migrations
    to opt known-good actors out before the first sign-in. A creator changed
    over ``PUT /<id>/trust/trustee`` now unvouches the actor. Adds
    ``with_open_factory`` to close the factory, the ``actor_adopted`` hook, and
-   ``prompt=select_account`` on the SPA sign-in.
+   ``prompt=select_account`` on the SPA sign-in. Database faults now raise
+   ``DbError`` (answered 503 with ``Retry-After``) instead of reading as
+   absence, which custom backends must follow. Opt-in creator uniqueness
+   (``with_unique_creator()``) makes the database hold one actor per creator;
+   with it on, the application refuses to start until Step 0 has run.
 
 **v3.15 Migration**
    Guide for upgrading to ActingWeb 3.15, a security release for the MCP

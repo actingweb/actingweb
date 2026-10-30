@@ -16,7 +16,8 @@ docstring says otherwise:
   a query error) raises ``actingweb.db.exceptions.DbError``, chained to the
   backend exception. It is never answered like absence.
 - **``strict=False`` restores the folded answer** on the reads that take it
-  (every ``get``, ``fetch`` and ``get_bucket``): the fault is logged at ERROR
+  (every ``get`` but ``DbPropertyProtocol.get``, which takes none and always
+  raises, and every ``fetch`` and ``get_bucket``): the fault is logged at ERROR
   and answered as absence. Only display reads should pass it.
 - **A delete on a loaded handle is confirmed.** It answers True when the row
   is gone after the call; a row that was already absent counts. A fault
@@ -47,7 +48,8 @@ class DbActorProtocol(Protocol):
     rules are in :mod:`actingweb.db.creator_rules`): a create or creator
     change that would make a second holder raises
     :class:`~actingweb.db.exceptions.CreatorTaken`, and
-    :meth:`replace_creator_holder` and :meth:`get_creator_holder` work. A
+    :meth:`replace_creator_holder`, :meth:`get_creator_holder` and
+    :meth:`release_stale_creator` work. A
     custom backend that does not accept the argument fails at construction,
     never silently.
     """

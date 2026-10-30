@@ -564,7 +564,6 @@ than ``trustee``, ``creator`` and the empty string (the rules are in
   this actor; a delete removes the actor (conditioned on the creator it was
   loaded with, and re-read once if another process renamed it since), then
   the record of the creator it had, if it names it. A
-
   ``TransactionConflict`` is retried twice with the same client request
   token. ``actingweb-unique-creators enable`` creates and backfills the
   table and then writes the item ``#meta#backfill``, which the startup check

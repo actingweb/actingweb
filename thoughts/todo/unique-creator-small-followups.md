@@ -46,3 +46,22 @@ From thoughts/verifications/2026-10-30-db-fault-semantics-and-creator-uniqueness
   changed since this creator change wrote it" for an outage. The actor
   stays unvouched either way; tell the two apart with a strict re-read.
 
+From the end-to-end review of the plan (2026-10-30), items the plan
+recorded only in its own text:
+
+- **The two-step record move on a DynamoDB rename.** The new record and the
+  actor are written in one transaction, the old record released after it,
+  so for that moment the freed old creator still answers `CreatorTaken`.
+  The pre-implementation review asked for it under Phase 3's failure
+  scenarios; document it in the migration guide's "What the flag changes".
+- **Unverified: a creator containing `#` in a URL.** A route or template
+  that puts the creator in a URL might break on `#`; the reserved prefixes
+  reduce the exposure, but no template (the library's or the demo's) was
+  checked.
+- **Unverified: records edited by hand.** A record pointing at the wrong
+  actor id is found only by `report`'s orphan pass; say so in the guide.
+- **The iteration-numbered test files.**
+  `tests/test_adoption_{fourth,fifth,sixth}_iteration.py` should be named by
+  behaviour (from the adoption PR's review; the plan named it out of its
+  scope).
+

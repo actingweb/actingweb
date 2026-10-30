@@ -54,8 +54,9 @@ SECURITY
   the same way: the marker is read back after it is written (an actor whose
   marker did not land is removed again at creation, and a clean whose marker
   did not land fails the sign-in), and the session revoke confirms each
-  delete. The actors with the creator are
-  listed with a strict read before anything is removed: a listing that
+  delete. With ``unique_creator`` off, the actors with the creator are
+  listed with a strict read before anything is removed (with it on, the one
+  holder is read through the creator record or unique row instead): a listing that
   faults or misses the actor being replaced, or a listed actor that cannot be
   read, fails the sign-in with every actor still in place, and a new actor is
   created only when the read says none is left. A replacement that stopped part-way
@@ -88,8 +89,8 @@ SECURITY
   resolves to them; a vouched actor carrying a deletion tombstone (a
   ``DELETE /<id>`` that stalled before its wipe) is returned as it is, as
   before 3.16, since a stale tombstone must not wipe a live actor; one
-  sign-in deletes the actor it replaces, if any, and at most 10 ``factory``
-  actors beside it (each is a full wipe inside the request), so a squatter
+  sign-in deletes the actor it replaces, if any, and (``unique_creator``
+  off) at most 10 ``factory`` actors beside it (each is a full wipe inside the request), so a squatter
   who created more is cleared over several sign-ins; with ``unique_creator``
   off, two concurrent first sign-ins may
   both run the rule and fire ``actor_adopted`` twice (a replacement reuses a
@@ -198,7 +199,9 @@ CHANGED
     A squatter mid-deletion is finished by the replacement; when its
     deletion status cannot be read the sign-in answers 503.
   - Two concurrent sign-ins for one identifier (a first sign-in, or two
-    replacing the same squatter) both end on the actor the winner created.
+    replacing the same squatter) both end on the actor the winner created,
+    unless that actor carries no ``auth_method`` marker (a row an older
+    process wrote): then the second answers 409.
     A new actor's ``auth_method`` marker is written before the actor row, so
     a sign-in never finds an actor still being created and takes it for a
     pre-3.16 one.

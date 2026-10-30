@@ -28,6 +28,12 @@ touching this file, because each is a way to delete live data by mistake:
    about rows another process may be writing. Review the report, then
    delete reviewed rows with your own tooling.
 
+A property row whose actor id ends in ``$aux`` belongs to that actor's
+property-list side partition (spanned items' body rows and key rows). It is
+an orphan only when the actor the id is derived from is gone, and it is
+reported under the raw ``{actor_id}$aux`` key, which is the partition key
+your tooling must delete it by.
+
 Run under the SAME environment as the application (``DATABASE_BACKEND`` and
 its backend-specific connection settings) but under an OPERATOR credential,
 not the application's runtime role: the full-table scans here need
@@ -62,6 +68,8 @@ import threading
 import time
 from collections.abc import Iterable, Iterator
 from typing import Any
+
+from actingweb.property_list_span import AUX_SUFFIX
 
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
@@ -199,9 +207,17 @@ def classify_rows(
 
     for row_type, actor_id, row_name in rows:
         counts[row_type] = counts.get(row_type, 0) + 1
-        if actor_id.startswith(RESERVED_ACTOR_ID_PREFIX):
+        # A property-list side partition ({actor_id}$aux: spanned items'
+        # body rows and key rows) belongs to the actor it is derived from:
+        # membership is tested with the suffix stripped, and a leaked one is
+        # reported under its RAW partition key so the operator's own tooling
+        # targets the right rows.
+        owner = (
+            actor_id[: -len(AUX_SUFFIX)] if actor_id.endswith(AUX_SUFFIX) else actor_id
+        )
+        if owner.startswith(RESERVED_ACTOR_ID_PREFIX):
             reserved.setdefault(row_type, []).append((actor_id, row_name))
-        elif actor_id not in actor_ids:
+        elif owner not in actor_ids:
             orphans.setdefault(row_type, []).append((actor_id, row_name))
 
     return {"orphans": orphans, "reserved": reserved, "counts": counts}

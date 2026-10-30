@@ -53,6 +53,8 @@ __all__ = [
     "interface",
     "ListMetadataContentionError",
     "ListItemTooLargeError",
+    "ListItemSpanError",
+    "UNRESOLVED",
 ]
 
 # Make the new interface easily accessible
@@ -65,4 +67,13 @@ from . import interface
 # - ListItemTooLargeError: an item's encoded size is over list_item_max_bytes
 #   (or the span threshold where it cannot span), raised before any write.
 #   handlers/properties.py maps it to 413.
-from .property_list import ListItemTooLargeError, ListMetadataContentionError
+# - ListItemSpanError: a spanned item's body rows are missing (a
+#   ListCorruptionError; handlers/properties.py maps it to 409).
+# - UNRESOLVED: the slot value items_with_handles(resolve=False) leaves for a
+#   spanned item whose bodies it did not read.
+from .property_list import (
+    UNRESOLVED,
+    ListItemSpanError,
+    ListItemTooLargeError,
+    ListMetadataContentionError,
+)

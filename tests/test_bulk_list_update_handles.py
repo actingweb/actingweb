@@ -123,8 +123,8 @@ class TestConcurrentModificationMidBatchIsReportedNotFatal:
 
         orig_items_with_handles = ListProperty.items_with_handles
 
-        def racy_items_with_handles(self):
-            pairs = orig_items_with_handles(self)
+        def racy_items_with_handles(self, **kwargs):
+            pairs = orig_items_with_handles(self, **kwargs)
             # Simulate another writer changing index 2's row AFTER this
             # batch's own snapshot was taken but BEFORE its conditional
             # write for that row runs -- items_with_handles() is where the
@@ -319,8 +319,8 @@ class TestSingleItemPutIndexParamDetectsRaces:
 
         orig_items_with_handles = ListProperty.items_with_handles
 
-        def racy_items_with_handles(self):
-            pairs = orig_items_with_handles(self)
+        def racy_items_with_handles(self, **kwargs):
+            pairs = orig_items_with_handles(self, **kwargs)
             raced_handle = pairs[1][0]
             db = get_property(self.config)
             db.set(
@@ -381,8 +381,8 @@ class TestItemsActionEndpointDetectsRaces:
 
         orig_items_with_handles = ListProperty.items_with_handles
 
-        def racy_items_with_handles(self):
-            pairs = orig_items_with_handles(self)
+        def racy_items_with_handles(self, **kwargs):
+            pairs = orig_items_with_handles(self, **kwargs)
             raced_handle = pairs[0][0]
             db = get_property(self.config)
             db.set(
@@ -419,8 +419,8 @@ class TestItemsActionEndpointDetectsRaces:
 
         orig_items_with_handles = ListProperty.items_with_handles
 
-        def racy_items_with_handles(self):
-            pairs = orig_items_with_handles(self)
+        def racy_items_with_handles(self, **kwargs):
+            pairs = orig_items_with_handles(self, **kwargs)
             raced_handle = pairs[0][0]
             db = get_property(self.config)
             db.set(
@@ -463,8 +463,8 @@ class TestWwwActionEndpointDetectsRaces:
 
         orig_items_with_handles = ListProperty.items_with_handles
 
-        def racy_items_with_handles(self):
-            pairs = orig_items_with_handles(self)
+        def racy_items_with_handles(self, **kwargs):
+            pairs = orig_items_with_handles(self, **kwargs)
             raced_handle = pairs[0][0]
             db = get_property(self.config)
             db.set(

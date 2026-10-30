@@ -79,6 +79,21 @@ class FakePropertyDb:
                 result[name] = "" if keys_only else value
         return result
 
+    def get_prefix(
+        self,
+        actor_id=None,
+        prefix=None,
+        keys_only=False,
+        consistent_read=True,
+    ):
+        """Every row of ``actor_id`` whose name begins with ``prefix`` --
+        the side-partition enumerations of spanned list items use it."""
+        return {
+            name: ("" if keys_only else value)
+            for (aid, name), value in self.store.items()
+            if aid == actor_id and name.startswith(prefix)
+        }
+
     def create_if_not_exists(self, actor_id=None, name=None, value=None):
         if name in self.fail_set_on:
             return False

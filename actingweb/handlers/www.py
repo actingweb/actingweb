@@ -964,7 +964,7 @@ class WwwHandler(base_handler.BaseHandler):
                             list_prop = getattr(myself.property_lists, prop_name)
                             try:
                                 if list_prop.storage_format() == 2:
-                                    pairs = list_prop.items_with_handles()
+                                    pairs = list_prop.items_with_handles(resolve=False)
                                     if index < 0 or index >= len(pairs):
                                         self.response.set_status(
                                             400, f"Index {index} out of range"
@@ -1014,7 +1014,7 @@ class WwwHandler(base_handler.BaseHandler):
                             list_prop = getattr(myself.property_lists, prop_name)
                             try:
                                 if list_prop.storage_format() == 2:
-                                    pairs = list_prop.items_with_handles()
+                                    pairs = list_prop.items_with_handles(resolve=False)
                                     if index < 0 or index >= len(pairs):
                                         self.response.set_status(
                                             400, f"Index {index} out of range"

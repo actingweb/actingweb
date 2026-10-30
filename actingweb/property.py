@@ -5,6 +5,10 @@ from actingweb.db.exceptions import DbError
 
 from .identifiers import first_control_character
 from .property_list import _V1_INDEX_RE, _V2_RANK_MARKER, ListProperty, _v2_is_rank
+from .property_list_span import aux_partition
+
+# Passes of the side-partition sweep in Properties.delete(): see there.
+_AUX_SWEEP_PASSES = 3
 
 
 def rows_for(names: list[str], rows: dict[str, str]) -> dict[str, str]:
@@ -126,6 +130,11 @@ class PropertyListStore:
         `to_list_from_rows()`) instead of paying a second whole-list Query
         per list.
 
+        The dump never includes a spanned item's body rows or a key row:
+        those live in the actor's side partition. `to_list_from_rows()`
+        therefore pays one paged body read per spanned item it resolves
+        (none with `resolve=False`).
+
         The rows are a point-in-time snapshot, stale the moment a mutation
         lands, and OPAQUE: feed them to `prime_from_rows()` /
         `to_list_from_rows()` and never inspect or parse a row name -- the
@@ -203,7 +212,8 @@ class PropertyListStore:
         would break the `list_all`/`list_all_with_rows` pairing for nothing.
 
         Rows are OPAQUE and a point-in-time snapshot, exactly as for
-        `list_all_with_rows()`. Different lists in one result may reflect
+        `list_all_with_rows()`, and never include spanned items' body rows
+        (see there). Different lists in one result may reflect
         different instants; there is no snapshot isolation across them.
 
         Args:
@@ -480,12 +490,35 @@ class Properties:
         return self.props if self.props is not None else False
 
     def delete(self) -> bool:
+        """Delete every property row of the actor: its own partition, then
+        the property-list side partition (spanned items' body rows and key
+        rows, under ``{actor_id}$aux``).
+
+        The side partition is swept last and repeatedly, until a prefix
+        read finds it empty, at most ``_AUX_SWEEP_PASSES`` passes: a
+        spanned write that lands between passes is caught, one that lands
+        after the last is a leaked row ``verify_orphans`` reports under the
+        raw ``{actor_id}$aux`` key. Actor deletion assumes the actor is
+        quiescent. A ``DbError`` propagates.
+        """
         if not self.list:
             return False
         if self.props is None:
             self.fetch()  # strict: the list deletes the rows it fetched
         self.list.delete()
+        self._delete_side_partition()
         return True
+
+    def _delete_side_partition(self) -> None:
+        if not self.actor_id or "$" in self.actor_id or not self.config:
+            return
+        aux = aux_partition(self.actor_id)
+        db = get_property(self.config)
+        for _ in range(_AUX_SWEEP_PASSES):
+            names = list(db.get_prefix(actor_id=aux, prefix="list:", keys_only=True))
+            if not names:
+                return
+            db.batch_delete(actor_id=aux, names=names)
 
     def __init__(self, actor_id: str | None = None, config: Any | None = None) -> None:
         """Properties must always be initialised with an actor_id"""

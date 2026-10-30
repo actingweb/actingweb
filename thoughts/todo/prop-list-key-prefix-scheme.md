@@ -91,13 +91,19 @@ item changed since I read it"; cheap first-row reads for lists and previews;
 delete and rank moves cascade with no orphan rows; one item stays one item
 for subscription diffs and the `/properties` handlers; a DynamoDB test path.
 
-`thoughts/todo/spanned-list-items.md` carries the part a minor can deliver
-(3.16): gen-stamped body rows in a `list:{name}-$span-` region under the
-existing partition, which also takes spanned items' bodies out of range
-scans — a partial answer to the second requirement above. What this scheme
-still owes: the partition-wide 1 MB Query page ceiling, which spanning does
-not move, and the diff-row cap (a spanned item's diff carries a reference,
-not the value, because a `SubscriptionDiff` row has the same 400 KB limit).
+The part a minor could deliver is in place
+(`thoughts/plans/2026-10-30-spanned-list-items.md`): a v2 item over the span
+threshold keeps a small envelope head in the list's own range and stores its
+gen-stamped body rows in a **derived side partition**, `{actor_id}$aux`
+(`list:{name}-$span-{gen}-p{NNNN}`), which no per-actor read touches. That is
+the out-of-band payload answer for spanned items: their bodies are in no
+dump or range read of the actor's partition. What this scheme still owes:
+the partition-wide 1 MB Query page ceiling (plain properties plus every head
+and unspanned item stay in one partition), out-of-band payload for items
+*under* the span threshold (the `memory_*` vectors above are inside ordinary
+rows), and the plain-property layout. A spanned item's diff carries a
+reference, not the value, because a `SubscriptionDiff` row has the same row
+cap.
 
 ## A third requirement: an attribute key delimiter that cannot collide
 

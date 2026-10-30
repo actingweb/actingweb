@@ -567,7 +567,20 @@ class Actor:
         for anything created from unauthenticated input. An unvouched actor
         (see :func:`actingweb.oauth2.is_vouched_actor`) is replaced or
         cleaned when a sign-in later proves the address.
+
+        Raises:
+            ValueError: A caller-supplied ``actor_id`` contains ``$`` (it
+                separates an actor's property-list side partition,
+                ``{actor_id}$aux``) or is longer than 251 characters (the
+                side partition key must fit PostgreSQL's 255-character
+                ``properties.id``). Raised before any write; generated ids
+                are 32 hex characters and never affected.
         """
+        if actor_id is not None and ("$" in actor_id or len(actor_id) > 251):
+            raise ValueError(
+                "A caller-supplied actor id may not contain '$' or be longer "
+                "than 251 characters"
+            )
         seed = url
         now = datetime.datetime.now(datetime.UTC)
         seed += now.strftime("%Y%m%dT%H%M%S%f")
@@ -3220,6 +3233,21 @@ class Actor:
             # Fallback: create a full-state diff and send low-granularity callback
             # Get the full current state
             full_state = self._get_full_state_for_subscription(target, sub_subtarget)
+            # A list's full state is an "extend" diff nested under the list
+            # name: over the span threshold it is stored as a reference (the
+            # subscriber re-reads the list) instead of a row over the diff
+            # row's cap, which would fail the store and this callback.
+            if isinstance(full_state, dict):
+                from .property_list import diff_reference
+
+                full_state = {
+                    key: (
+                        diff_reference(value, self.config)
+                        if isinstance(value, dict) and "list" in value
+                        else value
+                    )
+                    for key, value in full_state.items()
+                }
 
             # Store as a subscription diff
             diff_url = self._store_subscription_diff(

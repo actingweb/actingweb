@@ -456,6 +456,55 @@ CHANGED
   broken sees an empty server instead of every item; check the ERROR log
   when a client reports an empty tool list.
 
+- **Breaking: a list-item diff whose blob would exceed the span threshold
+  is sent as a reference.** A ``SubscriptionDiff`` row has the same row cap
+  as a list item, and an ``update`` diff carries two values, so a diff over
+  ``list_item_span_threshold`` (390,000 bytes on DynamoDB; off on
+  PostgreSQL) used to be lost or fail the full-state fallback. Such a diff
+  now has its value fields (``item``, ``old_item``, ``value``, ``items``)
+  removed and top-level ``"spanned": true`` and ``"bytes"`` added; this
+  covers a spanned item, a large ``update``, an ``extend`` of many items,
+  the REST handlers' single-item diffs and the full-state fallback for a
+  peer without resync. The library's receiver does not apply a reference: it
+  logs a WARNING and answers ``{"success": false, "spanned": true}``; the
+  subscriber re-reads the list. **Behavior change:** a pre-3.16 subscriber
+  answers ``unknown operation`` to a reference and stores nothing; a
+  subscriber that applies diffs itself must re-read the list on
+  ``"spanned": true``.
+
+- ``downgrade_to_v1`` refuses a list holding spanned items
+  (``reason="envelopes"``), and ``migrate_to_v2()`` refuses a v1 list
+  holding a dict item whose first key is ``__aw_env``
+  (``reason="envelope-shaped item"``; the migrate script reports it as a
+  refusal). Writers refuse an item that is a dict carrying ``__aw_env`` (or
+  whose string form starts like a storage envelope) with ``ValueError``
+  before any write.
+
+- **``$`` is refused in new list names.** It separates a list's spanned
+  body rows from its items. **Behavior change:** creating a list whose name
+  contains ``$`` raises ``ValueError``; existing lists with ``$`` in their
+  name keep working.
+
+- **``Actor.create`` refuses a caller-supplied ``actor_id`` containing
+  ``$`` or longer than 251 characters**, with ``ValueError`` before any
+  write: ``$`` separates an actor's property-list side partition
+  (``{actor_id}$aux``), and the side partition key must fit PostgreSQL's
+  255-character ``properties.id``. **Behavior change:** generated ids (32
+  hex characters) are unaffected; an application that supplies its own ids
+  must keep them free of ``$``.
+
+- An actor delete also sweeps the actor's property-list side partition
+  (spanned items' body rows), until a prefix read finds it empty, at most
+  three passes. ``actingweb-verify-orphans`` reports a leaked side
+  partition under its raw ``{actor_id}$aux`` key once the actor is gone.
+
+- ``GET /properties?metadata=true`` reports each list's ``total_bytes``
+  from the item rows alone (a spanned item's head carries its size), and
+  ``format=full`` reports a list with a broken span as ``{"_list": true,
+  "error": "list_corrupted", ...}`` instead of failing the whole response.
+  The handle-only reads in the REST and www item handlers no longer read
+  spanned items' bodies.
+
 ADDED
 ~~~~~
 
@@ -581,6 +630,35 @@ ADDED
   ``list_item_max_bytes`` is a storage bound: size the request-size limit
   at the deployment's edge to match it. A deployment that develops on
   PostgreSQL and runs DynamoDB in production sets both explicitly.
+
+- **Spanned list items.** On a v2 list an item over
+  ``list_item_span_threshold`` (390,000 encoded bytes on DynamoDB; off on
+  PostgreSQL unless configured) is stored across several rows and reads back
+  whole through every reader. The list row holds a small envelope; the
+  bodies live in the actor's side partition (``{actor_id}$aux``), so no
+  dump or range read of the actor's own properties carries a body byte.
+  Every rewrite writes a fresh body generation and then deletes the old
+  one; a reader that finds a generation short re-reads the head and bodies
+  strongly (at most twice) before raising ``ListItemSpanError`` (a
+  ``ListCorruptionError``; 409 over REST with a ``remedy`` naming the
+  repair), never a partial item. Costs: one extra paged read per spanned
+  item on every resolving read, and the body rows on every write.
+
+- ``items_with_handles(resolve=False)`` and
+  ``to_list_from_rows(rows, resolve=False)`` skip spanned items' bodies (the
+  slot holds the new ``UNRESOLVED`` sentinel, exported from ``actingweb``),
+  ``ListItemHandle`` gains ``spanned`` and ``bytes``, ``item_at(handle)``
+  reads one item now, and ``sizes_from_rows(rows)`` gives each item's size
+  without a body read.
+
+- ``verify()`` reports ``spanned_items``, ``span_bytes`` and
+  ``malformed_heads``; ``verify(spans=True)`` also enumerates body rows and
+  reports ``span_body_rows``, ``orphan_span_gens`` and ``broken_spans``.
+  ``compact(sweep_span_orphans=True)`` removes orphan body generations older
+  than an hour and heads whose bodies are missing
+  (``orphan_span_gens_removed``, ``broken_spans_removed``).
+  ``actingweb-verify-property-lists`` gains ``--spans`` and, with
+  ``--repair``, ``--sweep-spans``.
 
 FIXED
 ~~~~~
@@ -770,12 +848,13 @@ FIXED
   ``update_by_handle``, on v1 and v2 lists) now measures the encoded item
   first and raises ``ListItemTooLargeError`` before anything is written,
   including the meta row of a never-created list; ``extend()`` checks the
-  whole batch before its first write. On DynamoDB the limit is 390,000
-  encoded bytes per item for now; an item over that is refused rather
-  than failing at the backend. The REST handlers answer 413 with a
+  whole batch before its first write. On a v2 list an item over the span
+  threshold now spans several rows (see ADDED); an item over
+  ``list_item_max_bytes`` (4 MiB on DynamoDB), or a v1 list item over the
+  span threshold, is refused. The REST handlers answer 413 with a
   structured body. **Behavior change:** a caller that caught ``DbError``
   for an oversized item gets ``ListItemTooLargeError`` (a ``ValueError``)
-  instead, before any write.
+  instead, before any write, or the item is stored.
 
 - The property-list module docstring said items were stored "bypassing the
   400KB limit"; each item is one row, so the limit applies per item, and

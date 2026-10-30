@@ -52,7 +52,9 @@ runs these steps in this order:
 #. Run the ``actor_deleted`` lifecycle hook (HTTP path, and a sign-in that
    replaces an unvouched actor; see :doc:`hooks-reference`).
 #. Delete peer-trustee relationships.
-#. Delete properties and property lists.
+#. Delete properties and property lists, then the actor's property-list
+   side partition (``{actor_id}$aux``: spanned items' body rows and key
+   rows), swept until empty, at most three passes.
 #. Delete subscriptions.
 #. Delete trust relationships, including reciprocal ones on peers.
 #. Delete all attribute buckets.
@@ -266,6 +268,15 @@ checkpointed CLI for a persistent shell — do not invoke it from a
 lambda-like runtime. It classifies orphans only; it does not replace
 :doc:`../guides/database-maintenance` (TTL cleanup) or
 ``actingweb-verify-property-lists`` (per-actor list index integrity).
+
+A property row whose actor id ends in ``$aux`` belongs to that actor's
+property-list side partition. It is reported only when the actor itself is
+gone, and under the raw ``{actor_id}$aux`` key, which is the partition key
+to delete it by. Such rows are left by a pre-3.16 process deleting an actor
+during a rolling deploy, by a spanned write landing after an actor delete's
+last sweep pass, or by a crash between the two partitions' deletes; actor
+deletion assumes the actor is quiescent, as before. Remove them as any
+orphan property row.
 
 Four edge cases drove its design, and each is a way to delete live data if
 gotten wrong:

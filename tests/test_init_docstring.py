@@ -32,6 +32,8 @@ def test_init_all_unchanged():
         "interface",
         "ListMetadataContentionError",
         "ListItemTooLargeError",
+        "ListItemSpanError",
+        "UNRESOLVED",
     ]
 
 

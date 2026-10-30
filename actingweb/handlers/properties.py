@@ -7,8 +7,10 @@ from actingweb.db import get_property_list
 from actingweb.handlers import base_handler
 from actingweb.property_list import (
     ListCorruptionError,
+    ListItemSpanError,
     ListItemTooLargeError,
     ListMetadataContentionError,
+    diff_reference,
 )
 
 from ..db.exceptions import DbError
@@ -93,7 +95,8 @@ def _write_list_corrupted_response(response: Any, name: str, error: Exception) -
             "error": "list_corrupted",
             "list": name,
             "detail": str(error),
-            "remedy": "compact",
+            # A broken span names its own repair (ListItemSpanError.remedy).
+            "remedy": getattr(error, "remedy", "compact"),
         },
     )
 
@@ -650,11 +653,12 @@ class PropertiesHandler(base_handler.BaseHandler):
                 for list_name in list_names:
                     list_prop = getattr(actor_interface.property_lists, list_name)
                     list_prop.prime_from_rows(all_rows)
-                    items = list_prop.to_list_from_rows(all_rows)
-                    total_bytes = sum(len(json.dumps(item)) for item in items)
+                    # Sizes from the heads: a spanned item's envelope
+                    # carries its size, so no body is read here.
+                    sizes = list_prop.sizes_from_rows(all_rows)
                     lists_info[list_name] = {
-                        "count": len(items),
-                        "total_bytes": total_bytes,
+                        "count": len(sizes),
+                        "total_bytes": sum(sizes),
                         "description": list_prop.get_description(),
                         "explanation": list_prop.get_explanation(),
                     }
@@ -670,7 +674,21 @@ class PropertiesHandler(base_handler.BaseHandler):
                 for list_name in list_names:
                     list_prop = getattr(actor_interface.property_lists, list_name)
                     list_prop.prime_from_rows(all_rows)
-                    items = list_prop.to_list_from_rows(all_rows)
+                    try:
+                        items = list_prop.to_list_from_rows(all_rows)
+                    except ListItemSpanError as e:
+                        # One broken span must not fail the whole response:
+                        # that list is reported with an error marker, the
+                        # way the subscription full-state read skips a
+                        # corrupted list.
+                        logger.error(f"List '{list_name}' has a broken span: {e}")
+                        pair[list_name] = {
+                            "_list": True,
+                            "error": "list_corrupted",
+                            "detail": str(e),
+                            "remedy": e.remedy,
+                        }
+                        continue
                     # Execute property hooks on list items if available
                     if self.hooks and actor_interface:
                         auth_context = self._create_auth_context(check, "read")
@@ -788,7 +806,7 @@ class PropertiesHandler(base_handler.BaseHandler):
                 # always was.
                 v2_pairs = None
                 if list_prop.storage_format() == 2:
-                    v2_pairs = list_prop.items_with_handles()
+                    v2_pairs = list_prop.items_with_handles(resolve=False)
                     length = len(v2_pairs)
                 else:
                     length = len(list_prop)
@@ -849,7 +867,11 @@ class PropertiesHandler(base_handler.BaseHandler):
                 myself.register_diffs(
                     target="properties",
                     subtarget=name,
-                    blob=json.dumps({"index": index, "value": item_value}),
+                    blob=json.dumps(
+                        diff_reference(
+                            {"index": index, "value": item_value}, self.config
+                        )
+                    ),
                 )
 
                 if self.response:
@@ -1248,7 +1270,7 @@ class PropertiesHandler(base_handler.BaseHandler):
                                 # changed them) -- see CHANGELOG/migration
                                 # notes for 3.14: 3.13.0 deleted the updated
                                 # row instead.
-                                pairs = list_prop.items_with_handles()
+                                pairs = list_prop.items_with_handles(resolve=False)
                                 snapshot_length = len(pairs)
                                 pending_updates_v2: list[
                                     tuple[int, dict[str, Any]]
@@ -2225,11 +2247,14 @@ class PropertyListItemsHandler(base_handler.BaseHandler):
                     target="properties",
                     subtarget=name,
                     blob=json.dumps(
-                        {
-                            "action": "add",
-                            "index": new_index,
-                            "value": item_value,
-                        }
+                        diff_reference(
+                            {
+                                "action": "add",
+                                "index": new_index,
+                                "value": item_value,
+                            },
+                            self.config,
+                        )
                     ),
                 )
 
@@ -2272,7 +2297,7 @@ class PropertyListItemsHandler(base_handler.BaseHandler):
                 # cost, so that branch is unchanged.
                 try:
                     if list_prop.storage_format() == 2:
-                        pairs = list_prop.items_with_handles()
+                        pairs = list_prop.items_with_handles(resolve=False)
                         if index < 0 or index >= len(pairs):
                             if self.response:
                                 self.response.set_status(
@@ -2289,6 +2314,12 @@ class PropertyListItemsHandler(base_handler.BaseHandler):
                             return
                     else:
                         list_prop[index] = item_value
+                except ListItemSpanError as e:
+                    # A ListCorruptionError, so an IndexError too: caught
+                    # here, ahead of the out-of-range arm, so a broken span
+                    # answers 409 with its remedy, not 400.
+                    self._respond_list_corrupted(name, e)
+                    return
                 except IndexError:
                     if self.response:
                         self.response.set_status(400, f"Index {index} out of range")
@@ -2299,7 +2330,10 @@ class PropertyListItemsHandler(base_handler.BaseHandler):
                     target="properties",
                     subtarget=name,
                     blob=json.dumps(
-                        {"action": "update", "index": index, "value": item_value}
+                        diff_reference(
+                            {"action": "update", "index": index, "value": item_value},
+                            self.config,
+                        )
                     ),
                 )
 
@@ -2326,7 +2360,7 @@ class PropertyListItemsHandler(base_handler.BaseHandler):
                 # rationale.
                 try:
                     if list_prop.storage_format() == 2:
-                        pairs = list_prop.items_with_handles()
+                        pairs = list_prop.items_with_handles(resolve=False)
                         if index < 0 or index >= len(pairs):
                             if self.response:
                                 self.response.set_status(
@@ -2343,6 +2377,12 @@ class PropertyListItemsHandler(base_handler.BaseHandler):
                             return
                     else:
                         del list_prop[index]
+                except ListItemSpanError as e:
+                    # A ListCorruptionError, so an IndexError too: caught
+                    # here, ahead of the out-of-range arm, so a broken span
+                    # answers 409 with its remedy, not 400.
+                    self._respond_list_corrupted(name, e)
+                    return
                 except IndexError:
                     if self.response:
                         self.response.set_status(400, f"Index {index} out of range")
@@ -2366,8 +2406,9 @@ class PropertyListItemsHandler(base_handler.BaseHandler):
         except ListCorruptionError as e:
             # Parity with /items GET and every other list-serving path: a
             # corrupted list is a structured 409 with a repair hint, never a
-            # bare 500. No action above currently reads item rows, so this
-            # is a contract guarantee rather than a reachable branch today.
+            # bare 500. The update/delete actions read item rows (the
+            # handle read resolves spanned items) and catch a broken span
+            # themselves; this is the arm for the rest.
             self._respond_list_corrupted(name, e)
             return
         except ListMetadataContentionError as e:

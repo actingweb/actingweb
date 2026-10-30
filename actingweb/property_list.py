@@ -3,8 +3,12 @@ ListProperty implementation for ActingWeb distributed list storage.
 
 This module provides a list interface that stores each list item as its own
 property row, so the backend's row-size limit applies per item, not per list,
-while keeping a Python list API. An item larger than the configured limit is
-refused with ``ListItemTooLargeError`` before anything is written.
+while keeping a Python list API. On a v2 list an item larger than the span
+threshold spans several rows: its head row (in the list's own range) holds an
+envelope naming a body generation, and the bodies live in the actor's side
+partition (see ``actingweb.property_list_span``). An item larger than
+``list_item_max_bytes`` is refused with ``ListItemTooLargeError`` before
+anything is written.
 """
 
 import json
@@ -13,7 +17,7 @@ import os
 import random
 import re
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -22,7 +26,26 @@ import fractional_indexing as fi
 
 from actingweb.db import get_property
 from actingweb.db.exceptions import DbError
-from actingweb.property_list_span import encoded_size
+from actingweb.property_list_span import (
+    KEY_ROW_RE,
+    SPAN_PART_BYTES,
+    SPAN_ROW_RE,
+    Envelope,
+    EnvelopeError,
+    SpanInfo,
+    aux_partition,
+    encode_item,
+    encoded_size,
+    gen_age_seconds,
+    key_prefix,
+    looks_like_envelope,
+    new_gen,
+    parse,
+    part_names,
+    span_prefix,
+    split_parts,
+    wrap,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +108,40 @@ _V2_RANK_ALPHABET = frozenset(fi.BASE_62_DIGITS)
 # suffix "7" passes. Same role _v2_is_rank() plays for the v2 range.
 _V1_INDEX_RE = re.compile(r"^\d+\Z")
 _lazy_migration_nudge_logged = False
+
+# Spanned items (thoughts/plans/2026-10-30-spanned-list-items.md, Phase 2).
+# A reader that finds a spanned item's body set short re-reads the head
+# strongly at most this many times (following a changed generation) before
+# calling the span broken.
+_SPAN_MAX_REREADS = 2
+# The orphan sweep (compact(sweep_span_orphans=True)) never removes a body
+# generation younger than this: an append that has written its bodies and not
+# yet its head must not lose them.
+_SPAN_ORPHAN_MIN_AGE_SECONDS = 3600
+
+
+class _Unresolved:
+    """The type of ``UNRESOLVED``."""
+
+    _instance: "_Unresolved | None" = None
+
+    def __new__(cls) -> "_Unresolved":
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
+    def __repr__(self) -> str:
+        return "UNRESOLVED"
+
+    def __bool__(self) -> bool:
+        return False
+
+
+# The slot value ``items_with_handles(resolve=False)`` and
+# ``to_list_from_rows(rows, resolve=False)`` put where a spanned item's body
+# was not read. Its handle carries ``spanned=True`` and ``bytes``; read the
+# item with ``item_at(handle)``.
+UNRESOLVED: Any = _Unresolved()
 
 
 def _lazy_migration_max_length() -> int:
@@ -190,6 +247,48 @@ class ListCorruptionError(IndexError):
         )
 
 
+class ListItemSpanError(ListCorruptionError):
+    """A spanned item's body rows are missing or do not match its head, or
+    its head is a malformed envelope.
+
+    Raised instead of ever returning a partial item, after the reader has
+    re-read the head and the bodies strongly (a concurrent update can make
+    a reader's view of the old generation short for a moment). A
+    ``ListCorruptionError`` (and so an ``IndexError``), so the handlers'
+    409 applies, with ``remedy`` naming the repair: the orphan sweep
+    removes the broken head, or the caller removes the item by handle. The
+    message carries the list name, rank and part counts only.
+    """
+
+    remedy = (
+        "run actingweb-verify-property-lists --repair --sweep-spans, or remove "
+        "the item with delete_by_handle()"
+    )
+
+    def __init__(
+        self,
+        list_name: str,
+        rank: str,
+        *,
+        expected_parts: int | None = None,
+        found_parts: int | None = None,
+        detail: str | None = None,
+    ) -> None:
+        self.list_name = list_name
+        self.rank = rank
+        self.index = rank  # type: ignore[assignment]
+        self.expected_parts = expected_parts
+        self.found_parts = found_parts
+        if detail is None:
+            detail = (
+                f"spans {expected_parts} body row(s) but {found_parts} matching "
+                f"row(s) were found"
+            )
+        IndexError.__init__(
+            self, f"List '{list_name}' item at rank {rank!r} {detail}; {self.remedy}"
+        )
+
+
 class ListMetadataContentionError(RuntimeError):
     """A list's metadata row stayed under contention through every
     compare-and-swap retry this mutation was willing to make.
@@ -256,6 +355,72 @@ class ListItemTooLargeError(ValueError):
         )
 
 
+_DIFF_VALUE_FIELDS = ("item", "old_item", "value", "items")
+
+
+def diff_reference(diff: dict[str, Any], config: Any) -> dict[str, Any]:
+    """The list-item diff to store and send for ``diff``: unchanged, or a
+    *reference* when its encoded blob would exceed the span threshold.
+
+    A ``SubscriptionDiff`` row has the same row cap as a list item, and an
+    ``update`` diff carries two values, so the rule applies to the whole
+    blob. A reference **removes** the value-carrying fields (``item``,
+    ``old_item``, ``value``, ``items``) and adds top-level ``"spanned":
+    true`` and ``"bytes"`` (the values' total encoded size). Removed rather
+    than replaced by a marker, because a pre-3.16 receiver applies an
+    ``append``/``insert``/``update`` whenever ``"item"`` is present and an
+    ``extend`` whenever ``"items"`` is: without them an older receiver
+    answers ``unknown operation`` and stores nothing. A subscriber that
+    receives a reference re-reads the list.
+
+    With no span threshold (PostgreSQL at its defaults) diffs carry their
+    values as before.
+    """
+    span_threshold = getattr(config, "list_item_span_threshold", None)
+    if (
+        not isinstance(span_threshold, int)
+        or isinstance(span_threshold, bool)
+        or span_threshold <= 0
+    ):
+        return diff
+    if encoded_size(json.dumps(diff)) <= span_threshold:
+        return diff
+    return _as_reference(diff, span_threshold)
+
+
+def _as_reference(
+    diff: dict[str, Any], span_threshold: int | None, extra_bytes: int = 0
+) -> dict[str, Any]:
+    size = extra_bytes + sum(
+        encoded_size(json.dumps(diff[field]))
+        for field in _DIFF_VALUE_FIELDS
+        if field in diff
+    )
+    reference = {k: v for k, v in diff.items() if k not in _DIFF_VALUE_FIELDS}
+    reference["spanned"] = True
+    reference["bytes"] = size
+    if span_threshold is not None and encoded_size(json.dumps(reference)) > (
+        span_threshold
+    ):
+        raise ValueError("list diff reference is itself over the span threshold")
+    return reference
+
+
+def spanned_reference(
+    diff: dict[str, Any], config: Any, spanned_bytes: int
+) -> dict[str, Any]:
+    """``diff`` as a reference regardless of its size: for a diff whose
+    value is a spanned item the caller did not read (its handle carries
+    only the size). ``spanned_bytes`` is that item's encoded size."""
+    span_threshold = getattr(config, "list_item_span_threshold", None)
+    threshold = (
+        span_threshold
+        if isinstance(span_threshold, int) and not isinstance(span_threshold, bool)
+        else None
+    )
+    return _as_reference(diff, threshold, extra_bytes=spanned_bytes)
+
+
 class ListPropertyIterator:
     """
     Lazy-loading iterator for ListProperty.
@@ -305,6 +470,11 @@ class ListItemHandle:
 
     rank: str
     raw_value: str
+    # True when the item spans body rows; ``bytes`` is then its encoded size
+    # (read from the head, no body read). Informational: the CAS contract is
+    # still rank + raw_value, and a spanned head's raw value is its envelope.
+    spanned: bool = False
+    bytes: int | None = None
 
     def __repr__(self) -> str:
         return f"ListItemHandle(rank={self.rank!r})"
@@ -360,6 +530,19 @@ class ListProperty:
     check that must never over-admit should trust the hint while strictly
     below its limit and confirm with ``len()`` once it reaches the limit --
     the exact read is then paid only at the boundary, not on every save.
+
+    SPANNED ITEMS (v2, 3.16). An item whose encoded size is over
+    ``list_item_span_threshold`` is stored as a head row holding an envelope
+    (``property_list_span``) plus body rows in the actor's side partition
+    (``{actor_id}$aux``), which no dump or range read of the actor's
+    partition returns. Cost rule: every resolving read pays one paged body
+    read per spanned item (``resolve=False``/``item_at()`` defer it); a
+    write pays its body rows plus the head, a spanned-to-spanned update
+    about twice that, and a lost CAS wastes the new generation; enumerating
+    ``$span-`` rows costs every body byte on DynamoDB, so only ``delete()``
+    and the opt-in ``verify(spans=True)``/``compact(sweep_span_orphans=True)``
+    do it. Deleting or rewriting a spanned item deletes its old generation
+    best-effort after the head write committed.
 
     A v2 item mutator (``append``/``extend``/``insert``/``__setitem__``/
     ``__delitem__``/``pop``/``remove``/``delete_by_handle``/
@@ -497,14 +680,17 @@ class ListProperty:
             _accept(getattr(self.config, "list_item_max_bytes", None)),
         )
 
-    def _check_item_size(self, value_str: str) -> None:
-        """Raise ``ListItemTooLargeError`` if the encoded item is over a
-        limit. Called by every item write before anything is written.
+    def _check_item_size(self, value_str: str, *, can_span: bool = False) -> bool:
+        """Check an encoded item against the limits before anything is
+        written, and say whether it must span.
 
-        Over ``list_item_max_bytes`` is refused on both formats. Over
+        Over ``list_item_max_bytes``: refused on both formats. Over
         ``list_item_span_threshold`` (set by default only where the backend
-        has a row cap) is refused as well: the row would fail at the
-        backend, untyped, otherwise.
+        has a row cap): spans on v2 (``can_span=True``; returns ``True``)
+        and is refused on v1, where the row would fail at the backend.
+
+        Raises:
+            ListItemTooLargeError: The item is over a limit it cannot meet.
         """
         span_threshold, max_bytes = self._limits()
         size = encoded_size(value_str)
@@ -513,12 +699,16 @@ class ListProperty:
                 self.name, size, max_bytes, "list_item_max_bytes"
             )
         if span_threshold is not None and size > span_threshold:
+            if can_span:
+                return True
             raise ListItemTooLargeError(
                 self.name,
                 size,
                 span_threshold,
-                "list_item_span_threshold, the largest item one row stores",
+                "list_item_span_threshold, the largest item one row stores; "
+                "a v1 list does not span, run migrate_to_v2()",
             )
+        return False
 
     def _decode_item(self, item_str: str) -> Any:
         try:
@@ -528,10 +718,308 @@ class ListProperty:
             return item_str
 
     def _encode_item(self, item: Any) -> str:
+        """Encode an item for storage (``encode_item``): JSON, or the
+        sanitised ``str()`` fallback. Refuses an item carrying the reserved
+        envelope key with ``ValueError``, before any write."""
+        return encode_item(item)
+
+    # -- spanned items: the side partition ----------------------------
+
+    def _aux(self) -> str:
+        """This actor's side partition key. Raises ``ValueError`` for an
+        actor id containing ``$`` (only a spanning write needs it)."""
+        return aux_partition(self.actor_id)
+
+    def _aux_or_none(self) -> str | None:
+        """The side partition key, or ``None`` for an actor id containing
+        ``$``, which can hold no spanned item. For the cleanup paths, which
+        must keep working on such an actor."""
         try:
-            return json.dumps(item)
-        except (TypeError, ValueError):
-            return str(item)
+            return aux_partition(self.actor_id)
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _names_matching(
+        names: Any, prefix_len: int, matches: Callable[[str], bool]
+    ) -> list[str]:
+        """The names whose suffix after ``prefix_len`` passes ``matches``:
+        the shape filter every enumeration of a shared byte range applies
+        (a sibling list's rows can share the prefix)."""
+        return [name for name in names if matches(name[prefix_len:])]
+
+    def _aux_names(self, kind: str) -> list[str]:
+        """This list's own ``$span-`` (``kind="span"``) or ``$key-``
+        (``kind="key"``) row names in the side partition, shape-filtered.
+
+        One keys-only prefix read. On DynamoDB a keys-only projection saves
+        no capacity, so enumerating ``$span-`` rows costs every body byte:
+        only ``delete()``, ``verify(spans=True)`` and
+        ``compact(sweep_span_orphans=True)`` (and the residue sweeps) pay it.
+        """
+        aux = self._aux_or_none()
+        if aux is None:
+            return []
+        if kind == "span":
+            prefix, shape = span_prefix(self.name), SPAN_ROW_RE
+        else:
+            prefix, shape = key_prefix(self.name), KEY_ROW_RE
+        rows = get_property(self.config).get_prefix(
+            actor_id=aux, prefix=prefix, keys_only=True
+        )
+        return self._names_matching(
+            rows, len(prefix), lambda suffix: bool(shape.match(suffix))
+        )
+
+    def _delete_aux_rows(self, names: list[str]) -> None:
+        """Unconditionally delete side-partition rows (a list being cleared
+        or deleted). A fault propagates, like the head deletes beside it."""
+        aux = self._aux_or_none()
+        if names and aux is not None:
+            get_property(self.config).batch_delete(actor_id=aux, names=names)
+
+    def _span_delete_bodies(self, span: SpanInfo | None) -> None:
+        """Best-effort delete of one body generation (names derived, no
+        read). Runs after a head write committed, so a fault only leaves an
+        orphan generation for the aged sweep: logged at WARNING, never
+        raised."""
+        if span is None:
+            return
+        aux = self._aux_or_none()
+        if aux is None:
+            return
+        try:
+            get_property(self.config).batch_delete(
+                actor_id=aux, names=part_names(self.name, span.gen, span.parts)
+            )
+        except (  # folds DbError: best-effort cascade after commit; aged sweep repairs
+            DbError,
+            RuntimeError,
+        ) as exc:
+            logger.warning(
+                "List '%s' (actor %s): could not delete body generation %s "
+                "(%s) -- it is an orphan now; compact(sweep_span_orphans=True) "
+                "removes it once it is older than %d s",
+                self.name,
+                self.actor_id,
+                span.gen,
+                exc,
+                _SPAN_ORPHAN_MIN_AGE_SECONDS,
+            )
+
+    def _cascade(self, raw: str | None) -> None:
+        """After a head was deleted or overwritten: delete the body
+        generation its old raw value named, if any. Best-effort."""
+        try:
+            env = parse(raw)
+        except EnvelopeError:
+            return
+        if env is not None:
+            self._span_delete_bodies(env.span)
+
+    def _write_bodies(self, value_str: str) -> SpanInfo:
+        """Write ``value_str`` as a fresh body generation in the side
+        partition and return its ``SpanInfo``. Parts are at most the span
+        threshold (and ``SPAN_PART_BYTES``) each. On a fault, deletes the
+        parts it wrote (best-effort) and re-raises."""
+        span_threshold, _ = self._limits()
+        part_bytes = min(SPAN_PART_BYTES, span_threshold or SPAN_PART_BYTES)
+        parts = split_parts(value_str, part_bytes)
+        gen = new_gen()
+        span = SpanInfo(gen=gen, parts=len(parts), bytes=encoded_size(value_str))
+        aux = self._aux()
+        names = part_names(self.name, gen, len(parts))
+        try:
+            for name, part in zip(names, parts, strict=True):
+                if not get_property(self.config).set(
+                    actor_id=aux, name=name, value=part
+                ):
+                    raise RuntimeError(
+                        f"list body write failed for '{self.name}' (gen {gen})"
+                    )
+        except BaseException:
+            self._span_delete_bodies(span)
+            raise
+        return span
+
+    def _make_head(
+        self,
+        value_str: str,
+        span: SpanInfo | None,
+        carry: Envelope | None = None,
+    ) -> str:
+        """The head row's raw value for an item encoded as ``value_str``.
+
+        A spanned item is an envelope naming its bodies. An unspanned item
+        is its plain JSON, unless ``carry`` (the envelope the head held
+        before a rewrite) has fields that must survive -- a key, a writer
+        token, or fields a later version added -- in which case it is an
+        envelope with ``v``.
+        """
+        key = carry.key if carry is not None else None
+        tok = carry.tok if carry is not None else None
+        extra = dict(carry.extra) if carry is not None else {}
+        if span is not None:
+            return wrap(span=span, key=key, tok=tok, extra=extra)
+        if key is None and tok is None and not extra:
+            return value_str
+        try:
+            item: Any = json.loads(value_str)
+        except json.JSONDecodeError:
+            # The str() fallback for a value JSON cannot encode: the item
+            # IS that string, as a plain row would decode it.
+            item = value_str
+        return wrap(value=item, key=key, tok=tok, extra=extra)
+
+    def _write_spanning(
+        self,
+        value_str: str,
+        spans: bool,
+        head_write: Callable[[str], bool],
+        *,
+        carry: Envelope | None = None,
+    ) -> tuple[bool, str]:
+        """Bodies first, then the head through ``head_write`` (the caller's
+        own conditional or unconditional write), once per call.
+
+        Returns ``(landed, head)``. When the head write returns ``False`` or
+        raises, the bodies just written are deleted (best-effort) and the
+        outcome propagates; a crash in between leaves an orphan generation
+        for the aged sweep, never a head without bodies. Deleting the
+        previous generation is the caller's (it knows the old head).
+        """
+        span = self._write_bodies(value_str) if spans else None
+        head = self._make_head(value_str, span, carry)
+        try:
+            landed = head_write(head)
+        except BaseException:
+            self._span_delete_bodies(span)
+            raise
+        if not landed:
+            self._span_delete_bodies(span)
+        return landed, head
+
+    # -- spanned items: reading ----------------------------------------
+
+    def _read_span(self, span: SpanInfo, *, consistent: bool) -> tuple[str | None, int]:
+        """Read one body generation. Returns ``(value_str, found)``:
+        ``value_str`` is ``None`` unless the rows are exactly
+        ``p0000..p{parts-1}`` and join to ``span.bytes`` bytes; ``found``
+        counts the rows that match the expected names."""
+        aux = self._aux_or_none()
+        if aux is None:
+            return None, 0
+        rows = get_property(self.config).get_prefix(
+            actor_id=aux,
+            prefix=span_prefix(self.name, span.gen),
+            consistent_read=consistent,
+        )
+        expected = part_names(self.name, span.gen, span.parts)
+        found = sum(1 for name in expected if name in rows)
+        if set(rows) != set(expected):
+            return None, found
+        joined = "".join(rows[name] for name in expected)
+        if encoded_size(joined) != span.bytes:
+            return None, found
+        return joined, found
+
+    def _parse_head(self, raw: str, rank: str) -> Envelope | None:
+        """``parse(raw)``, with a malformed envelope reported as the
+        ``ListItemSpanError`` it is."""
+        try:
+            return parse(raw)
+        except EnvelopeError as e:
+            raise ListItemSpanError(
+                self.name, rank, detail=f"has a malformed envelope ({e})"
+            ) from None
+
+    def _read_head(
+        self, rank: str, *, consistent: bool = True
+    ) -> tuple[str | None, Envelope | None]:
+        """One point read of the head at ``rank``: ``(raw, envelope)``,
+        ``(None, None)`` when the row is gone, ``(raw, None)`` for a plain
+        item. Point reads are always strongly consistent on DynamoDB."""
+        raw = get_property(self.config).get(
+            actor_id=self.actor_id, name=self._v2_item_name(rank)
+        )
+        if raw is None:
+            return None, None
+        return raw, self._parse_head(raw, rank)
+
+    def _read_head_tolerant(self, rank: str) -> tuple[str | None, Envelope | None]:
+        """``_read_head()`` for a writer about to replace or delete the
+        head: a malformed envelope reads as no envelope (nothing to carry,
+        nothing to cascade) instead of raising, so the write can repair
+        it."""
+        raw = get_property(self.config).get(
+            actor_id=self.actor_id, name=self._v2_item_name(rank)
+        )
+        if raw is None:
+            return None, None
+        try:
+            return raw, parse(raw)
+        except EnvelopeError:
+            return raw, None
+
+    def _handle_for(self, rank: str, raw: str) -> ListItemHandle:
+        env = self._parse_head(raw, rank)
+        if env is not None and env.span is not None:
+            return ListItemHandle(
+                rank=rank, raw_value=raw, spanned=True, bytes=env.span.bytes
+            )
+        return ListItemHandle(rank=rank, raw_value=raw)
+
+    def _resolve(self, raw: str, *, rank: str, consistent: bool) -> Any:
+        """The item a v2 head's raw value stands for.
+
+        A plain value decodes as JSON. An envelope with ``v`` returns it. A
+        spanned envelope reads its body generation with the caller's
+        consistency (bodies never change once written, so that is enough
+        for the common path); on a short set it re-reads the head strongly,
+        follows a changed generation, and reads the bodies strongly, at
+        most ``_SPAN_MAX_REREADS`` times. Never returns a partial item.
+
+        Raises:
+            ListItemSpanError: The head is malformed, or after the re-reads
+                it still names a generation whose bodies are short, or it is
+                gone.
+        """
+        env = self._parse_head(raw, rank)
+        if env is None:
+            return self._decode_item(raw)
+        if env.span is None:
+            return env.value
+        value_str, found = self._read_span(env.span, consistent=consistent)
+        if value_str is not None:
+            return self._decode_item(value_str)
+        current = env.span
+        for _ in range(_SPAN_MAX_REREADS):
+            head_raw, head_env = self._read_head(rank, consistent=True)
+            if head_raw is None:
+                raise ListItemSpanError(
+                    self.name,
+                    rank,
+                    detail=(
+                        f"spans {current.parts} body row(s), {found} were found, "
+                        f"and its head is gone"
+                    ),
+                )
+            if head_env is None:
+                return self._decode_item(head_raw)
+            if head_env.span is None:
+                return head_env.value
+            same_gen = head_env.span.gen == current.gen
+            current = head_env.span
+            value_str, found = self._read_span(current, consistent=True)
+            if value_str is not None:
+                return self._decode_item(value_str)
+            if same_gen:
+                # The head still names this generation and a strong read
+                # of it is short: really broken, not a reader race.
+                break
+        raise ListItemSpanError(
+            self.name, rank, expected_parts=current.parts, found_parts=found
+        )
 
     # -- v2 (fractional rank key) helpers -----------------------------
 
@@ -644,9 +1132,11 @@ class ListProperty:
         return pairs
 
     def _v2_to_list(self, consistent: bool = True) -> list[Any]:
+        """Every item, resolved: one range read of the heads, plus one
+        paged body read per spanned item (with the same consistency)."""
         return [
-            self._decode_item(value)
-            for _, value in self._v2_load_full(consistent=consistent)
+            self._resolve(value, rank=rank, consistent=consistent)
+            for rank, value in self._v2_load_full(consistent=consistent)
         ]
 
     def _create_default_metadata_v2(self) -> dict[str, Any]:
@@ -688,14 +1178,14 @@ class ListProperty:
         if meta_str is None:
             # No metadata exists - this is a new list, created directly in
             # the v2 (fractional rank key) format.
-            if _V2_RANK_MARKER in self.name:
-                raise ValueError(
-                    f"List name '{self.name}' cannot contain "
-                    f"'{_V2_RANK_MARKER}' -- reserved for internal storage "
-                    f"keys (a list named '...{_V2_RANK_MARKER}...' would "
-                    f"put its item rows inside another list's storage "
-                    f"range)"
-                )
+            for reserved in (_V2_RANK_MARKER, "$"):
+                if reserved in self.name:
+                    raise ValueError(
+                        f"List name '{self.name}' cannot contain "
+                        f"'{reserved}' -- reserved for internal storage "
+                        f"keys (a list named '...{reserved}...' would put "
+                        f"its rows inside another list's storage range)"
+                    )
 
             # Check for property collision - error if property exists
             prop_db = get_property(self.config)
@@ -1107,6 +1597,48 @@ class ListProperty:
         self._meta_cache = None
         self._v2_rank_cache = None
 
+    def _v2_pairs_from_rows(self, rows: dict[str, Any]) -> list[tuple[str, str]]:
+        """This list's ``(rank, raw)`` heads from a dump, in order."""
+        prefix = self._v2_item_prefix()
+        prefix_len = len(prefix)
+        return sorted(
+            (rank, value)
+            for name, value in rows.items()
+            if name.startswith(prefix) and _v2_is_rank(rank := name[prefix_len:])
+        )
+
+    def _unresolved_or_item(self, rank: str, raw: str) -> Any:
+        """A head's item without reading bodies: ``UNRESOLVED`` for a
+        spanned item, the item otherwise."""
+        env = self._parse_head(raw, rank)
+        if env is None:
+            return self._decode_item(raw)
+        if env.span is not None:
+            return UNRESOLVED
+        return env.value
+
+    def sizes_from_rows(self, rows: dict[str, Any]) -> list[int]:
+        """Each item's encoded size, in list order, from a dump -- no body
+        read: a spanned head carries its ``bytes``, a plain item's size is
+        its raw value's. For the metadata GET, which reports sizes only.
+
+        v1 falls back to ``to_list_from_rows()`` (no spanned items exist on
+        v1)."""
+        if not self._is_v2():
+            return [
+                encoded_size(json.dumps(item)) for item in self.to_list_from_rows(rows)
+            ]
+        sizes: list[int] = []
+        for rank, raw in self._v2_pairs_from_rows(rows):
+            env = self._parse_head(raw, rank)
+            if env is not None and env.span is not None:
+                sizes.append(env.span.bytes)
+            elif env is not None:
+                sizes.append(encoded_size(json.dumps(env.value)))
+            else:
+                sizes.append(encoded_size(raw))
+        return sizes
+
     def prime_from_rows(self, rows: dict[str, Any]) -> None:
         """Hydrate the metadata cache (and, for v2, the rank-key cache)
         from a pre-fetched name->value mapping.
@@ -1152,30 +1684,37 @@ class ListProperty:
                 if name.startswith(prefix) and _v2_is_rank(rank := name[prefix_len:])
             )
 
-    def to_list_from_rows(self, rows: dict[str, Any]) -> list[Any]:
+    def to_list_from_rows(
+        self, rows: dict[str, Any], *, resolve: bool = True
+    ) -> list[Any]:
         """Like to_list(), but served from a pre-fetched name->value mapping.
 
         v1: falls back to a per-item database read (via __getitem__) for
         any row missing from the mapping. Item decoding matches
         __getitem__: JSON with a raw-string fallback.
 
-        v2: derived entirely from `rows` (no fallback reads -- there is no
-        separate "recorded length" a v2 list could disagree with).
+        v2: the heads come from `rows` (no fallback reads -- there is no
+        separate "recorded length" a v2 list could disagree with). A dump
+        never holds a spanned item's body rows (they live in the actor's
+        side partition), so each spanned item costs one paged body read,
+        eventually consistent first, matching the dump. With
+        ``resolve=False`` no body is read and a spanned item's slot holds
+        ``UNRESOLVED``.
 
         Raises:
             ListCorruptionError: v1 only -- a row is missing from BOTH the
                 mapping and storage.
+            ListItemSpanError: v2 -- a spanned item's bodies are broken.
         """
         if self._is_v2():
-            prefix = self._v2_item_prefix()
-            prefix_len = len(prefix)
-            pairs = sorted(
-                (rank, value)
-                for name, value in rows.items()
-                if name.startswith(prefix) and _v2_is_rank(rank := name[prefix_len:])
-            )
+            pairs = self._v2_pairs_from_rows(rows)
             self._v2_rank_cache = [rank for rank, _ in pairs]
-            return [self._decode_item(value) for _, value in pairs]
+            if not resolve:
+                return [self._unresolved_or_item(rank, value) for rank, value in pairs]
+            return [
+                self._resolve(value, rank=rank, consistent=False)
+                for rank, value in pairs
+            ]
 
         length = len(self)
         result: list[Any] = []
@@ -1307,7 +1846,7 @@ class ListProperty:
             if item_str is None:
                 raise ListCorruptionError(self.name, index)
 
-        return self._decode_item(item_str)
+        return self._resolve(item_str, rank=rank, consistent=True)
 
     def __getitem__(self, index: int) -> Any:
         """Get item by index, loading from database.
@@ -1452,7 +1991,6 @@ class ListProperty:
 
     def _v2_setitem(self, index: int, value: Any) -> None:
         value_str = self._encode_item(value)
-        self._check_item_size(value_str)
         # Force a fresh rank read: this is a DESTRUCTIVE positional write,
         # and a cached rank list can be arbitrarily old on a long-lived
         # instance. If another writer inserted an item earlier in the list
@@ -1469,12 +2007,28 @@ class ListProperty:
         if index < 0 or index >= length:
             raise IndexError(f"List index {orig_index} out of range (length: {length})")
 
+        # Size check after the bounds check (as v1 does), before any write.
+        spans = self._check_item_size(value_str, can_span=True)
         rank = ranks[index]
-        item_db = get_property(self.config)
-        if not item_db.set(
-            actor_id=self.actor_id, name=self._v2_item_name(rank), value=value_str
-        ):
-            raise RuntimeError(f"list item write failed for '{self.name}'[{index}]")
+        name = self._v2_item_name(rank)
+        # One point read of the head before the unconditional write: its
+        # envelope names the body generation to delete afterwards and the
+        # fields (key, token, unknown ones) the rewrite carries across.
+        # Positional writes gain this one item read; they stay
+        # unconditional (a concurrent update between this read and the
+        # write leaves the other writer's generation as an orphan, never a
+        # broken span).
+        old_raw, old_env = self._read_head_tolerant(rank)
+
+        def head_write(head: str) -> bool:
+            if not get_property(self.config).set(
+                actor_id=self.actor_id, name=name, value=head
+            ):
+                raise RuntimeError(f"list item write failed for '{self.name}'[{index}]")
+            return True
+
+        self._write_spanning(value_str, spans, head_write, carry=old_env)
+        self._cascade(old_raw)
         self._v2_touch_metadata(count=len(ranks))
 
     def __setitem__(self, index: int, value: Any) -> None:
@@ -1523,11 +2077,15 @@ class ListProperty:
             raise IndexError(f"List index {orig_index} out of range (length: {length})")
 
         rank = ranks[index]
+        # One point read: the envelope names the body generation the
+        # delete cascades to (positional writes gain one item read).
+        old_raw, _ = self._read_head_tolerant(rank)
         item_db = get_property(self.config)
         if not item_db.set(
             actor_id=self.actor_id, name=self._v2_item_name(rank), value=None
         ):
             raise RuntimeError(f"list item write failed for '{self.name}'[{index}]")
+        self._cascade(old_raw)
 
         # A single row delete IS the whole operation under v2 -- no shift
         # loop. Keep the cache consistent with the write we just made
@@ -1714,9 +2272,34 @@ class ListProperty:
         full write-order diagram.
         """
         value_str = self._encode_item(item)
-        self._check_item_size(value_str)
+        spans = self._check_item_size(value_str, can_span=True)
         if self._dispatch_saw_no_row():
             self._v2_create_meta_row()
+        landed: list[str] = []
+
+        def head_write(head: str) -> bool:
+            landed.append(self._v2_write_item_at_new_rank(head))
+            return True
+
+        # Bodies (if the item spans) are written once, before the rank loop;
+        # an exhausted loop deletes them again.
+        self._write_spanning(value_str, spans, head_write)
+        if self._v2_rank_cache is not None:
+            self._v2_rank_cache.append(landed[0])
+        self._v2_touch_metadata(count_delta=1)
+
+    def _v2_write_item_at_new_rank(self, head: str) -> str:
+        """Write ``head`` at a fresh rank after the current last one, and
+        return the rank.
+
+        The collision loop ``append()`` has always used: rank generation is
+        deterministic, so two appenders that read the same last rank produce
+        the same candidate, ``create_if_not_exists`` rejects the loser, and
+        the retry re-reads the (now current) last rank.
+
+        Raises:
+            RuntimeError: Too many collisions, or the rank grew past the cap.
+        """
         last = self._v2_last_rank()
         for attempt in range(_V2_MAX_RANK_RETRIES):
             candidate = fi.generate_key_between(last, None)
@@ -1729,12 +2312,9 @@ class ListProperty:
             if item_db.create_if_not_exists(
                 actor_id=self.actor_id,
                 name=self._v2_item_name(candidate),
-                value=value_str,
+                value=head,
             ):
-                if self._v2_rank_cache is not None:
-                    self._v2_rank_cache.append(candidate)
-                self._v2_touch_metadata(count_delta=1)
-                return
+                return candidate
             # Collision: another writer took this rank between our read
             # and the write. Re-read the last rank for the next attempt --
             # NOT `candidate` itself, since the collision means someone
@@ -1806,51 +2386,76 @@ class ListProperty:
         # Every item is encoded and size-checked before the first write, so
         # an oversized item anywhere in the batch writes nothing.
         encoded = [self._encode_item(item) for item in items]
-        for value_str in encoded:
-            self._check_item_size(value_str)
+        spans = [self._check_item_size(v, can_span=True) for v in encoded]
         if self._dispatch_saw_no_row():
             self._v2_create_meta_row()
-        last = self._v2_last_rank()
-        remaining = encoded
+        # Bodies of the spanning items first (one generation each), then
+        # the heads through the batch's rank loop. Heads that never land
+        # have their bodies deleted again below.
+        heads: list[str] = []
+        head_spans: list[SpanInfo | None] = []
+        try:
+            for value_str, item_spans in zip(encoded, spans, strict=True):
+                span = self._write_bodies(value_str) if item_spans else None
+                head_spans.append(span)
+                heads.append(self._make_head(value_str, span))
+        except BaseException:
+            for span in head_spans:
+                self._span_delete_bodies(span)
+            raise
         created = 0
         created_ranks: list[str] = []
-        for attempt in range(_V2_MAX_RANK_RETRIES):
-            if not remaining:
-                break
-            candidates = fi.generate_n_keys_between(last, None, len(remaining))
-            collided_at = None
-            for i, (candidate, value_str) in enumerate(
-                zip(candidates, remaining, strict=True)
-            ):
-                if len(candidate) > _V2_RANK_MAX_LEN:
-                    raise RuntimeError(
-                        f"list '{self.name}' rank key exceeded {_V2_RANK_MAX_LEN} "
-                        f"chars -- run compact() to rebalance"
-                    )
-                item_db = get_property(self.config)
-                if not item_db.create_if_not_exists(
-                    actor_id=self.actor_id,
-                    name=self._v2_item_name(candidate),
-                    value=value_str,
-                ):
-                    # Collision: another writer took this rank. The items
-                    # before it already landed; re-key from here.
-                    collided_at = i
+        remaining = heads
+        try:
+            last = self._v2_last_rank()
+            for attempt in range(_V2_MAX_RANK_RETRIES):
+                if not remaining:
                     break
-                created += 1
-                created_ranks.append(candidate)
-                last = candidate
-            if collided_at is None:
-                remaining = []
-                break
-            remaining = remaining[collided_at:]
-            if attempt < _V2_MAX_RANK_RETRIES - 1:
-                last = self._v2_last_rank()
+                candidates = fi.generate_n_keys_between(last, None, len(remaining))
+                collided_at = None
+                for i, (candidate, value_str) in enumerate(
+                    zip(candidates, remaining, strict=True)
+                ):
+                    if len(candidate) > _V2_RANK_MAX_LEN:
+                        raise RuntimeError(
+                            f"list '{self.name}' rank key exceeded {_V2_RANK_MAX_LEN} "
+                            f"chars -- run compact() to rebalance"
+                        )
+                    item_db = get_property(self.config)
+                    if not item_db.create_if_not_exists(
+                        actor_id=self.actor_id,
+                        name=self._v2_item_name(candidate),
+                        value=value_str,
+                    ):
+                        # Collision: another writer took this rank. The items
+                        # before it already landed; re-key from here.
+                        collided_at = i
+                        break
+                    created += 1
+                    created_ranks.append(candidate)
+                    last = candidate
+                if collided_at is None:
+                    remaining = []
+                    break
+                remaining = remaining[collided_at:]
+                if attempt < _V2_MAX_RANK_RETRIES - 1:
+                    last = self._v2_last_rank()
+        except BaseException:
+            # A fault part-way: the landed items stay, with their bodies;
+            # the un-landed tail's bodies go.
+            for span in head_spans[created:]:
+                self._span_delete_bodies(span)
+            if created_ranks and self._v2_rank_cache is not None:
+                self._v2_rank_cache.extend(created_ranks)
+            raise
         if created_ranks and self._v2_rank_cache is not None:
             self._v2_rank_cache.extend(created_ranks)
         if created:
             self._v2_touch_metadata(count_delta=created)
         if remaining:
+            # The un-landed tail's bodies: delete them, keep the landed ones.
+            for span in head_spans[created:]:
+                self._span_delete_bodies(span)
             raise RuntimeError(
                 f"list '{self.name}' extend: too many rank collisions, retry later"
             )
@@ -1890,8 +2495,7 @@ class ListProperty:
         rows = db.get_range(
             actor_id=self.actor_id, lower=lower, upper=upper, keys_only=True
         )
-        prefix_len = len(self._v2_item_prefix())
-        return [name for name in rows if _v2_is_rank(name[prefix_len:])]
+        return self._names_matching(rows, len(self._v2_item_prefix()), _v2_is_rank)
 
     def _v1_bounds(self) -> tuple[str, str]:
         """Inclusive [lower, upper] bounds for get_range() covering exactly
@@ -1923,8 +2527,9 @@ class ListProperty:
         rows = db.get_range(
             actor_id=self.actor_id, lower=lower, upper=upper, keys_only=True
         )
-        prefix_len = len(f"list:{self.name}-")
-        return [name for name in rows if _V1_INDEX_RE.match(name[prefix_len:])]
+        return self._names_matching(
+            rows, len(f"list:{self.name}-"), lambda s: bool(_V1_INDEX_RE.match(s))
+        )
 
     def sweep_foreign_format_rows(self) -> int:
         """Delete this list's item rows belonging to the storage format it
@@ -1966,21 +2571,32 @@ class ListProperty:
         stored, _ = self._read_meta_row()
         if stored is not None and stored.get("format_ever_changed") is False:
             return 0
+        aux_names: list[str] = []
         if stored is None:
             names = self._v1_item_names_in_range() + self._v2_item_names_in_range()
+            # The list is gone: its side-partition rows are residue too.
+            aux_names = self._aux_names("span") + self._aux_names("key")
         elif int(stored.get("format", 1) or 1) == 2:
             names = self._v1_item_names_in_range()
         else:
             names = self._v2_item_names_in_range()
+            # A v1 list has no spanned or keyed items: any side-partition
+            # row under its name is residue of an interrupted downgrade.
+            aux_names = self._aux_names("span") + self._aux_names("key")
 
         if names:
             db = get_property(self.config)
             db.batch_delete(actor_id=self.actor_id, names=names)
+        aux = self._aux_or_none()
+        if aux_names and aux is not None:
+            get_property(self.config).batch_delete(actor_id=aux, names=aux_names)
+        swept = len(names) + len(aux_names)
+        if swept:
             logger.info(
                 f"List '{self.name}' (actor {self.actor_id}): swept "
-                f"{len(names)} row(s) left by an interrupted format change"
+                f"{swept} row(s) left by an interrupted format change"
             )
-        return len(names)
+        return swept
 
     def clear(self) -> None:
         """Remove all items from list."""
@@ -2003,11 +2619,20 @@ class ListProperty:
         self.sweep_foreign_format_rows()
 
         if self._is_v2():
-            item_names = self._v2_item_names_in_range()
+            # One range read WITH values (not keys-only): the heads name
+            # the body generations to delete, so clear() never enumerates
+            # $span- rows. Only the generations of heads it deletes go, so
+            # an append racing clear() keeps its bodies (its head lands on
+            # the emptied list, the same outcome as before spanning).
+            pairs = self._v2_load_full()
+            item_names = [self._v2_item_name(rank) for rank, _ in pairs]
             if item_names:
                 get_property(self.config).batch_delete(
                     actor_id=self.actor_id, names=item_names
                 )
+            for _, raw in pairs:
+                self._cascade(raw)
+            self._delete_aux_rows(self._aux_names("key"))
             self._replace_metadata(self._create_default_metadata_v2())
             self._v2_rank_cache = []
             return
@@ -2051,6 +2676,10 @@ class ListProperty:
                 get_property(self.config).batch_delete(
                     actor_id=self.actor_id, names=item_names
                 )
+            # Every side-partition row of the list, orphan generations
+            # included: the only way they leave with the list. Enumerating
+            # $span- rows costs every body byte on DynamoDB.
+            self._delete_aux_rows(self._aux_names("span") + self._aux_names("key"))
             meta_db = get_property(self.config)
             if not meta_db.set(
                 actor_id=self.actor_id, name=self._get_meta_property_name(), value=None
@@ -2215,13 +2844,14 @@ class ListProperty:
                 # writer removed it. Re-resolve rather than calling it
                 # corruption.
                 continue
-            item = self._decode_item(item_str)
+            item = self._resolve(item_str, rank=rank, consistent=True)
 
             del_db = get_property(self.config)
             if del_db.delete_if_value_equals(
                 actor_id=self.actor_id, name=name, value=item_str
             ):
                 del ranks[resolved]
+                self._cascade(item_str)
                 self._v2_touch_metadata(count=len(ranks))
                 return item
             # Value changed or row already gone -- re-resolve and retry.
@@ -2260,42 +2890,47 @@ class ListProperty:
     def _v2_insert(self, index: int, item: Any) -> None:
         """On a list whose dispatch found no meta row, creates it first via
         ``_v2_create_meta_row()`` -- see that method's docstring for the
-        full write-order diagram."""
+        full write-order diagram. A spanning item's bodies are written once,
+        before the rank loop, and deleted again if the loop gives up."""
         value_str = self._encode_item(item)
-        self._check_item_size(value_str)
+        spans = self._check_item_size(value_str, can_span=True)
         if self._dispatch_saw_no_row():
             self._v2_create_meta_row()
-        for attempt in range(_V2_MAX_RANK_RETRIES):
-            ranks = self._v2_ensure_rank_cache(force=(attempt > 0))
-            length = len(ranks)
-            pos = index
-            if pos < 0:
-                pos = max(0, length + pos)
-            if pos > length:
-                pos = length
 
-            lower = ranks[pos - 1] if pos > 0 else None
-            upper = ranks[pos] if pos < length else None
-            candidate = fi.generate_key_between(lower, upper)
-            if len(candidate) > _V2_RANK_MAX_LEN:
-                raise RuntimeError(
-                    f"list '{self.name}' rank key exceeded {_V2_RANK_MAX_LEN} "
-                    f"chars -- run compact() to rebalance"
-                )
-            item_db = get_property(self.config)
-            if item_db.create_if_not_exists(
-                actor_id=self.actor_id,
-                name=self._v2_item_name(candidate),
-                value=value_str,
-            ):
-                ranks.insert(pos, candidate)
-                self._v2_touch_metadata(count_delta=1)
-                return
-            # Collision: force a fresh read (recomputing neighbours at this
-            # position) on the next attempt.
-        raise RuntimeError(
-            f"list '{self.name}' insert: too many rank collisions, retry later"
-        )
+        def head_write(head: str) -> bool:
+            for attempt in range(_V2_MAX_RANK_RETRIES):
+                ranks = self._v2_ensure_rank_cache(force=(attempt > 0))
+                length = len(ranks)
+                pos = index
+                if pos < 0:
+                    pos = max(0, length + pos)
+                if pos > length:
+                    pos = length
+
+                lower = ranks[pos - 1] if pos > 0 else None
+                upper = ranks[pos] if pos < length else None
+                candidate = fi.generate_key_between(lower, upper)
+                if len(candidate) > _V2_RANK_MAX_LEN:
+                    raise RuntimeError(
+                        f"list '{self.name}' rank key exceeded {_V2_RANK_MAX_LEN} "
+                        f"chars -- run compact() to rebalance"
+                    )
+                item_db = get_property(self.config)
+                if item_db.create_if_not_exists(
+                    actor_id=self.actor_id,
+                    name=self._v2_item_name(candidate),
+                    value=head,
+                ):
+                    ranks.insert(pos, candidate)
+                    return True
+                # Collision: force a fresh read (recomputing neighbours at
+                # this position) on the next attempt.
+            raise RuntimeError(
+                f"list '{self.name}' insert: too many rank collisions, retry later"
+            )
+
+        self._write_spanning(value_str, spans, head_write)
+        self._v2_touch_metadata(count_delta=1)
 
     def insert(self, index: int, item: Any) -> None:
         """Insert item at given index."""
@@ -2352,6 +2987,30 @@ class ListProperty:
         # computed from the cache -- see append()'s identical comment.
         self._save_metadata({}, length_delta=1, create_if_absent=False)
 
+    def _sought_value_cannot_span(self, value: Any) -> bool:
+        """True when ``value`` is at or under the span threshold encoded, so
+        it cannot equal a spanned item and a value scan may skip reading
+        spanned items' bodies."""
+        span_threshold, _ = self._limits()
+        if span_threshold is None:
+            return False
+        try:
+            return encoded_size(encode_item(value)) <= span_threshold
+        except ValueError:
+            return False
+
+    def _head_equals(self, raw: str, rank: str, value: Any, sought_small: bool) -> bool:
+        """Whether the item a head stands for equals ``value``, reading a
+        spanned item's bodies only when it could match."""
+        env = self._parse_head(raw, rank)
+        if env is None:
+            return bool(self._decode_item(raw) == value)
+        if env.span is None:
+            return bool(env.value == value)
+        if sought_small:
+            return False
+        return bool(self._resolve(raw, rank=rank, consistent=True) == value)
+
     def _v2_remove(self, value: Any) -> None:
         """Delete the first item equal to ``value``, by RANK.
 
@@ -2362,10 +3021,11 @@ class ListProperty:
         matched. Deleting the rank the match came from removes exactly the
         item that was matched, or nothing.
         """
+        sought_small = self._sought_value_cannot_span(value)
         for _attempt in range(_V2_MAX_RANK_RETRIES):
             pairs = self._v2_load_full()
             for i, (rank, raw_value) in enumerate(pairs):
-                if self._decode_item(raw_value) != value:
+                if not self._head_equals(raw_value, rank, value, sought_small):
                     continue
                 del_db = get_property(self.config)
                 if not del_db.delete_if_value_equals(
@@ -2377,6 +3037,7 @@ class ListProperty:
                     # match is stale, so rescan rather than deleting whatever
                     # is there now.
                     break
+                self._cascade(raw_value)
                 # _v2_load_full() just set the cache to exactly these ranks
                 # in this order, so dropping entry i keeps it consistent.
                 ranks = self._v2_rank_cache
@@ -2451,10 +3112,14 @@ class ListProperty:
             # (O(n) total) now that positional reads refresh the rank map,
             # and it would compare against a list that can shift under the
             # loop.
-            values = self._v2_to_list()
-            begin, end = self._normalize_search_bounds(start, stop, len(values))
+            # Spanned items' bodies are read only when the sought value is
+            # large enough to equal one.
+            pairs = self._v2_load_full()
+            sought_small = self._sought_value_cannot_span(value)
+            begin, end = self._normalize_search_bounds(start, stop, len(pairs))
             for i in range(begin, end):
-                if values[i] == value:
+                rank, raw = pairs[i]
+                if self._head_equals(raw, rank, value, sought_small):
                     return i
             raise ValueError(f"{value} is not in list")
 
@@ -2469,6 +3134,13 @@ class ListProperty:
 
     def count(self, value: Any) -> int:
         """Return number of occurrences of value."""
+        if self._is_v2():
+            sought_small = self._sought_value_cannot_span(value)
+            return sum(
+                1
+                for rank, raw in self._v2_load_full()
+                if self._head_equals(raw, rank, value, sought_small)
+            )
         count = 0
         for item in self:
             if item == value:
@@ -2519,7 +3191,9 @@ class ListProperty:
             and item[identity_key] == value
         ]
 
-    def items_with_handles(self) -> list[tuple[ListItemHandle, Any]]:
+    def items_with_handles(
+        self, *, resolve: bool = True
+    ) -> list[tuple[ListItemHandle, Any]]:
         """One range read -> ``[(handle, decoded_item), ...]``, in list
         order.
 
@@ -2536,15 +3210,54 @@ class ListProperty:
         bulk endpoint would then report every item as "concurrently
         modified" and apply nothing. Same rationale
         ``_v2_ensure_rank_cache()`` already carries, for the same reason.
+
+        Args:
+            resolve: ``True`` (the default) reads every spanned item's body
+                rows. ``False`` reads the heads only: a spanned item's slot
+                holds ``UNRESOLVED`` and its handle carries
+                ``spanned=True`` and ``bytes``; read it on demand with
+                ``item_at(handle)``. Plain items are decoded either way.
         """
         if not self._is_v2():
             raise ValueError(
                 f"items_with_handles() is v2-only -- list '{self.name}' is "
                 f"still v1. Call migrate_to_v2() first."
             )
-        return self._v2_items_with_handles()
+        return self._v2_items_with_handles(resolve=resolve)
 
-    def _v2_items_with_handles(self) -> list[tuple[ListItemHandle, Any]]:
+    def item_at(self, handle: ListItemHandle) -> tuple[ListItemHandle, Any]:
+        """Read the item at ``handle.rank`` NOW, resolving a spanned item,
+        and return it with a fresh handle: ``(fresh_handle, item)``.
+
+        One strongly consistent point read of the head, plus the body read
+        for a spanned item. **The rank is the address, not the item**: if
+        the item was updated since ``handle`` was read, this returns the
+        new value; if it was deleted and its trailing rank reissued to a
+        later append (see ``ListItemHandle``), this returns that other
+        item. A caller that needs "unchanged since I read it" compares
+        ``fresh_handle.raw_value`` to ``handle.raw_value``.
+
+        Raises:
+            ValueError: The list is v1.
+            IndexError: No item is at that rank any more.
+            ListItemSpanError: The item's bodies are broken.
+        """
+        if not self._is_v2():
+            raise ValueError(
+                f"item_at() is v2-only -- list '{self.name}' is still v1. "
+                f"Call migrate_to_v2() first."
+            )
+        raw, _ = self._read_head(handle.rank, consistent=True)
+        if raw is None:
+            raise IndexError(
+                f"List '{self.name}' has no item at rank {handle.rank!r} any more"
+            )
+        item = self._resolve(raw, rank=handle.rank, consistent=True)
+        return self._handle_for(handle.rank, raw), item
+
+    def _v2_items_with_handles(
+        self, *, resolve: bool = True
+    ) -> list[tuple[ListItemHandle, Any]]:
         """Same read as ``items_with_handles()``, without the ``_is_v2()``
         format check.
 
@@ -2559,8 +3272,12 @@ class ListProperty:
         pairs = self._v2_load_full()  # default consistent=True, no override
         return [
             (
-                ListItemHandle(rank=rank, raw_value=raw_value),
-                self._decode_item(raw_value),
+                self._handle_for(rank, raw_value),
+                (
+                    self._resolve(raw_value, rank=rank, consistent=True)
+                    if resolve
+                    else self._unresolved_or_item(rank, raw_value)
+                ),
             )
             for rank, raw_value in pairs
         ]
@@ -2594,6 +3311,9 @@ class ListProperty:
             value=handle.raw_value,
         ):
             return False
+        # The handle's raw value is the head that was deleted: its envelope
+        # names the body generation to delete (best-effort, after commit).
+        self._cascade(handle.raw_value)
         # Only drop the rank from an already-warm cache -- never load a
         # cold one, matching _v2_append()/_v2_extend()'s discipline.
         if self._v2_rank_cache is not None:
@@ -2626,15 +3346,29 @@ class ListProperty:
                 f"still v1. Call migrate_to_v2() first."
             )
         value_str = self._encode_item(item)
-        self._check_item_size(value_str)
-        db = get_property(self.config)
-        if not db.set_if_value_equals(
-            actor_id=self.actor_id,
-            name=self._v2_item_name(handle.rank),
-            expected=handle.raw_value,
-            value=value_str,
-        ):
+        spans = self._check_item_size(value_str, can_span=True)
+        try:
+            old_env = parse(handle.raw_value)
+        except EnvelopeError:
+            old_env = None
+
+        def head_write(head: str) -> bool:
+            return bool(
+                get_property(self.config).set_if_value_equals(
+                    actor_id=self.actor_id,
+                    name=self._v2_item_name(handle.rank),
+                    expected=handle.raw_value,
+                    value=head,
+                )
+            )
+
+        # Bodies first, then the head CAS; a lost CAS deletes the new
+        # bodies again and returns False. The envelope's key, token and
+        # unknown fields are carried into the new head.
+        landed, _ = self._write_spanning(value_str, spans, head_write, carry=old_env)
+        if not landed:
             return False
+        self._cascade(handle.raw_value)
         self._v2_touch_metadata()
         return True
 
@@ -2754,8 +3488,13 @@ class ListProperty:
             self[i] = item
         return [existing for _, existing in matched]
 
-    def _identity_of(self, raw_value: str, identity_key: str) -> Any:
+    def _identity_of(
+        self, raw_value: str, identity_key: str, rank: str | None = None
+    ) -> Any:
         """This row's value for ``identity_key``, or ``None`` if it has none.
+
+        With ``rank`` (a v2 head) a spanned item is resolved first, so
+        ``verify(identity_key=...)`` reads every spanned item's bodies.
 
         Rows that are not dicts, or that lack the field, are not
         identity-addressable and are excluded from identity duplicate
@@ -2763,7 +3502,11 @@ class ListProperty:
         identity" bucket would report every such row as a duplicate of
         every other.
         """
-        decoded = self._decode_item(raw_value)
+        decoded = (
+            self._resolve(raw_value, rank=rank, consistent=True)
+            if rank is not None
+            else self._decode_item(raw_value)
+        )
         if not isinstance(decoded, dict) or identity_key not in decoded:
             return None
         value = decoded[identity_key]
@@ -2807,7 +3550,9 @@ class ListProperty:
         }
         return duplicates, checked
 
-    def _v2_verify(self, identity_key: str | None = None) -> dict[str, Any]:
+    def _v2_verify(
+        self, identity_key: str | None = None, spans: bool = False
+    ) -> dict[str, Any]:
         """Read-only integrity check for v2 lists.
 
         Structurally, v2 cannot have holes -- there is no separate
@@ -2861,10 +3606,22 @@ class ListProperty:
               ``healthy`` encodes exactly that combination, so a consumer
               wanting "is this an orphan" should read ``healthy`` (or
               test both keys), not ``meta_row_present`` alone
+            - spanned_items, span_bytes: how many items span body rows and
+              their total encoded size, from the heads alone (no body read)
+            - malformed_heads: ranks whose head is a malformed envelope
+              (part of ``healthy``)
+            - with ``spans=True`` only (one enumeration of the list's
+              ``$span-`` rows in the side partition, which costs every body
+              byte on DynamoDB): ``span_body_rows``; ``orphan_span_gens``,
+              the number of body generations no head names (a crash between
+              bodies and head, or a failed best-effort cascade);
+              ``broken_spans``, the ranks of heads whose part set is not
+              exactly the one their envelope names (part of ``healthy``)
             - healthy: True iff no rank key is within the rebalance
-              warning zone of the cap, no identity is repeated, and the
-              list is not an orphan (``meta_row_present is False`` while
-              ``length > 0``). A never-created list is healthy.
+              warning zone of the cap, no identity is repeated, the list is
+              not an orphan (``meta_row_present is False`` while
+              ``length > 0``), no head is malformed and (with ``spans``) no
+              span is broken. A never-created list is healthy.
         """
         pairs = self._v2_load_full()
         max_rank_length = max((len(rank) for rank, _ in pairs), default=0)
@@ -2898,13 +3655,32 @@ class ListProperty:
                 and not (not meta_row_present and length > 0)
             ),
         }
+        span_heads, malformed = self._span_heads(pairs)
+        report["spanned_items"] = len(span_heads)
+        report["span_bytes"] = sum(span.bytes for _, span in span_heads)
+        report["malformed_heads"] = malformed
+        if malformed:
+            report["healthy"] = False
+        if spans:
+            span_names = self._aux_names("span")
+            broken, orphan_gens = self._span_inventory(span_heads, span_names)
+            report["span_body_rows"] = len(span_names)
+            report["orphan_span_gens"] = len(orphan_gens)
+            report["broken_spans"] = broken
+            if broken:
+                report["healthy"] = False
         duplicates: dict[Any, list[int]] | None = None
         identity_checked_count: int | None = None
         if identity_key is not None:
             duplicates, identity_checked_count = self._identity_duplicates(
                 [
-                    (i, self._identity_of(raw, identity_key))
-                    for i, (_, raw) in enumerate(pairs)
+                    (
+                        i,
+                        None
+                        if rank in malformed
+                        else self._identity_of(raw, identity_key, rank),
+                    )
+                    for i, (rank, raw) in enumerate(pairs)
                 ]
             )
         report["duplicate_identities"] = duplicates
@@ -2913,7 +3689,49 @@ class ListProperty:
             report["healthy"] = False
         return report
 
-    def verify(self, identity_key: str | None = None) -> dict[str, Any]:
+    def _span_heads(
+        self, pairs: list[tuple[str, str]]
+    ) -> tuple[list[tuple[str, SpanInfo]], list[str]]:
+        """From ``(rank, raw)`` heads: the spanned ones as ``(rank, span)``,
+        and the ranks of malformed envelopes. No body read."""
+        spanned: list[tuple[str, SpanInfo]] = []
+        malformed: list[str] = []
+        for rank, raw in pairs:
+            try:
+                env = parse(raw)
+            except EnvelopeError:
+                malformed.append(rank)
+                continue
+            if env is not None and env.span is not None:
+                spanned.append((rank, env.span))
+        return spanned, malformed
+
+    def _span_inventory(
+        self, span_heads: list[tuple[str, SpanInfo]], span_names: list[str]
+    ) -> tuple[list[str], dict[str, list[str]]]:
+        """Compare the heads' generations with the enumerated body rows.
+
+        Returns ``(broken_ranks, orphan_gens)``: heads whose exact part set
+        is not present, and ``{gen: [row names]}`` for generations no head
+        names."""
+        prefix_len = len(span_prefix(self.name))
+        by_gen: dict[str, list[str]] = {}
+        for name in span_names:
+            gen = name[prefix_len:][:30]  # {13 digits}-{16 hex}
+            by_gen.setdefault(gen, []).append(name)
+        broken: list[str] = []
+        named_gens: set[str] = set()
+        for rank, span in span_heads:
+            named_gens.add(span.gen)
+            expected = set(part_names(self.name, span.gen, span.parts))
+            if set(by_gen.get(span.gen, [])) != expected:
+                broken.append(rank)
+        orphans = {gen: names for gen, names in by_gen.items() if gen not in named_gens}
+        return broken, orphans
+
+    def verify(
+        self, identity_key: str | None = None, spans: bool = False
+    ) -> dict[str, Any]:
         """Read-only integrity check against stored rows.
 
         v2: see ``_v2_verify()`` -- a structurally different report shape
@@ -2929,7 +3747,12 @@ class ListProperty:
             identity_key: Optional field name that identifies an item
                 within your data (``"id"``, ``"uuid"``, ...). Strongly
                 recommended if your items have one -- see the duplicate
-                detection note below.
+                detection note below. On v2 this resolves every spanned
+                item (one paged body read each).
+            spans: v2 only. Also enumerate the list's body rows in the side
+                partition and report ``span_body_rows``,
+                ``orphan_span_gens`` and ``broken_spans``. Costs every body
+                byte on DynamoDB, which is why it is opt-in.
 
         Returns:
             Dict with:
@@ -2990,7 +3813,7 @@ class ListProperty:
         reported.
         """
         if self._is_v2():
-            return self._v2_verify(identity_key=identity_key)
+            return self._v2_verify(identity_key=identity_key, spans=spans)
 
         meta = self._load_metadata()
         stored_length = int(meta.get("length", 0) or 0)
@@ -3052,7 +3875,14 @@ class ListProperty:
         # extra keys-only range read -- the exact mirror of what _v2_verify()
         # already spends on `len(self._v1_item_names_in_range())`, and still a
         # rounding error against the dump the pair of them replaced.
-        foreign_format_rows = len(self._v2_item_names_in_range())
+        # Side-partition rows under a v1 list's name are residue too (a v1
+        # list never spans or keys an item): two keys-only prefix reads of
+        # a partition that is normally empty.
+        foreign_format_rows = (
+            len(self._v2_item_names_in_range())
+            + len(self._aux_names("span"))
+            + len(self._aux_names("key"))
+        )
 
         report: dict[str, Any] = {
             "stored_length": stored_length,
@@ -3071,7 +3901,7 @@ class ListProperty:
             report["healthy"] = False
         return report
 
-    def _v2_compact(self) -> dict[str, Any]:
+    def _v2_compact(self, sweep_span_orphans: bool = False) -> dict[str, Any]:
         """Rebalance a v2 list's rank keys back to short, evenly-spaced
         values.
 
@@ -3110,11 +3940,40 @@ class ListProperty:
         ``verify()`` performs. Duplicate residue at least shows up in the
         data. A staged-commit protocol that is genuinely recoverable is
         tracked in ``thoughts/todo/whole-list-rewrite-atomicity.md``.
+
+        SPANNED ITEMS. A spanned head that moves to a new rank gets a FRESH
+        body generation: its bodies are read strongly and written again
+        before the new head, and the old head's delete in the cleanup loop
+        cascades the old generation. Sharing the generation would make the
+        manual recovery above destructive (deleting either duplicate would
+        cascade bodies the survivor still names); with a generation per
+        head, every duplicate a crash leaves is independently readable. A
+        rebalance of a list with many spanned items is therefore a bulk copy,
+        O(total spanned bytes). A spanned head whose bodies cannot be read
+        stops compact() with ``ListItemSpanError``: run it with
+        ``sweep_span_orphans=True`` first. A ``compact()`` racing a spanned
+        ``update_by_handle()`` turns today's silent lost update into a 409
+        for that item: quiesce writes during repair, as above.
+
+        ``sweep_span_orphans=True`` first enumerates the list's body rows
+        once (every body byte, on DynamoDB) and removes (a) body generations
+        no head names that are older than ``_SPAN_ORPHAN_MIN_AGE_SECONDS``
+        (younger ones may belong to an append that has not written its head
+        yet), reported as ``orphan_span_gens_removed``, and (b) heads whose
+        bodies are not all there, reported as ``broken_spans_removed`` --
+        the item is lost already; this makes the list readable again.
+
+        Cost: two item ranges, plus every moved spanned item's bodies
+        (read and written), plus the deletes; with the flag, every body
+        byte once more.
         """
         report = self._v2_verify()
 
         if not self._db:
             raise RuntimeError("No database connection available")
+
+        if sweep_span_orphans:
+            report.update(self._sweep_spans())
 
         pairs = self._v2_load_full()
         n = len(pairs)
@@ -3134,13 +3993,23 @@ class ListProperty:
             for attempt in range(_V2_MAX_RANK_RETRIES + 1):
                 new_name = self._v2_item_name(rank)
                 if new_name not in old_names or rank == old_rank:
+                    moved = rank != old_rank
+                    new_value, new_span = (
+                        self._copy_span_head(value, old_rank)
+                        if moved
+                        else (value, None)
+                    )
                     item_db = get_property(self.config)
-                    if not item_db.set(
-                        actor_id=self.actor_id, name=new_name, value=value
-                    ):
-                        raise RuntimeError(
-                            f"list item write failed for '{self.name}' during compact()"
-                        )
+                    try:
+                        if not item_db.set(
+                            actor_id=self.actor_id, name=new_name, value=new_value
+                        ):
+                            raise RuntimeError(
+                                f"list item write failed for '{self.name}' during compact()"
+                            )
+                    except BaseException:
+                        self._span_delete_bodies(new_span)
+                        raise
                     written_ranks.append(rank)
                     break
                 if attempt == _V2_MAX_RANK_RETRIES:
@@ -3159,7 +4028,7 @@ class ListProperty:
                 rank = fi.generate_key_between(rank, upper)
 
         survivors = set(written_ranks)
-        for old_rank in old_ranks:
+        for old_rank, old_value in pairs:
             if old_rank not in survivors:
                 del_db = get_property(self.config)
                 if not del_db.set(
@@ -3170,6 +4039,9 @@ class ListProperty:
                     raise RuntimeError(
                         f"list item write failed for '{self.name}' during compact() cleanup"
                     )
+                # The moved copy has its own generation; the old one goes
+                # with its head.
+                self._cascade(old_value)
 
         self._v2_rank_cache = sorted(written_ranks)
         # compact() just counted every row it rewrote -- write the exact
@@ -3178,7 +4050,75 @@ class ListProperty:
         self._save_metadata({"count_hint": n})
         return report
 
-    def compact(self, allow_reverted: bool = False) -> dict[str, Any]:
+    def _copy_span_head(self, raw: str, rank: str) -> tuple[str, SpanInfo | None]:
+        """For compact(): the value to write for a head moving off
+        ``rank``. A spanned head gets its bodies copied to a fresh
+        generation (read strongly) and a head naming it; anything else is
+        written as it is. Returns ``(head, new_span)``."""
+        try:
+            env = parse(raw)
+        except EnvelopeError:
+            return raw, None
+        if env is None or env.span is None:
+            return raw, None
+        value_str, found = self._read_span(env.span, consistent=True)
+        if value_str is None:
+            raise ListItemSpanError(
+                self.name,
+                rank,
+                expected_parts=env.span.parts,
+                found_parts=found,
+            )
+        span = self._write_bodies(value_str)
+        return wrap(span=span, key=env.key, tok=env.tok, extra=env.extra), span
+
+    def _sweep_spans(self) -> dict[str, Any]:
+        """compact(sweep_span_orphans=True)'s sweep: one enumeration of the
+        list's body rows, then remove aged orphan generations and heads
+        whose bodies are not all there. See ``_v2_compact()``."""
+        pairs = self._v2_load_full()
+        span_heads, _ = self._span_heads(pairs)
+        span_names = self._aux_names("span")
+        broken, orphans = self._span_inventory(span_heads, span_names)
+        raw_by_rank = dict(pairs)
+        span_by_rank = dict(span_heads)
+        aux = self._aux_or_none()
+        broken_removed = 0
+        for rank in broken:
+            if get_property(self.config).delete_if_value_equals(
+                actor_id=self.actor_id,
+                name=self._v2_item_name(rank),
+                value=raw_by_rank[rank],
+            ):
+                broken_removed += 1
+                self._span_delete_bodies(span_by_rank[rank])
+                logger.warning(
+                    "List '%s' (actor %s): removed the item at rank %r, whose "
+                    "body rows were missing (a broken span)",
+                    self.name,
+                    self.actor_id,
+                    rank,
+                )
+        orphans_removed = 0
+        for gen, names in orphans.items():
+            if gen_age_seconds(gen) < _SPAN_ORPHAN_MIN_AGE_SECONDS:
+                continue
+            if aux is not None:
+                get_property(self.config).batch_delete(actor_id=aux, names=names)
+            orphans_removed += 1
+        if broken_removed:
+            self._v2_rank_cache = None
+        return {
+            "span_body_rows": len(span_names),
+            "orphan_span_gens": len(orphans),
+            "broken_spans": broken,
+            "orphan_span_gens_removed": orphans_removed,
+            "broken_spans_removed": broken_removed,
+        }
+
+    def compact(
+        self, allow_reverted: bool = False, sweep_span_orphans: bool = False
+    ) -> dict[str, Any]:
         """Repair holes and orphans by rewriting the list densely.
 
         v2: rebalances rank keys -- see ``_v2_compact()``.
@@ -3233,6 +4173,9 @@ class ListProperty:
         reverted, which no unit test built.
 
         Args:
+            sweep_span_orphans: v2 only -- see ``_v2_compact()``. Remove
+                aged orphan body generations and heads whose bodies are
+                missing, after one enumeration of the list's body rows.
             allow_reverted: compact a v1 list that has rows of the other
                 storage format, accepting that the items in them stop
                 being reachable and stop being reported. Off by default.
@@ -3254,7 +4197,7 @@ class ListProperty:
             and ``reason``.
         """
         if self._is_v2():
-            return self._v2_compact()
+            return self._v2_compact(sweep_span_orphans=sweep_span_orphans)
 
         report = self.verify()
 
@@ -3496,6 +4439,20 @@ class ListProperty:
             if self._get_item_property_name(i) in rows
         ]
 
+        # Step 4 copies raw v1 values into v2 heads. A pre-3.16 dict item
+        # whose first key is the reserved envelope marker would then read
+        # as an envelope. Refuse before writing anything, the way
+        # downgrade_to_v1 refuses a list holding envelopes.
+        if any(looks_like_envelope(raw) for raw in ordered_values):
+            logger.error(
+                f"List '{self.name}' (actor {self.actor_id}) not migrated to "
+                f"v2: an item is a dict whose first key is the reserved "
+                f"envelope marker '__aw_env', which a v2 reader would take "
+                f"for the library's storage envelope. Rename that key in the "
+                f"item first; the list keeps working as v1 in the meantime"
+            )
+            return {"migrated": False, "reason": "envelope-shaped item"}
+
         # Re-check the stored format one last time before the first
         # destructive write. The gap between the check above and here spans
         # verify()'s read and the item-row read above -- narrower than it was
@@ -3531,6 +4488,8 @@ class ListProperty:
                     f"list item write failed for '{self.name}' during "
                     f"migrate_to_v2() cleanup"
                 )
+        # Side-partition rows under a v1 list are residue of the same kind.
+        self._delete_aux_rows(self._aux_names("span") + self._aux_names("key"))
 
         # Step 4: write the fresh v2 rows.
         ranks = fi.generate_n_keys_between(None, None, len(ordered_values))

@@ -28,13 +28,12 @@ moderate problem outranks an expensive fix to a slightly worse one.
 
 ## 1. High leverage
 
-Bigger, designed, and each buys more than it costs. The first is decided and
-waiting on a plan; the other two are blocked on a decision nobody has made,
-not on effort.
+Bigger, designed, and each buys more than it costs. The first rides with
+the spanned-items plan; the other two are blocked on a decision nobody has
+made, not on effort.
 
 | Item | Impact of doing it | What it needs first |
 | --- | --- | --- |
-| [Spanned list items](spanned-list-items.md) | Removes the 400 KB per-item wall on DynamoDB without touching an existing row: gen-stamped body rows behind the existing compare-and-swap, a typed too-large error on both backends, and a threshold the consumer can lower to take bodies out of range scans | Decided 2026-10-26 for 3.16.0, falls to 3.17 if it slips. Largest change to list storage since v2; the enumeration audit is the work |
 | [A property-list append cannot be repeated safely after a lost answer](idempotent-list-item-create.md) | A keyed, atomic `append` so a client can repeat a create whose answer was lost, and the same key closes the library's own SDK-retry duplicate in `_v2_append` | Filed 2026-10-29 from the Emm AI app's create-retry audit. Rides with spanned list items (same storage layer and enumeration audit), so 3.16 if that lands in time, else 3.17. Needs the key-lifetime and API decisions |
 | [`subs_list` cache asymmetry](subs-list-cache-asymmetry.md) | Drops one **strongly-consistent Query per property write** for every actor with no subscribers, and `4 x peers` per page load on a consumer endpoint measured at p50 689 ms | **The ordering is the whole item.** The one-line guard fix (`is None`) is unsafe until the cross-request `Actor` cache is dealt with: the falsy guard is what stops a long-lived MCP-cached actor going permanently blind to subscriptions created in another container. Take the cache-lifetime question — should `_actor_cache` hold instance state at all — not the guard. The consumer has a per-call-site workaround, so this is not urgent; it is the highest-value item that is not waiting on a release |
 | [`ListAttribute` shift-loop design](attribute-list-shift-design.md) | Removes the **last instance** of the design that caused the production list corruption — `ListAttribute` still has, verbatim, what `ListProperty` had before the v2 format | The chosen approach is the full v2 port, which is mostly a port now that the fractional-rank format and its primitives are proven. Sequencing is unresolved: after [whole-list rewrite atomicity](whole-list-rewrite-atomicity.md), which has two dead designs and no third, or accept the same documented window `ListProperty` shipped with and fix both classes later. Owner's call, not made |

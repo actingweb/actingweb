@@ -144,8 +144,17 @@ def sweep_actor(
     limiter: RateLimiter,
     identity_key: str | None = None,
     repair_reverted: bool = False,
+    spans: bool = False,
+    sweep_spans: bool = False,
 ) -> tuple[int, int, int]:
     """Verify (and optionally repair) every list belonging to one actor.
+
+    ``spans`` passes ``verify(spans=True)``: enumerate each v2 list's body
+    rows (every body byte, on DynamoDB). ``sweep_spans`` (with ``repair``)
+    runs ``compact(sweep_span_orphans=True)`` on every v2 list with orphan
+    body generations or broken spans, healthy or not: an orphan
+    generation does not make a list unhealthy, so the ``healthy``
+    short-circuit below would otherwise skip it.
 
     Returns (lists_checked, lists_unhealthy_after, lists_errored).
     """
@@ -168,7 +177,9 @@ def sweep_actor(
             # is one dump per list. That is inherent to checking integrity
             # (which is this script's job) -- unlike the migrate script,
             # which only needs the format and uses storage_format().
-            report = list_prop.verify(identity_key=identity_key)
+            report = list_prop.verify(
+                identity_key=identity_key, spans=spans or sweep_spans
+            )
         except Exception as e:  # folds DbError: counted as error, exit 1
             logger.error(f"actor={actor_id} list={name}: verify() failed: {e}")
             errored += 1
@@ -177,6 +188,49 @@ def sweep_actor(
         # v1 and v2 reports carry different fields, and the foreign-row
         # handling below branches on the format, so resolve it first.
         is_v2 = report.get("format") == 2
+
+        if is_v2 and (report.get("spanned_items") or "span_body_rows" in report):
+            logger.info(
+                f"actor={actor_id} list={name}: spanned_items="
+                f"{report.get('spanned_items')} span_bytes={report.get('span_bytes')}"
+                + (
+                    f" span_body_rows={report['span_body_rows']} "
+                    f"orphan_span_gens={report['orphan_span_gens']} "
+                    f"broken_spans={len(report['broken_spans'])}"
+                    if "span_body_rows" in report
+                    else ""
+                )
+            )
+        if report.get("malformed_heads"):
+            logger.warning(
+                f"actor={actor_id} list={name}: "
+                f"{len(report['malformed_heads'])} head row(s) hold a malformed "
+                f"storage envelope -- remove the item(s) with delete_by_handle()"
+            )
+
+        # The span sweep has its own path, ahead of the healthy
+        # short-circuit: a list with orphan body generations is healthy.
+        if (
+            repair
+            and sweep_spans
+            and is_v2
+            and (report.get("orphan_span_gens") or report.get("broken_spans"))
+        ):
+            try:
+                swept = list_prop.compact(sweep_span_orphans=True)
+            except Exception as e:  # folds DbError: counted as error, exit 1
+                logger.error(
+                    f"actor={actor_id} list={name}: compact(sweep_span_orphans) "
+                    f"failed: {e}"
+                )
+                errored += 1
+                continue
+            logger.info(
+                f"actor={actor_id} list={name}: span sweep removed "
+                f"{swept.get('orphan_span_gens_removed', 0)} orphan generation(s) "
+                f"and {swept.get('broken_spans_removed', 0)} broken span(s)"
+            )
+            report = list_prop.verify(identity_key=identity_key, spans=True)
 
         # Rows of the OTHER storage format sharing this list's name: what an
         # interrupted migration or downgrade leaves. Not a health failure --
@@ -335,6 +389,25 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--spans",
+        action="store_true",
+        help=(
+            "also enumerate each v2 list's spanned-item body rows and report "
+            "span_body_rows, orphan_span_gens and broken_spans. Reads every "
+            "body byte on DynamoDB"
+        ),
+    )
+    parser.add_argument(
+        "--sweep-spans",
+        action="store_true",
+        help=(
+            "with --repair, run compact(sweep_span_orphans=True) on every v2 "
+            "list with orphan or broken spans: remove orphan body generations older "
+            "than an hour and heads whose bodies are missing (the remedy a "
+            "409 for a broken span names). Implies --spans"
+        ),
+    )
+    parser.add_argument(
         "--rps",
         type=float,
         default=10.0,
@@ -395,6 +468,8 @@ def main() -> int:
             limiter,
             args.identity_key,
             repair_reverted=args.repair_reverted,
+            spans=args.spans,
+            sweep_spans=args.sweep_spans,
         )
         total_checked += checked
         total_unhealthy += unhealthy

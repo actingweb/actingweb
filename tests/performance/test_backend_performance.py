@@ -613,6 +613,59 @@ class TestListPropertyPerformance:
             )
 
 
+@pytest.fixture(scope="module")
+def v2_list_1000_20_spanned() -> Iterator[Any]:
+    """1,000 items of which 20 span body rows. Recorded, not gated: the
+    threshold is lowered to 5,000 bytes so the 20 spanned items (about
+    10 KB each, two body rows) stay cheap to build on DynamoDB Local."""
+    from actingweb.config import Config
+    from actingweb.property_list import ListProperty
+
+    config = Config(list_item_span_threshold=5_000, list_item_max_bytes=4 * 2**20)
+    actor_id = f"perf_span_actor_{int(time.time() * 1000)}"
+    db_actor = config.DbActor.DbActor()  # type: ignore[misc]
+    db_actor.create(actor_id=actor_id, creator="perf@test.com", passphrase="test123")
+    lst = ListProperty(actor_id, "perf_spanned", config)
+    items: list[Any] = [
+        {"id": i, "title": f"item {i}", "body": "x" * 200} for i in range(1000)
+    ]
+    for i in range(0, 1000, 50):
+        items[i] = {"id": i, "title": f"big {i}", "body": "y" * 10_000}
+    lst.extend(items)
+
+    yield lst
+
+    lst.delete()
+    db_actor.get(actor_id=actor_id)
+    if db_actor.handle:
+        db_actor.delete()
+
+
+@pytest.mark.benchmark
+class TestSpannedListPropertyPerformance:
+    """The same reads on a list with 20 spanned items, resolved and not."""
+
+    def test_list_property_spanned_to_list(
+        self, benchmark: Any, backend_name: str, v2_list_1000_20_spanned: Any
+    ) -> None:
+        result = benchmark(v2_list_1000_20_spanned.to_list)
+        assert len(result) == 1000
+
+    def test_list_property_spanned_items_with_handles_resolve(
+        self, benchmark: Any, backend_name: str, v2_list_1000_20_spanned: Any
+    ) -> None:
+        result = benchmark(v2_list_1000_20_spanned.items_with_handles)
+        assert len(result) == 1000
+
+    def test_list_property_spanned_items_with_handles_no_resolve(
+        self, benchmark: Any, backend_name: str, v2_list_1000_20_spanned: Any
+    ) -> None:
+        result = benchmark(
+            lambda: v2_list_1000_20_spanned.items_with_handles(resolve=False)
+        )
+        assert len(result) == 1000
+
+
 # Performance comparison summary
 @pytest.mark.benchmark
 def test_performance_summary(backend_name: str) -> None:

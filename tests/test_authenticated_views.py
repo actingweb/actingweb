@@ -541,6 +541,8 @@ _PROXY_READS = {
     "find",
     "find_all",
     "items_with_handles",
+    "item_at",
+    "sizes_from_rows",
     "verify",
 }
 

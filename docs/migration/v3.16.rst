@@ -85,6 +85,15 @@ check only the first three items and item 11.
 13. The factory form redirects an address that has an actor to ``/login``,
     not to ``/<id>/www``, and creators beginning with ``#`` or containing
     ``#dup-``, and ``system`` and ``oauth2-system``, are refused with 400.
+14. **Property-list items larger than one row now span** (see
+    `Spanned list items`_): on DynamoDB a v2 list item over 390,000 encoded
+    bytes is stored across several rows instead of failing, an item over
+    4 MiB raises ``ListItemTooLargeError`` (413 over REST) before any write,
+    and PostgreSQL is unchanged at its defaults. **Deploy 3.16 everywhere
+    before any client stores a larger item**: a pre-3.16 reader sees a
+    spanned item as an envelope dict. ``$`` is refused in new list names and
+    in a caller-supplied actor id, and a list diff over the threshold is sent
+    as a reference.
 
 
 What changed and why
@@ -640,6 +649,76 @@ consent``; GitHub and Apple ignore it. ``GET /oauth/spa/config`` lists
 ``prompt_values`` and a per-provider ``prompt_supported`` (as does
 ``/oauth/config``; ``GET /?format=json`` lists ``prompt_values`` only). Any other value
 answers ``400``. See :doc:`../guides/spa-authentication`.
+
+Spanned list items
+------------------
+
+A property-list item is one storage row, so on DynamoDB an item cannot
+exceed about 400 KB. Before 3.16 an oversized write failed with the untyped
+``DbError("property write")``, and a consumer had to refuse large items with
+its own rule. 3.16 adds two limits, ``list_item_span_threshold`` and
+``list_item_max_bytes`` (``ActingWebApp.with_list_item_limits()``), and
+spans a v2 item over the threshold across several rows. See
+:doc:`../guides/property-lists` ("Items larger than one row") for the full
+picture; what an upgrade needs:
+
+- **Nothing changes shape in the actor's partition.** Existing rows keep
+  their form, and a spanned item's body rows live in a separate side
+  partition (``{actor_id}$aux``) that no dump or range read of the actor
+  returns. A 380,000-byte item stays one row.
+- **PostgreSQL is unchanged at its defaults** (no spanning, no ceiling). A
+  deployment that develops on PostgreSQL and runs DynamoDB in production
+  sets both limits in the app, so spanning happens in development too:
+
+  .. code-block:: python
+
+     app.with_list_item_limits(span_threshold=390_000, max_bytes=4 * 2**20)
+
+- **Drop your own size rule and catch the typed error.** An item over
+  ``list_item_max_bytes`` raises ``ListItemTooLargeError`` (a
+  ``ValueError``, before any write); catch it ahead of generic
+  ``ValueError`` handling. The REST handlers answer 413.
+- **Size the ingress limit at your edge** (Flask ``MAX_CONTENT_LENGTH``, an
+  ASGI body-limit middleware, a proxy's or gateway's body-size setting) to
+  ``list_item_max_bytes`` plus room for the JSON around it. The library's
+  limit is a storage bound, not an ingress guard.
+- **Read bodies on demand.** ``items_with_handles(resolve=False)`` and
+  ``to_list_from_rows(rows, resolve=False)`` skip spanned items' bodies
+  (their slot holds ``UNRESOLVED``; the handle carries ``spanned`` and
+  ``bytes``) and ``item_at(handle)`` reads one. A listing benefits only if
+  title and metadata live outside the large item.
+- **Diffs over the threshold are references.** A list diff whose blob would
+  exceed the threshold carries ``"spanned": true`` and ``"bytes"`` instead
+  of its values; the subscriber re-reads the list. A pre-3.16 subscriber
+  answers ``unknown operation`` and stores nothing.
+- **Rolling deploys.** Until every process runs 3.16, a pre-3.16 reader sees
+  a spanned item as an envelope dict, a pre-3.16 ``clear()``/``delete()``
+  leaves its bodies for the aged sweep, and a pre-3.16 actor delete leaves
+  the side partition for ``actingweb-verify-orphans`` to report. The sweep
+  tooling ships in the same release as the writer, so deploy 3.16
+  everywhere before raising any client's size limit.
+- **Refusals.** ``downgrade_to_v1`` refuses a list holding spanned items,
+  ``migrate_to_v2()`` refuses a v1 list holding a dict item whose first key
+  is ``__aw_env`` (``reason="envelope-shaped item"``), ``append`` and the
+  other writers refuse such an item, and new list names may not contain
+  ``$``.
+- **Actor ids.** ``Actor.create`` and ``ActorInterface.create`` refuse a
+  caller-supplied ``actor_id`` containing ``$`` or longer than 251
+  characters (``ValueError``, before any write). Generated ids are 32 hex
+  characters and unaffected. An existing actor whose id already holds a
+  ``$`` (possible only through a consumer's own ids) keeps working, except
+  that a spanning write on it raises ``ValueError``.
+- **Three lifecycles.** A list's ``delete()`` reaps its side-partition rows;
+  an actor delete reaps its partition and its side partition; anything else
+  (a crash between bodies and head, a failed best-effort cleanup) waits for
+  ``actingweb-verify-property-lists --repair --sweep-spans``, which removes
+  orphan generations older than an hour. The default ``verify()`` does not
+  count leaked bodies; ``verify(spans=True)`` does.
+- **A broken span answers 409.** A spanned item whose body rows are missing
+  raises ``ListItemSpanError`` (a ``ListCorruptionError``); the 409's
+  ``remedy`` names ``--sweep-spans`` or ``delete_by_handle()``, and its
+  ``detail`` carries the item's rank.
+
 
 What stays the same
 ===================

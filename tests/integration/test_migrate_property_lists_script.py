@@ -559,3 +559,49 @@ class TestDowngradeToV1:
             "reason": "not_v2",
             "swept_v2_rows": 0,
         }
+
+
+class TestEnvelopeRefusals:
+    """Spanned list items (thoughts/plans/2026-10-30-spanned-list-items.md,
+    Phase 2): a list holding storage envelopes cannot be downgraded, and a
+    v1 item shaped like an envelope cannot be migrated."""
+
+    def test_downgrade_refuses_a_list_with_a_spanned_item(self, test_actor):
+        import migrate_property_lists as script  # type: ignore[import-not-found]
+
+        config = test_actor.config
+        config.list_item_span_threshold = 2_000
+        config.list_item_max_bytes = 20_000
+        lst = ListProperty(test_actor.id, "spanned_target", config)
+        lst.extend(["a", "x" * 5_000])
+
+        result = script.downgrade_to_v1(test_actor.id, "spanned_target", config)
+
+        assert result == {"downgraded": False, "reason": "envelopes"}
+        assert lst.storage_format() == 2
+        assert lst.to_list() == ["a", "x" * 5_000]
+
+    def test_migrate_refuses_an_envelope_shaped_v1_item(self, test_actor):
+        import migrate_property_lists as script  # type: ignore[import-not-found]
+
+        _seed_v1_list(
+            test_actor.config,
+            test_actor.id,
+            "envelope_shaped",
+            ["a", {"__aw_env": 1, "v": "b"}],
+        )
+
+        checked, migrated, errored, refused = script.migrate_actor(
+            test_actor.id,
+            test_actor.config,
+            migrate=True,
+            limiter=script.RateLimiter(0),
+        )
+
+        assert checked == 1
+        assert migrated == 0
+        assert errored == 0
+        assert refused == [(f"{test_actor.id}/envelope_shaped", "envelope-shaped item")]
+        fresh = ListProperty(test_actor.id, "envelope_shaped", test_actor.config)
+        assert fresh.storage_format() == 1
+        assert fresh.to_list() == ["a", {"__aw_env": 1, "v": "b"}]

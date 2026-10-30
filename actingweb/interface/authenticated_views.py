@@ -244,8 +244,13 @@ class _PermissionEnforcingListView:
     def prime_from_rows(self, rows: dict[str, Any]) -> None:
         self._list_prop.prime_from_rows(rows)
 
-    def to_list_from_rows(self, rows: dict[str, Any]) -> list[Any]:
-        return self._list_prop.to_list_from_rows(rows)
+    def to_list_from_rows(
+        self, rows: dict[str, Any], *, resolve: bool = True
+    ) -> list[Any]:
+        return self._list_prop.to_list_from_rows(rows, resolve=resolve)
+
+    def sizes_from_rows(self, rows: dict[str, Any]) -> list[int]:
+        return self._list_prop.sizes_from_rows(rows)
 
     def slice(self, start: int, end: int, consistent: bool = True) -> list[Any]:
         return self._list_prop.slice(start, end, consistent=consistent)
@@ -264,11 +269,18 @@ class _PermissionEnforcingListView:
     ) -> list[Any]:
         return self._list_prop.find_all(identity_key, value, consistent=consistent)
 
-    def items_with_handles(self) -> list[tuple[ListItemHandle, Any]]:
-        return self._list_prop.items_with_handles()
+    def items_with_handles(
+        self, *, resolve: bool = True
+    ) -> list[tuple[ListItemHandle, Any]]:
+        return self._list_prop.items_with_handles(resolve=resolve)
 
-    def verify(self, identity_key: str | None = None) -> dict[str, Any]:
-        return self._list_prop.verify(identity_key=identity_key)
+    def item_at(self, handle: ListItemHandle) -> tuple[ListItemHandle, Any]:
+        return self._list_prop.item_at(handle)
+
+    def verify(
+        self, identity_key: str | None = None, spans: bool = False
+    ) -> dict[str, Any]:
+        return self._list_prop.verify(identity_key=identity_key, spans=spans)
 
     # Mutations -- `write` by default; `delete` for __delitem__/clear/delete,
     # matching AuthenticatedPropertyStore's per-operation split.
@@ -338,9 +350,9 @@ class _PermissionEnforcingListView:
             identity_key, value, item, first_only=first_only
         )
 
-    def compact(self) -> dict[str, Any]:
+    def compact(self, sweep_span_orphans: bool = False) -> dict[str, Any]:
         self._check("write")
-        return self._list_prop.compact()
+        return self._list_prop.compact(sweep_span_orphans=sweep_span_orphans)
 
     def migrate_to_v2(self, allow_damaged: bool = False) -> dict[str, Any]:
         self._check("write")

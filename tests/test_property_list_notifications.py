@@ -328,7 +328,7 @@ class TestPhase10HandleAndWhereNotifications:
     def test_delete_by_handle_registers_remove_diff_with_decoded_item(self):
         notifying_list, mock_actor, mock_list_prop = self._create_notifying_list([1, 2])
         mock_list_prop.__len__ = Mock(return_value=1)
-        mock_list_prop._decode_item = Mock(return_value={"id": 5})
+        mock_list_prop._unresolved_or_item = Mock(return_value={"id": 5})
         mock_list_prop.delete_by_handle = Mock(return_value=True)
         handle = ListItemHandle(rank="a0", raw_value='{"id": 5}')
 
@@ -342,7 +342,7 @@ class TestPhase10HandleAndWhereNotifications:
 
     def test_delete_by_handle_registers_nothing_on_false(self):
         notifying_list, mock_actor, mock_list_prop = self._create_notifying_list([1])
-        mock_list_prop._decode_item = Mock(return_value={"id": 5})
+        mock_list_prop._unresolved_or_item = Mock(return_value={"id": 5})
         mock_list_prop.delete_by_handle = Mock(return_value=False)
         handle = ListItemHandle(rank="a0", raw_value='{"id": 5}')
 
@@ -354,7 +354,7 @@ class TestPhase10HandleAndWhereNotifications:
     def test_update_by_handle_registers_update_diff_with_old_item(self):
         notifying_list, mock_actor, mock_list_prop = self._create_notifying_list([1])
         mock_list_prop.__len__ = Mock(return_value=1)
-        mock_list_prop._decode_item = Mock(return_value={"id": 5, "v": "old"})
+        mock_list_prop._unresolved_or_item = Mock(return_value={"id": 5, "v": "old"})
         mock_list_prop.update_by_handle = Mock(return_value=True)
         handle = ListItemHandle(rank="a0", raw_value='{"id": 5, "v": "old"}')
 

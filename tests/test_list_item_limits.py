@@ -217,14 +217,11 @@ class TestV2RefusedBeforeAnyWrite:
         assert store == before
         assert lst.to_list() == ["a", "b"]
 
-    def test_over_span_threshold_refused_until_items_can_span(
-        self, store: dict[Any, Any]
-    ) -> None:
+    def test_over_span_threshold_spans_on_v2(self, store: dict[Any, Any]) -> None:
         lst = ListProperty(ACTOR, "fresh", _small_config())
-        with pytest.raises(ListItemTooLargeError) as exc:
-            lst.append(_item_of(2_001))
-        assert exc.value.limit == 2_000
-        assert store == {}
+        item = _item_of(2_001)
+        lst.append(item)
+        assert lst.to_list() == [item]
 
     def test_item_of_exactly_the_threshold_is_stored(
         self, store: dict[Any, Any]
@@ -234,10 +231,14 @@ class TestV2RefusedBeforeAnyWrite:
         lst.append(item)
         assert lst.to_list() == [item]
 
-    def test_non_ascii_item_measured_as_escaped_json(self) -> None:
-        lst = ListProperty(ACTOR, "fresh", _small_config())
-        # Each "é" encodes as "é", six bytes: 400 of them plus quotes
-        # is 2,402 bytes, over the threshold although 400 characters.
+    def test_non_ascii_item_measured_as_escaped_json(
+        self, store: dict[Any, Any]
+    ) -> None:
+        _seed_v1(store, "old", ["a"])
+        lst = ListProperty(ACTOR, "old", _small_config())
+        # Each "é" encodes as "\u00e9", six bytes: 400 of them plus quotes
+        # is 2,402 bytes, over the threshold although 400 characters. A v1
+        # list cannot span, so it is refused.
         with pytest.raises(ListItemTooLargeError) as exc:
             lst.append("é" * 400)
         assert exc.value.bytes == 2_402

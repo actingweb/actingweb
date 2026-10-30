@@ -1340,21 +1340,111 @@ Integration tests (both backends, harness limits 390,000 / 4 MiB):
 
 ### Verification
 
-- [ ] Run the contract's `### Checks` fast tier verbatim (unsandboxed)
-- [ ] Enumeration audit: every caller of `get_range`, `get_prefix`,
+- [x] Run the contract's `### Checks` fast tier verbatim (unsandboxed)
+- [x] Enumeration audit: every caller of `get_range`, `get_prefix`,
       `batch_delete`, `fetch_all_including_lists`, `list_prefix_with_rows`
       and every `Property.query(actor_id)` / `WHERE id = %s` without a
       range condition in `actingweb/` and `actingweb/maintenance/` is
       listed in the implementation notes with "learns the side partition"
       or "does not need to" and a reason (expected: the list's own five
       methods, `Properties.delete()`, `classify_rows`; nothing else)
-- [ ] Run the benchmarks alone: `poetry run pytest tests/performance -m
+- [x] Run the benchmarks alone: `poetry run pytest tests/performance -m
       benchmark --no-cov -q` (DynamoDB Local up), numbers recorded against
       the Phase 1 baseline
-- [ ] Full tier before PR 1 opens; `thoughts/todo/INDEX.md` has no row for
+- [x] Full tier before PR 1 opens; `thoughts/todo/INDEX.md` has no row for
       `spanned-list-items.md`
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+#### Implementation notes (2026-10-30)
+
+- **Deviations from the change list:**
+  - `resolve=False` is passed at the four handle-only reads in
+    `handlers/properties.py` (PUT `?index=N`, the bulk v2 pass, the `/items`
+    `update` and `delete` actions) as well as the two in `www.py` the plan
+    named: those reads use the handle for a bounds check and a CAS only, and
+    resolving there would 409 an update over an unrelated broken item and
+    pay every body. Consequence: the `/items` `update` action over a broken
+    span writes a new head (a repair) instead of answering 409, so the
+    integration test asserts the 409 on `GET` of the list, `?index=0` and
+    `/items`, and `format=full`'s error marker, instead. The
+    `except ListItemSpanError` arms ahead of the inner `IndexError` stay
+    (a malformed head still raises there).
+  - `PropertyListAccessor` does not exist in the tree; the passthroughs
+    (`items_with_handles(resolve=)`, `to_list_from_rows(rows, resolve=)`,
+    `item_at`, `sizes_from_rows`, `verify(spans=)`,
+    `compact(sweep_span_orphans=)`) went on `NotifyingListProperty` and
+    `_PermissionEnforcingListView`.
+  - `verify()` also reports `malformed_heads` (ranks of malformed
+    envelopes, from the heads, always; part of `healthy`), since a malformed
+    head otherwise surfaced only as a read error.
+  - Body parts are at most `min(SPAN_PART_BYTES, span_threshold)`, so a
+    lowered threshold also lowers the part size (every row stays under the
+    configured threshold).
+  - The rank loop is already extracted as `_v2_write_item_at_new_rank(head)`
+    (Phase 3 adds `tok`), and `_v2_insert`/`_v2_append` run their rank loops
+    as the `head_write` callable of `_write_spanning`.
+  - `_v2_setitem` size-checks after the bounds check, as v1 does, so an
+    out-of-range oversized write still raises `IndexError`.
+  - `spanned_reference()` sits beside `diff_reference()`: the handle
+    mutators of `NotifyingListProperty` make a reference from
+    `handle.bytes` without reading a spanned old item.
+  - The subscription full-state fallback nests the list diff under the
+    list name (`{subtarget: {"list", "operation", "items"}}`), so
+    `diff_reference` is applied to each nested list diff (found by the
+    advisor review before the tests).
+  - `--sweep-spans` implies `--spans` and compacts only lists that report
+    orphan generations or broken spans (compact also rebalances ranks).
+  - The migrate script reports `reason="envelope-shaped item"` as its own
+    refusal label instead of falling into "rename required".
+  - `count()` on v2 scans heads (one range read, bodies only when the sought
+    value could equal a spanned item) instead of iterating resolved items.
+  - The plan's HTTP assertion "the diff registered for a subscriber is a
+    reference" is covered in unit tests (`TestDiffs`, the handlers'
+    `diff_reference` calls) rather than through a live subscription; no
+    integration test drives a subscriber here.
+- **DynamoDB Local enforces the 400 KB item cap** (a direct 450 KB
+  `DbProperty.set` raises `DbError`, observed 2026-10-30); the
+  DynamoDB-only test pins that outcome and the head-plus-two-bodies shape.
+  This closes the matching "Unverified notes" entry.
+- **Enumeration audit.** Every caller of `get_range`, `get_prefix`,
+  `batch_delete`, `fetch_all_including_lists`, `list_prefix_with_rows`,
+  `Property.query(actor_id)` and an unbounded `WHERE id = %s` on
+  `properties`:
+
+  | Caller | Verdict |
+  | --- | --- |
+  | `ListProperty.clear()`, `delete()`, `sweep_foreign_format_rows()`, `_v2_verify(spans=True)`, `_v2_compact(sweep_span_orphans=True)` (`_sweep_spans`), `migrate_to_v2()` step 3 | learns the side partition |
+  | `Properties.delete()` (`property.py`) | learns the side partition (up to three sweeps) |
+  | `verify_orphans.classify_rows` | learns the `$aux` suffix (its table scans already see the rows) |
+  | `ListProperty` range reads (`_v2_load_full`, rank cache, `_v1_bounds` reads, `get_last_in_range`) | does not need to: scoped to the list's own range in the actor's partition |
+  | `PropertyListStore.list_all()`, `list_all_with_rows()`, `list_prefix_with_rows()`; `handlers/properties.py` `listall` dump | does not need to: actor partition only; bodies resolve through `to_list_from_rows()`, sizes through `sizes_from_rows()` |
+  | `db/*/property.py` `DbPropertyList.fetch`/`fetch_all_including_lists`/`delete` and the PostgreSQL `WHERE id = %s` statements | does not need to: `db/` stays list-agnostic, the list layer owns the aux rule |
+  | `maintenance/unique_creators.py` | not `properties` (the `actors` table) |
+
+- **Benchmarks** (DynamoDB Local, medians, plain 1,000-item list, against
+  the Phase 1 baseline): `to_list()` 11.62 ms (14.88), `items_with_handles()`
+  15.36 ms (15.45), append + remove 35.46 ms (35.74): within 5%. Variant
+  with 20 of 1,000 items spanned (threshold lowered to 5,000 bytes, items
+  about 10 KB, two body rows each; recorded, not gated): `to_list()`
+  52.08 ms, `items_with_handles()` 63.14 ms, `items_with_handles(resolve=False)`
+  16.35 ms.
+- New tests: `tests/test_property_list_span_codec.py` (39),
+  `tests/test_property_list_spans.py` (58, a recording fake for the call
+  order and count assertions), side-partition cases in
+  `tests/test_verify_orphans.py`, integration cases in
+  `tests/integration/test_property_list_spans.py` and the two script test
+  files. `FakePropertyDb` gained `get_prefix`; four existing tests were
+  updated for the new report keys, the `resolve` keyword on monkeypatched
+  `items_with_handles`, the notifying wrapper's `_unresolved_or_item`, and
+  the proxy's new read methods.
+- Release class: new methods, keyword parameters, report keys, a response
+  shape change for large diffs and two refusals: a minor (3.16.0).
+- Checks: fast tier green (unit suite 3,429 passed); full tier: docs
+  build, `verify_groups`, lint, format, pyright clean; DynamoDB
+  `make test-all-parallel` 4,562 passed, 40 skipped; PostgreSQL 4,416
+  passed, 186 skipped.
+
 
 ---
 
@@ -1798,8 +1888,8 @@ protocol above now does.
 - Whether the consumer wraps positional reads in `except IndexError`, in
   which case a broken span would be swallowed as out-of-range on its side
   (pre-existing for `ListCorruptionError`).
-- Whether DynamoDB Local enforces the 400 KB item cap; the Phase 2
-  integration test asserts row shape either way and records the outcome.
+- ~~Whether DynamoDB Local enforces the 400 KB item cap~~ Verified in
+  Phase 2 (2026-10-30): it does; a direct 450 KB write raises `DbError`.
 - Whether PostgreSQL's psycopg3 path has an equivalent of the SDK-retry
   ambiguity (the narrowed todo keeps the question); the DynamoDB path
   returns `False` only for `ConditionalCheckFailedException`

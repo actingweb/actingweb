@@ -36,10 +36,12 @@ holes:
   traces `_v2_append` writing an item twice after a DynamoDB SDK retry of a
   lost response. A key written in the same step closes both; fix them
   together.
-- **Storage-layout constraint:** key rows need a region under the `list:`
-  prefix that plain reads, `list_all`, the v1 index scan and the v2 rank
-  ranges all skip. That is the constraint [spanned list items](spanned-list-items.md)
-  has for its body rows, and its enumeration audit is the same work.
+- **Storage-layout constraint:** key rows need a region that plain reads,
+  `list_all`, the v1 index scan and the v2 rank ranges all skip. Spanned
+  list items' body rows met the same constraint with the actor's derived
+  side partition (`{actor_id}$aux`, see
+  `thoughts/plans/2026-10-30-spanned-list-items.md`); key rows go there too
+  (`list:{name}-$key-{hash}`), and that plan's Phase 3 is this item.
 
 ## Decisions needed
 

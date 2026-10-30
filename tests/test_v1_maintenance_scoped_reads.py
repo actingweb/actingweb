@@ -380,4 +380,8 @@ class TestV2ListsAreUntouched:
             "healthy": True,
             "duplicate_identities": None,
             "identity_checked_count": None,
+            # 3.16: spanned-item counts from the heads alone.
+            "spanned_items": 0,
+            "span_bytes": 0,
+            "malformed_heads": [],
         }

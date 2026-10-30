@@ -392,7 +392,8 @@ The subscription processing system automatically applies list operations from ca
 ``delete_by_handle()``, ``update_by_handle()``, ``remove_where()``, and
 ``update_where()`` (added in 3.14) do not add new operations to this table
 -- the diff vocabulary above is closed, so a peer running an older
-ActingWeb version keeps understanding every diff it receives. Instead:
+ActingWeb version keeps understanding every diff it receives, except a
+3.16 *reference* (below). Instead:
 
 - ``delete_by_handle()`` and a multi-match ``remove_where()`` each emit
   one ``remove`` diff per item actually removed, carrying that item's
@@ -410,6 +411,26 @@ ActingWeb version keeps understanding every diff it receives. Instead:
   applied rather than risking the wrong row. A peer that predates
   ``old_item`` simply ignores the field; without ``index`` present
   either, it has nothing to match the diff against.
+
+**References (3.16).** A list diff whose encoded blob would exceed the
+publisher's span threshold (``list_item_span_threshold``; 390,000 bytes on
+DynamoDB by default, off on PostgreSQL) is sent as a *reference*: the
+value-carrying fields (``item``, ``old_item``, ``value``, ``items``) are
+removed and top-level ``"spanned": true`` and ``"bytes": n`` (the values'
+total encoded size) are added, for example::
+
+    {"list": "docs", "operation": "append", "length": 4,
+     "index": 3, "spanned": true, "bytes": 1048590}
+
+That covers a spanned item, an ``update`` whose old and new values together
+are too large, and an ``extend`` of many items. The library's receiver does
+not apply a reference: it logs a WARNING that the replica is out of sync and
+answers ``{"operation": ..., "success": false, "spanned": true}``; the
+subscriber re-reads the list (a value-addressed diff has nothing else to
+fetch by). A reference is the one diff a pre-3.16 peer does not understand:
+with the value fields absent it answers ``unknown operation`` and stores
+nothing. The full-state fallback for a peer without resync support is a
+reference too when the list's items exceed the threshold.
 
 One positional field became advisory in 3.14: the ``index`` an
 ``append`` diff carries (and the ``length`` field every list diff

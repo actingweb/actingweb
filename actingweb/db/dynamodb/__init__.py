@@ -14,6 +14,7 @@ re-implementing the environment parsing.
 from ._ensure import auto_create_enabled, reset_ensure_cache, set_auto_create
 from .actor import Actor, CreatorIndex, DbActor, DbActorList
 from .attribute import Attribute, DbAttribute, DbAttributeBucketList
+from .creator import Creator
 from .peertrustee import DbPeerTrustee, DbPeerTrusteeList, PeerTrustee
 from .property import DbProperty, DbPropertyList, Property, PropertyLegacy
 from .property_lookup import DbPropertyLookup, PropertyLookup, PropertyLookupV2
@@ -36,6 +37,8 @@ __all__ = [
     "CreatorIndex",
     "DbActor",
     "DbActorList",
+    # Creator (with_unique_creator)
+    "Creator",
     # Attribute
     "Attribute",
     "DbAttribute",

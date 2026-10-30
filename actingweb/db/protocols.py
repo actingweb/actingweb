@@ -39,7 +39,18 @@ from typing import Any, Protocol, runtime_checkable
 
 @runtime_checkable
 class DbActorProtocol(Protocol):
-    """Protocol for actor database operations."""
+    """Protocol for actor database operations.
+
+    The constructor takes a keyword-only ``unique_creator: bool = False``
+    (``actingweb.db.get_actor`` passes ``config.unique_creator``). When it is
+    set, a backend **must** enforce one actor per non-exempt creator (the
+    rules are in :mod:`actingweb.db.creator_rules`): a create or creator
+    change that would make a second holder raises
+    :class:`~actingweb.db.exceptions.CreatorTaken`, and
+    :meth:`replace_creator_holder` and :meth:`get_creator_holder` work. A
+    custom backend that does not accept the argument fails at construction,
+    never silently.
+    """
 
     handle: Any | None
 
@@ -89,6 +100,8 @@ class DbActorProtocol(Protocol):
         actor_id: str | None = None,
         creator: str | None = None,
         passphrase: str | None = None,
+        *,
+        replace_holder: str | None = None,
     ) -> bool:
         """
         Create new actor.
@@ -97,9 +110,16 @@ class DbActorProtocol(Protocol):
             actor_id: Unique actor ID
             creator: Creator email
             passphrase: Actor passphrase
+            replace_holder: With ``unique_creator``, the id of the actor that
+                holds ``creator`` now; the create then goes through
+                :meth:`replace_creator_holder`
 
         Returns:
             True when created, False when the id is taken
+
+        Raises:
+            CreatorTaken: another actor holds a non-exempt ``creator``
+            DbError: on a backend fault
         """
         ...
 
@@ -114,8 +134,60 @@ class DbActorProtocol(Protocol):
             passphrase: New passphrase bytes (optional)
 
         Returns:
-            True on success; False only without a handle or arguments.
-            A fault raises ``DbError``.
+            True on success; False only without a handle or arguments, or
+            when the stored row no longer matches the handle.
+            A fault raises ``DbError``; a new creator another actor holds
+            raises ``CreatorTaken`` (with ``unique_creator``, and on
+            PostgreSQL whenever the unique index exists).
+        """
+        ...
+
+    def replace_creator_holder(
+        self,
+        old_id: str,
+        *,
+        actor_id: str,
+        creator: str,
+        passphrase: str,
+    ) -> bool:
+        """
+        Create ``actor_id`` and move ``creator`` to it from ``old_id``, in one
+        atomic step (``unique_creator`` only). ``old_id`` keeps its row; the
+        caller removes it afterwards.
+
+        Returns:
+            True when created, False when ``actor_id`` is taken
+
+        Raises:
+            CreatorTaken: ``creator`` is no longer held by ``old_id``;
+                nothing was written
+            DbError: on a backend fault
+        """
+        ...
+
+    def get_creator_holder(
+        self, creator: str | None = None, *, strict: bool = True
+    ) -> str | None:
+        """
+        The id of the actor holding a non-exempt ``creator``, read
+        consistently (``unique_creator`` only); None when nobody holds it.
+
+        Raises:
+            DbError: on a read fault (unless ``strict=False``)
+        """
+        ...
+
+    def release_stale_creator(self, creator: str, actor_id: str) -> bool:
+        """
+        Remove the record that says ``actor_id`` holds ``creator``, only if
+        a consistent read shows that actor is gone or holds another creator
+        now (``unique_creator`` only). True when a record was removed.
+
+        A backend whose holder is the actor row itself (PostgreSQL) has no
+        separate record and answers False.
+
+        Raises:
+            DbError: on a fault
         """
         ...
 

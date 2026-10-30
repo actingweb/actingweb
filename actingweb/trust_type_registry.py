@@ -17,7 +17,7 @@ from . import actor as actor_module
 from . import attribute
 from . import config as config_class
 from .constants import ACTINGWEB_SYSTEM_ACTOR, TRUST_TYPES_BUCKET
-from .db.exceptions import DbError
+from .db.exceptions import CreatorTaken, DbError
 
 # Backward-compatibility alias expected by tests and older integrations
 TRUST_TYPE_SYSTEM_ACTOR = ACTINGWEB_SYSTEM_ACTOR
@@ -126,13 +126,18 @@ class TrustTypeRegistry:
                     else "system-pass"
                 )
                 try:
-                    created = sys_actor.create(
-                        url=url,
-                        creator="system",
-                        passphrase=passphrase,
-                        actor_id=ACTINGWEB_SYSTEM_ACTOR,
-                        auth_method="system",
-                    )
+                    try:
+                        created = sys_actor.create(
+                            url=url,
+                            creator="system",
+                            passphrase=passphrase,
+                            actor_id=ACTINGWEB_SYSTEM_ACTOR,
+                            auth_method="system",
+                        )
+                    except CreatorTaken:  # folds DbError: winner loaded below
+                        # with_unique_creator: a concurrent bootstrap holds
+                        # the creator. Load its actor, as for a False return.
+                        created = False
                     if not created:
                         # Another worker may have created it since the check.
                         sys_actor = actor_module.Actor(

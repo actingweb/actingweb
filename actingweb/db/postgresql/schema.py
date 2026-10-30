@@ -11,6 +11,7 @@ This ensures:
 """
 
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import (
     BigInteger,
@@ -28,7 +29,30 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import declarative_base
 
+from actingweb.db.creator_rules import UNIQUE_INDEX_NAME
+
 Base = declarative_base()
+
+
+def include_object(
+    obj: Any, name: str | None, type_: str, reflected: bool, compare_to: Any
+) -> bool:
+    """Alembic ``include_object`` filter for autogenerate.
+
+    Leaves out the partial unique index ``ux_actors_creator``: it is not in
+    the metadata (deployments without ``with_unique_creator()`` must not be
+    offered it), and ``actingweb-unique-creators enable`` owns it, so the next
+    ``alembic revision --autogenerate`` must not propose dropping it. Only
+    that reflected index on ``actors`` is left out; any other drift shows.
+    """
+    if (
+        type_ == "index"
+        and reflected
+        and name == UNIQUE_INDEX_NAME
+        and getattr(getattr(obj, "table", None), "name", None) == "actors"
+    ):
+        return False
+    return True
 
 
 class Actor(Base):

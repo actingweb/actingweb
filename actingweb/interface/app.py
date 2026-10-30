@@ -17,6 +17,11 @@ if TYPE_CHECKING:
     from .integrations.flask_integration import FlaskIntegration
 
 
+class UniqueCreatorNotReady(RuntimeError):
+    """``with_unique_creator()`` is on, but the database does not enforce it
+    yet (see :meth:`ActingWebApp.check_ready`)."""
+
+
 class ActingWebApp:
     """
     Main application class for ActingWeb with fluent configuration API.
@@ -1434,7 +1439,10 @@ class ActingWebApp:
             # Same list the operator-facing check uses
             # (python -m actingweb.db.verify_tables), so what we create and
             # what we tell operators to pre-create cannot drift apart.
-            models = required_models(bool(self.get_config().use_lookup_table))
+            config = self.get_config()
+            models = required_models(
+                bool(config.use_lookup_table), bool(config.unique_creator)
+            )
 
             with ThreadPoolExecutor(max_workers=len(models)) as pool:
                 futures = {m: pool.submit(ensure_table, m) for m in models}
@@ -1506,6 +1514,51 @@ class ActingWebApp:
         except Exception as e:  # folds DbError: startup diagnostic probe, log only
             logger.debug(f"Lookup backfill check skipped: {e}")
 
+    def check_ready(self) -> None:
+        """Refuse to run with ``with_unique_creator()`` when the database does
+        not enforce it yet.
+
+        ``integrate_flask`` and ``integrate_fastapi`` call it; an application
+        that uses neither calls it once before serving. With the flag on it
+        raises :class:`UniqueCreatorNotReady` (naming the command that fixes
+        it) when it finds definite absence: the DynamoDB ``creators`` table
+        or its backfill-complete item is missing, or the PostgreSQL index
+        ``ux_actors_creator`` is missing or INVALID. A fault while probing is
+        refused the same way: starting unchecked could let every existing
+        user's next sign-in create a second actor (DynamoDB). Runs once per
+        process; with the flag off it does nothing.
+
+        """
+        self._check_unique_creator_ready()
+
+    def _check_unique_creator_ready(self) -> None:
+        if getattr(self, "_unique_creator_checked", False):
+            return
+        config = self.get_config()
+        if not config.unique_creator:
+            return
+        try:
+            from ..maintenance.unique_creators import missing_enforcement
+
+            missing = missing_enforcement(config)
+        except Exception as e:  # folds DbError: fails closed, like absence
+            # Starting unchecked is worse than not starting: on DynamoDB an
+            # empty, auto-created creators table would make every existing
+            # user's next sign-in create a second actor.
+            raise UniqueCreatorNotReady(
+                "with_unique_creator() is on but whether the database enforces "
+                f"it could not be checked ({e}); fix the database connection "
+                "or permissions and start again, or turn the flag off."
+            ) from e
+        if missing:
+            raise UniqueCreatorNotReady(
+                f"with_unique_creator() is on but {missing}. Run "
+                "'actingweb-unique-creators report', then 'resolve --apply' "
+                "and 'enable --apply' (docs/migration/v3.16.rst, "
+                '"Creator uniqueness"), or turn the flag off.'
+            )
+        self._unique_creator_checked = True
+
     def integrate_flask(self, flask_app: Any) -> "FlaskIntegration":
         """Integrate with Flask application."""
         try:
@@ -1517,6 +1570,7 @@ class ActingWebApp:
             ) from e
         self._prewarm_dynamodb_tables()
         self._check_lookup_backfill_needed()
+        self._check_unique_creator_ready()
         integration = FlaskIntegration(self, flask_app)
         integration.setup_routes()
         return integration
@@ -1548,6 +1602,7 @@ class ActingWebApp:
 
         self._prewarm_dynamodb_tables()
         self._check_lookup_backfill_needed()
+        self._check_unique_creator_ready()
         integration = FastAPIIntegration(
             self,
             fastapi_app,

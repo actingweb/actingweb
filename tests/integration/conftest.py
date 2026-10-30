@@ -190,6 +190,7 @@ BASE_APP_PORT = 5555
 BASE_PEER_PORT = 5556
 BASE_WWW_PORT = 5557
 BASE_CLOSED_FACTORY_PORT = 5559
+BASE_UNIQUE_CREATOR_PORT = 5560
 
 
 @pytest.fixture(scope="session")
@@ -1153,3 +1154,84 @@ def closed_factory_app(docker_services, setup_database, worker_info):  # pylint:
     else:
         raise RuntimeError(f"Closed-factory app failed to start on port {port}")
     return url
+
+
+@pytest.fixture(scope="module")
+def unique_creator_store(docker_services, setup_database, worker_info):  # pylint: disable=unused-argument
+    """An empty store of this module's own, for the creator-uniqueness tests
+    (``tests/integration/_isolated_store.py`` says why). Yields a config with
+    ``unique_creator`` on; enforcement itself is not enabled."""
+    from actingweb.config import Config
+
+    from ._isolated_store import isolated_store
+
+    with isolated_store(DATABASE_BACKEND, worker_info["db_prefix"]):
+        yield Config(
+            database=DATABASE_BACKEND,
+            fqdn="test.example.com",
+            proto="https://",
+            aw_type="urn:actingweb:test:unique_creator",
+            unique_creator=True,
+            force_email_prop_as_creator=False,
+        )
+
+
+@pytest.fixture
+def fresh_store(unique_creator_store):
+    """The isolated store, emptied before the test."""
+    from ._isolated_store import wipe_store
+
+    wipe_store(DATABASE_BACKEND)
+    return unique_creator_store
+
+
+@pytest.fixture
+def enforced_store(fresh_store):
+    """The isolated store, emptied and with enforcement enabled."""
+    from ._isolated_store import enable_enforcement
+
+    enable_enforcement(fresh_store)
+    return fresh_store
+
+
+@pytest.fixture(scope="module")
+def unique_creator_app(unique_creator_store, worker_info):
+    """A harness with ``with_unique_creator()`` on the isolated store, on its
+    own worker port; stopped when the module ends. Tests take
+    ``enforced_store`` as well, so each starts on an empty, enabled store."""
+    from threading import Thread
+
+    import uvicorn
+
+    from ._isolated_store import enable_enforcement, wipe_store
+    from .test_harness import create_test_app
+
+    port = BASE_UNIQUE_CREATOR_PORT + worker_info["port_offset"]
+    url = f"http://{TEST_APP_HOST}:{port}"
+    wipe_store(DATABASE_BACKEND)
+    enable_enforcement(unique_creator_store)
+    fastapi_app, _ = create_test_app(
+        fqdn=f"{TEST_APP_HOST}:{port}",
+        proto="http://",
+        enable_oauth=False,
+        enable_mcp=False,
+        enable_devtest=True,
+        unique_creator=True,
+    )
+    server = uvicorn.Server(
+        uvicorn.Config(fastapi_app, host="0.0.0.0", port=port, log_level="error")
+    )
+    thread = Thread(target=server.run, daemon=True)
+    thread.start()
+    for _ in range(30):
+        try:
+            if requests.get(f"{url}/", timeout=2).status_code in [200, 404]:
+                break
+        except requests.exceptions.ConnectionError:
+            pass
+        time.sleep(0.5)
+    else:
+        raise RuntimeError(f"Unique-creator app failed to start on port {port}")
+    yield url
+    server.should_exit = True
+    thread.join(timeout=10)

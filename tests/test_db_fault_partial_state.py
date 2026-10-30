@@ -12,7 +12,7 @@ import pytest
 
 from actingweb.actor import Actor
 from actingweb.db import get_attribute, get_subscription, get_subscription_diff
-from actingweb.db.exceptions import DbError
+from actingweb.db.exceptions import CreatorTaken, DbError
 from tests._adoption_helpers import (
     aid,
     backend_fault,
@@ -62,7 +62,12 @@ class TestHDiffSequence:
 
 
 class TestIUniqueCreatorMatch:
-    def test_the_matched_actor_is_bound_to_its_row(self, config: Any) -> None:
+    def test_a_matching_passphrase_no_longer_returns_the_actor(
+        self, config: Any
+    ) -> None:
+        """3.16 PR 2: the passphrase match is gone. A second create for a
+        held creator raises ``CreatorTaken`` and binds nothing, so nothing
+        it returns can act on the first actor's row."""
         config.unique_creator = True
         creator = uuid_email()
         first = Actor(config=config)
@@ -71,14 +76,13 @@ class TestIUniqueCreatorMatch:
         )
 
         again = Actor(config=config)
-        assert again.create(
-            url="https://test.example.com/", creator=creator, passphrase="pw-1"
-        )
-        assert again.id == first.id
-        # Before the fix the handle held no row on DynamoDB, and this
-        # delete answered False with the actor still there.
-        assert again.delete() is True
-        assert not Actor(actor_id=aid(first), config=config).id
+        with pytest.raises(CreatorTaken):
+            again.create(
+                url="https://test.example.com/", creator=creator, passphrase="pw-1"
+            )
+        assert again.id is None and again.handle is None
+        assert Actor(actor_id=aid(first), config=config).id == first.id
+        assert first.delete() is True
 
 
 class TestKCallbackDrain:

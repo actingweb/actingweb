@@ -36,6 +36,7 @@ class TestDuplicateCreatorWarning:
         db = _mock_db(candidates)
         config = MagicMock()
         config.force_email_prop_as_creator = False
+        config.unique_creator = False  # the duplicate-tolerant path
 
         with (
             patch("actingweb.actor.get_actor", return_value=db),
@@ -62,6 +63,7 @@ class TestDuplicateCreatorWarning:
         db = _mock_db(candidates)
         config = MagicMock()
         config.force_email_prop_as_creator = False
+        config.unique_creator = False  # the duplicate-tolerant path
 
         with (
             patch("actingweb.actor.get_actor", return_value=db),
@@ -79,6 +81,7 @@ class TestDuplicateCreatorWarning:
         db = _mock_db([])
         config = MagicMock()
         config.force_email_prop_as_creator = False
+        config.unique_creator = False  # the duplicate-tolerant path
 
         with (
             patch("actingweb.actor.get_actor", return_value=db),

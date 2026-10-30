@@ -21,10 +21,12 @@ class CreatorTaken(DbError):
     """A create or creator change was refused because another actor holds
     the creator.
 
-    Reserved for enforced creator uniqueness; nothing raises it yet. It
+    Raised by the actor backends under ``with_unique_creator()`` (and by
+    PostgreSQL whenever its unique index exists, flag or not). It
     subclasses ``DbError`` so code that fails closed on a fault also stops
     here, but it is a conflict, not an availability fault: the HTTP layer
-    answers it with 409, never 503. Test for it before ``DbError``.
+    answers it with 409 (the factory keeps its 403), never 503. Test for it
+    before ``DbError``.
     """
 
     def __init__(self, creator: str | None = None) -> None:

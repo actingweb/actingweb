@@ -127,14 +127,15 @@ def get_actor(config: "Config") -> "DbActorProtocol":
         config: ActingWeb configuration instance
 
     Returns:
-        DbActor instance
+        DbActor instance, enforcing one actor per creator when
+        ``config.unique_creator`` is set
 
     Example:
         >>> from actingweb.db import get_actor
         >>> db = get_actor(config)
         >>> actor_data = db.get(actor_id="abc123")
     """
-    return config.DbActor.DbActor()
+    return config.DbActor.DbActor(unique_creator=bool(config.unique_creator))
 
 
 def get_actor_list(config: "Config") -> "DbActorListProtocol":

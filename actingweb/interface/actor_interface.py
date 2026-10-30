@@ -102,6 +102,7 @@ class ActorInterface:
         service_registry=None,
         *,
         auth_method: str = "app",
+        replace_holder: str | None = None,
     ) -> "ActorInterface":
         """
         Create a new actor.
@@ -111,7 +112,8 @@ class ActorInterface:
             config: ActingWeb Config object
             actor_id: Optional custom actor ID
             passphrase: Optional custom passphrase
-            delete_existing: Whether to delete existing actor with same creator
+            delete_existing: Delete the existing actors with the same creator
+                first (not atomic)
             trustee_root: Optional trustee root URL to set on the actor
             hooks: Optional hook registry for executing lifecycle hooks
             service_registry: Optional service registry for third-party service access
@@ -121,9 +123,18 @@ class ActorInterface:
                 created from unauthenticated input: such an actor is replaced
                 when a sign-in later proves the address. Written before
                 ``actor_created`` fires.
+            replace_holder: With ``with_unique_creator()``, the id of the
+                actor that holds ``creator`` now. The creator moves to the new
+                actor in the same backend step as the create; the caller
+                removes the old actor afterwards.
 
         Returns:
             New ActorInterface instance
+
+        Raises:
+            CreatorTaken: with ``with_unique_creator()``, another actor holds
+                ``creator`` (the integrations answer it with 409)
+            DbError: on a backend fault (503)
         """
         core_actor = CoreActor(config=config)
 
@@ -142,6 +153,7 @@ class ActorInterface:
             trustee_root=trustee_root,
             hooks=hooks,
             auth_method=auth_method,
+            replace_holder=replace_holder,
         )
 
         if not success:
@@ -408,11 +420,40 @@ class ActorInterface:
             unvouch: Unvouch the actor unless the change hands it to nobody new
 
         Returns:
-            True if successful, False otherwise
+            True if successful, False otherwise, including for a reserved
+            value (``#…``, ``#dup-``; with ``unvouch=True`` also ``system``
+            and ``oauth2-system``)
+
+        Raises:
+            CreatorTaken: with ``with_unique_creator()``, another actor holds
+                ``new_creator`` (the integrations answer it with 409)
         """
+        from ..db.creator_rules import is_reserved
+
         if unvouch:
             return self._core_actor.modify_creator_unvouched(new_creator)
-        return self._core_actor.modify(creator=new_creator)
+        if is_reserved(new_creator):
+            # The uniqueness bookkeeping's values; only
+            # actingweb-unique-creators writes them, through Actor.modify.
+            return False
+        if not self._core_actor.modify(creator=new_creator):
+            return False
+        return self._rebind_vouch(new_creator)
+
+    def _rebind_vouch(self, new_creator: str) -> bool:
+        """The application vouches for ``new_creator``: a vouched actor's
+        recorded address follows the rename, or the vouch would read as
+        stale and the next sign-in for it would clean the actor. False when
+        the address could not be confirmed (the actor then reads unvouched)."""
+        from ..db.creator_rules import normalise_creator
+        from ..oauth2 import VOUCHED_CREATOR, is_vouched_store
+
+        store = self._core_actor.store
+        if store is None or not is_vouched_store(store):
+            return True  # unvouched, or unbound (pre-3.16): nothing to move
+        if getattr(store, VOUCHED_CREATOR, None) is None:
+            return True
+        return store.set_confirmed(VOUCHED_CREATOR, normalise_creator(new_creator))
 
     def is_valid(self) -> bool:
         """Check if this actor is valid (has ID and exists)."""

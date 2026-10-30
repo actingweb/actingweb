@@ -13,6 +13,7 @@ import logging
 import time
 from typing import TYPE_CHECKING, Any, Optional
 
+from ..db.creator_rules import normalise_creator
 from ..db.exceptions import DbError
 from ..secret_compare import secret_equals
 from .base_handler import BaseHandler
@@ -213,6 +214,21 @@ class OAuth2EmailHandler(BaseHandler):
             logger.warning(f"Verification token expired for actor {actor_id}")
             return self._verification_error(410, "Verification link has expired")
 
+        # The link proves the address it was sent to, and only that one: a
+        # creator changed since (PUT /<id>/trust/trustee) would otherwise be
+        # vouched on the strength of a link to another inbox.
+        sent_to = (
+            actor.store.email_verification_address or actor.store.email or ""
+        ).lower()
+        if not sent_to or normalise_creator(actor.creator) != sent_to:
+            logger.warning(
+                f"Email verification of {actor_id}: the creator no longer is "
+                "the address the link was sent to"
+            )
+            return self._verification_error(
+                409, "This link was sent to another address; sign in again"
+            )
+
         # The link proves the address, so this is an adoption event: an actor
         # nobody vouched for is cleaned (passphrase, relationships, sessions)
         # before it is marked verified. Otherwise a squatter whose provider
@@ -237,6 +253,7 @@ class OAuth2EmailHandler(BaseHandler):
             return self._verification_error(500, "Internal error")
         actor.store.email_verification_token = None
         actor.store.email_verification_created_at = None
+        actor.store.email_verification_address = None
         actor.store.email_verified_at = str(int(time.time()))
 
         # Clean up the token index entry
@@ -618,6 +635,7 @@ class OAuth2EmailHandler(BaseHandler):
             # Store verification state on actor (email_verified was already
             # set to "false" above, before oauth_success)
             actor_instance.store.email_verification_token = verification_token
+            actor_instance.store.email_verification_address = email.lower()
             actor_instance.store.email_verification_created_at = str(int(time.time()))
 
             # Store token → actor_id index for reverse lookup

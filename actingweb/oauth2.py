@@ -23,7 +23,8 @@ from . import actor as actor_module
 from . import config as config_class
 from . import deletion
 from .constants import ESTABLISHED_VIA_OAUTH2_INTERACTIVE
-from .db.exceptions import DbError
+from .db.creator_rules import is_exempt, normalise_creator
+from .db.exceptions import CreatorTaken, DbError
 from .interface.actor_interface import ActorInterface
 from .oauth2_id_token import JWKSIdTokenValidator
 
@@ -1001,10 +1002,11 @@ class OAuth2Authenticator:
                 claimed, leaving a window in which an *independent* login can
                 create that actor first. Checking again here, immediately
                 before the create, narrows that window to the gap between
-                these two adjacent statements. It cannot close it — nothing
-                enforces creator uniqueness in the database yet (see
-                ``thoughts/todo/creator-uniqueness-not-enforced.md``) — so
-                this is a best-effort narrowing, not a guarantee.
+                these two adjacent statements. Without
+                ``with_unique_creator()`` it cannot close it, so this is a
+                best-effort narrowing, not a guarantee; with the flag on the
+                database refuses the second create (``CreatorTaken``, 409).
+                See ``docs/migration/v3.16.rst``, "Creator uniqueness".
             auth_method: Marker written on a newly created actor. Defaults to
                 ``"<provider>_oauth2"``; the self-asserted email form passes
                 ``"email_unverified"``.
@@ -1032,13 +1034,34 @@ class OAuth2Authenticator:
                 logger.info(f"Found existing actor for identifier: {identifier}")
                 # Vouched actors only get the provider recorded; an actor
                 # nobody vouched for is replaced or cleaned first.
-                return adopt_actor(
-                    existing_actor,
-                    provider=self.provider,
-                    config=self.config,
-                    hooks=effective_hooks,
-                    user_info=user_info,
-                )
+                try:
+                    return adopt_actor(
+                        existing_actor,
+                        provider=self.provider,
+                        config=self.config,
+                        hooks=effective_hooks,
+                        user_info=user_info,
+                    )
+                except CreatorTaken:  # folds DbError: loads the swap's winner
+                    if not self.config.unique_creator:
+                        raise
+                    # A concurrent sign-in replaced the same squatter first:
+                    # look up once more and take its successor. A squatter
+                    # renamed away leaves nobody, and the conflict stands.
+                    winner = actor_module.Actor(config=self.config)
+                    if (
+                        not winner.get_from_creator(identifier)
+                        or winner.id == existing_actor.id
+                        or not _winner_is_marked(winner)
+                    ):
+                        raise
+                    return adopt_actor(
+                        winner,
+                        provider=self.provider,
+                        config=self.config,
+                        hooks=effective_hooks,
+                        user_info=user_info,
+                    )
 
             # Create new actor with identifier as creator
             logger.info(f"Creating new actor for identifier: {identifier}")
@@ -1052,8 +1075,31 @@ class OAuth2Authenticator:
                     effective_hooks,
                     auth_method=auth_method,
                 )
+            except CreatorTaken:  # folds DbError: loads the race winner
+                if not self.config.unique_creator or create_only:
+                    raise
+                # A concurrent first sign-in (another tab, a retried callback)
+                # created the actor between the lookup and this create: load
+                # the winner, once, instead of answering a 409 to its owner.
+                winner = actor_module.Actor(config=self.config)
+                if not winner.get_from_creator(identifier) or not _winner_is_marked(
+                    winner
+                ):
+                    raise
+                logger.info(
+                    f"Concurrent sign-in for {identifier} created actor "
+                    f"{winner.id}; using it"
+                )
+                return adopt_actor(
+                    winner,
+                    provider=self.provider,
+                    config=self.config,
+                    hooks=effective_hooks,
+                    user_info=user_info,
+                )
             except DbError:
                 raise
+
             except Exception as create_error:
                 logger.error(
                     f"Failed to create actor for identifier {identifier}: {create_error}"
@@ -1590,6 +1636,31 @@ UNVOUCHED_AUTH_METHODS = frozenset({"factory", "email_unverified", "creator_chan
 REPLACE_AUTH_METHODS = frozenset({"factory"})
 
 
+def _winner_is_marked(winner: actor_module.Actor) -> bool:
+    """Whether a race winner a retry found carries its ``auth_method`` marker.
+
+    ``Actor.create`` writes the marker before the row for a generated id,
+    so a winner created by this version is always marked. An unmarked one
+    is a pre-3.16 actor, a row an old flag-off process wrote, or a create
+    whose answer was lost before its marker landed. Adopted, the adoption
+    rule would clean it in place on the strength of a race; the conflict
+    stands instead (409), and a plain sign-in decides it.
+    """
+    store = winner.store
+    method = store.auth_method if store else None
+    if isinstance(method, str) and method:
+        return True
+    if store is not None and not store.loaded:
+        # The lazy load folds a fault into an empty bucket: a 503, not a
+        # "creator taken" answer for a marker nobody could read.
+        raise DbError("actor store read")
+    logger.error(
+        f"Actor {winner.id} won the race but carries no auth_method; "
+        "the conflict stands"
+    )
+    return False
+
+
 def is_vouched_actor(actor_instance: actor_module.Actor) -> bool:
     """Whether some party vouched for this actor's creator address.
 
@@ -1602,34 +1673,62 @@ def is_vouched_actor(actor_instance: actor_module.Actor) -> bool:
     store = actor_instance.store
     if not store:
         return False
-    return is_vouched_store(store)
+    return is_vouched_store(store, actor_instance.creator or "")
 
 
-def is_vouched_store(store: "InternalStore") -> bool:
-    """:func:`is_vouched_actor` for an actor's ``_internal`` store."""
+# The ``_internal`` attribute naming the address a vouched marker vouches
+# for. Written beside every vouched marker; a creator changed since makes
+# the vouch stale when it is read, whatever order concurrent writes landed
+# in (a marker write cannot be conditioned on the actor row).
+VOUCHED_CREATOR = "vouched_creator"
+
+
+def is_vouched_store(store: "InternalStore", creator: str | None = None) -> bool:
+    """:func:`is_vouched_actor` for an actor's ``_internal`` store.
+
+    With ``creator`` (the actor's current creator, or the address a sign-in
+    is resolving) the vouch must also be for that address: the recorded
+    :data:`VOUCHED_CREATOR`, or the actor's own stored ``email`` (a provider
+    or the emailed link wrote it). An actor vouched before 3.16 has no
+    recorded address and is judged by its marker alone.
+    """
     method = store.auth_method
     if not isinstance(method, str) or not method:
         return False
     if method in UNVOUCHED_AUTH_METHODS:
         return False
-    return store.email_verified != "false"
+    if store.email_verified == "false":
+        return False
+    if creator is None:
+        return True
+    bound = getattr(store, VOUCHED_CREATOR, None)
+    if not isinstance(bound, str) or not bound:
+        return True  # vouched before the address was recorded
+    current = normalise_creator(creator)
+    if normalise_creator(bound) == current:
+        return True
+    email = store.email
+    return isinstance(email, str) and "@" in current and email.lower() == current
 
 
 MarkerClass = Literal["vouched", "unvouched", "replace"]
 
 
-def classify_store(store: "InternalStore") -> MarkerClass:
+def classify_store(store: "InternalStore", creator: str | None = None) -> MarkerClass:
     """How the adoption rule treats an actor, from its loaded ``_internal``
     store: ``"vouched"``, ``"replace"`` (a marker in
-    :data:`REPLACE_AUTH_METHODS`), or ``"unvouched"`` (cleaned in place)."""
-    if is_vouched_store(store):
+    :data:`REPLACE_AUTH_METHODS`), or ``"unvouched"`` (cleaned in place).
+    ``creator`` binds the vouch to that address (:func:`is_vouched_store`)."""
+    if is_vouched_store(store, creator):
         return "vouched"
     if store.auth_method in REPLACE_AUTH_METHODS:
         return "replace"
     return "unvouched"
 
 
-def classify_marker(config: config_class.Config, actor_id: str) -> MarkerClass | None:
+def classify_marker(
+    config: config_class.Config, actor_id: str, creator: str | None = None
+) -> MarkerClass | None:
     """:func:`classify_store` for an actor id; None when its ``_internal``
     bucket cannot be read (never raises). Every caller decides from this,
     so one unreadable bucket means the same thing everywhere: unknown."""
@@ -1639,7 +1738,7 @@ def classify_marker(config: config_class.Config, actor_id: str) -> MarkerClass |
         store = InternalStore(actor_id=actor_id, config=config)
         if not store.loaded:
             return None
-        return classify_store(store)
+        return classify_store(store, creator)
     except Exception as e:  # folds DbError: None means unreadable; every caller fails closed (raises, skips or retries)
         logger.warning(f"Could not read the marker of {actor_id}: {e}")
         return None
@@ -1653,11 +1752,15 @@ def _create_actor_for_identifier(
     hooks: "HookRegistry | None",
     *,
     auth_method: str | None = None,
+    replace_holder: str | None = None,
 ) -> actor_module.Actor:
     """Create an actor for a provider-proven identifier and seed its store.
 
+    ``replace_holder`` (``with_unique_creator()``) moves the identifier from
+    that actor to the new one in the same backend step.
+
     Raises on failure (``ActorInterface.create`` raises when nothing was
-    persisted).
+    persisted), ``CreatorTaken`` included.
     """
     actor_interface = ActorInterface.create(
         creator=identifier,
@@ -1665,6 +1768,7 @@ def _create_actor_for_identifier(
         passphrase="",  # ActingWeb will auto-generate
         hooks=hooks,
         auth_method=auth_method or f"{provider.name}_oauth2",
+        replace_holder=replace_holder,
     )
     store = actor_interface.core_actor.store
     if store:
@@ -1979,6 +2083,97 @@ def _sweep_factory_actors(
     return tokens_revoked, swept
 
 
+def _replace_enforced(
+    existing: actor_module.Actor,
+    *,
+    provider: "OAuth2Provider",
+    config: config_class.Config,
+    hooks: "HookRegistry | None",
+    user_info: dict[str, Any] | None,
+    client_ids: list[str],
+) -> tuple[actor_module.Actor | None, list[dict[str, Any]], list[str], int]:
+    """Replace a ``factory`` actor under ``with_unique_creator()``.
+
+    The successor is created first, taking the creator from the squatter in
+    the same backend step (:meth:`DbActorProtocol.replace_creator_holder`):
+    one transaction moves the DynamoDB record, or renames the squatter to its
+    ``#dup-`` value and inserts the successor on PostgreSQL. Only then is the
+    squatter removed. There is no ranking, no sibling sweep and no second
+    lookup: if the creator no longer names the squatter (a concurrent rename
+    or sign-in), ``CreatorTaken`` propagates and the sign-in fails closed.
+
+    ``actor_created`` for the successor therefore fires before
+    ``actor_deleted`` for the squatter. If the removal fails after the swap,
+    the squatter stays without the creator (``actingweb-unique-creators
+    report`` lists it) and the sign-in fails closed; the next one finds the
+    successor.
+
+    Returns the successor (None when the removal was not confirmed), and the
+    trusts, subscription peers and tokens the squatter lost.
+    """
+    from . import subscription as subscription_module
+    from . import trust as trust_module
+
+    actor_id = existing.id or ""
+    creator = existing.creator or ""
+    # The actor_adopted summary only: a fault leaves it empty.
+    removed_trusts, subscription_peers = actor_module.relationship_summary(
+        trust_module.Trusts(actor_id=actor_id, config=config).fetch(strict=False),
+        subscription_module.Subscriptions(actor_id=actor_id, config=config).fetch(
+            strict=False
+        ),
+    )
+    try:
+        successor = _create_actor_for_identifier(
+            config, provider, creator, user_info, hooks, replace_holder=actor_id
+        )
+    except CreatorTaken:
+        # The swap's own condition failed: the squatter was renamed, or a
+        # concurrent sign-in swapped first and is removing it. Nothing was
+        # written here; the caller looks up once more.
+        raise
+    except Exception:
+        # The create failed after the swap committed (its marker or
+        # trustee_root write): the squatter then no longer holds the creator
+        # and must still go, or it would live on with its tokens.
+        from .db import get_actor
+
+        try:
+            holder = get_actor(config).get_creator_holder(creator)
+        except DbError:  # folds DbError: logged, then re-raised
+            logger.error(
+                f"Adoption of actor {actor_id}: whether the swap committed "
+                "cannot be read; the squatter may still be live"
+            )
+            holder = None
+        if holder is not None and holder != actor_id:
+            logger.error(
+                f"Adoption of actor {actor_id}: the successor {holder} took "
+                "the creator but did not finish; removing the squatter"
+            )
+            try:
+                _remove_for_replacement(
+                    existing,
+                    config=config,
+                    hooks=hooks,
+                    creator=creator,
+                    client_ids=client_ids,
+                )
+            except Exception as e:  # folds DbError: logged; re-raised below
+                logger.error(f"Adoption of actor {actor_id}: removal raised: {e}")
+        raise
+    removed = _remove_for_replacement(
+        existing, config=config, hooks=hooks, creator=creator, client_ids=client_ids
+    )
+    if removed is None:
+        logger.error(
+            f"Adoption of actor {actor_id}: replaced by {successor.id}, but its "
+            "removal was not confirmed; it no longer holds the creator"
+        )
+        return None, removed_trusts, subscription_peers, 0
+    return successor, removed_trusts, subscription_peers, removed
+
+
 def adopt_actor(
     existing: actor_module.Actor,
     *,
@@ -2099,7 +2294,8 @@ def _adopt_actor(
     # among them, are already gone. Finish it rather than clean what is left
     # in place under a tombstone. UNKNOWN is not evidence of a wipe, so it
     # falls through to the marker: cleaning in place keeps the data.
-    unfinished_wipe = get_deletion_status(actor_id, config) == DeletionStatus.DELETED
+    deletion_status = get_deletion_status(actor_id, config)
+    unfinished_wipe = deletion_status == DeletionStatus.DELETED
     if unfinished_wipe and provider is None:
         logger.error(
             f"Adoption of actor {actor_id}: a deletion of it is unfinished and "
@@ -2116,7 +2312,29 @@ def _adopt_actor(
     # Read before anything is removed; a fault fails the sign-in here.
     client_ids = _actor_client_ids(config, actor_id)
 
-    if replace:
+    if replace and config.unique_creator and not is_exempt(existing.creator):
+        assert provider is not None
+        if deletion_status == DeletionStatus.UNKNOWN:
+            # Enforced: whether the actor is mid-deletion cannot be told, so
+            # nothing is swapped; the sign-in answers 503 and is retried.
+            raise DbError("actor deletion status", actor_id)
+        result, removed_trusts, subscription_peers, tokens_revoked = _replace_enforced(
+            existing,
+            provider=provider,
+            config=config,
+            hooks=hooks,
+            user_info=user_info,
+            client_ids=client_ids,
+        )
+        if result is None:
+            return None
+        if result.store:
+            result.store.auth_method_adopted_from = previous
+            result.store.auth_method_adopted_at = now
+            result.store.auth_method_replaced_actor_id = actor_id
+        property_names = []
+        mode = "replaced"
+    elif replace:
         assert provider is not None
         creator = existing.creator or ""
         # Every other factory actor for the same address goes too: an open
@@ -2156,8 +2374,9 @@ def _adopt_actor(
         # A concurrent first sign-in may already have created the successor,
         # and a vouched actor for the address may exist beside the factory
         # ones (get_from_creator prefers it). This narrows the race to the
-        # gap between two statements; nothing enforces creator uniqueness in
-        # the database yet (thoughts/todo/creator-uniqueness-not-enforced.md).
+        # gap between two statements; with with_unique_creator() off nothing
+        # in the database enforces one actor per creator (the enforced path
+        # is the branch above; docs/migration/v3.16.rst, "Creator uniqueness").
         # A new actor is created only when every actor left is a factory one
         # (BR): one whose marker cannot be read fails the sign-in, since a new
         # vouched actor would outrank the owner's unvouched one for good. The
@@ -2179,7 +2398,7 @@ def _adopt_actor(
                 continue
             if not db_actor.get(actor_id=rid):
                 continue  # deleted since the index listed it
-            marker = classify_marker(config, rid)
+            marker = classify_marker(config, rid, creator)
             if marker is None:
                 logger.error(
                     f"Adoption of actor {actor_id}: the marker of {rid} for "
@@ -2298,6 +2517,10 @@ def _adopt_actor(
                 else str((user_info or {}).get("email") or "").lower() or None
             )
             resets["email"] = proven_email
+            # The address this sign-in proves, written before the vouched
+            # marker: a rename landing during the clean leaves the vouch
+            # stale instead of vouching the new address.
+            resets[VOUCHED_CREATOR] = normalise_creator(existing.creator)
             for name, value in resets.items():
                 if value is None and getattr(store, name, None) is None:
                     continue  # not there (the bucket read answered)

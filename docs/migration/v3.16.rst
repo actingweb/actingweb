@@ -12,8 +12,17 @@ Start here
 ==========
 
 3.16 closes a squat on the actor factory, makes a database fault an error
-instead of a guess, and adds ``prompt`` to the SPA sign-in. Most applications
-need to check only the first three items and item 11:
+instead of a guess, makes ``with_unique_creator()`` a guarantee the database
+enforces, and adds ``prompt`` to the SPA sign-in. Most applications need to
+check only the first three items and item 11.
+
+.. warning::
+
+   **An application that calls ``with_unique_creator()`` does not start on
+   3.16 until you have run ``actingweb-unique-creators``** (the demo
+   application and ``actingweb_mcp`` both do). Run `Step 0`_ against the
+   production database before the deploy; the application otherwise raises
+   ``UniqueCreatorNotReady`` from ``integrate_flask`` / ``integrate_fastapi``.
 
 1. **An actor created before 3.16 with no marker is cleaned at its first
    sign-in after the upgrade.** That covers the factory, the email form,
@@ -67,6 +76,15 @@ need to check only the first three items and item 11:
     ``Retry-After: 5``. Code that catches ``Exception`` around
     ``ActorInterface`` calls and treats it as "absent" should let
     ``DbError`` through (see `Fault contract`_).
+12. **``with_unique_creator()`` is enforced** (see `Creator uniqueness`_):
+    a second actor for a creator raises ``CreatorTaken`` (409; the factory
+    keeps its 403), the factory no longer returns an existing actor for a
+    matching passphrase, and the application refuses to start until the
+    command has enabled enforcement.
+13. The factory form redirects an address that has an actor to ``/login``,
+    not to ``/<id>/www``, and creators beginning with ``#`` or containing
+    ``#dup-``, and ``system`` and ``oauth2-system``, are refused with 400.
+
 
 What changed and why
 ====================
@@ -335,7 +353,8 @@ from your own route, answers ``503`` with ``Retry-After: 5`` and
 unavailable"}``. The exception text is logged, never sent. A sign-in that
 hits a fault answers 503 too, not a failed login, and a token-store fault no
 longer signs a SPA user out. ``CreatorTaken`` (a ``DbError`` subclass,
-raised once creator uniqueness is enforced) answers ``409``.
+raised under ``with_unique_creator()``, see `Creator uniqueness`_) answers
+``409``.
 
 A backend error a retry cannot fix (a validation, size or constraint error,
 such as an item over DynamoDB's 400 KB limit) answers ``500`` with
@@ -413,6 +432,181 @@ module docstring of ``actingweb.db.protocols`` states:
 A backend without ``strict`` fails with ``TypeError`` at its first call; one
 without ``increment_seq`` fails with ``AttributeError`` at its first diff.
 
+For creator uniqueness, ``DbActor`` must also:
+
+- accept a keyword-only ``unique_creator: bool = False`` in its constructor
+  (``actingweb.db.get_actor`` passes ``config.unique_creator``; without it
+  construction fails with ``TypeError``) and a keyword-only
+  ``replace_holder`` on ``create``;
+- with the flag set, raise ``CreatorTaken`` from ``create`` and ``modify``
+  when another actor holds a non-exempt creator (the rules are in
+  ``actingweb.db.creator_rules``);
+- implement ``replace_creator_holder(old_id, *, actor_id, creator,
+  passphrase)``, creating ``actor_id`` and moving the creator from
+  ``old_id`` in one atomic step (``CreatorTaken`` when ``old_id`` no longer
+  holds it), ``get_creator_holder(creator, *, strict=True)``, a
+  consistent read of the one holder, and ``release_stale_creator(creator,
+  actor_id)``, which removes a record naming an actor that is gone or holds
+  another creator and returns whether it did (a backend whose uniqueness
+  lives on the actor row, as PostgreSQL's does, returns False).
+
+Creator uniqueness
+------------------
+
+Before 3.16 ``with_unique_creator()`` made ``Actor.create`` list the
+creator's actors and refuse when it found one. Two concurrent sign-ins or
+factory posts could both pass that check, a creator change was never
+checked, and a factory post with the existing actor's passphrase got that
+actor back. In 3.16 the database holds one actor per creator:
+
+- **DynamoDB:** a ``<prefix>_creators`` table, one item per held creator.
+  An actor create puts the actor and its record in one
+  ``TransactWriteItems``; a creator change updates the actor and puts the
+  new record in one. The old record (after a delete or a creator change) is
+  then removed by a separate conditional delete, only if it still names
+  the actor; a fault there is logged and leaves a record that ``report``
+  lists. The actor table and its scans are unchanged.
+- **PostgreSQL:** the partial unique index ``ux_actors_creator`` on
+  ``actors (creator)`` for every value other than ``trustee``, ``creator``
+  and the empty string. It is built by the command below, not by an Alembic
+  migration (a migration would fail on every deployment with duplicates),
+  and ``alembic revision --autogenerate`` ignores it.
+
+``trustee``, ``creator`` and the empty creator stay shared. Addresses (values
+with ``@``) are lowercased before they are stored; provider ids such as
+``apple:…`` compare exactly.
+
+The flag stays **off by default** in 3.16 and turns on at the next major.
+
+.. _Step 0:
+
+**Step 0, for a deployment that runs the flag on.** Neither the index nor
+the table can be switched on while actors share a creator, so in order,
+with the application's environment (``DATABASE_BACKEND``, the database
+settings, ``AWS_DB_PREFIX``, credentials).
+
+**DynamoDB permissions.** If your IAM policy lists tables by name, add
+``<prefix>_creators`` to the application's role (``GetItem``, ``PutItem``,
+``UpdateItem``, ``DeleteItem``, and ``DescribeTable`` unless table
+auto-creation is off) before step 4, plus ``ConditionCheckItem`` on the
+actor table, and give the role that runs the command ``CreateTable`` and
+``Scan`` on it as well. Without them the startup
+check cannot read the table and the application refuses to start.
+
+1. ``actingweb-unique-creators report`` lists actors sharing a creator
+   (including addresses that differ only by case) and exits 1 if there are
+   any.
+2. ``actingweb-unique-creators resolve`` prints which actor of each group it
+   keeps and how it renames the others; ``resolve --apply`` does it.
+3. ``actingweb-unique-creators enable --apply`` creates and fills the
+   DynamoDB table or builds the PostgreSQL index ``CONCURRENTLY`` (it
+   refuses while duplicates remain).
+4. Deploy 3.16.
+5. ``actingweb-unique-creators enable --apply`` again: it records actors the
+   old processes created during the deploy. Re-running it is safe.
+6. ``actingweb-unique-creators report``. If it lists anything (an actor
+   created in the window with a creator another actor holds, or a record
+   left by a delete in an old process), run ``resolve --apply``, then
+   ``enable --apply``.
+
+Close the factory for the window with ``with_open_factory(False)`` if you
+can. The application refuses to start with the flag on until step 3 has run
+(``UniqueCreatorNotReady``); call ``ActingWebApp.check_ready()`` yourself if
+you use neither integration. If the check cannot reach the database, the
+application refuses to start as well (``UniqueCreatorNotReady``, naming the
+fault): starting unchecked on DynamoDB, against an empty auto-created
+``creators`` table, would let every existing user's next sign-in create a
+second actor.
+
+``report``, ``resolve --apply`` and ``enable --apply`` are safe to run
+against live traffic with the flag on (steps 5 and 6): what they list as
+damage is confirmed by a consistent read of the actor or record, and a
+record they write commits only while its actor is as read, so an actor
+created or renamed while they run is left alone. ``resolve`` points the
+record at the actor it keeps before it renames the others, so a sign-in
+during the run lands on the kept actor. ``enable`` lists a
+creator recorded for another actor and carries on, and writes the
+backfill-complete item only when it listed nothing. ``--creator`` is
+refused for ``enable`` and ``disable``.
+
+**Which actor ``resolve`` keeps.** The best by marker (vouched, then
+unvouched, then ``factory``), then the oldest (PostgreSQL's ``created_at``;
+on DynamoDB the ``created_at`` the OAuth sign-in stores, unknown ages last),
+then the lowest id. A group with an actor whose marker cannot be read is
+skipped and reported. ``resolve --keep <id>`` overrides the rule for that
+id's group. The others are renamed to ``<creator>#dup-<hash>`` and their
+stored ``email`` is cleared, so ``force_email_prop_as_creator`` cannot undo
+the rename; nothing is deleted. **A renamed actor no longer opens with its
+old creator** (basic auth, OAuth sign-in): choose the kept actor with
+``--keep`` before ``enable``, or change creators with
+``ActorInterface.modify_creator`` afterwards.
+
+**Rolling back.** Turn the flag off and wait until every process that ran
+with it has stopped (one still serving would find no holder for anybody and
+create duplicates), then run
+``actingweb-unique-creators disable --apply``. Re-running it finishes a run
+that stopped part way. It drops the PostgreSQL
+index, or deletes the DynamoDB backfill-complete item and every record (the
+empty table can then be dropped by hand), so turning the flag on again
+starts with Step 0 from the actors, not from records that went stale while
+it was off. On PostgreSQL the index keeps answering ``CreatorTaken`` while
+it exists, even with the flag off.
+
+**What the flag changes once enabled:**
+
+- A create or creator change for a creator another actor holds raises
+  ``CreatorTaken``: ``ActorInterface.create`` and
+  ``ActorInterface.modify_creator`` raise it,
+  ``PUT /<id>/trust/trustee`` answers 409 and applies nothing else from the
+  request, and a route of your own answers 409 through the app-level handler.
+- The factory answers 403 "Creator already exists" for a held creator,
+  whatever the passphrase. A client that relied on getting the existing
+  actor back for its passphrase should keep the id and URL from the first
+  201 and use basic auth on ``/<id>``, or sign in through OAuth.
+- A sign-in that replaces a ``factory`` actor creates the successor first
+  and moves the creator to it in the same backend step, then removes the
+  squatter, so ``actor_created`` for the successor fires before
+  ``actor_deleted`` for the squatter. There is no ranking of duplicates and
+  no sibling sweep. If the squatter was renamed in the meantime the sign-in
+  fails closed; if its deletion status cannot be read, it answers 503.
+- Two concurrent first sign-ins for one identifier (two tabs, a retried
+  callback) both end on the actor the first one created.
+- A record whose actor is gone, or holds another creator now (left by a
+  release that faulted, or by an old process during the rollout), is
+  removed by the next sign-in for that creator, which then creates the
+  owner's actor; the stale record never signs anyone in to that actor.
+- A sign-in that loses the swap to a concurrent sign-in for the same
+  squatter ends on the winner's successor.
+- On PostgreSQL a creator change from a handle loaded before another
+  process renamed the actor returns False (as on DynamoDB), with or
+  without the flag.
+- A DynamoDB create whose answer was lost after the transaction committed
+  answers 503 although the actor exists; a retry then gets
+  ``CreatorTaken``. ``report`` does not flag it: sign in, or look the
+  creator up, to reach the actor.
+- Two applications sharing one actor table can no longer both bootstrap
+  their system actors (``system``, ``oauth2-system``).
+
+- On DynamoDB an actor create, delete or creator change costs about 4-6
+  write units instead of 1 (a transaction, and the conditional release of
+  the old record). Only opted-in tables pay this.
+
+**Scripts that write actors directly.** ``actingweb_mcp``'s
+``scripts/restore_actor.py`` writes through ``DbActor``: either create
+through ``Actor.create`` with the flag on, or run ``resolve --apply`` and
+``enable --apply`` after it. ``report`` finds what such a script leaves.
+
+**Consumer code to check:**
+
+- Catch ``CreatorTaken`` from ``ActorInterface.create`` and
+  ``modify_creator`` where you create or rename on the user's behalf, or let
+  the app-level handler answer 409. Test for it before ``DbError``: it is a
+  subclass, but a conflict, not an outage.
+- A caller that relied on the factory returning the existing actor for a
+  matching passphrase.
+- Monitoring: ``actingweb-unique-creators report`` exits 1 when it finds
+  anything, and 2 when the store cannot be read.
+
 SPA ``prompt``
 --------------
 
@@ -434,10 +628,11 @@ What stays the same
   proves the address (item 2).
 * A vouched actor that carries a deletion tombstone (a ``DELETE /<id>`` that
   stalled before its wipe) is returned to the sign-in as it is, as before.
-* Two concurrent first sign-ins may both run the rule; ``actor_adopted`` may
-  fire twice. A second replacement reuses the successor the first one already
-  created when it can read it, which narrows the race to two adjacent
-  statements; it does not close it.
+* With ``unique_creator`` off, two concurrent first sign-ins may both run the
+  rule; ``actor_adopted`` may fire twice. A second replacement reuses the
+  successor the first one already created when it can read it, which narrows
+  the race to two adjacent statements; it does not close it. With the flag on
+  the database refuses the second create.
 * Properties a squatter prefilled on a cleaned-in-place actor are reported,
   not removed.
 * ``devtest`` must be off in production: it lets a caller rewrite ``_internal``,

@@ -29,6 +29,7 @@ def create_test_app(
     enable_subscription_processing: bool = False,
     subscription_config: dict | None = None,
     open_factory: bool = True,
+    unique_creator: bool = False,
 ) -> tuple[FastAPI, ActingWebApp]:
     """
     Create a minimal ActingWeb test harness.
@@ -42,6 +43,8 @@ def create_test_app(
         enable_subscription_processing: Enable automatic subscription processing
         subscription_config: Optional config dict for subscription processing
         open_factory: Whether the actor factory (POST /) accepts requests
+        unique_creator: ``with_unique_creator()``; the store must be enabled
+            first (the ``unique_creator_app`` fixture does it)
 
     Returns:
         Tuple of (fastapi_app, actingweb_app)
@@ -57,7 +60,7 @@ def create_test_app(
         )
         .with_web_ui(enable=True)
         .with_devtest(enable=enable_devtest)
-        .with_unique_creator(enable=False)
+        .with_unique_creator(enable=unique_creator)
         .with_email_as_creator(enable=False)
         .with_open_factory(enable=open_factory)
     )

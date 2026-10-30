@@ -74,6 +74,7 @@ def pending_actor(config, valid_token):
     store = _store(core)
     store.email_verified = "false"
     store.email_verification_token = valid_token
+    store.email_verification_address = creator  # where the link went
     store.email_verification_created_at = str(int(time.time()))
     _index(config).set_attr(valid_token, data=core.id)
 
@@ -96,6 +97,23 @@ def _get(
     )
     result = OAuth2EmailHandler(webobj, config, hooks=hooks).get()
     return result, webobj
+
+
+class TestLinkProvesOnlyItsAddress:
+    """Round 8: the link was sent to one inbox; a creator changed since
+    (``PUT /<id>/trust/trustee``) is not proved by clicking it."""
+
+    def test_a_link_to_another_address_than_the_creator_is_refused(
+        self, config, pending_actor, valid_token
+    ):
+        assert pending_actor.modify(creator=f"{uuid.uuid4()}@example.com")
+
+        _result, webobj = _get(config, valid_token)
+
+        assert webobj.response.status_code == 409
+        reloaded = _reload_store(pending_actor.id, config)
+        assert reloaded.email_verified == "false"
+        assert reloaded.email_verification_token == valid_token
 
 
 class TestVerifyLinkMarksActorVerified:

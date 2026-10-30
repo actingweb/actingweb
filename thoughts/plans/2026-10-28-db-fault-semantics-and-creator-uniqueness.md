@@ -25,6 +25,7 @@ before changing it.
 
 ## Update Log
 
+- **2026-10-30**: owner confirmed the last two deduced decisions (reserved creators; a vouch bound to its address).
 - **2026-10-30**: PR 2 opened as #161 (`a8d899e`); end-to-end review of the plan against PR 1 and PR 2: code and tests complete, documentation drift and plan-only deferrals fixed in a follow-up commit.
 - **2026-10-30**: verification -9: nothing of Medium or higher; three Lows filed in `thoughts/todo/unique-creator-small-followups.md`; `verified:` set.
 - **2026-10-30**: verification -8 (A14 High, B14 Medium, C14 Low); Iterations 80-82 fix them; the built-in security review found nothing above its bar.
@@ -254,14 +255,14 @@ It also closes the eighth verification's BR, BS, BU, BV and BW on the default
   a short wait and re-read was not added because it would sleep on the
   request path.
 - **A vouch is bound to the address it proved** [Added 2026-10-30]
-  (deduced, not confirmed; from verification -7 and the audit's third
+  (confirmed by the owner 2026-10-30; from verification -7 and the audit's third
   addendum part). Every vouched marker is written with `vouched_creator`;
   an actor whose creator differs from it (and from its own stored email)
   reads as unvouched. Chosen over a cross-table compare-and-set, which
   would need a new protocol method on both backends and for custom ones.
   Pre-3.16 vouched actors keep the marker-only rule until a sign-in or
   `mark_actors_vouched` binds them.
-- **Reserved creators** [Added 2026-10-30] (deduced, not confirmed: from
+- **Reserved creators** [Added 2026-10-30] (confirmed by the owner 2026-10-30; from
   verification 2026-10-30, C7 and I7). `#…` and `#dup-` are checked on the
   value as stored and refused by `Actor.create` too; `system` and
   `oauth2-system` are refused by the factory and `PUT /trust/trustee`, with

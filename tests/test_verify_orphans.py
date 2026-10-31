@@ -56,6 +56,38 @@ class TestClassifyRowsOrphans:
         assert result["orphans"]["property"] == [("ghost", "list:mylist-meta")]
 
 
+class TestClassifyRowsSidePartitions:
+    """A property-list side partition (``{actor_id}$aux``) belongs to the
+    actor its id is derived from and is reported under its raw key."""
+
+    def test_live_actors_side_partition_is_not_reported(self):
+        result = vo.classify_rows(
+            {"live"},
+            [
+                (
+                    "property",
+                    "live$aux",
+                    "list:docs-$span-0000000000000-0000000000000000-p0000",
+                )
+            ],
+        )
+        assert result["orphans"]["property"] == []
+
+    def test_gone_actors_side_partition_is_reported_under_the_raw_key(self):
+        row = "list:docs-$key-" + "a" * 64
+        result = vo.classify_rows({"live"}, [("property", "gone$aux", row)])
+        assert result["orphans"]["property"] == [("gone$aux", row)]
+
+    def test_reserved_actors_side_partition_is_reserved(self):
+        result = vo.classify_rows(
+            set(), [("property", "_actingweb_system$aux", "list:x-$key-" + "b" * 64)]
+        )
+        assert result["orphans"]["property"] == []
+        assert result["reserved"]["property"] == [
+            ("_actingweb_system$aux", "list:x-$key-" + "b" * 64)
+        ]
+
+
 class TestClassifyRowsReservedIds:
     def test_reserved_prefixed_ids_are_reported_separately_never_as_orphans(self):
         # Deliberately an id that is NOT one of the named constants in

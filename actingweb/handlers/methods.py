@@ -90,6 +90,10 @@ class MethodsHandler(base_handler.BaseHandler):
         GET /methods - List available methods
         GET /methods/method_name - Get method info/schema
         """
+        # A GET with a _method override changes state: refuse one a
+        # page on another site started (see BaseHandler).
+        if self._refuse_cross_site_override():
+            return
         if self.request.get("_method") == "PUT":
             self.put(actor_id, name)
             return

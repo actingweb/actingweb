@@ -265,3 +265,44 @@ def test_demo_example_open_factory_follows_env(monkeypatch, value, expected):
         sys.modules.pop(name, None)
 
     assert module.aw_app.get_config().open_factory is expected
+
+
+def _exec_demo_as(name: str) -> None:
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(name, DEMO_DIR / "application.py")
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.modules.pop(name, None)
+
+
+@pytest.mark.parametrize(
+    "fqdn", [None, "demo.actingweb.io", "localhost.evil.example:5055"]
+)
+def test_demo_qa_mode_refuses_a_host_that_is_not_named_local(
+    monkeypatch: pytest.MonkeyPatch, fqdn: str | None
+) -> None:
+    """DEMO_QA_BASIC_AUTH turns OAuth off: it fails closed unless
+    APP_HOST_FQDN names the loopback host explicitly (no default)."""
+    monkeypatch.setenv("DEMO_QA_BASIC_AUTH", "true")
+    if fqdn is None:
+        monkeypatch.delenv("APP_HOST_FQDN", raising=False)
+    else:
+        monkeypatch.setenv("APP_HOST_FQDN", fqdn)
+    with pytest.raises(RuntimeError, match="local run only"):
+        _exec_demo_as("demo_application_qa_host")
+
+
+def test_demo_qa_mode_refuses_to_be_imported_by_a_wsgi_server(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Imported (gunicorn, Lambda) rather than run as the development
+    server, which binds the loopback interface, QA mode refuses to start."""
+    monkeypatch.setenv("DEMO_QA_BASIC_AUTH", "true")
+    monkeypatch.setenv("APP_HOST_FQDN", "localhost:5055")
+    with pytest.raises(RuntimeError, match="development server only"):
+        _exec_demo_as("demo_application_qa_import")

@@ -19,15 +19,16 @@
           {% set is_list = name in list_properties %}
           <tr>
             <td>
-              <a href="{{ actor_www|default('') }}/properties/{{ name }}">{{ name }}</a>
+              <a href="{{ actor_www|default('') }}/properties/{{ name|urlencode }}">{{ name }}</a>
               {% if is_read_only %}<span class="aw-badge">read-only</span>{% endif %}
               {% if is_list %}<span class="aw-badge">list</span>{% endif %}
             </td>
             <td><code>{{ value|default('') }}</code></td>
             <td>
               {% if not is_read_only %}
-                <form class="aw-inline" method="get" action="{{ actor_www|default('') }}/properties/{{ name }}"
-                      onsubmit="return confirm('Delete property {{ name }}?');">
+                <form class="aw-inline" method="get" action="{{ actor_www|default('') }}/properties/{{ name|urlencode }}"
+                      data-confirm="Delete property {{ name }}?"
+                      onsubmit="return confirm(this.dataset.confirm);">
                   <input type="hidden" name="_method" value="DELETE">
                   <button type="submit" class="aw-btn aw-btn-danger">Delete</button>
                 </form>

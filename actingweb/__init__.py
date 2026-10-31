@@ -52,14 +52,28 @@ __all__ = [
     # New modern interface
     "interface",
     "ListMetadataContentionError",
+    "ListItemTooLargeError",
+    "ListItemSpanError",
+    "UNRESOLVED",
 ]
 
 # Make the new interface easily accessible
 from . import interface
 
-# A list's metadata row stayed under sustained compare-and-swap contention
-# through every retry -- callers that want to catch this without importing
-# actingweb.property_list directly can do `from actingweb import
-# ListMetadataContentionError`. handlers/properties.py maps it to 503 with
-# Retry-After.
-from .property_list import ListMetadataContentionError
+# Typed list errors, importable without reaching into actingweb.property_list:
+# - ListMetadataContentionError: a list's metadata row stayed under sustained
+#   compare-and-swap contention through every retry. handlers/properties.py
+#   maps it to 503 with Retry-After.
+# - ListItemTooLargeError: an item's encoded size is over list_item_max_bytes
+#   (or the span threshold where it cannot span), raised before any write.
+#   handlers/properties.py maps it to 413.
+# - ListItemSpanError: a spanned item's body rows are missing (a
+#   ListCorruptionError; handlers/properties.py maps it to 409).
+# - UNRESOLVED: the slot value items_with_handles(resolve=False) leaves for a
+#   spanned item whose bodies it did not read.
+from .property_list import (
+    UNRESOLVED,
+    ListItemSpanError,
+    ListItemTooLargeError,
+    ListMetadataContentionError,
+)

@@ -302,8 +302,14 @@ Path Patterns
 URI Patterns (MCP Resources)
 ----------------------------
 
-* ``notes://`` - Matches any notes resource: ``notes://work/project1``
+* ``notes://`` - Matches any notes resource: ``notes://work/project1``. A
+  pattern ending in ``://`` with no ``*`` or ``?`` is matched as that
+  pattern plus ``*`` (here ``notes://*``).
 * ``usage://statistics`` - Specific usage resource with path
+
+URIs are matched as written: ``..`` segments and percent-encoding are not
+normalised, so ``notes://`` also matches ``notes://../../security/key``. A
+resource reader that maps URIs to storage validates its own path.
 
 Operations
 ----------

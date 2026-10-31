@@ -333,6 +333,11 @@ def migrate_actor(
             # refusal: refusing would fail the run and keep the actor out of
             # the checkpoint forever over a list that no longer exists.
             logger.info(f"actor={actor_id} list={name}: deleted while migrating")
+        elif result.get("reason") == "envelope-shaped item":
+            # A pre-3.16 dict item whose first key is the reserved envelope
+            # marker: migrating would turn it into a storage envelope. The
+            # item needs editing first; migrate_to_v2() logged which list.
+            refused.append((f"{actor_id}/{name}", "envelope-shaped item"))
         else:
             # "name_contains_hash" -- needs an operator rename before this
             # list can ever migrate.
@@ -347,6 +352,7 @@ def downgrade_to_v1(actor_id: str, list_name: str, config: Any) -> dict[str, Any
     single manual invocation during an incident, not routine use."""
     from actingweb.db import get_property
     from actingweb.property_list import ListProperty
+    from actingweb.property_list_span import looks_like_envelope
 
     list_prop = ListProperty(actor_id=actor_id, name=list_name, config=config)
     if list_prop.storage_format() != 2:
@@ -361,6 +367,18 @@ def downgrade_to_v1(actor_id: str, list_name: str, config: Any) -> dict[str, Any
                 f"left by an interrupted downgrade"
             )
         return {"downgraded": False, "reason": "not_v2", "swept_v2_rows": swept}
+
+    # A v1 list stores every item as one row of its plain JSON: an envelope
+    # (a spanned item, or a keyed one) has no v1 form, and copying its raw
+    # value would store the envelope dict as the item. Refuse before any
+    # write.
+    heads = list_prop._v2_load_full()  # noqa: SLF001 -- emergency tool
+    if any(looks_like_envelope(raw) for _, raw in heads):
+        logger.error(
+            f"{actor_id}/{list_name}: not downgraded -- it holds spanned or "
+            f"keyed items (storage envelopes), which have no v1 form"
+        )
+        return {"downgraded": False, "reason": "envelopes"}
 
     items = list_prop.to_list()  # one range query, in order
 

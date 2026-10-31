@@ -5,7 +5,13 @@ from typing import Any
 
 from actingweb.db import get_property_list
 from actingweb.handlers import base_handler
-from actingweb.property_list import ListCorruptionError, ListMetadataContentionError
+from actingweb.property_list import (
+    ListCorruptionError,
+    ListItemSpanError,
+    ListItemTooLargeError,
+    ListMetadataContentionError,
+    diff_reference,
+)
 
 from ..db.exceptions import DbError
 from ..identifiers import first_control_character
@@ -49,6 +55,29 @@ def delete_dict(d1, path):
 logger = logging.getLogger(__name__)
 
 
+def _write_list_error(
+    response: Any,
+    status: int,
+    reason: str,
+    body: dict[str, Any],
+    *,
+    headers: dict[str, str] | None = None,
+) -> None:
+    """Write a structured JSON error for a list operation.
+
+    The one writer behind the 409 (corrupted list), the 413 (item too
+    large) and the 503 (metadata contention) responses, so every list error
+    has the same shape: a status, a reason phrase and a JSON body whose
+    ``error`` names the condition.
+    """
+    if response:
+        response.set_status(status, reason)
+        response.headers["Content-Type"] = "application/json"
+        for header, value in (headers or {}).items():
+            response.headers[header] = value
+        response.write(json.dumps(body))
+
+
 def _write_list_corrupted_response(response: Any, name: str, error: Exception) -> None:
     """Write the structured 409 response for a ListCorruptionError.
 
@@ -58,19 +87,43 @@ def _write_list_corrupted_response(response: Any, name: str, error: Exception) -
     the body.
     """
     logger.error(f"List '{name}' is corrupted: {error}")
-    if response:
-        response.set_status(409, "List corrupted")
-        response.headers["Content-Type"] = "application/json"
-        response.write(
-            json.dumps(
-                {
-                    "error": "list_corrupted",
-                    "list": name,
-                    "detail": str(error),
-                    "remedy": "compact",
-                }
-            )
-        )
+    _write_list_error(
+        response,
+        409,
+        "List corrupted",
+        {
+            "error": "list_corrupted",
+            "list": name,
+            "detail": str(error),
+            # A broken span names its own repair (ListItemSpanError.remedy).
+            "remedy": getattr(error, "remedy", "compact"),
+        },
+    )
+
+
+def _write_list_item_too_large_response(
+    response: Any, name: str, error: ListItemTooLargeError
+) -> None:
+    """Write the structured 413 response for a ListItemTooLargeError.
+
+    Nothing was written: the size check runs before any row. The error's
+    message carries the list name, sizes and limit only, never item
+    content.
+    """
+    logger.warning(f"List '{name}' item refused: {error}")
+    _write_list_error(
+        response,
+        413,
+        "List item too large",
+        {
+            "error": "list_item_too_large",
+            "list": name,
+            "bytes": error.bytes,
+            "limit": error.limit,
+            "detail": str(error),
+            "remedy": "split the item or raise list_item_max_bytes",
+        },
+    )
 
 
 _LIST_METADATA_CONTENTION_RETRY_AFTER_SECONDS = "1"
@@ -87,18 +140,13 @@ def _write_list_metadata_contention_response(response: Any, error: Exception) ->
     clear.
     """
     logger.warning(f"List metadata contention: {error}")
-    if response:
-        response.set_status(503, "List metadata contended")
-        response.headers["Content-Type"] = "application/json"
-        response.headers["Retry-After"] = _LIST_METADATA_CONTENTION_RETRY_AFTER_SECONDS
-        response.write(
-            json.dumps(
-                {
-                    "error": "list_metadata_contended",
-                    "detail": str(error),
-                }
-            )
-        )
+    _write_list_error(
+        response,
+        503,
+        "List metadata contended",
+        {"error": "list_metadata_contended", "detail": str(error)},
+        headers={"Retry-After": _LIST_METADATA_CONTENTION_RETRY_AFTER_SECONDS},
+    )
 
 
 class PropertiesHandler(base_handler.BaseHandler):
@@ -164,14 +212,13 @@ class PropertiesHandler(base_handler.BaseHandler):
             logger.error(
                 f"Error in permission evaluation for {actor_id}:{peer_id}:{property_path}: {e}"
             )
-            # Fall back to legacy authorization on errors
-            legacy_subpath = property_path.split("/")[0] if property_path else ""
-            method_map = {"read": "GET", "write": "PUT", "delete": "DELETE"}
-            return auth_obj.check_authorisation(
-                path="properties",
-                subpath=legacy_subpath,
-                method=method_map.get(operation, "GET"),
-            )
+            # Fail closed: an evaluator that raises denies (403), as the MCP
+            # handlers do. Falling back to the coarse legacy access table here
+            # turned an excluded_patterns denial into an allow whenever the
+            # evaluator had a bug. A database fault (DbError, above) still
+            # propagates to the 503, so a client can tell an outage from a
+            # denial.
+            return False
 
     def _create_auth_context(self, auth_obj, operation: str = "read") -> dict[str, Any]:
         """Create auth context for hook execution with peer information."""
@@ -186,6 +233,12 @@ class PropertiesHandler(base_handler.BaseHandler):
     def _respond_list_metadata_contended(self, error: Exception) -> None:
         """Write the structured 503 response for a ListMetadataContentionError."""
         _write_list_metadata_contention_response(self.response, error)
+
+    def _respond_list_item_too_large(
+        self, name: str, error: ListItemTooLargeError
+    ) -> None:
+        """Write the structured 413 response for a ListItemTooLargeError."""
+        _write_list_item_too_large_response(self.response, name, error)
 
     def _finish_bulk_list_update(
         self,
@@ -232,6 +285,10 @@ class PropertiesHandler(base_handler.BaseHandler):
         return True
 
     def get(self, actor_id, name):
+        # A GET with a _method override changes state: refuse one a
+        # page on another site started (see BaseHandler).
+        if self._refuse_cross_site_override():
+            return
         if self.request.get("_method") == "PUT":
             self.put(actor_id, name)
             return
@@ -599,11 +656,23 @@ class PropertiesHandler(base_handler.BaseHandler):
                 for list_name in list_names:
                     list_prop = getattr(actor_interface.property_lists, list_name)
                     list_prop.prime_from_rows(all_rows)
-                    items = list_prop.to_list_from_rows(all_rows)
-                    total_bytes = sum(len(json.dumps(item)) for item in items)
+                    # Sizes from the heads: a spanned item's envelope
+                    # carries its size, so no body is read here. A list
+                    # with a malformed head is reported with an error
+                    # marker, as format=full does, not a 409 for all.
+                    try:
+                        sizes = list_prop.sizes_from_rows(all_rows)
+                    except ListItemSpanError as e:
+                        logger.error(f"List '{list_name}' has a malformed head: {e}")
+                        lists_info[list_name] = {
+                            "error": "list_corrupted",
+                            "detail": str(e),
+                            "remedy": e.remedy,
+                        }
+                        continue
                     lists_info[list_name] = {
-                        "count": len(items),
-                        "total_bytes": total_bytes,
+                        "count": len(sizes),
+                        "total_bytes": sum(sizes),
                         "description": list_prop.get_description(),
                         "explanation": list_prop.get_explanation(),
                     }
@@ -619,7 +688,21 @@ class PropertiesHandler(base_handler.BaseHandler):
                 for list_name in list_names:
                     list_prop = getattr(actor_interface.property_lists, list_name)
                     list_prop.prime_from_rows(all_rows)
-                    items = list_prop.to_list_from_rows(all_rows)
+                    try:
+                        items = list_prop.to_list_from_rows(all_rows)
+                    except ListItemSpanError as e:
+                        # One broken span must not fail the whole response:
+                        # that list is reported with an error marker, the
+                        # way the subscription full-state read skips a
+                        # corrupted list.
+                        logger.error(f"List '{list_name}' has a broken span: {e}")
+                        pair[list_name] = {
+                            "_list": True,
+                            "error": "list_corrupted",
+                            "detail": str(e),
+                            "remedy": e.remedy,
+                        }
+                        continue
                     # Execute property hooks on list items if available
                     if self.hooks and actor_interface:
                         auth_context = self._create_auth_context(check, "read")
@@ -737,7 +820,7 @@ class PropertiesHandler(base_handler.BaseHandler):
                 # always was.
                 v2_pairs = None
                 if list_prop.storage_format() == 2:
-                    v2_pairs = list_prop.items_with_handles()
+                    v2_pairs = list_prop.items_with_handles(resolve=False)
                     length = len(v2_pairs)
                 else:
                     length = len(list_prop)
@@ -798,7 +881,11 @@ class PropertiesHandler(base_handler.BaseHandler):
                 myself.register_diffs(
                     target="properties",
                     subtarget=name,
-                    blob=json.dumps({"index": index, "value": item_value}),
+                    blob=json.dumps(
+                        diff_reference(
+                            {"index": index, "value": item_value}, self.config
+                        )
+                    ),
                 )
 
                 if self.response:
@@ -817,6 +904,14 @@ class PropertiesHandler(base_handler.BaseHandler):
                 # meta-row create, which is safe to retry). Map to 503
                 # rather than letting it fall through as an unhandled 500.
                 self._respond_list_metadata_contended(e)
+                return
+            except ListItemTooLargeError as e:
+                self._respond_list_item_too_large(name, e)
+                return
+            except ListItemSpanError as e:
+                # An IndexError subclass: caught ahead of the generic arm so
+                # a broken or malformed item answers 409 with its remedy.
+                self._respond_list_corrupted(name, e)
                 return
             except (ValueError, IndexError) as e:
                 logger.error(f"Error setting list item at index {index_param}: {e}")
@@ -1194,7 +1289,7 @@ class PropertiesHandler(base_handler.BaseHandler):
                                 # changed them) -- see CHANGELOG/migration
                                 # notes for 3.14: 3.13.0 deleted the updated
                                 # row instead.
-                                pairs = list_prop.items_with_handles()
+                                pairs = list_prop.items_with_handles(resolve=False)
                                 snapshot_length = len(pairs)
                                 pending_updates_v2: list[
                                     tuple[int, dict[str, Any]]
@@ -1275,6 +1370,9 @@ class PropertiesHandler(base_handler.BaseHandler):
                                             for k, v in item_spec.items()
                                             if k != "index"
                                         }
+                                        # Size-check during validation, before any entry
+                                        # is written: a 413 must mean nothing landed.
+                                        list_prop.check_item_size(item_data)
                                         pending_updates_v2.append((index, item_data))
 
                                 # Resolve the final value for each targeted
@@ -1508,6 +1606,9 @@ class PropertiesHandler(base_handler.BaseHandler):
                                         for k, v in item_spec.items()
                                         if k != "index"
                                     }
+                                    # Size-check during validation, before any entry
+                                    # is written: a 413 must mean nothing landed.
+                                    list_prop.check_item_size(item_data)
                                     pending_updates.append((index, item_data))
 
                             # Pass 1: updates, in the given order.
@@ -1523,6 +1624,8 @@ class PropertiesHandler(base_handler.BaseHandler):
                                     # Store the complete object
                                     list_prop[index] = item_data
                                     items_updated += 1
+                                except ListItemTooLargeError:
+                                    raise
                                 except (IndexError, ValueError) as e:
                                     logger.error(
                                         f"Error updating item at index {index}: {e}"
@@ -1570,6 +1673,9 @@ class PropertiesHandler(base_handler.BaseHandler):
                             return
                         except ListMetadataContentionError as e:
                             self._respond_list_metadata_contended(e)
+                            return
+                        except ListItemTooLargeError as e:
+                            self._respond_list_item_too_large(key, e)
                             return
                         except DbError:
                             raise
@@ -1832,14 +1938,13 @@ class PropertyMetadataHandler(base_handler.BaseHandler):
             logger.error(
                 f"Error in permission evaluation for metadata {actor_id}:{peer_id}:{property_path}: {e}"
             )
-            # Fall back to legacy authorization on errors
-            legacy_subpath = property_path.split("/")[0] if property_path else ""
-            method_map = {"read": "GET", "write": "PUT", "delete": "DELETE"}
-            return auth_obj.check_authorisation(
-                path="properties",
-                subpath=legacy_subpath,
-                method=method_map.get(operation, "GET"),
-            )
+            # Fail closed: an evaluator that raises denies (403), as the MCP
+            # handlers do. Falling back to the coarse legacy access table here
+            # turned an excluded_patterns denial into an allow whenever the
+            # evaluator had a bug. A database fault (DbError, above) still
+            # propagates to the 503, so a client can tell an outage from a
+            # denial.
+            return False
 
     def get(self, actor_id: str, name: str):
         """Get list property metadata (description, explanation)."""
@@ -2017,14 +2122,13 @@ class PropertyListItemsHandler(base_handler.BaseHandler):
             logger.error(
                 f"Error in permission evaluation for items {actor_id}:{peer_id}:{property_path}: {e}"
             )
-            # Fall back to legacy authorization on errors
-            legacy_subpath = property_path.split("/")[0] if property_path else ""
-            method_map = {"read": "GET", "write": "PUT", "delete": "DELETE"}
-            return auth_obj.check_authorisation(
-                path="properties",
-                subpath=legacy_subpath,
-                method=method_map.get(operation, "GET"),
-            )
+            # Fail closed: an evaluator that raises denies (403), as the MCP
+            # handlers do. Falling back to the coarse legacy access table here
+            # turned an excluded_patterns denial into an allow whenever the
+            # evaluator had a bug. A database fault (DbError, above) still
+            # propagates to the 503, so a client can tell an outage from a
+            # denial.
+            return False
 
     def _respond_list_corrupted(self, name: str, error: Exception) -> None:
         """Write the structured 409 response for a ListCorruptionError."""
@@ -2033,6 +2137,12 @@ class PropertyListItemsHandler(base_handler.BaseHandler):
     def _respond_list_metadata_contended(self, error: Exception) -> None:
         """Write the structured 503 response for a ListMetadataContentionError."""
         _write_list_metadata_contention_response(self.response, error)
+
+    def _respond_list_item_too_large(
+        self, name: str, error: ListItemTooLargeError
+    ) -> None:
+        """Write the structured 413 response for a ListItemTooLargeError."""
+        _write_list_item_too_large_response(self.response, name, error)
 
     def get(self, actor_id: str, name: str):
         """Get all items from a list property.
@@ -2160,11 +2270,14 @@ class PropertyListItemsHandler(base_handler.BaseHandler):
                     target="properties",
                     subtarget=name,
                     blob=json.dumps(
-                        {
-                            "action": "add",
-                            "index": new_index,
-                            "value": item_value,
-                        }
+                        diff_reference(
+                            {
+                                "action": "add",
+                                "index": new_index,
+                                "value": item_value,
+                            },
+                            self.config,
+                        )
                     ),
                 )
 
@@ -2207,7 +2320,7 @@ class PropertyListItemsHandler(base_handler.BaseHandler):
                 # cost, so that branch is unchanged.
                 try:
                     if list_prop.storage_format() == 2:
-                        pairs = list_prop.items_with_handles()
+                        pairs = list_prop.items_with_handles(resolve=False)
                         if index < 0 or index >= len(pairs):
                             if self.response:
                                 self.response.set_status(
@@ -2224,6 +2337,12 @@ class PropertyListItemsHandler(base_handler.BaseHandler):
                             return
                     else:
                         list_prop[index] = item_value
+                except ListItemSpanError as e:
+                    # A ListCorruptionError, so an IndexError too: caught
+                    # here, ahead of the out-of-range arm, so a broken span
+                    # answers 409 with its remedy, not 400.
+                    self._respond_list_corrupted(name, e)
+                    return
                 except IndexError:
                     if self.response:
                         self.response.set_status(400, f"Index {index} out of range")
@@ -2234,7 +2353,10 @@ class PropertyListItemsHandler(base_handler.BaseHandler):
                     target="properties",
                     subtarget=name,
                     blob=json.dumps(
-                        {"action": "update", "index": index, "value": item_value}
+                        diff_reference(
+                            {"action": "update", "index": index, "value": item_value},
+                            self.config,
+                        )
                     ),
                 )
 
@@ -2261,7 +2383,7 @@ class PropertyListItemsHandler(base_handler.BaseHandler):
                 # rationale.
                 try:
                     if list_prop.storage_format() == 2:
-                        pairs = list_prop.items_with_handles()
+                        pairs = list_prop.items_with_handles(resolve=False)
                         if index < 0 or index >= len(pairs):
                             if self.response:
                                 self.response.set_status(
@@ -2278,6 +2400,12 @@ class PropertyListItemsHandler(base_handler.BaseHandler):
                             return
                     else:
                         del list_prop[index]
+                except ListItemSpanError as e:
+                    # A ListCorruptionError, so an IndexError too: caught
+                    # here, ahead of the out-of-range arm, so a broken span
+                    # answers 409 with its remedy, not 400.
+                    self._respond_list_corrupted(name, e)
+                    return
                 except IndexError:
                     if self.response:
                         self.response.set_status(400, f"Index {index} out of range")
@@ -2301,12 +2429,16 @@ class PropertyListItemsHandler(base_handler.BaseHandler):
         except ListCorruptionError as e:
             # Parity with /items GET and every other list-serving path: a
             # corrupted list is a structured 409 with a repair hint, never a
-            # bare 500. No action above currently reads item rows, so this
-            # is a contract guarantee rather than a reachable branch today.
+            # bare 500. The update/delete actions read item rows (the
+            # handle read resolves spanned items) and catch a broken span
+            # themselves; this is the arm for the rest.
             self._respond_list_corrupted(name, e)
             return
         except ListMetadataContentionError as e:
             self._respond_list_metadata_contended(e)
+            return
+        except ListItemTooLargeError as e:
+            self._respond_list_item_too_large(name, e)
             return
         except DbError:
             raise

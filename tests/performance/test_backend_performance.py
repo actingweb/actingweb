@@ -540,6 +540,132 @@ class TestBulkOperations:
             )
 
 
+@pytest.fixture(scope="module")
+def v2_list_1000() -> Iterator[Any]:
+    """A plain (no spanned items) 1,000-item v2 list, built once per module.
+
+    The baseline the spanned-list-items plan
+    (thoughts/plans/2026-10-30-spanned-list-items.md) measures Phase 2
+    against: reads of a list with no spanned items must stay within 5% of
+    it.
+    """
+    from actingweb.config import Config
+    from actingweb.property_list import ListProperty
+
+    config = Config()
+    actor_id = f"perf_list_actor_{int(time.time() * 1000)}"
+    db_actor = config.DbActor.DbActor()  # type: ignore[misc]
+    db_actor.create(actor_id=actor_id, creator="perf@test.com", passphrase="test123")
+    lst = ListProperty(actor_id, "perf_items", config)
+    lst.extend(
+        [{"id": i, "title": f"item {i}", "body": "x" * 200} for i in range(1000)]
+    )
+
+    yield lst
+
+    lst.delete()
+    db_actor.get(actor_id=actor_id)
+    if db_actor.handle:
+        db_actor.delete()
+
+
+@pytest.mark.benchmark
+class TestListPropertyPerformance:
+    """Benchmark v2 list reads and single-item writes on a 1,000-item list."""
+
+    def test_list_property_to_list(
+        self, benchmark: Any, backend_name: str, v2_list_1000: Any
+    ) -> None:
+        result = benchmark(v2_list_1000.to_list)
+        assert len(result) == 1000
+        if benchmark.stats:
+            print(
+                f"\n{backend_name} list to_list (1000): {benchmark.stats.stats.mean * 1000:.2f}ms avg"
+            )
+
+    def test_list_property_items_with_handles(
+        self, benchmark: Any, backend_name: str, v2_list_1000: Any
+    ) -> None:
+        result = benchmark(v2_list_1000.items_with_handles)
+        assert len(result) == 1000
+        if benchmark.stats:
+            print(
+                f"\n{backend_name} list items_with_handles (1000): {benchmark.stats.stats.mean * 1000:.2f}ms avg"
+            )
+
+    def test_list_property_append_remove(
+        self, benchmark: Any, backend_name: str, v2_list_1000: Any
+    ) -> None:
+        """One append followed by one remove of the same value, so the list
+        stays at 1,000 items across rounds. remove() is a whole-list scan."""
+        counter = [0]
+
+        def append_then_remove() -> None:
+            counter[0] += 1
+            marker = {"id": f"bench-{counter[0]}"}
+            v2_list_1000.append(marker)
+            v2_list_1000.remove(marker)
+
+        benchmark(append_then_remove)
+        if benchmark.stats:
+            print(
+                f"\n{backend_name} list append+remove (1000): {benchmark.stats.stats.mean * 1000:.2f}ms avg"
+            )
+
+
+@pytest.fixture(scope="module")
+def v2_list_1000_20_spanned() -> Iterator[Any]:
+    """1,000 items of which 20 span body rows. Recorded, not gated: the
+    threshold is lowered to 5,000 bytes so the 20 spanned items (about
+    10 KB each, two body rows) stay cheap to build on DynamoDB Local."""
+    from actingweb.config import Config
+    from actingweb.property_list import ListProperty
+
+    config = Config(list_item_span_threshold=5_000, list_item_max_bytes=4 * 2**20)
+    actor_id = f"perf_span_actor_{int(time.time() * 1000)}"
+    db_actor = config.DbActor.DbActor()  # type: ignore[misc]
+    db_actor.create(actor_id=actor_id, creator="perf@test.com", passphrase="test123")
+    lst = ListProperty(actor_id, "perf_spanned", config)
+    items: list[Any] = [
+        {"id": i, "title": f"item {i}", "body": "x" * 200} for i in range(1000)
+    ]
+    for i in range(0, 1000, 50):
+        items[i] = {"id": i, "title": f"big {i}", "body": "y" * 10_000}
+    lst.extend(items)
+
+    yield lst
+
+    lst.delete()
+    db_actor.get(actor_id=actor_id)
+    if db_actor.handle:
+        db_actor.delete()
+
+
+@pytest.mark.benchmark
+class TestSpannedListPropertyPerformance:
+    """The same reads on a list with 20 spanned items, resolved and not."""
+
+    def test_list_property_spanned_to_list(
+        self, benchmark: Any, backend_name: str, v2_list_1000_20_spanned: Any
+    ) -> None:
+        result = benchmark(v2_list_1000_20_spanned.to_list)
+        assert len(result) == 1000
+
+    def test_list_property_spanned_items_with_handles_resolve(
+        self, benchmark: Any, backend_name: str, v2_list_1000_20_spanned: Any
+    ) -> None:
+        result = benchmark(v2_list_1000_20_spanned.items_with_handles)
+        assert len(result) == 1000
+
+    def test_list_property_spanned_items_with_handles_no_resolve(
+        self, benchmark: Any, backend_name: str, v2_list_1000_20_spanned: Any
+    ) -> None:
+        result = benchmark(
+            lambda: v2_list_1000_20_spanned.items_with_handles(resolve=False)
+        )
+        assert len(result) == 1000
+
+
 # Performance comparison summary
 @pytest.mark.benchmark
 def test_performance_summary(backend_name: str) -> None:

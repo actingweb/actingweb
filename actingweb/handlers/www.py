@@ -1,17 +1,211 @@
 # mypy: disable-error-code="unreachable,unused-ignore"
 import json
 import logging
+from typing import Any
 
 from actingweb.db import get_property
 from actingweb.handlers import base_handler
-from actingweb.property_list import ListCorruptionError, ListMetadataContentionError
+from actingweb.property_list import (
+    ListCorruptionError,
+    ListItemSpanError,
+    ListItemTooLargeError,
+    ListMetadataContentionError,
+)
 
 from ..db.exceptions import DbError
+from ..trust import is_valid_peer_baseuri
 
 logger = logging.getLogger(__name__)
 
 
 class WwwHandler(base_handler.BaseHandler):
+    def _list_action_error(self, status: int, message: str) -> None:
+        """Answer a list item action with ``status`` and the reason on a
+        small HTML page (phone-width viewport, a link back to the list), so
+        a browser shows why instead of a blank page. The reason is escaped
+        and never carries item content."""
+        import html
+
+        back = getattr(self, "_list_back", None)
+        # "Your text is kept" only where the form had text: add and update.
+        typed = self.request.get("action") in ("add", "update")
+        link = (
+            f'<p><a href="{html.escape(back)}" '
+            'onclick="if (history.length > 1) { history.back(); return false; }">'
+            f"Back</a>{' (your text is kept)' if typed else ''} or "
+            f'<a href="{html.escape(back)}">go to the list</a></p>'
+            if back
+            else ""
+        )
+        self.response.set_status(status, message)
+        self.response.headers["Content-Type"] = "text/html; charset=utf-8"
+        self.response.write(
+            '<!doctype html><html><head><meta charset="utf-8">'
+            '<meta name="viewport" content="width=device-width, initial-scale=1">'
+            f"<title>{status}</title><style>body{{font-family:system-ui,sans-serif;"
+            "max-width:40rem;margin:2rem auto;padding:0 1rem;line-height:1.5}"
+            f"</style></head><body><p>{html.escape(message)}</p>"
+            f"{link}</body></html>"
+        )
+
+    def _list_page_items(
+        self, list_prop: Any
+    ) -> tuple[list[Any], list[dict[str, Any]], dict[str, Any] | None]:
+        """The list page's items: ``(list_items, list_entries, edit_entry)``.
+
+        A v2 list is read heads only (``resolve=False``): a spanned item's
+        bodies are never read for the listing, and its slot in
+        ``list_items`` holds ``UNRESOLVED``. Each entry carries the item's
+        index, rank, a digest of its raw value (the forms post both, so a
+        stale page cannot act on a different item), its size, whether it
+        spans, and its JSON with key order and non-ASCII kept (``None`` for
+        a spanned item). ``?edit=<rank>`` loads that one item fresh, whole,
+        as ``edit_entry``. A v1 list is read as before, with positional
+        entries (no rank).
+        """
+        from actingweb.property_list import UNRESOLVED
+        from actingweb.property_list_span import encoded_size, value_digest
+
+        def as_json(item: Any) -> str:
+            return json.dumps(item, ensure_ascii=False)
+
+        if list_prop.storage_format() != 2:
+            items = list_prop.to_list()
+            v1_entries = [
+                {
+                    "index": i,
+                    "rank": None,
+                    # A v1 item is addressed by position; the digest of its
+                    # JSON lets an action refuse when the position now holds
+                    # a different item.
+                    "digest": value_digest(json.dumps(item)),
+                    "spanned": False,
+                    "bytes": encoded_size(json.dumps(item)),
+                    "json": as_json(item),
+                    "text": item if isinstance(item, str) else None,
+                }
+                for i, item in enumerate(items)
+            ]
+            # A v1 list has no ranks: an item is edited by its position,
+            # which is what a v1 list's identity is.
+            v1_edit: dict[str, Any] | None = None
+            edit_index = self.request.get("edit_index")
+            if (
+                edit_index.isascii()
+                and edit_index.isdigit()
+                and int(edit_index) < len(v1_entries)
+            ):
+                v1_edit = dict(v1_entries[int(edit_index)])
+            return items, v1_entries, v1_edit
+        pairs = list_prop.items_with_handles(resolve=False)
+        items = [item for _, item in pairs]
+        entries = []
+        edit_rank = self.request.get("edit") or None
+        edit_entry: dict[str, Any] | None = None
+        for i, (handle, item) in enumerate(pairs):
+            unresolved = item is UNRESOLVED
+            entry = {
+                "index": i,
+                "rank": handle.rank,
+                "digest": value_digest(handle.raw_value),
+                "spanned": handle.spanned,
+                "bytes": handle.bytes
+                if handle.spanned and handle.bytes is not None
+                else encoded_size(json.dumps(item))
+                if not unresolved
+                else None,
+                "json": None if unresolved else as_json(item),
+                # A string item previews as its text, as its edit form shows it.
+                "text": item if isinstance(item, str) else None,
+            }
+            entries.append(entry)
+            if edit_rank is not None and handle.rank == edit_rank:
+                fresh, full = list_prop.item_at(handle)
+                edit_entry = {
+                    **entry,
+                    "digest": value_digest(fresh.raw_value),
+                    "json": as_json(full),
+                    # A string item is edited as its text, not as quoted
+                    # JSON (the add form takes plain text too).
+                    "text": full if isinstance(full, str) else None,
+                }
+        return items, entries, edit_entry
+
+    def _list_is_read_only(
+        self, myself: Any, prop_name: str, value: Any = None
+    ) -> bool:
+        """The read-only rule for a property page and its write actions: a
+        put hook that rejects the property (probed with its current value,
+        or ``{}``) makes it read-only. One rule for the page and the
+        actions, so they cannot disagree."""
+        if not self.hooks:
+            return False
+        actor_interface = self._get_actor_interface(myself)
+        if not actor_interface:
+            return False
+        return (
+            self.hooks.execute_property_hooks(
+                prop_name, "put", actor_interface, value or {}, [prop_name]
+            )
+            is None
+        )
+
+    def _trust_uri(self, actor_id: str, relationship: str, peerid: str) -> str:
+        """The trust row's URL, with the relationship and peer id quoted as
+        path segments: a stored id from before 3.16 may hold characters
+        (``/``, ``?``) that would point the link somewhere else. Empty for
+        an id that is only dots."""
+        from urllib.parse import quote
+
+        # A segment that is all dots is resolved away by the browser, quoted
+        # or not ("%2E" counts as "."): such a row gets no link at all.
+        if str(relationship).strip(".") == "" or str(peerid).strip(".") == "":
+            return ""
+        return (
+            f"{self.config.root}{actor_id}/trust/"
+            f"{quote(str(relationship), safe='')}/{quote(str(peerid), safe=':@')}"
+        )
+
+    def _v1_item_changed(self, list_prop: Any, index: int) -> bool:
+        """For a v1 list action that posted ``item_digest``: True when the
+        item at ``index`` is no longer the one the page showed (a v1 list
+        has no ranks; the digest is its stale-page guard), including when the
+        position is now past the end. Best effort: the check and the write
+        are two steps, and without ``item_digest`` there is no check."""
+        from actingweb.property_list_span import value_digest
+
+        digest = self.request.get("item_digest") or None
+        if digest is None:
+            return False
+        try:
+            current = list_prop[index]
+        except IndexError:
+            # The page showed an item at this position; it is gone now.
+            return True
+        return value_digest(json.dumps(current)) != digest
+
+    def _list_target(self, list_prop: Any, index: int | None) -> tuple[Any, str | None]:
+        """The handle a v2 item action writes through, and an error to
+        answer instead. With ``item_rank`` (and ``item_digest``) posted, the
+        item is the one the page showed: missing or changed since is a 409,
+        never a different item at the same position. Without them, the
+        position as before."""
+        from actingweb.property_list_span import value_digest
+
+        rank = self.request.get("item_rank") or None
+        digest = self.request.get("item_digest") or None
+        pairs = list_prop.items_with_handles(resolve=False)
+        if rank is not None:
+            for handle, _ in pairs:
+                if handle.rank == rank:
+                    if digest is not None and value_digest(handle.raw_value) != digest:
+                        return None, "changed"
+                    return handle, None
+            return None, "changed"
+        if index is None or index < 0 or index >= len(pairs):
+            return None, "range"
+        return pairs[index][0], None
+
     def _get_consistent_urls(self, actor_id: str) -> dict[str, str]:
         """
         Get consistent URL variables for templates using config.root.
@@ -242,6 +436,11 @@ class WwwHandler(base_handler.BaseHandler):
                 if self.request.params
                 else None
             )
+            if method_override and self._refuse_cross_site_override():
+                # A link or image on another site must not delete or change
+                # anything: SameSite=Lax cookies ride along on a top-level
+                # GET, and cached basic-auth credentials on any request.
+                return
             if method_override and method_override.upper() == "DELETE":
                 # Execute property delete hook first to check if deletion is allowed
                 if self.hooks:
@@ -302,7 +501,7 @@ class WwwHandler(base_handler.BaseHandler):
                 if deleted:
                     # Redirect back to properties page
                     self.response.set_status(302, "Found")
-                    self.response.set_redirect(f"/{actor_id}/www/properties")
+                    self.response.set_redirect(self._www_path(actor_id, "/properties"))
                     return
                 else:
                     self.response.set_status(404, "Property not found")
@@ -332,19 +531,15 @@ class WwwHandler(base_handler.BaseHandler):
             # Check if this property is read-only (protected from editing)
             is_read_only = False
             is_list_property = False
-            if self.hooks:
-                actor_interface = self._get_actor_interface(myself)
-                if actor_interface:
-                    # Test if property allows PUT operations (editing)
-                    put_test = self.hooks.execute_property_hooks(
-                        prop_name, "put", actor_interface, lookup or {}, [prop_name]
-                    )
-                    if put_test is None:
-                        is_read_only = True
+            if self._list_is_read_only(myself, prop_name, lookup):
+                is_read_only = True
 
             # Check if this is a list property and prepare appropriate display value
             display_value = lookup
             list_items = None
+            list_entries: list[dict[str, Any]] = []
+            list_error = ""
+            edit_entry: dict[str, Any] | None = None
             list_description = ""
             list_explanation = ""
 
@@ -358,9 +553,10 @@ class WwwHandler(base_handler.BaseHandler):
                 is_list_property = True
                 logger.debug(f"Property '{prop_name}' detected as list property")
                 try:
-                    # Get the actual list property and load all items
                     list_prop = getattr(myself.property_lists, prop_name)
-                    list_items = list_prop.to_list()
+                    list_items, list_entries, edit_entry = self._list_page_items(
+                        list_prop
+                    )
                     list_length = len(list_items)
 
                     # Get description and explanation
@@ -376,12 +572,14 @@ class WwwHandler(base_handler.BaseHandler):
                         "[List property is corrupted -- run "
                         "verify()/compact() to repair]"
                     )
+                    list_error = str(e)
                     list_items = []
                 except DbError:
                     raise
                 except Exception as e:
                     logger.error(f"Error loading list items for '{prop_name}': {e}")
                     display_value = "[List property - error loading items]"
+                    list_error = "The list's items could not be loaded"
                     list_items = []
 
             elif lookup is not None:
@@ -429,6 +627,9 @@ class WwwHandler(base_handler.BaseHandler):
                     "is_read_only": is_read_only,
                     "is_list_property": True,
                     "list_items": list_items or [],
+                    "list_entries": list_entries,
+                    "list_error": list_error,
+                    "edit_entry": edit_entry,
                     "list_description": list_description,
                     "list_explanation": list_explanation,
                 }
@@ -502,9 +703,11 @@ class WwwHandler(base_handler.BaseHandler):
                 if isinstance(t, dict):
                     rel = t.get("relationship", "")
                     peerid = t.get("peerid", "")
-                    t["approveuri"] = (
-                        f"{self.config.root}{myself.id or ''}/trust/{rel}/{peerid}"
-                    )
+                    t["approveuri"] = self._trust_uri(myself.id or "", rel, peerid)
+                    # A link to the peer only for a plain http(s) base URL:
+                    # the value came from the peer.
+                    baseuri = t.get("baseuri") or ""
+                    t["peer_link"] = baseuri if is_valid_peer_baseuri(baseuri) else ""
 
                     # Check if this relationship has custom permissions
                     t["has_custom_permissions"] = self._has_custom_permissions(
@@ -527,9 +730,9 @@ class WwwHandler(base_handler.BaseHandler):
                     rel = getattr(t, "relationship", "")
                     peerid = getattr(t, "peerid", "")
                     try:
-                        t.approveuri = (
-                            f"{self.config.root}{myself.id or ''}/trust/{rel}/{peerid}"
-                        )
+                        t.approveuri = self._trust_uri(myself.id or "", rel, peerid)
+                        baseuri = getattr(t, "baseuri", "") or ""
+                        t.peer_link = baseuri if is_valid_peer_baseuri(baseuri) else ""
                         t.has_custom_permissions = self._has_custom_permissions(
                             myself.id or "", peerid
                         )
@@ -796,7 +999,7 @@ class WwwHandler(base_handler.BaseHandler):
             if new_trust:
                 # Success - redirect back to trust page
                 self.response.set_status(302, "Found")
-                self.response.set_redirect(f"/{actor_id}/www/trust")
+                self.response.set_redirect(self._www_path(actor_id, "/trust"))
             else:
                 self.response.set_status(400, "Failed to create trust relationship")
                 self.response.write(
@@ -818,6 +1021,10 @@ class WwwHandler(base_handler.BaseHandler):
         if not self.config.ui:
             if self.response:
                 self.response.set_status(404, "Web interface is not enabled")
+            return
+        # Every web UI mutation: refuse a cross-site form post (see
+        # _cross_site_refused).
+        if self._refuse_cross_site():
             return
 
         # Handle trust relationship creation
@@ -854,7 +1061,7 @@ class WwwHandler(base_handler.BaseHandler):
                             # Redirect back to the property page
                             self.response.set_status(302, "Found")
                             self.response.set_redirect(
-                                f"/{actor_id}/www/properties/{prop_name}"
+                                self._www_path(actor_id, f"/properties/{prop_name}")
                             )
                             return
 
@@ -881,22 +1088,45 @@ class WwwHandler(base_handler.BaseHandler):
             if len(path_parts) >= 3 and path_parts[2] == "items":
                 prop_name = path_parts[1]
                 action = self.request.get("action")
+                self._list_back = self._www_path(actor_id, f"/properties/{prop_name}")
 
                 if not action:
-                    self.response.set_status(400, "Missing action parameter")
+                    self._list_action_error(400, "Missing action parameter")
+                    return
+
+                try:
+                    read_only = action in (
+                        "add",
+                        "update",
+                        "delete",
+                    ) and self._list_is_read_only(myself, prop_name)
+                except DbError:
+                    raise
+                except (
+                    Exception
+                ) as e:  # folds DbError: re-raised above; a hook bug answers 500
+                    logger.error(f"Read-only check failed for '{prop_name}': {e}")
+                    self._list_action_error(500, "Error processing list item")
+                    return
+                if read_only:
+                    self._list_action_error(403, f"List '{prop_name}' is read-only")
                     return
 
                 try:
                     if action == "add":
                         # Add new item to list
-                        item_value = self.request.get("item_value")
+                        # A textarea posts line breaks as CRLF; the web UI
+                        # stores them as LF, for add and update alike.
+                        item_value = self.request.get("item_value").replace(
+                            "\r\n", "\n"
+                        )
                         logger.debug(
                             f"List item add request - prop_name: {prop_name}, item_value: {item_value}"
                         )
 
-                        if not item_value:
-                            self.response.set_status(
-                                400, "Missing item_value parameter"
+                        if not item_value or not item_value.strip():
+                            self._list_action_error(
+                                400, "The item is empty; nothing was added"
                             )
                             return
 
@@ -921,32 +1151,58 @@ class WwwHandler(base_handler.BaseHandler):
                             list_prop.append(parsed_value)
                         else:
                             logger.error("List properties not supported")
-                            self.response.set_status(
+                            self._list_action_error(
                                 500, "List properties not supported"
                             )
                             return
 
                     elif action == "update":
                         # Update existing item
-                        item_index = self.request.get("item_index")
-                        item_value = self.request.get("item_value")
+                        item_index = self.request.get("item_index") or None
+                        # A textarea posts line breaks as CRLF; the web UI
+                        # stores them as LF, for add and update alike.
+                        item_value = self.request.get("item_value").replace(
+                            "\r\n", "\n"
+                        )
 
-                        if item_index is None or item_value is None:
-                            self.response.set_status(
-                                400, "Missing item_index or item_value parameter"
+                        # An empty value is refused like add's: an empty form
+                        # field must not silently blank the item.
+                        has_rank = bool(self.request.get("item_rank"))
+                        if item_index is None and not has_rank:
+                            self._list_action_error(
+                                400, "Missing item_index or item_rank parameter"
+                            )
+                            return
+                        if not (item_value and item_value.strip()):
+                            self._list_action_error(
+                                400, "The item is empty; nothing was saved"
                             )
                             return
 
                         try:
-                            index = int(item_index)
+                            index = int(item_index) if item_index is not None else None
                         except ValueError:
-                            self.response.set_status(400, "Invalid item_index")
+                            self._list_action_error(400, "Invalid item_index")
                             return
 
-                        # Try to parse as JSON, fall back to string
+                        # Try to parse as JSON, fall back to string -- except
+                        # when the form says the value is JSON (the edit
+                        # form): a typo there must not silently turn an
+                        # object into a string.
+                        item_format = self.request.get("item_format")
                         try:
-                            parsed_value = json.loads(item_value)
+                            if item_format == "text":
+                                # The edit form for a string item: the text
+                                # is the item, never parsed as JSON.
+                                parsed_value = item_value
+                            else:
+                                parsed_value = json.loads(item_value)
                         except json.JSONDecodeError:
+                            if item_format == "json":
+                                self._list_action_error(
+                                    400, "The item is not valid JSON; nothing was saved"
+                                )
+                                return
                             parsed_value = item_value
 
                         # Get the list property and update. No separate
@@ -964,47 +1220,68 @@ class WwwHandler(base_handler.BaseHandler):
                             list_prop = getattr(myself.property_lists, prop_name)
                             try:
                                 if list_prop.storage_format() == 2:
-                                    pairs = list_prop.items_with_handles()
-                                    if index < 0 or index >= len(pairs):
-                                        self.response.set_status(
+                                    handle, problem = self._list_target(
+                                        list_prop, index
+                                    )
+                                    if problem == "changed":
+                                        self._list_action_error(
+                                            409,
+                                            "The item changed or was removed since "
+                                            "the page was loaded; nothing was saved",
+                                        )
+                                        return
+                                    if handle is None:
+                                        self._list_action_error(
                                             400, f"Index {index} out of range"
                                         )
                                         return
                                     if not list_prop.update_by_handle(
-                                        pairs[index][0], parsed_value
+                                        handle, parsed_value
                                     ):
-                                        self.response.set_status(
+                                        self._list_action_error(
                                             503, "List item concurrently modified"
                                         )
                                         self.response.headers["Retry-After"] = "1"
                                         return
+                                elif index is None:
+                                    self._list_action_error(
+                                        400, "Missing item_index parameter"
+                                    )
+                                    return
                                 else:
+                                    if self._v1_item_changed(list_prop, index):
+                                        self._list_action_error(
+                                            409,
+                                            "The item changed or was removed since "
+                                            "the page was loaded; nothing was saved",
+                                        )
+                                        return
                                     list_prop[index] = parsed_value
+                            except ListItemSpanError:
+                                raise
                             except IndexError:
-                                self.response.set_status(
+                                self._list_action_error(
                                     400, f"Index {index} out of range"
                                 )
                                 return
                         else:
-                            self.response.set_status(
+                            self._list_action_error(
                                 500, "List properties not supported"
                             )
                             return
 
                     elif action == "delete":
                         # Delete item
-                        item_index = self.request.get("item_index")
+                        item_index = self.request.get("item_index") or None
 
-                        if item_index is None:
-                            self.response.set_status(
-                                400, "Missing item_index parameter"
-                            )
+                        if item_index is None and not self.request.get("item_rank"):
+                            self._list_action_error(400, "Missing item_index parameter")
                             return
 
                         try:
-                            index = int(item_index)
+                            index = int(item_index) if item_index is not None else None
                         except ValueError:
-                            self.response.set_status(400, "Invalid item_index")
+                            self._list_action_error(400, "Invalid item_index")
                             return
 
                         # Get the list property and delete -- see the
@@ -1014,54 +1291,81 @@ class WwwHandler(base_handler.BaseHandler):
                             list_prop = getattr(myself.property_lists, prop_name)
                             try:
                                 if list_prop.storage_format() == 2:
-                                    pairs = list_prop.items_with_handles()
-                                    if index < 0 or index >= len(pairs):
-                                        self.response.set_status(
+                                    handle, problem = self._list_target(
+                                        list_prop, index
+                                    )
+                                    if problem == "changed":
+                                        self._list_action_error(
+                                            409,
+                                            "The item changed or was removed since "
+                                            "the page was loaded; nothing was deleted",
+                                        )
+                                        return
+                                    if handle is None:
+                                        self._list_action_error(
                                             400, f"Index {index} out of range"
                                         )
                                         return
-                                    if not list_prop.delete_by_handle(pairs[index][0]):
-                                        self.response.set_status(
+                                    if not list_prop.delete_by_handle(handle):
+                                        self._list_action_error(
                                             503, "List item concurrently modified"
                                         )
                                         self.response.headers["Retry-After"] = "1"
                                         return
+                                elif index is None:
+                                    self._list_action_error(
+                                        400, "Missing item_index parameter"
+                                    )
+                                    return
                                 else:
+                                    if self._v1_item_changed(list_prop, index):
+                                        self._list_action_error(
+                                            409,
+                                            "The item changed or was removed since "
+                                            "the page was loaded; nothing was deleted",
+                                        )
+                                        return
                                     del list_prop[index]
+                            except ListItemSpanError:
+                                raise
                             except IndexError:
-                                self.response.set_status(
+                                self._list_action_error(
                                     400, f"Index {index} out of range"
                                 )
                                 return
                         else:
-                            self.response.set_status(
+                            self._list_action_error(
                                 500, "List properties not supported"
                             )
                             return
 
                     else:
-                        self.response.set_status(400, f"Unknown action: {action}")
+                        self._list_action_error(400, f"Unknown action: {action}")
                         return
 
                     # Redirect back to the property page
                     self.response.set_status(302, "Found")
-                    self.response.set_redirect(
-                        f"/{actor_id}/www/properties/{prop_name}"
-                    )
+                    self.response.set_redirect(self._list_back)
                     return
 
+                except ListItemTooLargeError as e:
+                    logger.warning(f"List item refused for '{prop_name}': {e}")
+                    self._list_action_error(413, str(e))
+                    return
+                except ListItemSpanError as e:
+                    logger.error(f"List '{prop_name}' has a broken span: {e}")
+                    self._list_action_error(409, str(e))
+                    return
                 except ListMetadataContentionError as e:
                     logger.warning(f"List metadata contended for '{prop_name}': {e}")
-                    self.response.set_status(503, "List metadata contended -- retry")
+                    self._list_action_error(503, "List metadata contended -- retry")
                     self.response.headers["Retry-After"] = "1"
                     return
                 except DbError:
                     raise
                 except Exception as e:
                     logger.error(f"Error in list item management: {e}")
-                    self.response.set_status(
-                        500, f"Error processing list item: {str(e)}"
-                    )
+                    self._list_action_error(500, "Error processing list item")
                     return
 
         # Initialize variables to avoid unbound issues
@@ -1086,6 +1390,8 @@ class WwwHandler(base_handler.BaseHandler):
             property_value = self.request.get("property_value") or self.request.get(
                 "value"
             )
+            # A textarea posts line breaks as CRLF; store them as LF.
+            property_value = property_value.replace("\r\n", "\n")
             property_type = "simple"  # Individual property updates are always simple
         # Handle property operations
         if property_name:
@@ -1200,9 +1506,26 @@ class WwwHandler(base_handler.BaseHandler):
 
                 # Redirect back to properties page or init page after successful creation
                 self.response.set_status(302, "Found")
-                redirect_path = (
-                    self.request.get("redirect_to") or f"/{actor_id}/www/properties"
-                )
+                # redirect_to may only name a page of this actor's own web
+                # UI: anything else (another site, another actor) would make
+                # the form an open redirect.
+                www_root = self._www_path(actor_id)
+                redirect_path = self.request.get("redirect_to") or ""
+                if (
+                    not (
+                        redirect_path == www_root
+                        or redirect_path.startswith(www_root + "/")
+                    )
+                    or "//" in redirect_path
+                    or "\\" in redirect_path
+                    # No dot segment, raw or encoded: the browser resolves
+                    # "/<id>/www/../../<other>" out of this actor's UI.
+                    or "%" in redirect_path
+                    # Browsers strip tab and newline from a URL: "\t.." is "..".
+                    or any(c.isspace() or ord(c) < 32 for c in redirect_path)
+                    or any(seg in (".", "..") for seg in redirect_path.split("/"))
+                ):
+                    redirect_path = self._www_path(actor_id, "/properties")
                 self.response.set_redirect(redirect_path)
                 return
 

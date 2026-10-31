@@ -10,6 +10,10 @@ class SubscriptionRootHandler(base_handler.BaseHandler):
     """Handles requests to /subscription"""
 
     def get(self, actor_id):
+        # A GET with a _method override changes state: refuse one a
+        # page on another site started (see BaseHandler).
+        if self._refuse_cross_site_override():
+            return
         if self.request.get("_method") == "POST":
             self.post(actor_id)
             return
@@ -123,6 +127,10 @@ class SubscriptionRootHandler(base_handler.BaseHandler):
 # Handling requests to /subscription/*, e.g. /subscription/<peerid>
 class SubscriptionRelationshipHandler(base_handler.BaseHandler):
     def get(self, actor_id, peerid):
+        # A GET with a _method override changes state: refuse one a
+        # page on another site started (see BaseHandler).
+        if self._refuse_cross_site_override():
+            return
         if self.request.get("_method") == "POST":
             self.post(actor_id, peerid)
             return
@@ -287,6 +295,10 @@ class SubscriptionHandler(base_handler.BaseHandler):
     """Handling requests to specific subscriptions, e.g. /subscriptions/<peerid>/12f2ae53bd"""
 
     def get(self, actor_id, peerid, subid):
+        # A GET with a _method override changes state: refuse one a
+        # page on another site started (see BaseHandler).
+        if self._refuse_cross_site_override():
+            return
         if self.request.get("_method") == "PUT":
             self.put(actor_id, peerid, subid)
             return

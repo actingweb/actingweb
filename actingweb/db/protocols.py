@@ -228,7 +228,17 @@ class DbActorListProtocol(Protocol):
 
 @runtime_checkable
 class DbPropertyProtocol(Protocol):
-    """Protocol for property operations."""
+    """Protocol for property operations.
+
+    Optional capability: a backend's ``DbProperty`` class may declare
+    ``MAX_ROW_BYTES: int | None``, the largest row (in bytes) it can store.
+    ``Config`` reads it to choose the property-list size defaults: an
+    ``int`` gives a span threshold of 390,000 bytes and a 4 MiB item
+    ceiling, anything else (``None``, or the attribute absent, which is
+    what a custom backend gets by default) turns spanning off and sets no
+    ceiling. The application can set both explicitly with
+    ``ActingWebApp.with_list_item_limits()``.
+    """
 
     handle: Any | None
 

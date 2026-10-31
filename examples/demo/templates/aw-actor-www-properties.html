@@ -32,11 +32,11 @@
             {% if properties and properties|length > 0 %}
             <div class="card mb-lg">
                 <div class="card-body p-sm" style="overflow-x: auto;">
-                    <table style="min-width: 100%; table-layout: auto;">
+                    <table class="properties-table">
                         <colgroup>
-                            <col style="width: 25%; min-width: 120px;">
-                            <col style="width: 60%; min-width: 200px;">
-                            <col style="width: 15%; min-width: 100px;">
+                            <col class="col-name">
+                            <col class="col-value">
+                            <col class="col-actions">
                         </colgroup>
                         <thead>
                             <tr>
@@ -48,7 +48,7 @@
                         <tbody>
                             {% for k, v in properties.items() %}
                             <tr>
-                                <td class="font-medium">{{ k }}</td>
+                                <td class="font-medium"><a href="{{ url }}/properties/{{ k|urlencode }}">{{ k }}</a></td>
                                 <td class="font-mono text-sm" style="word-break: break-all; max-width: 600px;">{{ v }}</td>
                                 <td class="text-right" style="white-space: nowrap;">
                                     <button class="btn btn-danger-outline btn-sm delete-property-btn" data-property-name="{{ k }}" data-actor-url="{{ url }}">

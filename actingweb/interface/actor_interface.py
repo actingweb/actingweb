@@ -110,7 +110,9 @@ class ActorInterface:
         Args:
             creator: Creator identifier (usually email)
             config: ActingWeb Config object
-            actor_id: Optional custom actor ID
+            actor_id: Optional custom actor ID. Must not contain ``$``
+                (reserved for the actor's property-list side partition) or
+                be longer than 251 characters.
             passphrase: Optional custom passphrase
             delete_existing: Delete the existing actors with the same creator
                 first (not atomic)
@@ -135,6 +137,8 @@ class ActorInterface:
             CreatorTaken: with ``with_unique_creator()``, another actor holds
                 ``creator`` (the integrations answer it with 409)
             DbError: on a backend fault (503)
+            ValueError: ``actor_id`` contains ``$`` or is over 251
+                characters; nothing was written
         """
         core_actor = CoreActor(config=config)
 

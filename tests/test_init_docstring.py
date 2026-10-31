@@ -31,6 +31,9 @@ def test_init_all_unchanged():
         "aw_web_request",
         "interface",
         "ListMetadataContentionError",
+        "ListItemTooLargeError",
+        "ListItemSpanError",
+        "UNRESOLVED",
     ]
 
 

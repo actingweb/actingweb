@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from ..db.exceptions import DbError
 from ..property import PropertyStore as CorePropertyStore
-from ..property_list import ListItemHandle
+from ..property_list import ListItemHandle, diff_reference, spanned_reference
 
 if TYPE_CHECKING:
     from ..actor import Actor as CoreActor
@@ -251,6 +251,7 @@ class NotifyingListProperty:
         index: int | None = None,
         items: list[Any] | None = None,
         old_item: Any = _UNSET,
+        spanned_bytes: int | None = None,
     ) -> None:
         """Register a diff for the list property change.
 
@@ -309,6 +310,16 @@ class NotifyingListProperty:
             # Note: diff_info already contains "list": self._list_name to identify
             # this as a list operation. We use clean subtarget without "list:" prefix
             # as that prefix is an internal storage detail, not exposed via HTTP/callbacks.
+            # A diff whose blob would exceed the span threshold carries a
+            # reference (no values; top-level "spanned"/"bytes") -- see
+            # property_list.diff_reference(). A spanned item the caller did
+            # not read is a reference regardless of size.
+            if spanned_bytes is not None:
+                diff_info = spanned_reference(
+                    diff_info, self._list_prop.config, spanned_bytes
+                )
+            else:
+                diff_info = diff_reference(diff_info, self._list_prop.config)
             self._actor.register_diffs(
                 target="properties",
                 subtarget=self._list_name,
@@ -348,8 +359,16 @@ class NotifyingListProperty:
     def prime_from_rows(self, rows: dict[str, Any]) -> None:
         self._list_prop.prime_from_rows(rows)
 
-    def to_list_from_rows(self, rows: dict[str, Any]) -> list[Any]:
-        return self._list_prop.to_list_from_rows(rows)
+    def to_list_from_rows(
+        self, rows: dict[str, Any], *, resolve: bool = True
+    ) -> list[Any]:
+        return self._list_prop.to_list_from_rows(rows, resolve=resolve)
+
+    def sizes_from_rows(self, rows: dict[str, Any]) -> list[int]:
+        return self._list_prop.sizes_from_rows(rows)
+
+    def check_item_size(self, item: Any) -> None:
+        self._list_prop.check_item_size(item)
 
     def slice(self, start: int, end: int, consistent: bool = True) -> list[Any]:
         return self._list_prop.slice(start, end, consistent=consistent)
@@ -370,18 +389,26 @@ class NotifyingListProperty:
         """Read-only -- see ListProperty.find_all()."""
         return self._list_prop.find_all(identity_key, value, consistent=consistent)
 
-    def items_with_handles(self) -> list[tuple[ListItemHandle, Any]]:
+    def items_with_handles(
+        self, *, resolve: bool = True
+    ) -> list[tuple[ListItemHandle, Any]]:
         """Read-only -- see ListProperty.items_with_handles(). v2 only."""
-        return self._list_prop.items_with_handles()
+        return self._list_prop.items_with_handles(resolve=resolve)
 
-    def verify(self, identity_key: str | None = None) -> dict[str, Any]:
+    def item_at(self, handle: ListItemHandle) -> tuple[ListItemHandle, Any]:
+        """Read-only -- see ListProperty.item_at(). v2 only."""
+        return self._list_prop.item_at(handle)
+
+    def verify(
+        self, identity_key: str | None = None, spans: bool = False
+    ) -> dict[str, Any]:
         """Read-only integrity check -- see ListProperty.verify(). No diff
         is registered; nothing changes.
 
         Pass ``identity_key`` if your items carry an identifying field:
         duplicate detection defaults to byte comparison, which stops
         finding a duplicate once either copy is edited."""
-        return self._list_prop.verify(identity_key=identity_key)
+        return self._list_prop.verify(identity_key=identity_key, spans=spans)
 
     # Mutation operations - register diffs after completion
     def __setitem__(self, index: int, value: Any) -> None:
@@ -440,7 +467,14 @@ class NotifyingListProperty:
         closed operation vocabulary has no dedicated handle-delete entry)
         carrying the removed item's decoded value, only when the delete
         actually succeeded -- a ``False`` return means nothing changed."""
-        item = self._list_prop._decode_item(handle.raw_value)
+        if handle.spanned:
+            # The handle carries the spanned item's size, not its value:
+            # the diff is a reference, with no read of the bodies.
+            removed = self._list_prop.delete_by_handle(handle)
+            if removed:
+                self._register_diff("remove", spanned_bytes=handle.bytes or 0)
+            return removed
+        item = self._list_prop._unresolved_or_item(handle.rank, handle.raw_value)
         removed = self._list_prop.delete_by_handle(handle)
         if removed:
             self._register_diff("remove", item=item)
@@ -452,9 +486,17 @@ class NotifyingListProperty:
         carrying both the new item and ``old_item`` (decoded from the
         handle), only when the update actually succeeded. No index --
         a handle is not positional."""
-        old_item = self._list_prop._decode_item(handle.raw_value)
         updated = self._list_prop.update_by_handle(handle, item)
-        if updated:
+        if not updated:
+            return updated
+        if handle.spanned:
+            # The old item spans and was not read: a reference, sized from
+            # the handle plus the new value.
+            self._register_diff("update", item=item, spanned_bytes=handle.bytes or 0)
+        else:
+            old_item = self._list_prop._unresolved_or_item(
+                handle.rank, handle.raw_value
+            )
             self._register_diff("update", item=item, old_item=old_item)
         return updated
 
@@ -500,12 +542,21 @@ class NotifyingListProperty:
             self._register_diff("update", item=item, old_item=old_item)
         return len(old_items)
 
-    def compact(self) -> dict[str, Any]:
+    def compact(self, sweep_span_orphans: bool = False) -> dict[str, Any]:
         """Repair holes/orphans -- see ListProperty.compact(). Registers a
         "metadata" diff (the closed operation vocabulary has no dedicated
         "compact" entry) so subscribers re-read the list rather than trust
         a positional diff for what is a storage-layer rewrite."""
-        report = self._list_prop.compact()
+        report = self._list_prop.compact(sweep_span_orphans=sweep_span_orphans)
+        self._register_diff("metadata")
+        return report
+
+    def sweep_span_orphans(self) -> dict[str, Any]:
+        """Remove spanned-item leftovers -- see
+        ListProperty.sweep_span_orphans(). Registers a "metadata" diff, as
+        compact() does, since a removed broken or malformed head changes
+        the list."""
+        report = self._list_prop.sweep_span_orphans()
         self._register_diff("metadata")
         return report
 

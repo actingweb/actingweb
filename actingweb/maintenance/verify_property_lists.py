@@ -144,8 +144,18 @@ def sweep_actor(
     limiter: RateLimiter,
     identity_key: str | None = None,
     repair_reverted: bool = False,
+    spans: bool = False,
+    sweep_spans: bool = False,
 ) -> tuple[int, int, int]:
     """Verify (and optionally repair) every list belonging to one actor.
+
+    ``spans`` passes ``verify(spans=True)``: enumerate each v2 list's body
+    rows (every body byte, on DynamoDB). ``sweep_spans`` (with ``repair``)
+    runs ``sweep_span_orphans()`` (no rebalance, no body copy) on every v2
+    list before verifying it, healthy or not: an orphan generation does not
+    make a list unhealthy. The sweep is the one body enumeration; the verify
+    after it reads bodies only with ``spans``. Without ``repair``,
+    ``sweep_spans`` reports what a sweep would find (``verify(spans=True)``).
 
     Returns (lists_checked, lists_unhealthy_after, lists_errored).
     """
@@ -163,20 +173,73 @@ def sweep_actor(
         limiter.wait()
         checked += 1
         list_prop = ListProperty(actor_id=actor_id, name=name, config=config)
+        # The span sweep runs first, ahead of verify and of the healthy
+        # short-circuit (an orphan body generation does not make a list
+        # unhealthy). It enumerates the list's body rows itself, so the
+        # verify after it reads bodies again only when --spans asks: one
+        # content read for --repair --sweep-spans, not three. What it found
+        # and could not remove decides health below, since that verify does
+        # not look at spans. A sweep fault is counted and the list is still
+        # verified.
+        swept: dict[str, Any] | None = None
+        sweep_failed = False
+        if repair and sweep_spans:
+            try:
+                if list_prop.storage_format() == 2:
+                    swept = list_prop.sweep_span_orphans()
+                    logger.info(
+                        f"actor={actor_id} list={name}: span sweep removed "
+                        f"{swept.get('orphan_span_gens_removed', 0)} orphan "
+                        f"generation(s), {swept.get('broken_spans_removed', 0)} "
+                        f"broken span(s) and "
+                        f"{swept.get('malformed_heads_removed', 0)} malformed head(s)"
+                    )
+            except Exception as e:  # folds DbError: counted as error, exit 1
+                logger.error(
+                    f"actor={actor_id} list={name}: sweep_span_orphans() failed: {e}"
+                )
+                errored += 1
+                sweep_failed = True
         try:
             # verify() fetches the actor's whole property partition, so this
             # is one dump per list. That is inherent to checking integrity
             # (which is this script's job) -- unlike the migrate script,
             # which only needs the format and uses storage_format().
-            report = list_prop.verify(identity_key=identity_key)
+            report = list_prop.verify(
+                identity_key=identity_key,
+                spans=spans or (sweep_spans and not repair),
+            )
         except Exception as e:  # folds DbError: counted as error, exit 1
             logger.error(f"actor={actor_id} list={name}: verify() failed: {e}")
-            errored += 1
+            if not sweep_failed:  # one list counts once
+                errored += 1
             continue
 
         # v1 and v2 reports carry different fields, and the foreign-row
         # handling below branches on the format, so resolve it first.
         is_v2 = report.get("format") == 2
+
+        if is_v2 and (report.get("spanned_items") or "span_body_rows" in report):
+            logger.info(
+                f"actor={actor_id} list={name}: spanned_items="
+                f"{report.get('spanned_items')} span_bytes={report.get('span_bytes')}"
+                + (
+                    f" span_body_rows={report['span_body_rows']} "
+                    f"orphan_span_gens={report['orphan_span_gens']} "
+                    f"broken_spans={len(report['broken_spans'])}"
+                    if "span_body_rows" in report
+                    else ""
+                )
+            )
+        if report.get("malformed_heads"):
+            logger.warning(
+                f"actor={actor_id} list={name}: "
+                f"{len(report['malformed_heads'])} head row(s) hold a malformed "
+                f"storage envelope -- --repair --sweep-spans removes the ones "
+                f"that carry the library's marker; a head that is not valid "
+                f"JSON is kept with its bodies for recovery: remove that item "
+                f"with delete_by_handle() once its value is saved"
+            )
 
         # Rows of the OTHER storage format sharing this list's name: what an
         # interrupted migration or downgrade leaves. Not a health failure --
@@ -218,6 +281,26 @@ def sweep_actor(
                     f"this list's format; clear it by re-running "
                     f"actingweb-migrate-property-lists --migrate"
                 )
+
+        # Broken spans the sweep found and could not remove (the head
+        # changed under it): the verify above did not look at spans, so this
+        # decides, whatever else the list needs. A malformed head left in
+        # place is already in the report (verify marks it unhealthy).
+        sweep_left = 0
+        if swept is not None:
+            sweep_left = len(swept.get("broken_spans") or []) - swept.get(
+                "broken_spans_removed", 0
+            )
+            if sweep_left > 0:
+                logger.warning(
+                    f"actor={actor_id} list={name}: UNHEALTHY: the span sweep "
+                    f"left {sweep_left} broken span(s) in place (changed under "
+                    f"the sweep) -- re-run, or remove the item(s) with "
+                    f"delete_by_handle()"
+                )
+                if report["healthy"]:
+                    unhealthy_after += 1
+                    continue
 
         if report["healthy"]:
             continue
@@ -303,7 +386,7 @@ def sweep_actor(
             continue
 
         post = list_prop.verify(identity_key=identity_key)
-        if post["healthy"]:
+        if post["healthy"] and sweep_left <= 0:
             logger.info(f"actor={actor_id} list={name}: repaired")
         else:
             unhealthy_after += 1
@@ -332,6 +415,26 @@ def main() -> int:
             "matter disappears and the NEXT clear()/delete()/migrate re-run "
             "sweeps them for real. Pass this only after extracting those rows, "
             "or after deciding to abandon them"
+        ),
+    )
+    parser.add_argument(
+        "--spans",
+        action="store_true",
+        help=(
+            "also enumerate each v2 list's spanned-item body rows and report "
+            "span_body_rows, orphan_span_gens and broken_spans. Reads every "
+            "body byte on DynamoDB"
+        ),
+    )
+    parser.add_argument(
+        "--sweep-spans",
+        action="store_true",
+        help=(
+            "with --repair, run sweep_span_orphans() on every v2 list with "
+            "orphan or broken spans or malformed heads (no rebalance): remove "
+            "orphan body generations older "
+            "than an hour and heads whose bodies are missing (the remedy a "
+            "409 for a broken span names). Implies --spans"
         ),
     )
     parser.add_argument(
@@ -395,6 +498,8 @@ def main() -> int:
             limiter,
             args.identity_key,
             repair_reverted=args.repair_reverted,
+            spans=args.spans,
+            sweep_spans=args.sweep_spans,
         )
         total_checked += checked
         total_unhealthy += unhealthy

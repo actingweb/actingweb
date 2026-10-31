@@ -39,16 +39,115 @@
                     <div class="mb-md">
                         <label class="text-sm font-medium text-muted">Property Type</label>
                         <div class="mt-xs">
-                            <span class="badge badge-accent">{{ qual }}</span>
+                            <span class="badge badge-accent">{% if is_list_property %}list{% else %}property{% endif %}</span>
                         </div>
                     </div>
 
+                    {% if is_list_property %}
+                    {% if list_description %}<p class="mb-md">{{ list_description }}</p>{% endif %}
+                    {% set list_url = url ~ "/properties/" ~ (property|urlencode) %}
+                    {% if list_error %}
+                    <div class="list-error mb-md" role="alert">
+                        This list could not be read: {{ list_error }}
+                    </div>
+                    {% else %}
+                    {% if edit_entry %}
+                    <div class="list-item mb-md">
+                        <label class="text-sm font-medium text-muted" for="edit-item">Edit item {{ edit_entry.index }} ({{ edit_entry.bytes }} bytes, {% if edit_entry.text is not none %}text{% else %}JSON{% endif %})</label>
+                        <form method="post" action="{{ list_url }}/items" class="mt-xs">
+                            <input type="hidden" name="action" value="update">
+                            {% if edit_entry.rank %}
+                            <input type="hidden" name="item_rank" value="{{ edit_entry.rank }}">
+                            {% else %}
+                            <input type="hidden" name="item_index" value="{{ edit_entry.index }}">
+                            {% endif %}
+                            <input type="hidden" name="item_digest" value="{{ edit_entry.digest }}">
+                            {% if edit_entry.text is not none %}
+                            <input type="hidden" name="item_format" value="text">
+                            <textarea id="edit-item" name="item_value" rows="8" class="list-item-editor" required>
+{{ edit_entry.text }}</textarea>
+                            {% else %}
+                            <input type="hidden" name="item_format" value="json">
+                            <textarea id="edit-item" name="item_value" rows="8" class="list-item-editor" required>
+{{ edit_entry.json }}</textarea>
+                            {% endif %}
+                            <div class="flex gap-sm mt-xs">
+                                <button type="submit" class="btn btn-primary btn-sm">Save item</button>
+                                <a href="{{ list_url }}" class="btn btn-secondary btn-sm">Cancel</a>
+                            </div>
+                        </form>
+                    </div>
+                    {% endif %}
+                    <div>
+                        <label class="text-sm font-medium text-muted">Items ({{ list_entries|length }})</label>
+                        {% for entry in list_entries %}
+                        <div class="list-item mt-sm">
+                            <div class="flex gap-sm" style="align-items: baseline;">
+                                <span class="badge">{{ entry.index }}</span>
+                                {% if entry.json is none %}
+                                <span class="list-item-preview text-sm text-muted">Large item, stored across several rows</span>
+                                {% else %}
+                                {% set preview = entry.text if entry.text is not none else entry.json %}
+                                <code class="list-item-preview">{{ preview[:200] }}{% if preview|length > 200 %}&hellip;{% endif %}</code>
+                                {% endif %}
+                                <span class="text-xs text-muted" style="white-space: nowrap;">{{ entry.bytes }} bytes</span>
+                            </div>
+                            {% if not is_read_only %}
+                            <div class="flex gap-sm mt-xs">
+                                {% if entry.rank %}
+                                <a href="{{ list_url }}?edit={{ entry.rank|urlencode }}" class="btn btn-secondary btn-sm">Edit</a>
+                                {% else %}
+                                <a href="{{ list_url }}?edit_index={{ entry.index }}" class="btn btn-secondary btn-sm">Edit</a>
+                                {% endif %}
+                                <form method="post" action="{{ list_url }}/items"
+                                      data-confirm="Delete item {{ entry.index }}?"
+                                      onsubmit="return confirm(this.dataset.confirm);">
+                                    <input type="hidden" name="action" value="delete">
+                                    {% if entry.rank %}
+                                    <input type="hidden" name="item_rank" value="{{ entry.rank }}">
+                                    <input type="hidden" name="item_digest" value="{{ entry.digest }}">
+                                    {% else %}
+                                    <input type="hidden" name="item_index" value="{{ entry.index }}">
+                                    <input type="hidden" name="item_digest" value="{{ entry.digest }}">
+                                    {% endif %}
+                                    <button type="submit" class="btn btn-danger-outline btn-sm">Delete</button>
+                                </form>
+                            </div>
+                            {% endif %}
+                        </div>
+                        {% else %}
+                        <p class="text-sm text-muted mt-xs">This list is empty.</p>
+                        {% endfor %}
+                        {% if not is_read_only %}
+                        <form method="post" action="{{ list_url }}/items" class="mt-md">
+                            <input type="hidden" name="action" value="add">
+                            <label class="text-sm font-medium text-muted" for="new-item">Add an item (JSON, or plain text)</label>
+                            <textarea id="new-item" name="item_value" rows="3" class="list-item-editor mt-xs" required></textarea>
+                            <button type="submit" class="btn btn-primary btn-sm mt-xs">Add item</button>
+                        </form>
+                        {% else %}
+                        <p class="text-sm text-muted mt-md">This list is read-only.</p>
+                        {% endif %}
+                    </div>
+                    {% endif %}
+                    {% else %}
                     <div>
                         <label class="text-sm font-medium text-muted">Value</label>
                         <div class="copy-field mt-xs">
                             <code>{{ value }}</code>
                         </div>
                     </div>
+                    {% if not is_read_only %}
+                    <form method="post" action="{{ url }}/properties/{{ property|urlencode }}" class="mt-md">
+                        <label class="text-sm font-medium text-muted" for="edit-value">New value</label>
+                        <textarea id="edit-value" name="value" rows="3" class="list-item-editor mt-xs" required>
+{{ raw_value }}</textarea>
+                        <button type="submit" class="btn btn-primary btn-sm mt-xs">Save value</button>
+                    </form>
+                    {% else %}
+                    <p class="text-sm text-muted mt-md">This property is read-only.</p>
+                    {% endif %}
+                    {% endif %}
                 </div>
             </div>
 

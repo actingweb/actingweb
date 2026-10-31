@@ -133,6 +133,11 @@ class DbProperty:
     delete().
     """
 
+    # The largest row DynamoDB stores (400 KB, attribute names included).
+    # The property-list layer reads this to set its span threshold and item
+    # ceiling defaults (see actingweb.config.Config.list_item_span_threshold).
+    MAX_ROW_BYTES: int | None = 409_600
+
     def __init__(
         self,
         use_lookup_table: bool | None = None,

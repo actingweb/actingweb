@@ -32,7 +32,7 @@
             {% if trusts and trusts|length > 0 %}
             <div class="card mb-lg">
                 <div class="card-body p-sm" style="overflow-x: auto;">
-                    <table>
+                    <table class="trust-table">
                         <thead>
                             <tr>
                                 <th>Peer ID</th>
@@ -66,20 +66,28 @@
                                 </td>
                                 <td class="text-right">
                                     <div class="flex gap-xs justify-end">
-                                        <a href="{{ trust.baseuri }}" class="btn btn-sm btn-ghost" target="_blank" title="Visit Peer">
+                                        {% if trust.peer_link %}<a href="{{ trust.peer_link }}" class="btn btn-sm btn-ghost" target="_blank" rel="noopener noreferrer" title="Visit Peer" aria-label="Visit peer {{ trust.peerid }}">
                                             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                                 <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
                                                 <polyline points="15 3 21 3 21 9"/>
                                                 <line x1="10" y1="14" x2="21" y2="3"/>
                                             </svg>
-                                        </a>
-                                        {% if not trust.approved %}
+                                        </a>{% endif %}
+                                        {% if not trust.approved and trust.approveuri %}
                                         <a href="{{ trust.approveuri }}?_method=PUT&approved=true" class="btn btn-sm btn-success">
                                             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                                 <polyline points="20 6 9 17 4 12"/>
                                             </svg>
                                             Approve
                                         </a>
+                                        {% endif %}
+                                        {% if trust.approveuri %}
+                                        <form method="get" action="{{ trust.approveuri }}"
+                                              data-confirm="Delete the trust with {{ trust.peerid }}?"
+                                              onsubmit="return confirm(this.dataset.confirm);">
+                                            <input type="hidden" name="_method" value="DELETE">
+                                            <button type="submit" class="btn btn-sm btn-danger-outline" title="Delete trust">Delete</button>
+                                        </form>
                                         {% endif %}
                                     </div>
                                 </td>

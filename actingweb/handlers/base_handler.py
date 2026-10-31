@@ -21,6 +21,71 @@ class BaseHandler:
         self.config = config
         self.hooks = hooks
 
+    # --- Cross-site requests --------------------------------------------
+    #
+    # A browser sends session cookies (SameSite=Lax rides along on a
+    # top-level GET from any site) and cached basic-auth credentials with a
+    # request another site starts, and the integrations turn the
+    # ``oauth_token`` cookie into a Bearer header. So a request that changes
+    # state from a browser must show it came from this app's own origin.
+
+    def _www_path(self, actor_id: str, suffix: str = "") -> str:
+        """``/<base>/<actor_id>/www`` plus ``suffix``: the web UI's path,
+        with the deployment's base path from ``config.root``, for redirects
+        and back links."""
+        return self.config.actor_path(actor_id, f"/www{suffix}")
+
+    def _same_origin(self, url: str) -> bool:
+        """Whether ``url``'s origin is this app's own (``config.root``)."""
+        from actingweb.cross_site import same_origin
+
+        return same_origin(url, getattr(self.config, "root", "") or "")
+
+    def _session_cookie_auth(self) -> bool:
+        """Whether the request carries the web UI's session cookie
+        (``oauth_token``), whatever its Authorization header says."""
+        cookies = getattr(self.request, "cookies", None) or {}
+        return bool(cookies.get("oauth_token"))
+
+    def _cross_site_refused(self, require_evidence: bool = False) -> bool:
+        """True when a state-changing request comes from another site; see
+        ``actingweb.cross_site.cross_site``. With ``require_evidence`` (a
+        GET that changes state) a request without ambient credentials (no
+        session cookie, no basic auth: an explicit Bearer token, say) is
+        never refused: another site cannot attach those."""
+        from actingweb import cross_site as cs
+
+        cookie = self._session_cookie_auth()
+        if require_evidence and not cs.ambient_credentials(
+            self.request.get_header("Authorization"), cookie
+        ):
+            return False
+        return cs.cross_site(
+            self.request.get_header,
+            getattr(self.config, "root", "") or "",
+            require_evidence=require_evidence,
+            session_cookie=cookie,
+        )
+
+    def _refuse_cross_site(self, require_evidence: bool = False) -> bool:
+        """Answer 403 for a cross-site state-changing request; True when it
+        did."""
+        if not self._cross_site_refused(require_evidence):
+            return False
+        self.response.set_status(403, "Cross-site request refused")
+        self.response.headers["Content-Type"] = "text/plain; charset=utf-8"
+        self.response.write("Cross-site request refused")
+        return True
+
+    def _refuse_cross_site_override(self) -> bool:
+        """For a GET handler: True (403 answered) when the request carries a
+        ``_method`` override and does not show it came from this app's own
+        pages. A GET that changes state must never be startable by a link
+        on another site; a real PUT/POST/DELETE is not affected."""
+        if not self.request.get("_method"):
+            return False
+        return self._refuse_cross_site(require_evidence=True)
+
     def _get_actor_interface(self, actor) -> Optional["ActorInterface"]:
         """Get ActorInterface wrapper for given actor."""
         if actor:

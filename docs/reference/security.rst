@@ -21,6 +21,43 @@ Access Control
 - **Permission merging**: Individual overrides UNION with base patterns (fail-safe).
 - To restrict access, use `excluded_patterns`; base `patterns` cannot be narrowed.
 - Use `merge_base=False` only when explicit full override is needed.
+- **Resource URI patterns are not normalised.** ``notes://`` is matched as
+  ``notes://*``, and a target such as ``notes://../../security/key`` matches
+  it: ``..`` segments and percent-encoding are not resolved. A resource
+  reader that maps URIs to storage validates its own path.
+- **A GET never changes state from another site.** Every handler that
+  honours a ``_method`` override on ``GET`` refuses one that carries an
+  ambient credential (the session cookie, or basic auth) unless the
+  request shows it came from the application's own pages
+  (``Sec-Fetch-Site: same-origin``, or a same-origin ``Origin`` or
+  ``Referer``); a request with none of these passes unless it carries the
+  session cookie. Web UI ``POST`` forms are refused when the browser
+  reports a cross-site request, and the integrations do not let the
+  session cookie, or a Basic header (except on ``/oauth/token``),
+  authenticate a
+  state-changing request another site (sibling subdomains included)
+  started. Both rely on the
+  browser's ``Sec-Fetch-Site``, ``Origin`` and ``Referer`` reaching the
+  application: do not strip them at a proxy. A cross-site request with
+  cached basic-auth credentials and no browser headers at all passes:
+  prefer OAuth2 sessions for browser use.
+- **Peer-supplied trust fields are shapes, not markup.** A peer's id and
+  base URI are checked when trust is requested in either direction and when
+  a peer changes its base URI (an id of letters, digits and
+  ``_ . : @ + = -``; a plain ``http(s)`` base URI).
+  Templates of your own must not interpolate values inside inline event
+  handlers: HTML escaping does not protect a JavaScript string there; use a
+  ``data-`` attribute.
+- **REST property permission checks fail closed.** When the permission
+  check itself raises for a peer (the evaluator cannot be built, or the
+  legacy check behind a no-rule result raises), the property, list-metadata
+  and list-item handlers deny (403) rather than answer with the legacy
+  ``access`` table; a database fault still answers 503. An error inside rule
+  evaluation already denies.
+- **MCP ``*/list`` filters fail closed.** When the permission evaluator
+  cannot be constructed, ``tools/list``, ``resources/list`` and
+  ``prompts/list`` answer an empty list; an item whose evaluation raises is
+  left out. A database fault still answers 503.
 
 MCP Multi-Client Trust
 ------------------------

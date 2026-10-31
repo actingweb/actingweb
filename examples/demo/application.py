@@ -12,6 +12,7 @@ examples/mcp_quickstart.py for that.
 import logging
 import os
 import sys
+from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
 from flask import Flask
@@ -40,28 +41,16 @@ LOG.setLevel(os.getenv("LOG_LEVEL", "INFO"))
 logging.getLogger("urllib3.connectionpool").setLevel(logging.WARNING)
 
 # Create ActingWeb app with fluent configuration
+# Property-list item limits (see with_list_item_limits below).
+LIST_ITEM_SPAN_THRESHOLD = 390_000
+LIST_ITEM_MAX_BYTES = 4 * 2**20
+
 aw_app = (
     ActingWebApp(
         aw_type="urn:actingweb:actingweb.io:actingwebdemo",
         database="dynamodb",
         fqdn=os.getenv("APP_HOST_FQDN", "localhost:5000"),
         proto=os.getenv("APP_HOST_PROTOCOL", "https://"),
-    )
-    # OAuth2 configuration - supports Google and GitHub providers via the new authentication system
-    .with_oauth(
-        client_id=os.getenv(
-            "OAUTH_CLIENT_ID",
-            os.getenv("APP_OAUTH_ID", ""),
-        ),
-        client_secret=os.getenv("OAUTH_CLIENT_SECRET", os.getenv("APP_OAUTH_KEY", "")),
-        scope=os.getenv(
-            "OAUTH_SCOPE", "openid email profile"
-        ),  # Default to Google scopes
-        auth_uri=os.getenv(
-            "OAUTH_AUTH_URI", "https://accounts.google.com/o/oauth2/v2/auth"
-        ),
-        token_uri=os.getenv("OAUTH_TOKEN_URI", "https://oauth2.googleapis.com/token"),
-        redirect_uri=f"{os.getenv('APP_HOST_PROTOCOL', 'https://')}{os.getenv('APP_HOST_FQDN', 'localhost:5000')}/oauth/callback",
     )
     .with_web_ui(enable=True)
     # Defaults to disabled -- this is the code behind demo.actingweb.io, and
@@ -96,7 +85,59 @@ aw_app = (
     .with_legacy_property_index(
         enable=False
     )  # Use new lookup table instead of legacy GSI
+    # Property-list item limits, set explicitly so the demo behaves the same
+    # on DynamoDB and PostgreSQL (PostgreSQL's own defaults never span and
+    # set no ceiling).
+    .with_list_item_limits(
+        span_threshold=LIST_ITEM_SPAN_THRESHOLD, max_bytes=LIST_ITEM_MAX_BYTES
+    )
 )
+
+# Local QA only: DEMO_QA_BASIC_AUTH=true leaves OAuth off, so the web UI
+# (/<actor_id>/www) signs in with the library's basic auth: the creator and
+# passphrase of a throwaway actor made through POST / (see
+# examples/demo/README.md, "Local QA account"). Never set in a deployment:
+# it turns sign-in through the provider off. Refused unless the host is
+# localhost or 127.0.0.1.
+DEMO_QA_BASIC_AUTH = os.getenv("DEMO_QA_BASIC_AUTH", "false").lower() == "true"
+if DEMO_QA_BASIC_AUTH:
+    # Fail closed: the host must be named explicitly (no default stands in
+    # for it), and only the development server below, which binds the
+    # loopback interface, may serve it. Under a WSGI server (Lambda,
+    # gunicorn) the module is imported, never run as __main__.
+    _demo_host = urlsplit("//" + os.getenv("APP_HOST_FQDN", "")).hostname
+    if _demo_host not in ("localhost", "127.0.0.1"):
+        raise RuntimeError(
+            "DEMO_QA_BASIC_AUTH is for a local run only: set APP_HOST_FQDN to "
+            "localhost:<port> or 127.0.0.1:<port>"
+        )
+    if __name__ != "__main__":
+        raise RuntimeError(
+            "DEMO_QA_BASIC_AUTH is for the development server only: run "
+            "python examples/demo/application.py"
+        )
+if not DEMO_QA_BASIC_AUTH:
+    # OAuth2 configuration - supports Google and GitHub providers
+    aw_app.with_oauth(
+        client_id=os.getenv(
+            "OAUTH_CLIENT_ID",
+            os.getenv("APP_OAUTH_ID", ""),
+        ),
+        client_secret=os.getenv("OAUTH_CLIENT_SECRET", os.getenv("APP_OAUTH_KEY", "")),
+        scope=os.getenv(
+            "OAUTH_SCOPE", "openid email profile"
+        ),  # Default to Google scopes
+        auth_uri=os.getenv(
+            "OAUTH_AUTH_URI", "https://accounts.google.com/o/oauth2/v2/auth"
+        ),
+        token_uri=os.getenv("OAUTH_TOKEN_URI", "https://oauth2.googleapis.com/token"),
+        redirect_uri=f"{os.getenv('APP_HOST_PROTOCOL', 'https://')}{os.getenv('APP_HOST_FQDN', 'localhost:5000')}/oauth/callback",
+    )
+else:
+    LOG.warning(
+        "DEMO_QA_BASIC_AUTH is on: OAuth is off and /<actor_id>/www uses basic "
+        "auth. Local QA only."
+    )
 
 # Configure OAuth2 provider and trust relationship settings
 oauth_provider = os.getenv("OAUTH_PROVIDER", "google")  # "google" or "github"
@@ -130,6 +171,16 @@ register_all_shared_hooks(aw_app)
 
 # Create Flask app
 app = Flask(__name__, static_url_path="/static")
+# The ingress guard for list_item_max_bytes, which is a storage bound only.
+# The web UI posts an item as one URL-encoded form field, where a character
+# such as "&" or a non-ASCII letter grows to three bytes per byte (%XX), so
+# the request and form-field limits allow three times one maximal item plus
+# room for the rest of the form. The library refuses an oversized item itself
+# with a 413 that names the limit. (A FastAPI deployment uses an ASGI
+# body-limit middleware or its reverse proxy's body-size setting.)
+_FORM_LIMIT = 3 * LIST_ITEM_MAX_BYTES + 64 * 1024
+app.config["MAX_CONTENT_LENGTH"] = _FORM_LIMIT
+app.config["MAX_FORM_MEMORY_SIZE"] = _FORM_LIMIT
 
 # Trust proxy headers (X-Forwarded-Proto, X-Forwarded-Host, etc.) from ngrok/reverse proxies
 # This ensures request.url uses https:// when behind a proxy that terminates SSL
@@ -276,4 +327,9 @@ if __name__ == "__main__":
     LOG.info("Starting ActingWeb Demo...")
 
     # Run in development mode
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    # In local QA mode (OAuth off) listen on the loopback interface only.
+    app.run(
+        host="127.0.0.1" if DEMO_QA_BASIC_AUTH else "0.0.0.0",
+        port=int(os.getenv("PORT", "5000")),
+        debug=True,
+    )

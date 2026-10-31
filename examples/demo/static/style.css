@@ -912,3 +912,131 @@ pre code {
 
 /* Flex utilities */
 .flex-1 { flex: 1; }
+
+/* Property list items on the property page */
+.page-header p {
+  overflow-wrap: anywhere;
+}
+
+.list-item {
+  padding: var(--spacing-sm);
+  border: 1px solid var(--color-border, rgba(127, 127, 127, 0.25));
+  border-radius: var(--radius-md);
+}
+
+.list-item-preview {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.list-item-editor {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-sm);
+}
+
+.list-error {
+  padding: var(--spacing-sm) var(--spacing-md);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-danger, #dc2626);
+  color: var(--color-danger, #dc2626);
+  overflow-wrap: anywhere;
+}
+
+/* The properties table: wrap instead of scrolling inside its card on a phone. */
+.properties-table {
+  min-width: 100%;
+  table-layout: auto;
+}
+.properties-table .col-name { width: 25%; }
+.properties-table .col-value { width: 60%; }
+.properties-table .col-actions { width: 15%; }
+/* Column minimums only where they fit (above phone width). */
+@media (min-width: 481px) {
+  .properties-table .col-name { min-width: 120px; }
+  .properties-table .col-value { min-width: 200px; }
+  .properties-table .col-actions { min-width: 100px; }
+}
+
+/* The trust table: long ids and type URNs wrap, so the actions stay
+   inside the card at every width. */
+.trust-table {
+  width: 100%;
+}
+.trust-table td {
+  overflow-wrap: anywhere;
+}
+.trust-table td:last-child {
+  white-space: nowrap;
+}
+.trust-table .badge {
+  white-space: nowrap;
+  overflow-wrap: normal;
+}
+
+@media (max-width: 480px) {
+  /* Phones: each property (or trust) stacks as a block, its cells one
+     under the other with the actions last, instead of columns that cannot
+     hold the buttons. */
+  .properties-table,
+  .properties-table tbody,
+  .properties-table tr,
+  .properties-table td,
+  .trust-table,
+  .trust-table tbody,
+  .trust-table tr,
+  .trust-table td {
+    display: block;
+    width: 100%;
+    box-sizing: border-box;
+  }
+  .properties-table thead,
+  .properties-table colgroup,
+  .trust-table thead {
+    display: none;
+  }
+  .properties-table tr,
+  .trust-table tr {
+    padding: var(--spacing-sm) 0;
+    border-bottom: 1px solid var(--color-border);
+  }
+  .properties-table td,
+  .trust-table td {
+    padding: 2px 0;
+    border: none;
+    text-align: left !important;
+  }
+  .trust-table td .justify-end {
+    justify-content: flex-start;
+  }
+  /* Two-column cards (the trust page's "About") take one column. */
+  .grid-cols-2 {
+    grid-template-columns: 1fr;
+  }
+  .properties-table td:nth-child(2) {
+    overflow-wrap: anywhere;
+    max-width: none !important;
+  }
+  /* The list page: preview on its own line under the index and size. */
+  .list-item > .flex {
+    flex-wrap: wrap;
+  }
+  .list-item-preview {
+    flex-basis: 100%;
+    order: 3;
+  }
+}
+
+/* A preview never reorders the text around it (bidi overrides stay inside). */
+.list-item-preview {
+  unicode-bidi: isolate;
+  /* Line breaks in a text item show as line breaks. */
+  white-space: pre-wrap;
+}
+
+/* A property value keeps its line breaks. */
+.copy-field code {
+  white-space: pre-wrap;
+}

@@ -147,6 +147,84 @@ SECURITY
   vouches for that address unless it passes ``unvouch=True`` (new), which
   applies the endpoint's rules.
 
+- **A link on another site could delete the actor, approve a trust, or
+  change a property for a signed-in owner.** Every REST handler honours a
+  ``_method`` override on ``GET`` (``GET /<id>?_method=DELETE`` deletes the
+  actor; ``/<id>/trust/<rel>/<peer>?_method=PUT&approved=true`` approves a
+  pending trust; ``/<id>/properties/<name>``, ``/subscriptions``,
+  ``/actions``, ``/methods`` and ``/callbacks`` likewise), and so does the
+  web UI's property page. A browser sends the ``SameSite=Lax`` session
+  cookie, which the Flask and FastAPI integrations turn into a Bearer
+  header, and cached basic-auth credentials, on a top-level navigation
+  started by any site. The web UI's ``POST`` forms had no origin check
+  either (only the list item actions did, and only on ``Origin``).
+
+  A ``GET`` with a ``_method`` override that carries an ambient credential
+  (the session cookie, or basic auth, which browsers cache) now answers 403
+  "Cross-site request refused" unless it shows it came from the
+  application's own pages: ``Sec-Fetch-Site: same-origin`` when the
+  browser sends the header (so ``none``, a link opened from a mail or chat
+  client, is refused too), else a same-origin ``Origin`` or ``Referer``;
+  without any of the three it passes, except when it carries the session
+  cookie. A request with an explicit Bearer token and no cookie is not
+  checked: another site cannot attach one. Every ``POST`` under
+  ``/<id>/www`` answers 403 when the browser says it is cross-site
+  (``Sec-Fetch-Site`` other than ``same-origin`` or ``none``, or a foreign
+  or ``null`` ``Origin``, or a foreign ``Referer``). The Flask and FastAPI
+  integrations no longer turn the ``oauth_token`` cookie into a Bearer
+  header for a ``POST``, ``PUT``, ``PATCH`` or ``DELETE`` that the browser
+  says another site, a sibling subdomain included, started, and drop a
+  ``Basic`` Authorization header from such a request on every route except
+  ``/oauth/token``, where it is an OAuth2 client's own
+  ``client_secret_basic`` (the token endpoint now also reads a lowercase
+  ``basic`` scheme). A browser sends the ``Lax``
+  cookie on any same-site request and on a top-level ``GET`` from any site,
+  and cached basic-auth credentials on any request; the drop is logged at
+  INFO. This relies on the
+  browser's ``Sec-Fetch-Site``, ``Origin`` and ``Referer`` reaching the
+  application; a proxy that strips all three turns it off. "Same origin" is the scheme, host and port of
+  ``config.root``; a base path does not matter. Peers and SPAs (Bearer
+  tokens) are unaffected. The property creation form's ``redirect_to``
+  now only redirects within the actor's own web UI (no other actor, no dot
+  segments, no percent-encoding, no whitespace). **Limitation:** a
+  cross-site request with cached basic-auth credentials and no browser
+  headers at all (a browser without Fetch Metadata following a
+  no-referrer link) cannot be told from ``curl -u`` and passes; prefer
+  OAuth2 sessions for browser use. **Behavior change:** a page on another
+  origin that posts to the web UI or links to a ``?_method=`` URL, and a
+  browser link opened from outside the browser, now get 403; a form on a
+  sibling subdomain no longer acts with the owner's session; a script that
+  uses ``?_method=`` with the session cookie and no browser headers must
+  send the real method instead.
+
+- **A peer could plant script and links in the owner's web UI.** A trust
+  request (``POST /<id>/trust/<rel>``, unauthenticated by design) chose
+  the peer's ``id`` and ``baseuri`` freely, and the trust page put the id
+  inside an inline ``confirm('...')`` handler, where HTML escaping does not
+  protect a quote (the browser decodes ``&#39;`` before running it), built
+  links from it unquoted (an id of ``../../<actor>`` turned Delete into
+  ``GET /<actor>?_method=DELETE``), and the demo linked to the base URI
+  (``javascript:`` or a ``?_method=`` URL on the same origin). The property
+  pages did the same with property names. A peer's id must now be
+  letters, digits and ``_ . : @ + = -`` (at most 255, starting with a
+  letter or digit) and its base URI a plain ``http(s)`` URL with no user
+  info, query or fragment, both when a peer asks for trust (400 "Invalid id
+  or baseuri"), when a peer changes its base URI with ``PUT
+  /<id>/trust/<rel>/<peer>`` (400 "Invalid baseuri"), and when this actor
+  asks a peer (``create_reciprocal_trust`` returns ``False`` for such a URL
+  or a peer id outside the shape); ``Actor.create_verified_trust`` refuses
+  them too. The shipped templates put no value inside an inline handler
+  (the confirm text is a ``data-confirm`` attribute), encode property names
+  in their URLs (a name with ``?`` made a same-origin ``?_method=DELETE``
+  link), quote the peer id in the trust page's links (a row whose id is
+  only dots gets none), and the demo links to a peer only through
+  ``peer_link``, set only for a valid base URI. The email-verification
+  fallback page escapes the message and address. **Behavior change:** a peer whose id or base URI
+  falls outside those shapes can no longer establish trust; ids the library
+  makes for OAuth2 and MCP trusts are not affected. A custom template that
+  interpolates a value inside ``onsubmit``/``onclick`` should move it to a
+  ``data-`` attribute.
+
 REMOVED
 ~~~~~~~
 
@@ -444,8 +522,140 @@ CHANGED
   in the built documentation moves from ``LICENSE.html`` to
   ``docs/license.html``.
 
+- **MCP ``tools/list``, ``resources/list`` and ``prompts/list`` listed
+  everything when the permission evaluator failed.** An evaluator that
+  could not be constructed left the filter off, and an item whose
+  evaluation raised was listed anyway, so an evaluator fault showed a
+  connected client every tool, resource and prompt. The three lists now
+  fail closed: an evaluator that cannot be constructed answers an empty
+  list, and an item whose evaluation raises is left out, each logged at
+  ERROR with the traceback. A database fault still answers 503.
+  **Behavior change:** a client connected while the permission system is
+  broken sees an empty server instead of every item; check the ERROR log
+  when a client reports an empty tool list.
+
+- **Breaking: a list-item diff whose blob would exceed the span threshold
+  is sent as a reference.** A ``SubscriptionDiff`` row has the same row cap
+  as a list item, and an ``update`` diff carries two values, so a diff over
+  ``list_item_span_threshold`` (390,000 bytes on DynamoDB; off on
+  PostgreSQL) used to be lost or fail the full-state fallback. Such a diff
+  now has its value fields (``item``, ``old_item``, ``value``, ``items``)
+  removed and top-level ``"spanned": true`` and ``"bytes"`` added; this
+  covers a spanned item, a large ``update``, an ``extend`` of many items,
+  the REST handlers' single-item diffs and the full-state fallback for a
+  peer without resync. The library's receiver does not apply a reference: it
+  logs a WARNING and answers ``{"success": false, "spanned": true}``; the
+  subscriber re-reads the list. **Behavior change:** a pre-3.16 subscriber
+  answers ``unknown operation`` to a reference and stores nothing; a
+  subscriber that applies diffs itself must re-read the list on
+  ``"spanned": true``.
+
+- ``downgrade_to_v1`` refuses a list holding spanned items
+  (``reason="envelopes"``), and ``migrate_to_v2()`` refuses a v1 list
+  holding a dict item whose first key is ``__aw_env``
+  (``reason="envelope-shaped item"``; the migrate script reports it as a
+  refusal). Writers refuse an item that is a dict carrying ``__aw_env`` (or
+  whose string form starts like a storage envelope) with ``ValueError``
+  before any write.
+
+- **``$`` is refused in new list names.** It separates a list's spanned
+  body rows from its items. **Behavior change:** creating a list whose name
+  contains ``$`` raises ``ValueError``; existing lists with ``$`` in their
+  name keep working.
+
+- **``Actor.create`` refuses a caller-supplied ``actor_id`` containing
+  ``$`` or longer than 251 characters**, with ``ValueError`` before any
+  write: ``$`` separates an actor's property-list side partition
+  (``{actor_id}$aux``), and the side partition key must fit PostgreSQL's
+  255-character ``properties.id``. **Behavior change:** generated ids (32
+  hex characters) are unaffected; an application that supplies its own ids
+  must keep them free of ``$``.
+
+- An actor delete also sweeps the actor's property-list side partition
+  (spanned items' body rows), until a prefix read finds it empty, at most
+  three passes. ``actingweb-verify-orphans`` reports a leaked side
+  partition under its raw ``{actor_id}$aux`` key once the actor is gone.
+
+- ``GET /properties?metadata=true`` reports each list's ``total_bytes``
+  from the item rows alone (a spanned item's head carries its size), and
+  ``format=full`` and ``metadata=true`` report a list with a broken span or
+  a malformed head with an ``error`` marker instead of failing the whole
+  response. The handle-only reads in the REST and www item handlers no
+  longer read spanned items' bodies. The bulk ``items`` update size-checks
+  every entry before writing any, so its 413 means nothing was written, and
+  ``PUT ?index=`` answers a broken span with the 409.
+
+- **Behavior change: the REST property handlers deny when their permission
+  check raises.** For a peer request, ``PropertiesHandler``,
+  ``PropertyMetadataHandler`` and ``PropertyListItemsHandler`` caught an
+  exception from ``get_permission_evaluator()``, or from the legacy check
+  behind a ``NOT_FOUND`` result, and answered with the coarse legacy
+  ``access`` table, which for the default table allowed ``friend``,
+  ``partner`` and ``admin`` every property method. They now deny (403) and
+  log at ERROR; a ``DbError`` still answers 503. An error inside the
+  evaluator's own rule evaluation already answered ``DENIED`` and is
+  unchanged, as is the no-rule (``NOT_FOUND``) fallback. Only a deployment
+  whose evaluator cannot be built, or whose legacy check raises, sees 403s
+  where it saw 200s; check the ERROR log for "Error in permission evaluation".
+
+- **The web UI's list pages read item heads only and act by identity.**
+  ``/<id>/www/properties/<list>`` no longer reads spanned items' bodies: it
+  passes ``list_entries`` (index, rank, a digest of the stored value, size,
+  and the item's JSON with key order and non-ASCII kept, ``None`` for a
+  spanned item) beside ``list_items`` (where a spanned item is
+  ``UNRESOLVED``), and ``?edit=<rank>`` loads one item whole as
+  ``edit_entry``; a corrupted list sets ``list_error``. The item actions
+  accept ``item_rank`` and ``item_digest`` and answer 409 when the item
+  changed or went since the page was loaded, refuse writes on a list a put
+  hook makes read-only (403), refuse a cross-site request (403, see
+  SECURITY), refuse invalid JSON when ``item_format=json``, store every
+  textarea's line breaks as ``\n`` (a textarea posts CRLF; an item written
+  over REST with CRLF is rewritten with LF when it is saved in the web
+  UI), and treat a whitespace-only value as empty. A v1 list's items are
+  edited by position (``?edit_index=<i>``), and its actions accept
+  ``item_digest`` too, answering 409 when that position now holds a
+  different item or none; this is best effort (the check and the write are
+  two steps) and only runs when the form posts ``item_digest``. The web
+  UI's redirects, the trust and email-verification redirects and the error
+  pages' back links keep the deployment's base path (``config.root``). **Behavior change:** in ``list_items`` a spanned item is the
+  ``UNRESOLVED`` sentinel, so a custom template that prints ``list_items``
+  shows the text ``UNRESOLVED`` for it, and one that passes ``list_items``
+  through ``tojson`` raises ``TypeError``. Render ``list_entries`` instead,
+  as the shipped templates do (see ``docs/guides/web-ui.rst``).
+
+- **The web UI's list item actions answer with a reason.** The
+  ``/<id>/www/properties/<list>/items`` actions answered errors with an empty
+  body, mapped an oversized item to 500 and a broken span to 400, and an
+  ``update`` with an empty ``item_value`` replaced the item with ``""``.
+  They now answer with a small HTML page carrying the reason and a link back
+  to the list, answer 413 and 409, and
+  refuse an empty ``update`` value with 400 as ``add`` already did.
+  **Behavior change:** a form that posts an empty value to blank an item
+  gets 400.
+
+- **``with_list_item_limits()`` refuses a ceiling more than 9,999 body rows
+  of the threshold** (``list_item_max_bytes > 9999 *
+  list_item_span_threshold``), where an item at the ceiling could not be
+  stored. **Behavior change:** such a pair raises ``ValueError`` wherever
+  it is set.
+
+- An actor delete skips the side-partition sweep, with an ERROR, when an
+  actor exists whose id is the deleted actor's id plus ``$aux`` (possible
+  only with pre-3.16 caller-supplied ids), and logs a WARNING when rows
+  remain after its last pass.
+
 ADDED
 ~~~~~
+
+- **``Config.actor_path(actor_id, suffix="")``** returns an actor's path
+  with the deployment's base path (the path part of ``config.root``). The
+  library's redirects after sign-in, after the email flow, from ``/<id>``
+  in a browser, from the email-verification page and from the trust and
+  web UI pages use it, so a deployment mounted under a base path no longer
+  lands on ``/<id>/www`` without it. **Behavior change:** the
+  ``redirect_url`` the OAuth2 callback passes to the ``oauth_completed``
+  hook, and returns to an SPA, now carries the base path; a hook that
+  prefixed ``config.root`` to it should prefix the origin only.
 
 - **``actingweb-unique-creators``** (``report``, ``resolve``, ``enable``,
   ``disable``; dry run unless ``--apply``). ``report`` lists actors sharing
@@ -551,8 +761,69 @@ ADDED
   read and nothing was scanned, or when an argument such as ``--marker`` was
   refused. Run it as maintenance, with the application's environment.
 
+- **``ListItemTooLargeError``** (``from actingweb import
+  ListItemTooLargeError``), raised before any write when a property-list
+  item's encoded size is over a limit; it carries ``list_name``, ``bytes``,
+  ``limit`` and ``reason``, and its message never includes item content.
+  The REST handlers map it to 413 with ``{"error": "list_item_too_large",
+  "list", "bytes", "limit", "detail", "remedy"}``. It subclasses
+  ``ValueError``: catch it ahead of a generic ``except ValueError``.
+
+- **``ActingWebApp.with_list_item_limits(span_threshold=..., max_bytes=...)``**
+  and the ``Config`` settings ``list_item_span_threshold`` and
+  ``list_item_max_bytes``. Defaults follow the backend: DynamoDB 390,000
+  bytes and 4 MiB; PostgreSQL neither (unchanged behaviour there). An
+  omitted argument keeps the default and an explicit ``None`` turns the
+  limit off; out-of-range values raise ``ValueError`` wherever they are
+  set. A backend declares its row cap with ``DbProperty.MAX_ROW_BYTES``.
+  ``list_item_max_bytes`` is a storage bound: size the request-size limit
+  at the deployment's edge to match it. A deployment that develops on
+  PostgreSQL and runs DynamoDB in production sets both explicitly.
+
+- **Spanned list items.** On a v2 list an item over
+  ``list_item_span_threshold`` (390,000 encoded bytes on DynamoDB; off on
+  PostgreSQL unless configured) is stored across several rows and reads back
+  whole through every reader. The list row holds a small envelope; the
+  bodies live in the actor's side partition (``{actor_id}$aux``), so no
+  dump or range read of the actor's own properties carries a body byte.
+  Every rewrite writes a fresh body generation and then deletes the old
+  one; a reader that finds a generation short re-reads the head and bodies
+  strongly (at most twice) before raising ``ListItemSpanError`` (a
+  ``ListCorruptionError``; 409 over REST with a ``remedy`` naming the
+  repair), never a partial item. Costs: one extra paged read per spanned
+  item on every resolving read, and the body rows on every write.
+
+- ``items_with_handles(resolve=False)`` and
+  ``to_list_from_rows(rows, resolve=False)`` skip spanned items' bodies (the
+  slot holds the new ``UNRESOLVED`` sentinel, exported from ``actingweb``),
+  ``ListItemHandle`` gains ``spanned`` and ``bytes``, ``item_at(handle)``
+  reads one item now, and ``sizes_from_rows(rows)`` gives each item's size
+  without a body read.
+
+- ``verify()`` reports ``spanned_items``, ``span_bytes`` and
+  ``malformed_heads``; ``verify(spans=True)`` also enumerates body rows and
+  reports ``span_body_rows``, ``orphan_span_gens`` and ``broken_spans``.
+  ``sweep_span_orphans()`` removes orphan body generations older than an
+  hour, heads whose bodies are missing and malformed heads that carry the
+  library's envelope marker (``orphan_span_gens_removed``,
+  ``broken_spans_removed``, ``malformed_heads_removed``) without
+  rebalancing; a head that is not valid JSON is kept with the bodies it
+  names (``malformed_heads_kept``) for recovery, and the script reports a
+  list whose sweep left one in place as unhealthy;
+  ``compact(sweep_span_orphans=True)`` sweeps and then rebalances.
+  ``actingweb-verify-property-lists`` gains ``--spans`` and, with
+  ``--repair``, ``--sweep-spans`` (which runs the sweep, not a rebalance).
+  A span records its body's SHA-256, so same-length wrong content reads as a
+  broken span rather than as the item. ``ListProperty.check_item_size(item)``
+  checks an item against the limits without writing.
+
 FIXED
 ~~~~~
+
+- **A ``GET /<id>/callbacks/<name>?_method=POST`` ran the POST and then
+  the GET.** ``CallbacksHandler.get`` did not return after dispatching an
+  override, so both hooks ran and the GET's answer replaced the POST's. It
+  now returns after the override, as every other handler does.
 
 - **``GET /?format=json`` on Flask returned the HTML page.** The Flask root
   route rendered the factory template for every GET without running the
@@ -729,6 +1000,38 @@ FIXED
 - **A generated OAuth2 state key was written to the log.** When the state
   manager could not store a key it generated one in memory and logged it in
   full. It now logs that a non-persistent key is in use, not the key.
+
+- **A list item over DynamoDB's 400 KB row cap failed with an untyped
+  ``DbError("property write")``.** Nothing checked an item's size before
+  the write, so the backend refused the row and the caller (and a REST
+  client, as a 500) could not tell an oversized item from an outage; a v2
+  list's first mutation had already created its meta row by then. Every
+  item write (``append``, ``extend``, ``insert``, ``__setitem__``,
+  ``update_by_handle``, on v1 and v2 lists) now measures the encoded item
+  first and raises ``ListItemTooLargeError`` before anything is written,
+  including the meta row of a never-created list; ``extend()`` checks the
+  whole batch before its first write. On a v2 list an item over the span
+  threshold now spans several rows (see ADDED); an item over
+  ``list_item_max_bytes`` (4 MiB on DynamoDB), or a v1 list item over the
+  span threshold, is refused. The REST handlers answer 413 with a
+  structured body. **Behavior change:** a caller that caught ``DbError``
+  for an oversized item gets ``ListItemTooLargeError`` (a ``ValueError``)
+  instead, before any write, or the item is stored.
+
+- The property-list module docstring said items were stored "bypassing the
+  400KB limit"; each item is one row, so the limit applies per item, and
+  the docstring now says so. ``get_metadata()``'s ``chunk_size`` is
+  documented as a legacy field that is always ``1``. The configuration
+  guide's "property lists for chunked storage" advice is reworded the same
+  way. No behaviour change.
+
+- The ``://`` prefix form of a permission pattern (``notes://``) is now
+  matched through the glob path as ``notes://*`` instead of a separate
+  ``startswith`` branch. No behaviour change: the two match the same
+  targets, ``..`` segments included, and a pattern that already holds a
+  wildcard (``*://``) is left as written. The access-control guide and the
+  security reference now say that resource URIs are not normalised and a
+  resource reader validates its own path.
 
 v3.15.1: September 29, 2026
 ---------------------------

@@ -18,13 +18,15 @@
   {% elif is_list_property %}
     {% if list_description %}<p>{{ list_description }}</p>{% endif %}
     {% if list_explanation %}<p class="aw-muted">{{ list_explanation }}</p>{% endif %}
-    {% if list_items %}
+    {% if list_error %}
+      <p class="aw-muted">This list could not be read: {{ list_error }}</p>
+    {% elif list_entries %}
       <div class="aw-table-wrap">
       <table>
         <thead><tr><th>#</th><th>Item</th></tr></thead>
         <tbody>
-          {% for item in list_items %}
-            <tr><td>{{ loop.index0 }}</td><td><code>{{ item }}</code></td></tr>
+          {% for entry in list_entries %}
+            <tr><td>{{ entry.index }}</td><td>{% if entry.json is none %}<span class="aw-muted">large item, {{ entry.bytes }} bytes</span>{% else %}<code>{{ entry.json }}</code>{% endif %}</td></tr>
           {% endfor %}
         </tbody>
       </table>
@@ -39,7 +41,7 @@
 
     {% if not is_read_only %}
       <h2>Edit</h2>
-      <form method="post" action="{{ actor_www|default('') }}/properties/{{ property|default('') }}">
+      <form method="post" action="{{ actor_www|default('') }}/properties/{{ property|default('')|urlencode }}">
         <label for="value">New value</label>
         <input type="text" id="value" name="value" value="{{ raw_value|default('') }}">
         <p></p>
@@ -47,8 +49,9 @@
       </form>
 
       <h2>Delete</h2>
-      <form method="get" action="{{ actor_www|default('') }}/properties/{{ property|default('') }}"
-            onsubmit="return confirm('Delete property {{ property|default('') }}?');">
+      <form method="get" action="{{ actor_www|default('') }}/properties/{{ property|default('')|urlencode }}"
+            data-confirm="Delete property {{ property|default('') }}?"
+            onsubmit="return confirm(this.dataset.confirm);">
         <input type="hidden" name="_method" value="DELETE">
         <button type="submit" class="aw-btn aw-btn-danger">Delete property</button>
       </form>

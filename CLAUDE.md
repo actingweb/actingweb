@@ -86,17 +86,29 @@ Preconditions and warnings (the commands follow these as instructions):
   dynamodb-test`), copy `examples/demo/.env.example` to `examples/demo/.env`
   with a real OAuth2 client id and secret, then `poetry install --extras
   flask && poetry run python examples/demo/application.py`
-  (`http://localhost:5000`). Login goes through the real provider, so browser
-  QA can only cover what an already-logged-in session reaches.
-- Allowed hosts for browser QA: `localhost`, `127.0.0.1`
+  (`http://localhost:5000`). For browser QA without a real provider, run it
+  in local QA mode instead: `PORT=5055 APP_HOST_FQDN=localhost:5055
+  APP_HOST_PROTOCOL=http:// DEMO_QA_BASIC_AUTH=true` with DynamoDB Local
+  (`AWS_DB_HOST=http://localhost:8001`, a fresh `AWS_DB_PREFIX`) and
+  on a fresh database, start once (it creates the tables and stops with
+  `UniqueCreatorNotReady`), run `actingweb-unique-creators enable --apply`,
+  and start again; see
+  "Test account". Port 5000 is often held by a sibling project's dev server
+  (`../actingweb_mcp`): check it before sending any request there.
+- Allowed hosts for browser QA: `localhost`, `127.0.0.1` (on the demo's own
+  port; never a sibling project's server)
 - Seed or reset data: none. (`GET /nuke?secret=` deletes every actor and is
   only armed when `NUKE_SECRET` is set; leave it unset.)
 - Stop: `Ctrl-C`, then `docker compose -f docker-compose.test.yml down -v`
 
 ### Test account
 
-- none. The demo app logs in through a real OAuth2 provider; the browser
-  agent never types a real account's credentials.
+- A throwaway local actor, created per QA run; no stored credentials. Start
+  the demo with `DEMO_QA_BASIC_AUTH=true` (localhost only: OAuth off, the web
+  UI uses basic auth), then `POST /` with `{"creator": "qa@example.test"}`
+  and sign in to `/<id>/www` with that creator and the returned passphrase
+  (`examples/demo/README.md`, "Local QA account"). The browser agent never
+  types a real account's credentials. Delete the actor after the run.
 
 ### Commits
 

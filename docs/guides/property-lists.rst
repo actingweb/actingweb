@@ -188,10 +188,17 @@ exact hint.
   metadata row read on a compare-and-swap retry, or a scalar property
   created under the list's name between dispatch and the touch, raises
   *after* the item write by design -- corruption and name collisions
-  stay visible, and the REST handlers map it to 400.
+  stay visible, and the REST handlers map it to 400. The exception is
+  ``ListItemTooLargeError``, which is raised before any write (see
+  `Items larger than one row`_ below).
 - ``extend()``, ``remove_where()`` and ``update_where()`` are batches: a
   raise part-way through means the earlier items landed, exactly as
-  today.
+  today. The exception is an oversized item: ``extend()`` size-checks the
+  whole batch first, so ``ListItemTooLargeError`` means nothing landed.
+- Deleting or rewriting a spanned item deletes its old body rows after the
+  head write committed, best-effort: a failure there logs a WARNING naming
+  the list and generation (the only signal) and leaves an orphan for the
+  aged sweep, never a broken item.
 - None of this makes retrying a *raised* mutation safe in general: a
   timed-out conditional write retried by the SDK can itself report
   ``False`` for a write that actually landed, independent of anything
@@ -507,6 +514,9 @@ If your code needs the *contents* of several of an actor's lists at once
 -- rendering a dashboard, say -- fetching each list separately means one
 database read per list. Two methods return the names **and** the raw rows
 in one read, so you can fill in each list from data you already have.
+The rows never include a spanned item's body (see `Items larger than one
+row`_): ``to_list_from_rows()`` pays one extra read per spanned item, and
+none with ``resolve=False``.
 
 **All of them**, when you want everything the actor has:
 
@@ -583,6 +593,150 @@ There is deliberately no names-only ``list_prefix()``. A keys-only
 projection saves no read capacity on DynamoDB -- it still pays for the
 whole item -- so it would break the ``list_all()``/``list_all_with_rows()``
 pairing for nothing.
+
+Items larger than one row
+-------------------------
+
+Each item is stored in its own row, so a backend's row-size limit applies
+per item, not per list. Two settings bound an item's size, in bytes of its
+encoded JSON (``json.dumps`` with ``ensure_ascii=True``, so a non-ASCII
+character costs up to six bytes as ``\uXXXX``):
+
+- ``list_item_span_threshold``: the largest item one row holds. On a v2
+  list, a larger item **spans**: it is stored across several rows and
+  reads back whole. On a v1 list it is refused (``migrate_to_v2()`` is the
+  path to store it).
+- ``list_item_max_bytes``: the largest item the library stores at all. A
+  larger item raises ``ListItemTooLargeError`` (``from actingweb import
+  ListItemTooLargeError``) before anything is written, on both formats.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 35 35
+
+   * - Backend
+     - ``list_item_span_threshold``
+     - ``list_item_max_bytes``
+   * - DynamoDB (400 KB rows)
+     - 390,000
+     - 4 MiB
+   * - PostgreSQL (no row cap)
+     - ``None`` (never spans)
+     - ``None`` (no ceiling)
+
+Change them with
+``ActingWebApp.with_list_item_limits(span_threshold=..., max_bytes=...)``;
+see :doc:`../quickstart/configuration`. A deployment that develops on
+PostgreSQL and runs DynamoDB in production sets both, so spanning happens
+in development too. ``ListItemTooLargeError`` subclasses ``ValueError``, so
+catch it ahead of any generic ``except ValueError``. ``extend()`` checks
+every item before writing the first, so an oversized item anywhere in the
+batch writes nothing.
+
+.. code-block:: python
+
+    from actingweb import ListItemTooLargeError
+
+    try:
+        actor.property_lists.documents.append(document)
+    except ListItemTooLargeError as e:
+        # e.list_name, e.bytes, e.limit; nothing was written
+        ...
+
+**How a spanned item is stored.** Its row in the list holds a small
+*envelope* naming a body generation; the bodies live in the actor's *side
+partition* (rows under ``{actor_id}$aux``), which no read of the actor's
+own properties ever returns. So ``list_all_with_rows()``, range reads and
+the bulk ``GET /properties`` never carry a body byte. Every rewrite of a
+spanned item writes a fresh generation and then deletes the old one, so a
+reader never sees a mix of two versions. ``$`` is reserved: new list names
+may not contain it, and ``Actor.create`` refuses a caller-supplied actor id
+containing ``$`` (or longer than 251 characters).
+
+**What it costs.** A read that returns a spanned item pays one extra paged
+read of its bodies, in order, per spanned item: on DynamoDB about 144
+eventually consistent read units (288 strongly consistent) over 2 pages for
+a 1 MiB item, about 528 (1,056) over 6 pages for 4 MiB. Writing one costs
+its body rows plus the head (about 4,300 write units at 4 MiB); an update
+of a spanned item costs about twice that, since it writes the new
+generation and deletes the old. A lost compare-and-swap wastes the new
+generation's writes. Enumerating body rows (``verify(spans=True)``,
+``compact(sweep_span_orphans=True)``, ``delete()``) costs every body byte on
+DynamoDB, which is why it is opt-in.
+
+**Reading bodies on demand.** A list read resolves every spanned item. A
+caller that lists items and opens one at a time can skip that:
+
+.. code-block:: python
+
+    from actingweb import UNRESOLVED
+
+    for handle, item in lst.items_with_handles(resolve=False):
+        if item is UNRESOLVED:              # a spanned item, not read
+            print(handle.bytes)             # its encoded size, from the head
+    fresh_handle, item = lst.item_at(handle)  # one item, read now
+
+``to_list_from_rows(rows, resolve=False)`` does the same for a dump. Handles
+carry ``spanned`` and ``bytes``. ``item_at()`` reads whatever is at the
+handle's rank *now*; compare ``fresh_handle.raw_value`` to
+``handle.raw_value`` if you need "unchanged since I read it" (a deleted
+item's trailing rank can be reissued, see ``ListItemHandle``). This only
+saves reads if the fields a listing shows (title, metadata) live outside the
+large item: keep them in the item's own small fields, or in their own list.
+
+**Broken spans.** A head whose body rows are missing, or whose bodies do
+not match the size and SHA-256 digest the head records, raises
+``ListItemSpanError`` (a ``ListCorruptionError``) instead of returning a
+partial or wrong item; before raising, the reader re-reads the head and
+bodies strongly, so a concurrent update is never mistaken for damage. An
+item deleted while it is being read is simply gone: a list read leaves it
+out and a point read raises ``IndexError``. The REST
+handlers answer 409 with ``"remedy": "run actingweb-verify-property-lists
+--repair --sweep-spans, or remove the item with delete_by_handle()"``; the
+error names the list, the item's rank and the part counts, never content.
+
+**Orphans and repair.** A crash between writing bodies and the head, or a
+failed best-effort cleanup after a rewrite, leaves an *orphan generation*:
+body rows no head names. They are inert. ``verify()`` reports
+``spanned_items`` and ``span_bytes`` from the heads; ``verify(spans=True)``
+also enumerates body rows and reports ``span_body_rows``,
+``orphan_span_gens`` and ``broken_spans`` (a span is broken when a body row
+is missing or the bodies do not match the size and digest its head records,
+so this reads every body). ``sweep_span_orphans()`` (the
+script's ``--repair --sweep-spans``) removes orphan generations older than
+one hour (younger ones may belong to an append still in flight), heads whose
+bodies are gone (``broken_spans_removed``) and malformed envelopes that
+carry the library's marker (``malformed_heads_removed``), without moving
+any other head. A head that is not valid JSON is kept, with the bodies it
+names, for recovery (``malformed_heads_kept``): save its value, then remove
+the item with ``delete_by_handle()``. The script reports a list whose sweep
+left a broken span or malformed head in place as unhealthy.
+``compact(sweep_span_orphans=True)`` does the same and then rebalances. A
+``compact()`` that moves a spanned item copies its bodies to a fresh
+generation first, and stops with nothing moved if one cannot be read.
+
+**Writes with an unknown outcome.** A head write that raises while its
+backend call is in flight (a timeout after the backend applied it) keeps the
+new bodies: if the head did not land they are an orphan for the sweep. A
+failure known not to have written anything (a collision storm, the rank cap,
+a fault before the write) deletes them. A conditional write that answers ``False``
+is checked by reading the head back, so an SDK retry of a write that
+committed is reported as the success it was. ``check_item_size(item)``
+raises ``ListItemTooLargeError`` without writing, for a caller that
+validates a batch before its first write.
+
+**Lifecycles.** A list's ``delete()`` removes its side-partition rows,
+orphans included, and like an actor delete it assumes writes to the list
+are quiesced (an append whose head lands after the delete leaves a head
+without bodies, which the sweep removes); ``clear()`` removes the bodies of
+the items it deletes; an actor delete removes its whole side partition. Anything else waits for
+the opt-in, age-gated sweep, and the default ``verify()`` does not count
+leaked bodies.
+
+**Rolling deploys.** A pre-3.16 process reads a spanned item as the
+envelope dict, and its ``clear()``/``delete()`` leave the bodies behind for
+the aged sweep. Deploy 3.16 everywhere before raising a client's size
+limit. ``downgrade_to_v1`` refuses a list holding spanned items.
 
 REST API
 --------
@@ -702,17 +856,34 @@ relying on batch semantics:
   Content-Type: application/json
   {"description": "...", "explanation": "..."}
 
+**Item too large (413 Payload Too Large)**
+
+Every item-writing path above (PUT ``?index=N``, the ``/items`` ``add``
+and ``update`` actions, and the bulk update) answers 413 when an item's
+encoded size is over the configured limit. Nothing is written::
+
+  {"error": "list_item_too_large", "list": "notes", "bytes": 4194306,
+   "limit": 4194304, "detail": "...",
+   "remedy": "split the item or raise list_item_max_bytes"}
+
+See `Items larger than one row`_ below.
+
 **Corrupted list (409 Conflict)**
 
 Every list-serving path above (GET on the list, ``/items``, ``format=full``
 and ``metadata=true`` on the properties root) returns structured 409 if it
 finds an item missing from storage within the list's recorded length --
-the residue an interrupted delete/insert can leave. This can only happen
+the residue an interrupted delete/insert can leave. That can only happen
 on a v1 (dense-integer) list -- see `Storage Format (v1 / v2)`_ above;
-a v2 list has no separate stored length for a row to disagree with, so
-this failure mode is structurally impossible there::
+a v2 list has no separate stored length for a row to disagree with::
 
   {"error": "list_corrupted", "list": "notes", "detail": "...", "remedy": "compact"}
+
+A v2 list answers the same 409 for a **broken span** (a spanned item whose
+body rows are missing; see `Items larger than one row`_), with its own
+``remedy`` and the item's rank in ``detail``. ``format=full`` on the
+properties root reports such a list with an ``error`` marker instead of
+failing the whole response.
 
 .. note::
 

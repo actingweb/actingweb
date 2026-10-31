@@ -395,6 +395,21 @@ class RemotePeerStore:
         self, list_name: str, operation: str, data: dict[str, Any]
     ) -> dict[str, Any]:
         """Apply a single list operation."""
+        if data.get("spanned") is True:
+            # A reference (property_list.diff_reference): the publisher's
+            # values were over the span threshold and the diff carries none.
+            # There is nothing to apply by value; the subscriber re-reads.
+            logger.warning(
+                "Not applying a %r diff for list '%s': it is a reference to "
+                "values over the span threshold, not the values, and this "
+                "receiver does not fetch them. This replica is now out of sync "
+                "with the source list until the application re-reads the list "
+                "from the publisher (a resync callback does so only for a peer "
+                "that supports resync).",
+                operation,
+                list_name,
+            )
+            return {"operation": operation, "success": False, "spanned": True}
         store = self._get_list_store()
         list_attr = getattr(store, list_name)
 

@@ -285,7 +285,7 @@ class OAuth2EmailHandler(BaseHandler):
                 "status": "verified",
                 "message": "Your email address has been verified successfully!",
                 "email": actor.creator,
-                "redirect_url": f"/{actor_id}/www",
+                "redirect_url": self._www_path(actor_id),
             }
             self.response.write(json.dumps(response_data))
             self.response.headers["Content-Type"] = "application/json"
@@ -298,7 +298,7 @@ class OAuth2EmailHandler(BaseHandler):
             "message": "Your email address has been verified successfully!",
             "actor_id": actor_id,
             "email": actor.creator,
-            "redirect_url": f"/{actor_id}/www",
+            "redirect_url": self._www_path(actor_id),
         }
         return {}
 
@@ -695,7 +695,7 @@ class OAuth2EmailHandler(BaseHandler):
 
             logger.debug(f"Set oauth_token cookie for actor {actor_instance.id}")
 
-        redirect_url = f"/{actor_instance.id}/www"
+        redirect_url = self.config.actor_path(actor_instance.id or "", "/www")
 
         logger.info(
             f"Completed OAuth email flow for {email} -> actor {actor_instance.id}"

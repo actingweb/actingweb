@@ -96,7 +96,7 @@
             <form id="propertyForm">
                 <div class="form-group">
                     <label for="property">Property Name</label>
-                    <input type="text" name="property" id="property" maxlength="100" required
+                    <input type="text" name="property" id="property" maxlength="100" required pattern="[a-z0-9_]+" title="Lowercase letters, numbers and underscores"
                            placeholder="e.g., status, name, config" />
                     <p class="text-xs text-muted mt-xs">Use lowercase letters, numbers, and underscores</p>
                 </div>

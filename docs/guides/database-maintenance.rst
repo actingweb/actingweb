@@ -723,6 +723,10 @@ TTL to expire on. ``actingweb-verify-orphans``
 ``python scripts/verify_orphans.py``) is a separate tool for that case; see
 :doc:`../reference/actor-deletion` ("Finding orphaned rows") for what it
 does and the edge cases it exists to get right.
+A leaked property-list side partition (spanned items' body rows under
+``{actor_id}$aux``, left by a pre-3.16 actor delete during a rolling
+deploy or by a write that landed after an actor delete) is reported under
+that raw key once its actor is gone.
 
 Its operational envelope is different enough from the rest of this guide to
 call out explicitly:

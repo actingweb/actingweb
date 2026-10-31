@@ -88,6 +88,10 @@ def _public_trust_row(row: Any) -> Any:
 # Handling requests to trust/
 class TrustHandler(base_handler.BaseHandler):
     def get(self, actor_id):
+        # A GET with a _method override changes state: refuse one a
+        # page on another site started (see BaseHandler).
+        if self._refuse_cross_site_override():
+            return
         if self.request.get("_method") == "POST":
             # Web UI method override for creating trust
             self.post(actor_id)
@@ -98,7 +102,7 @@ class TrustHandler(base_handler.BaseHandler):
             if status in (200, 201, 202):
                 # After successful creation, return to trust overview
                 self.response.set_status(302, "Found")
-                self.response.set_redirect(f"/{actor_id}/www/trust")
+                self.response.set_redirect(self._www_path(actor_id, "/trust"))
             return
         myself = self.require_authenticated_actor(actor_id, "trust", "GET")
         if not myself:
@@ -209,6 +213,10 @@ class TrustHandler(base_handler.BaseHandler):
 # Handling requests to /trust/*, e.g. /trust/friend
 class TrustRelationshipHandler(base_handler.BaseHandler):
     def get(self, actor_id, relationship):
+        # A GET with a _method override changes state: refuse one a
+        # page on another site started (see BaseHandler).
+        if self._refuse_cross_site_override():
+            return
         if self.request.get("_method") == "POST":
             # Web UI method override for creating specific relationship
             self.post(actor_id, relationship)
@@ -218,7 +226,7 @@ class TrustRelationshipHandler(base_handler.BaseHandler):
                 status = 0
             if status in (200, 201, 202):
                 self.response.set_status(302, "Found")
-                self.response.set_redirect(f"/{actor_id}/www/trust")
+                self.response.set_redirect(self._www_path(actor_id, "/trust"))
             return
         self.response.set_status(404, "Not found")
 
@@ -408,6 +416,14 @@ class TrustRelationshipHandler(base_handler.BaseHandler):
         if len(baseuri) == 0 or len(peerid) == 0:
             self.response.set_status(400, "Missing mandatory attributes")
             return
+        from actingweb.trust import is_valid_peer_baseuri, is_valid_peer_id
+
+        if not is_valid_peer_id(peerid) or not is_valid_peer_baseuri(baseuri):
+            # Both are shown to the owner and built into links on the
+            # owner's own pages: refuse anything that is not plainly an id
+            # and plainly a base URL.
+            self.response.set_status(400, "Invalid id or baseuri")
+            return
         if (
             self.config.auto_accept_default_relationship
             and self.config.default_relationship == relationship
@@ -482,6 +498,10 @@ class TrustRelationshipHandler(base_handler.BaseHandler):
 # Handling requests to specific relationships, e.g. /trust/friend/12f2ae53bd
 class TrustPeerHandler(base_handler.BaseHandler):
     def get(self, actor_id, relationship, peerid):
+        # A GET with a _method override changes state: refuse one a
+        # page on another site started (see BaseHandler).
+        if self._refuse_cross_site_override():
+            return
         if self.request.get("_method") == "PUT":
             # Web UI method override for updating/approving trust
             self.put(actor_id, relationship, peerid)
@@ -491,7 +511,7 @@ class TrustPeerHandler(base_handler.BaseHandler):
                 status = 0
             if status in (200, 201, 202, 204):
                 self.response.set_status(302, "Found")
-                self.response.set_redirect(f"/{actor_id}/www/trust")
+                self.response.set_redirect(self._www_path(actor_id, "/trust"))
             return
         if self.request.get("_method") == "DELETE":
             # Perform deletion, then redirect back to the web UI trust page on success
@@ -503,7 +523,7 @@ class TrustPeerHandler(base_handler.BaseHandler):
             if status in (200, 201, 202, 204):
                 # Redirect to the trust overview so the browser view updates
                 self.response.set_status(302, "Found")
-                self.response.set_redirect(f"/{actor_id}/www/trust")
+                self.response.set_redirect(self._www_path(actor_id, "/trust"))
             return
         logger.debug("GET trust request received")
         auth_result = self.authenticate_actor(actor_id, "trust", subpath=relationship)
@@ -736,6 +756,15 @@ class TrustPeerHandler(base_handler.BaseHandler):
                 desc = self.request.get("desc")
             else:
                 desc = ""
+        from actingweb.trust import is_valid_peer_baseuri
+
+        if baseuri and not is_valid_peer_baseuri(baseuri):
+            # The peer may PUT its own row: the base URI it moves to must be
+            # as plain as the one it was admitted with (it is fetched and
+            # shown).
+            if self.response:
+                self.response.set_status(400, "Invalid baseuri")
+            return
         # Use developer API - ActorInterface with TrustManager
         if actor_interface is None:
             actor_interface = self._get_actor_interface(myself)

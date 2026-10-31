@@ -1,9 +1,54 @@
 import logging
+import re
 from typing import Any
 
 from actingweb.db import get_trust, get_trust_list
 
 from .db.exceptions import DbError
+
+# What a peer may call itself, and where it may say it lives. Both arrive
+# from the peer (an unauthenticated trust request, or the peer's /meta) and
+# end up in the owner's web UI and in URLs built from them, so they are
+# refused at the door unless they are plainly an id and plainly a base URL.
+# Ids the library makes for OAuth2/MCP trusts never come through here.
+_PEER_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:@+=-]{0,254}$")
+
+
+def is_valid_peer_id(value: Any) -> bool:
+    """A peer-supplied id: letters, digits and ``_ . : @ + = -``, starting
+    with a letter or digit, at most 255 characters. No ``/``, ``?``, ``#``,
+    ``%``, quotes or whitespace, so it can sit in a URL path segment and a
+    page without escaping surprises."""
+    return isinstance(value, str) and bool(_PEER_ID_RE.fullmatch(value))
+
+
+def is_valid_peer_baseuri(value: Any) -> bool:
+    """A peer-supplied base URI: ``http`` or ``https``, a host, no user
+    info, query or fragment, and no whitespace, control characters, quotes
+    or angle brackets. A link to it can then never carry a ``_method``
+    override or a script."""
+    from urllib.parse import urlsplit
+
+    if not isinstance(value, str) or not value or len(value) > 2048:
+        return False
+    if any(c.isspace() or ord(c) < 32 or c in "\"'<>`\\" for c in value):
+        return False
+    try:
+        parts = urlsplit(value)
+        parts.port  # noqa: B018 -- raises ValueError on a bad port
+    except ValueError:
+        return False
+    return (
+        parts.scheme in ("http", "https")
+        and bool(parts.hostname)
+        and parts.username is None
+        and parts.password is None
+        and not parts.query
+        and not parts.fragment
+        and "?" not in value
+        and "#" not in value
+    )
+
 
 logger = logging.getLogger(__name__)
 

@@ -512,3 +512,62 @@ class TestMainCommandLineWorkflow:
         # Second run re-examines the actor and still reports the problem,
         # rather than skipping it and exiting 0.
         assert script.main() == 1
+
+
+class TestSpanFlags:
+    """--spans and --repair --sweep-spans (spanned list items, Phase 2 of
+    thoughts/plans/2026-10-30-spanned-list-items.md)."""
+
+    @staticmethod
+    def _spanned_list(test_actor):
+        from actingweb.property_list import ListProperty
+
+        config = test_actor.config
+        config.list_item_span_threshold = 2_000
+        config.list_item_max_bytes = 20_000
+        lst = ListProperty(test_actor.id, "spanned", config)
+        lst.extend(["a", "x" * 5_000])
+        return lst
+
+    def test_spans_reports_the_body_keys(self, test_actor, caplog):
+        import verify_property_lists as script  # type: ignore[import-not-found]
+
+        self._spanned_list(test_actor)
+        with caplog.at_level("INFO"):
+            checked, unhealthy, errored = script.sweep_actor(
+                test_actor.id,
+                test_actor.config,
+                repair=False,
+                limiter=script.RateLimiter(0),
+                spans=True,
+            )
+        assert (checked, unhealthy, errored) == (1, 0, 0)
+        assert "span_body_rows=3" in caplog.text
+        assert "orphan_span_gens=0" in caplog.text
+        assert "broken_spans=0" in caplog.text
+
+    def test_sweep_spans_removes_an_aged_orphan_on_a_healthy_list(self, test_actor):
+        import verify_property_lists as script  # type: ignore[import-not-found]
+
+        from actingweb.property_list_span import AUX_SUFFIX, span_prefix
+
+        lst = self._spanned_list(test_actor)
+        aux = test_actor.id + AUX_SUFFIX
+        orphan = f"{span_prefix('spanned', f'{0:013d}-{0:016x}')}p0000"
+        db = get_property(test_actor.config)
+        assert db.set(actor_id=aux, name=orphan, value="left behind")
+        assert lst.verify()["healthy"] is True
+        assert lst.verify(spans=True)["orphan_span_gens"] == 1
+
+        checked, unhealthy, errored = script.sweep_actor(
+            test_actor.id,
+            test_actor.config,
+            repair=True,
+            limiter=script.RateLimiter(0),
+            sweep_spans=True,
+        )
+
+        assert (checked, unhealthy, errored) == (1, 0, 0)
+        assert db.get(actor_id=aux, name=orphan) is None
+        assert lst.verify(spans=True)["orphan_span_gens"] == 0
+        assert lst.to_list() == ["a", "x" * 5_000]

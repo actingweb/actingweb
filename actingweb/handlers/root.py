@@ -21,6 +21,10 @@ class RootHandler(base_handler.BaseHandler):
         return False
 
     def get(self, actor_id):
+        # A GET with a _method override changes state: refuse one a
+        # page on another site started (see BaseHandler).
+        if self._refuse_cross_site_override():
+            return
         if self.request.get("_method") == "DELETE":
             self.delete(actor_id)
             return
@@ -46,15 +50,20 @@ class RootHandler(base_handler.BaseHandler):
             actor_id_str = myself.id or ""
             if self.config.ui:
                 # Web UI enabled - redirect to /www
-                redirect_path = f"/{actor_id_str}/www"
+                redirect_path = self.config.actor_path(actor_id_str, "/www")
             else:
                 # Web UI disabled - redirect to /app (for SPAs)
-                redirect_path = f"/{actor_id_str}/app"
+                redirect_path = self.config.actor_path(actor_id_str, "/app")
 
             if self.response:
-                # Build full URL for redirect - config.root includes protocol, host, and any base path
-                # The integration uses response.redirect directly for RedirectResponse
-                full_redirect_url = f"{self.config.root.rstrip('/')}{redirect_path}"
+                # Full URL for the redirect: the origin of config.root plus the
+                # path, which already carries any base path (actor_path).
+                from urllib.parse import urlsplit
+
+                root_parts = urlsplit(self.config.root)
+                full_redirect_url = (
+                    f"{root_parts.scheme}://{root_parts.netloc}{redirect_path}"
+                )
                 self.response.set_redirect(full_redirect_url)
                 self.response.headers["Location"] = full_redirect_url
                 self.response.set_status(302, "Found")

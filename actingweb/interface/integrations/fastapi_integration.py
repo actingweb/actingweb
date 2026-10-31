@@ -1384,11 +1384,39 @@ class FastAPIIntegration(BaseActingWebIntegration):
 
         # If no Authorization header but we have an oauth_token cookie (web UI session),
         # provide it as a Bearer token so core auth can validate OAuth2 and authorize creator actions.
-        if "Authorization" not in headers and "oauth_token" in cookies:
-            headers["Authorization"] = f"Bearer {cookies['oauth_token']}"
-            self.logger.debug(
-                "FastAPI: Injected Authorization Bearer from oauth_token cookie for web UI request"
+        # Not for a state-changing request another site started (a form on
+        # a sibling subdomain carries the Lax cookie): see cross_site.
+        # A Basic header on such a request is dropped the same way: the
+        # browser caches it and sends it to any site's form.
+        from ...cross_site import may_use_session_cookie
+
+        def ambient_ok() -> bool:
+            return may_use_session_cookie(
+                request.method, request.headers.get, self.aw_app.get_config().root
             )
+
+        if "Authorization" not in headers:
+            if "oauth_token" in cookies and ambient_ok():
+                headers["Authorization"] = f"Bearer {cookies['oauth_token']}"
+                self.logger.debug(
+                    "FastAPI: Injected Authorization Bearer from oauth_token cookie for web UI request"
+                )
+        elif headers["Authorization"].strip().lower().startswith("basic "):
+            from ...cross_site import may_use_basic
+
+            if not may_use_basic(
+                request.method,
+                request.headers.get,
+                request.url.path,
+                self.aw_app.get_config().root,
+            ):
+                self.logger.info(
+                    "Dropped a Basic Authorization header from a cross-site "
+                    "%s %s (a browser attaches cached credentials)",
+                    request.method,
+                    request.url.path,
+                )
+                del headers["Authorization"]
 
         # Get query parameters and form data (similar to Flask's request.values)
         params = {}
@@ -1513,7 +1541,9 @@ class FastAPIIntegration(BaseActingWebIntegration):
                     actor_id = token_data.get("actor_id")
                     if actor_id:
                         # Valid ActingWeb token - redirect to actor's www page
-                        redirect_url = f"/{actor_id}/www"
+                        redirect_url = self.aw_app.get_config().actor_path(
+                            actor_id, "/www"
+                        )
                         self.logger.debug(
                             f"ActingWeb token valid - redirecting to {redirect_url}"
                         )
@@ -1548,7 +1578,9 @@ class FastAPIIntegration(BaseActingWebIntegration):
                             )
                             if actor_instance and actor_instance.id:
                                 # Redirect to actor's www page
-                                redirect_url = f"/{actor_instance.id}/www"
+                                redirect_url = self.aw_app.get_config().actor_path(
+                                    actor_instance.id, "/www"
+                                )
                                 self.logger.debug(
                                     f"Redirecting authenticated user {email} to {redirect_url}"
                                 )
@@ -2052,6 +2084,19 @@ class FastAPIIntegration(BaseActingWebIntegration):
 
         return self._create_fastapi_response(webobj, request)
 
+    def _with_verification_redirect(
+        self, template_values: dict[str, Any]
+    ) -> dict[str, Any]:
+        """The verification page's Continue link, with the base path: a
+        ``redirect_url`` the handler did not set is the actor's web UI."""
+        values = dict(template_values)
+        actor_id = values.get("actor_id")
+        if actor_id and not values.get("redirect_url"):
+            values["redirect_url"] = self.aw_app.get_config().actor_path(
+                str(actor_id), "/www"
+            )
+        return values
+
     def _render_verification_result(
         self,
         request: Request,
@@ -2066,6 +2111,9 @@ class FastAPIIntegration(BaseActingWebIntegration):
         would report a failed verification as a success to anything reading
         the status rather than the page.
         """
+        import html
+
+        template_values = self._with_verification_redirect(template_values)
         if self.templates:
             try:
                 # App provides aw-verify-email.html template
@@ -2080,13 +2128,15 @@ class FastAPIIntegration(BaseActingWebIntegration):
                 self.logger.warning(f"Template aw-verify-email.html not found: {e}")
 
         status = template_values.get("status", "")
-        message = template_values.get("message", "")
-        email = template_values.get("email", "")
+        message = html.escape(str(template_values.get("message", "")))
+        email = html.escape(str(template_values.get("email", "")))
         actor_id = template_values.get("actor_id", "")
         ok = status in ("success", "verified", "already_verified")
         heading = "Email Verified" if ok else "Verification Failed"
         cont = (
-            f'<p><a href="/{actor_id}/www">Continue</a></p>' if ok and actor_id else ""
+            f'<p><a href="{html.escape(template_values["redirect_url"])}">Continue</a></p>'
+            if ok and actor_id
+            else ""
         )
         fallback_html = f"""
         <!DOCTYPE html>

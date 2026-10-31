@@ -616,6 +616,17 @@ class FlaskIntegration(BaseActingWebIntegration):
         ) -> Response | WerkzeugResponse | str:  # pyright: ignore[reportUnusedFunction]
             return self._handle_actor_request(actor_id, "services", name=service_name)
 
+    def _may_use_session_cookie(self, method: str, headers: dict[str, str]) -> bool:
+        """Whether the session cookie may authenticate this request."""
+        from ...cross_site import may_use_session_cookie
+
+        lowered = {k.lower(): v for k, v in headers.items()}
+        return may_use_session_cookie(
+            method,
+            lambda name: lowered.get(name.lower()),
+            self.aw_app.get_config().root,
+        )
+
     def _normalize_request(self) -> dict[str, Any]:
         """Convert Flask request to ActingWeb format."""
         cookies = {}
@@ -632,7 +643,13 @@ class FlaskIntegration(BaseActingWebIntegration):
 
         # If no Authorization header but we have an oauth_token cookie (web UI session),
         # provide it as a Bearer token so core auth can validate OAuth2 and authorize creator actions.
-        if "Authorization" not in headers and cookies.get("oauth_token"):
+        # Not for a state-changing request another site started (a form on
+        # a sibling subdomain carries the Lax cookie): see cross_site.
+        if (
+            "Authorization" not in headers
+            and cookies.get("oauth_token")
+            and self._may_use_session_cookie(request.method, headers)
+        ):
             headers["Authorization"] = f"Bearer {cookies['oauth_token']}"
 
         params = {}
@@ -726,7 +743,9 @@ class FlaskIntegration(BaseActingWebIntegration):
                             )
                             if actor_instance and actor_instance.id:
                                 # Redirect to actor's www page
-                                redirect_url = f"/{actor_instance.id}/www"
+                                redirect_url = self.aw_app.get_config().actor_path(
+                                    actor_instance.id, "/www"
+                                )
                                 logger.debug(
                                     f"Redirecting authenticated user {email} to {redirect_url}"
                                 )

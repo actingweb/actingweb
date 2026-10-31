@@ -695,7 +695,7 @@ class OAuth2EmailHandler(BaseHandler):
 
             logger.debug(f"Set oauth_token cookie for actor {actor_instance.id}")
 
-        redirect_url = f"/{actor_instance.id}/www"
+        redirect_url = self.config.actor_path(actor_instance.id or "", "/www")
 
         logger.info(
             f"Completed OAuth email flow for {email} -> actor {actor_instance.id}"

@@ -100,7 +100,8 @@
                                 <a href="{{ list_url }}?edit_index={{ entry.index }}" class="btn btn-secondary btn-sm">Edit</a>
                                 {% endif %}
                                 <form method="post" action="{{ list_url }}/items"
-                                      onsubmit="return confirm('Delete item {{ entry.index }}?');">
+                                      data-confirm="Delete item {{ entry.index }}?"
+                                      onsubmit="return confirm(this.dataset.confirm);">
                                     <input type="hidden" name="action" value="delete">
                                     {% if entry.rank %}
                                     <input type="hidden" name="item_rank" value="{{ entry.rank }}">

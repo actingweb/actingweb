@@ -1384,7 +1384,20 @@ class FastAPIIntegration(BaseActingWebIntegration):
 
         # If no Authorization header but we have an oauth_token cookie (web UI session),
         # provide it as a Bearer token so core auth can validate OAuth2 and authorize creator actions.
-        if "Authorization" not in headers and "oauth_token" in cookies:
+        # Not for a state-changing request another site started (a form on
+        # a sibling subdomain carries the Lax cookie): see cross_site.
+        lowered = {k.lower(): v for k, v in headers.items()}
+        from ...cross_site import may_use_session_cookie
+
+        if (
+            "Authorization" not in headers
+            and "oauth_token" in cookies
+            and may_use_session_cookie(
+                request.method,
+                lambda name: lowered.get(name.lower()),
+                self.aw_app.get_config().root,
+            )
+        ):
             headers["Authorization"] = f"Bearer {cookies['oauth_token']}"
             self.logger.debug(
                 "FastAPI: Injected Authorization Bearer from oauth_token cookie for web UI request"
@@ -1513,7 +1526,9 @@ class FastAPIIntegration(BaseActingWebIntegration):
                     actor_id = token_data.get("actor_id")
                     if actor_id:
                         # Valid ActingWeb token - redirect to actor's www page
-                        redirect_url = f"/{actor_id}/www"
+                        redirect_url = self.aw_app.get_config().actor_path(
+                            actor_id, "/www"
+                        )
                         self.logger.debug(
                             f"ActingWeb token valid - redirecting to {redirect_url}"
                         )
@@ -1548,7 +1563,9 @@ class FastAPIIntegration(BaseActingWebIntegration):
                             )
                             if actor_instance and actor_instance.id:
                                 # Redirect to actor's www page
-                                redirect_url = f"/{actor_instance.id}/www"
+                                redirect_url = self.aw_app.get_config().actor_path(
+                                    actor_instance.id, "/www"
+                                )
                                 self.logger.debug(
                                     f"Redirecting authenticated user {email} to {redirect_url}"
                                 )

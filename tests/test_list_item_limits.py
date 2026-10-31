@@ -812,10 +812,11 @@ def _www_call(
     params: dict[str, str],
     headers: dict[str, str] | None = None,
     hooks: Any = None,
+    cookies: dict[str, str] | None = None,
 ) -> Any:
     from actingweb.handlers.www import WwwHandler
 
-    webobj = AWWebObj(params=params, headers=headers or {})
+    webobj = AWWebObj(params=params, headers=headers or {}, cookies=cookies or {})
     handler = (
         WwwHandler(webobj, config, hooks=hooks) if hooks else WwwHandler(webobj, config)
     )
@@ -923,6 +924,7 @@ class TestWwwVerification3FollowUps:
             "properties/keepme",
             {"_method": "DELETE"},
             {"Sec-Fetch-Site": "cross-site"},
+            cookies={"oauth_token": "tok"},
         )
         assert webobj.response.status_code == 403
         assert myself.property.keepme == "v"
@@ -1110,7 +1112,13 @@ class TestWwwVerification4FollowUps:
         myself, config = live
         myself.property.mailed = "v"
         webobj = _www_call(
-            myself, config, "get", "properties/mailed", {"_method": "DELETE"}, headers
+            myself,
+            config,
+            "get",
+            "properties/mailed",
+            {"_method": "DELETE"},
+            headers,
+            cookies={"oauth_token": "tok"},
         )
         assert webobj.response.status_code == 403
         assert myself.property.mailed == "v"

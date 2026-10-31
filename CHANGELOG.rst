@@ -159,27 +159,59 @@ SECURITY
   started by any site. The web UI's ``POST`` forms had no origin check
   either (only the list item actions did, and only on ``Origin``).
 
-  A ``GET`` with a ``_method`` override now answers 403 "Cross-site request
-  refused" unless the request shows it came from the application's own
-  pages: ``Sec-Fetch-Site: same-origin`` when the browser sends the header
-  (so ``none``, a link opened from a mail or chat client, is refused too),
-  else a same-origin ``Origin`` or ``Referer``; without any of the three it
-  passes, except when it authenticates with the session cookie. Every
-  ``POST`` under ``/<id>/www`` answers 403 when the browser says it is
-  cross-site (``Sec-Fetch-Site`` other than ``same-origin`` or ``none``, or
-  a foreign or ``null`` ``Origin``, or a foreign ``Referer``). "Same
-  origin" is the scheme, host and port of ``config.root``; a base path does
-  not matter. A real ``PUT``, ``POST`` or ``DELETE`` is not checked, so
-  peers and SPAs (which call the API cross-origin with Bearer tokens) are
-  unaffected. The property creation form's ``redirect_to`` now only
-  redirects within the actor's own web UI (no other actor, no dot
-  segments, no percent-encoding). **Limitation:** a cross-site ``POST`` to a
-  REST endpoint still carries cached basic-auth credentials; a browser
-  sends a ``Lax`` cookie only on top-level ``GET`` navigations.
-  **Behavior change:** a page on another origin that posts to the web UI or
-  links to a ``?_method=`` URL, and a browser link opened from outside the
-  browser, now get 403; a script that uses ``?_method=`` with the session
-  cookie and no browser headers must send the real method instead.
+  A ``GET`` with a ``_method`` override that carries an ambient credential
+  (the session cookie, or basic auth, which browsers cache) now answers 403
+  "Cross-site request refused" unless it shows it came from the
+  application's own pages: ``Sec-Fetch-Site: same-origin`` when the
+  browser sends the header (so ``none``, a link opened from a mail or chat
+  client, is refused too), else a same-origin ``Origin`` or ``Referer``;
+  without any of the three it passes, except when it carries the session
+  cookie. A request with an explicit Bearer token and no cookie is not
+  checked: another site cannot attach one. Every ``POST`` under
+  ``/<id>/www`` answers 403 when the browser says it is cross-site
+  (``Sec-Fetch-Site`` other than ``same-origin`` or ``none``, or a foreign
+  or ``null`` ``Origin``, or a foreign ``Referer``). The Flask and FastAPI
+  integrations no longer turn the ``oauth_token`` cookie into a Bearer
+  header for a ``POST``, ``PUT``, ``PATCH`` or ``DELETE`` that the browser
+  says another site, a sibling subdomain included, started: a browser
+  sends the ``Lax`` cookie on any same-site request and on a top-level
+  ``GET`` from any site. "Same origin" is the scheme, host and port of
+  ``config.root``; a base path does not matter. Peers and SPAs (Bearer
+  tokens) are unaffected. The property creation form's ``redirect_to``
+  now only redirects within the actor's own web UI (no other actor, no dot
+  segments, no percent-encoding, no whitespace). **Limitation:** a
+  cross-site request with cached basic-auth credentials and no browser
+  headers at all (a browser without Fetch Metadata following a
+  no-referrer link) cannot be told from ``curl -u`` and passes; prefer
+  OAuth2 sessions for browser use. **Behavior change:** a page on another
+  origin that posts to the web UI or links to a ``?_method=`` URL, and a
+  browser link opened from outside the browser, now get 403; a form on a
+  sibling subdomain no longer acts with the owner's session; a script that
+  uses ``?_method=`` with the session cookie and no browser headers must
+  send the real method instead.
+
+- **A peer could plant script and links in the owner's web UI.** A trust
+  request (``POST /<id>/trust/<rel>``, unauthenticated by design) chose
+  the peer's ``id`` and ``baseuri`` freely, and the trust page put the id
+  inside an inline ``confirm('...')`` handler, where HTML escaping does not
+  protect a quote (the browser decodes ``&#39;`` before running it), built
+  links from it unquoted (an id of ``../../<actor>`` turned Delete into
+  ``GET /<actor>?_method=DELETE``), and the demo linked to the base URI
+  (``javascript:`` or a ``?_method=`` URL on the same origin). The property
+  pages did the same with property names. A peer's id must now be
+  letters, digits and ``_ . : @ + = -`` (at most 255, starting with a
+  letter or digit) and its base URI a plain ``http(s)`` URL with no user
+  info, query or fragment, both when a peer asks for trust (400 "Invalid id
+  or baseuri") and when this actor asks a peer (``create_reciprocal_trust``
+  returns ``False``); ``Actor.create_verified_trust`` refuses them too. The
+  shipped templates put no value inside an inline handler (the confirm text
+  is a ``data-confirm`` attribute), the trust page quotes the id in its
+  links, and the demo links to a peer only through ``peer_link``, set only
+  for a valid base URI. **Behavior change:** a peer whose id or base URI
+  falls outside those shapes can no longer establish trust; ids the library
+  makes for OAuth2 and MCP trusts are not affected. A custom template that
+  interpolates a value inside ``onsubmit``/``onclick`` should move it to a
+  ``data-`` attribute.
 
 REMOVED
 ~~~~~~~
@@ -603,6 +635,12 @@ CHANGED
 ADDED
 ~~~~~
 
+- **``Config.actor_path(actor_id, suffix="")``** returns an actor's path
+  with the deployment's base path (the path part of ``config.root``). The
+  library's redirects after sign-in, after the email flow, from ``/<id>``
+  in a browser and from the trust and web UI pages use it, so a deployment
+  mounted under a base path no longer lands on ``/<id>/www`` without it.
+
 - **``actingweb-unique-creators``** (``report``, ``resolve``, ``enable``,
   ``disable``; dry run unless ``--apply``). ``report`` lists actors sharing
   a creator, including addresses that differ only by case, and on DynamoDB
@@ -765,6 +803,11 @@ ADDED
 
 FIXED
 ~~~~~
+
+- **A ``GET /<id>/callbacks/<name>?_method=POST`` ran the POST and then
+  the GET.** ``CallbacksHandler.get`` did not return after dispatching an
+  override, so both hooks ran and the GET's answer replaced the POST's. It
+  now returns after the override, as every other handler does.
 
 - **``GET /?format=json`` on Flask returned the HTML page.** The Flask root
   route rendered the factory template for every GET without running the

@@ -4384,10 +4384,12 @@ class ListProperty:
         )
         raw_by_rank = dict(pairs)
         # Malformed heads first. One with the library marker names no
-        # readable item: removing it makes the list readable again, and its
-        # bodies become ordinary orphans below. One without it (not valid
-        # JSON) is left for an operator, and so are the bodies it names, so
-        # a repair can recover them.
+        # readable item: removing it makes the list readable again. One
+        # without it (not valid JSON) is left for an operator. Either way
+        # the bodies a malformed head names survive this run (a head damaged
+        # in a side field may still have intact bodies); the warning names
+        # them, and they are ordinary orphans for the next sweep once their
+        # head is gone.
         malformed_removed = 0
         malformed_kept: list[str] = []
         for rank in malformed:
@@ -4402,15 +4404,18 @@ class ListProperty:
                 malformed_removed += 1
                 logger.warning(
                     "List '%s' (actor %s): removed the item at rank %r "
-                    "(%d bytes), whose head was a malformed storage envelope",
+                    "(%d bytes), whose head was a malformed storage envelope; "
+                    "the body generation(s) it named, %s, are kept until the "
+                    "next sweep",
                     self.name,
                     self.actor_id,
                     rank,
                     len(raw),
+                    sorted(self._gens_named_by([raw])) or "none",
                 )
             else:
                 malformed_kept.append(rank)
-        for gen in self._gens_named_by(raw_by_rank[r] for r in malformed_kept):
+        for gen in self._gens_named_by(raw_by_rank[r] for r in malformed):
             orphans.pop(gen, None)
         span_by_rank = dict(span_heads)
         aux = self._aux_or_none()

@@ -1551,6 +1551,16 @@ class Actor:
         ):
             return False
         peer = res["data"]
+        from .trust import is_valid_peer_id
+
+        if not is_valid_peer_id(peer.get("id")):
+            # The peer names itself: refuse an id that is not plainly one
+            # (it is shown to the owner and built into links).
+            logger.warning(
+                "Received an invalid peer id when trying to establish trust: %r",
+                url,
+            )
+            return False
         if not peer["id"] or not peer["type"] or len(peer["type"]) == 0:
             logger.info(
                 "Received invalid peer info when trying to establish trust: " + url
@@ -1664,6 +1674,15 @@ class Actor:
         ):
             return False
         peer = res["data"]
+        from .trust import is_valid_peer_id
+
+        if not is_valid_peer_id(peer.get("id")):
+            # The peer names itself: see create_reciprocal_trust().
+            logger.warning(
+                "Received an invalid peer id when trying to establish trust: %r",
+                url,
+            )
+            return False
         if not peer.get("id") or not peer.get("type") or len(peer["type"]) == 0:
             logger.info(
                 "Received invalid peer info when trying to establish trust: " + url
@@ -1776,6 +1795,12 @@ class Actor:
             relationship: The trust type/permission level (friend, admin, etc.)
         """
         if not peerid or len(baseuri) == 0 or not relationship:
+            return False
+        from .trust import is_valid_peer_baseuri, is_valid_peer_id
+
+        if not is_valid_peer_id(peerid) or not is_valid_peer_baseuri(baseuri):
+            # Both come from the requesting peer and reach the owner's UI.
+            logger.warning("Refused a trust request with an invalid peer id or baseuri")
             return False
         requrl = baseuri + "/trust/" + relationship + "/" + self.id
         if not secret or len(secret) == 0:

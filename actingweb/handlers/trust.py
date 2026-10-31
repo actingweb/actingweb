@@ -416,6 +416,14 @@ class TrustRelationshipHandler(base_handler.BaseHandler):
         if len(baseuri) == 0 or len(peerid) == 0:
             self.response.set_status(400, "Missing mandatory attributes")
             return
+        from actingweb.trust import is_valid_peer_baseuri, is_valid_peer_id
+
+        if not is_valid_peer_id(peerid) or not is_valid_peer_baseuri(baseuri):
+            # Both are shown to the owner and built into links on the
+            # owner's own pages: refuse anything that is not plainly an id
+            # and plainly a base URL.
+            self.response.set_status(400, "Invalid id or baseuri")
+            return
         if (
             self.config.auto_accept_default_relationship
             and self.config.default_relationship == relationship

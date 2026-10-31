@@ -2512,6 +2512,138 @@ add, edit and delete from the UI keep LF line breaks and é; no console
 errors; 375, 768 and 1280 px fit with the actions inside their cards.
 
 
+### 2026-10-31, after verification thoughts/verifications/2026-10-31-spanned-list-items-5.md
+
+#### 50. Peer-supplied trust fields cannot become script or links (Y1, Y2, Y3)
+
+**Category**: Bug fix (security)
+
+**What changed**: `actingweb.trust.is_valid_peer_id()` (letters, digits and
+`_ . : @ + = -`, at most 255) and `is_valid_peer_baseuri()` (plain
+`http(s)`, no user info, query, fragment, whitespace or quotes) are
+checked where a peer supplies them: the incoming trust request (400
+"Invalid id or baseuri"), `create_reciprocal_trust` and its async twin (the
+peer's `/meta` id), and `Actor.create_verified_trust`. The trust page
+builds its links through `WwwHandler._trust_uri()`, which quotes the
+relationship and id as path segments (dot segments encoded), and sets
+`peer_link` only for a valid base URI; the demo links to the peer only
+through it (`rel="noopener noreferrer"`). No shipped template puts a value
+inside an inline handler any more: the confirm text is a `data-confirm`
+attribute in the library's trust, properties and property templates and in
+the demo's trust and property templates.
+
+**Files affected**: `actingweb/trust.py`, `actingweb/actor.py`,
+`actingweb/handlers/trust.py`, `actingweb/handlers/www.py`,
+`actingweb/templates/aw-actor-www-trust.html`,
+`aw-actor-www-properties.html`, `aw-actor-www-property.html`,
+`examples/demo/templates/aw-actor-www-trust.html`,
+`aw-actor-www-property.html`; `CHANGELOG.rst` (a new SECURITY entry),
+`docs/reference/security.rst`, `docs/migration/v3.16.rst`;
+`tests/test_cross_site_and_peer_inputs.py` (new)
+
+**Rationale**: the trust request is unauthenticated by design, and its
+fields reached the owner's same-origin pages, where every request passes
+the cross-site check. Validation sits only on peer-supplied ids: the ids
+the library makes for OAuth2/MCP trusts (`oauth2:email_at_...:client`)
+never come through these paths.
+
+#### 51. Only ambient credentials are checked; one cross-site module (Y4, Y5, Y12)
+
+**Category**: Bug fix (security)
+
+**What changed**: the origin logic is `actingweb/cross_site.py` (pure
+functions), used by `BaseHandler` and both integrations. A GET override is
+checked only when the request carries the session cookie or basic auth (an
+explicit Bearer token cannot be attached by another site, so a
+cross-origin SPA works); the cookie counts whatever the Authorization
+header says. The integrations map the `oauth_token` cookie to a Bearer
+header for a state-changing method only when the browser does not report
+another site (`may_use_session_cookie`), so a form on a sibling subdomain
+cannot act with the owner's session. The changelog's `Lax` wording is
+corrected.
+
+**Files affected**: `actingweb/cross_site.py` (new),
+`actingweb/handlers/base_handler.py`,
+`actingweb/interface/integrations/flask_integration.py`,
+`fastapi_integration.py`; `CHANGELOG.rst`, `docs/reference/security.rst`,
+`docs/migration/v3.16.rst`; `tests/test_cross_site_and_peer_inputs.py`,
+`tests/test_get_override_cross_site.py`, `tests/test_list_item_limits.py`
+(the override tests now carry the session cookie)
+
+**Rationale**: the guard is still called from the fourteen GET methods
+(the code review's altitude note): the integrations dispatch to handler
+methods by name, and the cookie part, the one a browser adds by itself, is
+now enforced once where it is added.
+
+#### 52. One base-path helper (Y6)
+
+**Category**: Bug fix
+
+**What changed**: `Config.actor_path(actor_id, suffix)` (new, additive);
+`BaseHandler._www_path()` and the redirects in `root.py`,
+`oauth2_callback.py`, `oauth_email.py` and both integrations use it.
+
+**Files affected**: `actingweb/config.py`, `actingweb/handlers/root.py`,
+`oauth2_callback.py`, `oauth_email.py`, `base_handler.py`, both
+integrations, `CHANGELOG.rst` (ADDED)
+
+#### 53. `redirect_to` refuses whitespace and control characters (Y7)
+
+**Category**: Bug fix
+
+**Files affected**: `actingweb/handlers/www.py`
+
+#### 54. Malformed heads' bodies survive the run that finds them (Y8)
+
+**Category**: Decision changed (reverses part of entry 47)
+
+**What changed**: the sweep keeps the bodies of every malformed head for
+that run, removed or not, and the warning for a removed head names the
+generations it held; the next sweep reaps them as orphans.
+
+**Files affected**: `actingweb/property_list.py`,
+`tests/test_property_list_span_iterations.py`
+
+**Rationale**: both reviewers found that a head damaged in a side field
+may have intact bodies; removing both in one pass lost a recoverable item.
+
+#### 55. Sweep accounting (Y9) and the callbacks override (Y10)
+
+**Category**: Bug fix
+
+**What changed**: a list counts once as errored; a broken span the sweep
+left in place makes the list unhealthy whatever else it needs, and
+"repaired" is logged only without one; the dead `malformed_heads_kept` term
+is gone from the health sum. `CallbacksHandler.get` returns after an
+override.
+
+**Files affected**: `actingweb/maintenance/verify_property_lists.py`,
+`actingweb/handlers/callbacks.py`, `CHANGELOG.rst` (FIXED)
+
+#### 56. The marker stays a plain item; the docstring says so (Y11)
+
+**Category**: Documentation
+
+**What changed**: `parse()`'s docstring no longer says another marker
+raises. The outside voice suggested refusing other int markers again (for
+a future format read by an older version); the plain-item reading stays,
+because no other format exists and a pre-3.16 item `{"__aw_env": 2, ...}`
+would otherwise make its whole list unreadable, while a future format will
+need its own reader-compatibility plan anyway.
+
+**Files affected**: `actingweb/property_list_span.py`
+
+**Browser walk of this batch** (headless Playwright, an owner and a peer on
+`localhost:5055`): a script-bearing peer id and a base URI with
+`?_method=DELETE` are refused with 400; the pending trust's Visit Peer link
+points at the peer with `rel="noopener noreferrer"` (it now also has an
+`aria-label`), Approve answers 302, and Delete's confirm names the peer
+from `data-confirm` and deletes on accept; list item and property delete
+confirms read their text from `data-confirm`, dismissing keeps the item;
+an address-bar `?_method=DELETE` with basic auth answers 403, and one with
+only an explicit Bearer token is not refused as cross-site (authentication
+answers it); no console errors; the trust page fits at 375 px.
+
 ## Evaluation Notes
 
 Five evaluators reviewed the first draft against the codebase on

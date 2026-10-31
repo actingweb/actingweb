@@ -15,6 +15,7 @@ import json
 from unittest.mock import MagicMock, patch
 
 from actingweb.aw_web_request import AWWebObj
+from actingweb.config import Config
 from actingweb.handlers.oauth_email import OAuth2EmailHandler
 
 EXISTING_EMAIL = "probe.existing@example.com"
@@ -26,6 +27,11 @@ def _config(*, ui: bool = True, spa_cors_origins=None) -> MagicMock:
     config.ui = ui
     config.proto = "https://"
     config.fqdn = "test.example.com"
+    config.root = "https://test.example.com/"
+    # The real path helper, bound to this double.
+    config.actor_path.side_effect = lambda actor_id, suffix="": Config.actor_path(
+        config, actor_id, suffix
+    )
     config.service_registry = None
     config.spa_cors_origins = (
         spa_cors_origins if spa_cors_origins is not None else ["*"]

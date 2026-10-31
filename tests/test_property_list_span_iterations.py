@@ -833,11 +833,14 @@ class TestW4SingleListResyncSurvivesDamageAndDeletes:
         assert Actor._resolve_list_heads(lst, pairs) == ["a", big("b")]
 
 
-class TestX6RemovedMalformedHeadsReleaseTheirBodies:
-    """Fourth verification, X6: a malformed head the sweep removes does not
-    keep its bodies; one it keeps (not valid JSON) does."""
+class TestX6RemovedMalformedHeadsKeepTheirBodiesOneRun:
+    """Fourth and fifth verifications, X6 and Y8: the sweep removes a
+    malformed head with the library marker and keeps one that is not valid
+    JSON; the bodies either names survive that run (a head damaged in a side
+    field may still have intact bodies), and the next sweep reaps those of
+    the removed head as orphans."""
 
-    def test_removed_head_bodies_are_swept_kept_head_bodies_stay(
+    def test_removed_head_bodies_survive_one_run(
         self, config: Config, store: dict[Any, Any]
     ) -> None:
         lst = _lst(config)
@@ -861,11 +864,16 @@ class TestX6RemovedMalformedHeadsReleaseTheirBodies:
         assert report["malformed_heads_removed"] == 1
         assert report["malformed_heads_kept"] == 1
         assert (ACTOR, names[1]) not in store
-        assert (AUX, f"{span_prefix(NAME, OLD_GEN)}p0000") not in store
+        assert (AUX, f"{span_prefix(NAME, OLD_GEN)}p0000") in store
         assert (ACTOR, names[2]) in store
         assert (
             store[(AUX, f"{span_prefix(NAME, kept_gen)}p0000")] == "body of kept head"
         )
+
+        again = lst.sweep_span_orphans()
+        assert again["orphan_span_gens_removed"] == 1
+        assert (AUX, f"{span_prefix(NAME, OLD_GEN)}p0000") not in store
+        assert (AUX, f"{span_prefix(NAME, kept_gen)}p0000") in store
 
 
 class TestX4SweepLeftoversDecideHealth:

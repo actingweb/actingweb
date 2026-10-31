@@ -50,7 +50,8 @@
 
       <h2>Delete</h2>
       <form method="get" action="{{ actor_www|default('') }}/properties/{{ property|default('') }}"
-            onsubmit="return confirm('Delete property {{ property|default('') }}?');">
+            data-confirm="Delete property {{ property|default('') }}?"
+            onsubmit="return confirm(this.dataset.confirm);">
         <input type="hidden" name="_method" value="DELETE">
         <button type="submit" class="aw-btn aw-btn-danger">Delete property</button>
       </form>

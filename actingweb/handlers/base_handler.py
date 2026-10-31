@@ -33,69 +33,39 @@ class BaseHandler:
         """``/<base>/<actor_id>/www`` plus ``suffix``: the web UI's path,
         with the deployment's base path from ``config.root``, for redirects
         and back links."""
-        from urllib.parse import urlsplit
-
-        base = urlsplit(getattr(self.config, "root", "") or "").path.rstrip("/")
-        return f"{base}/{actor_id}/www{suffix}"
+        return self.config.actor_path(actor_id, f"/www{suffix}")
 
     def _same_origin(self, url: str) -> bool:
-        """Whether ``url``'s origin (scheme, host, port) is this app's own,
-        from ``config.root``: case-insensitive host, default ports filled
-        in, any base path ignored (an origin has none)."""
-        from urllib.parse import urlsplit
+        """Whether ``url``'s origin is this app's own (``config.root``)."""
+        from actingweb.cross_site import same_origin
 
-        def origin(value: str) -> tuple[str, str, int | None]:
-            parts = urlsplit(value)
-            scheme = (parts.scheme or "").lower()
-            try:
-                port = parts.port
-            except ValueError:
-                port = -1
-            if port is None:
-                port = {"https": 443, "http": 80}.get(scheme)
-            return scheme, (parts.hostname or "").lower(), port
-
-        return origin(url) == origin(getattr(self.config, "root", "") or "")
+        return same_origin(url, getattr(self.config, "root", "") or "")
 
     def _session_cookie_auth(self) -> bool:
-        """Whether this request authenticates with the web UI's session
-        cookie (the integrations copy ``oauth_token`` into a Bearer header
-        when no Authorization header was sent)."""
+        """Whether the request carries the web UI's session cookie
+        (``oauth_token``), whatever its Authorization header says."""
         cookies = getattr(self.request, "cookies", None) or {}
-        token = cookies.get("oauth_token")
-        if not token:
-            return False
-        auth = self.request.get_header("Authorization")
-        return not auth or auth == f"Bearer {token}"
+        return bool(cookies.get("oauth_token"))
 
     def _cross_site_refused(self, require_evidence: bool = False) -> bool:
-        """True when a state-changing request comes from another site.
+        """True when a state-changing request comes from another site; see
+        ``actingweb.cross_site.cross_site``. With ``require_evidence`` (a
+        GET that changes state) a request without ambient credentials (no
+        session cookie, no basic auth: an explicit Bearer token, say) is
+        never refused: another site cannot attach those."""
+        from actingweb import cross_site as cs
 
-        ``Sec-Fetch-Site`` decides when the browser sends it (every current
-        one): ``same-origin`` passes, and so does ``none`` (typed, or a
-        bookmark) unless ``require_evidence``. Without it, an ``Origin``,
-        then a ``Referer``, must be this app's origin (``config.root``; a
-        base path does not matter), and ``Origin: null`` is refused. A
-        request with none of the three passes (a script, ``curl``, a peer),
-        except, with ``require_evidence``, one that authenticates with the
-        session cookie: only a browser holds it.
-
-        ``require_evidence`` is for a GET that changes state (a ``_method``
-        override): a link opened from a mail client arrives as ``none``,
-        and a no-referrer link from a browser without Fetch Metadata
-        arrives with no headers at all.
-        """
-        fetch_site = (self.request.get_header("Sec-Fetch-Site") or "").lower()
-        if fetch_site:
-            allowed = ("same-origin",) if require_evidence else ("same-origin", "none")
-            return fetch_site not in allowed
-        origin = self.request.get_header("Origin")
-        if origin:
-            return origin == "null" or not self._same_origin(origin)
-        referer = self.request.get_header("Referer")
-        if referer:
-            return not self._same_origin(referer)
-        return require_evidence and self._session_cookie_auth()
+        cookie = self._session_cookie_auth()
+        if require_evidence and not cs.ambient_credentials(
+            self.request.get_header("Authorization"), cookie
+        ):
+            return False
+        return cs.cross_site(
+            self.request.get_header,
+            getattr(self.config, "root", "") or "",
+            require_evidence=require_evidence,
+            session_cookie=cookie,
+        )
 
     def _refuse_cross_site(self, require_evidence: bool = False) -> bool:
         """Answer 403 for a cross-site state-changing request; True when it

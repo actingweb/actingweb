@@ -99,7 +99,9 @@ check only the first three items and item 11.
     from the application's own pages, but a link on another site, or one
     opened from a mail or chat client, answers 403. A script that sends
     ``?_method=`` with the web UI's session cookie and no browser headers
-    must send the real HTTP method.
+    must send the real HTTP method. A peer's trust ``id`` and ``baseuri``
+    must be plain shapes, and a custom template must not interpolate a
+    value inside an inline event handler.
 
 
 What changed and why
@@ -763,13 +765,28 @@ pages:
   are those of ``config.root`` (a base path does not matter; ``Origin:
   null`` is refused);
 - a request with none of the three passes (a script, a peer), unless it
-  authenticates with the ``oauth_token`` session cookie.
+  carries the ``oauth_token`` session cookie.
 
-A refused request answers 403 "Cross-site request refused" and changes
+Only requests with an ambient credential are checked: the session cookie,
+or basic auth (browsers cache it). A request with an explicit Bearer token
+and no cookie, such as an SPA calling the API cross-origin, is not. A
+refused request answers 403 "Cross-site request refused" and changes
 nothing. Every ``POST`` under ``/<id>/www`` is refused when the browser
-reports a cross-site request. A real ``PUT``, ``POST`` or ``DELETE`` is not
-checked, so peers and SPAs that call the API with Bearer tokens are
-unaffected.
+reports a cross-site request, and the Flask and FastAPI integrations do not
+let the session cookie authenticate a ``POST``, ``PUT``, ``PATCH`` or
+``DELETE`` that the browser reports as started by another site, a sibling
+subdomain included.
+
+**Peer-supplied trust fields.** A peer's ``id`` must be letters, digits and
+``_ . : @ + = -`` (at most 255 characters, starting with a letter or digit)
+and its ``baseuri`` a plain ``http`` or ``https`` URL with no user info,
+query or fragment. An incoming trust request outside those shapes answers
+400; ``create_reciprocal_trust`` returns ``False`` for a peer whose
+``/meta`` names such an id. Ids the library makes for OAuth2 and MCP
+trusts are not affected. The shipped templates no longer interpolate values
+inside inline event handlers; if yours do, move the value to a ``data-``
+attribute (HTML escaping does not protect a JavaScript string inside an
+attribute).
 
 **What to check:** a template or page of your own that links to a
 ``?_method=`` URL must be served from the application's origin (the shipped

@@ -1,0 +1,310 @@
+"""Fifth verification, Y1-Y5, Y7, Y10, Y12: peer-supplied trust fields
+never reach a script or a link that acts; ambient credentials only; the
+integrations refuse the session cookie for a cross-site state change."""
+
+import asyncio
+import json
+from pathlib import Path
+from typing import Any
+from unittest import mock
+
+import jinja2
+import pytest
+
+from actingweb import cross_site
+from actingweb.aw_web_request import AWWebObj
+from actingweb.config import Config
+from actingweb.handlers import callbacks, properties, root, trust
+from actingweb.trust import is_valid_peer_baseuri, is_valid_peer_id
+
+ROOT = "https://demo.actingweb.io/"
+EVIL_ID = "x');fetch('/v1?_method=DELETE');('"
+REPO = Path(__file__).resolve().parent.parent
+
+
+def _config() -> Config:
+    config = Config(database="dynamodb")
+    config.root = ROOT
+    return config
+
+
+# --- Y1: no template value inside an inline script --------------------------
+
+
+@pytest.mark.parametrize(
+    "directory,template,values",
+    [
+        (
+            "actingweb/templates",
+            "aw-actor-www-trust.html",
+            {
+                "trusts": [
+                    {"peerid": EVIL_ID, "approveuri": "/t", "relationship": "friend"}
+                ]
+            },
+        ),
+        (
+            "examples/demo/templates",
+            "aw-actor-www-trust.html",
+            {
+                "trusts": [
+                    {"peerid": EVIL_ID, "approveuri": "/t", "baseuri": "javascript:x"}
+                ]
+            },
+        ),
+        (
+            "actingweb/templates",
+            "aw-actor-www-properties.html",
+            {"properties": {EVIL_ID: "v"}, "actor_www": "/a1/www"},
+        ),
+        (
+            "actingweb/templates",
+            "aw-actor-www-property.html",
+            {"property": EVIL_ID, "qual": "a", "value": "v", "actor_www": "/a1/www"},
+        ),
+    ],
+)
+def test_inline_handlers_carry_no_template_values(
+    directory: str, template: str, values: dict[str, Any]
+) -> None:
+    env = jinja2.Environment(
+        loader=jinja2.FileSystemLoader(REPO / directory), autoescape=True
+    )
+    html = env.get_template(template).render(id="a1", url="/a1/www", **values)
+    for line in html.splitlines():
+        if "onsubmit=" in line or "onclick=" in line:
+            assert "fetch(" not in line, line
+    assert 'onsubmit="return confirm(this.dataset.confirm);"' in html
+    # The value sits in a data attribute, escaped once.
+    assert "x&#39;);fetch(" in html
+    # A peer base URI that is not a plain http(s) URL is never a link.
+    assert 'href="javascript:' not in html
+
+
+# --- Y2, Y3: peer ids and base URIs are checked where a peer supplies them --
+
+
+def test_incoming_trust_request_refuses_a_bad_id_or_baseuri() -> None:
+    for body in (
+        {"id": "../../../victim", "baseuri": "https://peer.example/p1"},
+        {"id": EVIL_ID, "baseuri": "https://peer.example/p1"},
+        {"id": "p1", "baseuri": "https://demo.actingweb.io/v1?_method=DELETE"},
+        {"id": "p1", "baseuri": "javascript:alert(1)"},
+    ):
+        webobj = AWWebObj(body=json.dumps(body))
+        handler = trust.TrustRelationshipHandler(webobj, _config())
+        auth = mock.Mock(actor=mock.Mock(id="a1"))
+        with (
+            mock.patch.object(handler, "authenticate_actor", return_value=auth),
+            mock.patch("actingweb.actor.Actor.create_verified_trust") as created,
+        ):
+            handler.post("a1", "friend")
+        assert webobj.response.status_code == 400, body
+        created.assert_not_called()
+
+
+def test_create_verified_trust_refuses_a_bad_id() -> None:
+    from actingweb.actor import Actor
+
+    actor = Actor.__new__(Actor)
+    actor.id = "a1"
+    actor.config = _config()
+    assert (
+        actor.create_verified_trust(
+            baseuri="https://peer.example/p1",
+            peerid="../x",
+            approved=False,
+            secret="s",
+            verification_token=None,
+            trust_type="",
+            peer_approved=None,
+            relationship="friend",
+            desc="",
+        )
+        is False
+    )
+
+
+def test_peer_input_validators() -> None:
+    assert is_valid_peer_id("0f3a9c")
+    assert is_valid_peer_id("oauth2:user_at_x_dot_com:client_1")
+    for bad in ("", "../x", "a/b", "a?b", "a#b", "a%2fb", "a b", "a'b", "é", "x" * 256):
+        assert not is_valid_peer_id(bad), bad
+    assert is_valid_peer_baseuri("https://peer.example/p1")
+    assert is_valid_peer_baseuri("http://localhost:5055/p1")
+    for bad in (
+        "javascript:alert(1)",
+        "https://h/a?_method=DELETE",
+        "https://h/a#f",
+        "https://u:p@h/a",
+        "//h/a",
+        "https://h/a b",
+        'https://h/a"b',
+    ):
+        assert not is_valid_peer_baseuri(bad), bad
+
+
+def test_trust_links_quote_a_stored_peer_id() -> None:
+    from actingweb.handlers.www import WwwHandler
+
+    handler = WwwHandler(AWWebObj(), _config())
+    assert handler._trust_uri("a1", "friend", "../../x") == (
+        "https://demo.actingweb.io/a1/trust/friend/..%2F..%2Fx"
+    )
+    assert handler._trust_uri("a1", "friend", "..").endswith("/friend/%2E%2E")
+    assert handler._trust_uri("a1", "friend", "a?_method=DELETE#").endswith(
+        "/friend/a%3F_method%3DDELETE%23"
+    )
+
+
+# --- Y4, Y5: ambient credentials only ---------------------------------------
+
+
+def _override(headers: dict[str, str], cookies: dict[str, str] | None = None) -> Any:
+    webobj = AWWebObj(
+        params={"_method": "DELETE"}, headers=headers, cookies=cookies or {}
+    )
+    handler = properties.PropertiesHandler(webobj, _config())
+    with mock.patch.object(handler, "delete") as dispatched:
+        handler.get("a1", "notes")
+    return dispatched
+
+
+def test_a_cross_origin_spa_with_its_own_bearer_token_is_dispatched() -> None:
+    dispatched = _override(
+        {"Sec-Fetch-Site": "cross-site", "Authorization": "Bearer spa-token"}
+    )
+    dispatched.assert_called_once()
+
+
+def test_cached_basic_auth_cross_site_is_refused() -> None:
+    dispatched = _override(
+        {"Sec-Fetch-Site": "cross-site", "Authorization": "Basic eDp5"}
+    )
+    dispatched.assert_not_called()
+
+
+def test_the_cookie_counts_whatever_the_authorization_header() -> None:
+    dispatched = _override(
+        {"Authorization": "Basic eDp5"}, cookies={"oauth_token": "tok"}
+    )
+    dispatched.assert_not_called()
+
+
+# --- Y12: the integrations and the session cookie ---------------------------
+
+
+@pytest.mark.parametrize(
+    "method,headers,expected",
+    [
+        ("GET", {"Sec-Fetch-Site": "cross-site"}, True),
+        ("POST", {"Sec-Fetch-Site": "same-origin"}, True),
+        ("POST", {}, True),
+        ("POST", {"Sec-Fetch-Site": "same-site"}, False),
+        ("PUT", {"Origin": "https://sibling.actingweb.io"}, False),
+        ("DELETE", {"Origin": "null"}, False),
+        ("POST", {"Origin": "https://demo.actingweb.io"}, True),
+    ],
+)
+def test_may_use_session_cookie(
+    method: str, headers: dict[str, str], expected: bool
+) -> None:
+    lowered = {k.lower(): v for k, v in headers.items()}
+    assert (
+        cross_site.may_use_session_cookie(
+            method, lambda n: lowered.get(n.lower()), ROOT
+        )
+        is expected
+    )
+
+
+def _flask_integration() -> Any:
+    from actingweb.interface.integrations.flask_integration import FlaskIntegration
+
+    aw_app = mock.Mock()
+    aw_app.hooks = {}
+    aw_app.get_config.return_value = _config()
+    with mock.patch.object(FlaskIntegration, "setup_routes"):
+        return FlaskIntegration(aw_app, mock.Mock())
+
+
+@pytest.mark.parametrize(
+    "fetch_site,mapped", [("same-site", False), ("same-origin", True)]
+)
+def test_flask_maps_the_cookie_only_for_a_same_origin_state_change(
+    fetch_site: str, mapped: bool
+) -> None:
+    from flask import Flask
+
+    integration = _flask_integration()
+    app = Flask("t")
+    with app.test_request_context(
+        "/a1/properties",
+        method="POST",
+        headers={"Cookie": "oauth_token=tok", "Sec-Fetch-Site": fetch_site},
+    ):
+        headers = integration._normalize_request()["headers"]
+    assert ("Authorization" in headers) is mapped
+
+
+@pytest.mark.parametrize(
+    "fetch_site,mapped", [(b"same-site", False), (b"same-origin", True)]
+)
+def test_fastapi_maps_the_cookie_only_for_a_same_origin_state_change(
+    fetch_site: bytes, mapped: bool
+) -> None:
+    from starlette.requests import Request
+
+    from actingweb.interface.integrations.fastapi_integration import (
+        FastAPIIntegration,
+    )
+
+    aw_app = mock.Mock()
+    aw_app.hooks = {}
+    aw_app.get_config.return_value = _config()
+    with mock.patch.object(FastAPIIntegration, "setup_routes"):
+        integration = FastAPIIntegration(aw_app, mock.Mock())
+
+    async def receive() -> dict[str, Any]:
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/a1/properties",
+            "query_string": b"",
+            "headers": [
+                (b"cookie", b"oauth_token=tok"),
+                (b"sec-fetch-site", fetch_site),
+            ],
+        },
+        receive,
+    )
+    headers = asyncio.run(integration._normalize_request(request))["headers"]
+    assert ("Authorization" in headers) is mapped
+
+
+# --- Y10: callbacks dispatch once -------------------------------------------
+
+
+def test_callbacks_override_does_not_also_run_the_get() -> None:
+    webobj = AWWebObj(
+        params={"_method": "POST"}, headers={"Sec-Fetch-Site": "same-origin"}
+    )
+    handler = callbacks.CallbacksHandler(webobj, _config())
+    with (
+        mock.patch.object(handler, "post") as posted,
+        mock.patch.object(handler, "_authenticate_dual_context") as authed,
+    ):
+        handler.get("a1", "cb")
+    posted.assert_called_once()
+    authed.assert_not_called()
+
+
+def test_root_redirect_keeps_the_base_path() -> None:
+    config = _config()
+    config.root = "https://demo.actingweb.io/base/"
+    assert config.actor_path("a1", "/www") == "/base/a1/www"
+    assert _config().actor_path("a1") == "/a1"
+    assert root.RootHandler  # imported for the handler map

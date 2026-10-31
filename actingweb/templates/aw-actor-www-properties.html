@@ -27,7 +27,8 @@
             <td>
               {% if not is_read_only %}
                 <form class="aw-inline" method="get" action="{{ actor_www|default('') }}/properties/{{ name }}"
-                      onsubmit="return confirm('Delete property {{ name }}?');">
+                      data-confirm="Delete property {{ name }}?"
+                      onsubmit="return confirm(this.dataset.confirm);">
                   <input type="hidden" name="_method" value="DELETE">
                   <button type="submit" class="aw-btn aw-btn-danger">Delete</button>
                 </form>

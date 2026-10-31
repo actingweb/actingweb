@@ -31,8 +31,10 @@ class CallbacksHandler(base_handler.BaseHandler):
             return
         if self.request.get("_method") == "PUT":
             self.put(actor_id, name)
+            return
         if self.request.get("_method") == "POST":
             self.post(actor_id, name)
+            return
         auth_result = self._authenticate_dual_context(
             actor_id, "callbacks", "callbacks", name, add_response=False
         )

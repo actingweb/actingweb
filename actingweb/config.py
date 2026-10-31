@@ -434,6 +434,15 @@ class Config:
         # Authentication realm used in Basic auth
         self.auth_realm = self.fqdn
 
+    def actor_path(self, actor_id: str, suffix: str = "") -> str:
+        """``/<base>/<actor_id><suffix>``: an actor's path on this server,
+        with the deployment's base path (the path part of ``root``, empty
+        unless ``fqdn`` carries one), for redirects and links."""
+        from urllib.parse import urlsplit
+
+        base = urlsplit(getattr(self, "root", "") or "").path.rstrip("/")
+        return f"{base}/{actor_id}{suffix}"
+
     @property
     def refresh_token_grace_period(self) -> int:
         """Seconds after a refresh token is consumed during which presenting

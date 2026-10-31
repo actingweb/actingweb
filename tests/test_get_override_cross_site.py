@@ -76,7 +76,10 @@ def _call(
 def test_cross_site_override_is_refused(
     cls: Any, target: str, override: str, args: tuple[str, ...], headers: dict[str, str]
 ) -> None:
-    webobj, dispatched = _call(cls, target, override, args, headers)
+    # With the session cookie: the ambient credential a link carries.
+    webobj, dispatched = _call(
+        cls, target, override, args, headers, cookies={"oauth_token": "tok"}
+    )
     assert webobj.response.status_code == 403
     dispatched.assert_not_called()
 
@@ -103,20 +106,22 @@ def test_header_less_session_cookie_override_is_refused(
 @pytest.mark.parametrize(
     "headers",
     [
-        {"Sec-Fetch-Site": "same-origin"},
-        {"Origin": "https://DEMO.actingweb.io:443"},
-        {"Referer": "https://demo.actingweb.io/a1/www/trust"},
+        {"Sec-Fetch-Site": "same-origin", "Cookie": "x"},
+        {"Origin": "https://DEMO.actingweb.io:443", "Cookie": "x"},
+        {"Referer": "https://demo.actingweb.io/a1/www/trust", "Cookie": "x"},
         # A script or a peer: no browser headers, its own credentials.
         {},
         {"Authorization": "Basic eDp5"},
+        # An explicit Bearer token cannot be attached by another site.
+        {"Sec-Fetch-Site": "cross-site", "Authorization": "Bearer t"},
     ],
 )
 def test_same_origin_or_scripted_override_is_dispatched(
     cls: Any, target: str, override: str, args: tuple[str, ...], headers: dict[str, str]
 ) -> None:
-    # Dispatched is the evidence: the callbacks handler falls through to
-    # its GET's own authentication afterwards.
-    _, dispatched = _call(cls, target, override, args, headers)
+    # "Cookie" marks a browser request with the session cookie.
+    cookies = {"oauth_token": "tok"} if headers.pop("Cookie", None) else None
+    _, dispatched = _call(cls, target, override, args, headers, cookies=cookies)
     dispatched.assert_called_once()
 
 
@@ -124,7 +129,9 @@ def test_base_path_root_compares_origin_only() -> None:
     config = Config(database="dynamodb")
     config.root = "https://demo.actingweb.io/base/"
     webobj = AWWebObj(
-        params={"_method": "DELETE"}, headers={"Origin": "https://demo.actingweb.io"}
+        params={"_method": "DELETE"},
+        headers={"Origin": "https://demo.actingweb.io"},
+        cookies={"oauth_token": "tok"},
     )
     handler = root.RootHandler(webobj, config)
     with mock.patch.object(handler, "delete") as dispatched:
@@ -156,7 +163,11 @@ def test_async_handlers_refuse_a_cross_site_override(module: str, cls: str) -> N
     handler_cls = getattr(importlib.import_module(f"actingweb.handlers.{module}"), cls)
     config = Config(database="dynamodb")
     config.root = ROOT
-    webobj = AWWebObj(params={"_method": "POST"}, headers={"Sec-Fetch-Site": "none"})
+    webobj = AWWebObj(
+        params={"_method": "POST"},
+        headers={"Sec-Fetch-Site": "none"},
+        cookies={"oauth_token": "tok"},
+    )
     handler = handler_cls(webobj, config)
     with mock.patch.object(handler, "post_async") as dispatched:
         asyncio.run(handler.get_async("a1", "go"))

@@ -700,9 +700,9 @@ class OAuth2CallbackHandler(BaseHandler):
         else:
             # Traditional (non-SPA) mode: redirect based on config.ui setting
             if self.config.ui:
-                final_redirect = f"/{actor_instance.id}/www"
+                final_redirect = self.config.actor_path(actor_instance.id or "", "/www")
             else:
-                final_redirect = f"/{actor_instance.id}/app"
+                final_redirect = self.config.actor_path(actor_instance.id or "", "/app")
 
         response_data = {
             "status": "success",

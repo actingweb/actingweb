@@ -50,7 +50,8 @@
                 {% endif %}
                 {% if approveuri %}
                   <form class="aw-inline" method="get" action="{{ approveuri }}"
-                        onsubmit="return confirm('Delete trust with {{ peerid }}?');">
+                        data-confirm="Delete trust with {{ peerid }}?"
+                        onsubmit="return confirm(this.dataset.confirm);">
                     <input type="hidden" name="_method" value="DELETE">
                     <button type="submit" class="aw-btn aw-btn-danger">Delete</button>
                   </form>

@@ -248,12 +248,12 @@ def parse(raw: Any) -> Envelope | None:
     JSON); an ``Envelope`` means read the item through it.
 
     See ``_envelope_obj`` for what is plain: a pre-3.16 user item that
-    merely starts like an envelope (a non-int marker) reads as that item.
+    merely starts like an envelope (a marker other than the int ``1``)
+    reads as that item.
 
     Raises:
         EnvelopeError: ``raw`` starts like an envelope but is damaged
-            (invalid JSON), of another format (an int marker other than
-            ``1``), or malformed: ``span`` with ``parts`` not an int from 1
+            (invalid JSON), or carries the marker ``1`` and is malformed: ``span`` with ``parts`` not an int from 1
             to 9999, ``gen`` not of the gen shape, ``bytes`` not a
             non-negative int or ``sha256`` not 64 hex characters,
             ``key``/``tok`` not strings, or neither ``v`` nor ``span``.

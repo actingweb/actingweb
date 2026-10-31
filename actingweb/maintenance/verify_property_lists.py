@@ -182,6 +182,7 @@ def sweep_actor(
         # not look at spans. A sweep fault is counted and the list is still
         # verified.
         swept: dict[str, Any] | None = None
+        sweep_failed = False
         if repair and sweep_spans:
             try:
                 if list_prop.storage_format() == 2:
@@ -198,6 +199,7 @@ def sweep_actor(
                     f"actor={actor_id} list={name}: sweep_span_orphans() failed: {e}"
                 )
                 errored += 1
+                sweep_failed = True
         try:
             # verify() fetches the actor's whole property partition, so this
             # is one dump per list. That is inherent to checking integrity
@@ -209,7 +211,8 @@ def sweep_actor(
             )
         except Exception as e:  # folds DbError: counted as error, exit 1
             logger.error(f"actor={actor_id} list={name}: verify() failed: {e}")
-            errored += 1
+            if not sweep_failed:  # one list counts once
+                errored += 1
             continue
 
         # v1 and v2 reports carry different fields, and the foreign-row
@@ -279,21 +282,25 @@ def sweep_actor(
                     f"actingweb-migrate-property-lists --migrate"
                 )
 
+        # Broken spans the sweep found and could not remove (the head
+        # changed under it): the verify above did not look at spans, so this
+        # decides, whatever else the list needs. A malformed head left in
+        # place is already in the report (verify marks it unhealthy).
+        sweep_left = 0
         if swept is not None:
-            left = (
-                len(swept.get("broken_spans") or [])
-                - swept.get("broken_spans_removed", 0)
-                + swept.get("malformed_heads_kept", 0)
+            sweep_left = len(swept.get("broken_spans") or []) - swept.get(
+                "broken_spans_removed", 0
             )
-            if left > 0 and report["healthy"]:
+            if sweep_left > 0:
                 logger.warning(
                     f"actor={actor_id} list={name}: UNHEALTHY: the span sweep "
-                    f"left {left} broken span(s) or malformed head(s) in place "
-                    f"(changed under the sweep, or not valid JSON) -- re-run, "
-                    f"or remove the item(s) with delete_by_handle()"
+                    f"left {sweep_left} broken span(s) in place (changed under "
+                    f"the sweep) -- re-run, or remove the item(s) with "
+                    f"delete_by_handle()"
                 )
-                unhealthy_after += 1
-                continue
+                if report["healthy"]:
+                    unhealthy_after += 1
+                    continue
 
         if report["healthy"]:
             continue
@@ -379,7 +386,7 @@ def sweep_actor(
             continue
 
         post = list_prop.verify(identity_key=identity_key)
-        if post["healthy"]:
+        if post["healthy"] and sweep_left <= 0:
             logger.info(f"actor={actor_id} list={name}: repaired")
         else:
             unhealthy_after += 1

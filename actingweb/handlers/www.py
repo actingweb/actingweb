@@ -13,6 +13,7 @@ from actingweb.property_list import (
 )
 
 from ..db.exceptions import DbError
+from ..trust import is_valid_peer_baseuri
 
 logger = logging.getLogger(__name__)
 
@@ -147,6 +148,22 @@ class WwwHandler(base_handler.BaseHandler):
                 prop_name, "put", actor_interface, value or {}, [prop_name]
             )
             is None
+        )
+
+    def _trust_uri(self, actor_id: str, relationship: str, peerid: str) -> str:
+        """The trust row's URL, with the relationship and peer id quoted as
+        path segments: a stored id from before 3.16 may hold characters
+        (``/``, ``?``, ``.``) that would point the link somewhere else."""
+        from urllib.parse import quote
+
+        def segment(value: str, safe: str) -> str:
+            quoted = quote(value, safe=safe)
+            # A dot segment would be resolved away by the browser.
+            return quoted.replace(".", "%2E") if quoted in (".", "..") else quoted
+
+        return (
+            f"{self.config.root}{actor_id}/trust/"
+            f"{segment(str(relationship), '')}/{segment(str(peerid), ':@')}"
         )
 
     def _v1_item_changed(self, list_prop: Any, index: int) -> bool:
@@ -686,9 +703,11 @@ class WwwHandler(base_handler.BaseHandler):
                 if isinstance(t, dict):
                     rel = t.get("relationship", "")
                     peerid = t.get("peerid", "")
-                    t["approveuri"] = (
-                        f"{self.config.root}{myself.id or ''}/trust/{rel}/{peerid}"
-                    )
+                    t["approveuri"] = self._trust_uri(myself.id or "", rel, peerid)
+                    # A link to the peer only for a plain http(s) base URL:
+                    # the value came from the peer.
+                    baseuri = t.get("baseuri") or ""
+                    t["peer_link"] = baseuri if is_valid_peer_baseuri(baseuri) else ""
 
                     # Check if this relationship has custom permissions
                     t["has_custom_permissions"] = self._has_custom_permissions(
@@ -711,9 +730,7 @@ class WwwHandler(base_handler.BaseHandler):
                     rel = getattr(t, "relationship", "")
                     peerid = getattr(t, "peerid", "")
                     try:
-                        t.approveuri = (
-                            f"{self.config.root}{myself.id or ''}/trust/{rel}/{peerid}"
-                        )
+                        t.approveuri = self._trust_uri(myself.id or "", rel, peerid)
                         t.has_custom_permissions = self._has_custom_permissions(
                             myself.id or "", peerid
                         )
@@ -1500,6 +1517,8 @@ class WwwHandler(base_handler.BaseHandler):
                     # No dot segment, raw or encoded: the browser resolves
                     # "/<id>/www/../../<other>" out of this actor's UI.
                     or "%" in redirect_path
+                    # Browsers strip tab and newline from a URL: "\t.." is "..".
+                    or any(c.isspace() or ord(c) < 32 for c in redirect_path)
                     or any(seg in (".", "..") for seg in redirect_path.split("/"))
                 ):
                     redirect_path = self._www_path(actor_id, "/properties")

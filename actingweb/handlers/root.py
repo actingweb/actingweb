@@ -50,10 +50,10 @@ class RootHandler(base_handler.BaseHandler):
             actor_id_str = myself.id or ""
             if self.config.ui:
                 # Web UI enabled - redirect to /www
-                redirect_path = f"/{actor_id_str}/www"
+                redirect_path = self.config.actor_path(actor_id_str, "/www")
             else:
                 # Web UI disabled - redirect to /app (for SPAs)
-                redirect_path = f"/{actor_id_str}/app"
+                redirect_path = self.config.actor_path(actor_id_str, "/app")
 
             if self.response:
                 # Build full URL for redirect - config.root includes protocol, host, and any base path

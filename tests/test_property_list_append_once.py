@@ -1057,3 +1057,26 @@ class TestVerification10:
         lst._db = None
         with pytest.raises(RuntimeError, match="database connection"):
             lst.repair_keys()
+
+
+class TestPr163Review:
+    """PR #163 review: churn that makes every adoption see its item vanish
+    spends the attempt budget and raises, writing nothing of its own."""
+
+    def test_repeated_item_gone_exhausts_the_budget(
+        self, config: Config, store: dict[Any, Any], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from actingweb.property_list import _ItemGone
+
+        calls = {"n": 0}
+
+        def gone(self: ListProperty, key_hash: str, tok: str) -> Any:
+            calls["n"] += 1
+            raise _ItemGone("deleted under the read")
+
+        monkeypatch.setattr(ListProperty, "_find_keyed", gone)
+        with pytest.raises(RuntimeError, match="append_once"):
+            _lst(config).append_once("a", key=KEY)
+        assert calls["n"] == 3
+        assert heads(store) == {}
+        assert key_rows(store) == {}

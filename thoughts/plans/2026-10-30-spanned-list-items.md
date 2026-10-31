@@ -3151,6 +3151,25 @@ converges for a rare data loss that does not.
 removed; `test_attempt_budget_keeps_the_head_for_a_repeat_to_finish`
 replaces the budget test: the head stays and a repeat announces it once).
 
+### 2026-10-31, after the PR #163 review and CI
+
+#### 79. CI's pyright and the PR review
+
+**Category**: Bug fix / Verification fix (Low)
+
+**What changed**: `_write_spanning` builds the unspanned head once at the
+top (`plain_head: str | None`), which CI's pyright flagged as possibly
+unbound (the local pyright did not) and the PR review called fragile.
+`clear()`'s comment states its quiescence and clock assumptions; the verify
+script logs a list's dangling key rows (informational, healthy lists
+included); the guide's Cost paragraph advises on long lists of large plain
+items; `TestPr163Review` pins that repeated `_ItemGone` spends the budget
+and writes nothing.
+
+**Files affected**: `actingweb/property_list.py`,
+`actingweb/maintenance/verify_property_lists.py`,
+`docs/guides/property-lists.rst`, `tests/test_property_list_append_once.py`.
+
 ## Evaluation Notes
 
 Five evaluators reviewed the first draft against the codebase on

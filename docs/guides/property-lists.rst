@@ -799,7 +799,10 @@ strongly consistent range read of the heads and rewrites the key row's
 rank. A first call adds one strongly consistent range read of the list's
 heads before writing (a spanned item's head is small, but a plain item
 costs its full size, as in any list read), then the item write and one
-small key-row create in the actor's side partition. The read is strong so
+small key-row create in the actor's side partition. On a long list of
+large plain items that read dominates a first call: keep large content in
+spanned items or outside the list, or use plain ``append()`` where a
+duplicate is acceptable. The read is strong so
 that an item deleted a moment ago is never mistaken for the stored one,
 and an item written a moment ago by a call that then stopped is always
 found.

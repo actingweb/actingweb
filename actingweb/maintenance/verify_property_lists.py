@@ -286,6 +286,15 @@ def sweep_actor(
                     f"actingweb-migrate-property-lists --migrate"
                 )
 
+        if report.get("dangling_key_rows"):
+            logger.info(
+                f"actor={actor_id} list={name}: "
+                f"{len(report['dangling_key_rows'])} dangling key row(s) "
+                f"(append_once() items deleted while their key-row delete "
+                f"failed) -- informational; the next call with the key, or "
+                f"--repair on an unhealthy list, removes them"
+            )
+
         # Broken spans the sweep found and could not remove (the head
         # changed under it): the verify above did not look at spans, so this
         # decides, whatever else the list needs. A malformed head left in

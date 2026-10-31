@@ -1051,20 +1051,26 @@ class ListProperty:
           Otherwise the bodies are deleted; a read-back that raises keeps
           them (unknown outcome).
         """
-        if not spans and carry is not None:
-            # An envelope re-encodes the item (non-ASCII text from the str()
-            # fallback becomes \uXXXX escapes), so a carried key or token
-            # can push a head the size check passed over the threshold:
-            # span it instead.
-            span_threshold, _ = self._limits()
+        # The unspanned head, built once. An envelope re-encodes the item
+        # (non-ASCII text from the str() fallback becomes \uXXXX escapes), so
+        # a carried key or token can push a head the size check passed over
+        # the threshold: span it instead.
+        plain_head: str | None = None
+        if not spans:
             plain_head = self._make_head(value_str, None, carry)
-            if span_threshold is not None and encoded_size(plain_head) > span_threshold:
+            span_threshold, _ = self._limits()
+            if (
+                carry is not None
+                and span_threshold is not None
+                and encoded_size(plain_head) > span_threshold
+            ):
                 self._aux()
                 spans = True
+                plain_head = None
         span = self._write_bodies(value_str) if spans else None
         head = (
             plain_head
-            if span is None and carry is not None
+            if plain_head is not None
             else self._make_head(value_str, span, carry)
         )
         self._head_write_in_flight = False
@@ -3445,7 +3451,9 @@ class ListProperty:
             # Only the key rows of the heads it deleted, as with bodies: an
             # append_once() racing clear() keeps its key with its head.
             # Rows already dangling go too, unless a running call may have
-            # written them after the read (the in-flight guard).
+            # written them after the read (the in-flight guard). Like every
+            # whole-list rewrite, this assumes writes are quiesced beyond that
+            # window and that hosts' clocks agree.
             deleted = {
                 (key_hash, tok or "")
                 for key_hash, keyed in self._keyed_by_hash(pairs).items()

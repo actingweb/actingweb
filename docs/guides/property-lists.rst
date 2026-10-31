@@ -684,10 +684,13 @@ item's trailing rank can be reissued, see ``ListItemHandle``). This only
 saves reads if the fields a listing shows (title, metadata) live outside the
 large item: keep them in the item's own small fields, or in their own list.
 
-**Broken spans.** A head whose body rows are missing raises
+**Broken spans.** A head whose body rows are missing, or whose bodies do
+not match the size and SHA-256 digest the head records, raises
 ``ListItemSpanError`` (a ``ListCorruptionError``) instead of returning a
-partial item; before raising, the reader re-reads the head and bodies
-strongly, so a concurrent update is never mistaken for damage. The REST
+partial or wrong item; before raising, the reader re-reads the head and
+bodies strongly, so a concurrent update is never mistaken for damage. An
+item deleted while it is being read is simply gone: a list read leaves it
+out and a point read raises ``IndexError``. The REST
 handlers answer 409 with ``"remedy": "run actingweb-verify-property-lists
 --repair --sweep-spans, or remove the item with delete_by_handle()"``; the
 error names the list, the item's rank and the part counts, never content.
@@ -697,11 +700,22 @@ failed best-effort cleanup after a rewrite, leaves an *orphan generation*:
 body rows no head names. They are inert. ``verify()`` reports
 ``spanned_items`` and ``span_bytes`` from the heads; ``verify(spans=True)``
 also enumerates body rows and reports ``span_body_rows``,
-``orphan_span_gens`` and ``broken_spans``. ``compact(sweep_span_orphans=True)``
-(the script's ``--repair --sweep-spans``) removes orphan generations older
-than one hour (younger ones may belong to an append still in flight) and
-heads whose bodies are gone (``broken_spans_removed``). A ``compact()`` that
-moves a spanned item copies its bodies to a fresh generation.
+``orphan_span_gens`` and ``broken_spans``. ``sweep_span_orphans()`` (the
+script's ``--repair --sweep-spans``) removes orphan generations older than
+one hour (younger ones may belong to an append still in flight), heads whose
+bodies are gone (``broken_spans_removed``) and heads that are malformed
+envelopes (``malformed_heads_removed``), without moving any other head.
+``compact(sweep_span_orphans=True)`` does the same and then rebalances. A
+``compact()`` that moves a spanned item copies its bodies to a fresh
+generation first, and stops with nothing moved if one cannot be read.
+
+**Writes with an unknown outcome.** A head write that raises (a timeout
+after the backend applied it) keeps the new bodies: if the head did not land
+they are an orphan for the sweep. A conditional write that answers ``False``
+is checked by reading the head back, so an SDK retry of a write that
+committed is reported as the success it was. ``check_item_size(item)``
+raises ``ListItemTooLargeError`` without writing, for a caller that
+validates a batch before its first write.
 
 **Lifecycles.** A list's ``delete()`` removes its side-partition rows,
 orphans included; ``clear()`` removes the bodies of the items it deletes;

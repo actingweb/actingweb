@@ -151,8 +151,9 @@ def sweep_actor(
 
     ``spans`` passes ``verify(spans=True)``: enumerate each v2 list's body
     rows (every body byte, on DynamoDB). ``sweep_spans`` (with ``repair``)
-    runs ``compact(sweep_span_orphans=True)`` on every v2 list with orphan
-    body generations or broken spans, healthy or not: an orphan
+    runs ``sweep_span_orphans()`` (no rebalance, no body copy) on every v2
+    list with orphan body generations, broken spans or malformed heads,
+    healthy or not: an orphan
     generation does not make a list unhealthy, so the ``healthy``
     short-circuit below would otherwise skip it.
 
@@ -222,11 +223,10 @@ def sweep_actor(
             )
         ):
             try:
-                swept = list_prop.compact(sweep_span_orphans=True)
+                swept = list_prop.sweep_span_orphans()
             except Exception as e:  # folds DbError: counted as error, exit 1
                 logger.error(
-                    f"actor={actor_id} list={name}: compact(sweep_span_orphans) "
-                    f"failed: {e}"
+                    f"actor={actor_id} list={name}: sweep_span_orphans() failed: {e}"
                 )
                 errored += 1
                 continue
@@ -407,8 +407,9 @@ def main() -> int:
         "--sweep-spans",
         action="store_true",
         help=(
-            "with --repair, run compact(sweep_span_orphans=True) on every v2 "
-            "list with orphan or broken spans: remove orphan body generations older "
+            "with --repair, run sweep_span_orphans() on every v2 list with "
+            "orphan or broken spans or malformed heads (no rebalance): remove "
+            "orphan body generations older "
             "than an hour and heads whose bodies are missing (the remedy a "
             "409 for a broken span names). Implies --spans"
         ),

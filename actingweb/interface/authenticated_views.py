@@ -357,6 +357,10 @@ class _PermissionEnforcingListView:
         self._check("write")
         return self._list_prop.compact(sweep_span_orphans=sweep_span_orphans)
 
+    def sweep_span_orphans(self) -> dict[str, Any]:
+        self._check("write")
+        return self._list_prop.sweep_span_orphans()
+
     def migrate_to_v2(self, allow_damaged: bool = False) -> dict[str, Any]:
         self._check("write")
         return self._list_prop.migrate_to_v2(allow_damaged=allow_damaged)

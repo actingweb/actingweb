@@ -401,9 +401,11 @@ class RemotePeerStore:
             # There is nothing to apply by value; the subscriber re-reads.
             logger.warning(
                 "Not applying a %r diff for list '%s': it is a reference to "
-                "values over the span threshold, not the values. This replica "
-                "is now out of sync with the source list; re-read the list (a "
-                "resync of the subscription brings it back in line).",
+                "values over the span threshold, not the values, and this "
+                "receiver does not fetch them. This replica is now out of sync "
+                "with the source list until the application re-reads the list "
+                "from the publisher (a resync callback does so only for a peer "
+                "that supports resync).",
                 operation,
                 list_name,
             )

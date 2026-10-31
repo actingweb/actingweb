@@ -116,6 +116,10 @@ class TestParse:
             {"__aw_env": 2, "v": 1},
             {"__aw_env": True, "v": 1},
             {"__aw_env": 1, "key": 5, "v": 1},
+            {
+                "__aw_env": 1,
+                "span": {"gen": GEN, "parts": 1, "bytes": 5, "sha256": "x"},
+            },
         ],
     )
     def test_malformed_envelopes_raise(self, obj: dict[str, Any]) -> None:
@@ -131,7 +135,7 @@ class TestParse:
             parse('{"__aw_env": 1, ')
 
     def test_round_trip_with_span_preserves_extra(self) -> None:
-        span = SpanInfo(gen=GEN, parts=3, bytes=1000)
+        span = SpanInfo(gen=GEN, parts=3, bytes=1000, sha256="ab" * 32)
         raw = wrap(span=span, key="k" * 64, tok="t1", extra={"later": [1, 2]})
         assert raw.startswith('{"__aw_env": 1')
         env = parse(raw)

@@ -551,6 +551,15 @@ class NotifyingListProperty:
         self._register_diff("metadata")
         return report
 
+    def sweep_span_orphans(self) -> dict[str, Any]:
+        """Remove spanned-item leftovers -- see
+        ListProperty.sweep_span_orphans(). Registers a "metadata" diff, as
+        compact() does, since a removed broken or malformed head changes
+        the list."""
+        report = self._list_prop.sweep_span_orphans()
+        self._register_diff("metadata")
+        return report
+
     def migrate_to_v2(self, allow_damaged: bool = False) -> dict[str, Any]:
         """Migrate this list from v1 to v2 storage -- see
         ListProperty.migrate_to_v2(), including what ``allow_damaged``

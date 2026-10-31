@@ -39,16 +39,56 @@
                     <div class="mb-md">
                         <label class="text-sm font-medium text-muted">Property Type</label>
                         <div class="mt-xs">
-                            <span class="badge badge-accent">{{ qual }}</span>
+                            <span class="badge badge-accent">{% if is_list_property %}list{% else %}property{% endif %}</span>
                         </div>
                     </div>
 
+                    {% if is_list_property %}
+                    {% if list_description %}<p class="mb-md">{{ list_description }}</p>{% endif %}
+                    <div>
+                        <label class="text-sm font-medium text-muted">Items ({{ list_items|length }})</label>
+                        {% for item in list_items %}
+                        {% set item_json = item|tojson %}
+                        <div class="list-item mt-sm">
+                            <div class="flex gap-sm" style="align-items: baseline;">
+                                <span class="badge">{{ loop.index0 }}</span>
+                                <code class="list-item-preview">{{ item_json[:200] }}{% if item_json|length > 200 %}&hellip;{% endif %}</code>
+                                <span class="text-xs text-muted" style="white-space: nowrap;">{{ item_json|length }} bytes</span>
+                            </div>
+                            <details class="mt-xs">
+                                <summary class="text-sm">Edit or delete</summary>
+                                <form method="post" action="{{ url }}/properties/{{ property|urlencode }}/items" class="mt-xs">
+                                    <input type="hidden" name="action" value="update">
+                                    <input type="hidden" name="item_index" value="{{ loop.index0 }}">
+                                    <textarea name="item_value" rows="4" class="list-item-editor" required>{{ item_json }}</textarea>
+                                    <button type="submit" class="btn btn-primary btn-sm mt-xs">Save item</button>
+                                </form>
+                                <form method="post" action="{{ url }}/properties/{{ property|urlencode }}/items"
+                                      onsubmit="return confirm('Delete item {{ loop.index0 }}?');" class="mt-xs">
+                                    <input type="hidden" name="action" value="delete">
+                                    <input type="hidden" name="item_index" value="{{ loop.index0 }}">
+                                    <button type="submit" class="btn btn-danger-outline btn-sm">Delete item</button>
+                                </form>
+                            </details>
+                        </div>
+                        {% else %}
+                        <p class="text-sm text-muted mt-xs">This list is empty.</p>
+                        {% endfor %}
+                        <form method="post" action="{{ url }}/properties/{{ property|urlencode }}/items" class="mt-md">
+                            <input type="hidden" name="action" value="add">
+                            <label class="text-sm font-medium text-muted" for="new-item">Add an item (JSON, or plain text)</label>
+                            <textarea id="new-item" name="item_value" rows="3" class="list-item-editor mt-xs" required></textarea>
+                            <button type="submit" class="btn btn-primary btn-sm mt-xs">Add item</button>
+                        </form>
+                    </div>
+                    {% else %}
                     <div>
                         <label class="text-sm font-medium text-muted">Value</label>
                         <div class="copy-field mt-xs">
                             <code>{{ value }}</code>
                         </div>
                     </div>
+                    {% endif %}
                 </div>
             </div>
 

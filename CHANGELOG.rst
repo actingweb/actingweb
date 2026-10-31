@@ -500,10 +500,32 @@ CHANGED
 
 - ``GET /properties?metadata=true`` reports each list's ``total_bytes``
   from the item rows alone (a spanned item's head carries its size), and
-  ``format=full`` reports a list with a broken span as ``{"_list": true,
-  "error": "list_corrupted", ...}`` instead of failing the whole response.
-  The handle-only reads in the REST and www item handlers no longer read
-  spanned items' bodies.
+  ``format=full`` and ``metadata=true`` report a list with a broken span or
+  a malformed head with an ``error`` marker instead of failing the whole
+  response. The handle-only reads in the REST and www item handlers no
+  longer read spanned items' bodies. The bulk ``items`` update size-checks
+  every entry before writing any, so its 413 means nothing was written, and
+  ``PUT ?index=`` answers a broken span with the 409.
+
+- **The web UI's list item actions answer with a reason.** The
+  ``/<id>/www/properties/<list>/items`` actions answered errors with an empty
+  body, mapped an oversized item to 500 and a broken span to 400, and an
+  ``update`` with an empty ``item_value`` replaced the item with ``""``.
+  They now write the reason as a plain-text body, answer 413 and 409, and
+  refuse an empty ``update`` value with 400 as ``add`` already did.
+  **Behavior change:** a form that posts an empty value to blank an item
+  gets 400.
+
+- **``with_list_item_limits()`` refuses a ceiling more than 9,999 body rows
+  of the threshold** (``list_item_max_bytes > 9999 *
+  list_item_span_threshold``), where an item at the ceiling could not be
+  stored. **Behavior change:** such a pair raises ``ValueError`` wherever
+  it is set.
+
+- An actor delete skips the side-partition sweep, with an ERROR, when an
+  actor exists whose id is the deleted actor's id plus ``$aux`` (possible
+  only with pre-3.16 caller-supplied ids), and logs a WARNING when rows
+  remain after its last pass.
 
 ADDED
 ~~~~~
@@ -654,11 +676,16 @@ ADDED
 - ``verify()`` reports ``spanned_items``, ``span_bytes`` and
   ``malformed_heads``; ``verify(spans=True)`` also enumerates body rows and
   reports ``span_body_rows``, ``orphan_span_gens`` and ``broken_spans``.
-  ``compact(sweep_span_orphans=True)`` removes orphan body generations older
-  than an hour and heads whose bodies are missing
-  (``orphan_span_gens_removed``, ``broken_spans_removed``).
+  ``sweep_span_orphans()`` removes orphan body generations older than an
+  hour, heads whose bodies are missing and malformed heads
+  (``orphan_span_gens_removed``, ``broken_spans_removed``,
+  ``malformed_heads_removed``) without rebalancing;
+  ``compact(sweep_span_orphans=True)`` sweeps and then rebalances.
   ``actingweb-verify-property-lists`` gains ``--spans`` and, with
-  ``--repair``, ``--sweep-spans``.
+  ``--repair``, ``--sweep-spans`` (which runs the sweep, not a rebalance).
+  A span records its body's SHA-256, so same-length wrong content reads as a
+  broken span rather than as the item. ``ListProperty.check_item_size(item)``
+  checks an item against the limits without writing.
 
 FIXED
 ~~~~~

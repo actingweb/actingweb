@@ -1011,6 +1011,11 @@ class TestActorLevel:
 
         monkeypatch.setattr(property_module, "get_property_list", lambda c: FakeList())
         monkeypatch.setattr(
+            property_module,
+            "get_actor",
+            lambda c: mock.Mock(get=mock.Mock(return_value=None)),
+        )
+        monkeypatch.setattr(
             property_module, "get_property", lambda c: LateWriter(store, [])
         )
         props = property_module.Properties(ACTOR, config)
@@ -1048,12 +1053,17 @@ class TestActorLevel:
 
         monkeypatch.setattr(property_module, "get_property_list", lambda c: FakeList())
         monkeypatch.setattr(
+            property_module,
+            "get_actor",
+            lambda c: mock.Mock(get=mock.Mock(return_value=None)),
+        )
+        monkeypatch.setattr(
             property_module, "get_property", lambda c: AlwaysWriting(store, [])
         )
         store[(AUX, f"list:x-$span-{OLD_GEN}-p0000")] = "w"
         props = property_module.Properties(ACTOR, config)
         assert props.delete()
-        assert AlwaysWriting.n == 3
+        assert AlwaysWriting.n == 4  # three sweep passes, then the leak check
         assert aux_rows(store)  # the documented leak, no raise
 
 

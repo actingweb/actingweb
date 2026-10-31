@@ -4,7 +4,12 @@ import logging
 
 from actingweb.db import get_property
 from actingweb.handlers import base_handler
-from actingweb.property_list import ListCorruptionError, ListMetadataContentionError
+from actingweb.property_list import (
+    ListCorruptionError,
+    ListItemSpanError,
+    ListItemTooLargeError,
+    ListMetadataContentionError,
+)
 
 from ..db.exceptions import DbError
 
@@ -12,6 +17,16 @@ logger = logging.getLogger(__name__)
 
 
 class WwwHandler(base_handler.BaseHandler):
+    def _list_action_error(self, status: int, message: str) -> None:
+        """Answer a list item action with ``status`` and the reason as a
+        plain-text body, so a browser shows why instead of a blank page.
+        The reason is escaped; it never carries item content."""
+        import html
+
+        self.response.set_status(status, message)
+        self.response.headers["Content-Type"] = "text/plain; charset=utf-8"
+        self.response.write(html.escape(message))
+
     def _get_consistent_urls(self, actor_id: str) -> dict[str, str]:
         """
         Get consistent URL variables for templates using config.root.
@@ -883,7 +898,7 @@ class WwwHandler(base_handler.BaseHandler):
                 action = self.request.get("action")
 
                 if not action:
-                    self.response.set_status(400, "Missing action parameter")
+                    self._list_action_error(400, "Missing action parameter")
                     return
 
                 try:
@@ -895,9 +910,7 @@ class WwwHandler(base_handler.BaseHandler):
                         )
 
                         if not item_value:
-                            self.response.set_status(
-                                400, "Missing item_value parameter"
-                            )
+                            self._list_action_error(400, "Missing item_value parameter")
                             return
 
                         # Try to parse as JSON, fall back to string
@@ -921,7 +934,7 @@ class WwwHandler(base_handler.BaseHandler):
                             list_prop.append(parsed_value)
                         else:
                             logger.error("List properties not supported")
-                            self.response.set_status(
+                            self._list_action_error(
                                 500, "List properties not supported"
                             )
                             return
@@ -931,8 +944,10 @@ class WwwHandler(base_handler.BaseHandler):
                         item_index = self.request.get("item_index")
                         item_value = self.request.get("item_value")
 
-                        if item_index is None or item_value is None:
-                            self.response.set_status(
+                        # An empty value is refused like add's: an empty form
+                        # field must not silently blank the item.
+                        if item_index is None or not item_value:
+                            self._list_action_error(
                                 400, "Missing item_index or item_value parameter"
                             )
                             return
@@ -940,7 +955,7 @@ class WwwHandler(base_handler.BaseHandler):
                         try:
                             index = int(item_index)
                         except ValueError:
-                            self.response.set_status(400, "Invalid item_index")
+                            self._list_action_error(400, "Invalid item_index")
                             return
 
                         # Try to parse as JSON, fall back to string
@@ -966,27 +981,29 @@ class WwwHandler(base_handler.BaseHandler):
                                 if list_prop.storage_format() == 2:
                                     pairs = list_prop.items_with_handles(resolve=False)
                                     if index < 0 or index >= len(pairs):
-                                        self.response.set_status(
+                                        self._list_action_error(
                                             400, f"Index {index} out of range"
                                         )
                                         return
                                     if not list_prop.update_by_handle(
                                         pairs[index][0], parsed_value
                                     ):
-                                        self.response.set_status(
+                                        self._list_action_error(
                                             503, "List item concurrently modified"
                                         )
                                         self.response.headers["Retry-After"] = "1"
                                         return
                                 else:
                                     list_prop[index] = parsed_value
+                            except ListItemSpanError:
+                                raise
                             except IndexError:
-                                self.response.set_status(
+                                self._list_action_error(
                                     400, f"Index {index} out of range"
                                 )
                                 return
                         else:
-                            self.response.set_status(
+                            self._list_action_error(
                                 500, "List properties not supported"
                             )
                             return
@@ -996,15 +1013,13 @@ class WwwHandler(base_handler.BaseHandler):
                         item_index = self.request.get("item_index")
 
                         if item_index is None:
-                            self.response.set_status(
-                                400, "Missing item_index parameter"
-                            )
+                            self._list_action_error(400, "Missing item_index parameter")
                             return
 
                         try:
                             index = int(item_index)
                         except ValueError:
-                            self.response.set_status(400, "Invalid item_index")
+                            self._list_action_error(400, "Invalid item_index")
                             return
 
                         # Get the list property and delete -- see the
@@ -1016,31 +1031,33 @@ class WwwHandler(base_handler.BaseHandler):
                                 if list_prop.storage_format() == 2:
                                     pairs = list_prop.items_with_handles(resolve=False)
                                     if index < 0 or index >= len(pairs):
-                                        self.response.set_status(
+                                        self._list_action_error(
                                             400, f"Index {index} out of range"
                                         )
                                         return
                                     if not list_prop.delete_by_handle(pairs[index][0]):
-                                        self.response.set_status(
+                                        self._list_action_error(
                                             503, "List item concurrently modified"
                                         )
                                         self.response.headers["Retry-After"] = "1"
                                         return
                                 else:
                                     del list_prop[index]
+                            except ListItemSpanError:
+                                raise
                             except IndexError:
-                                self.response.set_status(
+                                self._list_action_error(
                                     400, f"Index {index} out of range"
                                 )
                                 return
                         else:
-                            self.response.set_status(
+                            self._list_action_error(
                                 500, "List properties not supported"
                             )
                             return
 
                     else:
-                        self.response.set_status(400, f"Unknown action: {action}")
+                        self._list_action_error(400, f"Unknown action: {action}")
                         return
 
                     # Redirect back to the property page
@@ -1050,16 +1067,24 @@ class WwwHandler(base_handler.BaseHandler):
                     )
                     return
 
+                except ListItemTooLargeError as e:
+                    logger.warning(f"List item refused for '{prop_name}': {e}")
+                    self._list_action_error(413, str(e))
+                    return
+                except ListItemSpanError as e:
+                    logger.error(f"List '{prop_name}' has a broken span: {e}")
+                    self._list_action_error(409, str(e))
+                    return
                 except ListMetadataContentionError as e:
                     logger.warning(f"List metadata contended for '{prop_name}': {e}")
-                    self.response.set_status(503, "List metadata contended -- retry")
+                    self._list_action_error(503, "List metadata contended -- retry")
                     self.response.headers["Retry-After"] = "1"
                     return
                 except DbError:
                     raise
                 except Exception as e:
                     logger.error(f"Error in list item management: {e}")
-                    self.response.set_status(
+                    self._list_action_error(
                         500, f"Error processing list item: {str(e)}"
                     )
                     return

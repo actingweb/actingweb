@@ -912,3 +912,27 @@ pre code {
 
 /* Flex utilities */
 .flex-1 { flex: 1; }
+
+/* Property list items on the property page */
+.page-header p {
+  overflow-wrap: anywhere;
+}
+
+.list-item {
+  padding: var(--spacing-sm);
+  border: 1px solid var(--color-border, rgba(127, 127, 127, 0.25));
+  border-radius: var(--radius-md);
+}
+
+.list-item-preview {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.list-item-editor {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-sm);
+}

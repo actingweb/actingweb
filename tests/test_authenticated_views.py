@@ -518,6 +518,7 @@ _PROXY_MUTATORS = {
     "remove_where": ("delete", lambda v: v.remove_where("k", "v")),
     "update_where": ("write", lambda v: v.update_where("k", "v", "x")),
     "compact": ("write", lambda v: v.compact()),
+    "sweep_span_orphans": ("write", lambda v: v.sweep_span_orphans()),
     "migrate_to_v2": ("write", lambda v: v.migrate_to_v2()),
 }
 

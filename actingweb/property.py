@@ -1,11 +1,14 @@
+import logging
 from typing import Any
 
-from actingweb.db import get_property, get_property_list
+from actingweb.db import get_actor, get_property, get_property_list
 from actingweb.db.exceptions import DbError
 
 from .identifiers import first_control_character
 from .property_list import _V1_INDEX_RE, _V2_RANK_MARKER, ListProperty, _v2_is_rank
 from .property_list_span import aux_partition
+
+logger = logging.getLogger(__name__)
 
 # Passes of the side-partition sweep in Properties.delete(): see there.
 _AUX_SWEEP_PASSES = 3
@@ -514,11 +517,37 @@ class Properties:
             return
         aux = aux_partition(self.actor_id)
         db = get_property(self.config)
+        names = list(db.get_prefix(actor_id=aux, prefix="list:", keys_only=True))
+        if not names:
+            return  # the common case: no spanned or keyed item, no extra read
+        # An actor id with "$" is refused since 3.16, but a consumer could
+        # have created "{id}$aux" before then: that partition is another
+        # actor's own properties, never this actor's side partition.
+        if get_actor(self.config).get(actor_id=aux) is not None:
+            logger.error(
+                "Not sweeping partition %r after deleting actor %s: an actor "
+                "with that id exists (created before 3.16 refused '$' in "
+                "actor ids). Any spanned-item rows of %s are left for "
+                "actingweb-verify-orphans to report.",
+                aux,
+                self.actor_id,
+                self.actor_id,
+            )
+            return
         for _ in range(_AUX_SWEEP_PASSES):
-            names = list(db.get_prefix(actor_id=aux, prefix="list:", keys_only=True))
             if not names:
                 return
             db.batch_delete(actor_id=aux, names=names)
+            names = list(db.get_prefix(actor_id=aux, prefix="list:", keys_only=True))
+        if names:
+            logger.warning(
+                "Actor %s: its property-list side partition %r still had rows "
+                "after %d sweep passes (a write landed during the delete); "
+                "actingweb-verify-orphans reports them under that key.",
+                self.actor_id,
+                aux,
+                _AUX_SWEEP_PASSES,
+            )
 
     def __init__(self, actor_id: str | None = None, config: Any | None = None) -> None:
         """Properties must always be initialised with an actor_id"""

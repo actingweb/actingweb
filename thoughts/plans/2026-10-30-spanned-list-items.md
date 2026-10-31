@@ -1679,8 +1679,8 @@ Integration (both backends):
 The plan stays `status: active` (Phase 3 is not built); these entries fix
 the verification's High findings and the Mediums it marked as blocking PR 1,
 plus the user's request for a test account so the web UI can be verified in
-a browser. The rest of its findings are in
-`thoughts/todo/spanned-list-items-followups.md`. Regression tests for 1-7
+a browser. Its remaining findings, first filed as a todo, are fixed in the
+second batch below. Regression tests for 1-7
 are in `tests/test_property_list_span_iterations.py` (one class per finding,
 each failing before its fix) and `tests/test_list_item_limits.py`.
 
@@ -1845,14 +1845,151 @@ bound as `MAX_CONTENT_LENGTH` (`list_item_max_bytes` plus 64 KiB).
 non-file form field at 500,000 bytes, so editing a 500 KB item through the
 web form answered 413 although the library would have stored it. Re-tested
 through the same form POST: 302, the item reads back with its 500,000-byte
-body. The walk's other findings predate this work and are in
-`thoughts/todo/demo-www-list-ui-gaps.md`.
+body. The walk's other findings are fixed in the second batch below.
 
 **Browser walk** (headless Playwright Chromium, local QA account,
 `localhost:5055`): `/www`, `/www/properties` and the list page load with no
 console errors and fit at 375 px; editing and deleting small items through
 the items form persist; bad indexes and a missing action answer 400 with the
 data unchanged; special characters and a 200,000-character value round-trip.
+
+### 2026-10-31, the remaining findings of the same verification
+
+The owner asked that nothing found while verifying this plan be filed for
+later: the two todos the first batch created
+(`spanned-list-items-followups.md`, `demo-www-list-ui-gaps.md`) are fixed
+here and deleted with their `INDEX.md` rows. Regression tests are in
+`tests/test_property_list_span_iterations.py` and
+`tests/test_list_item_limits.py` (`TestHandlerStatusMappings`).
+
+#### 10. Value scans compare with the head's size, not the current threshold (M6)
+
+**Category**: Bug fix
+
+**What changed**: `_head_equals` reads a spanned item's bodies only when the
+sought value's encoded size equals the head's `span.bytes`
+(`_sought_size` replaces `_sought_value_cannot_span`).
+
+**Files affected**: `actingweb/property_list.py` — `_sought_size`,
+`_head_equals`, `_v2_remove`, `index`, `count`
+
+**Rationale**: an item that spanned under a lower threshold was skipped by
+`remove()`/`index()`/`count()` after the threshold was raised.
+
+#### 11. `sweep_span_orphans()` sweeps without rebalancing (M7)
+
+**Category**: New functionality
+
+**What changed**: a public `ListProperty.sweep_span_orphans()` (passed
+through by both list wrappers; the permission view requires `write`) runs the
+sweep alone; `compact(sweep_span_orphans=True)` still sweeps then
+rebalances; `--repair --sweep-spans` now calls the sweep and also triggers on
+malformed heads.
+
+**Files affected**: `actingweb/property_list.py`,
+`actingweb/interface/property_store.py`,
+`actingweb/interface/authenticated_views.py`,
+`actingweb/maintenance/verify_property_lists.py`,
+`tests/test_authenticated_views.py`
+
+**Rationale**: an orphan cleanup copied every moving spanned item's bodies.
+
+#### 12. The subscription full-state fallback fits the diff row (M5)
+
+**Category**: Bug fix
+
+**What changed**: `fit_full_state()` turns each oversized nested list diff
+into a reference and then the largest remaining ones until the merged blob
+fits; `Actor._list_state_reference()` builds a list's reference from its
+heads (`sizes_from_rows`, or handles) without reading spanned bodies, for v2
+lists only; the receiver's WARNING no longer promises a resync it cannot
+make; the subscriptions guide says the application re-reads.
+
+**Files affected**: `actingweb/property_list.py` — `fit_full_state`;
+`actingweb/actor.py` — fallback, `_list_state_reference`;
+`actingweb/remote_storage.py` — WARNING text; `docs/guides/subscriptions.rst`
+
+**Rationale**: an all-properties subscription could still store a blob over
+the row cap, the fallback read every spanned body only to drop it, and the
+log line was false for a peer without resync. Fetching on the receiver
+stays out of scope (What We're NOT Doing).
+
+#### 13. An actor delete leaves another actor's `$aux` partition alone (M8) and logs a leak
+
+**Category**: Bug fix
+
+**What changed**: `Properties._delete_side_partition` skips the sweep with an
+ERROR when an actor with id `{id}$aux` exists, and logs a WARNING when rows
+remain after the last pass; the migration guide gains the `$` id audit.
+
+**Files affected**: `actingweb/property.py`; `docs/migration/v3.16.rst`
+
+**Rationale**: a pre-3.16 caller-supplied id ending in `$aux` would have had
+its list rows deleted with another actor; a leak after three passes left no
+trace. The actor read happens only when the side partition has rows:
+`tests/test_adoption_bounded_reads.py` pins the reads an adoption's deletes
+may make, and an unconditional check broke that bound.
+
+#### 14. Limits and preconditions checked before any write (L1)
+
+**Category**: Bug fix
+
+**What changed**: `validate_limit_pair` also requires `max_bytes <=
+9999 * span_threshold`; `_check_item_size` checks the side partition key
+before a spanning write.
+
+**Files affected**: `actingweb/property_list_span.py`,
+`actingweb/property_list.py`, `docs/migration/v3.16.rst`
+
+**Rationale**: an accepted pair, or a `$` actor id, failed with a plain
+`ValueError` after the meta row was created.
+
+#### 15. Status mappings: `PUT ?index=`, the www item actions, the metadata GET (L2, L3, browser F-003, F-004)
+
+**Category**: Bug fix
+
+**What changed**: `PUT ?index=` answers a `ListItemSpanError` with the 409;
+the www item actions answer `ListItemTooLargeError` with 413 and
+`ListItemSpanError` with 409, write every error's reason as a plain-text
+body, and refuse an empty `update` value with 400; the metadata GET marks a
+list with a malformed head instead of failing.
+
+**Files affected**: `actingweb/handlers/properties.py`,
+`actingweb/handlers/www.py` — `_list_action_error`; `CHANGELOG.rst`
+
+**Rationale**: wrong statuses (400 or 500) and blank error pages, and an
+empty form field silently blanked an item.
+
+#### 16. A span records its body's SHA-256 (L4)
+
+**Category**: New functionality
+
+**What changed**: `SpanInfo.sha256` is written by `_write_bodies` and checked
+by `_read_span` when present; `parse` validates it; envelopes without one
+still read.
+
+**Files affected**: `actingweb/property_list_span.py`,
+`actingweb/property_list.py`, `tests/test_property_list_span_codec.py`
+
+**Rationale**: a same-length body from the wrong source was returned as the
+item. The other two Lows are covered by entry 13 (the leak log) and the
+migration guide (pre-3.16 envelope-shaped v2 items).
+
+#### 17. The demo list page shows and edits items (browser F-002, F-005, F-006)
+
+**Category**: UX refinement
+
+**What changed**: the properties page links each name; the property page
+shows a list's items (index, a 200-character preview and the size) with an
+edit form, a delete form and an add form posting to the items actions; the
+type badge reads "list" or "property"; long ids wrap at phone width.
+
+**Files affected**: `examples/demo/templates/aw-actor-www-properties.html`,
+`examples/demo/templates/aw-actor-www-property.html`,
+`examples/demo/static/style.css`
+
+**Rationale**: the browser walk could reach the item actions only by
+hand-built form POSTs.
 
 ## Evaluation Notes
 

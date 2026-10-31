@@ -44,6 +44,7 @@ from actingweb.property_list_span import (
     part_names,
     span_prefix,
     split_parts,
+    value_digest,
     wrap,
 )
 
@@ -413,6 +414,43 @@ def _as_reference(
     return reference
 
 
+def fit_full_state(state: dict[str, Any], config: Any) -> dict[str, Any]:
+    """A subscription full-state blob made to fit the diff row: each nested
+    list diff over the span threshold becomes a reference
+    (``diff_reference``), and while the whole blob is still over the
+    threshold the largest remaining list diffs become references too,
+    largest first. Scalar properties are never altered (a blob too large
+    for its scalars alone fails to store as before). Without a threshold
+    the state is returned unchanged."""
+    span_threshold = getattr(config, "list_item_span_threshold", None)
+    if (
+        not isinstance(span_threshold, int)
+        or isinstance(span_threshold, bool)
+        or span_threshold <= 0
+    ):
+        return state
+    out = dict(state)
+    lists = [
+        key
+        for key, value in out.items()
+        if isinstance(value, dict) and "list" in value and "operation" in value
+    ]
+    for key in lists:
+        out[key] = diff_reference(out[key], config)
+    if encoded_size(json.dumps(out)) <= span_threshold:
+        return out
+    by_size = sorted(
+        (key for key in lists if not out[key].get("spanned")),
+        key=lambda key: encoded_size(json.dumps(out[key])),
+        reverse=True,
+    )
+    for key in by_size:
+        out[key] = _as_reference(out[key], None)
+        if encoded_size(json.dumps(out)) <= span_threshold:
+            break
+    return out
+
+
 def spanned_reference(
     diff: dict[str, Any], config: Any, spanned_bytes: int
 ) -> dict[str, Any]:
@@ -707,6 +745,9 @@ class ListProperty:
             )
         if span_threshold is not None and size > span_threshold:
             if can_span:
+                # A spanning write needs the side partition: refuse an actor
+                # id that cannot have one now, before any row is written.
+                self._aux()
                 return True
             raise ListItemTooLargeError(
                 self.name,
@@ -841,7 +882,12 @@ class ListProperty:
         part_bytes = min(SPAN_PART_BYTES, span_threshold or SPAN_PART_BYTES)
         parts = split_parts(value_str, part_bytes)
         gen = new_gen()
-        span = SpanInfo(gen=gen, parts=len(parts), bytes=encoded_size(value_str))
+        span = SpanInfo(
+            gen=gen,
+            parts=len(parts),
+            bytes=encoded_size(value_str),
+            sha256=value_digest(value_str),
+        )
         aux = self._aux()
         names = part_names(self.name, gen, len(parts))
         try:
@@ -967,6 +1013,10 @@ class ListProperty:
             return None, found
         joined = "".join(rows[name] for name in expected)
         if encoded_size(joined) != span.bytes:
+            return None, found
+        if span.sha256 is not None and value_digest(joined) != span.sha256:
+            # Same length, wrong content (a body row restored from the wrong
+            # backup, say): never returned as the item.
             return None, found
         return joined, found
 
@@ -3081,22 +3131,29 @@ class ListProperty:
         # computed from the cache -- see append()'s identical comment.
         self._save_metadata({}, length_delta=1, create_if_absent=False)
 
-    def _sought_value_cannot_span(self, value: Any) -> bool:
-        """True when ``value`` is at or under the span threshold encoded, so
-        it cannot equal a spanned item and a value scan may skip reading
-        spanned items' bodies."""
-        span_threshold, _ = self._limits()
-        if span_threshold is None:
-            return False
+    @staticmethod
+    def _sought_size(value: Any) -> int | None:
+        """The encoded size of a sought value, for value scans to compare
+        with a spanned head's ``span.bytes`` without reading its bodies;
+        ``None`` when it cannot be encoded as an item (then every spanned
+        item is read)."""
         try:
-            return encoded_size(encode_item(value)) <= span_threshold
+            return encoded_size(encode_item(value))
         except ValueError:
-            return False
+            return None
 
-    def _head_equals(self, raw: str, rank: str, value: Any, sought_small: bool) -> bool:
-        """Whether the item a head stands for equals ``value``, reading a
-        spanned item's bodies only when it could match. A malformed head
-        equals nothing (``verify()`` reports it), so a scan passes it."""
+    def _head_equals(
+        self, raw: str, rank: str, value: Any, sought_size: int | None
+    ) -> bool:
+        """Whether the item a head stands for equals ``value``.
+
+        A spanned item's bodies are read only when its encoded size (from
+        the head) equals the sought value's: equal items encode to the same
+        bytes, whatever span threshold was configured when either was
+        written. (Python equality that crosses encodings, such as ``1`` and
+        ``1.0`` inside an item, is not matched against a spanned item.) A
+        malformed head equals nothing (``verify()`` reports it), so a scan
+        passes it."""
         try:
             env = parse(raw)
         except EnvelopeError:
@@ -3105,7 +3162,7 @@ class ListProperty:
             return bool(self._decode_item(raw) == value)
         if env.span is None:
             return bool(env.value == value)
-        if sought_small:
+        if sought_size is not None and sought_size != env.span.bytes:
             return False
         try:
             return bool(self._resolve(raw, rank=rank, consistent=True) == value)
@@ -3122,11 +3179,11 @@ class ListProperty:
         matched. Deleting the rank the match came from removes exactly the
         item that was matched, or nothing.
         """
-        sought_small = self._sought_value_cannot_span(value)
+        sought_size = self._sought_size(value)
         for _attempt in range(_V2_MAX_RANK_RETRIES):
             pairs = self._v2_load_full()
             for i, (rank, raw_value) in enumerate(pairs):
-                if not self._head_equals(raw_value, rank, value, sought_small):
+                if not self._head_equals(raw_value, rank, value, sought_size):
                     continue
                 del_db = get_property(self.config)
                 if not del_db.delete_if_value_equals(
@@ -3216,11 +3273,11 @@ class ListProperty:
             # Spanned items' bodies are read only when the sought value is
             # large enough to equal one.
             pairs = self._v2_load_full()
-            sought_small = self._sought_value_cannot_span(value)
+            sought_size = self._sought_size(value)
             begin, end = self._normalize_search_bounds(start, stop, len(pairs))
             for i in range(begin, end):
                 rank, raw = pairs[i]
-                if self._head_equals(raw, rank, value, sought_small):
+                if self._head_equals(raw, rank, value, sought_size):
                     return i
             raise ValueError(f"{value} is not in list")
 
@@ -3236,11 +3293,11 @@ class ListProperty:
     def count(self, value: Any) -> int:
         """Return number of occurrences of value."""
         if self._is_v2():
-            sought_small = self._sought_value_cannot_span(value)
+            sought_size = self._sought_size(value)
             return sum(
                 1
                 for rank, raw in self._v2_load_full()
-                if self._head_equals(raw, rank, value, sought_small)
+                if self._head_equals(raw, rank, value, sought_size)
             )
         count = 0
         for item in self:
@@ -4260,6 +4317,33 @@ class ListProperty:
             "broken_spans_removed": broken_removed,
             "malformed_heads_removed": malformed_removed,
         }
+
+    def sweep_span_orphans(self) -> dict[str, Any]:
+        """Remove what spanned items leave behind, without rebalancing.
+
+        v2 only. One enumeration of the list's body rows in the side
+        partition (every body byte, on DynamoDB), then: body generations no
+        head names that are older than an hour (younger ones may belong to
+        an append still in flight), heads whose bodies are not all there
+        (the item is lost already; this makes the list readable again), and
+        heads that are malformed envelopes. No head is moved or rewritten,
+        so this costs no copy of any body, unlike
+        ``compact(sweep_span_orphans=True)``, which also rebalances.
+
+        Returns:
+            ``span_body_rows``, ``orphan_span_gens``, ``broken_spans`` (as
+            found) and ``orphan_span_gens_removed``,
+            ``broken_spans_removed``, ``malformed_heads_removed``.
+
+        Raises:
+            ValueError: The list is v1.
+        """
+        if not self._is_v2():
+            raise ValueError(
+                f"sweep_span_orphans() is v2-only -- list '{self.name}' is "
+                f"still v1. Call migrate_to_v2() first."
+            )
+        return self._sweep_spans()
 
     def compact(
         self, allow_reverted: bool = False, sweep_span_orphans: bool = False

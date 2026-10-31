@@ -654,8 +654,19 @@ class PropertiesHandler(base_handler.BaseHandler):
                     list_prop = getattr(actor_interface.property_lists, list_name)
                     list_prop.prime_from_rows(all_rows)
                     # Sizes from the heads: a spanned item's envelope
-                    # carries its size, so no body is read here.
-                    sizes = list_prop.sizes_from_rows(all_rows)
+                    # carries its size, so no body is read here. A list
+                    # with a malformed head is reported with an error
+                    # marker, as format=full does, not a 409 for all.
+                    try:
+                        sizes = list_prop.sizes_from_rows(all_rows)
+                    except ListItemSpanError as e:
+                        logger.error(f"List '{list_name}' has a malformed head: {e}")
+                        lists_info[list_name] = {
+                            "error": "list_corrupted",
+                            "detail": str(e),
+                            "remedy": e.remedy,
+                        }
+                        continue
                     lists_info[list_name] = {
                         "count": len(sizes),
                         "total_bytes": sum(sizes),
@@ -893,6 +904,11 @@ class PropertiesHandler(base_handler.BaseHandler):
                 return
             except ListItemTooLargeError as e:
                 self._respond_list_item_too_large(name, e)
+                return
+            except ListItemSpanError as e:
+                # An IndexError subclass: caught ahead of the generic arm so
+                # a broken or malformed item answers 409 with its remedy.
+                self._respond_list_corrupted(name, e)
                 return
             except (ValueError, IndexError) as e:
                 logger.error(f"Error setting list item at index {index_param}: {e}")

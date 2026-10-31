@@ -3,6 +3,7 @@
 finding. Each failed before its fix.
 """
 
+import json
 from typing import Any
 
 import pytest
@@ -314,3 +315,230 @@ class TestM3IdentityVerifyReportsABrokenSpan:
         assert len(report["broken_spans"]) == 1
         assert report["healthy"] is False
         assert report["identity_checked_count"] == 1
+
+
+class TestM6ValueScansAfterAThresholdChange:
+    def test_item_spanned_under_a_lower_threshold_is_found(
+        self, config: Config, store: dict[Any, Any]
+    ) -> None:
+        lst = _lst(config)
+        item = big("a", 3_000)  # spans at 2,000
+        lst.extend(["x", item])
+        raised = Config(
+            database="dynamodb",
+            list_item_span_threshold=10_000,
+            list_item_max_bytes=20_000,
+        )
+        later = ListProperty(ACTOR, NAME, raised)
+        assert later.index(item) == 1
+        assert later.count(item) == 1
+        later.remove(item)
+        assert later.to_list() == ["x"]
+        assert aux_rows(store) == {}
+
+    def test_differently_sized_value_reads_no_bodies(
+        self, config: Config, store: dict[Any, Any], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        lst = _lst(config)
+        lst.extend([big("a"), "needle"])
+        calls: list[Any] = []
+        _use(monkeypatch, lambda c: RecordingDb(store, calls))
+        assert lst.index("needle") == 1
+        assert not [c for c in calls if c[0] == "get_prefix" and c[1] == AUX]
+
+
+class TestM7SweepWithoutRebalance:
+    def test_sweep_span_orphans_moves_no_head(
+        self, config: Config, store: dict[Any, Any]
+    ) -> None:
+        lst = _lst(config)
+        for tag in ("c", "b", "a"):
+            lst.insert(0, big(tag))  # non-canonical ranks: compact would move all
+        store[(AUX, f"{span_prefix(NAME, OLD_GEN)}p0000")] = "orphan"
+        before = dict(heads(store))
+        report = lst.sweep_span_orphans()
+        assert report["orphan_span_gens_removed"] == 1
+        assert heads(store) == before  # no rebalance, no copy
+        assert lst.to_list() == [big("a"), big("b"), big("c")]
+
+    def test_verify_script_uses_the_sweep_not_compact(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from actingweb.maintenance import verify_property_lists as script
+
+        assert "sweep_span_orphans()" in open(script.__file__).read()
+        assert "compact(sweep_span_orphans=True)" not in open(script.__file__).read()
+
+
+class TestL1LimitsAndPreconditionsBeforeAnyWrite:
+    def test_a_ceiling_needing_more_than_9999_parts_is_refused(self) -> None:
+        with pytest.raises(ValueError, match="9999"):
+            Config(
+                database="dynamodb",
+                list_item_span_threshold=100,
+                list_item_max_bytes=4 * 2**20,
+            )
+
+    def test_spanning_write_on_a_dollar_actor_writes_nothing(
+        self, config: Config, store: dict[Any, Any]
+    ) -> None:
+        lst = ListProperty("legacy$id", NAME, config)
+        with pytest.raises(ValueError, match=r"\$"):
+            lst.append(big("a"))
+        assert store == {}
+
+
+class TestL4DigestCatchesSameLengthWrongContent:
+    def test_swapped_body_of_the_same_length_is_a_broken_span(
+        self, config: Config, store: dict[Any, Any]
+    ) -> None:
+        lst = _lst(config)
+        lst.append(big("a"))
+        name = sorted(aux_rows(store))[0]
+        store[(AUX, name)] = "q" * len(store[(AUX, name)])
+        with pytest.raises(ListItemSpanError):
+            lst.to_list()
+
+    def test_envelopes_without_a_digest_still_read(
+        self, config: Config, store: dict[Any, Any]
+    ) -> None:
+        lst = _lst(config)
+        lst.append(big("a"))
+        (head_name, head) = next(iter(heads(store).items()))
+        obj = json.loads(head)
+        del obj["span"]["sha256"]
+        store[(ACTOR, head_name)] = json.dumps(obj)
+        assert lst.to_list() == [big("a")]
+
+
+class TestM8AndL4ActorLevelSweep:
+    def _wire(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        store: dict[Any, Any],
+        aux_actor: Any,
+        db_cls: type = RecordingDb,
+    ) -> Any:
+        from unittest import mock
+
+        from actingweb import property as property_module
+
+        class FakeList:
+            def fetch(self, actor_id=None):  # type: ignore[no-untyped-def]
+                return {}
+
+            def delete(self) -> None:
+                return None
+
+        monkeypatch.setattr(property_module, "get_property_list", lambda c: FakeList())
+        monkeypatch.setattr(
+            property_module, "get_property", lambda c: db_cls(store, [])
+        )
+        monkeypatch.setattr(
+            property_module,
+            "get_actor",
+            lambda c: mock.Mock(get=mock.Mock(return_value=aux_actor)),
+        )
+        return property_module
+
+    def test_an_actor_named_like_the_side_partition_is_left_alone(
+        self,
+        config: Config,
+        store: dict[Any, Any],
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        property_module = self._wire(
+            monkeypatch, store, {"id": AUX, "creator": "someone"}
+        )
+        store[(AUX, "list:theirs-meta")] = "{}"
+        with caplog.at_level("ERROR", logger="actingweb.property"):
+            assert property_module.Properties(ACTOR, config).delete()
+        assert (AUX, "list:theirs-meta") in store
+        assert "an actor with that id exists" in caplog.text
+
+    def test_rows_left_after_the_last_pass_are_logged(
+        self,
+        config: Config,
+        store: dict[Any, Any],
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        class AlwaysWriting(RecordingDb):
+            n = 0
+
+            def get_prefix(
+                self, actor_id=None, prefix=None, keys_only=False, consistent_read=True
+            ):  # type: ignore[no-untyped-def]
+                rows = super().get_prefix(
+                    actor_id=actor_id,
+                    prefix=prefix,
+                    keys_only=keys_only,
+                    consistent_read=consistent_read,
+                )
+                AlwaysWriting.n += 1
+                store[(AUX, f"list:x-$span-{OLD_GEN}-p{AlwaysWriting.n:04d}")] = "w"
+                return rows
+
+        property_module = self._wire(monkeypatch, store, None, AlwaysWriting)
+        store[(AUX, f"list:x-$span-{OLD_GEN}-p0000")] = "w"
+        with caplog.at_level("WARNING", logger="actingweb.property"):
+            assert property_module.Properties(ACTOR, config).delete()
+        assert "still had rows" in caplog.text
+
+
+class TestM5FullStateFitsTheDiffRow:
+    def test_merged_lists_under_the_threshold_each_still_fit_together(self) -> None:
+        from actingweb.property_list import fit_full_state
+
+        cfg = Config(database="dynamodb")  # 390,000
+        state = {
+            "title": "a scalar",
+            "odd": {"list": "not a list diff", "items": ["kept"]},
+            **{
+                f"l{i}": {
+                    "list": f"l{i}",
+                    "operation": "extend",
+                    "items": ["x" * 150_000],
+                }
+                for i in range(3)
+            },
+        }
+        out = fit_full_state(state, cfg)
+        assert len(json.dumps(out)) <= 390_000
+        assert out["title"] == "a scalar"
+        assert out["odd"] == state["odd"]
+        refs = [k for k in ("l0", "l1", "l2") if out[k].get("spanned")]
+        assert refs and all("items" not in out[k] for k in refs)
+        kept = [k for k in ("l0", "l1", "l2") if not out[k].get("spanned")]
+        assert all(out[k]["items"] == ["x" * 150_000] for k in kept)
+
+    def test_no_threshold_leaves_the_state_alone(self) -> None:
+        from actingweb.property_list import fit_full_state
+
+        state = {"l": {"list": "l", "operation": "extend", "items": ["x" * 500_000]}}
+        assert fit_full_state(state, Config(database="postgresql")) == state
+
+    def test_a_spanned_list_becomes_a_reference_without_reading_bodies(
+        self, config: Config, store: dict[Any, Any], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from actingweb.actor import Actor
+
+        lst = _lst(config)
+        lst.extend(["a", big("b")])
+        calls: list[Any] = []
+        _use(monkeypatch, lambda c: RecordingDb(store, calls))
+        actor = Actor(config=config)
+        ref = actor._list_state_reference(NAME, lst)
+        assert ref is not None and ref["spanned"] is True
+        assert ref["bytes"] == len(json.dumps("a")) + len(json.dumps(big("b")))
+        assert not [c for c in calls if c[0] == "get_prefix" and c[1] == AUX]
+
+    def test_a_small_list_is_read_as_before(
+        self, config: Config, store: dict[Any, Any]
+    ) -> None:
+        from actingweb.actor import Actor
+
+        lst = _lst(config)
+        lst.extend(["a", "b"])
+        assert Actor(config=config)._list_state_reference(NAME, lst) is None

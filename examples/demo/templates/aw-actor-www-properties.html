@@ -48,7 +48,7 @@
                         <tbody>
                             {% for k, v in properties.items() %}
                             <tr>
-                                <td class="font-medium">{{ k }}</td>
+                                <td class="font-medium"><a href="{{ url }}/properties/{{ k|urlencode }}">{{ k }}</a></td>
                                 <td class="font-mono text-sm" style="word-break: break-all; max-width: 600px;">{{ v }}</td>
                                 <td class="text-right" style="white-space: nowrap;">
                                     <button class="btn btn-danger-outline btn-sm delete-property-btn" data-property-name="{{ k }}" data-actor-url="{{ url }}">

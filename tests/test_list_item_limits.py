@@ -19,6 +19,7 @@ from unittest import mock
 import pytest
 
 import actingweb
+from actingweb.aw_web_request import AWWebObj
 from actingweb.config import Config
 from actingweb.handlers.properties import PropertiesHandler, PropertyListItemsHandler
 from actingweb.property_list import ListItemTooLargeError, ListProperty
@@ -404,3 +405,108 @@ class TestBulk413WritesNothing:
         )
         assert webobj.response.status_code == 413
         assert myself.property_lists.bulk2.to_list() == [{"n": 0}]
+
+
+def _www_post(myself: Any, config: Any, path: str, params: dict[str, str]) -> Any:
+    from actingweb.handlers.www import WwwHandler
+
+    webobj = AWWebObj(params=params)
+    handler = WwwHandler(webobj, config)
+    with mock.patch.object(handler, "require_authenticated_actor", return_value=myself):
+        handler.post(myself.id, path)
+    return webobj
+
+
+class TestHandlerStatusMappings:
+    """Verification 2026-10-31 follow-ups: 409 for a broken span on PUT
+    ?index=, the www item actions' 413/409 and visible reasons, an empty
+    www update refused, and a malformed head isolated in the metadata GET."""
+
+    def test_put_index_broken_span_is_409(self, live: Any) -> None:
+        from actingweb.property_list import ListItemSpanError
+
+        myself, config = live
+        myself.property_lists.p409.append("a")
+        with mock.patch.object(
+            ListProperty,
+            "update_by_handle",
+            side_effect=ListItemSpanError(
+                "p409", "a0", expected_parts=2, found_parts=1
+            ),
+        ):
+            webobj = _run_handler(
+                PropertiesHandler,
+                myself,
+                config,
+                "put",
+                "p409",
+                params={"index": "0"},
+                body=json.dumps("b"),
+            )
+        assert webobj.response.status_code == 409
+        assert "--sweep-spans" in json.loads(webobj.response.body)["remedy"]
+
+    def test_www_update_too_large_is_413_with_a_reason(self, live: Any) -> None:
+        myself, config = live
+        myself.property_lists.w413.append("a")
+        webobj = _www_post(
+            myself,
+            config,
+            "properties/w413/items",
+            {"action": "update", "item_index": "0", "item_value": "y" * 20_001},
+        )
+        assert webobj.response.status_code == 413
+        assert "list_item_max_bytes" in webobj.response.body
+        assert myself.property_lists.w413.to_list() == ["a"]
+
+    def test_www_empty_update_is_refused(self, live: Any) -> None:
+        myself, config = live
+        myself.property_lists.wempty.append("keep")
+        webobj = _www_post(
+            myself,
+            config,
+            "properties/wempty/items",
+            {"action": "update", "item_index": "0", "item_value": ""},
+        )
+        assert webobj.response.status_code == 400
+        assert "item_value" in webobj.response.body
+        assert myself.property_lists.wempty.to_list() == ["keep"]
+
+    def test_www_out_of_range_shows_its_reason(self, live: Any) -> None:
+        myself, config = live
+        myself.property_lists.wrange.append("a")
+        webobj = _www_post(
+            myself,
+            config,
+            "properties/wrange/items",
+            {"action": "delete", "item_index": "9"},
+        )
+        assert webobj.response.status_code == 400
+        assert "Index 9 out of range" in webobj.response.body
+
+    def test_metadata_get_isolates_a_malformed_head(self, live: Any) -> None:
+        from actingweb.db import get_property
+
+        myself, config = live
+        myself.property_lists.good.append("a")
+        bad = myself.property_lists.bad
+        bad.append("x")
+        ((rank, _),) = bad._v2_load_full()
+        get_property(config).set(
+            actor_id=myself.id,
+            name=f"list:bad-#{rank}",
+            value='{"__aw_env": 1, "span": {"gen": "nope"}}',
+        )
+        webobj = AWWebObj(params={"metadata": "true"})
+        handler = PropertiesHandler(webobj, config)
+        auth_result = mock.Mock(success=True, actor=myself)
+        auth_result.auth_obj = mock.Mock(acl={"peerid": ""})
+        with (
+            mock.patch.object(handler, "authenticate_actor", return_value=auth_result),
+            mock.patch.object(handler, "_check_property_permission", return_value=True),
+        ):
+            handler.get(myself.id, "")
+        assert webobj.response.status_code == 200
+        lists = json.loads(webobj.response.body)["lists"]
+        assert lists["good"]["count"] == 1
+        assert lists["bad"]["error"] == "list_corrupted"

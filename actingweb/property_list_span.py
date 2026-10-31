@@ -21,6 +21,7 @@ scoped to the actor's own partition, so no dump or range read of it ever
 returns a body byte.
 """
 
+import hashlib
 import json
 import re
 import secrets
@@ -109,12 +110,20 @@ def validate_max_bytes(value: Any) -> int | None:
 
 
 def validate_limit_pair(span_threshold: int | None, max_bytes: int | None) -> None:
-    """Raise unless ``max_bytes >= span_threshold`` when both are set."""
+    """Raise unless ``span_threshold <= max_bytes <= span_threshold * 9999``
+    when both are set: an item at the ceiling must fit in the 9,999 body
+    rows a span can name (each at most the threshold)."""
     if span_threshold is not None and max_bytes is not None:
         if max_bytes < span_threshold:
             raise ValueError(
                 f"list_item_max_bytes ({max_bytes}) must be at least "
                 f"list_item_span_threshold ({span_threshold})"
+            )
+        if max_bytes > span_threshold * MAX_PARTS:
+            raise ValueError(
+                f"list_item_max_bytes ({max_bytes}) is more than {MAX_PARTS} "
+                f"body rows of list_item_span_threshold ({span_threshold}); "
+                f"raise the threshold or lower the ceiling"
             )
 
 
@@ -130,7 +139,15 @@ AUX_SUFFIX = "$aux"
 GEN_RE = re.compile(r"^\d{13}-[0-9a-f]{16}\Z")
 SPAN_ROW_RE = re.compile(r"^\d{13}-[0-9a-f]{16}-p\d{4}\Z")
 KEY_ROW_RE = re.compile(r"^[0-9a-f]{64}\Z")
-_MAX_PARTS = 9999
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}\Z")
+
+
+def value_digest(value_str: str) -> str:
+    """The SHA-256 (hex) a span records for its joined body value."""
+    return hashlib.sha256(value_str.encode("utf-8", "surrogatepass")).hexdigest()
+
+
+MAX_PARTS = 9999
 
 # The fields parse() understands; anything else rides in Envelope.extra.
 _KNOWN_FIELDS = frozenset({ENVELOPE_MARKER, "key", "tok", "span", "v"})
@@ -144,11 +161,13 @@ class EnvelopeError(ValueError):
 @dataclass(frozen=True)
 class SpanInfo:
     """Where a spanned item's encoded value lives: ``parts`` body rows of
-    generation ``gen``, ``bytes`` bytes in all."""
+    generation ``gen``, ``bytes`` bytes in all, whose SHA-256 is ``sha256``
+    (hex; ``None`` on an envelope written without one)."""
 
     gen: str
     parts: int
     bytes: int
+    sha256: str | None = None
 
 
 _NO_VALUE: Any = object()
@@ -217,12 +236,17 @@ def parse(raw: Any) -> Envelope | None:
         if (
             not isinstance(parts, int)
             or isinstance(parts, bool)
-            or not 1 <= parts <= _MAX_PARTS
+            or not 1 <= parts <= MAX_PARTS
         ):
             raise EnvelopeError("envelope span parts is not an int from 1 to 9999")
         if not isinstance(size, int) or isinstance(size, bool) or size < 0:
             raise EnvelopeError("envelope span bytes is not a non-negative int")
-        span = SpanInfo(gen=gen, parts=parts, bytes=size)
+        digest = raw_span.get("sha256")
+        if digest is not None and (
+            not isinstance(digest, str) or not _SHA256_RE.match(digest)
+        ):
+            raise EnvelopeError("envelope span sha256 is not 64 hex characters")
+        span = SpanInfo(gen=gen, parts=parts, bytes=size, sha256=digest)
     if span is None and "v" not in obj:
         raise EnvelopeError("envelope carries neither v nor span")
     extra = {k: v for k, v in obj.items() if k not in _KNOWN_FIELDS}
@@ -257,6 +281,8 @@ def wrap(
         obj["tok"] = tok
     if span is not None:
         obj["span"] = {"gen": span.gen, "parts": span.parts, "bytes": span.bytes}
+        if span.sha256 is not None:
+            obj["span"]["sha256"] = span.sha256
     else:
         obj["v"] = value
     return json.dumps(obj)
@@ -331,8 +357,8 @@ def split_parts(value_str: str, part_bytes: int) -> list[str]:
         parts.append(value_str[start:])
     if any(not part for part in parts):
         raise ValueError("split produced an empty part")
-    if len(parts) > _MAX_PARTS:
-        raise ValueError(f"an item may span at most {_MAX_PARTS} parts")
+    if len(parts) > MAX_PARTS:
+        raise ValueError(f"an item may span at most {MAX_PARTS} parts")
     return parts
 
 

@@ -3234,20 +3234,13 @@ class Actor:
             # Get the full current state
             full_state = self._get_full_state_for_subscription(target, sub_subtarget)
             # A list's full state is an "extend" diff nested under the list
-            # name: over the span threshold it is stored as a reference (the
-            # subscriber re-reads the list) instead of a row over the diff
-            # row's cap, which would fail the store and this callback.
-            if isinstance(full_state, dict):
-                from .property_list import diff_reference
+            # name. Over the span threshold, list diffs become references
+            # (the subscriber re-reads), per list and then largest first
+            # until the whole blob fits the diff row, so the store does not
+            # fail on the row cap.
+            from .property_list import fit_full_state
 
-                full_state = {
-                    key: (
-                        diff_reference(value, self.config)
-                        if isinstance(value, dict) and "list" in value
-                        else value
-                    )
-                    for key, value in full_state.items()
-                }
+            full_state = fit_full_state(full_state, self.config)
 
             # Store as a subscription diff
             diff_url = self._store_subscription_diff(
@@ -3308,6 +3301,9 @@ class Actor:
                     if self.property_lists.exists(subtarget):
                         # It's a list - return all items
                         list_attr = getattr(self.property_lists, subtarget)
+                        reference = self._list_state_reference(subtarget, list_attr)
+                        if reference is not None:
+                            return {subtarget: reference}
                         try:
                             items = list(list_attr)
                         except ListCorruptionError as e:
@@ -3356,6 +3352,12 @@ class Actor:
                     for list_name in list_names:
                         list_attr = getattr(self.property_lists, list_name)
                         list_attr.prime_from_rows(list_rows)
+                        reference = self._list_state_reference(
+                            list_name, list_attr, list_rows
+                        )
+                        if reference is not None:
+                            result[list_name] = reference
+                            continue
                         try:
                             items = list_attr.to_list_from_rows(list_rows)
                         except ListCorruptionError as e:
@@ -3375,6 +3377,44 @@ class Actor:
                 )
                 return result
         return {}
+
+    def _list_state_reference(
+        self, list_name: str, list_attr: Any, rows: dict[str, Any] | None = None
+    ) -> dict[str, Any] | None:
+        """The full-state reference for a list whose items together exceed
+        the span threshold, sized from the heads alone so no spanned body is
+        read only to be dropped; ``None`` when the list fits (or there is no
+        threshold, or the list is v1), and its items are read as before."""
+        from .property_list import ListCorruptionError as _Corrupt
+        from .property_list_span import encoded_size
+
+        threshold = getattr(self.config, "list_item_span_threshold", None)
+        if not isinstance(threshold, int) or isinstance(threshold, bool):
+            return None
+        core = getattr(list_attr, "_list_prop", list_attr)
+        try:
+            if core.storage_format() != 2:
+                return None  # a v1 list never spans: read it once, as before
+            if rows is not None:
+                sizes = list_attr.sizes_from_rows(rows)
+            else:
+                sizes = [
+                    handle.bytes
+                    if handle.spanned and handle.bytes is not None
+                    else encoded_size(handle.raw_value)
+                    for handle, _ in list_attr.items_with_handles(resolve=False)
+                ]
+        except (ValueError, _Corrupt):
+            return None  # v1, or a malformed head: read as before
+        total = sum(sizes)
+        if total + 2 * len(sizes) + 64 <= threshold:
+            return None
+        return {
+            "list": list_name,
+            "operation": "extend",
+            "spanned": True,
+            "bytes": total,
+        }
 
     def _store_subscription_diff(
         self, peer_id: str, subscription_id: str, sequence: int, data: dict[str, Any]

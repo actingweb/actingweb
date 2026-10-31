@@ -424,13 +424,17 @@ total encoded size) are added, for example::
 
 That covers a spanned item, an ``update`` whose old and new values together
 are too large, and an ``extend`` of many items. The library's receiver does
-not apply a reference: it logs a WARNING that the replica is out of sync and
-answers ``{"operation": ..., "success": false, "spanned": true}``; the
-subscriber re-reads the list (a value-addressed diff has nothing else to
-fetch by). A reference is the one diff a pre-3.16 peer does not understand:
+not apply a reference and does not fetch the values: it logs a WARNING that
+the replica is out of sync and answers ``{"operation": ..., "success":
+false, "spanned": true}``. An application that mirrors lists through
+``RemotePeerStore`` re-reads the list from the publisher when it sees that
+answer (a resync callback does so only for a peer that supports resync). A reference is the one diff a pre-3.16 peer does not understand:
 with the value fields absent it answers ``unknown operation`` and stores
 nothing. The full-state fallback for a peer without resync support is a
-reference too when the list's items exceed the threshold.
+reference too when the list's items exceed the threshold, sized from the
+list's rows without reading spanned bodies, and when several lists together
+would exceed the diff row the largest become references until the blob
+fits.
 
 One positional field became advisory in 3.14: the ``index`` an
 ``append`` diff carries (and the ``length`` field every list diff

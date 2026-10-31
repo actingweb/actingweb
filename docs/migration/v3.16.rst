@@ -102,6 +102,11 @@ check only the first three items and item 11.
     must send the real HTTP method. A peer's trust ``id`` and ``baseuri``
     must be plain shapes, and a custom template must not interpolate a
     value inside an inline event handler.
+16. **``append_once(item, key=...)`` makes a create repeatable** (see
+    `Idempotent appends`_). Nothing changes for code that does not call it,
+    except that a v2 list's ``verify()`` report gains ``key_rows``,
+    ``dangling_key_rows``, ``duplicate_keyed_items`` and
+    ``unkeyed_keyed_items``. Deploy 3.16 everywhere before the first call.
 
 
 What changed and why
@@ -746,6 +751,62 @@ picture; what an upgrade needs:
 - **Limits.** ``list_item_max_bytes`` may be at most 9,999 times
   ``list_item_span_threshold`` (the most body rows a span names); a pair
   outside that raises ``ValueError`` where it is set.
+
+
+Idempotent appends
+------------------
+
+``ListProperty.append_once(item, *, key)`` lets a client repeat a create
+whose answer it never saw (a gateway that timed out while the server
+finished the write) without making a second copy. It replaces a
+find-then-append duplicate guard, which races. See
+:doc:`../guides/property-lists` ("Idempotent appends") for the protocol
+and its two windows; what a consumer does:
+
+- **Mint the key with the first attempt and keep it with the draft**: a
+  UUID4, or 128 random bits, never something guessable such as a title.
+  Every repeat, from any page or device, sends the same key.
+- **An answer means what it says.** ``created=True``: stored now.
+  ``created=False``: already stored; ``result.item`` is the item the first
+  call stored, whatever the repeat sent. There is no "pending" status.
+  ``RuntimeError`` means the key-row create kept losing under contention
+  (the item may be stored; repeat with the key); a ``DbError`` can follow a
+  stored item (any exception after the item write can), and repeating
+  with the key converges. Only an operator
+  rewrite (``compact()``, ``repair_keys()``) or a delete running at the
+  same moment can overtake an answer, so run those with writes quiesced.
+
+  .. code-block:: python
+
+     result = actor.property_lists.drafts.append_once(draft, key=draft_key)
+     if not result.created and result.item != draft:
+         ...  # the key was used for different content
+
+- **A key is bound to its item.** Deleting the item frees the key, so a
+  repeat that arrives after a user deleted the item stores it again.
+- **Two repeats that overlap** both write; the loser deletes its copy, so a
+  reader can see both for the length of that delete. If that delete
+  faults, ``verify()`` reports ``duplicate_keyed_items`` once the copy is
+  an hour old, and ``actingweb-verify-property-lists --repair`` (which runs
+  the new ``ListProperty.repair_keys()``, no rebalance) removes it.
+- **A repeat that finishes a stopped call announces it.** When the first
+  call stored the item and stopped before its key row, the repeat returns
+  ``created=False`` with ``announced=True`` and sends the diff (an
+  ``insert`` at ``announce_index``) and the ``count_hint`` update the first
+  call never made. Subscribers hear of an item at most once: a call that
+  stops between its key row and its diff leaves the item unannounced.
+- **Clocks.** ``verify()`` and the repairs leave alone what was written in
+  the last hour, by the writer's clock: keep the hosts' clocks in sync.
+- **v2 lists only.** ``extend()``, ``insert()`` and the REST handlers take
+  no keys.
+- **Behavior change:** the first ``append_once`` on a list makes it
+  unreadable to pre-3.16 readers (they see the storage envelope as the
+  item) and ``downgrade_to_v1`` refuses it. Deploy 3.16 everywhere before
+  the first call.
+- **SDK retries.** A keyed append recognises its own write when a
+  conditional create retried by the SDK answers ``False`` after landing.
+  Unkeyed ``append()``, ``extend()``, ``insert()`` and ``pop()`` still
+  cannot; use ``append_once`` where a duplicate matters.
 
 
 Cross-site requests

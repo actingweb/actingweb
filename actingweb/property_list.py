@@ -11,6 +11,8 @@ partition (see ``actingweb.property_list_span``). An item larger than
 anything is written.
 """
 
+import hashlib
+import hmac
 import json
 import logging
 import os
@@ -19,9 +21,9 @@ import re
 import threading
 import time
 from collections.abc import Callable, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any
+from typing import Any, NamedTuple
 
 import fractional_indexing as fi
 
@@ -29,6 +31,7 @@ from actingweb.db import get_property
 from actingweb.db.exceptions import DbError
 from actingweb.property_list_span import (
     GEN_IN_RAW_RE,
+    GEN_RE,
     KEY_ROW_RE,
     MAX_PARTS,
     SPAN_PART_BYTES,
@@ -42,6 +45,7 @@ from actingweb.property_list_span import (
     encoded_size,
     gen_age_seconds,
     key_prefix,
+    key_row_name,
     looks_like_envelope,
     new_gen,
     parse,
@@ -123,6 +127,18 @@ _SPAN_MAX_REREADS = 2
 # generation younger than this: an append that has written its bodies and not
 # yet its head must not lose them.
 _SPAN_ORPHAN_MIN_AGE_SECONDS = 3600
+
+# Idempotent appends (Phase 3 of the same plan). One append_once() call makes
+# at most this many arbitration passes (a key-row create and what follows a
+# lost one) before giving up with RuntimeError.
+_APPEND_ONCE_MAX_ATTEMPTS = 3
+# The longest idempotency key append_once() accepts, in characters.
+_APPEND_ONCE_KEY_MAX_LEN = 512
+# verify(), compact() and repair_keys() leave alone what an append_once() call
+# wrote this recently (by its writer token's timestamp): a second head for a
+# key, or a head without its key row, is the normal state of a call still
+# running, not damage.
+_KEYED_IN_FLIGHT_SECONDS = 3600
 
 
 class _Unresolved:
@@ -532,9 +548,46 @@ class ListItemHandle:
     # still rank + raw_value, and a spanned head's raw value is its envelope.
     spanned: bool = False
     bytes: int | None = None
+    # The keyed-append hash of an item stored by ``append_once()`` (an HMAC
+    # of its key, never the key itself), else ``None``.
+    key_hash: str | None = None
 
     def __repr__(self) -> str:
         return f"ListItemHandle(rank={self.rank!r})"
+
+
+@dataclass(frozen=True)
+class AppendOnceResult:
+    """What ``ListProperty.append_once()`` did.
+
+    ``created`` is ``True`` when this call stored the item and ``False``
+    when an item with the same key was already there (from an earlier call,
+    or a concurrent one that won). ``item`` is the stored item either way --
+    on a repeat, the FIRST call's item, whatever payload the repeat sent --
+    and ``handle`` addresses it.
+    """
+
+    created: bool
+    item: Any
+    handle: ListItemHandle
+    # True when this call is the one that announces the item to
+    # subscribers: it made the metadata touch, and NotifyingListProperty
+    # registers the diff. Usually equal to ``created``; a repeat that
+    # finished a call which stopped before its key row is ``created=False``
+    # and ``announced=True``. At most one call announces an item.
+    announced: bool = field(default=False, compare=False)
+    # For an announced repeat: the item's position when it was adopted (it
+    # can sit anywhere in the list, so the diff is an insert there, not an
+    # append). ``None`` for a creating call, whose item is the last.
+    announce_index: int | None = field(default=None, compare=False)
+
+
+class _KeyRow(NamedTuple):
+    """A parsed key row of ``append_once()``."""
+
+    rank: str
+    tok: str
+    by: str | None
 
 
 class ListProperty:
@@ -991,15 +1044,29 @@ class ListProperty:
           the bodies are deleted.
         - A ``False`` from a conditional write can be an SDK retry of a write
           that committed and then failed its own condition, so with
-          ``head_name`` a spanned head is read back once: a row holding
-          exactly this head (its bytes name a fresh generation, unique to
-          this call) means the write landed. A plain head cannot be told
+          ``head_name`` a spanned or keyed head is read back once: a row
+          holding exactly this head (its bytes name a fresh generation, or
+          carry its writer's token) means the write landed. A plain head cannot be told
           from another writer's identical value, so its ``False`` stands.
           Otherwise the bodies are deleted; a read-back that raises keeps
           them (unknown outcome).
         """
+        if not spans and carry is not None:
+            # An envelope re-encodes the item (non-ASCII text from the str()
+            # fallback becomes \uXXXX escapes), so a carried key or token
+            # can push a head the size check passed over the threshold:
+            # span it instead.
+            span_threshold, _ = self._limits()
+            plain_head = self._make_head(value_str, None, carry)
+            if span_threshold is not None and encoded_size(plain_head) > span_threshold:
+                self._aux()
+                spans = True
         span = self._write_bodies(value_str) if spans else None
-        head = self._make_head(value_str, span, carry)
+        head = (
+            plain_head
+            if span is None and carry is not None
+            else self._make_head(value_str, span, carry)
+        )
         self._head_write_in_flight = False
         try:
             landed = head_write(head)
@@ -1047,15 +1114,20 @@ class ListProperty:
         return result
 
     def _landed_anyway(self, name: str, head: str) -> bool:
-        """After a ``False`` from a conditional write of a spanned head:
-        does the row hold exactly ``head`` (this call's write committed and
-        a retry then failed its condition)? A plain head cannot be told from
-        a concurrent byte-identical write, so only spanned heads qualify."""
+        """After a ``False`` from a conditional write of a spanned or keyed
+        head: does the row hold exactly ``head`` (this call's write committed
+        and a retry then failed its condition)? A spanned head names a fresh
+        body generation and an ``append_once()`` head a fresh writer token,
+        so their bytes are unique to the call. A rewrite of a keyed item
+        carries its old token, so two concurrent identical rewrites have the
+        same bytes: the loser then reads as landed, which is the intended end
+        state (that value at that rank). A plain head cannot be told from a
+        concurrent byte-identical write, so it never qualifies."""
         try:
             env = parse(head)
         except EnvelopeError:
             return False
-        if env is None or env.span is None:
+        if env is None or (env.span is None and env.tok is None):
             return False
         # The read-back is part of the write's outcome: a raise from it is
         # an unknown outcome, so the in-flight mark stays set if it raises.
@@ -1138,11 +1210,17 @@ class ListProperty:
             env = parse(raw)
         except EnvelopeError:
             return ListItemHandle(rank=rank, raw_value=raw)
-        if env is not None and env.span is not None:
+        if env is None:
+            return ListItemHandle(rank=rank, raw_value=raw)
+        if env.span is not None:
             return ListItemHandle(
-                rank=rank, raw_value=raw, spanned=True, bytes=env.span.bytes
+                rank=rank,
+                raw_value=raw,
+                spanned=True,
+                bytes=env.span.bytes,
+                key_hash=env.key,
             )
-        return ListItemHandle(rank=rank, raw_value=raw)
+        return ListItemHandle(rank=rank, raw_value=raw, key_hash=env.key)
 
     def _resolve(self, raw: str, *, rank: str, consistent: bool) -> Any:
         """The item a v2 head's raw value stands for.
@@ -2291,6 +2369,7 @@ class ListProperty:
         ):
             raise RuntimeError(f"list item write failed for '{self.name}'[{index}]")
         self._cascade(old_raw)
+        self._retire_key_row(old_raw)
 
         # A single row delete IS the whole operation under v2 -- no shift
         # loop. Keep the cache consistent with the write we just made
@@ -2501,7 +2580,9 @@ class ListProperty:
         The collision loop ``append()`` has always used: rank generation is
         deterministic, so two appenders that read the same last rank produce
         the same candidate, ``create_if_not_exists`` rejects the loser, and
-        the retry re-reads the (now current) last rank.
+        the retry re-reads the (now current) last rank. A ``False`` for a
+        spanned or keyed head is read back first (``_landed_anyway``): a
+        row holding exactly ``head`` is this call's own write.
 
         Raises:
             RuntimeError: Too many collisions, or the rank grew past the cap.
@@ -2568,6 +2649,521 @@ class ListProperty:
         # the CAS, so a retained instance's stale `length` no longer
         # overwrites a concurrent writer's more-current one.
         self._save_metadata({}, length_delta=1, create_if_absent=False)
+
+    # -- idempotent appends ----------------------------------------------
+
+    @staticmethod
+    def _validate_append_key(key: Any) -> None:
+        """Refuse a key ``append_once()`` cannot use, before any read or
+        write. The message never carries the key."""
+        if not isinstance(key, str):
+            raise ValueError("append_once() key must be a str")
+        if not key:
+            raise ValueError("append_once() key must not be empty")
+        if len(key) > _APPEND_ONCE_KEY_MAX_LEN:
+            raise ValueError(
+                f"append_once() key must be at most {_APPEND_ONCE_KEY_MAX_LEN} "
+                f"characters"
+            )
+        if any(ord(c) < 0x20 or 0x7F <= ord(c) < 0xA0 for c in key):
+            raise ValueError("append_once() key must not contain control characters")
+        try:
+            key.encode("utf-8")
+        except UnicodeEncodeError:
+            raise ValueError("append_once() key must be valid Unicode text") from None
+
+    def _key_hash(self, key: str) -> str:
+        """The key's stored form: HMAC-SHA256 keyed by the actor id, hex.
+        Separates actors (the same key hashes differently on each); the actor
+        id is public, so it does not make a guessable key safe."""
+        return hmac.new(
+            self.actor_id.encode("utf-8"), key.encode("utf-8"), hashlib.sha256
+        ).hexdigest()
+
+    def _key_row(self, key_hash: str) -> str:
+        return key_row_name(self.name, key_hash)
+
+    @staticmethod
+    def _key_row_value(rank: str, tok: str, by: str) -> str:
+        """A key row: the item's rank (a hint), its head's writer token (the
+        authority) and the token of the call that wrote the row (``by``,
+        which says whether a writer's own create landed or another call
+        adopted its head)."""
+        return json.dumps({"rank": rank, "tok": tok, "by": by})
+
+    @staticmethod
+    def _parse_key_row(raw: str | None) -> _KeyRow | None:
+        """A key row's fields, or ``None`` when it is absent or malformed (a
+        malformed row is treated as dangling)."""
+        if raw is None:
+            return None
+        try:
+            obj = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            return None
+        if not isinstance(obj, dict):
+            return None
+        rank, tok, by = obj.get("rank"), obj.get("tok"), obj.get("by")
+        if not isinstance(rank, str) or not isinstance(tok, str):
+            return None
+        return _KeyRow(rank=rank, tok=tok, by=by if isinstance(by, str) else None)
+
+    @staticmethod
+    def _in_flight(tok: str | None) -> bool:
+        """True for a writer token younger than ``_KEYED_IN_FLIGHT_SECONDS``:
+        its ``append_once()`` call may still be running, so the maintenance
+        paths neither report nor repair what it has written so far. A token
+        of another shape counts as old."""
+        if not tok or not GEN_RE.match(tok):
+            return False
+        # A token minted more than the window in the future (a host clock
+        # far ahead) counts as old rather than hiding damage until then.
+        return (
+            -_KEYED_IN_FLIGHT_SECONDS < gen_age_seconds(tok) < _KEYED_IN_FLIGHT_SECONDS
+        )
+
+    def _read_key_row(self, key_hash: str) -> tuple[str | None, _KeyRow | None]:
+        """One point read of a key row: ``(raw, fields)``."""
+        raw = get_property(self.config).get(
+            actor_id=self._aux(), name=self._key_row(key_hash)
+        )
+        return raw, self._parse_key_row(raw)
+
+    def _drop_key_row(self, key_hash: str, raw: str) -> bool:
+        """Delete a key row only if it still holds ``raw``."""
+        return bool(
+            get_property(self.config).delete_if_value_equals(
+                actor_id=self._aux(), name=self._key_row(key_hash), value=raw
+            )
+        )
+
+    def _best_effort(self, what: str, write: Callable[[], Any]) -> None:
+        """Run a key-row write whose failure only delays convergence (the
+        next call with the key, or ``compact()``, repeats it): a fault is
+        logged at WARNING and swallowed."""
+        try:
+            write()
+        except (  # folds DbError: best-effort key-row upkeep; later calls converge
+            DbError,
+            RuntimeError,
+        ) as exc:
+            logger.warning(
+                "List '%s' (actor %s): could not %s (%s); the next "
+                "append_once() with that key, or compact(), repeats it",
+                self.name,
+                self.actor_id,
+                what,
+                exc,
+            )
+
+    def _keyed_heads(self, key_hash: str) -> list[tuple[str, str, str | None]]:
+        """Every head carrying ``key_hash``: ``(rank, raw, tok)``, from one
+        strongly consistent range read of the heads, no body read."""
+        return self._keyed_by_hash(self._v2_load_full()).get(key_hash, [])
+
+    def _locate_keyed(
+        self, key_hash: str, rank: str, tok: str
+    ) -> tuple[str, str] | None:
+        """The head a key row names: the one carrying ``key_hash`` and
+        ``tok``, at the hinted ``rank`` (one point read) or, when the hint is
+        stale, anywhere (one strong range read). ``(rank, raw)`` or
+        ``None``."""
+        raw, env = self._read_head_tolerant(rank)
+        if raw is not None and env is not None and env.key == key_hash:
+            if (env.tok or "") == tok:
+                return rank, raw
+        for found_rank, found_raw, found_tok in self._keyed_heads(key_hash):
+            if (found_tok or "") == tok:
+                return found_rank, found_raw
+        return None
+
+    def _keyed_result(
+        self,
+        rank: str,
+        raw: str,
+        *,
+        announce: bool = False,
+        index: int | None = None,
+    ) -> AppendOnceResult:
+        """``created=False`` for the existing item at ``rank``. With
+        ``announce``, this call finished a call that never wrote its key
+        row, so it also makes the metadata touch (and, through the
+        notifying wrapper, the ``append`` diff) that call never made.
+
+        Raises:
+            _ItemGone: It was deleted while being read.
+        """
+        item = self._resolve(raw, rank=rank, consistent=True)
+        if announce:
+            self._v2_touch_metadata(count_delta=1)
+        return AppendOnceResult(
+            created=False,
+            item=item,
+            handle=self._handle_for(rank, raw),
+            announced=announce,
+            announce_index=index if announce else None,
+        )
+
+    def _find_keyed(self, key_hash: str, tok: str) -> AppendOnceResult | None:
+        """Steps 2 and 3 of ``append_once()``: the item already stored under
+        ``key_hash``, or ``None`` when there is none (and no key row left
+        naming one). ``tok`` is this call's token, recorded as ``by`` when
+        it adopts a head that has no key row.
+
+        Raises:
+            _ItemGone: The item was deleted under the read; the caller
+                retries.
+        """
+        db = get_property(self.config)
+        raw_k, named = self._read_key_row(key_hash)
+        if raw_k is not None:
+            if named is not None:
+                hit = self._locate_keyed(key_hash, named.rank, named.tok)
+                if hit is not None:
+                    rank, raw = hit
+                    if rank != named.rank:
+                        # compact() moved it: repair the hint for the next
+                        # repeat (a lost CAS means someone else did).
+                        self._best_effort(
+                            "rewrite a stale key-row hint",
+                            lambda: db.set_if_value_equals(
+                                actor_id=self._aux(),
+                                name=self._key_row(key_hash),
+                                expected=raw_k,
+                                value=self._key_row_value(
+                                    rank, named.tok, named.by or named.tok
+                                ),
+                            ),
+                        )
+                    return self._keyed_result(rank, raw)
+            # Dangling: its item was deleted and the key row's own delete
+            # never ran (or the row is malformed).
+            self._best_effort(
+                "delete a dangling key row",
+                lambda: self._drop_key_row(key_hash, raw_k),
+            )
+        # No key row: a head that landed before its key row was written (a
+        # crash between the two, or a call still running) is found by a
+        # strongly consistent scan, so an item deleted a moment ago is never
+        # seen and a head written a moment ago always is.
+        found = self._keyed_heads(key_hash)
+        if not found:
+            return None
+        # Two or more (a loser's faulted delete, then the winner's deletion):
+        # the newest writer's head is the item. The others are left for
+        # compact(): deleting them here could remove a running call's head
+        # just before it creates its key row.
+        rank, raw, head_tok = max(found, key=lambda h: h[2] or "")
+        head_tok = head_tok or ""
+        row = self._key_row_value(rank, head_tok, tok)
+        for _ in range(_APPEND_ONCE_MAX_ATTEMPTS):
+            if db.create_if_not_exists(
+                actor_id=self._aux(), name=self._key_row(key_hash), value=row
+            ):
+                return self._adopted(key_hash, rank, head_tok, row)
+            _, now = self._read_key_row(key_hash)
+            if now is None:
+                continue  # deleted since the create failed: create again
+            if now.tok == head_tok:
+                # Bound to this head already: by this call (an SDK retry of
+                # the create that landed) or by its own writer.
+                if now.by == tok:
+                    return self._adopted(key_hash, rank, head_tok, row)
+                return self._keyed_result(rank, raw)
+            # Another call bound the key to another head meanwhile: follow it.
+            hit = self._locate_keyed(key_hash, now.rank, now.tok)
+            if hit is not None:
+                return self._keyed_result(*hit)
+            raise _ItemGone(f"List '{self.name}' keyed item moved while adopting")
+        raise _ItemGone(f"List '{self.name}' key row kept vanishing while adopting")
+
+    def _adopted(
+        self, key_hash: str, rank: str, head_tok: str, row: str
+    ) -> AppendOnceResult:
+        """This call bound the key to a head another call wrote: confirm the
+        head still carries the key and token (a delete or a reused rank since
+        the scan takes the row back and starts over), then announce it, as an
+        insert at its position, since later appends may sit after it."""
+        now_raw, now_env = self._read_head_tolerant(rank)
+        if (
+            now_raw is None
+            or now_env is None
+            or now_env.key != key_hash
+            or (now_env.tok or "") != head_tok
+        ):
+            self._best_effort(
+                "delete a key row naming a deleted item",
+                lambda: self._drop_key_row(key_hash, row),
+            )
+            raise _ItemGone(
+                f"List '{self.name}' keyed item at rank {rank!r} was deleted "
+                f"while it was being adopted"
+            )
+        position = (
+            self._v2_rank_cache.index(rank)
+            if self._v2_rank_cache is not None and rank in self._v2_rank_cache
+            else None
+        )
+        return self._keyed_result(rank, now_raw, announce=True, index=position)
+
+    def _retire_own_head(self, key_hash: str, rank: str, head: str, tok: str) -> bool:
+        """Delete this call's own head after it lost the key race, cascading
+        its bodies, and say whether it did. If the head moved (a concurrent
+        ``compact()``), it is found by its token. A ``DbError`` propagates;
+        the duplicate it leaves is ``compact()``'s to remove."""
+        db = get_property(self.config)
+        target: tuple[str, str] | None = None
+        if db.delete_if_value_equals(
+            actor_id=self.actor_id, name=self._v2_item_name(rank), value=head
+        ):
+            target = (rank, head)
+        else:
+            for found_rank, found_raw, found_tok in self._keyed_heads(key_hash):
+                if (found_tok or "") != tok:
+                    continue
+                if db.delete_if_value_equals(
+                    actor_id=self.actor_id,
+                    name=self._v2_item_name(found_rank),
+                    value=found_raw,
+                ):
+                    target = (found_rank, found_raw)
+                    break
+        if target is None:
+            return False
+        self._cascade(target[1])
+        if self._v2_rank_cache is not None and target[0] in self._v2_rank_cache:
+            self._v2_rank_cache.remove(target[0])
+        return True
+
+    def _retire_key_row(self, raw: str | None) -> None:
+        """After a keyed item's head was deleted: delete its key row, if the
+        row still names this head's token (a loser's duplicate must not
+        free the winner's key). Best-effort: the head delete committed, and a
+        row left behind is dangling, which the next ``append_once()`` with
+        the key and ``compact()`` both remove."""
+        if raw is None or not looks_like_envelope(raw):
+            return
+        try:
+            env = parse(raw)
+        except EnvelopeError:
+            return
+        if env is None or env.key is None or self._aux_or_none() is None:
+            return
+        key_hash = env.key
+
+        def retire() -> None:
+            raw_k, named = self._read_key_row(key_hash)
+            if raw_k is not None and (named is None or named.tok == (env.tok or "")):
+                self._drop_key_row(key_hash, raw_k)
+
+        self._best_effort("delete the key row of a deleted keyed item", retire)
+
+    def append_once(self, item: Any, *, key: str) -> AppendOnceResult:
+        """Append ``item`` unless an item with the same ``key`` is already
+        in the list, and return what is stored under the key.
+
+        For a client that must be able to repeat a create whose answer it
+        never saw (a gateway timeout while the server finished the write):
+        mint an unguessable ``key`` with the first attempt, keep it with the
+        draft, and send the same key on every repeat.
+
+        - First call: stores ``item`` and returns ``created=True``.
+        - A repeat with the same key: stores nothing and returns
+          ``created=False`` with the item the first call stored, **whatever
+          payload the repeat sends**. Compare ``result.item`` yourself to
+          detect a changed payload.
+        - A key is bound to its item: once the item is deleted (by handle,
+          ``pop``, ``remove``, ``del``, ``clear`` or ``delete``), a repeat
+          with the key creates it again. A rewrite (``update_by_handle``,
+          ``lst[i] = ...``) keeps the key.
+
+        The key is never stored or logged: rows carry
+        ``HMAC-SHA256(actor_id, key)``, which separates actors but does not
+        make a guessable key safe (the actor id is public). Keys are a
+        non-empty ``str`` of at most 512 characters, no control characters.
+
+        **Concurrency.** The key row ``list:{name}-$key-{hash}`` in the
+        actor's side partition is the authority; its conditional create
+        decides between overlapping calls. Two calls with one key that
+        overlap both write the item, and the one that loses the key row
+        deletes its own copy and returns the winner's, so two items are
+        visible for the length of that delete. If that delete faults, the
+        error propagates and the duplicate stays: ``verify()`` reports it
+        (``duplicate_keyed_items``, once it is an hour old) and
+        ``compact()`` or ``repair_keys()`` removes it, keeping the key row's
+        item. A call that stops after storing the item and before its key
+        row leaves an item a repeat finds and finishes (the repeat then
+        makes the metadata touch and, through the notifying wrapper, the
+        ``append`` diff the first call never made). ``verify()`` reports such
+        an item as ``unkeyed_keyed_items`` after an hour, and ``compact()``
+        writes its key row. Nothing waits inside the call. ``compact()`` and
+        ``repair_keys()`` leave anything written in the last hour alone, but
+        like every operator rewrite they expect writes to be quiesced.
+
+        **Raises after a write.** Any exception after the head write (a
+        timeout on it, a fault on the key row or on deleting a losing copy,
+        a span read) may follow a head that committed. A repeat with the key
+        converges either way.
+
+        **Announcing.** ``result.announced`` says this call made the
+        metadata touch and is the one whose diff the notifying wrapper
+        sends: the creating call, or a repeat that finished a call which
+        stopped before its key row (``announce_index`` is then the item's
+        position). An item is announced at most once; a call that stops
+        between its key row and its diff leaves it unannounced. The
+        maintenance paths' one-hour guard uses the writer token's
+        timestamp, so the hosts' clocks should agree.
+
+        **Cost.** A repeat: two point reads (plus one strong range read of
+        the heads and a compare-and-swap when ``compact()`` moved the item
+        since). A first call: one point read, one strongly consistent range
+        read of the list's heads (spanned bodies are not read; plain items
+        cost their full size), the item write and the key-row create. Each
+        of at most three arbitration passes adds at most one head write
+        (with its bodies) and up to three range reads, before
+        ``RuntimeError``.
+
+        **v2 only.** Raises ``ValueError`` naming ``migrate_to_v2()`` on a v1
+        list. The first keyed item makes the list unreadable to readers
+        older than 3.16 (as a spanned item does).
+
+        Raises:
+            ValueError: The key is invalid, the list is v1, or the item
+                carries the reserved envelope key.
+            ListItemTooLargeError: The item is over ``list_item_max_bytes``.
+            RuntimeError: The attempt budget ran out under contention. The
+                item this call wrote may be stored without its key row; a
+                repeat with the key finishes it (``created=False``).
+        """
+        if not self._db:
+            raise RuntimeError("No database connection available")
+        self._validate_append_key(key)
+        self._maybe_lazy_migrate()
+        if self._dispatch_and_stash() != 2:
+            raise ValueError(
+                f"append_once() is v2-only -- list '{self.name}' is still v1. "
+                f"Call migrate_to_v2() first."
+            )
+        return self._v2_append_once(item, key)
+
+    def _v2_append_once(self, item: Any, key: str) -> AppendOnceResult:
+        """The protocol behind ``append_once()``; see the plan's Phase 3.
+
+        Item first, then the key row: point-read the key row (and the head
+        it names); else scan the heads for one that landed without its key
+        row; else write a head carrying the key hash and a fresh token, then
+        create the key row. A lost create reads the row back: our own token
+        is a win (an SDK retry of our create, or another call that adopted
+        our head and announced it); a row naming no head is dangling and is
+        replaced; anything else is another writer's win, and our head is
+        deleted.
+        """
+        value_str = self._encode_item(item)
+        spans = self._check_item_size(value_str, can_span=True)
+        self._aux()  # key rows need the side partition: refuse a '$' actor id now
+        key_hash = self._key_hash(key)
+        if self._dispatch_saw_no_row():
+            self._v2_create_meta_row()
+
+        tok = new_gen()
+        own: tuple[str, str] | None = None  # (rank, head) once written
+        key_name = self._key_row(key_hash)
+        for _attempt in range(_APPEND_ONCE_MAX_ATTEMPTS):
+            if own is None:
+                try:
+                    found = self._find_keyed(key_hash, tok)
+                except _ItemGone:
+                    continue
+                if found is not None:
+                    return found
+                landed: list[str] = []
+
+                def head_write(head: str, landed: list[str] = landed) -> bool:
+                    landed.append(self._v2_write_item_at_new_rank(head))
+                    return True
+
+                _, head = self._write_spanning(
+                    value_str,
+                    spans,
+                    head_write,
+                    carry=Envelope(key=key_hash, tok=tok),
+                )
+                own = (landed[0], head)
+
+            rank, head = own
+            row = self._key_row_value(rank, tok, tok)
+            db = get_property(self.config)
+            if db.create_if_not_exists(actor_id=self._aux(), name=key_name, value=row):
+                return self._created(rank, head, value_str, announce=True)
+            raw_k, named = self._read_key_row(key_hash)
+            if raw_k is None:
+                continue  # deleted since the create failed: create again
+            if named is not None and named.tok == tok:
+                # Our head is the item: an SDK retry of our own create that
+                # landed (``by`` is ours), or another call adopted our head
+                # and made the announcement itself.
+                return self._created(
+                    rank, head, value_str, announce=named.by in (None, tok)
+                )
+            winner = (
+                self._locate_keyed(key_hash, named.rank, named.tok)
+                if named is not None
+                else None
+            )
+            if winner is None:
+                # Names no head (its item was deleted, or the hint is the
+                # rank our own head reused): dangling. Replace it.
+                self._drop_key_row(key_hash, raw_k)
+                continue
+            # Another writer owns the key: ours is the duplicate.
+            if not self._retire_own_head(key_hash, rank, head, tok):
+                # A repeat adopted our head after the winner's item went:
+                # ours is the stored item now, announced by that repeat.
+                _, now = self._read_key_row(key_hash)
+                if now is not None and now.tok == tok:
+                    return self._created(rank, head, value_str, announce=False)
+            if self._v2_rank_cache is not None and winner[0] not in self._v2_rank_cache:
+                self._v2_rank_cache.append(winner[0])
+                self._v2_rank_cache.sort()
+            try:
+                return self._keyed_result(*winner)
+            except _ItemGone:
+                own = None  # the winner's item went too: start over
+                tok = new_gen()
+                continue
+        if own is not None:
+            # A repeat may have adopted our head since our last create: if
+            # the key row now names it, it is the stored item.
+            _, named = self._read_key_row(key_hash)
+            if named is not None and named.tok == tok:
+                return self._created(
+                    own[0], own[1], value_str, announce=named.by in (None, tok)
+                )
+            # No live winner exists here (every pass ended with the row absent,
+            # dangling or its item gone), so the head is kept: deleting it
+            # could remove an item a repeat is adopting right now. A repeat
+            # with the key finishes it.
+        raise RuntimeError(
+            f"list '{self.name}' append_once: too many concurrent attempts with "
+            f"this key, retry later"
+        )
+
+    def _created(
+        self, rank: str, head: str, value_str: str, *, announce: bool
+    ) -> AppendOnceResult:
+        """``created=True`` for this call's own head. With ``announce`` (no
+        other call announced it), the metadata touch a creating call makes."""
+        if self._v2_rank_cache is not None and rank not in self._v2_rank_cache:
+            self._v2_rank_cache.append(rank)
+            self._v2_rank_cache.sort()
+        if announce:
+            self._v2_touch_metadata(count_delta=1)
+        return AppendOnceResult(
+            created=True,
+            item=self._decode_item(value_str),
+            handle=self._handle_for(rank, head),
+            announced=announce,
+        )
 
     def _v2_extend(self, items: list[Any]) -> None:
         """Phase 9B: one last-rank read for the WHOLE batch, then n
@@ -2846,7 +3442,23 @@ class ListProperty:
                 )
             for _, raw in pairs:
                 self._cascade(raw)
-            self._delete_aux_rows(self._aux_names("key"))
+            # Only the key rows of the heads it deleted, as with bodies: an
+            # append_once() racing clear() keeps its key with its head.
+            # Rows already dangling go too, unless a running call may have
+            # written them after the read (the in-flight guard).
+            deleted = {
+                (key_hash, tok or "")
+                for key_hash, keyed in self._keyed_by_hash(pairs).items()
+                for _, _, tok in keyed
+            }
+            stale = [
+                self._key_row(key_hash)
+                for key_hash, raw_k in self._key_rows().items()
+                if (named := self._parse_key_row(raw_k)) is None
+                or (key_hash, named.tok) in deleted
+                or not self._in_flight(named.tok)
+            ]
+            self._delete_aux_rows(stale)
             self._replace_metadata(self._create_default_metadata_v2())
             self._v2_rank_cache = []
             return
@@ -3073,6 +3685,7 @@ class ListProperty:
             ):
                 del ranks[resolved]
                 self._cascade(item_str)
+                self._retire_key_row(item_str)
                 self._v2_touch_metadata(count=len(ranks))
                 return item
             # Value changed or row already gone -- re-resolve and retry.
@@ -3275,6 +3888,7 @@ class ListProperty:
                     # is there now.
                     break
                 self._cascade(raw_value)
+                self._retire_key_row(raw_value)
                 # _v2_load_full() just set the cache to exactly these ranks
                 # in this order, so dropping entry i keeps it consistent.
                 ranks = self._v2_rank_cache
@@ -3547,8 +4161,10 @@ class ListProperty:
         ):
             return False
         # The handle's raw value is the head that was deleted: its envelope
-        # names the body generation to delete (best-effort, after commit).
+        # names the body generation to delete (best-effort, after commit),
+        # and a keyed item's key row goes with it.
         self._cascade(handle.raw_value)
+        self._retire_key_row(handle.raw_value)
         # Only drop the rank from an already-warm cache -- never load a
         # cold one, matching _v2_append()/_v2_extend()'s discipline.
         if self._v2_rank_cache is not None:
@@ -3869,6 +4485,26 @@ class ListProperty:
               not an orphan (``meta_row_present is False`` while
               ``length > 0``), no head is malformed and (with ``spans``) no
               span is broken. A never-created list is healthy.
+            - key_rows: how many key rows (``append_once()``) the list has,
+              from one prefix read of its small ``$key-`` rows (always on)
+            - dangling_key_rows: the rank hints of key rows that name no
+              head carrying their key and token (the item was deleted and
+              its key row's delete never ran); the next ``append_once()``
+              with the key, ``compact()`` or ``repair_keys()`` removes
+              them. Informational
+            - duplicate_keyed_items: the ranks of heads that share a key
+              with another head (an overlapping ``append_once()`` whose
+              loser could not delete its copy); part of ``healthy``, and
+              ``compact()``/``repair_keys()`` keep the key row's item and
+              remove the others
+            - unkeyed_keyed_items: the ranks of keyed heads that no key row
+              names (a call that stopped between its item and its key row);
+              a repeat with the key, ``compact()`` or ``repair_keys()``
+              writes the row. Informational
+            The three key findings leave out anything an ``append_once()``
+            call wrote in the last hour (its writer token's age): a second
+            copy, or a head without its key row, is then a call still
+            running. They report ranks, never key hashes.
         """
         pairs = self._v2_load_full()
         max_rank_length = max((len(rank) for rank, _ in pairs), default=0)
@@ -3921,6 +4557,9 @@ class ListProperty:
             report["broken_spans"] = broken
             if broken:
                 report["healthy"] = False
+        report.update(self._key_report(pairs))
+        if report["duplicate_keyed_items"]:
+            report["healthy"] = False
         duplicates: dict[Any, list[int]] | None = None
         identity_checked_count: int | None = None
         if identity_key is not None:
@@ -3957,6 +4596,227 @@ class ListProperty:
             if env is not None and env.span is not None:
                 spanned.append((rank, env.span))
         return spanned, malformed
+
+    def _key_rows(self) -> dict[str, str]:
+        """``{key_hash: raw}`` for the list's key rows: one prefix read of
+        the side partition, shape-filtered (key rows are a few dozen bytes)."""
+        aux = self._aux_or_none()
+        if aux is None:
+            return {}
+        prefix = key_prefix(self.name)
+        rows = get_property(self.config).get_prefix(actor_id=aux, prefix=prefix)
+        return {
+            name[len(prefix) :]: rows[name]
+            for name in self._names_matching(
+                rows, len(prefix), lambda suffix: bool(KEY_ROW_RE.match(suffix))
+            )
+        }
+
+    @staticmethod
+    def _keyed_by_hash(
+        pairs: list[tuple[str, str]],
+    ) -> dict[str, list[tuple[str, str, str | None]]]:
+        """``{key_hash: [(rank, raw, tok), ...]}`` for the keyed heads among
+        ``pairs``, in list order. No body read."""
+        by_key: dict[str, list[tuple[str, str, str | None]]] = {}
+        for rank, raw in pairs:
+            if not looks_like_envelope(raw):
+                continue
+            try:
+                env = parse(raw)
+            except EnvelopeError:
+                continue
+            if env is not None and env.key is not None:
+                by_key.setdefault(env.key, []).append((rank, raw, env.tok))
+        return by_key
+
+    def _key_findings(
+        self, pairs: list[tuple[str, str]]
+    ) -> tuple[
+        dict[str, list[tuple[str, str, str | None]]],
+        dict[str, str],
+        dict[str, Any],
+    ]:
+        """What ``verify()`` reports about key rows and what
+        ``_repair_keys()`` acts on, both leaving alone anything an
+        ``append_once()`` call wrote in the last ``_KEYED_IN_FLIGHT_SECONDS``.
+
+        Returns ``(by_key, rows, plan)``. ``plan`` maps each key hash that
+        needs work to ``{"keep": (rank, raw, tok) | None, "remove": [...],
+        "drop_row": bool, "create_row": bool}``.
+        """
+        by_key = self._keyed_by_hash(pairs)
+        rows = self._key_rows()
+        plan: dict[str, Any] = {}
+        for key_hash, raw_k in rows.items():
+            if key_hash in by_key:
+                continue
+            named = self._parse_key_row(raw_k)
+            if named is not None and self._in_flight(named.tok):
+                continue  # a call may be writing its head right now
+            plan[key_hash] = {
+                "keep": None,
+                "remove": [],
+                "drop_row": True,
+                "create_row": False,
+                "hint": named.rank if named is not None else None,
+            }
+        for key_hash, keyed in by_key.items():
+            named = self._parse_key_row(rows.get(key_hash))
+            keep = None
+            if named is not None:
+                keep = next((h for h in keyed if (h[2] or "") == named.tok), None)
+                if keep is None and self._in_flight(named.tok):
+                    # The row names a head this read did not see, written by
+                    # a call that may still be running (its head landed after
+                    # the read): leave the whole key alone.
+                    continue
+            drop_row = rows.get(key_hash) is not None and keep is None
+            if keep is None:
+                aged = [h for h in keyed if not self._in_flight(h[2])]
+                if not aged:
+                    continue  # every head is a running call's
+                keep = max(aged, key=lambda h: h[2] or "")
+            remove = [h for h in keyed if h is not keep and not self._in_flight(h[2])]
+            create_row = keep is not None and (named is None or drop_row)
+            if create_row and self._in_flight(keep[2]):
+                create_row = False
+            if remove or drop_row or create_row:
+                plan[key_hash] = {
+                    "keep": keep,
+                    "remove": remove,
+                    "drop_row": drop_row,
+                    "create_row": create_row,
+                    "hint": named.rank if named is not None else None,
+                }
+        return by_key, rows, plan
+
+    def _key_report(self, pairs: list[tuple[str, str]]) -> dict[str, Any]:
+        """The key-row part of ``verify()``'s report; see there."""
+        by_key, rows, plan = self._key_findings(pairs)
+        dangling: list[str | None] = []
+        duplicates: list[str] = []
+        unkeyed: list[str] = []
+        for key_hash, work in plan.items():
+            if work["drop_row"]:
+                dangling.append(work["hint"])
+            if work["remove"]:
+                duplicates.extend([work["keep"][0], *(h[0] for h in work["remove"])])
+            if work["create_row"]:
+                unkeyed.extend(
+                    h[0] for h in by_key.get(key_hash, []) if not self._in_flight(h[2])
+                )
+        return {
+            "key_rows": len(rows),
+            "dangling_key_rows": dangling,
+            "duplicate_keyed_items": sorted(set(duplicates)),
+            "unkeyed_keyed_items": sorted(set(unkeyed)),
+        }
+
+    def _repair_keys(
+        self, pairs: list[tuple[str, str]]
+    ) -> tuple[dict[str, Any], list[tuple[str, str]], dict[str, tuple[str, str]]]:
+        """The key repair ``compact()`` runs before it rebalances, and
+        ``repair_keys()`` runs alone.
+
+        For each key: with a key row naming one of its heads, that head is
+        the item and the other heads are removed; without one (or with a row
+        naming none of them, which is deleted as dangling), the head with the
+        newest token is kept, the others removed, and a key row is created
+        for it once its final rank is known. Key rows naming no head are
+        deleted, after a strong re-read of the heads confirms it. Nothing an
+        ``append_once()`` call wrote in the last ``_KEYED_IN_FLIGHT_SECONDS``
+        is touched.
+
+        Returns ``(counts, surviving_pairs, {key_hash: (rank, tok)})`` for
+        the key rows still to create.
+        """
+        _, rows, plan = self._key_findings(pairs)
+        if any(work["keep"] is None for work in plan.values()):
+            # A key row that names no head in ``pairs`` may belong to a call
+            # that wrote its head after ``pairs`` was read: confirm against a
+            # fresh, strongly consistent read before deleting any.
+            fresh = self._keyed_by_hash(self._v2_load_full())
+            plan = {
+                key_hash: work
+                for key_hash, work in plan.items()
+                if work["keep"] is not None or key_hash not in fresh
+            }
+        db = get_property(self.config)
+        removed_ranks: set[str] = set()
+        dangling_removed = 0
+        to_create: dict[str, tuple[str, str]] = {}
+        for key_hash, work in plan.items():
+            if work["drop_row"] and self._drop_key_row(key_hash, rows[key_hash]):
+                dangling_removed += 1
+            for rank, raw, _ in work["remove"]:
+                if db.delete_if_value_equals(
+                    actor_id=self.actor_id, name=self._v2_item_name(rank), value=raw
+                ):
+                    self._cascade(raw)
+                    removed_ranks.add(rank)
+            if work["create_row"]:
+                keep = work["keep"]
+                to_create[key_hash] = (keep[0], keep[2] or "")
+        counts = {
+            "duplicate_keyed_items_removed": len(removed_ranks),
+            "dangling_key_rows_removed": dangling_removed,
+        }
+        survivors = [(rank, raw) for rank, raw in pairs if rank not in removed_ranks]
+        return counts, survivors, to_create
+
+    def _create_key_rows(
+        self,
+        to_create: dict[str, tuple[str, str]],
+        moved_to: dict[str, str] | None = None,
+    ) -> int:
+        """Create the key rows ``_repair_keys()`` found missing, at each
+        head's final rank. Returns how many were created (a lost create means
+        a running call wrote it first)."""
+        created = 0
+        for key_hash, (rank, tok) in to_create.items():
+            final = (moved_to or {}).get(rank, rank)
+            if get_property(self.config).create_if_not_exists(
+                actor_id=self._aux(),
+                name=self._key_row(key_hash),
+                value=self._key_row_value(final, tok, ""),
+            ):
+                created += 1
+        return created
+
+    def repair_keys(self) -> dict[str, Any]:
+        """The key-row repair ``compact()`` makes, without rebalancing.
+
+        Removes duplicate keyed items (keeping the one the key row names),
+        deletes dangling key rows and creates missing ones; anything an
+        ``append_once()`` call wrote in the last hour is left alone. Like
+        ``compact()``, run it with writes quiesced. One strong range read of
+        the heads and one prefix read of the key rows (one more range read
+        when a key row names no head), plus the writes.
+
+        Returns:
+            ``duplicate_keyed_items_removed``, ``dangling_key_rows_removed``
+            and ``key_rows_created``.
+
+        Raises:
+            ValueError: The list is v1 (it holds no keyed items).
+        """
+        if not self._db:
+            raise RuntimeError("No database connection available")
+        if self._dispatch_and_stash() != 2:
+            raise ValueError(
+                f"repair_keys() is v2-only -- list '{self.name}' is still v1."
+            )
+        pairs = self._v2_load_full()
+        counts, survivors, to_create = self._repair_keys(pairs)
+        counts["key_rows_created"] = self._create_key_rows(to_create)
+        if any(counts.values()):
+            # The counted truth: a repaired item that never had a key row was
+            # never counted by the call that stopped before writing it. The
+            # cache is dropped, not rebuilt: a second read may have run.
+            self._v2_rank_cache = None
+            self._v2_touch_metadata(count=len(survivors))
+        return counts
 
     @staticmethod
     def _gens_named_by(raws: Any) -> set[str]:
@@ -4229,9 +5089,22 @@ class ListProperty:
         bodies are not all there, reported as ``broken_spans_removed`` --
         the item is lost already; this makes the list readable again.
 
+        KEYED ITEMS (``append_once()``). Before rebalancing, the repair
+        ``repair_keys()`` makes runs: a key with two or more heads keeps the
+        one its key row names and removes the others
+        (``duplicate_keyed_items_removed``); a keyed head no key row names
+        keeps the newest-token copy and gets its key row, at its final rank
+        (``key_rows_created``); a key row naming no head is deleted
+        (``dangling_key_rows_removed``). Anything an ``append_once()`` call
+        wrote in the last hour is left alone. The key repair runs before the
+        spanned-body copy check below and is not undone if a span cannot be
+        read. Key rows' hints are not
+        remapped when ranks move: a repeat finds a moved head by scan and
+        repairs its own hint.
+
         Cost: two item ranges, plus every moved spanned item's bodies
-        (read and written), plus the deletes; with the flag, every body
-        byte once more.
+        (read and written), plus the deletes, plus two prefix reads of the
+        list's key rows (small); with the flag, every body byte once more.
         """
         report = self._v2_verify()
 
@@ -4242,6 +5115,8 @@ class ListProperty:
             report.update(self._sweep_spans())
 
         pairs = self._v2_load_full()
+        key_counts, pairs, key_rows_to_create = self._repair_keys(pairs)
+        report.update(key_counts)
         n = len(pairs)
         old_ranks = [rank for rank, _ in pairs]
         old_names = {self._v2_item_name(rank) for rank in old_ranks}
@@ -4343,6 +5218,11 @@ class ListProperty:
         for old_value in rewritten_in_place:
             self._cascade(old_value)
 
+        # Key rows for keyed heads that had none, at their final rank.
+        report["key_rows_created"] = self._create_key_rows(
+            key_rows_to_create, dict(zip(old_ranks, written_ranks, strict=True))
+        )
+
         self._v2_rank_cache = sorted(written_ranks)
         # compact() just counted every row it rewrote -- write the exact
         # truth back to count_hint rather than leaving whatever drift
@@ -4430,6 +5310,7 @@ class ListProperty:
             ):
                 broken_removed += 1
                 self._span_delete_bodies(span_by_rank[rank])
+                self._retire_key_row(raw_by_rank[rank])
                 logger.warning(
                     "List '%s' (actor %s): removed the item at rank %r, whose "
                     "body rows were missing or did not match its head (a "

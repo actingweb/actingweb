@@ -160,6 +160,7 @@ is easy to guess wrong from its name:
     notes.update_by_handle(handle, item)   # requires "write"
     notes.update_where("status", "open", item)   # requires "write"
     notes.remove_where("status", "archived")     # requires "delete"
+    notes.append_once(item, key=draft_key)       # requires "write" (3.16)
 
 ``delete_by_handle()`` requires ``write`` rather than ``delete`` because
 it targets exactly one item you already have a reference to, the same

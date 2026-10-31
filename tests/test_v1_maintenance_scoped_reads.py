@@ -384,4 +384,9 @@ class TestV2ListsAreUntouched:
             "spanned_items": 0,
             "span_bytes": 0,
             "malformed_heads": [],
+            # 3.16: key rows of append_once() items.
+            "key_rows": 0,
+            "dangling_key_rows": [],
+            "duplicate_keyed_items": [],
+            "unkeyed_keyed_items": [],
         }

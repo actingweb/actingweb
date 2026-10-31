@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any, Optional
 from ..db.exceptions import DbError
 from ..permission_evaluator import PermissionResult, get_permission_evaluator
 from ..property import rows_for
-from ..property_list import ListItemHandle
+from ..property_list import AppendOnceResult, ListItemHandle
 
 if TYPE_CHECKING:
     from ..config import Config
@@ -307,6 +307,10 @@ class _PermissionEnforcingListView:
         self._check("write")
         self._list_prop.append(item)
 
+    def append_once(self, item: Any, *, key: str) -> AppendOnceResult:
+        self._check("write")
+        return self._list_prop.append_once(item, key=key)
+
     def extend(self, items: list[Any]) -> None:
         self._check("write")
         self._list_prop.extend(items)
@@ -356,6 +360,10 @@ class _PermissionEnforcingListView:
     def compact(self, sweep_span_orphans: bool = False) -> dict[str, Any]:
         self._check("write")
         return self._list_prop.compact(sweep_span_orphans=sweep_span_orphans)
+
+    def repair_keys(self) -> dict[str, Any]:
+        self._check("write")
+        return self._list_prop.repair_keys()
 
     def sweep_span_orphans(self) -> dict[str, Any]:
         self._check("write")

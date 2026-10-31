@@ -10,7 +10,9 @@ thoughts/plans/2026-08-08-property-list-index-integrity.md:
   see thoughts/research/2026-08-07-property-list-index-integrity.md.
 - v2 (fractional rank key): cannot have holes/orphans by construction;
   "unhealthy" here means rank keys have grown long from repeated
-  insert-between operations and are approaching the length cap.
+  insert-between operations and are approaching the length cap, a
+  malformed or broken spanned item, or two copies of an append_once() item
+  sharing one key (older than an hour).
 
 Run with the SAME environment as the application (DATABASE_BACKEND and its
 backend-specific connection settings), e.g.::
@@ -22,7 +24,9 @@ backend-specific connection settings), e.g.::
 
 Dry-run (report only) by default. --repair invokes ListProperty.compact()
 on every unhealthy v1 list that has holes or orphans, and on every
-unhealthy v2 list (rank rebalance); it never touches a list whose only
+v2 list whose rank keys need a rebalance; a v2 list whose only repairable
+finding is duplicate keyed items gets ListProperty.repair_keys() (no
+rebalance). Like compact(), run it with writes quiesced. It never touches a list whose only
 finding is adjacent_duplicates -- compact() itself leaves duplicate
 residue intact (a duplicate always means a destroyed item, and silently
 collapsing one copy would bless the data loss as intentional).
@@ -326,6 +330,12 @@ def sweep_actor(
                 f"orphan_indices={report['orphan_indices']} "
                 f"adjacent_duplicates={report['adjacent_duplicates']}"
             )
+        if report.get("duplicate_keyed_items"):
+            logger.warning(
+                f"actor={actor_id} list={name}: keyed items share a key at "
+                f"ranks {report['duplicate_keyed_items']} -- --repair keeps the "
+                f"one the key row names and removes the others"
+            )
         if report["adjacent_duplicates"]:
             logger.warning(
                 f"actor={actor_id} list={name}: duplicate residue reported "
@@ -356,13 +366,19 @@ def sweep_actor(
             unhealthy_after += 1
             continue
 
+        keys_only = False
         if is_v2:
             # compact() under v2 rebalances rank keys and nothing else. A
             # list flagged unhealthy ONLY for duplicate identities is not
             # something it can fix, so running it would rewrite every row
             # -- including the documented interrupted-compaction exposure
-            # -- and leave the list just as unhealthy afterwards.
-            needs_repair = bool(report["needs_rebalance"])
+            # -- and leave the list just as unhealthy afterwards. Duplicate
+            # keyed items (append_once()) are repaired by repair_keys()
+            # alone, without the rebalance, unless the ranks need it too.
+            keys_only = bool(
+                report.get("duplicate_keyed_items") and not report["needs_rebalance"]
+            )
+            needs_repair = bool(report["needs_rebalance"] or keys_only)
         else:
             needs_repair = bool(report["missing_indices"] or report["orphan_indices"])
 
@@ -372,9 +388,12 @@ def sweep_actor(
             continue
 
         try:
-            compact_report = list_prop.compact(allow_reverted=repair_reverted)
+            if is_v2 and keys_only:
+                compact_report = list_prop.repair_keys()
+            else:
+                compact_report = list_prop.compact(allow_reverted=repair_reverted)
         except Exception as e:  # folds DbError: counted as error, exit 1
-            logger.error(f"actor={actor_id} list={name}: compact() failed: {e}")
+            logger.error(f"actor={actor_id} list={name}: repair failed: {e}")
             errored += 1
             continue
 

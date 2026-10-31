@@ -1,5 +1,6 @@
 ---
-status: active
+status: done
+verified: thoughts/verifications/2026-10-31-spanned-list-items-11.md
 ---
 
 # Implementation Plan: Spanned list items, idempotent appends, and the `://` permission branch
@@ -385,6 +386,15 @@ deferred were put to the owner the same day and are marked **[Owner,
      `tok t''`: `create_if_not_exists(keyrow, {"rank": r, "tok": t''})`;
      True or `False` with the row now naming `(r, t'')`: return it
      (`created=False`); `False` naming anything else: back to step 2.
+     **[Updated 2026-10-31, entry 66]** The scan is strongly consistent
+     (the owner, after verification 8), and the adopted head is point-read
+     again after the key-row create.
+     **[Updated 2026-10-31]** In the request path the extra heads are not
+     cascaded (deleting one could remove a concurrent first call's head just
+     before it wins the key row): the newest-token head is the item and
+     `compact()` removes the others. A lost create here continues to step 4
+     and arbitrates in step 5 instead of looping to step 2. See Phase 3's
+     implementation notes.
   4. Write the head at a new rank through `_v2_write_item_at_new_rank(value,
      tok=t)` (bodies first if spanned). An ambiguous `False` reads the
      candidate rank back; a head whose `tok == t` is ours.
@@ -1661,15 +1671,101 @@ Integration (both backends):
 
 ### Verification
 
-- [ ] Run the contract's `### Checks` fast tier verbatim (unsandboxed)
-- [ ] Full tier before PR 2 opens
-- [ ] `grep -n "pending\|claim\|Retry-After" actingweb/property_list.py`
-      returns nothing new for `append_once`
-- [ ] `grep -l "^status: active" thoughts/plans/*.md` lists only this plan
-      while PR 2 is in flight; `thoughts/todo/INDEX.md` has no row for
+- [x] Run the contract's `### Checks` fast tier verbatim (unsandboxed)
+- [x] Full tier before PR 2 opens
+- [x] `grep -n "pending\|claim\|Retry-After" actingweb/property_list.py`
+      returns nothing new for `append_once` (checked on the diff against
+      `master`: no added line matches)
+- [x] `grep -l "^status: active" thoughts/plans/*.md` listed only this plan
+      while Phase 3 was built; with every phase complete the plan is now
+      `status: done` (`/implement_plan`), and `/verify_implementation` adds
+      its `verified:` link. `thoughts/todo/INDEX.md` has no row for
       `idempotent-list-item-create.md`
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+#### Implementation notes (2026-10-31)
+
+Branch `release/3.16.0-idempotent-append`, cut from `master` at `18d7541`
+(PR #162, Phases 1-2, merged). **Release type:** `append_once`,
+`AppendOnceResult`, `ListItemHandle.key_hash` and the new `verify()` and
+`compact()` report keys are new public API, so this is a minor; it ships in
+3.16 with its migration-guide section.
+
+- **What landed.** `ListProperty.append_once(item, *, key)` and its helpers
+  (`_validate_append_key`, `_key_hash`, `_read_key_row`, `_drop_key_row`,
+  `_keyed_heads`, `_locate_keyed`, `_find_keyed`, `_retire_own_head`,
+  `_retire_key_row`, `_v2_append_once`, `_created`); `AppendOnceResult`,
+  exported from `actingweb`; `ListItemHandle.key_hash`, set by
+  `_handle_for`. Key rows die with the item in `delete_by_handle`,
+  `_v2_pop`, `_v2_remove` and `_v2_delitem`, deleted only when the row
+  still names the deleted head's token (a duplicate's delete never frees
+  the winner's key), best-effort after the head delete like the body
+  cascade. `verify()` reports `key_rows`, `dangling_key_rows`,
+  `duplicate_keyed_items` and `unkeyed_keyed_items` (lists of ranks; only
+  the duplicates are part of `healthy`); `compact()` runs `_repair_keys`
+  before it rebalances and creates missing key rows at their final ranks.
+  `NotifyingListProperty.append_once` and
+  `_PermissionEnforcingListView.append_once` (`write`).
+  `actingweb-verify-property-lists --repair` compacts a v2 list whose
+  report has duplicate keyed items (it gated on `needs_rebalance` only).
+- **Deviation: the keyed head's read-back.** The plan gave
+  `_v2_write_item_at_new_rank` a `tok=` parameter. It already called
+  `_landed_anyway` (Phase 2, iteration 1) for spanned heads; that check now
+  also accepts a head carrying a writer token, since an `append_once` head's
+  bytes are unique to the call. Same effect, no new parameter. A rewrite of
+  a keyed item carries its old token, so two concurrent identical rewrites
+  share bytes and the loser reads as landed: the intended end state, said in
+  the docstring.
+- **Deviation: step 3 never deletes another writer's head.** The plan's
+  step 3 cascaded the extra heads when two or more carry the key and no key
+  row exists. Two concurrent first calls can both be in that state with
+  their key-row creates still to come, so a third call deleting the older
+  head could delete a live writer's item just before that writer wins the
+  key row and returns `created=True` for it. Step 3 now picks the
+  newest-token head and leaves the rest to `compact()`, which removes them
+  with writes quiesced. Decision updated below.
+- **Deviation: a lost step-3 create starts a write rather than looping to
+  step 2.** When step 3's key-row create loses to a row naming another
+  token, `_find_keyed` returns "none found" and the call goes on to write
+  its own head and arbitrate in step 5 against that row. One more head
+  write in a rare race, the same end state, and one loop instead of two.
+- **Deviation: `verify()` reports lists of ranks.** The plan said "a count
+  plus the ranks". The lists are the ranks and their length is the count,
+  as for `malformed_heads` and `broken_spans`. A dangling row's rank is its
+  hint (`None` for a malformed row).
+- **Helper names** differ from the plan's: `_keyed_heads` is
+  `_scan_heads_for_key`, and an eventually consistent scan leaves the rank
+  cache cold instead of seeding it from a possibly stale read.
+- **Tests.** `tests/test_property_list_append_once.py` (39 tests and the
+  strict `xfail` on plain `append`), with a `HookDb` fake that runs code
+  before a key-row create, makes one create land and answer `False`, or
+  faults a delete or create, so every branch is reached with no clock.
+  `tests/integration/test_property_list_append_once.py` (5 tests, both
+  backends): first call and repeat, a spanned keyed item, a stale hint after
+  `compact()`, deletion, list delete. Three existing tests changed for the
+  new always-on key-row read and report keys:
+  `test_verify_without_spans_reads_no_bodies` and
+  `test_identity_verify_resolves_each_spanned_item` now count `$span-` reads,
+  `test_v2_verify_still_reports_the_same_way` lists the four keys; the
+  proxy-classification table in `tests/test_authenticated_views.py` gains
+  `append_once` as a `write` mutator.
+- **Benchmark** (DynamoDB Local, `-m benchmark -k list_property`, run
+  alone, medians): `to_list()` 12.75 ms, `items_with_handles()` 12.39 ms,
+  append + remove 23.53 ms, against Phase 2's 11.62 / 15.36 / 35.46 ms:
+  run-to-run noise (the unkeyed paths gained a prefix check, no read).
+  Spanned: `to_list()` 61.30 ms, `items_with_handles()` 43.20 ms,
+  `resolve=False` 13.31 ms.
+- **Todos.** `thoughts/todo/idempotent-list-item-create.md` deleted with
+  its `INDEX.md` row; `conditional-write-ambiguous-after-sdk-retry.md`
+  narrowed to unkeyed, unspanned `append`/`extend`/`insert`, `pop` and
+  `delete_by_handle`, citing the strict `xfail`, with its row updated;
+  `subscription-subscriber-fault-hardening.md` now points at `append_once`
+  instead of the deleted todo.
+- **Checks at the end of the phase:** ruff, format (460 files), pyright
+  0/0; `verify_groups.py` all 51 documented; DynamoDB 4931 passed, 40
+  skipped, 1 xfailed; PostgreSQL 4739 passed, 232 skipped, 1 xfailed;
+  sphinx `-W` pass.
 
 ---
 
@@ -2792,6 +2888,269 @@ guide and security notes say exactly that.
 copied in both integrations and re-parses `config.root` per request; no
 integration-level test covers a base-path deployment.
 
+### 2026-10-31, after verification thoughts/verifications/2026-10-31-spanned-list-items-8.md
+
+Phase 3's first verification: two Highs (V8-1, V8-3), and the owner chose
+the strong scan for V8-2 ("Strong read and continue verifying and iterating
+until clean"). Every finding is addressed here, the Mediums and Lows
+included, since the owner asked for a clean run and for the documentation
+to be complete.
+
+#### 66. Step 3 scans strongly and confirms the head it adopts (V8-1, V8-2)
+
+**Category**: Verification fix (High) / Decision changed
+
+**What changed**: `_find_keyed`'s scan for a head without its key row is
+strongly consistent (`_keyed_heads` always reads strongly), so an item
+deleted a moment ago is never adopted and a crashed call's head written a
+moment ago is always found. After winning the key-row create, the adopted
+head is point-read again; if it is gone or changed, the row is taken back
+and the call starts over (`_ItemGone`).
+
+**Files affected**: `actingweb/property_list.py` (`_keyed_heads`,
+`_find_keyed`); `tests/test_property_list_append_once.py`
+(`test_v8_1_an_item_deleted_before_adoption_is_not_returned`,
+`test_v8_2_the_crash_hole_scan_is_strongly_consistent`).
+
+**Rationale**: an eventually consistent scan could return a deleted head
+as `created=False` (V8-1) or miss a crashed head and leave two items for
+one key (V8-2). The cost is the plan's: a first call's head read at full
+strength instead of half. Decision "item-first append_once" updated below.
+
+#### 67. Maintenance leaves in-flight calls alone; `repair_keys()` (V8-3, V8-10)
+
+**Category**: Verification fix (High) / New functionality
+
+**What changed**: `_KEYED_IN_FLIGHT_SECONDS` (3600, as for span orphans):
+`verify()`'s `duplicate_keyed_items`, `unkeyed_keyed_items` and
+`dangling_key_rows`, and the repair, ignore any head or key row whose writer
+token is younger (`_in_flight`). One `_key_findings` feeds both the report
+and the repair. `_repair_keys` re-reads the heads strongly before deleting a
+key row that names no head in its earlier read. New public
+`ListProperty.repair_keys()`: the key repair alone, no rebalance;
+`compact()` calls the same code. The script's `--repair` runs
+`repair_keys()` for a v2 list whose only repairable finding is duplicate
+keyed items, and `compact()` when ranks need a rebalance.
+
+**Files affected**: `actingweb/property_list.py` (`_in_flight`,
+`_key_findings`, `_key_report`, `_repair_keys`, `_create_key_rows`,
+`repair_keys`, `_v2_compact`); `actingweb/maintenance/verify_property_lists.py`;
+tests `test_v8_3_*` (three) and `TestRepairScript` (two); three earlier
+tests take an `aged` fixture (zero grace) because they build old states with
+fresh tokens.
+
+**Rationale**: two overlapping calls, or a call between its head and its
+key row, look exactly like the damage these paths repair; repairing them
+then could delete the head of a call about to answer `created=True`, the
+hazard entry-time step 3 already avoided. A new public method makes this a
+minor-release addition (3.16 already is one).
+
+#### 68. The call that finishes another's write announces it (V8-4)
+
+**Category**: Verification fix (Medium)
+
+**What changed**: key rows carry `by`, the token of the call that wrote
+them. A call that adopts a head with no key row (step 3) makes the metadata
+touch and returns `AppendOnceResult(created=False, ..., _announce=True)`;
+`NotifyingListProperty.append_once` registers the `append` diff when
+`_announce` is set. A slow writer whose head was adopted reads `by` back,
+returns `created=True` and stays quiet, so subscribers hear of the item
+exactly once.
+
+**Files affected**: `actingweb/property_list.py` (`AppendOnceResult._announce`,
+`_KeyRow`, `_key_row_value`, `_keyed_result`, `_created`,
+`_v2_append_once`); `actingweb/interface/property_store.py`; tests
+`test_v8_4_*` (two).
+
+**Rationale**: the gateway-timeout case the feature exists for left
+subscribers without the item and `count_hint` one low.
+
+#### 69. The cache, oversized carried heads and best-effort key-row upkeep (V8-7, V8-8, V8-9)
+
+**Category**: Verification fix (Low)
+
+**What changed**: `_created` adds its rank to a warm cache only if absent;
+`_retire_own_head` removes the rank it deleted; a lost race adds the
+winner's rank. `_write_spanning` spans an item whose head with a carried
+key or token would exceed the span threshold (the `str()` fallback's
+non-ASCII text grows sixfold when JSON-escaped). The hint rewrite, the
+dangling-row drop in `_find_keyed` and `_retire_key_row` go through one
+`_best_effort` (WARNING, no hash in the message); a key row that vanished
+after a lost step-3 create is created again rather than writing a second
+head. `_keyed_heads` reuses `_keyed_by_hash`, and `_key_rows` reuses
+`_names_matching`.
+
+**Files affected**: `actingweb/property_list.py`; tests `test_v8_7_*`
+(two), `test_v8_8_*`, `test_v8_9_*`.
+
+#### 70. Documentation says what the code does (V8-5, V8-6)
+
+**Category**: Verification fix (Medium, Low)
+
+**What changed**: the guide's mutation guarantees name `append_once()`'s
+`DbError` after a committed item; "Every answer is final" became "an answer
+means what it says" with the two operator rewrites and deletes named as
+what can overtake one, and a quiescence note; the costs are corrected
+(strong first-call read; a repeat after `compact()`); logs name no hash;
+the in-flight hour, the announcement and `repair_keys()` are described.
+The v2 repair sentence, the script docstring, `docs/sdk/authenticated-views.rst`
+(`append_once` needs `write`), `docs/sdk/developer-api.rst`, the migration
+guide, the changelog entry, the `append_once` docstring and
+`thoughts/todo/INDEX.md`'s subscriber row are updated.
+
+**Files affected**: `docs/guides/property-lists.rst`,
+`docs/migration/v3.16.rst`, `docs/sdk/authenticated-views.rst`,
+`docs/sdk/developer-api.rst`, `CHANGELOG.rst`,
+`actingweb/property_list.py`, `actingweb/maintenance/verify_property_lists.py`,
+`thoughts/todo/INDEX.md`.
+
+### 2026-10-31, after verification thoughts/verifications/2026-10-31-spanned-list-items-9.md
+
+No High; four Mediums, Lows and wording, all taken up for the clean run the
+owner asked for.
+
+#### 71. The announcement is at most once, and public (V9-1)
+
+**Category**: Verification fix / Decision changed
+
+**What changed**: `AppendOnceResult.announced` (public; was `_announce`) and
+`announce_index`; the notifying wrapper registers an `append` from a
+creating call and an `insert` at `announce_index` from a repeat that
+adopted the item. An adopter backs out only when the head no longer carries
+the key and token (a rewrite keeps both). The docs and docstring say "at
+most once" and name the window: a call that stops between its key row and
+its diff leaves the item unannounced.
+
+**Rationale**: exactly-once needs a write after the diff, and a crash
+before it would announce twice; at-most-once matches every other
+notification path's behaviour after a crash.
+
+#### 72. The repair's second loop and the report honour the in-flight guard; the clock bound (V9-2, V9-5)
+
+**Category**: Verification fix
+
+**What changed**: `_key_findings` skips a key whose row names an in-flight
+token the read did not see; `_key_report` lists only aged unkeyed heads;
+`_in_flight` treats a token dated more than the window ahead as old; the
+docs name clock sync as a precondition. Token comparisons treat a missing
+token as `""`.
+
+#### 73. The budget exit, `clear()` and the lost adoption (V9-3, V9-4, V9-5)
+
+**Category**: Verification fix
+
+**What changed**: before deleting its own head at the budget exit, a call
+re-reads the key row and returns `created=True` if a repeat bound the key
+to its head. `clear()` deletes only the key rows of the heads it deleted
+(and malformed ones), as it does for bodies. A lost adoption create follows
+the key row to the head it names instead of writing a third copy.
+
+#### 74. `repair_keys()` on the wrappers; `count_hint`; docs (V9-5, V9-6)
+
+**Category**: Verification fix
+
+**What changed**: `NotifyingListProperty.repair_keys()` (a `metadata` diff,
+as `compact()`) and `_PermissionEnforcingListView.repair_keys()` (`write`);
+`repair_keys()` writes the counted `count_hint` whenever it repaired
+anything. The guide, docstring, migration guide and changelog say any
+exception after the item write may follow a stored item, scope the log
+statement to the list layer (a backend's error log may name the row), and
+describe the at-most-once announcement, `announce_index`, the clock
+precondition and `clear()`'s key rule.
+
+**Files affected (71-74)**: `actingweb/property_list.py`,
+`actingweb/interface/property_store.py`,
+`actingweb/interface/authenticated_views.py`,
+`tests/test_property_list_append_once.py` (`TestVerification9`, six tests;
+the young-token test mints a current token),
+`tests/test_authenticated_views.py`, `docs/guides/property-lists.rst`,
+`docs/migration/v3.16.rst`, `CHANGELOG.rst`.
+
+### 2026-10-31, after verification thoughts/verifications/2026-10-31-spanned-list-items-10.md
+
+#### 75. An adopted head is marked; its writer never deletes it (V10-1)
+
+**Category**: Verification fix / Decision changed
+
+**What changed**: a repeat that adopts a head without its key row first
+rewrites the head's envelope with `adopted` (its token) by compare-and-swap
+(`_mark_adopted`), then binds the key (`_adopted` confirms and announces).
+`_retire_own_head` deletes only by the original bytes and returns whether
+it deleted; its moved-head fallback skips a marked head. When it does not
+delete, the writer re-reads the key row and, if the row names its token,
+answers `created=True` without announcing (the adopter did).
+
+**Rationale**: verifications 9 and 10 each found a gap between the
+writer's last check and its delete; re-reads narrow it, a change to the
+head's bytes closes it. Cost: one compare-and-swap on the adoption path,
+which only runs after a call stopped between its head and its key row.
+
+**Files affected**: `actingweb/property_list.py` (`_ADOPTED_FIELD`,
+`_mark_adopted`, `_adopted`, `_find_keyed`, `_retire_own_head`,
+`_v2_append_once`); `test_a_loser_never_deletes_a_head_a_repeat_adopted`
+(fails with the mark disabled, checked).
+
+#### 76. Smaller edges (V10-2 to V10-5)
+
+**Category**: Verification fix (Low)
+
+**What changed**: an SDK retry of an adoption's key-row create announces
+(`now.by == tok`); `_retire_key_row` normalises a missing token; the
+adoption loop retries from the top (`_ItemGone`) instead of returning
+"none"; `_sweep_spans` frees a removed keyed head's key row; `clear()` also
+deletes dangling key rows older than the in-flight window; `repair_keys()`
+checks its connection and drops the rank cache; `_write_spanning` reuses
+the head it measured.
+
+**Files affected**: `actingweb/property_list.py`; tests in
+`TestVerification10` (five) and the `clear()` test now plants a fresh
+token, as a racing call has.
+
+#### 77. Documentation precision (V10-6)
+
+**Category**: Verification fix (Low)
+
+**What changed**: the guide describes the adoption mark, the stale handle
+a slow writer gets back, `announce_index` as a position in the stored list,
+a leftover copy returned by a repeat after a delete, and `clear()`'s actual
+key rule (a delete before the key row is written behaves as for plain
+`append()`); the changelog entry names the mark and `clear()`'s rule.
+
+**Files affected**: `docs/guides/property-lists.rst`, `CHANGELOG.rst`.
+
+### 2026-10-31, after the fourth review round (recorded in thoughts/verifications/2026-10-31-spanned-list-items-11.md)
+
+#### 78. The adoption mark is withdrawn; the budget exit keeps its head
+
+**Category**: Decision changed / Verification fix
+
+**What changed**: entry 75's mark (`_ADOPTED_FIELD`, `_mark_adopted`, the
+adopted-skip in `_retire_own_head`) is removed. The budget exit no longer
+deletes the call's head: it is reached only when no live winner exists (the
+row was absent or dangling, or the winner's item went), so the head is kept
+for a repeat to finish, and `RuntimeError` now means "the item may be
+stored without its key row; repeat with the key". The loser path keeps
+entry 73's re-read. The remaining window, a winner deleted and the loser's
+copy adopted, both inside the instant before the loser deletes its copy,
+is documented in the guide as an accepted limit (it converges: the key row
+is left dangling and the next repeat creates). `compact()`'s docstring says
+its key repair is not undone when a later span check stops it. Entry 76's
+fixes stay.
+
+**Rationale**: the fourth review round reproduced, with the test fakes, two
+failures the mark caused: it changed a head's bytes under
+`_landed_anyway`'s read-back, so a writer whose create was retried by the
+SDK stored its head twice with shared bodies, and deleting either copy lost
+the item (High); and a repeat that marked a head and then lost the key row
+left a silent duplicate (Medium). The mark traded a rare wrong answer that
+converges for a rare data loss that does not.
+
+**Files affected**: `actingweb/property_list.py`,
+`docs/guides/property-lists.rst`, `docs/migration/v3.16.rst`,
+`CHANGELOG.rst`, `tests/test_property_list_append_once.py` (the mark test
+removed; `test_attempt_budget_keeps_the_head_for_a_repeat_to_finish`
+replaces the budget test: the head stays and a repeat announces it once).
+
 ## Evaluation Notes
 
 Five evaluators reviewed the first draft against the codebase on
@@ -3040,3 +3399,43 @@ protocol above now does.
   raises `ListItemTooLargeError` inside `remote_storage` and what catches
   it; the implementer checks `_apply_list_operation`'s `except` arms
   (`remote_storage.py:388` appears to be the arm, logging at ERROR).
+
+## Implementation Summary
+
+**Completed:** 2026-10-31
+**All phases:** Complete (Phases 1-2 in PR #162, merged; Phase 3 on
+`release/3.16.0-idempotent-append`)
+**Test status:** All passing on both backends; one strict `xfail` pins the
+unkeyed `append()` SDK-retry duplicate the narrowed todo tracks.
+
+### Deviations from Plan
+- Phases 1-2: see their implementation notes and the Iterations section
+  (entries 1-65), including the cross-site and peer-input hardening the
+  reviews added, and the owner's stopping rule in verification 7.
+- Phase 3: the keyed head's read-back reuses `_landed_anyway` rather than a
+  `tok=` parameter; step 3 leaves extra keyed heads to `compact()`; a lost
+  step-3 create continues to the write; `verify()` reports rank lists.
+- Phase 3, after verification 8 (entries 66-70): step 3 scans strongly;
+  maintenance ignores what was written in the last hour; new
+  `repair_keys()`; key rows carry `by` so the call that finishes another's
+  write announces it.
+- Phase 3, after verifications 9-11 (entries 71-78): the announcement is
+  at most once and public (`announced`, `announce_index`); `clear()` keeps
+  the keys of items it did not delete; the adoption mark was tried and
+  withdrawn; a `RuntimeError` leaves the item for a repeat to finish.
+
+### Learnings
+- A request-path cleanup that deletes "duplicates" must be sure they are
+  not another call's work in flight; the operator path (`compact()`, writes
+  quiesced) is where that judgement is safe.
+- Writes whose bytes are unique to the call (a fresh generation, a fresh
+  token) can be recognised after an ambiguous `False` by reading back; a
+  plain value cannot, which is the whole of what remains in the SDK-retry
+  todo.
+- A write that changes bytes other calls hold or compare (entry 75's
+  adoption mark) breaks every byte-equality check downstream: the SDK-retry
+  read-back, the conditional deletes. A converging window documented once is
+  safer than a mechanism that closes it by rewriting shared state.
+- Adversarial review rounds always find something. The stopping point is a
+  run with nothing above Low that is not a documented limit with its
+  rationale, not a run with no findings.

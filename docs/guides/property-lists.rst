@@ -175,7 +175,11 @@ exact hint.
   the metadata bookkeeping that follows it can neither fail that
   mutation nor be the reason it raised.
 - A v2 mutator that raises ``DbError``, ``RuntimeError`` or
-  ``ListMetadataContentionError`` did NOT commit its item row. Two facts
+  ``ListMetadataContentionError`` did NOT commit its item row. The
+  exception is ``append_once()``: any exception after its item write (a
+  timeout on that write, a fault on the key row or on deleting a losing
+  copy, a span read) may follow an item that committed, and a repeat with
+  the same key converges on one item (see `Idempotent appends`_). Two facts
   about the *meta* row go with that: a raise on a list's first mutation
   may still have created the list (a fault on the item write, after the
   meta row was created, leaves an empty, visible list that a retry then
@@ -199,11 +203,13 @@ exact hint.
   head write committed, best-effort: a failure there logs a WARNING naming
   the list and generation (the only signal) and leaves an orphan for the
   aged sweep, never a broken item.
-- None of this makes retrying a *raised* mutation safe in general: a
-  timed-out conditional write retried by the SDK can itself report
-  ``False`` for a write that actually landed, independent of anything
-  above (see
-  ``thoughts/todo/conditional-write-ambiguous-after-sdk-retry.md``).
+- None of this makes retrying a *raised* unkeyed ``append()``,
+  ``extend()``, ``insert()`` or ``pop()`` safe: a timed-out conditional
+  write retried by the SDK can itself report ``False`` for a write that
+  actually landed, independent of anything above (see
+  ``thoughts/todo/conditional-write-ambiguous-after-sdk-retry.md``). A
+  create that must survive a repeat uses ``append_once()`` (see
+  `Idempotent appends`_ below), which recognises its own landed write.
 
 A quota check that must never over-admit should trust the hint while
 strictly below its limit, and confirm with the exact ``len()`` only once
@@ -738,6 +744,128 @@ envelope dict, and its ``clear()``/``delete()`` leave the bodies behind for
 the aged sweep. Deploy 3.16 everywhere before raising a client's size
 limit. ``downgrade_to_v1`` refuses a list holding spanned items.
 
+Idempotent appends
+------------------
+
+A client whose create timed out cannot tell "not stored" from "stored, the
+answer was lost" (a gateway that gives up while the server finishes the
+write). ``append_once(item, key=...)`` lets it repeat the create safely:
+
+.. code-block:: python
+
+    # The client mints the key with the first attempt and keeps it with the
+    # draft; every repeat sends the same key.
+    result = actor.property_lists.drafts.append_once(draft, key=draft_key)
+    result.created  # True: stored now. False: already stored under this key.
+    result.item     # the stored item (on a repeat: the FIRST call's item)
+    result.handle   # its ListItemHandle; handle.key_hash is set
+
+There is no "retry later" status: an answer means what it says, except
+the ``RuntimeError`` and ``DbError`` cases below. What each result means:
+
+- ``created=True``: this call stored ``item``.
+- ``created=False``: an item with this key was already in the list. The
+  call stored nothing and returns that item **whatever payload it was
+  sent**: a key identifies a create, not its content. Compare
+  ``result.item`` yourself if a changed payload matters.
+
+An answer can be overtaken only by an operator rewrite (``compact()``,
+``repair_keys()``) or a delete running at the same moment, which is why
+those expect writes to be quiesced. One such case is narrow but real: if
+the winner of a key race is deleted, and a repeat adopts the losing call's
+copy, both inside the instant before that losing call deletes its copy,
+the repeat answers ``created=False`` for an item that is then removed; the
+key row is left dangling and the next repeat creates the item again.
+
+**Keys.** A non-empty ``str`` of at most 512 characters without control
+characters, minted by the client and unguessable (a UUID4 or 128 random
+bits). The key is never stored or logged: rows carry
+``HMAC-SHA256(actor_id, key)``. The list layer's own log lines name
+neither the key nor its hash; a backend's error log may name the failing
+row, ``list:{name}-$key-{hash}`` (PostgreSQL does). The hash separates actors (one key
+hashes differently on each) but does not make a guessable key safe,
+because the actor id is public. A key is bound to its item: once the item
+is deleted (``delete_by_handle``, ``pop``, ``remove``, ``del``, ``clear``,
+``delete``) a repeat with the key creates it again, so a retry that
+arrives after a user deleted the item brings it back. (If a losing copy
+was left behind by a faulted delete, see Concurrency, the repeat instead
+returns that copy with ``created=False`` until ``repair_keys()`` has
+removed it.) A rewrite
+(``update_by_handle``, ``lst[i] = ...``, ``update_where``) keeps the key.
+
+**Cost.** A repeat is two point reads (the key row, then the item's head);
+after a ``compact()`` moved the item, the first repeat also makes one
+strongly consistent range read of the heads and rewrites the key row's
+rank. A first call adds one strongly consistent range read of the list's
+heads before writing (a spanned item's head is small, but a plain item
+costs its full size, as in any list read), then the item write and one
+small key-row create in the actor's side partition. The read is strong so
+that an item deleted a moment ago is never mistaken for the stored one,
+and an item written a moment ago by a call that then stopped is always
+found.
+
+**Concurrency.** The key row (``list:{name}-$key-{hash}`` in the side
+partition) is the authority, and its conditional create decides between
+calls that overlap. Two calls with one key that run at the same moment
+both write the item; the one that loses the key row deletes its own copy
+and returns the winner's, so two items are visible for the length of that
+delete. Nothing waits or sleeps inside the call. Two windows remain, and
+both converge:
+
+- The loser's delete faults: the ``DbError`` propagates and the duplicate
+  stays. Once it is an hour old, ``verify()`` reports
+  ``duplicate_keyed_items`` (and the list as unhealthy), and
+  ``repair_keys()`` (the script's ``--repair``) or ``compact()`` keeps the
+  item the key row names and removes the others
+  (``duplicate_keyed_items_removed``).
+- A call stops after writing the item and before its key row (its
+  ``DbError`` or a crash): the next call with the key finds the item,
+  writes the key row and returns ``created=False`` with
+  ``announced=True``. The repeat also makes the metadata touch and,
+  through the notifying wrapper, the diff the first call never made: an
+  ``insert`` at ``announce_index``, the item's position in the stored list
+  when it was adopted (a subscriber that missed other items may place it
+  slightly differently). A call that was only slow, not stopped, sees that
+  another call wrote its key row and stays quiet. Subscribers hear of an item **at most
+  once**: a call that stops between writing the key row and registering
+  its diff (the creating call, or a repeat that adopted the item) leaves it
+  unannounced, and later repeats stay quiet. Until a repeat comes,
+  ``verify()`` reports the item under ``unkeyed_keyed_items`` (after an
+  hour); ``compact()`` or ``repair_keys()`` writes its key row
+  (``key_rows_created``) and corrects ``count_hint``, but sends no diff, so
+  that item is never announced either.
+
+A key row whose item was deleted while its own delete failed is reported
+as ``dangling_key_rows``; the next call with the key, ``repair_keys()`` or
+``compact()`` (``dangling_key_rows_removed``) removes it. ``verify()``
+always reads the list's key rows (small) and reports ``key_rows``; its
+key findings report ranks, never hashes. **They leave out anything an
+``append_once()`` call wrote in the last hour** (by its writer token's
+timestamp): a second copy, or an item without its key row, is the normal
+state of a call still running, and repairing it then could delete the
+item of a call about to answer ``created=True``. ``repair_keys()`` and
+``compact()`` follow the same rule, and ``repair_keys()`` does not
+rebalance ranks. The hour is measured on the writer token's timestamp, so
+it assumes the hosts' clocks agree to well within an hour (a token dated
+more than an hour ahead counts as old). ``clear()`` deletes the key rows
+of the items it deleted and dangling rows older than an hour, so an
+``append_once()`` whose item lands after ``clear()`` read the list keeps
+its key; one whose item ``clear()`` deleted before its key row was written
+answers ``created=True`` for an item that is gone, as a plain ``append()``
+racing ``clear()`` does.
+
+``compact()`` does not rewrite key rows when it moves items: a repeat
+finds a moved item by scanning and repairs its key row. A call that keeps
+losing the key-row create (three arbitration passes) raises
+``RuntimeError``; the item it wrote may be stored without its key row,
+and a repeat with the key finishes it.
+
+**Limits.** v2 lists only (``ValueError`` naming ``migrate_to_v2()`` on
+v1). ``extend()``, ``insert()`` and the REST handlers take no keys. The
+first keyed item, like a spanned one, makes the list unreadable to readers
+older than 3.16 and blocks ``downgrade_to_v1``: deploy 3.16 everywhere
+first.
+
 REST API
 --------
 
@@ -912,7 +1040,10 @@ There is no HTTP repair endpoint. Repair through the library API --
 ``verify()``/``compact()`` also work on v2 lists, for a different purpose:
 detecting and rebalancing rank keys that have grown long from repeated
 inserts at the same position, before they approach the internal length
-cap.
+cap, and repairing the key rows of ``append_once()`` items (``compact()``
+before it rebalances; ``repair_keys()`` without rebalancing). The script's
+``--repair`` uses ``repair_keys()`` for a list whose only repairable
+finding is duplicate keyed items.
 
 .. warning::
 

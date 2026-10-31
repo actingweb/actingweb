@@ -8,7 +8,16 @@ are in
 [`../research/2026-09-14-v2-list-mutation-raises-after-its-write-committed.md`](../research/2026-09-14-v2-list-mutation-raises-after-its-write-committed.md)'s
 "Adjacent finding" section.
 
-**Fix together with** [a property-list append cannot be repeated safely after a lost answer](idempotent-list-item-create.md): a key row written in the same conditional step tells "I won on the attempt whose answer I never saw" from "someone else won".
+**Narrowed 2026-10-31.** 3.16 closed it for writes whose bytes are unique to
+the call: a spanned head (it names a fresh body generation) and a keyed head
+from `append_once()` (it carries the writer's token) are read back after a
+`False`, and a row holding exactly that head is the call's own landed write
+(`ListProperty._landed_anyway`); `append_once()` also reads its key row back
+and recognises its own token (`thoughts/plans/2026-10-30-spanned-list-items.md`,
+Phases 2 and 3). What remains is the unkeyed, unspanned writes below, whose
+bytes another writer could match. `tests/test_property_list_append_once.py`
+`TestAmbiguousConditionalWrites.test_plain_append_still_duplicates` is a strict
+`xfail` pinning the `append` duplicate; it starts passing when this lands.
 
 ## What is wrong
 
@@ -30,12 +39,14 @@ request whose write actually landed on the server:
 The mutators read that `False` as "someone else won", not "I won, on the
 attempt whose response I never saw":
 
-- `_v2_append()` treats it as a rank collision and writes the item again
-  under the next rank — a duplicate.
+- `_v2_append()` (and `_v2_extend()`, `_v2_insert()`, which share the rank
+  loop) treats it as a rank collision and writes the item again under the
+  next rank — a duplicate. Not for a spanned or keyed head (see above).
 - `_v2_pop()` re-resolves and deletes the item that now occupies the index —
   removes two items, returns the second.
-- `delete_by_handle()`/`update_by_handle()` report `False` ("changed or
-  vanished") for their own write.
+- `delete_by_handle()` reports `False` ("changed or vanished") for its own
+  delete; `update_by_handle()` does too for a plain head (a spanned or keyed one is
+  read back).
 
 Different mechanism from the one
 [`../plans/2026-09-14-v2-list-mutation-raises-after-its-write-committed.md`](../plans/2026-09-14-v2-list-mutation-raises-after-its-write-committed.md)

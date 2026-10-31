@@ -607,7 +607,9 @@ class TestOrphansAndVerify:
         lst.extend([big("a"), "b"])
         calls.clear()
         report = lst.verify()
-        assert aux_reads(calls) == []
+        # The only side-partition read is the (small) key-row enumeration.
+        assert [c for c in aux_reads(calls) if "$span-" in c[2]] == []
+        assert [c[2] for c in aux_reads(calls)] == [f"list:{NAME}-$key-"]
         assert report["spanned_items"] == 1
         assert report["span_bytes"] == len(json.dumps(big("a")))
         assert "orphan_span_gens" not in report
@@ -638,7 +640,7 @@ class TestOrphansAndVerify:
         calls.clear()
         report = lst.verify(identity_key="id")
         assert report["identity_checked_count"] == 3
-        assert len(aux_reads(calls)) == 2
+        assert len([c for c in aux_reads(calls) if "$span-" in c[2]]) == 2
 
     def test_small_value_scans_read_no_bodies(
         self, config: Config, store: dict[Any, Any], calls: list[tuple[Any, ...]]

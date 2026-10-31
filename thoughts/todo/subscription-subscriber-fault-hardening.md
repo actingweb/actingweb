@@ -59,6 +59,8 @@ violation today.
 
 The spec does not require it, the failure needs a store fault mid-callback,
 and the fix touches the delivery model (idempotency keys) rather than one
-site. It rides best with
-[the idempotent list-item create](idempotent-list-item-create.md), which
-needs the same kind of key for list appends.
+site. The library side of the key now exists: `ListProperty.append_once(item,
+*, key)` (3.16, `thoughts/plans/2026-10-30-spanned-list-items.md` Phase 3)
+stores a list item at most once per key, so a re-applied `append` diff can
+use it once each diff carries a stable key (for example its sequence number
+and position).

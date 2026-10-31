@@ -55,6 +55,7 @@ __all__ = [
     "ListItemTooLargeError",
     "ListItemSpanError",
     "UNRESOLVED",
+    "AppendOnceResult",
 ]
 
 # Make the new interface easily accessible
@@ -71,8 +72,10 @@ from . import interface
 #   ListCorruptionError; handlers/properties.py maps it to 409).
 # - UNRESOLVED: the slot value items_with_handles(resolve=False) leaves for a
 #   spanned item whose bodies it did not read.
+# - AppendOnceResult: what ListProperty.append_once() returns.
 from .property_list import (
     UNRESOLVED,
+    AppendOnceResult,
     ListItemSpanError,
     ListItemTooLargeError,
     ListMetadataContentionError,

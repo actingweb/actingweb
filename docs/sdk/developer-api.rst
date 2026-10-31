@@ -74,8 +74,8 @@ given or the backend reports failure; DynamoDB raises on a failed save).
 
 ``actor.property_lists`` is only summarized here -- see
 :doc:`../guides/property-lists` for the full API (``to_list()``,
-``find()``, ``items_with_handles()``, the identity-addressed mutators, and
-REST usage).
+``find()``, ``items_with_handles()``, the identity-addressed mutators, the
+idempotent ``append_once()``, and REST usage).
 
 PropertyStore
 =============

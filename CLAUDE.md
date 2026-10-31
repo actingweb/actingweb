@@ -90,7 +90,9 @@ Preconditions and warnings (the commands follow these as instructions):
   in local QA mode instead: `PORT=5055 APP_HOST_FQDN=localhost:5055
   APP_HOST_PROTOCOL=http:// DEMO_QA_BASIC_AUTH=true` with DynamoDB Local
   (`AWS_DB_HOST=http://localhost:8001`, a fresh `AWS_DB_PREFIX`) and
-  `actingweb-unique-creators enable --apply` once per fresh database; see
+  on a fresh database, start once (it creates the tables and stops with
+  `UniqueCreatorNotReady`), run `actingweb-unique-creators enable --apply`,
+  and start again; see
   "Test account". Port 5000 is often held by a sibling project's dev server
   (`../actingweb_mcp`): check it before sending any request there.
 - Allowed hosts for browser QA: `localhost`, `127.0.0.1` (on the demo's own

@@ -172,11 +172,14 @@ SECURITY
   (``Sec-Fetch-Site`` other than ``same-origin`` or ``none``, or a foreign
   or ``null`` ``Origin``, or a foreign ``Referer``). The Flask and FastAPI
   integrations no longer turn the ``oauth_token`` cookie into a Bearer
-  header, and drop a ``Basic`` Authorization header, for a ``POST``,
-  ``PUT``, ``PATCH`` or ``DELETE`` that the browser says another site, a
-  sibling subdomain included, started: a browser sends the ``Lax`` cookie
-  on any same-site request and on a top-level ``GET`` from any site, and
-  cached basic-auth credentials on any request. This relies on the
+  header for a ``POST``, ``PUT``, ``PATCH`` or ``DELETE`` that the browser
+  says another site, a sibling subdomain included, started, and drop a
+  ``Basic`` Authorization header from such a request to an actor route
+  (``/oauth/*``, ``/mcp`` and ``/.well-known/*`` keep it: there it is an
+  OAuth2 client's own ``client_secret_basic``). A browser sends the ``Lax``
+  cookie on any same-site request and on a top-level ``GET`` from any site,
+  and cached basic-auth credentials on any request; the drop is logged at
+  INFO. This relies on the
   browser's ``Sec-Fetch-Site``, ``Origin`` and ``Referer`` reaching the
   application; a proxy that strips all three turns it off. "Same origin" is the scheme, host and port of
   ``config.root``; a base path does not matter. Peers and SPAs (Bearer

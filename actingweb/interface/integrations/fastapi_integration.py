@@ -1401,11 +1401,22 @@ class FastAPIIntegration(BaseActingWebIntegration):
                 self.logger.debug(
                     "FastAPI: Injected Authorization Bearer from oauth_token cookie for web UI request"
                 )
-        elif (
-            headers["Authorization"].strip().lower().startswith("basic ")
-            and not ambient_ok()
-        ):
-            del headers["Authorization"]
+        elif headers["Authorization"].strip().lower().startswith("basic "):
+            from ...cross_site import may_use_basic
+
+            if not may_use_basic(
+                request.method,
+                request.headers.get,
+                request.url.path,
+                self.aw_app.get_config().root,
+            ):
+                self.logger.info(
+                    "Dropped a Basic Authorization header from a cross-site "
+                    "%s %s (a browser attaches cached credentials)",
+                    request.method,
+                    request.url.path,
+                )
+                del headers["Authorization"]
 
         # Get query parameters and form data (similar to Flask's request.values)
         params = {}

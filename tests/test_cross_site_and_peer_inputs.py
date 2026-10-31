@@ -438,3 +438,83 @@ def test_verification_page_continue_link_keeps_the_base_path() -> None:
         {"actor_id": "a1", "status": "success"}
     )
     assert values["redirect_url"] == "/base/a1/www"
+
+
+# --- Seventh verification: the Basic drop is for actor routes only ----------
+
+
+@pytest.mark.parametrize(
+    "path,kept",
+    [
+        ("/oauth/token", True),
+        ("/oauth/revoke", True),
+        ("/mcp", True),
+        ("/.well-known/oauth-authorization-server", True),
+        ("/a1/properties", False),
+        ("/a1/trust", False),
+    ],
+)
+def test_flask_keeps_a_client_basic_header_on_client_auth_endpoints(
+    path: str, kept: bool
+) -> None:
+    """client_secret_basic from a browser-hosted client is cross-origin by
+    design; only actor routes drop a cross-site Basic header."""
+    from flask import Flask
+
+    integration = _flask_integration()
+    app = Flask("t")
+    with app.test_request_context(
+        path,
+        method="POST",
+        headers={"Authorization": "Basic eDp5", "Sec-Fetch-Site": "cross-site"},
+    ):
+        headers = integration._normalize_request()["headers"]
+    assert ("Authorization" in headers) is kept
+
+
+@pytest.mark.parametrize(
+    "path,kept", [("/oauth/token", True), ("/a1/properties", False)]
+)
+def test_fastapi_drops_a_cross_site_basic_header_on_actor_routes_only(
+    path: str, kept: bool
+) -> None:
+    from starlette.requests import Request
+
+    from actingweb.interface.integrations.fastapi_integration import (
+        FastAPIIntegration,
+    )
+
+    aw_app = mock.Mock()
+    aw_app.hooks = {}
+    aw_app.get_config.return_value = _config()
+    with mock.patch.object(FastAPIIntegration, "setup_routes"):
+        integration = FastAPIIntegration(aw_app, mock.Mock())
+
+    async def receive() -> dict[str, Any]:
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": path,
+            "query_string": b"",
+            "headers": [
+                (b"authorization", b"Basic eDp5"),
+                (b"sec-fetch-site", b"cross-site"),
+            ],
+        },
+        receive,
+    )
+    headers = asyncio.run(integration._normalize_request(request))["headers"]
+    assert ("Authorization" in headers) is kept
+
+
+def test_may_use_basic_strips_the_base_path() -> None:
+    def cross(name: str) -> str | None:
+        return "cross-site" if name.lower() == "sec-fetch-site" else None
+
+    root = "https://h.example/base/"
+    assert cross_site.may_use_basic("POST", cross, "/base/oauth/token", root)
+    assert not cross_site.may_use_basic("POST", cross, "/base/a1/properties", root)
+    assert cross_site.may_use_basic("GET", cross, "/base/a1/properties", root)

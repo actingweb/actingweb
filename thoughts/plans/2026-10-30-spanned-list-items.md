@@ -2746,6 +2746,30 @@ same-origin or header-less one answers 201; a simple property is created,
 edited (`v2`, then a two-line value stored with `\n`) and deleted; list
 add, multi-line edit and delete work; no console errors.
 
+### 2026-10-31, after verification thoughts/verifications/2026-10-31-spanned-list-items-7.md
+
+#### 64. The Basic drop is for actor routes only (verification 7, High)
+
+**Category**: Bug fix (regression from entry 59)
+
+**What changed**: `cross_site.may_use_basic()` decides whether a Basic
+header may authenticate a request: always on `/oauth/*`, `/mcp` and
+`/.well-known/*` (after the base path), where it is an OAuth2 client's own
+`client_secret_basic`; on actor routes, only when the browser does not
+report a cross-site or same-site state change. Both integrations use it
+and log a drop at INFO.
+
+**Files affected**: `actingweb/cross_site.py`, both integrations,
+`CHANGELOG.rst`, `docs/reference/security.rst`,
+`docs/migration/v3.16.rst`, `tests/test_cross_site_and_peer_inputs.py`
+(Flask and FastAPI)
+
+**Rationale**: entry 59 dropped the header on every route, so a
+browser-hosted OAuth client (MCP Inspector in direct mode) lost its client
+authentication on `/oauth/token`. Per the stopping rule recorded in
+verification 7, this batch fixes only that High; the Mediums and Lows
+verification 7 lists await the owner's scope decision.
+
 ## Evaluation Notes
 
 Five evaluators reviewed the first draft against the codebase on

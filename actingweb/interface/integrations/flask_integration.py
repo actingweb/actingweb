@@ -648,10 +648,22 @@ class FlaskIntegration(BaseActingWebIntegration):
         if "Authorization" not in headers:
             if cookies.get("oauth_token") and self._may_use_ambient_credentials():
                 headers["Authorization"] = f"Bearer {cookies['oauth_token']}"
-        elif headers["Authorization"].strip().lower().startswith("basic ") and not (
-            self._may_use_ambient_credentials()
-        ):
-            del headers["Authorization"]
+        elif headers["Authorization"].strip().lower().startswith("basic "):
+            from ...cross_site import may_use_basic
+
+            if not may_use_basic(
+                request.method,
+                request.headers.get,
+                request.path,
+                self.aw_app.get_config().root,
+            ):
+                logger.info(
+                    "Dropped a Basic Authorization header from a cross-site "
+                    "%s %s (a browser attaches cached credentials)",
+                    request.method,
+                    request.path,
+                )
+                del headers["Authorization"]
 
         params = {}
         for k, v in request.values.items():

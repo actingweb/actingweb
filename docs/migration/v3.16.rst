@@ -713,12 +713,18 @@ picture; what an upgrade needs:
   actor's id plus ``$aux`` would share that actor's side partition; 3.16
   detects it, logs an ERROR and skips the sweep when the other actor is
   deleted, but rename it.
-- **Pre-3.16 items shaped like an envelope.** A v2 list item stored before
-  3.16 that is a dict whose first key is ``__aw_env`` is now read as a
-  storage envelope (its ``v`` field, or a 409). New writes refuse such items,
-  and ``migrate_to_v2`` refuses them in v1 lists; ``verify()`` lists the
-  ones that do not parse under ``malformed_heads``. If your items could
-  carry that key, check before deploying.
+- **Pre-3.16 items shaped like an envelope.** Only a stored value whose
+  first key is ``__aw_env`` with exactly the value ``1`` is read as a
+  storage envelope; any other value, including a pre-3.16 dict item
+  ``{"__aw_env": "x", ...}``, reads as the plain item it is and is never
+  removed by the sweep. A pre-3.16 v2 item ``{"__aw_env": 1, "v": ...}`` is
+  read as an envelope (its ``v``). New writes refuse dict items carrying the
+  key, and ``migrate_to_v2`` refuses them in v1 lists. If your items could
+  carry that key with the value ``1``, check before deploying.
+- **REST permission errors deny.** The REST property handlers answer 403
+  when the permission evaluator raises, instead of falling back to the
+  legacy ``access`` table (which allowed ``friend``, ``partner`` and
+  ``admin`` every property method). A database fault still answers 503.
 - **Three lifecycles.** A list's ``delete()`` reaps its side-partition rows;
   an actor delete reaps its partition and its side partition; anything else
   (a crash between bodies and head, a failed best-effort cleanup) waits for

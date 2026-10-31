@@ -168,7 +168,8 @@ class TestHandlerPermissionIntegration(unittest.TestCase):
 
     @patch("actingweb.handlers.properties.get_permission_evaluator")
     def test_permission_evaluator_error_fallback(self, mock_get_evaluator):
-        """Test handlers fall back to legacy auth on permission evaluator errors."""
+        """An evaluator error denies (3.16): no fallback to legacy auth,
+        which used to turn an excluded_patterns denial into an allow."""
         # Setup mock permission evaluator to raise exception
         mock_evaluator = Mock()
         mock_evaluator.evaluate_property_access = Mock(
@@ -185,9 +186,9 @@ class TestHandlerPermissionIntegration(unittest.TestCase):
             self.actor_id, auth_obj, "profile", "read"
         )
 
-        # Verify fallback to legacy authorization
-        self.assertTrue(result)  # Legacy auth should allow
-        auth_obj.check_authorisation.assert_called_once()
+        # Fail closed: denied, and the legacy check is never consulted.
+        self.assertFalse(result)
+        auth_obj.check_authorisation.assert_not_called()
 
     @patch("actingweb.handlers.properties.get_permission_evaluator")
     def test_not_found_permission_fallback(self, mock_get_evaluator):

@@ -28,6 +28,7 @@ from actingweb.db import get_property
 from actingweb.db.exceptions import DbError
 from actingweb.property_list_span import (
     KEY_ROW_RE,
+    MAX_PARTS,
     SPAN_PART_BYTES,
     SPAN_ROW_RE,
     Envelope,
@@ -414,7 +415,9 @@ def _as_reference(
     return reference
 
 
-def fit_full_state(state: dict[str, Any], config: Any) -> dict[str, Any]:
+def fit_full_state(
+    state: dict[str, Any], config: Any, *, list_keys: set[str] | None = None
+) -> dict[str, Any]:
     """A subscription full-state blob made to fit the diff row: each nested
     list diff over the span threshold becomes a reference
     (``diff_reference``), and while the whole blob is still over the
@@ -430,10 +433,16 @@ def fit_full_state(state: dict[str, Any], config: Any) -> dict[str, Any]:
     ):
         return state
     out = dict(state)
+    # With list_keys (the caller knows which keys are lists) a scalar
+    # property shaped like a list diff is never touched; without, the shape
+    # decides.
     lists = [
         key
         for key, value in out.items()
-        if isinstance(value, dict) and "list" in value and "operation" in value
+        if isinstance(value, dict)
+        and "list" in value
+        and "operation" in value
+        and (list_keys is None or key in list_keys)
     ]
     for key in lists:
         out[key] = diff_reference(out[key], config)
@@ -617,6 +626,9 @@ class ListProperty:
         self._pending_meta_read: tuple[dict[str, Any] | None, str | None] | object = (
             _NO_STASH
         )
+        # True while a spanning head write's backend call is in flight (see
+        # _write_spanning / _probed_write).
+        self._head_write_in_flight = False
 
     def _get_meta_property_name(self) -> str:
         """Get the metadata property name."""
@@ -748,6 +760,20 @@ class ListProperty:
                 # A spanning write needs the side partition: refuse an actor
                 # id that cannot have one now, before any row is written.
                 self._aux()
+                # Parts are cut on character boundaries, so a non-ASCII value
+                # (the str() fallback) can need more parts than its size
+                # suggests; count them now rather than fail mid-write.
+                if not value_str.isascii():
+                    part_bytes = min(SPAN_PART_BYTES, span_threshold)
+                    try:
+                        split_parts(value_str, part_bytes)
+                    except ValueError:
+                        raise ListItemTooLargeError(
+                            self.name,
+                            size,
+                            span_threshold * MAX_PARTS,
+                            f"more than {MAX_PARTS} body rows",
+                        ) from None
                 return True
             raise ListItemTooLargeError(
                 self.name,
@@ -947,37 +973,63 @@ class ListProperty:
         Returns ``(landed, head)``. Deleting the previous generation is the
         caller's (it knows the old head).
 
-        A failed head write is **ambiguous**, so the new bodies are kept
-        unless the head is known not to have landed. A raise (a timeout
-        after the backend applied the write) leaves them: if the head did
-        not land they are an orphan for the aged sweep; deleting them would
-        break a head that did. A ``False`` from a conditional write can be
-        an SDK retry of a write that committed and then failed its own
-        condition, so with ``head_name`` the head is read back once: if it
-        holds exactly this head (a spanned head names a fresh generation,
-        so the bytes are unique to this call) the write landed. Only a
-        ``False`` that the read-back confirms deletes the bodies.
+        Bodies are deleted again only when the head is known not to have
+        landed. ``head_write`` issues its backend write through
+        ``_probed_write()``, which marks the call in flight:
+
+        - A raise while a write is in flight (a timeout after the backend
+          applied it) is an **unknown outcome**: the bodies are kept, an
+          orphan for the aged sweep if the head did not land; deleting them
+          would break a head that did.
+        - A raise before any write was in flight (a fault reading the last
+          rank, the rank cap, a collision storm) is **known not landed**:
+          the bodies are deleted.
+        - A ``False`` from a conditional write can be an SDK retry of a write
+          that committed and then failed its own condition, so with
+          ``head_name`` the row is read back once: if it holds exactly this
+          head the write landed (the row holds what the caller asked for).
+          Otherwise the bodies are deleted.
         """
         span = self._write_bodies(value_str) if spans else None
         head = self._make_head(value_str, span, carry)
+        self._head_write_in_flight = False
         try:
             landed = head_write(head)
         except BaseException:
             if span is not None:
-                logger.warning(
-                    "List '%s' (actor %s): a spanned head write failed with an "
-                    "unknown outcome; its body generation %s is kept (an orphan "
-                    "for the aged sweep if the head did not land)",
-                    self.name,
-                    self.actor_id,
-                    span.gen,
-                )
+                if self._head_write_in_flight:
+                    logger.warning(
+                        "List '%s' (actor %s): a spanned head write failed "
+                        "with an unknown outcome; its body generation %s is "
+                        "kept (an orphan for the aged sweep if the head did "
+                        "not land)",
+                        self.name,
+                        self.actor_id,
+                        span.gen,
+                    )
+                else:
+                    self._span_delete_bodies(span)
             raise
-        if not landed and span is not None:
-            if head_name is not None and self._landed_anyway(head_name, head):
+        finally:
+            self._head_write_in_flight = False
+        if not landed:
+            if head_name is not None and self._row_holds(head_name, head):
                 return True, head
             self._span_delete_bodies(span)
         return landed, head
+
+    def _probed_write(self, write: Callable[..., Any], **kwargs: Any) -> Any:
+        """Call one backend head write, marking it in flight for
+        ``_write_spanning()``: a raise that escapes while the mark is set
+        has an unknown outcome."""
+        self._head_write_in_flight = True
+        result = write(**kwargs)
+        self._head_write_in_flight = False
+        return result
+
+    def _row_holds(self, name: str, head: str) -> bool:
+        """Does the head row hold exactly ``head`` now? One point read."""
+        return get_property(self.config).get(actor_id=self.actor_id, name=name) == head
 
     def _landed_anyway(self, name: str, head: str) -> bool:
         """After a ``False`` from a conditional write of a spanned head:
@@ -1119,6 +1171,17 @@ class ListProperty:
                 # The head still names this generation and a strong read
                 # of it is short: really broken, not a reader race.
                 break
+        if found == current.parts:
+            raise ListItemSpanError(
+                self.name,
+                rank,
+                expected_parts=current.parts,
+                found_parts=found,
+                detail=(
+                    f"has all {found} body row(s), but they do not match the "
+                    f"size and digest its head records"
+                ),
+            )
         raise ListItemSpanError(
             self.name, rank, expected_parts=current.parts, found_parts=found
         )
@@ -2140,8 +2203,11 @@ class ListProperty:
         old_raw, old_env = self._read_head_tolerant(rank)
 
         def head_write(head: str) -> bool:
-            if not get_property(self.config).set(
-                actor_id=self.actor_id, name=name, value=head
+            if not self._probed_write(
+                get_property(self.config).set,
+                actor_id=self.actor_id,
+                name=name,
+                value=head,
             ):
                 raise RuntimeError(f"list item write failed for '{self.name}'[{index}]")
             return True
@@ -2401,7 +2467,8 @@ class ListProperty:
             return True
 
         # Bodies (if the item spans) are written once, before the rank loop;
-        # an exhausted loop deletes them again.
+        # a loop that gives up before or between writes deletes them again
+        # (see _write_spanning).
         self._write_spanning(value_str, spans, head_write)
         if self._v2_rank_cache is not None:
             self._v2_rank_cache.append(landed[0])
@@ -2429,8 +2496,11 @@ class ListProperty:
                 )
             item_db = get_property(self.config)
             name = self._v2_item_name(candidate)
-            if item_db.create_if_not_exists(
-                actor_id=self.actor_id, name=name, value=head
+            if self._probed_write(
+                item_db.create_if_not_exists,
+                actor_id=self.actor_id,
+                name=name,
+                value=head,
             ) or self._landed_anyway(name, head):
                 return candidate
             # Collision: another writer took this rank between our read
@@ -2524,6 +2594,7 @@ class ListProperty:
         created = 0
         created_ranks: list[str] = []
         remaining = heads
+        in_create = False  # a create call for item `created` is in flight
         try:
             last = self._v2_last_rank()
             for attempt in range(_V2_MAX_RANK_RETRIES):
@@ -2541,12 +2612,12 @@ class ListProperty:
                         )
                     item_db = get_property(self.config)
                     name = self._v2_item_name(candidate)
-                    if not (
-                        item_db.create_if_not_exists(
-                            actor_id=self.actor_id, name=name, value=value_str
-                        )
-                        or self._landed_anyway(name, value_str)
-                    ):
+                    in_create = True
+                    wrote = item_db.create_if_not_exists(
+                        actor_id=self.actor_id, name=name, value=value_str
+                    )
+                    in_create = False
+                    if not (wrote or self._landed_anyway(name, value_str)):
                         # Collision: another writer took this rank. The items
                         # before it already landed; re-key from here.
                         collided_at = i
@@ -2562,10 +2633,11 @@ class ListProperty:
                     last = self._v2_last_rank()
         except BaseException:
             # A fault part-way: the landed items stay, with their bodies.
-            # The item whose write raised may have landed (an unknown
-            # outcome), so its bodies stay too, an orphan for the aged sweep
-            # if it did not; only the bodies of items never written go.
-            for span in head_spans[created + 1 :]:
+            # If the raise came from a create in flight, that item's outcome
+            # is unknown and its bodies stay (an orphan for the aged sweep if
+            # it did not land); otherwise (a last-rank read, the rank cap)
+            # it was never written. Bodies of items never written go.
+            for span in head_spans[created + 1 if in_create else created :]:
                 self._span_delete_bodies(span)
             if created_ranks and self._v2_rank_cache is not None:
                 self._v2_rank_cache.extend(created_ranks)
@@ -2793,35 +2865,19 @@ class ListProperty:
         self.sweep_foreign_format_rows()
 
         if self._is_v2():
-            # Heads with values: they name the generations that go with
-            # them.
-            pairs = self._v2_load_full()
-            item_names = [self._v2_item_name(rank) for rank, _ in pairs]
+            item_names = self._v2_item_names_in_range()
             if item_names:
                 get_property(self.config).batch_delete(
                     actor_id=self.actor_id, names=item_names
                 )
-            # The side partition: generations the deleted heads named, and
-            # orphan generations old enough that no append can still be
-            # about to write their head (a younger unnamed one may be an
-            # append in flight; deleting it would leave that head with no
-            # bodies). Key rows all go. Enumerating $span- rows costs every
-            # body byte on DynamoDB.
-            span_heads, _ = self._span_heads(pairs)
-            named = {span.gen for _, span in span_heads}
-            span_names = self._aux_names("span")
-            _, orphans = self._span_inventory(span_heads, span_names)
-            young = {
-                name
-                for gen, names in orphans.items()
-                if gen not in named
-                and gen_age_seconds(gen) < _SPAN_ORPHAN_MIN_AGE_SECONDS
-                for name in names
-            }
-            self._delete_aux_rows(
-                [name for name in span_names if name not in young]
-                + self._aux_names("key")
-            )
+            # Every side-partition row of the list, orphan generations
+            # included: once the meta row is gone no sweep can reach them.
+            # Like an actor delete, this assumes writes to the list are
+            # quiesced: an append whose head lands after delete() leaves a
+            # head without bodies (a 409 the sweep removes), never a whole
+            # item a recreated list would adopt. Enumerating $span- rows
+            # costs every body byte on DynamoDB.
+            self._delete_aux_rows(self._aux_names("span") + self._aux_names("key"))
             meta_db = get_property(self.config)
             if not meta_db.set(
                 actor_id=self.actor_id, name=self._get_meta_property_name(), value=None
@@ -3062,8 +3118,11 @@ class ListProperty:
                     )
                 item_db = get_property(self.config)
                 name = self._v2_item_name(candidate)
-                if item_db.create_if_not_exists(
-                    actor_id=self.actor_id, name=name, value=head
+                if self._probed_write(
+                    item_db.create_if_not_exists,
+                    actor_id=self.actor_id,
+                    name=name,
+                    value=head,
                 ) or self._landed_anyway(name, head):
                     ranks.insert(pos, candidate)
                     return True
@@ -3510,7 +3569,8 @@ class ListProperty:
 
         def head_write(head: str) -> bool:
             return bool(
-                get_property(self.config).set_if_value_equals(
+                self._probed_write(
+                    get_property(self.config).set_if_value_equals,
                     actor_id=self.actor_id,
                     name=self._v2_item_name(handle.rank),
                     expected=handle.raw_value,
@@ -3830,7 +3890,9 @@ class ListProperty:
             report["healthy"] = False
         if spans:
             span_names = self._aux_names("span")
-            broken, orphan_gens = self._span_inventory(span_heads, span_names)
+            broken, orphan_gens = self._span_inventory(
+                span_heads, span_names, check_content=True
+            )
             report["span_body_rows"] = len(span_names)
             report["orphan_span_gens"] = len(orphan_gens)
             report["broken_spans"] = broken
@@ -3874,13 +3936,20 @@ class ListProperty:
         return spanned, malformed
 
     def _span_inventory(
-        self, span_heads: list[tuple[str, SpanInfo]], span_names: list[str]
+        self,
+        span_heads: list[tuple[str, SpanInfo]],
+        span_names: list[str],
+        *,
+        check_content: bool = False,
     ) -> tuple[list[str], dict[str, list[str]]]:
         """Compare the heads' generations with the enumerated body rows.
 
         Returns ``(broken_ranks, orphan_gens)``: heads whose exact part set
-        is not present, and ``{gen: [row names]}`` for generations no head
-        names."""
+        is not present (or, with ``check_content``, whose bodies do not join
+        to the size and digest the head records), and ``{gen: [row names]}``
+        for generations no head names. ``check_content`` reads every
+        complete generation's bodies strongly: the cost the enumeration
+        already pays on DynamoDB, once more."""
         prefix_len = len(span_prefix(self.name))
         by_gen: dict[str, list[str]] = {}
         for name in span_names:
@@ -3892,6 +3961,8 @@ class ListProperty:
             named_gens.add(span.gen)
             expected = set(part_names(self.name, span.gen, span.parts))
             if set(by_gen.get(span.gen, [])) != expected:
+                broken.append(rank)
+            elif check_content and self._read_span(span, consistent=True)[0] is None:
                 broken.append(rank)
         orphans = {gen: names for gen, names in by_gen.items() if gen not in named_gens}
         return broken, orphans
@@ -4168,46 +4239,63 @@ class ListProperty:
         # landing back on its own rank): their old generation is cascaded
         # with the cleanup below.
         rewritten_in_place: list[str] = []
-        for i, ((old_rank, value), target_rank) in enumerate(
-            zip(pairs, target_ranks, strict=True)
-        ):
-            if target_rank == old_rank:
-                written_ranks.append(old_rank)
-                continue
+        # On a failure part-way, the copies of items whose head was never
+        # written are deleted again; only a copy whose write was in flight
+        # (an unknown outcome) is kept.
+        written_old: set[str] = set()
+        in_flight: str | None = None
+        try:
+            for i, ((old_rank, value), target_rank) in enumerate(
+                zip(pairs, target_ranks, strict=True)
+            ):
+                if target_rank == old_rank:
+                    written_ranks.append(old_rank)
+                    continue
 
-            rank = target_rank
-            for attempt in range(_V2_MAX_RANK_RETRIES + 1):
-                new_name = self._v2_item_name(rank)
-                if new_name not in old_names or rank == old_rank:
-                    new_value, new_span = copies[old_rank]
-                    item_db = get_property(self.config)
-                    # A fault here has an unknown outcome: the copy's bodies
-                    # stay (an orphan for the aged sweep if the head did not
-                    # land), see _write_spanning().
-                    if not item_db.set(
-                        actor_id=self.actor_id, name=new_name, value=new_value
-                    ):
-                        raise RuntimeError(
-                            f"list item write failed for '{self.name}' during compact()"
+                rank = target_rank
+                for attempt in range(_V2_MAX_RANK_RETRIES + 1):
+                    new_name = self._v2_item_name(rank)
+                    if new_name not in old_names or rank == old_rank:
+                        new_value, new_span = copies[old_rank]
+                        item_db = get_property(self.config)
+                        # A fault inside set() has an unknown outcome: this
+                        # copy's bodies stay (an orphan for the aged sweep if
+                        # the head did not land), see _write_spanning(). A
+                        # False is known not landed.
+                        in_flight = old_rank
+                        ok = item_db.set(
+                            actor_id=self.actor_id, name=new_name, value=new_value
                         )
-                    if rank == old_rank and new_span is not None:
-                        rewritten_in_place.append(value)
-                    written_ranks.append(rank)
-                    break
-                if attempt == _V2_MAX_RANK_RETRIES:
-                    raise RuntimeError(
-                        f"compact() could not rebalance '{self.name}' -- "
-                        f"rank collision storm"
-                    )
-                # Bisect between the rank that JUST collided and the next
-                # unclaimed target boundary -- using the failed candidate
-                # (not the last-written rank) as the new lower bound is
-                # what makes each retry generate a genuinely different,
-                # still-monotonic value instead of regenerating the same
-                # collision forever.
-                upper_idx = i + 1
-                upper = target_ranks[upper_idx] if upper_idx < n else None
-                rank = fi.generate_key_between(rank, upper)
+                        in_flight = None
+                        if not ok:
+                            raise RuntimeError(
+                                f"list item write failed for '{self.name}' during compact()"
+                            )
+                        written_old.add(old_rank)
+                        if rank == old_rank and new_span is not None:
+                            rewritten_in_place.append(value)
+                        written_ranks.append(rank)
+                        break
+                    if attempt == _V2_MAX_RANK_RETRIES:
+                        raise RuntimeError(
+                            f"compact() could not rebalance '{self.name}' -- "
+                            f"rank collision storm"
+                        )
+                    # Bisect between the rank that JUST collided and the next
+                    # unclaimed target boundary -- using the failed candidate
+                    # (not the last-written rank) as the new lower bound is
+                    # what makes each retry generate a genuinely different,
+                    # still-monotonic value instead of regenerating the same
+                    # collision forever.
+                    upper_idx = i + 1
+                    upper = target_ranks[upper_idx] if upper_idx < n else None
+                    rank = fi.generate_key_between(rank, upper)
+
+        except BaseException:
+            for copied_rank, (_, copied_span) in copies.items():
+                if copied_rank not in written_old and copied_rank != in_flight:
+                    self._span_delete_bodies(copied_span)
+            raise
 
         survivors = set(written_ranks)
         for old_rank, old_value in pairs:
@@ -4263,7 +4351,9 @@ class ListProperty:
         pairs = self._v2_load_full()
         span_heads, malformed = self._span_heads(pairs)
         span_names = self._aux_names("span")
-        broken, orphans = self._span_inventory(span_heads, span_names)
+        broken, orphans = self._span_inventory(
+            span_heads, span_names, check_content=True
+        )
         raw_by_rank = dict(pairs)
         span_by_rank = dict(span_heads)
         aux = self._aux_or_none()
@@ -4278,7 +4368,8 @@ class ListProperty:
                 self._span_delete_bodies(span_by_rank[rank])
                 logger.warning(
                     "List '%s' (actor %s): removed the item at rank %r, whose "
-                    "body rows were missing (a broken span)",
+                    "body rows were missing or did not match its head (a "
+                    "broken span)",
                     self.name,
                     self.actor_id,
                     rank,

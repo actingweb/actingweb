@@ -113,8 +113,6 @@ class TestParse:
             {"__aw_env": 1, "span": {"gen": GEN, "parts": 1, "bytes": -1}},
             {"__aw_env": 1, "span": "nope"},
             {"__aw_env": 1},
-            {"__aw_env": 2, "v": 1},
-            {"__aw_env": True, "v": 1},
             {"__aw_env": 1, "key": 5, "v": 1},
             {
                 "__aw_env": 1,
@@ -126,13 +124,26 @@ class TestParse:
         with pytest.raises(EnvelopeError):
             parse(json.dumps(obj))
 
+    @pytest.mark.parametrize(
+        "obj",
+        [
+            {"__aw_env": 2, "v": 1},
+            {"__aw_env": True, "v": 1},
+            {"__aw_env": "x", "title": "a pre-3.16 user item"},
+        ],
+    )
+    def test_marker_other_than_exactly_1_is_a_plain_item(
+        self, obj: dict[str, Any]
+    ) -> None:
+        assert parse(json.dumps(obj)) is None
+
     def test_marker_not_first_is_a_plain_item_not_an_envelope(self) -> None:
         raw = json.dumps({"v": 1, "__aw_env": 1})
         assert parse(raw) is None
 
-    def test_invalid_json_after_the_marker_raises(self) -> None:
-        with pytest.raises(EnvelopeError):
-            parse('{"__aw_env": 1, ')
+    def test_invalid_json_after_the_marker_is_a_plain_item(self) -> None:
+        # It cannot be shown to be the library's: read it as the raw value.
+        assert parse('{"__aw_env": 1, ') is None
 
     def test_round_trip_with_span_preserves_extra(self) -> None:
         span = SpanInfo(gen=GEN, parts=3, bytes=1000, sha256="ab" * 32)

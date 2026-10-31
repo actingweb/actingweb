@@ -12,6 +12,7 @@ examples/mcp_quickstart.py for that.
 import logging
 import os
 import sys
+from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
 from flask import Flask
@@ -99,7 +100,7 @@ aw_app = (
 # it turns sign-in through the provider off. Refused unless the host is
 # localhost or 127.0.0.1.
 DEMO_QA_BASIC_AUTH = os.getenv("DEMO_QA_BASIC_AUTH", "false").lower() == "true"
-_demo_host = os.getenv("APP_HOST_FQDN", "localhost:5000").split(":")[0]
+_demo_host = urlsplit("//" + os.getenv("APP_HOST_FQDN", "localhost:5000")).hostname
 if DEMO_QA_BASIC_AUTH and _demo_host not in ("localhost", "127.0.0.1"):
     raise RuntimeError("DEMO_QA_BASIC_AUTH is for a local run only (APP_HOST_FQDN)")
 if not DEMO_QA_BASIC_AUTH:
@@ -157,15 +158,16 @@ register_all_shared_hooks(aw_app)
 
 # Create Flask app
 app = Flask(__name__, static_url_path="/static")
-# The ingress guard for list_item_max_bytes, which is a storage bound only:
-# refuse a request body larger than one maximal item plus room for the JSON
-# around it, before it is read. (A FastAPI deployment uses an ASGI body-limit
-# middleware or its reverse proxy's body-size setting for the same purpose.)
-app.config["MAX_CONTENT_LENGTH"] = LIST_ITEM_MAX_BYTES + 64 * 1024
-# Flask also caps a non-file form field at 500,000 bytes by default
-# (MAX_FORM_MEMORY_SIZE), below one maximal list item: the web UI's item edit
-# form posts the whole item as one field. Match it to the same bound.
-app.config["MAX_FORM_MEMORY_SIZE"] = LIST_ITEM_MAX_BYTES + 64 * 1024
+# The ingress guard for list_item_max_bytes, which is a storage bound only.
+# The web UI posts an item as one URL-encoded form field, where a character
+# such as "&" or a non-ASCII letter grows to three bytes per byte (%XX), so
+# the request and form-field limits allow three times one maximal item plus
+# room for the rest of the form. The library refuses an oversized item itself
+# with a 413 that names the limit. (A FastAPI deployment uses an ASGI
+# body-limit middleware or its reverse proxy's body-size setting.)
+_FORM_LIMIT = 3 * LIST_ITEM_MAX_BYTES + 64 * 1024
+app.config["MAX_CONTENT_LENGTH"] = _FORM_LIMIT
+app.config["MAX_FORM_MEMORY_SIZE"] = _FORM_LIMIT
 
 # Trust proxy headers (X-Forwarded-Proto, X-Forwarded-Host, etc.) from ngrok/reverse proxies
 # This ensures request.url uses https:// when behind a proxy that terminates SSL
@@ -312,4 +314,9 @@ if __name__ == "__main__":
     LOG.info("Starting ActingWeb Demo...")
 
     # Run in development mode
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5000")), debug=True)
+    # In local QA mode (OAuth off) listen on the loopback interface only.
+    app.run(
+        host="127.0.0.1" if DEMO_QA_BASIC_AUTH else "0.0.0.0",
+        port=int(os.getenv("PORT", "5000")),
+        debug=True,
+    )

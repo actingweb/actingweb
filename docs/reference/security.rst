@@ -25,6 +25,10 @@ Access Control
   ``notes://*``, and a target such as ``notes://../../security/key`` matches
   it: ``..`` segments and percent-encoding are not resolved. A resource
   reader that maps URIs to storage validates its own path.
+- **REST property permission checks fail closed.** When the permission
+  evaluator raises for a peer, the property, list-metadata and list-item
+  handlers deny (403) rather than answer with the legacy ``access`` table; a
+  database fault still answers 503.
 - **MCP ``*/list`` filters fail closed.** When the permission evaluator
   cannot be constructed, ``tools/list``, ``resources/list`` and
   ``prompts/list`` answer an empty list; an item whose evaluation raises is

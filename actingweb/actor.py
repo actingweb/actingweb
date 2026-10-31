@@ -3232,7 +3232,10 @@ class Actor:
         else:
             # Fallback: create a full-state diff and send low-granularity callback
             # Get the full current state
-            full_state = self._get_full_state_for_subscription(target, sub_subtarget)
+            list_keys: set[str] = set()
+            full_state = self._get_full_state_for_subscription(
+                target, sub_subtarget, list_keys
+            )
             # A list's full state is an "extend" diff nested under the list
             # name. Over the span threshold, list diffs become references
             # (the subscriber re-reads), per list and then largest first
@@ -3240,7 +3243,7 @@ class Actor:
             # fail on the row cap.
             from .property_list import fit_full_state
 
-            full_state = fit_full_state(full_state, self.config)
+            full_state = fit_full_state(full_state, self.config, list_keys=list_keys)
 
             # Store as a subscription diff
             diff_url = self._store_subscription_diff(
@@ -3283,13 +3286,19 @@ class Actor:
             return True  # Scheduled (not confirmed)
 
     def _get_full_state_for_subscription(
-        self, target: str, subtarget: str | None
+        self,
+        target: str,
+        subtarget: str | None,
+        list_keys: set[str] | None = None,
     ) -> dict[str, Any]:
         """Get the full current state for a subscription target.
 
         Args:
             target: Subscription target (e.g., "properties")
             subtarget: Optional subtarget (e.g., list name for property lists)
+            list_keys: When given, the keys of the result that are list diffs
+                are added to it, so a caller can tell a list from a scalar
+                property of the same shape (``fit_full_state``).
 
         Returns:
             Dict containing the full state
@@ -3301,11 +3310,27 @@ class Actor:
                     if self.property_lists.exists(subtarget):
                         # It's a list - return all items
                         list_attr = getattr(self.property_lists, subtarget)
-                        reference = self._list_state_reference(subtarget, list_attr)
+                        if list_keys is not None:
+                            list_keys.add(subtarget)
+                        reference, pairs = self._list_state_reference(
+                            subtarget, list_attr
+                        )
                         if reference is not None:
                             return {subtarget: reference}
                         try:
-                            items = list(list_attr)
+                            if pairs is not None:
+                                # The heads are in hand: resolve from them,
+                                # one range read in all.
+                                from .property_list import UNRESOLVED
+
+                                items = [
+                                    list_attr.item_at(handle)[1]
+                                    if item is UNRESOLVED
+                                    else item
+                                    for handle, item in pairs
+                                ]
+                            else:
+                                items = list(list_attr)
                         except ListCorruptionError as e:
                             logger.error(
                                 f"List '{subtarget}' is corrupted, cannot build "
@@ -3352,7 +3377,9 @@ class Actor:
                     for list_name in list_names:
                         list_attr = getattr(self.property_lists, list_name)
                         list_attr.prime_from_rows(list_rows)
-                        reference = self._list_state_reference(
+                        if list_keys is not None:
+                            list_keys.add(list_name)
+                        reference, _ = self._list_state_reference(
                             list_name, list_attr, list_rows
                         )
                         if reference is not None:
@@ -3380,41 +3407,53 @@ class Actor:
 
     def _list_state_reference(
         self, list_name: str, list_attr: Any, rows: dict[str, Any] | None = None
-    ) -> dict[str, Any] | None:
-        """The full-state reference for a list whose items together exceed
-        the span threshold, sized from the heads alone so no spanned body is
-        read only to be dropped; ``None`` when the list fits (or there is no
-        threshold, or the list is v1), and its items are read as before."""
+    ) -> tuple[dict[str, Any] | None, list[tuple[Any, Any]] | None]:
+        """``(reference, pairs)`` for a list's full state.
+
+        ``reference`` is the full-state reference for a list whose items
+        together exceed the span threshold, sized from the heads alone so no
+        spanned body is read only to be dropped; ``None`` when the list fits
+        (or there is no threshold, or the list is v1). ``pairs`` are the
+        heads this read (``items_with_handles(resolve=False)``, for a
+        single list without ``rows``), so the caller resolves the items
+        from them instead of reading the list again; ``None`` otherwise.
+        """
+        from .property_list import UNRESOLVED
         from .property_list import ListCorruptionError as _Corrupt
         from .property_list_span import encoded_size
 
         threshold = getattr(self.config, "list_item_span_threshold", None)
         if not isinstance(threshold, int) or isinstance(threshold, bool):
-            return None
+            return None, None
         core = getattr(list_attr, "_list_prop", list_attr)
+        pairs: list[tuple[Any, Any]] | None = None
         try:
             if core.storage_format() != 2:
-                return None  # a v1 list never spans: read it once, as before
+                return None, None  # a v1 list never spans: read it as before
             if rows is not None:
                 sizes = list_attr.sizes_from_rows(rows)
             else:
+                heads: list[tuple[Any, Any]] = list_attr.items_with_handles(
+                    resolve=False
+                )
+                pairs = heads
                 sizes = [
                     handle.bytes
-                    if handle.spanned and handle.bytes is not None
-                    else encoded_size(handle.raw_value)
-                    for handle, _ in list_attr.items_with_handles(resolve=False)
+                    if item is UNRESOLVED and handle.bytes is not None
+                    else encoded_size(json.dumps(item))
+                    for handle, item in heads
                 ]
         except (ValueError, _Corrupt):
-            return None  # v1, or a malformed head: read as before
+            return None, None  # v1, or a malformed head: read as before
         total = sum(sizes)
         if total + 2 * len(sizes) + 64 <= threshold:
-            return None
+            return None, pairs
         return {
             "list": list_name,
             "operation": "extend",
             "spanned": True,
             "bytes": total,
-        }
+        }, None
 
     def _store_subscription_diff(
         self, peer_id: str, subscription_id: str, sequence: int, data: dict[str, Any]

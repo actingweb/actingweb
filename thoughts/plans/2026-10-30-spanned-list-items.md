@@ -524,7 +524,8 @@ an HMAC key hash; the bounded re-resolve and the write-amplification note.
 - **The REST handlers' legacy-authorization fallback on an evaluator
   error** (`handlers/properties.py:167-174`, `:1835-1842`, `:2020-2027`):
   the REST counterpart of the MCP fail-open this plan closes, pre-existing
-  and outside the todo's scope. Filed as a todo in Phase 1.
+  and outside the todo's scope. Filed as a todo in Phase 1. **[Updated
+  2026-10-31]** The owner folded it in (iteration 27).
 - **The `uri_pattern` metadata question** named in the todo
   (`handlers/mcp.py:1887`): already `re.fullmatch` since 3.14.4; nothing
   left to decide with.
@@ -1990,6 +1991,210 @@ type badge reads "list" or "property"; long ids wrap at phone width.
 
 **Rationale**: the browser walk could reach the item actions only by
 hand-built form POSTs.
+
+### 2026-10-31, after verification thoughts/verifications/2026-10-31-spanned-list-items-2.md
+
+Every finding of the second verification, plus the REST permission fallback
+the owner folded in from "What We're NOT Doing". No todos. Regression tests
+are in `tests/test_property_list_span_iterations.py` (classes named after
+the finding; the V1, V2, V3 and V7 classes were run against the previous
+library code and failed there) and `tests/test_list_item_limits.py`
+(`TestWwwListPageAndActions`, `TestRestPermissionFailsClosed`). Two choices
+are deduced, not confirmed: an evaluator error answers 403 (fail closed, as
+MCP), and `delete()` sweeps every generation and documents quiescence
+rather than keep young ones.
+
+#### 18. Only the library's exact marker makes an envelope (V1)
+
+**Category**: Bug fix
+
+**What changed**: `parse` treats a value as an envelope only when its first
+key is `__aw_env` with exactly the int `1` (`carries_library_marker`);
+anything else, including invalid JSON after the marker, is a plain item. So
+a pre-3.16 user item `{"__aw_env": "x", ...}` reads as itself and the sweep
+never removes it; only a library envelope that fails later checks is
+malformed.
+
+**Files affected**: `actingweb/property_list_span.py`;
+`tests/test_property_list_span_codec.py`; `docs/migration/v3.16.rst`
+
+**Rationale**: the sweep deleted such items and every whole-list read
+answered 409 for them.
+
+#### 19. Verify and the sweep check body content (V2)
+
+**Category**: Bug fix
+
+**What changed**: `_span_inventory(check_content=True)` (used by
+`verify(spans=True)` and the sweep) also reads each complete generation and
+counts a size or digest mismatch as broken; the 409 says "do not match the
+size and digest its head records" for that case.
+
+**Files affected**: `actingweb/property_list.py`
+
+**Rationale**: a same-length wrong body was a 409 its remedy could not clear.
+
+#### 20. Known failed writes delete their bodies (V3)
+
+**Category**: Bug fix
+
+**What changed**: head writes go through `_probed_write()`, which marks the
+backend call in flight; `_write_spanning` keeps bodies only for a raise
+during a write in flight and deletes them otherwise (collision storm, rank
+cap, last-rank fault). `_v2_extend` does the same per item, and compact's
+write loop deletes the copies of items whose head was never written.
+
+**Files affected**: `actingweb/property_list.py` — `_write_spanning`,
+`_probed_write`, `_row_holds`, the append/insert/setitem/update head writes,
+`_v2_extend`, `_v2_compact`
+
+**Rationale**: every failed retry of a contended spanned append leaked a
+generation.
+
+#### 21. `update_by_handle` reads back a `False` for any head (L5)
+
+**Category**: Bug fix
+
+**What changed**: with `head_name`, a `False` is followed by one read; a row
+holding exactly the new head counts as landed, plain or spanned.
+
+**Files affected**: `actingweb/property_list.py` — `_write_spanning`
+
+**Rationale**: a retried CAS that committed answered 503 and orphaned the
+old generation.
+
+#### 22. `delete()` sweeps every generation again (V7)
+
+**Category**: Decision changed (reverts iteration 4's age gate)
+
+**What changed**: `delete()` removes every `$span-` and `$key-` row of the
+list; its comment and the guide state that, like an actor delete, it
+assumes writes are quiesced.
+
+**Files affected**: `actingweb/property_list.py`;
+`docs/guides/property-lists.rst`
+
+**Rationale**: kept young generations could not be reached once the list
+was gone, and an in-flight append's late head made them a whole item a
+recreated list adopted. A head without bodies (the remaining race) is a 409
+the sweep removes.
+
+#### 23. Non-ASCII part counts answer 413 (L1)
+
+**Category**: Bug fix
+
+**What changed**: `_check_item_size` counts the parts of a non-ASCII value
+before a spanning write and raises `ListItemTooLargeError` past 9,999.
+
+**Files affected**: `actingweb/property_list.py`
+
+#### 24. `fit_full_state` uses the known list names (L2) and a single-list resync reads once (L4)
+
+**Category**: Bug fix
+
+**What changed**: `_get_full_state_for_subscription(..., list_keys)` records
+which keys are lists and `fit_full_state(..., list_keys=)` touches only
+those; `_list_state_reference` returns the heads it read and the single-list
+path resolves from them.
+
+**Files affected**: `actingweb/actor.py`, `actingweb/property_list.py`
+
+#### 25. The web UI's list page reads heads only and edits one item by identity (V4, V5, V6, V8)
+
+**Category**: Bug fix / UX refinement
+
+**What changed**: `WwwHandler._list_page_items` reads `resolve=False` and
+passes `list_entries` (rank, digest, size, JSON with key order and
+non-ASCII kept), `edit_entry` for `?edit=<rank>`, and `list_error`; the item
+actions take `item_rank`/`item_digest` (409 when changed), refuse a
+read-only list (403) and invalid JSON from the edit form; both templates
+render the entries, the demo hides the forms for a read-only list and shows
+`list_error`.
+
+**Files affected**: `actingweb/handlers/www.py`,
+`actingweb/templates/aw-actor-www-property.html`,
+`examples/demo/templates/aw-actor-www-property.html`,
+`examples/demo/templates/aw-actor-www-properties.html`,
+`examples/demo/static/style.css`
+
+**Rationale**: forms acted by position, ignored read-only lists, showed a
+corrupted list as empty, and the page loaded every item in full.
+
+#### 26. Error pages, cross-site posts and whitespace (V9, L7, L8)
+
+**Category**: Bug fix
+
+**What changed**: `_list_action_error` answers a small HTML page (viewport,
+escaped reason, a link back to the list); the item actions refuse an
+`Origin` other than the app's own host (403) and a whitespace-only value;
+the 500 arm no longer echoes the exception; the demo's properties table
+wraps on a phone.
+
+**Files affected**: `actingweb/handlers/www.py`,
+`examples/demo/static/style.css`
+
+#### 27. The REST property permission checks fail closed (folded in from What We're NOT Doing)
+
+**Category**: Bug fix (owner decision 2026-10-31 to fold in)
+
+**What changed**: the three `_check_property_permission` methods answer
+`False` (403) when the evaluator raises, instead of the legacy `access`
+check; `DbError` still propagates; `rest-permission-legacy-fallback.md` and
+its `INDEX.md` row are deleted.
+
+**Files affected**: `actingweb/handlers/properties.py`;
+`docs/reference/security.rst`, `docs/migration/v3.16.rst`, `CHANGELOG.rst`
+
+#### 28. The demo's request limits allow form encoding, and QA mode binds loopback (V8, L6)
+
+**Category**: Bug fix
+
+**What changed**: `MAX_CONTENT_LENGTH` and `MAX_FORM_MEMORY_SIZE` are three
+times `list_item_max_bytes` plus 64 KiB; the QA guard parses
+`APP_HOST_FQDN` with `urlsplit`, and in QA mode the dev server binds
+`127.0.0.1`.
+
+**Files affected**: `examples/demo/application.py`
+
+#### 29. Typed test doubles (L9)
+
+**Category**: Hygiene
+
+**What changed**: the overrides in the span test files carry type hints
+instead of `# type: ignore[no-untyped-def]`.
+
+**Files affected**: `tests/test_property_list_spans.py`,
+`tests/test_property_list_span_iterations.py`
+
+#### 30. Browser walk of the rebuilt list page: four follow-ups
+
+**Category**: UX refinement (found by the third browser walk)
+
+**What changed**: on a phone the demo's properties table stacks each row as
+a block (name, value, Delete), since three columns at 375 px cannot hold
+the button (two CSS attempts that kept the columns failed the re-check: an
+inline `min-width` won, then a less specific reset); a list item's
+preview takes its own line, and previews isolate bidi overrides; a string
+item is edited as its text (`edit_entry.text`, `item_format=text`), not as
+quoted JSON; whitespace-only adds and edits say "The item is empty"; error
+pages' "Back" returns with the typed text kept (`history.back()`, with the
+list as the fallback).
+
+**Files affected**: `actingweb/handlers/www.py`,
+`examples/demo/templates/aw-actor-www-properties.html`,
+`examples/demo/templates/aw-actor-www-property.html`,
+`examples/demo/static/style.css`, `tests/test_list_item_limits.py`
+
+**Browser walk** (headless Playwright, local QA account, `localhost:5055`
+bound to loopback): pages load with no console errors; edit by rank keeps
+key order and non-ASCII; the 500 KB item edits through its own page; a
+stale delete or save answers 409 and changes nothing, and a delete by rank
+after a shift removes the right item; 4.5 MiB answers 413 with its reason
+and 1.5 MiB of `&` is accepted; markup in items is escaped in preview and
+textarea. Re-checks: the stacked table fits its card at 375 px with every
+Delete button inside (card body 259/259) and desktop is unchanged; a string
+item previews and edits as text; whitespace errors say the item is empty;
+"Back" keeps the typed text.
 
 ## Evaluation Notes
 

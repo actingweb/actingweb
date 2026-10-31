@@ -212,14 +212,13 @@ class PropertiesHandler(base_handler.BaseHandler):
             logger.error(
                 f"Error in permission evaluation for {actor_id}:{peer_id}:{property_path}: {e}"
             )
-            # Fall back to legacy authorization on errors
-            legacy_subpath = property_path.split("/")[0] if property_path else ""
-            method_map = {"read": "GET", "write": "PUT", "delete": "DELETE"}
-            return auth_obj.check_authorisation(
-                path="properties",
-                subpath=legacy_subpath,
-                method=method_map.get(operation, "GET"),
-            )
+            # Fail closed: an evaluator that raises denies (403), as the MCP
+            # handlers do. Falling back to the coarse legacy access table here
+            # turned an excluded_patterns denial into an allow whenever the
+            # evaluator had a bug. A database fault (DbError, above) still
+            # propagates to the 503, so a client can tell an outage from a
+            # denial.
+            return False
 
     def _create_auth_context(self, auth_obj, operation: str = "read") -> dict[str, Any]:
         """Create auth context for hook execution with peer information."""
@@ -1935,14 +1934,13 @@ class PropertyMetadataHandler(base_handler.BaseHandler):
             logger.error(
                 f"Error in permission evaluation for metadata {actor_id}:{peer_id}:{property_path}: {e}"
             )
-            # Fall back to legacy authorization on errors
-            legacy_subpath = property_path.split("/")[0] if property_path else ""
-            method_map = {"read": "GET", "write": "PUT", "delete": "DELETE"}
-            return auth_obj.check_authorisation(
-                path="properties",
-                subpath=legacy_subpath,
-                method=method_map.get(operation, "GET"),
-            )
+            # Fail closed: an evaluator that raises denies (403), as the MCP
+            # handlers do. Falling back to the coarse legacy access table here
+            # turned an excluded_patterns denial into an allow whenever the
+            # evaluator had a bug. A database fault (DbError, above) still
+            # propagates to the 503, so a client can tell an outage from a
+            # denial.
+            return False
 
     def get(self, actor_id: str, name: str):
         """Get list property metadata (description, explanation)."""
@@ -2120,14 +2118,13 @@ class PropertyListItemsHandler(base_handler.BaseHandler):
             logger.error(
                 f"Error in permission evaluation for items {actor_id}:{peer_id}:{property_path}: {e}"
             )
-            # Fall back to legacy authorization on errors
-            legacy_subpath = property_path.split("/")[0] if property_path else ""
-            method_map = {"read": "GET", "write": "PUT", "delete": "DELETE"}
-            return auth_obj.check_authorisation(
-                path="properties",
-                subpath=legacy_subpath,
-                method=method_map.get(operation, "GET"),
-            )
+            # Fail closed: an evaluator that raises denies (403), as the MCP
+            # handlers do. Falling back to the coarse legacy access table here
+            # turned an excluded_patterns denial into an allow whenever the
+            # evaluator had a bug. A database fault (DbError, above) still
+            # propagates to the 503, so a client can tell an outage from a
+            # denial.
+            return False
 
     def _respond_list_corrupted(self, name: str, error: Exception) -> None:
         """Write the structured 409 response for a ListCorruptionError."""

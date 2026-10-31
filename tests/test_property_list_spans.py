@@ -46,13 +46,17 @@ class RecordingDb(FakePropertyDb):
         super().__init__(store)
         self.calls = calls
 
-    def get(self, actor_id=None, name=None):  # type: ignore[no-untyped-def]
+    def get(self, actor_id: str | None = None, name: str | None = None) -> Any:
         self.calls.append(("get", actor_id, name, True))
         return super().get(actor_id=actor_id, name=name)
 
-    def get_prefix(  # type: ignore[no-untyped-def]
-        self, actor_id=None, prefix=None, keys_only=False, consistent_read=True
-    ):
+    def get_prefix(
+        self,
+        actor_id: str | None = None,
+        prefix: str | None = None,
+        keys_only: bool = False,
+        consistent_read: bool = True,
+    ) -> dict[str, str]:
         self.calls.append(("get_prefix", actor_id, prefix, consistent_read))
         return super().get_prefix(
             actor_id=actor_id,
@@ -61,14 +65,14 @@ class RecordingDb(FakePropertyDb):
             consistent_read=consistent_read,
         )
 
-    def get_range(  # type: ignore[no-untyped-def]
+    def get_range(
         self,
-        actor_id=None,
-        lower=None,
-        upper=None,
-        keys_only=False,
-        consistent_read=True,
-    ):
+        actor_id: str | None = None,
+        lower: str | None = None,
+        upper: str | None = None,
+        keys_only: bool = False,
+        consistent_read: bool = True,
+    ) -> dict[str, str]:
         self.calls.append(("get_range", actor_id, lower, consistent_read))
         return super().get_range(
             actor_id=actor_id,
@@ -439,8 +443,12 @@ class TestReaderRaces:
             fired = False
 
             def get_prefix(
-                self, actor_id=None, prefix=None, keys_only=False, consistent_read=True
-            ):  # type: ignore[no-untyped-def]
+                self,
+                actor_id: str | None = None,
+                prefix: str | None = None,
+                keys_only: bool = False,
+                consistent_read: bool = True,
+            ) -> dict[str, str]:
                 if actor_id == AUX and not SwapOnFirstBodyRead.fired:
                     SwapOnFirstBodyRead.fired = True
                     # A concurrent update lands: new head, old gen deleted.
@@ -480,8 +488,12 @@ class TestReaderRaces:
 
         class ShortWhenEventual(RecordingDb):
             def get_prefix(
-                self, actor_id=None, prefix=None, keys_only=False, consistent_read=True
-            ):  # type: ignore[no-untyped-def]
+                self,
+                actor_id: str | None = None,
+                prefix: str | None = None,
+                keys_only: bool = False,
+                consistent_read: bool = True,
+            ) -> dict[str, str]:
                 rows = super().get_prefix(
                     actor_id=actor_id,
                     prefix=prefix,
@@ -515,7 +527,9 @@ class TestReaderRaces:
         counter = [0]
 
         class ChurningHead(RecordingDb):
-            def get(self, actor_id=None, name=None):  # type: ignore[no-untyped-def]
+            def get(
+                self, actor_id: str | None = None, name: str | None = None
+            ) -> str | None:
                 if name == head_name:
                     self.calls.append(("get", actor_id, name, True))
                     counter[0] += 1
@@ -526,8 +540,12 @@ class TestReaderRaces:
                 return super().get(actor_id=actor_id, name=name)
 
             def get_prefix(
-                self, actor_id=None, prefix=None, keys_only=False, consistent_read=True
-            ):  # type: ignore[no-untyped-def]
+                self,
+                actor_id: str | None = None,
+                prefix: str | None = None,
+                keys_only: bool = False,
+                consistent_read: bool = True,
+            ) -> dict[str, str]:
                 self.calls.append(("get_prefix", actor_id, prefix, consistent_read))
                 return {}  # every generation is short
 
@@ -667,7 +685,12 @@ class TestCompact:
         lst = self._scattered(config)
 
         class FailCleanup(RecordingDb):
-            def set(self, actor_id=None, name=None, value=None):  # type: ignore[no-untyped-def]
+            def set(
+                self,
+                actor_id: str | None = None,
+                name: str | None = None,
+                value: str | None = None,
+            ) -> bool:
                 if value is None and actor_id == ACTOR and "-#" in (name or ""):
                     raise DbError("property write", actor_id)
                 return super().set(actor_id=actor_id, name=name, value=value)
@@ -771,7 +794,12 @@ class TestPartialExtend:
         landed = [0]
 
         class TwoThenCollide(RecordingDb):
-            def create_if_not_exists(self, actor_id=None, name=None, value=None):  # type: ignore[no-untyped-def]
+            def create_if_not_exists(
+                self,
+                actor_id: str | None = None,
+                name: str | None = None,
+                value: str | None = None,
+            ) -> bool:
                 if actor_id == ACTOR and "-#" in (name or ""):
                     if landed[0] >= 2:
                         return False
@@ -938,7 +966,12 @@ class TestFullStateFallback:
             ),
             mock.patch("actingweb.interface.actor_interface.ActorInterface"),
             mock.patch.object(
-                actor, "_get_full_state_for_subscription", return_value=state
+                actor,
+                "_get_full_state_for_subscription",
+                side_effect=lambda t, st, keys=None: (
+                    keys.add(NAME) if keys is not None else None,
+                    state,
+                )[1],
             ),
             mock.patch.object(
                 actor, "_store_subscription_diff", side_effect=store_diff
@@ -982,7 +1015,7 @@ class TestActorLevel:
         from actingweb import property as property_module
 
         class FakeList:
-            def fetch(self, actor_id=None):  # type: ignore[no-untyped-def]
+            def fetch(self, actor_id: str | None = None) -> Any:
                 return {}
 
             def delete(self) -> None:
@@ -995,8 +1028,12 @@ class TestActorLevel:
 
         class LateWriter(RecordingDb):
             def get_prefix(
-                self, actor_id=None, prefix=None, keys_only=False, consistent_read=True
-            ):  # type: ignore[no-untyped-def]
+                self,
+                actor_id: str | None = None,
+                prefix: str | None = None,
+                keys_only: bool = False,
+                consistent_read: bool = True,
+            ) -> dict[str, str]:
                 rows = super().get_prefix(
                     actor_id=actor_id,
                     prefix=prefix,
@@ -1028,7 +1065,7 @@ class TestActorLevel:
         from actingweb import property as property_module
 
         class FakeList:
-            def fetch(self, actor_id=None):  # type: ignore[no-untyped-def]
+            def fetch(self, actor_id: str | None = None) -> Any:
                 return {}
 
             def delete(self) -> None:
@@ -1038,8 +1075,12 @@ class TestActorLevel:
             n = 0
 
             def get_prefix(
-                self, actor_id=None, prefix=None, keys_only=False, consistent_read=True
-            ):  # type: ignore[no-untyped-def]
+                self,
+                actor_id: str | None = None,
+                prefix: str | None = None,
+                keys_only: bool = False,
+                consistent_read: bool = True,
+            ) -> dict[str, str]:
                 AlwaysWriting.n += 1
                 rows = super().get_prefix(
                     actor_id=actor_id,

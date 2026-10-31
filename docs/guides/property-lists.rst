@@ -700,7 +700,9 @@ failed best-effort cleanup after a rewrite, leaves an *orphan generation*:
 body rows no head names. They are inert. ``verify()`` reports
 ``spanned_items`` and ``span_bytes`` from the heads; ``verify(spans=True)``
 also enumerates body rows and reports ``span_body_rows``,
-``orphan_span_gens`` and ``broken_spans``. ``sweep_span_orphans()`` (the
+``orphan_span_gens`` and ``broken_spans`` (a span is broken when a body row
+is missing or the bodies do not match the size and digest its head records,
+so this reads every body). ``sweep_span_orphans()`` (the
 script's ``--repair --sweep-spans``) removes orphan generations older than
 one hour (younger ones may belong to an append still in flight), heads whose
 bodies are gone (``broken_spans_removed``) and heads that are malformed
@@ -709,17 +711,21 @@ envelopes (``malformed_heads_removed``), without moving any other head.
 ``compact()`` that moves a spanned item copies its bodies to a fresh
 generation first, and stops with nothing moved if one cannot be read.
 
-**Writes with an unknown outcome.** A head write that raises (a timeout
-after the backend applied it) keeps the new bodies: if the head did not land
-they are an orphan for the sweep. A conditional write that answers ``False``
+**Writes with an unknown outcome.** A head write that raises while its
+backend call is in flight (a timeout after the backend applied it) keeps the
+new bodies: if the head did not land they are an orphan for the sweep. A
+failure known not to have written anything (a collision storm, the rank cap,
+a fault before the write) deletes them. A conditional write that answers ``False``
 is checked by reading the head back, so an SDK retry of a write that
 committed is reported as the success it was. ``check_item_size(item)``
 raises ``ListItemTooLargeError`` without writing, for a caller that
 validates a batch before its first write.
 
 **Lifecycles.** A list's ``delete()`` removes its side-partition rows,
-orphans included; ``clear()`` removes the bodies of the items it deletes;
-an actor delete removes its whole side partition. Anything else waits for
+orphans included, and like an actor delete it assumes writes to the list
+are quiesced (an append whose head lands after the delete leaves a head
+without bodies, which the sweep removes); ``clear()`` removes the bodies of
+the items it deletes; an actor delete removes its whole side partition. Anything else waits for
 the opt-in, age-gated sweep, and the default ``verify()`` does not count
 leaked bodies.
 

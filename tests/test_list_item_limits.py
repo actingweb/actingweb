@@ -469,7 +469,7 @@ class TestHandlerStatusMappings:
             {"action": "update", "item_index": "0", "item_value": ""},
         )
         assert webobj.response.status_code == 400
-        assert "item_value" in webobj.response.body
+        assert "The item is empty" in webobj.response.body
         assert myself.property_lists.wempty.to_list() == ["keep"]
 
     def test_www_out_of_range_shows_its_reason(self, live: Any) -> None:
@@ -510,3 +510,267 @@ class TestHandlerStatusMappings:
         lists = json.loads(webobj.response.body)["lists"]
         assert lists["good"]["count"] == 1
         assert lists["bad"]["error"] == "list_corrupted"
+
+
+def _www_get(myself: Any, config: Any, path: str, params: dict[str, str]) -> Any:
+    from actingweb.handlers.www import WwwHandler
+
+    webobj = AWWebObj(params=params)
+    handler = WwwHandler(webobj, config)
+    with mock.patch.object(handler, "require_authenticated_actor", return_value=myself):
+        handler.get(myself.id, path)
+    return webobj
+
+
+class TestWwwListPageAndActions:
+    """Second verification, V4-V6, V8, V9, L7, L8: the web UI's list page
+    and its item actions."""
+
+    def _seed(self, myself: Any, name: str) -> Any:
+        lst = getattr(myself.property_lists, name)
+        lst.extend(["a", {"z": 1, "é": "ü"}, "y" * 5_000])  # the last spans
+        return lst
+
+    def test_list_page_reads_heads_only_and_keeps_json_order(self, live: Any) -> None:
+        from actingweb.property_list import UNRESOLVED
+
+        myself, config = live
+        self._seed(myself, "page")
+        with mock.patch.object(
+            ListProperty, "_read_span", side_effect=AssertionError("body read")
+        ):
+            webobj = _www_get(myself, config, "properties/page", {})
+        values = webobj.response.template_values
+        assert values["list_items"][2] is UNRESOLVED
+        entries = values["list_entries"]
+        assert entries[1]["json"] == '{"z": 1, "é": "ü"}'
+        assert entries[2]["spanned"] and entries[2]["json"] is None
+        assert entries[2]["bytes"] == 5_002
+        assert all(e["rank"] and e["digest"] for e in entries)
+
+    def test_edit_param_loads_one_item_whole(self, live: Any) -> None:
+        myself, config = live
+        self._seed(myself, "pedit")
+        first = _www_get(myself, config, "properties/pedit", {})
+        rank = first.response.template_values["list_entries"][2]["rank"]
+        webobj = _www_get(myself, config, "properties/pedit", {"edit": rank})
+        edit = webobj.response.template_values["edit_entry"]
+        assert edit["json"] == json.dumps("y" * 5_000)
+
+    def test_a_stale_page_cannot_act_on_another_item(self, live: Any) -> None:
+        myself, config = live
+        lst = self._seed(myself, "stale")
+        page = _www_get(myself, config, "properties/stale", {})
+        entry = page.response.template_values["list_entries"][0]
+        lst.insert(0, "inserted by another writer")
+        lst[1] = "a changed"  # the item the page showed, now changed
+        webobj = _www_post(
+            myself,
+            config,
+            "properties/stale/items",
+            {
+                "action": "delete",
+                "item_rank": entry["rank"],
+                "item_digest": entry["digest"],
+            },
+        )
+        assert webobj.response.status_code == 409
+        assert "since the page was loaded" in webobj.response.body
+        assert len(lst.to_list()) == 4
+
+    def test_rank_and_digest_update_the_shown_item(self, live: Any) -> None:
+        myself, config = live
+        lst = self._seed(myself, "byrank")
+        page = _www_get(myself, config, "properties/byrank", {})
+        entry = page.response.template_values["list_entries"][1]
+        lst.insert(0, "inserted first")
+        webobj = _www_post(
+            myself,
+            config,
+            "properties/byrank/items",
+            {
+                "action": "update",
+                "item_rank": entry["rank"],
+                "item_digest": entry["digest"],
+                "item_value": '{"z": 2}',
+                "item_format": "json",
+            },
+        )
+        assert webobj.response.status_code == 302
+        assert lst.to_list()[2] == {"z": 2}
+
+    def test_invalid_json_from_the_edit_form_is_refused(self, live: Any) -> None:
+        myself, config = live
+        lst = self._seed(myself, "badjson")
+        webobj = _www_post(
+            myself,
+            config,
+            "properties/badjson/items",
+            {
+                "action": "update",
+                "item_index": "1",
+                "item_value": '{"z": 1',
+                "item_format": "json",
+            },
+        )
+        assert webobj.response.status_code == 400
+        assert lst.to_list()[1] == {"z": 1, "é": "ü"}
+
+    def test_whitespace_values_are_refused(self, live: Any) -> None:
+        myself, config = live
+        lst = self._seed(myself, "blank")
+        for params in (
+            {"action": "add", "item_value": "   "},
+            {"action": "update", "item_index": "0", "item_value": "  "},
+        ):
+            webobj = _www_post(myself, config, "properties/blank/items", params)
+            assert webobj.response.status_code == 400
+        assert lst.to_list()[0] == "a" and len(lst.to_list()) == 3
+
+    def test_error_page_has_a_back_link_and_unescaped_reason(self, live: Any) -> None:
+        myself, config = live
+        myself.property_lists.errpage.append("a")
+        webobj = _www_post(
+            myself,
+            config,
+            "properties/errpage/items",
+            {"action": "add", "item_value": "y" * 20_001},
+        )
+        assert webobj.response.status_code == 413
+        body = webobj.response.body
+        assert webobj.response.headers["Content-Type"].startswith("text/html")
+        assert "List &#x27;errpage&#x27;" in body  # escaped once, for HTML
+        assert "&amp;#x27;" not in body
+        assert f'href="/{myself.id}/www/properties/errpage"' in body
+        assert 'name="viewport"' in body
+
+    def test_cross_site_post_is_refused(self, live: Any) -> None:
+        from actingweb.handlers.www import WwwHandler
+
+        myself, config = live
+        myself.property_lists.csrf.append("a")
+        webobj = AWWebObj(
+            params={"action": "add", "item_value": "x"},
+            headers={"Origin": "https://evil.example"},
+        )
+        handler = WwwHandler(webobj, config)
+        with mock.patch.object(
+            handler, "require_authenticated_actor", return_value=myself
+        ):
+            handler.post(myself.id, "properties/csrf/items")
+        assert webobj.response.status_code == 403
+        assert myself.property_lists.csrf.to_list() == ["a"]
+
+    def test_read_only_list_refuses_writes(self, live: Any) -> None:
+        from actingweb.handlers.www import WwwHandler
+
+        myself, config = live
+        myself.property_lists.locked.append("a")
+        hooks = mock.Mock()
+        hooks.execute_property_hooks.return_value = None  # put rejected
+        webobj = AWWebObj(params={"action": "add", "item_value": "x"})
+        handler = WwwHandler(webobj, config, hooks=hooks)
+        with (
+            mock.patch.object(
+                handler, "require_authenticated_actor", return_value=myself
+            ),
+            mock.patch.object(
+                handler, "_get_actor_interface", return_value=mock.Mock()
+            ),
+        ):
+            handler.post(myself.id, "properties/locked/items")
+        assert webobj.response.status_code == 403
+        assert myself.property_lists.locked.to_list() == ["a"]
+
+    def test_corrupted_list_page_says_so(self, live: Any) -> None:
+        from actingweb.property_list import ListItemSpanError
+
+        myself, config = live
+        myself.property_lists.broken.append("a")
+        with mock.patch.object(
+            ListProperty,
+            "items_with_handles",
+            side_effect=ListItemSpanError(
+                "broken", "a0", expected_parts=2, found_parts=1
+            ),
+        ):
+            webobj = _www_get(myself, config, "properties/broken", {})
+        assert "--sweep-spans" in webobj.response.template_values["list_error"]
+
+
+class TestRestPermissionFailsClosed:
+    """The REST property handlers deny (403) when the permission evaluator
+    raises, instead of answering with the legacy access table."""
+
+    @pytest.mark.parametrize(
+        "handler_name",
+        ["PropertiesHandler", "PropertyMetadataHandler", "PropertyListItemsHandler"],
+    )
+    def test_evaluator_error_denies(self, handler_name: str) -> None:
+        from actingweb.handlers import properties as module
+
+        handler = getattr(module, handler_name)(AWWebObj(), Config(database="dynamodb"))
+        auth_obj = mock.Mock()
+        auth_obj.acl = {"peerid": "peer-1"}
+        with mock.patch.object(
+            module, "get_permission_evaluator", side_effect=RuntimeError("bug")
+        ):
+            assert (
+                handler._check_property_permission("a1", auth_obj, "notes", "read")
+                is False
+            )
+        auth_obj.check_authorisation.assert_not_called()
+
+    def test_a_database_fault_still_propagates(self) -> None:
+        from actingweb.db.exceptions import DbError
+        from actingweb.handlers import properties as module
+
+        handler = module.PropertiesHandler(AWWebObj(), Config(database="dynamodb"))
+        auth_obj = mock.Mock()
+        auth_obj.acl = {"peerid": "peer-1"}
+        with mock.patch.object(
+            module, "get_permission_evaluator", side_effect=DbError("trust read", "a1")
+        ):
+            with pytest.raises(DbError):
+                handler._check_property_permission("a1", auth_obj, "notes", "read")
+
+
+class TestWwwBrowserWalkFollowUps:
+    """Third browser walk: a string item is edited as text, and a
+    whitespace edit names the real problem."""
+
+    def test_string_item_edit_round_trips_as_text(self, live: Any) -> None:
+        myself, config = live
+        lst = myself.property_lists.textedit
+        lst.append("plain words")
+        page = _www_get(myself, config, "properties/textedit", {})
+        rank = page.response.template_values["list_entries"][0]["rank"]
+        edit = _www_get(myself, config, "properties/textedit", {"edit": rank})
+        entry = edit.response.template_values["edit_entry"]
+        assert entry["text"] == "plain words"
+        webobj = _www_post(
+            myself,
+            config,
+            "properties/textedit/items",
+            {
+                "action": "update",
+                "item_rank": entry["rank"],
+                "item_digest": entry["digest"],
+                "item_value": '{"not": "parsed"}',
+                "item_format": "text",
+            },
+        )
+        assert webobj.response.status_code == 302
+        assert lst.to_list() == ['{"not": "parsed"}']
+
+    def test_whitespace_edit_says_the_item_is_empty(self, live: Any) -> None:
+        myself, config = live
+        myself.property_lists.wsedit.append("a")
+        webobj = _www_post(
+            myself,
+            config,
+            "properties/wsedit/items",
+            {"action": "update", "item_index": "0", "item_value": "   "},
+        )
+        assert webobj.response.status_code == 400
+        assert "The item is empty" in webobj.response.body

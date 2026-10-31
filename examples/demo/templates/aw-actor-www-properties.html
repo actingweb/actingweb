@@ -32,11 +32,11 @@
             {% if properties and properties|length > 0 %}
             <div class="card mb-lg">
                 <div class="card-body p-sm" style="overflow-x: auto;">
-                    <table style="min-width: 100%; table-layout: auto;">
+                    <table class="properties-table">
                         <colgroup>
-                            <col style="width: 25%; min-width: 120px;">
-                            <col style="width: 60%; min-width: 200px;">
-                            <col style="width: 15%; min-width: 100px;">
+                            <col class="col-name">
+                            <col class="col-value">
+                            <col class="col-actions">
                         </colgroup>
                         <thead>
                             <tr>

@@ -58,8 +58,12 @@ class TestH2ConcurrentDeleteIsNotCorruption:
             fired = False
 
             def get_prefix(
-                self, actor_id=None, prefix=None, keys_only=False, consistent_read=True
-            ):  # type: ignore[no-untyped-def]
+                self,
+                actor_id: str | None = None,
+                prefix: str | None = None,
+                keys_only: bool = False,
+                consistent_read: bool = True,
+            ) -> dict[str, str]:
                 if actor_id == AUX and not DeleteOnFirstBodyRead.fired:
                     DeleteOnFirstBodyRead.fired = True
                     other = ListProperty(ACTOR, NAME, config)
@@ -126,7 +130,13 @@ class _LandsThen(RecordingDb):
             raise DbError("property write", ACTOR)
         return False
 
-    def set_if_value_equals(self, actor_id=None, name=None, expected=None, value=None):  # type: ignore[no-untyped-def]
+    def set_if_value_equals(
+        self,
+        actor_id: str | None = None,
+        name: str | None = None,
+        expected: str | None = None,
+        value: str | None = None,
+    ) -> Any:
         landed = super().set_if_value_equals(
             actor_id=actor_id, name=name, expected=expected, value=value
         )
@@ -139,7 +149,12 @@ class _LandsThen(RecordingDb):
             return self._after()
         return landed
 
-    def create_if_not_exists(self, actor_id=None, name=None, value=None):  # type: ignore[no-untyped-def]
+    def create_if_not_exists(
+        self,
+        actor_id: str | None = None,
+        name: str | None = None,
+        value: str | None = None,
+    ) -> bool:
         landed = super().create_if_not_exists(actor_id=actor_id, name=name, value=value)
         if (
             landed
@@ -240,20 +255,22 @@ class TestH3CompactRefusesBeforeWritingAnything:
         assert set(aux_rows(store)) == before_aux  # copies rolled back
 
 
-class TestM1DeleteKeepsAFreshUnnamedGeneration:
-    def test_in_flight_bodies_survive_delete(
+class TestV7DeleteSweepsEveryGeneration:
+    """Second verification, V7: delete() removes every side-partition row
+    of the list, fresh or aged, since nothing can sweep them once the list
+    is gone; it assumes writes are quiesced, like an actor delete."""
+
+    def test_fresh_and_aged_generations_both_go(
         self, config: Config, store: dict[Any, Any]
     ) -> None:
         from actingweb.property_list_span import new_gen
 
         lst = _lst(config)
         lst.append(big("a"))
-        fresh = f"{span_prefix(NAME, new_gen())}p0000"
-        aged = f"{span_prefix(NAME, OLD_GEN)}p0000"
-        store[(AUX, fresh)] = "an append's bodies, head not written yet"
-        store[(AUX, aged)] = "orphan"
+        store[(AUX, f"{span_prefix(NAME, new_gen())}p0000")] = "in flight"
+        store[(AUX, f"{span_prefix(NAME, OLD_GEN)}p0000")] = "orphan"
         lst.delete()
-        assert set(aux_rows(store)) == {fresh}
+        assert aux_rows(store) == {}
 
 
 MALFORMED = '{"__aw_env": 1, "span": {"gen": "bad"}}'
@@ -424,7 +441,7 @@ class TestM8AndL4ActorLevelSweep:
         from actingweb import property as property_module
 
         class FakeList:
-            def fetch(self, actor_id=None):  # type: ignore[no-untyped-def]
+            def fetch(self, actor_id: str | None = None) -> Any:
                 return {}
 
             def delete(self) -> None:
@@ -468,8 +485,12 @@ class TestM8AndL4ActorLevelSweep:
             n = 0
 
             def get_prefix(
-                self, actor_id=None, prefix=None, keys_only=False, consistent_read=True
-            ):  # type: ignore[no-untyped-def]
+                self,
+                actor_id: str | None = None,
+                prefix: str | None = None,
+                keys_only: bool = False,
+                consistent_read: bool = True,
+            ) -> dict[str, str]:
                 rows = super().get_prefix(
                     actor_id=actor_id,
                     prefix=prefix,
@@ -529,7 +550,8 @@ class TestM5FullStateFitsTheDiffRow:
         calls: list[Any] = []
         _use(monkeypatch, lambda c: RecordingDb(store, calls))
         actor = Actor(config=config)
-        ref = actor._list_state_reference(NAME, lst)
+        ref, pairs = actor._list_state_reference(NAME, lst)
+        assert pairs is None
         assert ref is not None and ref["spanned"] is True
         assert ref["bytes"] == len(json.dumps("a")) + len(json.dumps(big("b")))
         assert not [c for c in calls if c[0] == "get_prefix" and c[1] == AUX]
@@ -541,4 +563,136 @@ class TestM5FullStateFitsTheDiffRow:
 
         lst = _lst(config)
         lst.extend(["a", "b"])
-        assert Actor(config=config)._list_state_reference(NAME, lst) is None
+        ref, pairs = Actor(config=config)._list_state_reference(NAME, lst)
+        assert ref is None
+        assert pairs is not None and [i for _, i in pairs] == ["a", "b"]
+
+
+class TestV1PreReleaseItemsAreNeverSwept:
+    """Second verification, V1: a user item stored before 3.16 that merely
+    starts like an envelope is an item, read as such and never removed."""
+
+    def test_it_reads_and_survives_the_sweep(
+        self, config: Config, store: dict[Any, Any]
+    ) -> None:
+        lst = _lst(config)
+        lst.extend(["a", "b"])
+        name = sorted(heads(store))[1]
+        legacy = {"__aw_env": "x", "title": "written by 3.14"}
+        store[(ACTOR, name)] = json.dumps(legacy)
+        assert lst.to_list() == ["a", legacy]
+        report = lst.sweep_span_orphans()
+        assert report["malformed_heads_removed"] == 0
+        assert lst.to_list() == ["a", legacy]
+        assert lst.verify()["malformed_heads"] == []
+
+
+class TestV2ContentMismatchIsFoundAndSwept:
+    def test_verify_reports_and_the_sweep_removes_it(
+        self, config: Config, store: dict[Any, Any]
+    ) -> None:
+        lst = _lst(config)
+        lst.extend(["ok", big("a")])
+        name = sorted(aux_rows(store))[0]
+        store[(AUX, name)] = "q" * len(store[(AUX, name)])
+        with pytest.raises(ListItemSpanError, match="do not match"):
+            lst.to_list()
+        report = lst.verify(spans=True)
+        assert len(report["broken_spans"]) == 1
+        assert lst.sweep_span_orphans()["broken_spans_removed"] == 1
+        assert lst.to_list() == ["ok"]
+
+
+class TestV3KnownFailuresDeleteTheirBodies:
+    def test_collision_storm_on_append_leaves_no_bodies(
+        self, config: Config, store: dict[Any, Any], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        class AlwaysCollides(RecordingDb):
+            def create_if_not_exists(
+                self,
+                actor_id: str | None = None,
+                name: str | None = None,
+                value: str | None = None,
+            ) -> bool:
+                if actor_id == ACTOR and "-#" in (name or ""):
+                    return False
+                return super().create_if_not_exists(
+                    actor_id=actor_id, name=name, value=value
+                )
+
+        lst = _lst(config)
+        lst.append("seed")
+        _use(monkeypatch, lambda c: AlwaysCollides(store, []))
+        with pytest.raises(RuntimeError, match="collisions"):
+            lst.append(big("a"))
+        assert aux_rows(store) == {}
+
+    def test_a_last_rank_fault_before_any_write_leaves_no_bodies(
+        self, config: Config, store: dict[Any, Any], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        lst = _lst(config)
+        lst.append("seed")
+
+        def boom(self: ListProperty) -> str:
+            raise DbError("property read", ACTOR)
+
+        monkeypatch.setattr(ListProperty, "_v2_last_rank", boom)
+        with pytest.raises(DbError):
+            lst.append(big("a"))
+        assert aux_rows(store) == {}
+
+    def test_compact_failure_deletes_the_copies_of_unwritten_items(
+        self, config: Config, store: dict[Any, Any], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        lst = _lst(config)
+        for tag in ("c", "b", "a"):
+            lst.insert(0, big(tag))
+        before = set(aux_rows(store))
+        writes = [0]
+
+        class SecondHeadWriteFails(RecordingDb):
+            def set(
+                self,
+                actor_id: str | None = None,
+                name: str | None = None,
+                value: str | None = None,
+            ) -> bool:
+                if actor_id == ACTOR and "-#" in (name or "") and value:
+                    writes[0] += 1
+                    if writes[0] == 2:
+                        return False
+                return super().set(actor_id=actor_id, name=name, value=value)
+
+        _use(monkeypatch, lambda c: SecondHeadWriteFails(store, []))
+        with pytest.raises(RuntimeError):
+            lst.compact()
+        # Old bodies plus exactly one copy: the item written before the
+        # failure. The failed item's and the unwritten item's copies are gone.
+        added = set(aux_rows(store)) - before
+        gens = {n.split("-$span-")[1][:30] for n in added}
+        assert len(gens) == 1
+
+
+class TestL1NonAsciiPartCount:
+    def test_too_many_non_ascii_parts_is_413_before_any_write(
+        self, store: dict[Any, Any]
+    ) -> None:
+        from actingweb.property_list import ListItemTooLargeError
+
+        # 10-byte parts hold two 4-byte emoji (8 bytes), so 50,000 bytes of
+        # emoji need about 6,250 parts while 10 * 9,999 allows 99,990 bytes:
+        # use a 15-byte threshold (3 emoji per part = 12 bytes).
+        cfg = Config(
+            database="dynamodb",
+            list_item_span_threshold=15,
+            list_item_max_bytes=15 * 9_999,
+        )
+
+        class Emoji:
+            def __str__(self) -> str:
+                return "\U0001f600" * 37_000  # 148,000 bytes, ~12,334 parts
+
+        lst = ListProperty(ACTOR, NAME, cfg)
+        with pytest.raises(ListItemTooLargeError, match="body rows"):
+            lst.append(Emoji())
+        assert store == {}

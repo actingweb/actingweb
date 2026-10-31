@@ -507,11 +507,37 @@ CHANGED
   every entry before writing any, so its 413 means nothing was written, and
   ``PUT ?index=`` answers a broken span with the 409.
 
+- **Behavior change: the REST property handlers deny when the permission
+  evaluator raises.** For a peer request, ``PropertiesHandler``,
+  ``PropertyMetadataHandler`` and ``PropertyListItemsHandler`` caught any
+  evaluator exception and answered with the coarse legacy ``access`` table,
+  which for the default table allowed ``friend``, ``partner`` and ``admin``
+  every property method, so an evaluator bug turned an ``excluded_patterns``
+  denial into an allow. They now deny (403) and log at ERROR; a ``DbError``
+  still answers 503. The no-rule (``NOT_FOUND``) fallback is unchanged. A
+  deployment whose evaluator raises today sees 403s where it saw 200s.
+
+- **The web UI's list pages read item heads only and act by identity.**
+  ``/<id>/www/properties/<list>`` no longer reads spanned items' bodies: it
+  passes ``list_entries`` (index, rank, a digest of the stored value, size,
+  and the item's JSON with key order and non-ASCII kept, ``None`` for a
+  spanned item) beside ``list_items`` (where a spanned item is
+  ``UNRESOLVED``), and ``?edit=<rank>`` loads one item whole as
+  ``edit_entry``; a corrupted list sets ``list_error``. The item actions
+  accept ``item_rank`` and ``item_digest`` and answer 409 when the item
+  changed or went since the page was loaded, refuse writes on a list a put
+  hook makes read-only (403), refuse a cross-site ``Origin`` (403), refuse
+  invalid JSON when ``item_format=json``, and treat a whitespace-only value
+  as empty. **Behavior change:** a template that rendered ``list_items``
+  shows ``UNRESOLVED`` for a spanned item; the shipped templates use
+  ``list_entries``.
+
 - **The web UI's list item actions answer with a reason.** The
   ``/<id>/www/properties/<list>/items`` actions answered errors with an empty
   body, mapped an oversized item to 500 and a broken span to 400, and an
   ``update`` with an empty ``item_value`` replaced the item with ``""``.
-  They now write the reason as a plain-text body, answer 413 and 409, and
+  They now answer with a small HTML page carrying the reason and a link back
+  to the list, answer 413 and 409, and
   refuse an empty ``update`` value with 400 as ``add`` already did.
   **Behavior change:** a form that posts an empty value to blank an item
   gets 400.

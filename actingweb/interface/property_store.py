@@ -9,7 +9,12 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from ..db.exceptions import DbError
 from ..property import PropertyStore as CorePropertyStore
-from ..property_list import ListItemHandle, diff_reference, spanned_reference
+from ..property_list import (
+    AppendOnceResult,
+    ListItemHandle,
+    diff_reference,
+    spanned_reference,
+)
 
 if TYPE_CHECKING:
     from ..actor import Actor as CoreActor
@@ -435,6 +440,21 @@ class NotifyingListProperty:
         # computes, rather than a second len(self._list_prop) call here.
         self._register_diff("append", item=item)
 
+    def append_once(self, item: Any, *, key: str) -> AppendOnceResult:
+        """See ``ListProperty.append_once()``. Registers the item's diff from
+        the call that announces it (``result.announced``): an ``append`` from
+        the creating call, or an ``insert`` at the item's position from a
+        repeat that finished a call which stopped before its key row."""
+        result = self._list_prop.append_once(item, key=key)
+        if result.announced:
+            if result.created or result.announce_index is None:
+                self._register_diff("append", item=result.item)
+            else:
+                self._register_diff(
+                    "insert", item=result.item, index=result.announce_index
+                )
+        return result
+
     def extend(self, items: list[Any]) -> None:
         self._list_prop.extend(items)
         # Include all items in the callback
@@ -548,6 +568,14 @@ class NotifyingListProperty:
         "compact" entry) so subscribers re-read the list rather than trust
         a positional diff for what is a storage-layer rewrite."""
         report = self._list_prop.compact(sweep_span_orphans=sweep_span_orphans)
+        self._register_diff("metadata")
+        return report
+
+    def repair_keys(self) -> dict[str, Any]:
+        """Repair ``append_once()`` key rows -- see
+        ListProperty.repair_keys(). Registers a "metadata" diff, as
+        compact() does, since a removed duplicate changes the list."""
+        report = self._list_prop.repair_keys()
         self._register_diff("metadata")
         return report
 

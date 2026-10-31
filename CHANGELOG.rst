@@ -817,6 +817,47 @@ ADDED
   broken span rather than as the item. ``ListProperty.check_item_size(item)``
   checks an item against the limits without writing.
 
+- **``ListProperty.append_once(item, *, key)``: a create a client can
+  repeat.** A client whose create timed out at a gateway while the server
+  finished the write could not tell "not stored" from "stored, answer
+  lost", and a find-then-append guard races. ``append_once`` stores
+  ``item`` unless an item with the same client-minted ``key`` is already in
+  the list, and returns ``AppendOnceResult(created, item, handle)`` (exported
+  from ``actingweb``): on a repeat ``created=False`` and the item the first
+  call stored, whatever payload the repeat sent. The key is stored only as
+  ``HMAC-SHA256(actor_id, key)`` in a key row in the actor's side partition,
+  and that row's conditional create decides between overlapping calls; the
+  loser deletes its own copy, so two items are visible for the length of
+  that delete. A key is bound to its item: deleting the item (by handle,
+  ``pop``, ``remove``, ``del``, ``clear``, ``delete``) deletes its key row,
+  and a later repeat creates again; a rewrite keeps the key. A repeat costs
+  two point reads, a first call one more strongly consistent read of the
+  list's heads. A ``DbError`` can follow a stored item (a repeat
+  converges). v2 only; ``extend()``, ``insert()`` and the REST handlers
+  take no keys. Also on ``NotifyingListProperty`` (at most one diff per
+  item: an ``append`` from the call that created it, or an ``insert`` at
+  ``announce_index`` from the repeat that finished a call which stopped
+  before its key row, ``announced=True`` there) and the permission-checked
+  list view (needs ``write``). ``ListItemHandle`` gains ``key_hash``.
+  ``verify()`` now always reads the list's key rows and reports
+  ``key_rows``, ``dangling_key_rows``, ``duplicate_keyed_items`` (part of
+  ``healthy``) and ``unkeyed_keyed_items``, by rank, never by hash, leaving
+  out anything written in the last hour by the writer's clock (a call
+  still running). ``clear()`` deletes the key rows of the items it deleted
+  and dangling ones older than an hour. New ``ListProperty.repair_keys()`` (also on the notifying list,
+  with a ``metadata`` diff, and the permission-checked view) removes duplicate keyed items, keeping the
+  one the key row names, writes missing key rows and deletes dangling ones
+  (``duplicate_keyed_items_removed``, ``key_rows_created``,
+  ``dangling_key_rows_removed``), under the same age rule and without
+  rebalancing; ``compact()`` runs it before it rebalances, and
+  ``actingweb-verify-property-lists --repair`` runs it for a list whose
+  only repairable finding is duplicate keyed items. **Behavior
+  change:** the first ``append_once`` on a list makes it unreadable to
+  pre-3.16 readers (they see the storage envelope as the item) and makes
+  ``downgrade_to_v1`` refuse it; deploy 3.16 everywhere first.
+  ``verify()`` on a v2 list makes one more small read (the key rows) and
+  its report has the four new keys.
+
 FIXED
 ~~~~~
 

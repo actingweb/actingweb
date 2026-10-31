@@ -507,6 +507,7 @@ _PROXY_MUTATORS = {
     "set_description": ("write", lambda v: v.set_description("d")),
     "set_explanation": ("write", lambda v: v.set_explanation("e")),
     "append": ("write", lambda v: v.append("x")),
+    "append_once": ("write", lambda v: v.append_once("x", key="k")),
     "extend": ("write", lambda v: v.extend(["x"])),
     "clear": ("delete", lambda v: v.clear()),
     "delete": ("delete", lambda v: v.delete()),
@@ -518,6 +519,7 @@ _PROXY_MUTATORS = {
     "remove_where": ("delete", lambda v: v.remove_where("k", "v")),
     "update_where": ("write", lambda v: v.update_where("k", "v", "x")),
     "compact": ("write", lambda v: v.compact()),
+    "repair_keys": ("write", lambda v: v.repair_keys()),
     "sweep_span_orphans": ("write", lambda v: v.sweep_span_orphans()),
     "migrate_to_v2": ("write", lambda v: v.migrate_to_v2()),
 }

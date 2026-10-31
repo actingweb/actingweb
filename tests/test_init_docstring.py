@@ -34,6 +34,7 @@ def test_init_all_unchanged():
         "ListItemTooLargeError",
         "ListItemSpanError",
         "UNRESOLVED",
+        "AppendOnceResult",
     ]
 
 

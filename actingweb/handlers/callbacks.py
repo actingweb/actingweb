@@ -25,6 +25,10 @@ def _has_wildcard(pattern: str) -> bool:
 class CallbacksHandler(base_handler.BaseHandler):
     def get(self, actor_id, name):
         """Handles GETs to callbacks"""
+        # A GET with a _method override changes state: refuse one a
+        # page on another site started (see BaseHandler).
+        if self._refuse_cross_site_override():
+            return
         if self.request.get("_method") == "PUT":
             self.put(actor_id, name)
         if self.request.get("_method") == "POST":

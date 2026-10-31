@@ -705,8 +705,12 @@ is missing or the bodies do not match the size and digest its head records,
 so this reads every body). ``sweep_span_orphans()`` (the
 script's ``--repair --sweep-spans``) removes orphan generations older than
 one hour (younger ones may belong to an append still in flight), heads whose
-bodies are gone (``broken_spans_removed``) and heads that are malformed
-envelopes (``malformed_heads_removed``), without moving any other head.
+bodies are gone (``broken_spans_removed``) and malformed envelopes that
+carry the library's marker (``malformed_heads_removed``), without moving
+any other head. A head that is not valid JSON is kept, with the bodies it
+names, for recovery (``malformed_heads_kept``): save its value, then remove
+the item with ``delete_by_handle()``. The script reports a list whose sweep
+left a broken span or malformed head in place as unhealthy.
 ``compact(sweep_span_orphans=True)`` does the same and then rebalances. A
 ``compact()`` that moves a spanned item copies its bodies to a fresh
 generation first, and stops with nothing moved if one cannot be read.

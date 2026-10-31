@@ -4383,9 +4383,34 @@ class ListProperty:
             span_heads, span_names, check_content=True
         )
         raw_by_rank = dict(pairs)
-        # A head that does not parse may still name its bodies: keep them for
-        # a repair, never sweep them as orphans.
-        for gen in self._gens_named_by(raw_by_rank[r] for r in malformed):
+        # Malformed heads first. One with the library marker names no
+        # readable item: removing it makes the list readable again, and its
+        # bodies become ordinary orphans below. One without it (not valid
+        # JSON) is left for an operator, and so are the bodies it names, so
+        # a repair can recover them.
+        malformed_removed = 0
+        malformed_kept: list[str] = []
+        for rank in malformed:
+            raw = raw_by_rank[rank]
+            if carries_library_marker(raw) and get_property(
+                self.config
+            ).delete_if_value_equals(
+                actor_id=self.actor_id,
+                name=self._v2_item_name(rank),
+                value=raw,
+            ):
+                malformed_removed += 1
+                logger.warning(
+                    "List '%s' (actor %s): removed the item at rank %r "
+                    "(%d bytes), whose head was a malformed storage envelope",
+                    self.name,
+                    self.actor_id,
+                    rank,
+                    len(raw),
+                )
+            else:
+                malformed_kept.append(rank)
+        for gen in self._gens_named_by(raw_by_rank[r] for r in malformed_kept):
             orphans.pop(gen, None)
         span_by_rank = dict(span_heads)
         aux = self._aux_or_none()
@@ -4413,23 +4438,6 @@ class ListProperty:
             if aux is not None:
                 get_property(self.config).batch_delete(actor_id=aux, names=names)
             orphans_removed += 1
-        malformed_removed = 0
-        for rank in [r for r in malformed if carries_library_marker(raw_by_rank[r])]:
-            # A head that is not a valid envelope names no readable item;
-            # removing it makes the list readable again.
-            if get_property(self.config).delete_if_value_equals(
-                actor_id=self.actor_id,
-                name=self._v2_item_name(rank),
-                value=raw_by_rank[rank],
-            ):
-                malformed_removed += 1
-                logger.warning(
-                    "List '%s' (actor %s): removed the item at rank %r, whose "
-                    "head was a malformed storage envelope",
-                    self.name,
-                    self.actor_id,
-                    rank,
-                )
         if broken_removed or malformed_removed:
             self._v2_rank_cache = None
         return {
@@ -4439,6 +4447,9 @@ class ListProperty:
             "orphan_span_gens_removed": orphans_removed,
             "broken_spans_removed": broken_removed,
             "malformed_heads_removed": malformed_removed,
+            # Malformed heads still in place: not removable here (no
+            # library marker) or changed under the sweep.
+            "malformed_heads_kept": len(malformed_kept),
         }
 
     def sweep_span_orphans(self) -> dict[str, Any]:
@@ -4449,14 +4460,17 @@ class ListProperty:
         head names that are older than an hour (younger ones may belong to
         an append still in flight), heads whose bodies are not all there
         (the item is lost already; this makes the list readable again), and
-        heads that are malformed envelopes. No head is moved or rewritten,
+        heads that are malformed envelopes with the library marker (a head
+        that is not valid JSON is reported, and kept with its bodies). No head is moved or rewritten,
         so this costs no copy of any body, unlike
         ``compact(sweep_span_orphans=True)``, which also rebalances.
 
         Returns:
             ``span_body_rows``, ``orphan_span_gens``, ``broken_spans`` (as
             found) and ``orphan_span_gens_removed``,
-            ``broken_spans_removed``, ``malformed_heads_removed``.
+            ``broken_spans_removed``, ``malformed_heads_removed`` and
+            ``malformed_heads_kept`` (heads not valid JSON, which need
+            ``delete_by_handle()``, or ones that changed under the sweep).
 
         Raises:
             ValueError: The list is v1.

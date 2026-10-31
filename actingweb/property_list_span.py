@@ -199,15 +199,17 @@ def _envelope_obj(raw: Any) -> dict[str, Any] | None:
     """Decode ``raw`` once and classify it.
 
     ``None``: a plain item. That is anything not starting with the marker,
-    and a valid JSON object whose marker value is not an int (a pre-3.16
-    user item such as ``{"__aw_env": "x", ...}``, which reads as itself).
-    A dict: an envelope with the marker ``1``, to validate further.
+    and a valid JSON object whose marker value is anything but the int
+    ``1`` (a pre-3.16 user item such as ``{"__aw_env": "x", ...}`` or
+    ``{"__aw_env": 2, ...}``, which reads as itself: no other envelope
+    format exists). A dict: an envelope with the marker ``1``, to validate
+    further.
 
     Raises:
         EnvelopeError: The value starts with the marker but is not valid
-            JSON (a damaged library envelope), or its marker is an int other
-            than ``1`` (an envelope of a format this version does not read).
-            Either is reported as malformed rather than served as an item.
+            JSON. A stored user item is always valid JSON, so this is a
+            damaged library envelope, reported as malformed rather than
+            served as an item.
     """
     if not looks_like_envelope(raw):
         return None
@@ -218,10 +220,8 @@ def _envelope_obj(raw: Any) -> dict[str, Any] | None:
     if not isinstance(obj, dict) or not obj or next(iter(obj)) != ENVELOPE_MARKER:
         return None
     marker = obj[ENVELOPE_MARKER]
-    if not isinstance(marker, int) or isinstance(marker, bool):
+    if not isinstance(marker, int) or isinstance(marker, bool) or marker != 1:
         return None
-    if marker != 1:
-        raise EnvelopeError(f"envelope format {marker} is not one this version reads")
     return obj
 
 
@@ -229,8 +229,8 @@ def carries_library_marker(raw: Any) -> bool:
     """True if ``raw`` is a valid JSON object whose first key is the
     envelope marker with exactly the value ``1``: something this library
     wrote as an envelope (even if a later field is now damaged), and so
-    safe for the span sweep to remove when it is malformed. A damaged or
-    other-format envelope is reported but never removed."""
+    safe for the span sweep to remove when it is malformed. A head that is
+    not valid JSON is reported but never removed."""
     try:
         return _envelope_obj(raw) is not None
     except EnvelopeError:

@@ -31,6 +31,10 @@ class AsyncActionsHandler(ActionsHandler):
         GET /actions - List available actions
         GET /actions/action_name - Get action status
         """
+        # A GET with a _method override changes state: refuse one a
+        # page on another site started (see BaseHandler).
+        if self._refuse_cross_site_override():
+            return
         if self.request.get("_method") == "PUT":
             await self.put_async(actor_id, name)
             return

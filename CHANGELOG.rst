@@ -147,24 +147,39 @@ SECURITY
   vouches for that address unless it passes ``unvouch=True`` (new), which
   applies the endpoint's rules.
 
-- **A link on another site could delete a property through the web UI, and
-  a form on another site could change one.** ``GET
-  /<id>/www/properties/<name>?_method=DELETE`` deletes the property, and a
-  browser sends ``SameSite=Lax`` session cookies, and cached basic-auth
-  credentials, on a top-level navigation from any site; the web UI's
-  property and trust ``POST`` forms had no origin check either (only the
-  list item actions did, and only on ``Origin``). Every state-changing web
-  UI request (each ``POST`` under ``/<id>/www`` and the ``_method``
-  override on ``GET``) now answers 403 "Cross-site request refused" when
-  the browser says it is cross-site: ``Sec-Fetch-Site`` other than
-  ``same-origin`` or ``none`` when the browser sends it, else an ``Origin``
-  (or, without one, a ``Referer``) whose scheme, host and port are not
-  ``config.root``'s; ``Origin: null`` is refused. A request with none of
-  these headers (a script, ``curl``) passes as before. The property
-  creation form's ``redirect_to`` now only redirects within the actor's own
-  web UI. **Behavior change:** a page on another origin that posts to the
-  web UI, or links to ``?_method=DELETE``, now gets 403; serve it from the
-  application's own origin.
+- **A link on another site could delete the actor, approve a trust, or
+  change a property for a signed-in owner.** Every REST handler honours a
+  ``_method`` override on ``GET`` (``GET /<id>?_method=DELETE`` deletes the
+  actor; ``/<id>/trust/<rel>/<peer>?_method=PUT&approved=true`` approves a
+  pending trust; ``/<id>/properties/<name>``, ``/subscriptions``,
+  ``/actions``, ``/methods`` and ``/callbacks`` likewise), and so does the
+  web UI's property page. A browser sends the ``SameSite=Lax`` session
+  cookie, which the Flask and FastAPI integrations turn into a Bearer
+  header, and cached basic-auth credentials, on a top-level navigation
+  started by any site. The web UI's ``POST`` forms had no origin check
+  either (only the list item actions did, and only on ``Origin``).
+
+  A ``GET`` with a ``_method`` override now answers 403 "Cross-site request
+  refused" unless the request shows it came from the application's own
+  pages: ``Sec-Fetch-Site: same-origin`` when the browser sends the header
+  (so ``none``, a link opened from a mail or chat client, is refused too),
+  else a same-origin ``Origin`` or ``Referer``; without any of the three it
+  passes, except when it authenticates with the session cookie. Every
+  ``POST`` under ``/<id>/www`` answers 403 when the browser says it is
+  cross-site (``Sec-Fetch-Site`` other than ``same-origin`` or ``none``, or
+  a foreign or ``null`` ``Origin``, or a foreign ``Referer``). "Same
+  origin" is the scheme, host and port of ``config.root``; a base path does
+  not matter. A real ``PUT``, ``POST`` or ``DELETE`` is not checked, so
+  peers and SPAs (which call the API cross-origin with Bearer tokens) are
+  unaffected. The property creation form's ``redirect_to`` now only
+  redirects within the actor's own web UI (no other actor, no dot
+  segments, no percent-encoding). **Limitation:** a cross-site ``POST`` to a
+  REST endpoint still carries cached basic-auth credentials; a browser
+  sends a ``Lax`` cookie only on top-level ``GET`` navigations.
+  **Behavior change:** a page on another origin that posts to the web UI or
+  links to a ``?_method=`` URL, and a browser link opened from outside the
+  browser, now get 403; a script that uses ``?_method=`` with the session
+  cookie and no browser headers must send the real method instead.
 
 REMOVED
 ~~~~~~~
@@ -549,13 +564,16 @@ CHANGED
   accept ``item_rank`` and ``item_digest`` and answer 409 when the item
   changed or went since the page was loaded, refuse writes on a list a put
   hook makes read-only (403), refuse a cross-site request (403, see
-  SECURITY), refuse invalid JSON when ``item_format=json``, keep a text
-  item's line breaks as ``\n`` (a textarea posts CRLF), and treat a
-  whitespace-only value as empty. A v1 list's items are edited by
-  position (``?edit_index=<i>``) and its actions accept ``item_digest``
-  too, answering 409 when that position now holds a different item. The
-  web UI's redirects and the error pages' back links keep the
-  deployment's base path (``config.root``). **Behavior change:** in ``list_items`` a spanned item is the
+  SECURITY), refuse invalid JSON when ``item_format=json``, store every
+  textarea's line breaks as ``\n`` (a textarea posts CRLF; an item written
+  over REST with CRLF is rewritten with LF when it is saved in the web
+  UI), and treat a whitespace-only value as empty. A v1 list's items are
+  edited by position (``?edit_index=<i>``), and its actions accept
+  ``item_digest`` too, answering 409 when that position now holds a
+  different item or none; this is best effort (the check and the write are
+  two steps) and only runs when the form posts ``item_digest``. The web
+  UI's redirects, the trust and email-verification redirects and the error
+  pages' back links keep the deployment's base path (``config.root``). **Behavior change:** in ``list_items`` a spanned item is the
   ``UNRESOLVED`` sentinel, so a custom template that prints ``list_items``
   shows the text ``UNRESOLVED`` for it, and one that passes ``list_items``
   through ``tojson`` raises ``TypeError``. Render ``list_entries`` instead,
@@ -732,9 +750,12 @@ ADDED
   ``malformed_heads``; ``verify(spans=True)`` also enumerates body rows and
   reports ``span_body_rows``, ``orphan_span_gens`` and ``broken_spans``.
   ``sweep_span_orphans()`` removes orphan body generations older than an
-  hour, heads whose bodies are missing and malformed heads
-  (``orphan_span_gens_removed``, ``broken_spans_removed``,
-  ``malformed_heads_removed``) without rebalancing;
+  hour, heads whose bodies are missing and malformed heads that carry the
+  library's envelope marker (``orphan_span_gens_removed``,
+  ``broken_spans_removed``, ``malformed_heads_removed``) without
+  rebalancing; a head that is not valid JSON is kept with the bodies it
+  names (``malformed_heads_kept``) for recovery, and the script reports a
+  list whose sweep left one in place as unhealthy;
   ``compact(sweep_span_orphans=True)`` sweeps and then rebalances.
   ``actingweb-verify-property-lists`` gains ``--spans`` and, with
   ``--repair``, ``--sweep-spans`` (which runs the sweep, not a rebalance).

@@ -11,7 +11,7 @@ import pytest
 from actingweb.config import Config
 from actingweb.db.exceptions import DbError
 from actingweb.property_list import ListItemSpanError, ListProperty
-from actingweb.property_list_span import parse, span_prefix
+from actingweb.property_list_span import EnvelopeError, parse, span_prefix
 from tests.test_property_list_spans import (
     ACTOR,
     AUX,
@@ -699,22 +699,18 @@ class TestL1NonAsciiPartCount:
 
 
 class TestW2DamagedEnvelopesAreReportedAndTheirBodiesKept:
-    """Third verification, W2: a truncated library envelope or one of
-    another format is malformed (never a plain item); the sweep keeps both
-    the head and the bodies it names, so a repair can recover them."""
+    """Third verification, W2: a truncated library envelope is malformed
+    (never a plain item); the sweep keeps both the head and the bodies it
+    names, so a repair can recover them."""
 
-    @pytest.mark.parametrize("damage", ["truncate", "format2"])
     def test_reported_not_served_not_swept(
-        self, config: Config, store: dict[Any, Any], damage: str
+        self, config: Config, store: dict[Any, Any]
     ) -> None:
         lst = _lst(config)
         lst.extend(["ok", big("a")])
         name = sorted(heads(store))[1]
         head = store[(ACTOR, name)]
-        if damage == "truncate":
-            store[(ACTOR, name)] = head[: len(head) // 2]
-        else:
-            store[(ACTOR, name)] = head.replace('"__aw_env": 1', '"__aw_env": 2', 1)
+        store[(ACTOR, name)] = head[: len(head) // 2]
         bodies = dict(aux_rows(store))
         with pytest.raises(ListItemSpanError, match="malformed"):
             lst.to_list()
@@ -835,3 +831,88 @@ class TestW4SingleListResyncSurvivesDamageAndDeletes:
         lst.extend(["a", big("b")])
         pairs = lst.items_with_handles(resolve=False)
         assert Actor._resolve_list_heads(lst, pairs) == ["a", big("b")]
+
+
+class TestX6RemovedMalformedHeadsReleaseTheirBodies:
+    """Fourth verification, X6: a malformed head the sweep removes does not
+    keep its bodies; one it keeps (not valid JSON) does."""
+
+    def test_removed_head_bodies_are_swept_kept_head_bodies_stay(
+        self, config: Config, store: dict[Any, Any]
+    ) -> None:
+        lst = _lst(config)
+        lst.extend(["ok", "x", "y"])
+        names = sorted(heads(store))
+        # Marker 1, valid JSON, a span the codec refuses: removable.
+        removable = json.dumps(
+            {"__aw_env": 1, "span": {"gen": OLD_GEN, "parts": 0, "bytes": 1}}
+        )
+        store[(ACTOR, names[1])] = removable
+        with pytest.raises(EnvelopeError):
+            parse(removable)
+        store[(AUX, f"{span_prefix(NAME, OLD_GEN)}p0000")] = "body of removed head"
+        # Not valid JSON, naming another old generation: kept, with it.
+        kept_gen = OLD_GEN[:-1] + ("1" if OLD_GEN[-1] != "1" else "2")
+        store[(ACTOR, names[2])] = '{"__aw_env": 1, "span": {"gen": "' + kept_gen + '"'
+        store[(AUX, f"{span_prefix(NAME, kept_gen)}p0000")] = "body of kept head"
+
+        report = lst.sweep_span_orphans()
+
+        assert report["malformed_heads_removed"] == 1
+        assert report["malformed_heads_kept"] == 1
+        assert (ACTOR, names[1]) not in store
+        assert (AUX, f"{span_prefix(NAME, OLD_GEN)}p0000") not in store
+        assert (ACTOR, names[2]) in store
+        assert (
+            store[(AUX, f"{span_prefix(NAME, kept_gen)}p0000")] == "body of kept head"
+        )
+
+
+class TestX4SweepLeftoversDecideHealth:
+    """Fourth verification, X4: what the sweep found and could not remove
+    makes the list unhealthy, and a sweep fault still verifies the list."""
+
+    @staticmethod
+    def _run(monkeypatch: pytest.MonkeyPatch, sweep: Any) -> tuple[Any, list[Any]]:
+        from actingweb.maintenance import verify_property_lists as script
+
+        calls: list[Any] = []
+        monkeypatch.setattr(
+            "actingweb.property.PropertyListStore.list_all", lambda self: ["l"]
+        )
+        monkeypatch.setattr(ListProperty, "storage_format", lambda self: 2)
+        monkeypatch.setattr(ListProperty, "sweep_span_orphans", sweep)
+
+        def verify(self: ListProperty, **kwargs: Any) -> dict[str, Any]:
+            calls.append(kwargs)
+            return {"healthy": True, "format": 2}
+
+        monkeypatch.setattr(ListProperty, "verify", verify)
+        result = script.sweep_actor(
+            "a1",
+            Config(database="dynamodb"),
+            repair=True,
+            limiter=script.RateLimiter(0),
+            sweep_spans=True,
+        )
+        return result, calls
+
+    def test_a_broken_span_left_in_place_is_unhealthy(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def sweep(self: ListProperty) -> dict[str, Any]:
+            return {"broken_spans": ["a0"], "broken_spans_removed": 0}
+
+        (checked, unhealthy, errored), calls = self._run(monkeypatch, sweep)
+        assert (checked, unhealthy, errored) == (1, 1, 0)
+        assert calls == [{"identity_key": None, "spans": False}]
+
+    def test_a_sweep_fault_is_counted_and_the_list_still_verified(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def sweep(self: ListProperty) -> dict[str, Any]:
+            raise DbError("span sweep", "a1")
+
+        (checked, unhealthy, errored), calls = self._run(monkeypatch, sweep)
+        assert (checked, unhealthy, errored) == (1, 0, 1)
+        assert len(calls) == 1

@@ -960,29 +960,60 @@ pre code {
   .properties-table .col-actions { min-width: 100px; }
 }
 
+/* The trust table: long ids and type URNs wrap, so the actions stay
+   inside the card at every width. */
+.trust-table {
+  width: 100%;
+}
+.trust-table td {
+  overflow-wrap: anywhere;
+}
+.trust-table td:last-child {
+  white-space: nowrap;
+}
+.trust-table .badge {
+  white-space: nowrap;
+  overflow-wrap: normal;
+}
+
 @media (max-width: 480px) {
-  /* Phones: each property stacks as a block (name, value, then Delete)
-     instead of three columns that cannot hold the button. */
+  /* Phones: each property (or trust) stacks as a block, its cells one
+     under the other with the actions last, instead of columns that cannot
+     hold the buttons. */
   .properties-table,
   .properties-table tbody,
   .properties-table tr,
-  .properties-table td {
+  .properties-table td,
+  .trust-table,
+  .trust-table tbody,
+  .trust-table tr,
+  .trust-table td {
     display: block;
     width: 100%;
     box-sizing: border-box;
   }
   .properties-table thead,
-  .properties-table colgroup {
+  .properties-table colgroup,
+  .trust-table thead {
     display: none;
   }
-  .properties-table tr {
+  .properties-table tr,
+  .trust-table tr {
     padding: var(--spacing-sm) 0;
     border-bottom: 1px solid var(--color-border);
   }
-  .properties-table td {
+  .properties-table td,
+  .trust-table td {
     padding: 2px 0;
     border: none;
     text-align: left !important;
+  }
+  .trust-table td .justify-end {
+    justify-content: flex-start;
+  }
+  /* Two-column cards (the trust page's "About") take one column. */
+  .grid-cols-2 {
+    grid-template-columns: 1fr;
   }
   .properties-table td:nth-child(2) {
     overflow-wrap: anywhere;

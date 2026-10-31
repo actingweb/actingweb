@@ -1095,3 +1095,104 @@ def test_delete_error_page_does_not_promise_kept_text(live: Any) -> None:
         myself, config, "properties/delerr/items", {"action": "add", "item_value": " "}
     )
     assert "your text is kept" in typed.response.body
+
+
+class TestWwwVerification4FollowUps:
+    """Fourth verification, X2, X7, X8, X9, X13."""
+
+    @pytest.mark.parametrize(
+        "headers",
+        [{"Sec-Fetch-Site": "none"}, {"Sec-Fetch-Site": "same-site"}],
+    )
+    def test_get_delete_from_a_mail_link_is_refused(
+        self, live: Any, headers: dict[str, str]
+    ) -> None:
+        myself, config = live
+        myself.property.mailed = "v"
+        webobj = _www_call(
+            myself, config, "get", "properties/mailed", {"_method": "DELETE"}, headers
+        )
+        assert webobj.response.status_code == 403
+        assert myself.property.mailed == "v"
+
+    def test_v1_position_gone_with_a_digest_is_409(self, live: Any) -> None:
+        myself, config = live
+        _seed_v1_live(myself, config, "short", ["a", "b"])
+        page = _www_get(myself, config, "properties/short", {})
+        digest = page.response.template_values["list_entries"][1]["digest"]
+        del myself.property_lists.short[1]
+        for action in ("delete", "update"):
+            webobj = _www_post(
+                myself,
+                config,
+                "properties/short/items",
+                {
+                    "action": action,
+                    "item_index": "1",
+                    "item_digest": digest,
+                    "item_value": "c",
+                },
+            )
+            assert webobj.response.status_code == 409, action
+        assert myself.property_lists.short.to_list() == ["a"]
+
+    def test_add_stores_line_breaks_as_lf(self, live: Any) -> None:
+        myself, config = live
+        webobj = _www_post(
+            myself,
+            config,
+            "properties/addcrlf/items",
+            {"action": "add", "item_value": "one\r\ntwo"},
+        )
+        assert webobj.response.status_code == 302
+        assert myself.property_lists.addcrlf.to_list() == ["one\ntwo"]
+
+    @pytest.mark.parametrize(
+        "target",
+        [
+            "/{id}/www/../../other/www/properties",
+            "/{id}/www/%2e%2e/%2e%2e/other/www",
+            "/{id}/www/./x",
+        ],
+    )
+    def test_redirect_to_refuses_dot_segments(self, live: Any, target: str) -> None:
+        myself, config = live
+        webobj = _www_call(
+            myself,
+            config,
+            "post",
+            "properties",
+            {
+                "property_name": "dots",
+                "property_value": "x",
+                "property_type": "simple",
+                "redirect_to": target.format(id=myself.id),
+            },
+        )
+        assert webobj.response.status_code == 302
+        assert webobj.response.redirect == f"/{myself.id}/www/properties"
+
+    def test_a_non_ascii_edit_index_is_ignored(self, live: Any) -> None:
+        myself, config = live
+        _seed_v1_live(myself, config, "sup", ["a"])
+        page = _www_get(myself, config, "properties/sup", {"edit_index": "²"})
+        assert page.response.template_values["edit_entry"] is None
+
+
+def test_trust_redirects_keep_the_base_path() -> None:
+    from actingweb.handlers import trust
+
+    config = Config(database="dynamodb")
+    config.root = "https://demo.actingweb.io/base/"
+    webobj = AWWebObj(
+        params={"_method": "DELETE"}, headers={"Sec-Fetch-Site": "same-origin"}
+    )
+    handler = trust.TrustPeerHandler(webobj, config)
+
+    def deleted(*_args: Any) -> None:
+        handler.response.set_status(204, "Deleted")
+
+    with mock.patch.object(handler, "delete", side_effect=deleted):
+        handler.get("a1", "friend", "p1")
+    assert webobj.response.status_code == 302
+    assert webobj.response.redirect == "/base/a1/www/trust"

@@ -144,9 +144,10 @@ class TestParse:
         with pytest.raises(EnvelopeError, match="not valid JSON"):
             parse('{"__aw_env": 1, ')
 
-    def test_another_format_is_malformed_not_an_item(self) -> None:
-        with pytest.raises(EnvelopeError, match="format 2"):
-            parse(json.dumps({"__aw_env": 2, "span": {}}))
+    def test_another_marker_value_is_a_plain_item(self) -> None:
+        # Fourth verification, X3: no other envelope format exists, so a
+        # pre-3.16 user item {"__aw_env": 2, ...} reads as itself.
+        assert parse(json.dumps({"__aw_env": 2, "span": {}})) is None
 
     def test_round_trip_with_span_preserves_extra(self) -> None:
         span = SpanInfo(gen=GEN, parts=3, bytes=1000, sha256="ab" * 32)

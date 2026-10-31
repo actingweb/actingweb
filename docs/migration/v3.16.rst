@@ -94,6 +94,12 @@ check only the first three items and item 11.
     spanned item as an envelope dict. ``$`` is refused in new list names and
     in a caller-supplied actor id, and a list diff over the threshold is sent
     as a reference.
+15. **A ``GET`` with ``?_method=`` refuses a cross-site request** (see
+    `Cross-site requests`_): links to ``?_method=PUT|POST|DELETE`` work
+    from the application's own pages, but a link on another site, or one
+    opened from a mail or chat client, answers 403. A script that sends
+    ``?_method=`` with the web UI's session cookie and no browser headers
+    must send the real HTTP method.
 
 
 What changed and why
@@ -739,6 +745,37 @@ picture; what an upgrade needs:
   ``list_item_span_threshold`` (the most body rows a span names); a pair
   outside that raises ``ValueError`` where it is set.
 
+
+Cross-site requests
+===================
+
+A ``GET`` that carries a ``_method`` override changes state, and a browser
+sends the ``SameSite=Lax`` session cookie (and cached basic-auth
+credentials) on a top-level navigation any site starts. Every handler that
+honours the override (``/<id>``, ``/properties``, ``/trust``,
+``/subscriptions``, ``/actions``, ``/methods``, ``/callbacks`` and the web
+UI) now requires the request to show it came from the application's own
+pages:
+
+- ``Sec-Fetch-Site: same-origin`` when the browser sends that header
+  (``none``, ``same-site`` and ``cross-site`` are refused);
+- otherwise an ``Origin``, then a ``Referer``, whose scheme, host and port
+  are those of ``config.root`` (a base path does not matter; ``Origin:
+  null`` is refused);
+- a request with none of the three passes (a script, a peer), unless it
+  authenticates with the ``oauth_token`` session cookie.
+
+A refused request answers 403 "Cross-site request refused" and changes
+nothing. Every ``POST`` under ``/<id>/www`` is refused when the browser
+reports a cross-site request. A real ``PUT``, ``POST`` or ``DELETE`` is not
+checked, so peers and SPAs that call the API with Bearer tokens are
+unaffected.
+
+**What to check:** a template or page of your own that links to a
+``?_method=`` URL must be served from the application's origin (the shipped
+templates are); a proxy must not strip ``Sec-Fetch-Site``, ``Origin`` and
+``Referer``, or set them to another origin; a script that relied on
+``?_method=`` with the session cookie must send the real method.
 
 What stays the same
 ===================

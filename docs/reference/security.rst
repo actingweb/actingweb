@@ -25,6 +25,15 @@ Access Control
   ``notes://*``, and a target such as ``notes://../../security/key`` matches
   it: ``..`` segments and percent-encoding are not resolved. A resource
   reader that maps URIs to storage validates its own path.
+- **A GET never changes state from another site.** Every handler that
+  honours a ``_method`` override on ``GET`` refuses it (403) unless the
+  request shows it came from the application's own pages
+  (``Sec-Fetch-Site: same-origin``, or a same-origin ``Origin`` or
+  ``Referer``); a request with none of these passes unless it
+  authenticates with the web UI's session cookie. Web UI ``POST`` forms
+  are refused when the browser reports a cross-site request. A cross-site
+  ``POST`` to a REST endpoint still carries cached basic-auth credentials:
+  prefer OAuth2 sessions for browser use.
 - **REST property permission checks fail closed.** When the permission
   check itself raises for a peer (the evaluator cannot be built, or the
   legacy check behind a no-rule result raises), the property, list-metadata

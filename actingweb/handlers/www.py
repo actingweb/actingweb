@@ -89,7 +89,11 @@ class WwwHandler(base_handler.BaseHandler):
             # which is what a v1 list's identity is.
             v1_edit: dict[str, Any] | None = None
             edit_index = self.request.get("edit_index")
-            if edit_index.isdigit() and int(edit_index) < len(v1_entries):
+            if (
+                edit_index.isascii()
+                and edit_index.isdigit()
+                and int(edit_index) < len(v1_entries)
+            ):
                 v1_edit = dict(v1_entries[int(edit_index)])
             return items, v1_entries, v1_edit
         pairs = list_prop.items_with_handles(resolve=False)
@@ -145,78 +149,23 @@ class WwwHandler(base_handler.BaseHandler):
             is None
         )
 
-    def _www_path(self, actor_id: str, suffix: str = "") -> str:
-        """``/<base>/<actor_id>/www`` plus ``suffix``: the web UI's own path,
-        with the deployment's base path (``config.root``), for redirects and
-        back links."""
-        try:
-            www_base = self._get_consistent_urls(actor_id)["actor_www"]
-        except RuntimeError:
-            www_base = f"/{actor_id}/www"
-        return f"{www_base}{suffix}"
-
-    def _same_origin(self, url: str) -> bool:
-        """Whether ``url``'s origin (scheme, host, port) is this app's own,
-        from ``config.root``: case-insensitive host, default ports filled
-        in, any base path ignored (an origin has none)."""
-        from urllib.parse import urlsplit
-
-        def origin(value: str) -> tuple[str, str, int | None]:
-            parts = urlsplit(value)
-            scheme = (parts.scheme or "").lower()
-            try:
-                port = parts.port
-            except ValueError:
-                port = -1
-            if port is None:
-                port = {"https": 443, "http": 80}.get(scheme)
-            return scheme, (parts.hostname or "").lower(), port
-
-        return origin(url) == origin(self.config.root)
-
-    def _cross_site_refused(self) -> bool:
-        """True when a state-changing web UI request comes from another site.
-
-        A browser that sends ``Sec-Fetch-Site`` (every current one) is
-        trusted on it: only ``same-origin`` (or ``none``, a user typing the
-        URL) passes. Otherwise the ``Origin`` header, then ``Referer``, must
-        be this app's origin (``config.root``; a base path does not
-        matter). A request with none of the three (a script, ``curl``) is
-        not a browser's cross-site request and passes, as do basic-auth API
-        clients. ``Origin: null`` without ``Sec-Fetch-Site`` is refused.
-        """
-        fetch_site = (self.request.get_header("Sec-Fetch-Site") or "").lower()
-        if fetch_site:
-            return fetch_site not in ("same-origin", "none")
-        origin = self.request.get_header("Origin")
-        if origin:
-            return origin == "null" or not self._same_origin(origin)
-        referer = self.request.get_header("Referer")
-        if referer:
-            return not self._same_origin(referer)
-        return False
-
-    def _refuse_cross_site(self) -> bool:
-        """Answer 403 for a cross-site state-changing request; True when it
-        did."""
-        if not self._cross_site_refused():
-            return False
-        self.response.set_status(403, "Cross-site request refused")
-        self.response.headers["Content-Type"] = "text/plain; charset=utf-8"
-        self.response.write("Cross-site request refused")
-        return True
-
     def _v1_item_changed(self, list_prop: Any, index: int) -> bool:
         """For a v1 list action that posted ``item_digest``: True when the
         item at ``index`` is no longer the one the page showed (a v1 list
-        has no ranks; the digest is its stale-page guard). Raises
-        ``IndexError`` for a position past the end, as the write would."""
+        has no ranks; the digest is its stale-page guard), including when the
+        position is now past the end. Best effort: the check and the write
+        are two steps, and without ``item_digest`` there is no check."""
         from actingweb.property_list_span import value_digest
 
         digest = self.request.get("item_digest") or None
         if digest is None:
             return False
-        return value_digest(json.dumps(list_prop[index])) != digest
+        try:
+            current = list_prop[index]
+        except IndexError:
+            # The page showed an item at this position; it is gone now.
+            return True
+        return value_digest(json.dumps(current)) != digest
 
     def _list_target(self, list_prop: Any, index: int | None) -> tuple[Any, str | None]:
         """The handle a v2 item action writes through, and an error to
@@ -470,7 +419,7 @@ class WwwHandler(base_handler.BaseHandler):
                 if self.request.params
                 else None
             )
-            if method_override and self._refuse_cross_site():
+            if method_override and self._refuse_cross_site_override():
                 # A link or image on another site must not delete or change
                 # anything: SameSite=Lax cookies ride along on a top-level
                 # GET, and cached basic-auth credentials on any request.
@@ -1147,7 +1096,11 @@ class WwwHandler(base_handler.BaseHandler):
                 try:
                     if action == "add":
                         # Add new item to list
-                        item_value = self.request.get("item_value")
+                        # A textarea posts line breaks as CRLF; the web UI
+                        # stores them as LF, for add and update alike.
+                        item_value = self.request.get("item_value").replace(
+                            "\r\n", "\n"
+                        )
                         logger.debug(
                             f"List item add request - prop_name: {prop_name}, item_value: {item_value}"
                         )
@@ -1187,7 +1140,11 @@ class WwwHandler(base_handler.BaseHandler):
                     elif action == "update":
                         # Update existing item
                         item_index = self.request.get("item_index") or None
-                        item_value = self.request.get("item_value")
+                        # A textarea posts line breaks as CRLF; the web UI
+                        # stores them as LF, for add and update alike.
+                        item_value = self.request.get("item_value").replace(
+                            "\r\n", "\n"
+                        )
 
                         # An empty value is refused like add's: an empty form
                         # field must not silently blank the item.
@@ -1217,9 +1174,8 @@ class WwwHandler(base_handler.BaseHandler):
                         try:
                             if item_format == "text":
                                 # The edit form for a string item: the text
-                                # is the item, never parsed as JSON. A
-                                # textarea submits line breaks as CRLF.
-                                parsed_value = item_value.replace("\r\n", "\n")
+                                # is the item, never parsed as JSON.
+                                parsed_value = item_value
                             else:
                                 parsed_value = json.loads(item_value)
                         except json.JSONDecodeError:
@@ -1541,6 +1497,10 @@ class WwwHandler(base_handler.BaseHandler):
                     )
                     or "//" in redirect_path
                     or "\\" in redirect_path
+                    # No dot segment, raw or encoded: the browser resolves
+                    # "/<id>/www/../../<other>" out of this actor's UI.
+                    or "%" in redirect_path
+                    or any(seg in (".", "..") for seg in redirect_path.split("/"))
                 ):
                     redirect_path = self._www_path(actor_id, "/properties")
                 self.response.set_redirect(redirect_path)

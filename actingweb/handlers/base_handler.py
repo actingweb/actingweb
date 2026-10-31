@@ -21,6 +21,101 @@ class BaseHandler:
         self.config = config
         self.hooks = hooks
 
+    # --- Cross-site requests --------------------------------------------
+    #
+    # A browser sends session cookies (SameSite=Lax rides along on a
+    # top-level GET from any site) and cached basic-auth credentials with a
+    # request another site starts, and the integrations turn the
+    # ``oauth_token`` cookie into a Bearer header. So a request that changes
+    # state from a browser must show it came from this app's own origin.
+
+    def _www_path(self, actor_id: str, suffix: str = "") -> str:
+        """``/<base>/<actor_id>/www`` plus ``suffix``: the web UI's path,
+        with the deployment's base path from ``config.root``, for redirects
+        and back links."""
+        from urllib.parse import urlsplit
+
+        base = urlsplit(getattr(self.config, "root", "") or "").path.rstrip("/")
+        return f"{base}/{actor_id}/www{suffix}"
+
+    def _same_origin(self, url: str) -> bool:
+        """Whether ``url``'s origin (scheme, host, port) is this app's own,
+        from ``config.root``: case-insensitive host, default ports filled
+        in, any base path ignored (an origin has none)."""
+        from urllib.parse import urlsplit
+
+        def origin(value: str) -> tuple[str, str, int | None]:
+            parts = urlsplit(value)
+            scheme = (parts.scheme or "").lower()
+            try:
+                port = parts.port
+            except ValueError:
+                port = -1
+            if port is None:
+                port = {"https": 443, "http": 80}.get(scheme)
+            return scheme, (parts.hostname or "").lower(), port
+
+        return origin(url) == origin(getattr(self.config, "root", "") or "")
+
+    def _session_cookie_auth(self) -> bool:
+        """Whether this request authenticates with the web UI's session
+        cookie (the integrations copy ``oauth_token`` into a Bearer header
+        when no Authorization header was sent)."""
+        cookies = getattr(self.request, "cookies", None) or {}
+        token = cookies.get("oauth_token")
+        if not token:
+            return False
+        auth = self.request.get_header("Authorization")
+        return not auth or auth == f"Bearer {token}"
+
+    def _cross_site_refused(self, require_evidence: bool = False) -> bool:
+        """True when a state-changing request comes from another site.
+
+        ``Sec-Fetch-Site`` decides when the browser sends it (every current
+        one): ``same-origin`` passes, and so does ``none`` (typed, or a
+        bookmark) unless ``require_evidence``. Without it, an ``Origin``,
+        then a ``Referer``, must be this app's origin (``config.root``; a
+        base path does not matter), and ``Origin: null`` is refused. A
+        request with none of the three passes (a script, ``curl``, a peer),
+        except, with ``require_evidence``, one that authenticates with the
+        session cookie: only a browser holds it.
+
+        ``require_evidence`` is for a GET that changes state (a ``_method``
+        override): a link opened from a mail client arrives as ``none``,
+        and a no-referrer link from a browser without Fetch Metadata
+        arrives with no headers at all.
+        """
+        fetch_site = (self.request.get_header("Sec-Fetch-Site") or "").lower()
+        if fetch_site:
+            allowed = ("same-origin",) if require_evidence else ("same-origin", "none")
+            return fetch_site not in allowed
+        origin = self.request.get_header("Origin")
+        if origin:
+            return origin == "null" or not self._same_origin(origin)
+        referer = self.request.get_header("Referer")
+        if referer:
+            return not self._same_origin(referer)
+        return require_evidence and self._session_cookie_auth()
+
+    def _refuse_cross_site(self, require_evidence: bool = False) -> bool:
+        """Answer 403 for a cross-site state-changing request; True when it
+        did."""
+        if not self._cross_site_refused(require_evidence):
+            return False
+        self.response.set_status(403, "Cross-site request refused")
+        self.response.headers["Content-Type"] = "text/plain; charset=utf-8"
+        self.response.write("Cross-site request refused")
+        return True
+
+    def _refuse_cross_site_override(self) -> bool:
+        """For a GET handler: True (403 answered) when the request carries a
+        ``_method`` override and does not show it came from this app's own
+        pages. A GET that changes state must never be startable by a link
+        on another site; a real PUT/POST/DELETE is not affected."""
+        if not self.request.get("_method"):
+            return False
+        return self._refuse_cross_site(require_evidence=True)
+
     def _get_actor_interface(self, actor) -> Optional["ActorInterface"]:
         """Get ActorInterface wrapper for given actor."""
         if actor:

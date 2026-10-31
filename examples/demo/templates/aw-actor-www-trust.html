@@ -32,7 +32,7 @@
             {% if trusts and trusts|length > 0 %}
             <div class="card mb-lg">
                 <div class="card-body p-sm" style="overflow-x: auto;">
-                    <table>
+                    <table class="trust-table">
                         <thead>
                             <tr>
                                 <th>Peer ID</th>
@@ -80,6 +80,13 @@
                                             </svg>
                                             Approve
                                         </a>
+                                        {% endif %}
+                                        {% if trust.approveuri %}
+                                        <form method="get" action="{{ trust.approveuri }}"
+                                              onsubmit="return confirm('Delete the trust with {{ trust.peerid }}?');">
+                                            <input type="hidden" name="_method" value="DELETE">
+                                            <button type="submit" class="btn btn-sm btn-danger-outline" title="Delete trust">Delete</button>
+                                        </form>
                                         {% endif %}
                                     </div>
                                 </td>

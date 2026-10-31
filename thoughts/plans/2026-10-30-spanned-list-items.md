@@ -2391,6 +2391,127 @@ own delete works; the 500,000-character spanned item saves unchanged
 at 375 px. Not walked: a base-path deployment (it needs a proxy in front
 of the demo; the unit tests cover the Origin comparison and redirects).
 
+### 2026-10-31, after verification thoughts/verifications/2026-10-31-spanned-list-items-4.md
+
+#### 43. No GET changes state from another site, in any handler (X1, X2)
+
+**Category**: Bug fix (security)
+
+**What changed**: `_same_origin`, `_cross_site_refused` and
+`_refuse_cross_site` moved from `WwwHandler` to `BaseHandler`, with a
+strict mode (`require_evidence`) for a GET that carries `_method`:
+`Sec-Fetch-Site` must be `same-origin` (`none`, from a mail-client link, is
+refused), else `Origin` then `Referer` must be same-origin; a request with
+none of them passes unless it authenticates with the session cookie
+(`_session_cookie_auth`). `_refuse_cross_site_override()` runs at the top
+of all fourteen GET methods that honour an override: root, properties,
+trust (three), subscription (three), actions, methods, async actions, async
+methods, callbacks and the web UI property page. Web UI POSTs keep the
+lenient rule. The changelog's SECURITY entry, `security.rst` and a new
+"Cross-site requests" section in `docs/migration/v3.16.rst` describe it.
+
+**Files affected**: `actingweb/handlers/base_handler.py`, `www.py`,
+`root.py`, `properties.py`, `trust.py`, `subscription.py`, `actions.py`,
+`methods.py`, `async_actions.py`, `async_methods.py`, `callbacks.py`;
+`CHANGELOG.rst`, `docs/reference/security.rst`,
+`docs/migration/v3.16.rst`; `tests/test_get_override_cross_site.py` (new),
+`tests/test_list_item_limits.py`
+
+**Rationale**: the fourth batch closed the GET delete only in the web UI;
+`GET /<id>?_method=DELETE` from a link deleted the whole actor, and the
+shipped trust page's GET forms let a link approve an attacker's pending
+trust. The protocol requires `_method` support, so header-less clients
+(scripts, peers) keep it. A real PUT/POST/DELETE stays unchecked: SPAs call
+the API cross-origin with Bearer tokens.
+
+#### 44. Redirects outside the web UI keep the base path (X10, X12)
+
+**Category**: Bug fix
+
+**What changed**: `BaseHandler._www_path()` builds the path from
+`config.root` alone (no request comparison, nothing to swallow); the trust
+handlers' redirects and the email-verification `redirect_url` use it.
+
+**Files affected**: `actingweb/handlers/base_handler.py`, `trust.py`,
+`oauth_email.py`, `tests/test_list_item_limits.py`
+
+#### 45. Web UI edge cases (X7, X8, X9, X11, X13)
+
+**Category**: Bug fix
+
+**What changed**: a v1 action with `item_digest` whose position is now past
+the end answers 409; every textarea value (add and update) is stored with
+LF; `redirect_to` refuses dot segments and any `%`; `?edit_index=` needs
+ASCII digits; the changelog says the v1 guard is best effort and needs
+`item_digest`, and that a web UI save rewrites CRLF.
+
+**Files affected**: `actingweb/handlers/www.py`, `CHANGELOG.rst`,
+`tests/test_list_item_limits.py`
+
+#### 46. A marker other than 1 is a plain item again (X3)
+
+**Category**: Bug fix
+
+**What changed**: `_envelope_obj` raises only for invalid JSON after the
+prefix; a valid object whose marker is anything but the int 1 reads as
+itself, as before 3.16 (no other envelope format exists).
+
+**Files affected**: `actingweb/property_list_span.py`,
+`tests/test_property_list_span_codec.py`,
+`tests/test_property_list_span_iterations.py`
+
+#### 47. The sweep releases what it removes and reports what it leaves (X4, X5, X6, X15)
+
+**Category**: Bug fix
+
+**What changed**: `_sweep_spans` removes malformed heads with the library
+marker first (logging rank and size) and protects only the bodies of the
+heads it keeps, which it returns as `malformed_heads_kept`.
+`sweep_actor` runs the sweep in its own `try` (a fault is counted and the
+list still verified) and marks a list unhealthy when the sweep left a
+broken span or malformed head in place. The malformed-head warning names
+which heads the sweep removes.
+
+**Files affected**: `actingweb/property_list.py`,
+`actingweb/maintenance/verify_property_lists.py`, `CHANGELOG.rst`,
+`docs/guides/property-lists.rst`,
+`tests/test_property_list_span_iterations.py` (`TestX6...`, `TestX4...`)
+
+#### 48. X14 needs no change
+
+**Category**: Verification note
+
+**What changed**: nothing. The fallback path runs the whole full state
+through `fit_full_state` (`actor.py:3246`), which turns any list diff over
+the threshold into a reference, so a size decision gone stale cannot put
+an oversized list inline.
+
+
+#### 49. Fifth browser walk: the demo's trust page
+
+**Category**: UX refinement (found by the fifth browser walk)
+
+**What changed**: the demo's trust page gets a Delete control per trust
+(the GET form with `_method=DELETE` the library template already has); at
+phone width the trust table stacks each trust as a block, and the "About"
+card's two columns become one; at every width long peer ids and type URNs
+wrap while the badges and action buttons stay whole, so the actions sit
+inside the card.
+
+**Files affected**: `examples/demo/templates/aw-actor-www-trust.html`,
+`examples/demo/static/style.css`
+
+**Browser walk** (headless Playwright, two local QA peers, `localhost:5055`
+on loopback): the shipped trust page's Approve answers 302 and the trust is
+approved; its Delete answers 302 and the trust is gone; a `?_method=DELETE`
+typed into the address bar (`Sec-Fetch-Site: none`) answers 403 on
+`/properties/<p>` and `/www/properties/<p>` with the property kept;
+`GET /<id>?_method=DELETE` with `Sec-Fetch-Site: cross-site` answers 403
+and the actor stays; the properties page's own Delete answers 204; list
+add, edit and delete from the UI keep LF line breaks and é; no console
+errors; 375, 768 and 1280 px fit with the actions inside their cards.
+
+
 ## Evaluation Notes
 
 Five evaluators reviewed the first draft against the codebase on

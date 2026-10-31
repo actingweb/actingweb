@@ -773,13 +773,14 @@ and no cookie, such as an SPA calling the API cross-origin, is not. A
 refused request answers 403 "Cross-site request refused" and changes
 nothing. Every ``POST`` under ``/<id>/www`` is refused when the browser
 reports a cross-site request, and the Flask and FastAPI integrations do not
-let the session cookie, or a ``Basic`` header on an actor route, authenticate
-a ``POST``, ``PUT``, ``PATCH`` or ``DELETE`` that the browser reports as
-started by another site, a sibling subdomain included. The OAuth2, MCP and
-discovery endpoints keep a ``Basic`` header (``client_secret_basic``). A
-browser page on another origin that calls actor routes with creator basic
-auth through ``fetch`` loses it: use an OAuth2 Bearer token there. This needs the browser's
-``Sec-Fetch-Site``, ``Origin`` and ``Referer`` to reach the application.
+let the session cookie, or a ``Basic`` header on any route but
+``/oauth/token``, authenticate a ``POST``, ``PUT``, ``PATCH`` or ``DELETE``
+that the browser reports as started by another site, a sibling subdomain
+included. The token endpoint keeps a ``Basic`` header (an OAuth2 client's
+``client_secret_basic``). A browser page on another origin that calls
+actor routes with creator basic auth through ``fetch`` loses it: use an
+OAuth2 Bearer token there. This needs the browser's ``Sec-Fetch-Site``,
+``Origin`` and ``Referer`` to reach the application.
 
 **Peer-supplied trust fields.** A peer's ``id`` must be letters, digits and
 ``_ . : @ + = -`` (at most 255 characters, starting with a letter or digit)

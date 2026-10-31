@@ -174,9 +174,10 @@ SECURITY
   integrations no longer turn the ``oauth_token`` cookie into a Bearer
   header for a ``POST``, ``PUT``, ``PATCH`` or ``DELETE`` that the browser
   says another site, a sibling subdomain included, started, and drop a
-  ``Basic`` Authorization header from such a request to an actor route
-  (``/oauth/*``, ``/mcp`` and ``/.well-known/*`` keep it: there it is an
-  OAuth2 client's own ``client_secret_basic``). A browser sends the ``Lax``
+  ``Basic`` Authorization header from such a request on every route except
+  ``/oauth/token``, where it is an OAuth2 client's own
+  ``client_secret_basic`` (the token endpoint now also reads a lowercase
+  ``basic`` scheme). A browser sends the ``Lax``
   cookie on any same-site request and on a top-level ``GET`` from any site,
   and cached basic-auth credentials on any request; the drop is logged at
   INFO. This relies on the

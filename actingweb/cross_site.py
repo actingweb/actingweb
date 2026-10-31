@@ -101,26 +101,26 @@ def may_use_session_cookie(method: str, header: HeaderLookup, root: str) -> bool
     return not cross_site(header, root)
 
 
-# First path segments (after any base path) of the endpoints that
-# authenticate cross-origin clients on purpose: OAuth2 client
-# authentication (``client_secret_basic`` on ``/oauth/token`` and
-# ``/oauth/revoke``), MCP and discovery. A Basic header there is a client's
-# own credential, set by its code, never one a browser cached for a user.
-_CLIENT_AUTH_SEGMENTS = frozenset({"oauth", "mcp", ".well-known"})
+# The one endpoint that authenticates a client with a Basic header it set
+# itself: OAuth2 ``client_secret_basic`` on the token endpoint, called
+# cross-origin by browser-hosted clients by design. Everywhere else a Basic
+# header on a browser request may be credentials the browser cached for a
+# user. Exact path (after any base path), never a prefix.
+_CLIENT_BASIC_PATHS = frozenset({"/oauth/token"})
 
 
 def may_use_basic(method: str, header: HeaderLookup, path: str, root: str) -> bool:
     """For the integrations: whether a ``Basic`` Authorization header may
-    authenticate this request. On an actor route a browser attaches cached
-    basic-auth credentials to a form another site submits, so a
-    state-changing request the browser reports as cross-site (or same-site)
-    loses the header, as the session cookie does. The OAuth2, MCP and
-    discovery endpoints keep it: their Basic header is a client's own."""
+    authenticate this request. A browser attaches cached basic-auth
+    credentials to a form another site submits, so a state-changing request
+    the browser reports as cross-site (or same-site) loses the header, as
+    the session cookie does, on every route but the OAuth2 token endpoint
+    (``/oauth/token``), where the header is a client's own
+    ``client_secret_basic``."""
     base = urlsplit(root or "").path.rstrip("/")
     rest = path or ""
     if base and (rest == base or rest.startswith(base + "/")):
         rest = rest[len(base) :]
-    first = rest.lstrip("/").split("/", 1)[0]
-    if first in _CLIENT_AUTH_SEGMENTS:
+    if "/" + rest.strip("/") in _CLIENT_BASIC_PATHS:
         return True
     return may_use_session_cookie(method, header, root)

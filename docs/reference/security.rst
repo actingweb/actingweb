@@ -33,7 +33,8 @@ Access Control
   ``Referer``); a request with none of these passes unless it carries the
   session cookie. Web UI ``POST`` forms are refused when the browser
   reports a cross-site request, and the integrations do not let the
-  session cookie, or (on actor routes) a Basic header, authenticate a
+  session cookie, or a Basic header (except on ``/oauth/token``),
+  authenticate a
   state-changing request another site (sibling subdomains included)
   started. Both rely on the
   browser's ``Sec-Fetch-Site``, ``Origin`` and ``Referer`` reaching the

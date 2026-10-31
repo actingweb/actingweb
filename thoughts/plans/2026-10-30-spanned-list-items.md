@@ -2770,6 +2770,28 @@ authentication on `/oauth/token`. Per the stopping rule recorded in
 verification 7, this batch fixes only that High; the Mediums and Lows
 verification 7 lists await the owner's scope decision.
 
+#### 65. The Basic exemption is the token endpoint only (review of `c661b63`)
+
+**Category**: Bug fix
+
+**What changed**: the code review of entry 64 found the exemption too
+wide: it kept a cross-site Basic header on every path under `/oauth`,
+`/mcp` and `/.well-known`, though only `/oauth/token` reads
+`client_secret_basic` (MCP takes Bearer only; discovery is GET). It is now
+that exact path (after the base path), never a prefix, and the token
+endpoint reads the scheme case-insensitively. The changelog, migration
+guide and security notes say exactly that.
+
+**Files affected**: `actingweb/cross_site.py`,
+`actingweb/handlers/oauth2_endpoints.py`, `CHANGELOG.rst`,
+`docs/migration/v3.16.rst`, `docs/reference/security.rst`,
+`tests/test_cross_site_and_peer_inputs.py`,
+`tests/test_oauth2_public_clients.py`
+
+**Not taken up** (Low, the owner's stopping rule): the drop block is still
+copied in both integrations and re-parses `config.root` per request; no
+integration-level test covers a base-path deployment.
+
 ## Evaluation Notes
 
 Five evaluators reviewed the first draft against the codebase on

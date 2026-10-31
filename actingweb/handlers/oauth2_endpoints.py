@@ -381,7 +381,8 @@ class OAuth2EndpointsHandler(BaseHandler):
             auth_header = headers.get("Authorization", "") or headers.get(
                 "authorization", ""
             )
-            if auth_header.startswith("Basic "):
+            # The scheme is case-insensitive (RFC 7235).
+            if auth_header[:6].lower() == "basic ":
                 header_client_id: str | None = None
                 header_secret: str | None = None
                 try:

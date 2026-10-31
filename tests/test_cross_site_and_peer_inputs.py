@@ -447,9 +447,12 @@ def test_verification_page_continue_link_keeps_the_base_path() -> None:
     "path,kept",
     [
         ("/oauth/token", True),
-        ("/oauth/revoke", True),
-        ("/mcp", True),
-        ("/.well-known/oauth-authorization-server", True),
+        # Only the token endpoint reads client_secret_basic: every other
+        # path, under /oauth and /mcp too, drops a cross-site Basic header.
+        ("/oauth/revoke", False),
+        ("/oauth/register", False),
+        ("/oauth/tokenx", False),
+        ("/mcp", False),
         ("/a1/properties", False),
         ("/a1/trust", False),
     ],
@@ -458,7 +461,7 @@ def test_flask_keeps_a_client_basic_header_on_client_auth_endpoints(
     path: str, kept: bool
 ) -> None:
     """client_secret_basic from a browser-hosted client is cross-origin by
-    design; only actor routes drop a cross-site Basic header."""
+    design; every other route drops a cross-site Basic header."""
     from flask import Flask
 
     integration = _flask_integration()
@@ -475,7 +478,7 @@ def test_flask_keeps_a_client_basic_header_on_client_auth_endpoints(
 @pytest.mark.parametrize(
     "path,kept", [("/oauth/token", True), ("/a1/properties", False)]
 )
-def test_fastapi_drops_a_cross_site_basic_header_on_actor_routes_only(
+def test_fastapi_drops_a_cross_site_basic_header_except_on_the_token_endpoint(
     path: str, kept: bool
 ) -> None:
     from starlette.requests import Request

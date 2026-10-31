@@ -244,6 +244,21 @@ class TestTokenHandlerCredentials:
         )
         assert "error" not in out
 
+    def test_a_lowercase_basic_scheme_is_read(self, env: Any) -> None:
+        """The auth scheme is case-insensitive (RFC 7235)."""
+        server, _ = env
+        resp = register(server)
+        cid, secret = resp["client_id"], resp["client_secret"]
+        tokens = _tokens_for(server, cid)
+        headers = _basic(cid, secret)
+        headers["Authorization"] = "basic " + headers["Authorization"][6:]
+        out, _ = self._refresh(
+            server,
+            {"grant_type": "refresh_token", "refresh_token": tokens["refresh_token"]},
+            headers,
+        )
+        assert "error" not in out
+
     def test_differing_body_and_header_secrets_are_refused(self, env: Any) -> None:
         """Two authentication methods that disagree (RFC 6749 §2.3.1): refuse
         rather than silently pick one."""

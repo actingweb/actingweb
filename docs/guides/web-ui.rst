@@ -204,6 +204,7 @@ Available Templates
     Individual property editing template
 
     Available variables:
+
     - ``url``: Actor www URL (e.g., ``/mcp-server/actor123/www``) - **backwards compatible**
     - ``actor_root``: Actor base URL (e.g., ``/mcp-server/actor123``) - **NEW**
     - ``actor_www``: Actor www URL (e.g., ``/mcp-server/actor123/www``) - **NEW**
@@ -214,7 +215,20 @@ Available Templates
     - ``qual``: Property status ("a" if exists, "n" if not)
     - ``is_read_only``: Boolean indicating if property is read-only
     - ``is_list_property``: Boolean indicating if this is a list property
-    - ``list_items``: List of items (for list properties)
+    - ``list_items``: List of items (for list properties). On a v2 list a
+      spanned item is the ``UNRESOLVED`` sentinel here (its bodies are not
+      read for the page), which prints as ``UNRESOLVED`` and makes
+      ``tojson`` raise; render ``list_entries`` instead
+    - ``list_entries``: One dict per item, in order: ``index``, ``rank``
+      (``None`` on a v1 list), ``digest`` (of the stored value; post it back
+      as ``item_digest``), ``bytes``, ``spanned``, ``json`` (the item as
+      JSON, key order and non-ASCII kept; ``None`` for a spanned item) and
+      ``text`` (the item itself when it is a string, else ``None``)
+    - ``edit_entry``: The entry to edit, read whole, when the page was
+      loaded with ``?edit=<rank>`` (v2) or ``?edit_index=<i>`` (v1); else
+      ``None``. Its ``json`` is never ``None``
+    - ``list_error``: Why the list could not be read (a corrupted list or a
+      broken span), with the remedy; ``list_entries`` is empty when it is set
     - ``list_description``: Description of list property
     - ``list_explanation``: Explanation of list property
 

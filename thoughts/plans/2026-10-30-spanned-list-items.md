@@ -2196,6 +2196,201 @@ Delete button inside (card body 259/259) and desktop is unchanged; a string
 item previews and edits as text; whitespace errors say the item is empty;
 "Back" keeps the typed text.
 
+### 2026-10-31, after verification thoughts/verifications/2026-10-31-spanned-list-items-3.md
+
+#### 31. A damaged library envelope is reported, and its bodies kept (W2, W13)
+
+**Category**: Bug fix
+
+**What changed**: `property_list_span._envelope_obj()` decodes a head once.
+A value with the envelope prefix that is not valid JSON, or whose marker is
+an int other than 1, raises `EnvelopeError`; valid JSON whose marker is not
+an int (a bool included) is a plain item. `carries_library_marker()` is true
+only for a valid marker of 1. `_sweep_spans` removes only malformed heads
+that carry the library marker, and keeps the body generations a malformed
+head names (`_gens_named_by`, `GEN_IN_RAW_RE`); `verify(spans=True)` leaves
+those generations out of the orphan count.
+
+**Files affected**: `actingweb/property_list_span.py`,
+`actingweb/property_list.py`, `tests/test_property_list_span_codec.py`,
+`tests/test_property_list_span_iterations.py`
+(`TestW2DamagedEnvelopesAreReportedAndTheirBodiesKept`)
+
+**Rationale**: a truncated head read as a plain item, so the sweep counted
+its bodies as orphans and deleted the only copy of the item.
+
+#### 32. A read-back fault is an unknown outcome, per thread (W3, W8, W14)
+
+**Category**: Bug fix
+
+**What changed**: the in-flight mark moved to a `threading.local()` behind a
+`_head_write_in_flight` property. `_landed_anyway` sets it during its
+read-back, so a raise there counts as an unknown outcome and the bodies are
+kept. `_write_spanning`'s `False` path reads back through `_landed_anyway`
+(spanned heads only), and `_row_holds` is gone, so a lost plain
+compare-and-swap stays lost. `_v2_extend` holds the read-back inside
+`in_create`.
+
+**Files affected**: `actingweb/property_list.py`,
+`tests/test_property_list_span_iterations.py` (`TestW3...`, `TestW8...`,
+`TestW14...`)
+
+#### 33. A single-list full-state resync survives damage and deletes (W4)
+
+**Category**: Bug fix
+
+**What changed**: `_list_state_reference` sizes an unresolved item from its
+span's `bytes`, else from the raw head. The new
+`Actor._resolve_list_heads()` drops an item whose `item_at` raises
+`IndexError` (deleted since the head read) and re-raises
+`ListCorruptionError`; the single-list full-state path uses it.
+
+**Files affected**: `actingweb/actor.py`,
+`tests/test_property_list_span_iterations.py` (`TestW4...`)
+
+#### 34. One cross-site rule for every web UI mutation (W1)
+
+**Category**: Bug fix (security)
+
+**What changed**: `WwwHandler._cross_site_refused()` replaces the item-only
+`Origin` check. It trusts `Sec-Fetch-Site` when present (`same-origin` and
+`none` pass), else compares `Origin`, then `Referer`, with `config.root` by
+scheme, lowercased host and default-filled port, so a base path does not
+matter; `Origin: null` is refused, and a request with none of the three
+headers passes. It runs at the top of `post()` (every form: properties,
+trust, list items, metadata) and before the `GET ?_method=` override, so a
+link on another site can no longer delete a property. The property form's
+`redirect_to` is limited to the actor's own web UI (it was an open
+redirect). A SECURITY changelog entry records it.
+
+**Files affected**: `actingweb/handlers/www.py`, `CHANGELOG.rst`,
+`tests/test_list_item_limits.py` (`TestWwwVerification3FollowUps`)
+
+**Rationale**: the old check compared `netloc` with `config.fqdn`, which
+holds the base path, so it refused every list edit on a base-path
+deployment; and the GET delete, which `SameSite=Lax` cookies ride along
+on, had no check at all. Deletion stays a GET with the check rather than
+becoming a POST: the shipped templates link to it, and the check closes
+the cross-site path.
+
+#### 35. Redirects and back links keep the base path (W10)
+
+**Category**: Bug fix
+
+**What changed**: `_www_path()` builds `/<base>/<actor_id>/www...` from
+`config.root`; every web UI redirect (property create, update and delete,
+trust, list items) and the error page's back link use it. The error page's
+inline `onclick="history.back()"` keeps its `href` to the list, so a
+Content Security Policy that blocks inline script still leaves a working
+link.
+
+**Files affected**: `actingweb/handlers/www.py`,
+`tests/test_list_item_limits.py`
+
+#### 36. One read-only rule, guarded (W9)
+
+**Category**: Bug fix
+
+**What changed**: `_list_is_read_only(myself, name, value=None)` is the one
+probe for the property page and the item actions; an action whose probe
+raises answers 500 and writes nothing (`DbError` still propagates).
+
+**Files affected**: `actingweb/handlers/www.py`,
+`tests/test_list_item_limits.py`
+
+#### 37. Multi-line text survives an unchanged save (W5)
+
+**Category**: Bug fix
+
+**What changed**: an `item_format=text` update turns CRLF into LF (a
+textarea posts CRLF), and the demo's edit textareas emit a newline right
+after the opening tag, so a value that starts with a newline keeps it (HTML
+drops the first one).
+
+**Files affected**: `actingweb/handlers/www.py`,
+`examples/demo/templates/aw-actor-www-property.html`,
+`tests/test_list_item_limits.py`
+
+#### 38. v1 lists are editable again, with a stale guard (W6)
+
+**Category**: Bug fix
+
+**What changed**: `_list_page_items` gives v1 entries a digest of the item's
+JSON and loads `?edit_index=<i>` as `edit_entry`; the template shows an
+Edit link and posts `item_index` plus `item_digest` for v1 entries. A v1
+update or delete with `item_digest` answers 409 when that position now
+holds a different item (`_v1_item_changed`).
+
+**Files affected**: `actingweb/handlers/www.py`,
+`examples/demo/templates/aw-actor-www-property.html`,
+`tests/test_list_item_limits.py`
+
+#### 39. QA mode fails closed outside a local development server (W11)
+
+**Category**: Bug fix
+
+**What changed**: with `DEMO_QA_BASIC_AUTH=true` the demo requires
+`APP_HOST_FQDN` to name `localhost` or `127.0.0.1` explicitly (no default
+stands in) and refuses to start unless run as `__main__`, the development
+server that binds loopback, so a WSGI import cannot serve it.
+
+**Files affected**: `examples/demo/application.py`,
+`tests/test_demo_example.py`
+
+#### 40. The span sweep reads bodies once (W12)
+
+**Category**: Efficiency
+
+**What changed**: `sweep_actor` with `--repair --sweep-spans` runs
+`sweep_span_orphans()` first (its own body enumeration) and then one
+`verify()`, which reads bodies again only with `--spans`; it was a content
+verify, the sweep, and a content verify again. A DynamoDB test pins that
+`get_prefix` pages past 1 MB (four 390,000-byte rows), which the content
+checks depend on for a large generation.
+
+**Files affected**: `actingweb/maintenance/verify_property_lists.py`,
+`tests/test_list_item_limits.py` (`test_prefix_read_pages_past_one_megabyte`)
+
+#### 41. The changelog and web UI docs say what changed (W7)
+
+**Category**: Documentation
+
+**What changed**: the REST fail-closed entry says it fires only when
+building the evaluator, or the legacy check, raises (rule evaluation
+already denied); the web UI entry says a template that prints `list_items`
+shows `UNRESOLVED` and `tojson` raises `TypeError`, and adds the v1
+editing, CRLF and base-path changes; `docs/guides/web-ui.rst` documents
+`list_entries`, `edit_entry` and `list_error`; `security.rst` matches.
+
+**Files affected**: `CHANGELOG.rst`, `docs/guides/web-ui.rst`,
+`docs/reference/security.rst`
+
+#### 42. Fourth browser walk: three follow-ups
+
+**Category**: UX refinement (found by the fourth browser walk)
+
+**What changed**: a list item's preview keeps its line breaks
+(`white-space: pre-wrap`); the item error pages carry a small inline style
+and say "your text is kept" only for an add or update; the demo's create
+form enforces the `[a-z0-9_]+` name its hint promises (native `pattern`).
+
+**Files affected**: `actingweb/handlers/www.py`,
+`examples/demo/static/style.css`,
+`examples/demo/templates/aw-actor-www-init.html`,
+`tests/test_list_item_limits.py`
+
+**Browser walk** (headless Playwright, local QA account, `localhost:5055`
+on loopback): an unchanged save keeps `"line one\nline two\n"` and a
+leading newline; typed line breaks are stored as `\n`; v1 items edit by
+position, and a stale save or delete answers 409 with nothing changed;
+`Origin: https://evil.example`, `Origin: null`, `Sec-Fetch-Site:
+cross-site` and `same-site` answer 403 on an item post, and a cross-site
+`GET ?_method=DELETE` answers 403 with the property kept, while the UI's
+own delete works; the 500,000-character spanned item saves unchanged
+(same SHA-256); key order and é/ü kept; no console errors; every page fits
+at 375 px. Not walked: a base-path deployment (it needs a proxy in front
+of the demo; the unit tests cover the Origin comparison and redirects).
+
 ## Evaluation Notes
 
 Five evaluators reviewed the first draft against the codebase on

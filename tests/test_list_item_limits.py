@@ -774,3 +774,324 @@ class TestWwwBrowserWalkFollowUps:
         )
         assert webobj.response.status_code == 400
         assert "The item is empty" in webobj.response.body
+
+
+def _seed_v1_live(myself: Any, config: Any, name: str, items: list[Any]) -> None:
+    """A v1 list written as its rows, on real storage (new lists are v2)."""
+    from actingweb.db import get_property
+
+    for i, item in enumerate(items):
+        db = get_property(config)
+        assert db.set(
+            actor_id=myself.id, name=f"list:{name}-{i}", value=json.dumps(item)
+        )
+    db = get_property(config)
+    assert db.set(
+        actor_id=myself.id,
+        name=f"list:{name}-meta",
+        value=json.dumps(
+            {
+                "length": len(items),
+                "created_at": "2026-01-01T00:00:00",
+                "updated_at": "2026-01-01T00:00:00",
+                "item_type": "json",
+                "chunk_size": 1,
+                "version": "1.0",
+                "description": "",
+                "explanation": "",
+            }
+        ),
+    )
+
+
+def _www_call(
+    myself: Any,
+    config: Any,
+    method: str,
+    path: str,
+    params: dict[str, str],
+    headers: dict[str, str] | None = None,
+    hooks: Any = None,
+) -> Any:
+    from actingweb.handlers.www import WwwHandler
+
+    webobj = AWWebObj(params=params, headers=headers or {})
+    handler = (
+        WwwHandler(webobj, config, hooks=hooks) if hooks else WwwHandler(webobj, config)
+    )
+    with mock.patch.object(handler, "require_authenticated_actor", return_value=myself):
+        getattr(handler, method)(myself.id, path)
+    return webobj
+
+
+class TestWwwVerification3FollowUps:
+    """Third verification, W1, W5, W6, W9, W10: one cross-site rule for
+    every web UI mutation, the base path kept, CRLF text, v1 editing."""
+
+    @pytest.mark.parametrize(
+        "headers",
+        [
+            {"Sec-Fetch-Site": "cross-site"},
+            {"Sec-Fetch-Site": "same-site"},
+            {"Origin": "https://evil.example"},
+            {"Origin": "null"},
+            {"Referer": "https://evil.example/page"},
+        ],
+    )
+    def test_cross_site_list_action_is_refused(
+        self, live: Any, headers: dict[str, str]
+    ) -> None:
+        myself, config = live
+        myself.property_lists.xs.append("a")
+        webobj = _www_call(
+            myself,
+            config,
+            "post",
+            "properties/xs/items",
+            {"action": "add", "item_value": "x"},
+            headers,
+        )
+        assert webobj.response.status_code == 403
+        assert myself.property_lists.xs.to_list() == ["a"]
+
+    @pytest.mark.parametrize(
+        "headers",
+        [
+            {},
+            {"Sec-Fetch-Site": "same-origin"},
+            {"Sec-Fetch-Site": "none"},
+            # Sec-Fetch-Site wins over a mismatching Origin (a proxy that
+            # rewrites Host but not the browser's own verdict).
+            {"Sec-Fetch-Site": "same-origin", "Origin": "https://other.example"},
+            # Host compared case-insensitively, default port filled in.
+            {"Origin": "https://DEMO.actingweb.io:443"},
+            {"Referer": "https://demo.actingweb.io/x/www"},
+        ],
+    )
+    def test_same_origin_list_action_passes(
+        self, live: Any, headers: dict[str, str]
+    ) -> None:
+        myself, config = live
+        assert config.root == "https://demo.actingweb.io/"
+        myself.property_lists.so.append("a")
+        webobj = _www_call(
+            myself,
+            config,
+            "post",
+            "properties/so/items",
+            {"action": "add", "item_value": "x"},
+            headers,
+        )
+        assert webobj.response.status_code == 302
+        assert myself.property_lists.so.to_list() == ["a", "x"]
+
+    def test_base_path_origin_passes_and_redirects_keep_the_base(
+        self, live: Any
+    ) -> None:
+        myself, config = live
+        config.fqdn = "demo.actingweb.io/base"
+        config.root = config.proto + config.fqdn + "/"
+        myself.property_lists.bp.append("a")
+        webobj = _www_call(
+            myself,
+            config,
+            "post",
+            "properties/bp/items",
+            {"action": "add", "item_value": "x"},
+            {"Origin": "https://demo.actingweb.io"},
+        )
+        assert webobj.response.status_code == 302
+        assert webobj.response.redirect == f"/base/{myself.id}/www/properties/bp"
+        bad = _www_call(
+            myself,
+            config,
+            "post",
+            "properties/bp/items",
+            {"action": "frobnicate"},
+            {"Origin": "https://demo.actingweb.io"},
+        )
+        assert bad.response.status_code == 400
+        assert f'href="/base/{myself.id}/www/properties/bp"' in bad.response.body
+
+    def test_cross_site_get_delete_is_refused(self, live: Any) -> None:
+        myself, config = live
+        myself.property.keepme = "v"
+        webobj = _www_call(
+            myself,
+            config,
+            "get",
+            "properties/keepme",
+            {"_method": "DELETE"},
+            {"Sec-Fetch-Site": "cross-site"},
+        )
+        assert webobj.response.status_code == 403
+        assert myself.property.keepme == "v"
+
+    def test_cross_site_property_form_is_refused(self, live: Any) -> None:
+        myself, config = live
+        webobj = _www_call(
+            myself,
+            config,
+            "post",
+            "properties",
+            {
+                "property_name": "planted",
+                "property_value": "x",
+                "property_type": "simple",
+            },
+            {"Origin": "https://evil.example"},
+        )
+        assert webobj.response.status_code == 403
+        assert myself.property.planted is None
+
+    def test_redirect_to_stays_inside_the_actors_web_ui(self, live: Any) -> None:
+        myself, config = live
+        for target, expected in (
+            ("https://evil.example/", f"/{myself.id}/www/properties"),
+            ("//evil.example/", f"/{myself.id}/www/properties"),
+            ("/other-actor/www", f"/{myself.id}/www/properties"),
+            (f"/{myself.id}/www/init", f"/{myself.id}/www/init"),
+        ):
+            webobj = _www_call(
+                myself,
+                config,
+                "post",
+                "properties",
+                {
+                    "property_name": "rt",
+                    "property_value": "x",
+                    "property_type": "simple",
+                    "redirect_to": target,
+                },
+            )
+            assert webobj.response.status_code == 302, target
+            assert webobj.response.redirect == expected, target
+
+    def test_text_edit_keeps_line_breaks_as_lf(self, live: Any) -> None:
+        myself, config = live
+        lst = myself.property_lists.crlf
+        lst.append("one")
+        rank = _www_get(myself, config, "properties/crlf", {}).response.template_values[
+            "list_entries"
+        ][0]["rank"]
+        webobj = _www_post(
+            myself,
+            config,
+            "properties/crlf/items",
+            {
+                "action": "update",
+                "item_rank": rank,
+                "item_value": "one\r\ntwo\r\n",
+                "item_format": "text",
+            },
+        )
+        assert webobj.response.status_code == 302
+        assert lst.to_list() == ["one\ntwo\n"]
+
+    def test_v1_list_is_edited_by_position_with_a_stale_guard(self, live: Any) -> None:
+        myself, config = live
+        _seed_v1_live(myself, config, "old", ["a", {"k": 1}])
+        lst = myself.property_lists.old
+        assert lst.storage_format() == 1
+        page = _www_get(myself, config, "properties/old", {"edit_index": "1"})
+        values = page.response.template_values
+        edit = values["edit_entry"]
+        assert edit["index"] == 1 and edit["rank"] is None
+        assert edit["json"] == '{"k": 1}'
+        stale = _www_post(
+            myself,
+            config,
+            "properties/old/items",
+            {
+                "action": "update",
+                "item_index": "1",
+                "item_digest": values["list_entries"][0]["digest"],
+                "item_value": '{"k": 2}',
+                "item_format": "json",
+            },
+        )
+        assert stale.response.status_code == 409
+        assert lst.to_list() == ["a", {"k": 1}]
+        ok = _www_post(
+            myself,
+            config,
+            "properties/old/items",
+            {
+                "action": "update",
+                "item_index": "1",
+                "item_digest": edit["digest"],
+                "item_value": '{"k": 2}',
+                "item_format": "json",
+            },
+        )
+        assert ok.response.status_code == 302
+        assert lst.to_list() == ["a", {"k": 2}]
+        gone = _www_post(
+            myself,
+            config,
+            "properties/old/items",
+            {
+                "action": "delete",
+                "item_index": "0",
+                "item_digest": edit["digest"],
+            },
+        )
+        assert gone.response.status_code == 409
+        assert lst.to_list() == ["a", {"k": 2}]
+
+    def test_read_only_probe_failure_answers_500_without_writing(
+        self, live: Any
+    ) -> None:
+        myself, config = live
+        myself.property_lists.probe.append("a")
+        hooks = mock.Mock()
+        hooks.execute_property_hooks.side_effect = RuntimeError("hook bug")
+        webobj = _www_call(
+            myself,
+            config,
+            "post",
+            "properties/probe/items",
+            {"action": "add", "item_value": "x"},
+            hooks=hooks,
+        )
+        assert webobj.response.status_code == 500
+        assert "Error processing list item" in webobj.response.body
+        assert myself.property_lists.probe.to_list() == ["a"]
+
+
+def test_prefix_read_pages_past_one_megabyte(live: Any) -> None:
+    """W12: the span content checks read a generation's body rows with
+    ``get_prefix``; a DynamoDB query page stops at 1 MB, so the read must
+    follow the continuation key. Four 390,000-byte rows are about 1.5 MB."""
+    from actingweb.db import get_property
+    from actingweb.property_list_span import AUX_SUFFIX
+
+    myself, config = live
+    aux = myself.id + AUX_SUFFIX
+    db = get_property(config)
+    names = [f"list:paged-$span-g-p{i:04d}" for i in range(4)]
+    # The fixture's actor delete sweeps the side partition.
+    for i, name in enumerate(names):
+        assert db.set(actor_id=aux, name=name, value=str(i) * 390_000)
+    rows = get_property(config).get_prefix(actor_id=aux, prefix="list:paged-")
+    assert sorted(rows) == names
+    assert all(len(v) == 390_000 for v in rows.values())
+
+
+def test_delete_error_page_does_not_promise_kept_text(live: Any) -> None:
+    """Fourth browser walk: a failed delete had no text to keep."""
+    myself, config = live
+    myself.property_lists.delerr.append("a")
+    gone = _www_post(
+        myself,
+        config,
+        "properties/delerr/items",
+        {"action": "delete", "item_index": "5"},
+    )
+    assert gone.response.status_code == 400
+    assert "your text is kept" not in gone.response.body
+    assert "go to the list" in gone.response.body
+    typed = _www_post(
+        myself, config, "properties/delerr/items", {"action": "add", "item_value": " "}
+    )
+    assert "your text is kept" in typed.response.body

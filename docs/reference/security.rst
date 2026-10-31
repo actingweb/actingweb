@@ -26,9 +26,11 @@ Access Control
   it: ``..`` segments and percent-encoding are not resolved. A resource
   reader that maps URIs to storage validates its own path.
 - **REST property permission checks fail closed.** When the permission
-  evaluator raises for a peer, the property, list-metadata and list-item
-  handlers deny (403) rather than answer with the legacy ``access`` table; a
-  database fault still answers 503.
+  check itself raises for a peer (the evaluator cannot be built, or the
+  legacy check behind a no-rule result raises), the property, list-metadata
+  and list-item handlers deny (403) rather than answer with the legacy
+  ``access`` table; a database fault still answers 503. An error inside rule
+  evaluation already denies.
 - **MCP ``*/list`` filters fail closed.** When the permission evaluator
   cannot be constructed, ``tools/list``, ``resources/list`` and
   ``prompts/list`` answer an empty list; an item whose evaluation raises is

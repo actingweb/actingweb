@@ -696,3 +696,142 @@ class TestL1NonAsciiPartCount:
         with pytest.raises(ListItemTooLargeError, match="body rows"):
             lst.append(Emoji())
         assert store == {}
+
+
+class TestW2DamagedEnvelopesAreReportedAndTheirBodiesKept:
+    """Third verification, W2: a truncated library envelope or one of
+    another format is malformed (never a plain item); the sweep keeps both
+    the head and the bodies it names, so a repair can recover them."""
+
+    @pytest.mark.parametrize("damage", ["truncate", "format2"])
+    def test_reported_not_served_not_swept(
+        self, config: Config, store: dict[Any, Any], damage: str
+    ) -> None:
+        lst = _lst(config)
+        lst.extend(["ok", big("a")])
+        name = sorted(heads(store))[1]
+        head = store[(ACTOR, name)]
+        if damage == "truncate":
+            store[(ACTOR, name)] = head[: len(head) // 2]
+        else:
+            store[(ACTOR, name)] = head.replace('"__aw_env": 1', '"__aw_env": 2', 1)
+        bodies = dict(aux_rows(store))
+        with pytest.raises(ListItemSpanError, match="malformed"):
+            lst.to_list()
+        assert lst.verify(spans=True)["malformed_heads"]
+        report = lst.sweep_span_orphans()
+        assert report["malformed_heads_removed"] == 0
+        assert report["orphan_span_gens_removed"] == 0
+        assert aux_rows(store) == bodies
+        assert (ACTOR, name) in store
+
+    def test_a_library_envelope_with_a_bad_field_is_still_removed(
+        self, config: Config, store: dict[Any, Any]
+    ) -> None:
+        lst = _lst(config)
+        lst.extend(["ok", "x"])
+        name = sorted(heads(store))[1]
+        store[(ACTOR, name)] = MALFORMED  # marker 1, valid JSON, bad gen
+        assert lst.sweep_span_orphans()["malformed_heads_removed"] == 1
+        assert lst.to_list() == ["ok"]
+
+
+class TestW3ReadBackFaultIsAnUnknownOutcome:
+    def test_bodies_stay_when_the_read_back_raises(
+        self, config: Config, store: dict[Any, Any], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        class CommitsThenFalseThenReadFaults(RecordingDb):
+            def create_if_not_exists(
+                self,
+                actor_id: str | None = None,
+                name: str | None = None,
+                value: str | None = None,
+            ) -> bool:
+                landed = super().create_if_not_exists(
+                    actor_id=actor_id, name=name, value=value
+                )
+                if (
+                    actor_id == ACTOR
+                    and "-#" in (name or "")
+                    and '"span"' in (value or "")
+                ):
+                    return False  # an SDK retry of the committed create
+                return landed
+
+            def get(self, actor_id: str | None = None, name: str | None = None) -> Any:
+                if actor_id == ACTOR and "-#" in (name or ""):
+                    raise DbError("property read", actor_id)
+                return super().get(actor_id=actor_id, name=name)
+
+        lst = _lst(config)
+        lst.append("seed")
+        _use(monkeypatch, lambda c: CommitsThenFalseThenReadFaults(store, []))
+        with pytest.raises(DbError):
+            lst.append(big("a"))
+        _use(monkeypatch, lambda c: RecordingDb(store, []))
+        # The head landed; its bodies were kept, so it reads whole.
+        assert lst.to_list() == ["seed", big("a")]
+
+
+class TestW8LostPlainCasStaysLost:
+    def test_identical_plain_value_from_another_writer_is_not_our_success(
+        self, config: Config, store: dict[Any, Any]
+    ) -> None:
+        lst = _lst(config)
+        lst.append("x")
+        handle, _ = lst.items_with_handles()[0]
+        lst[0] = "y"  # another writer: the row no longer holds handle's bytes
+        lst[0] = "z"
+        other_handle, _ = lst.items_with_handles()[0]
+        assert lst.update_by_handle(other_handle, "w")  # row is now "w"
+        # Our stale handle loses its CAS although the row holds what we ask.
+        assert lst.update_by_handle(handle, "w") is False
+
+
+class TestW14InFlightMarkIsPerThread:
+    def test_another_threads_mark_is_invisible(self, config: Config) -> None:
+        import threading
+
+        lst = _lst(config)
+        lst._head_write_in_flight = True
+        seen: list[bool] = []
+        t = threading.Thread(target=lambda: seen.append(lst._head_write_in_flight))
+        t.start()
+        t.join()
+        assert seen == [False]
+        assert lst._head_write_in_flight is True
+
+
+class TestW4SingleListResyncSurvivesDamageAndDeletes:
+    def test_a_malformed_head_is_sized_from_its_raw_value(
+        self, config: Config, store: dict[Any, Any]
+    ) -> None:
+        from actingweb.actor import Actor
+
+        lst = _lst(config)
+        lst.extend(["a", "b"])
+        name = sorted(heads(store))[1]
+        store[(ACTOR, name)] = MALFORMED
+        ref, pairs = Actor(config=config)._list_state_reference(NAME, lst)
+        assert ref is None and pairs is not None
+
+    def test_an_item_deleted_mid_resolve_is_dropped(
+        self, config: Config, store: dict[Any, Any]
+    ) -> None:
+        from actingweb.actor import Actor
+
+        lst = _lst(config)
+        lst.extend(["a", big("b")])
+        pairs = lst.items_with_handles(resolve=False)
+        assert lst.delete_by_handle(pairs[1][0])  # deleted after the read
+        assert Actor._resolve_list_heads(lst, pairs) == ["a"]
+
+    def test_a_spanned_item_resolves(
+        self, config: Config, store: dict[Any, Any]
+    ) -> None:
+        from actingweb.actor import Actor
+
+        lst = _lst(config)
+        lst.extend(["a", big("b")])
+        pairs = lst.items_with_handles(resolve=False)
+        assert Actor._resolve_list_heads(lst, pairs) == ["a", big("b")]

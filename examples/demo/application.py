@@ -100,9 +100,22 @@ aw_app = (
 # it turns sign-in through the provider off. Refused unless the host is
 # localhost or 127.0.0.1.
 DEMO_QA_BASIC_AUTH = os.getenv("DEMO_QA_BASIC_AUTH", "false").lower() == "true"
-_demo_host = urlsplit("//" + os.getenv("APP_HOST_FQDN", "localhost:5000")).hostname
-if DEMO_QA_BASIC_AUTH and _demo_host not in ("localhost", "127.0.0.1"):
-    raise RuntimeError("DEMO_QA_BASIC_AUTH is for a local run only (APP_HOST_FQDN)")
+if DEMO_QA_BASIC_AUTH:
+    # Fail closed: the host must be named explicitly (no default stands in
+    # for it), and only the development server below, which binds the
+    # loopback interface, may serve it. Under a WSGI server (Lambda,
+    # gunicorn) the module is imported, never run as __main__.
+    _demo_host = urlsplit("//" + os.getenv("APP_HOST_FQDN", "")).hostname
+    if _demo_host not in ("localhost", "127.0.0.1"):
+        raise RuntimeError(
+            "DEMO_QA_BASIC_AUTH is for a local run only: set APP_HOST_FQDN to "
+            "localhost:<port> or 127.0.0.1:<port>"
+        )
+    if __name__ != "__main__":
+        raise RuntimeError(
+            "DEMO_QA_BASIC_AUTH is for the development server only: run "
+            "python examples/demo/application.py"
+        )
 if not DEMO_QA_BASIC_AUTH:
     # OAuth2 configuration - supports Google and GitHub providers
     aw_app.with_oauth(

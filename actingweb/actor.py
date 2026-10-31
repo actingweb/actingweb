@@ -3321,14 +3321,7 @@ class Actor:
                             if pairs is not None:
                                 # The heads are in hand: resolve from them,
                                 # one range read in all.
-                                from .property_list import UNRESOLVED
-
-                                items = [
-                                    list_attr.item_at(handle)[1]
-                                    if item is UNRESOLVED
-                                    else item
-                                    for handle, item in pairs
-                                ]
+                                items = self._resolve_list_heads(list_attr, pairs)
                             else:
                                 items = list(list_attr)
                         except ListCorruptionError as e:
@@ -3405,6 +3398,28 @@ class Actor:
                 return result
         return {}
 
+    @staticmethod
+    def _resolve_list_heads(list_attr: Any, pairs: list[tuple[Any, Any]]) -> list[Any]:
+        """The items for heads read with ``resolve=False``: plain items as
+        read, spanned ones through ``item_at``. An item deleted since the
+        heads were read is dropped (the delete won, as in ``to_list()``); a
+        broken one raises ``ListCorruptionError`` as before."""
+        from .property_list import UNRESOLVED
+        from .property_list import ListCorruptionError as _Corrupt
+
+        items: list[Any] = []
+        for handle, item in pairs:
+            if item is not UNRESOLVED:
+                items.append(item)
+                continue
+            try:
+                items.append(list_attr.item_at(handle)[1])
+            except _Corrupt:
+                raise
+            except IndexError:
+                continue
+        return items
+
     def _list_state_reference(
         self, list_name: str, list_attr: Any, rows: dict[str, Any] | None = None
     ) -> tuple[dict[str, Any] | None, list[tuple[Any, Any]] | None]:
@@ -3438,8 +3453,12 @@ class Actor:
                 )
                 pairs = heads
                 sizes = [
-                    handle.bytes
-                    if item is UNRESOLVED and handle.bytes is not None
+                    (
+                        handle.bytes
+                        if handle.bytes is not None
+                        else encoded_size(handle.raw_value)
+                    )
+                    if item is UNRESOLVED
                     else encoded_size(json.dumps(item))
                     for handle, item in heads
                 ]

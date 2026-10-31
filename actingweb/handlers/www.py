@@ -26,10 +26,12 @@ class WwwHandler(base_handler.BaseHandler):
         import html
 
         back = getattr(self, "_list_back", None)
+        # "Your text is kept" only where the form had text: add and update.
+        typed = self.request.get("action") in ("add", "update")
         link = (
             f'<p><a href="{html.escape(back)}" '
             'onclick="if (history.length > 1) { history.back(); return false; }">'
-            "Back</a> (your text is kept) or "
+            f"Back</a>{' (your text is kept)' if typed else ''} or "
             f'<a href="{html.escape(back)}">go to the list</a></p>'
             if back
             else ""
@@ -39,7 +41,9 @@ class WwwHandler(base_handler.BaseHandler):
         self.response.write(
             '<!doctype html><html><head><meta charset="utf-8">'
             '<meta name="viewport" content="width=device-width, initial-scale=1">'
-            f"<title>{status}</title></head><body><p>{html.escape(message)}</p>"
+            f"<title>{status}</title><style>body{{font-family:system-ui,sans-serif;"
+            "max-width:40rem;margin:2rem auto;padding:0 1rem;line-height:1.5}"
+            f"</style></head><body><p>{html.escape(message)}</p>"
             f"{link}</body></html>"
         )
 
@@ -66,11 +70,14 @@ class WwwHandler(base_handler.BaseHandler):
 
         if list_prop.storage_format() != 2:
             items = list_prop.to_list()
-            entries = [
+            v1_entries = [
                 {
                     "index": i,
                     "rank": None,
-                    "digest": None,
+                    # A v1 item is addressed by position; the digest of its
+                    # JSON lets an action refuse when the position now holds
+                    # a different item.
+                    "digest": value_digest(json.dumps(item)),
                     "spanned": False,
                     "bytes": encoded_size(json.dumps(item)),
                     "json": as_json(item),
@@ -78,7 +85,13 @@ class WwwHandler(base_handler.BaseHandler):
                 }
                 for i, item in enumerate(items)
             ]
-            return items, entries, None
+            # A v1 list has no ranks: an item is edited by its position,
+            # which is what a v1 list's identity is.
+            v1_edit: dict[str, Any] | None = None
+            edit_index = self.request.get("edit_index")
+            if edit_index.isdigit() and int(edit_index) < len(v1_entries):
+                v1_edit = dict(v1_entries[int(edit_index)])
+            return items, v1_entries, v1_edit
         pairs = list_prop.items_with_handles(resolve=False)
         items = [item for _, item in pairs]
         entries = []
@@ -113,10 +126,13 @@ class WwwHandler(base_handler.BaseHandler):
                 }
         return items, entries, edit_entry
 
-    def _list_is_read_only(self, myself: Any, prop_name: str) -> bool:
-        """The list page's read-only rule, for its write actions: a put hook
-        that rejects the property makes it read-only (``is_read_only`` on
-        the page)."""
+    def _list_is_read_only(
+        self, myself: Any, prop_name: str, value: Any = None
+    ) -> bool:
+        """The read-only rule for a property page and its write actions: a
+        put hook that rejects the property (probed with its current value,
+        or ``{}``) makes it read-only. One rule for the page and the
+        actions, so they cannot disagree."""
         if not self.hooks:
             return False
         actor_interface = self._get_actor_interface(myself)
@@ -124,10 +140,83 @@ class WwwHandler(base_handler.BaseHandler):
             return False
         return (
             self.hooks.execute_property_hooks(
-                prop_name, "put", actor_interface, {}, [prop_name]
+                prop_name, "put", actor_interface, value or {}, [prop_name]
             )
             is None
         )
+
+    def _www_path(self, actor_id: str, suffix: str = "") -> str:
+        """``/<base>/<actor_id>/www`` plus ``suffix``: the web UI's own path,
+        with the deployment's base path (``config.root``), for redirects and
+        back links."""
+        try:
+            www_base = self._get_consistent_urls(actor_id)["actor_www"]
+        except RuntimeError:
+            www_base = f"/{actor_id}/www"
+        return f"{www_base}{suffix}"
+
+    def _same_origin(self, url: str) -> bool:
+        """Whether ``url``'s origin (scheme, host, port) is this app's own,
+        from ``config.root``: case-insensitive host, default ports filled
+        in, any base path ignored (an origin has none)."""
+        from urllib.parse import urlsplit
+
+        def origin(value: str) -> tuple[str, str, int | None]:
+            parts = urlsplit(value)
+            scheme = (parts.scheme or "").lower()
+            try:
+                port = parts.port
+            except ValueError:
+                port = -1
+            if port is None:
+                port = {"https": 443, "http": 80}.get(scheme)
+            return scheme, (parts.hostname or "").lower(), port
+
+        return origin(url) == origin(self.config.root)
+
+    def _cross_site_refused(self) -> bool:
+        """True when a state-changing web UI request comes from another site.
+
+        A browser that sends ``Sec-Fetch-Site`` (every current one) is
+        trusted on it: only ``same-origin`` (or ``none``, a user typing the
+        URL) passes. Otherwise the ``Origin`` header, then ``Referer``, must
+        be this app's origin (``config.root``; a base path does not
+        matter). A request with none of the three (a script, ``curl``) is
+        not a browser's cross-site request and passes, as do basic-auth API
+        clients. ``Origin: null`` without ``Sec-Fetch-Site`` is refused.
+        """
+        fetch_site = (self.request.get_header("Sec-Fetch-Site") or "").lower()
+        if fetch_site:
+            return fetch_site not in ("same-origin", "none")
+        origin = self.request.get_header("Origin")
+        if origin:
+            return origin == "null" or not self._same_origin(origin)
+        referer = self.request.get_header("Referer")
+        if referer:
+            return not self._same_origin(referer)
+        return False
+
+    def _refuse_cross_site(self) -> bool:
+        """Answer 403 for a cross-site state-changing request; True when it
+        did."""
+        if not self._cross_site_refused():
+            return False
+        self.response.set_status(403, "Cross-site request refused")
+        self.response.headers["Content-Type"] = "text/plain; charset=utf-8"
+        self.response.write("Cross-site request refused")
+        return True
+
+    def _v1_item_changed(self, list_prop: Any, index: int) -> bool:
+        """For a v1 list action that posted ``item_digest``: True when the
+        item at ``index`` is no longer the one the page showed (a v1 list
+        has no ranks; the digest is its stale-page guard). Raises
+        ``IndexError`` for a position past the end, as the write would."""
+        from actingweb.property_list_span import value_digest
+
+        digest = self.request.get("item_digest") or None
+        if digest is None:
+            return False
+        return value_digest(json.dumps(list_prop[index])) != digest
 
     def _list_target(self, list_prop: Any, index: int | None) -> tuple[Any, str | None]:
         """The handle a v2 item action writes through, and an error to
@@ -381,6 +470,11 @@ class WwwHandler(base_handler.BaseHandler):
                 if self.request.params
                 else None
             )
+            if method_override and self._refuse_cross_site():
+                # A link or image on another site must not delete or change
+                # anything: SameSite=Lax cookies ride along on a top-level
+                # GET, and cached basic-auth credentials on any request.
+                return
             if method_override and method_override.upper() == "DELETE":
                 # Execute property delete hook first to check if deletion is allowed
                 if self.hooks:
@@ -441,7 +535,7 @@ class WwwHandler(base_handler.BaseHandler):
                 if deleted:
                     # Redirect back to properties page
                     self.response.set_status(302, "Found")
-                    self.response.set_redirect(f"/{actor_id}/www/properties")
+                    self.response.set_redirect(self._www_path(actor_id, "/properties"))
                     return
                 else:
                     self.response.set_status(404, "Property not found")
@@ -471,15 +565,8 @@ class WwwHandler(base_handler.BaseHandler):
             # Check if this property is read-only (protected from editing)
             is_read_only = False
             is_list_property = False
-            if self.hooks:
-                actor_interface = self._get_actor_interface(myself)
-                if actor_interface:
-                    # Test if property allows PUT operations (editing)
-                    put_test = self.hooks.execute_property_hooks(
-                        prop_name, "put", actor_interface, lookup or {}, [prop_name]
-                    )
-                    if put_test is None:
-                        is_read_only = True
+            if self._list_is_read_only(myself, prop_name, lookup):
+                is_read_only = True
 
             # Check if this is a list property and prepare appropriate display value
             display_value = lookup
@@ -944,7 +1031,7 @@ class WwwHandler(base_handler.BaseHandler):
             if new_trust:
                 # Success - redirect back to trust page
                 self.response.set_status(302, "Found")
-                self.response.set_redirect(f"/{actor_id}/www/trust")
+                self.response.set_redirect(self._www_path(actor_id, "/trust"))
             else:
                 self.response.set_status(400, "Failed to create trust relationship")
                 self.response.write(
@@ -966,6 +1053,10 @@ class WwwHandler(base_handler.BaseHandler):
         if not self.config.ui:
             if self.response:
                 self.response.set_status(404, "Web interface is not enabled")
+            return
+        # Every web UI mutation: refuse a cross-site form post (see
+        # _cross_site_refused).
+        if self._refuse_cross_site():
             return
 
         # Handle trust relationship creation
@@ -1002,7 +1093,7 @@ class WwwHandler(base_handler.BaseHandler):
                             # Redirect back to the property page
                             self.response.set_status(302, "Found")
                             self.response.set_redirect(
-                                f"/{actor_id}/www/properties/{prop_name}"
+                                self._www_path(actor_id, f"/properties/{prop_name}")
                             )
                             return
 
@@ -1029,26 +1120,27 @@ class WwwHandler(base_handler.BaseHandler):
             if len(path_parts) >= 3 and path_parts[2] == "items":
                 prop_name = path_parts[1]
                 action = self.request.get("action")
-                self._list_back = f"/{actor_id}/www/properties/{prop_name}"
-
-                # A cross-site form post: refuse it. OAuth sessions are
-                # already covered by a SameSite=Lax cookie, but a browser
-                # resends cached basic-auth credentials on a cross-site POST.
-                origin = self.request.get_header("Origin")
-                if origin:
-                    from urllib.parse import urlparse
-
-                    if urlparse(origin).netloc != self.config.fqdn:
-                        self._list_action_error(403, "Cross-site request refused")
-                        return
+                self._list_back = self._www_path(actor_id, f"/properties/{prop_name}")
 
                 if not action:
                     self._list_action_error(400, "Missing action parameter")
                     return
 
-                if action in ("add", "update", "delete") and self._list_is_read_only(
-                    myself, prop_name
-                ):
+                try:
+                    read_only = action in (
+                        "add",
+                        "update",
+                        "delete",
+                    ) and self._list_is_read_only(myself, prop_name)
+                except DbError:
+                    raise
+                except (
+                    Exception
+                ) as e:  # folds DbError: re-raised above; a hook bug answers 500
+                    logger.error(f"Read-only check failed for '{prop_name}': {e}")
+                    self._list_action_error(500, "Error processing list item")
+                    return
+                if read_only:
                     self._list_action_error(403, f"List '{prop_name}' is read-only")
                     return
 
@@ -1125,8 +1217,9 @@ class WwwHandler(base_handler.BaseHandler):
                         try:
                             if item_format == "text":
                                 # The edit form for a string item: the text
-                                # is the item, never parsed as JSON.
-                                parsed_value = item_value
+                                # is the item, never parsed as JSON. A
+                                # textarea submits line breaks as CRLF.
+                                parsed_value = item_value.replace("\r\n", "\n")
                             else:
                                 parsed_value = json.loads(item_value)
                         except json.JSONDecodeError:
@@ -1181,6 +1274,13 @@ class WwwHandler(base_handler.BaseHandler):
                                     )
                                     return
                                 else:
+                                    if self._v1_item_changed(list_prop, index):
+                                        self._list_action_error(
+                                            409,
+                                            "The item changed or was removed since "
+                                            "the page was loaded; nothing was saved",
+                                        )
+                                        return
                                     list_prop[index] = parsed_value
                             except ListItemSpanError:
                                 raise
@@ -1243,6 +1343,13 @@ class WwwHandler(base_handler.BaseHandler):
                                     )
                                     return
                                 else:
+                                    if self._v1_item_changed(list_prop, index):
+                                        self._list_action_error(
+                                            409,
+                                            "The item changed or was removed since "
+                                            "the page was loaded; nothing was deleted",
+                                        )
+                                        return
                                     del list_prop[index]
                             except ListItemSpanError:
                                 raise
@@ -1263,9 +1370,7 @@ class WwwHandler(base_handler.BaseHandler):
 
                     # Redirect back to the property page
                     self.response.set_status(302, "Found")
-                    self.response.set_redirect(
-                        f"/{actor_id}/www/properties/{prop_name}"
-                    )
+                    self.response.set_redirect(self._list_back)
                     return
 
                 except ListItemTooLargeError as e:
@@ -1424,9 +1529,20 @@ class WwwHandler(base_handler.BaseHandler):
 
                 # Redirect back to properties page or init page after successful creation
                 self.response.set_status(302, "Found")
-                redirect_path = (
-                    self.request.get("redirect_to") or f"/{actor_id}/www/properties"
-                )
+                # redirect_to may only name a page of this actor's own web
+                # UI: anything else (another site, another actor) would make
+                # the form an open redirect.
+                www_root = self._www_path(actor_id)
+                redirect_path = self.request.get("redirect_to") or ""
+                if (
+                    not (
+                        redirect_path == www_root
+                        or redirect_path.startswith(www_root + "/")
+                    )
+                    or "//" in redirect_path
+                    or "\\" in redirect_path
+                ):
+                    redirect_path = self._www_path(actor_id, "/properties")
                 self.response.set_redirect(redirect_path)
                 return
 

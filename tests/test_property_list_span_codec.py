@@ -127,23 +127,26 @@ class TestParse:
     @pytest.mark.parametrize(
         "obj",
         [
-            {"__aw_env": 2, "v": 1},
             {"__aw_env": True, "v": 1},
             {"__aw_env": "x", "title": "a pre-3.16 user item"},
+            {"__aw_env": 1.0, "v": 1},
         ],
     )
-    def test_marker_other_than_exactly_1_is_a_plain_item(
-        self, obj: dict[str, Any]
-    ) -> None:
+    def test_non_int_marker_is_a_plain_item(self, obj: dict[str, Any]) -> None:
         assert parse(json.dumps(obj)) is None
 
     def test_marker_not_first_is_a_plain_item_not_an_envelope(self) -> None:
         raw = json.dumps({"v": 1, "__aw_env": 1})
         assert parse(raw) is None
 
-    def test_invalid_json_after_the_marker_is_a_plain_item(self) -> None:
-        # It cannot be shown to be the library's: read it as the raw value.
-        assert parse('{"__aw_env": 1, ') is None
+    def test_invalid_json_after_the_marker_is_malformed(self) -> None:
+        # A damaged library envelope is reported, never served as an item.
+        with pytest.raises(EnvelopeError, match="not valid JSON"):
+            parse('{"__aw_env": 1, ')
+
+    def test_another_format_is_malformed_not_an_item(self) -> None:
+        with pytest.raises(EnvelopeError, match="format 2"):
+            parse(json.dumps({"__aw_env": 2, "span": {}}))
 
     def test_round_trip_with_span_preserves_extra(self) -> None:
         span = SpanInfo(gen=GEN, parts=3, bytes=1000, sha256="ab" * 32)

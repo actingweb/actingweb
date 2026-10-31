@@ -16,6 +16,7 @@ import logging
 import os
 import random
 import re
+import threading
 import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
@@ -27,6 +28,7 @@ import fractional_indexing as fi
 from actingweb.db import get_property
 from actingweb.db.exceptions import DbError
 from actingweb.property_list_span import (
+    GEN_IN_RAW_RE,
     KEY_ROW_RE,
     MAX_PARTS,
     SPAN_PART_BYTES,
@@ -35,6 +37,7 @@ from actingweb.property_list_span import (
     EnvelopeError,
     SpanInfo,
     aux_partition,
+    carries_library_marker,
     encode_item,
     encoded_size,
     gen_age_seconds,
@@ -626,9 +629,11 @@ class ListProperty:
         self._pending_meta_read: tuple[dict[str, Any] | None, str | None] | object = (
             _NO_STASH
         )
-        # True while a spanning head write's backend call is in flight (see
-        # _write_spanning / _probed_write).
-        self._head_write_in_flight = False
+        # Per thread: True while a spanning head write's backend call, or the
+        # read-back after it, is in flight (see _write_spanning /
+        # _probed_write). Thread-local so an instance shared across threads
+        # never reads another call's mark.
+        self._probe = threading.local()
 
     def _get_meta_property_name(self) -> str:
         """Get the metadata property name."""
@@ -986,9 +991,12 @@ class ListProperty:
           the bodies are deleted.
         - A ``False`` from a conditional write can be an SDK retry of a write
           that committed and then failed its own condition, so with
-          ``head_name`` the row is read back once: if it holds exactly this
-          head the write landed (the row holds what the caller asked for).
-          Otherwise the bodies are deleted.
+          ``head_name`` a spanned head is read back once: a row holding
+          exactly this head (its bytes name a fresh generation, unique to
+          this call) means the write landed. A plain head cannot be told
+          from another writer's identical value, so its ``False`` stands.
+          Otherwise the bodies are deleted; a read-back that raises keeps
+          them (unknown outcome).
         """
         span = self._write_bodies(value_str) if spans else None
         head = self._make_head(value_str, span, carry)
@@ -1013,10 +1021,21 @@ class ListProperty:
         finally:
             self._head_write_in_flight = False
         if not landed:
-            if head_name is not None and self._row_holds(head_name, head):
+            # A read-back that faults here has an unknown outcome too: the
+            # raise propagates and the bodies stay (the mark is set inside
+            # _landed_anyway while it reads).
+            if head_name is not None and self._landed_anyway(head_name, head):
                 return True, head
             self._span_delete_bodies(span)
         return landed, head
+
+    @property
+    def _head_write_in_flight(self) -> bool:
+        return bool(getattr(self._probe, "in_flight", False))
+
+    @_head_write_in_flight.setter
+    def _head_write_in_flight(self, value: bool) -> None:
+        self._probe.in_flight = value
 
     def _probed_write(self, write: Callable[..., Any], **kwargs: Any) -> Any:
         """Call one backend head write, marking it in flight for
@@ -1026,10 +1045,6 @@ class ListProperty:
         result = write(**kwargs)
         self._head_write_in_flight = False
         return result
-
-    def _row_holds(self, name: str, head: str) -> bool:
-        """Does the head row hold exactly ``head`` now? One point read."""
-        return get_property(self.config).get(actor_id=self.actor_id, name=name) == head
 
     def _landed_anyway(self, name: str, head: str) -> bool:
         """After a ``False`` from a conditional write of a spanned head:
@@ -1042,7 +1057,12 @@ class ListProperty:
             return False
         if env is None or env.span is None:
             return False
-        return get_property(self.config).get(actor_id=self.actor_id, name=name) == head
+        # The read-back is part of the write's outcome: a raise from it is
+        # an unknown outcome, so the in-flight mark stays set if it raises.
+        self._head_write_in_flight = True
+        holds = get_property(self.config).get(actor_id=self.actor_id, name=name) == head
+        self._head_write_in_flight = False
+        return holds
 
     # -- spanned items: reading ----------------------------------------
 
@@ -2615,9 +2635,9 @@ class ListProperty:
                     in_create = True
                     wrote = item_db.create_if_not_exists(
                         actor_id=self.actor_id, name=name, value=value_str
-                    )
+                    ) or self._landed_anyway(name, value_str)
                     in_create = False
-                    if not (wrote or self._landed_anyway(name, value_str)):
+                    if not wrote:
                         # Collision: another writer took this rank. The items
                         # before it already landed; re-key from here.
                         collided_at = i
@@ -3893,6 +3913,9 @@ class ListProperty:
             broken, orphan_gens = self._span_inventory(
                 span_heads, span_names, check_content=True
             )
+            raw_by_rank = dict(pairs)
+            for gen in self._gens_named_by(raw_by_rank[r] for r in malformed):
+                orphan_gens.pop(gen, None)
             report["span_body_rows"] = len(span_names)
             report["orphan_span_gens"] = len(orphan_gens)
             report["broken_spans"] = broken
@@ -3934,6 +3957,11 @@ class ListProperty:
             if env is not None and env.span is not None:
                 spanned.append((rank, env.span))
         return spanned, malformed
+
+    @staticmethod
+    def _gens_named_by(raws: Any) -> set[str]:
+        """Body generations named in raw heads that do not parse."""
+        return {m.group(1) for raw in raws for m in GEN_IN_RAW_RE.finditer(raw)}
 
     def _span_inventory(
         self,
@@ -4355,6 +4383,10 @@ class ListProperty:
             span_heads, span_names, check_content=True
         )
         raw_by_rank = dict(pairs)
+        # A head that does not parse may still name its bodies: keep them for
+        # a repair, never sweep them as orphans.
+        for gen in self._gens_named_by(raw_by_rank[r] for r in malformed):
+            orphans.pop(gen, None)
         span_by_rank = dict(span_heads)
         aux = self._aux_or_none()
         broken_removed = 0
@@ -4382,7 +4414,7 @@ class ListProperty:
                 get_property(self.config).batch_delete(actor_id=aux, names=names)
             orphans_removed += 1
         malformed_removed = 0
-        for rank in malformed:
+        for rank in [r for r in malformed if carries_library_marker(raw_by_rank[r])]:
             # A head that is not a valid envelope names no readable item;
             # removing it makes the list readable again.
             if get_property(self.config).delete_if_value_equals(

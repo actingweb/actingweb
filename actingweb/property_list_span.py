@@ -195,47 +195,72 @@ def looks_like_envelope(raw: Any) -> bool:
     return isinstance(raw, str) and raw.startswith(_ENVELOPE_PREFIX)
 
 
-def carries_library_marker(raw: Any) -> bool:
-    """True if ``raw`` is a JSON object whose first key is the envelope
-    marker with exactly the value ``1``: something this library wrote as an
-    envelope, even if it is now damaged. A value that merely starts like an
-    envelope (a pre-3.16 user item ``{"__aw_env": "x", ...}``) is not."""
+def _envelope_obj(raw: Any) -> dict[str, Any] | None:
+    """Decode ``raw`` once and classify it.
+
+    ``None``: a plain item. That is anything not starting with the marker,
+    and a valid JSON object whose marker value is not an int (a pre-3.16
+    user item such as ``{"__aw_env": "x", ...}``, which reads as itself).
+    A dict: an envelope with the marker ``1``, to validate further.
+
+    Raises:
+        EnvelopeError: The value starts with the marker but is not valid
+            JSON (a damaged library envelope), or its marker is an int other
+            than ``1`` (an envelope of a format this version does not read).
+            Either is reported as malformed rather than served as an item.
+    """
     if not looks_like_envelope(raw):
-        return False
+        return None
     try:
         obj = json.loads(raw)
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as e:
+        raise EnvelopeError(f"envelope is not valid JSON: {e.msg}") from None
+    if not isinstance(obj, dict) or not obj or next(iter(obj)) != ENVELOPE_MARKER:
+        return None
+    marker = obj[ENVELOPE_MARKER]
+    if not isinstance(marker, int) or isinstance(marker, bool):
+        return None
+    if marker != 1:
+        raise EnvelopeError(f"envelope format {marker} is not one this version reads")
+    return obj
+
+
+def carries_library_marker(raw: Any) -> bool:
+    """True if ``raw`` is a valid JSON object whose first key is the
+    envelope marker with exactly the value ``1``: something this library
+    wrote as an envelope (even if a later field is now damaged), and so
+    safe for the span sweep to remove when it is malformed. A damaged or
+    other-format envelope is reported but never removed."""
+    try:
+        return _envelope_obj(raw) is not None
+    except EnvelopeError:
         return False
-    if not isinstance(obj, dict) or not obj:
-        return False
-    marker = obj.get(ENVELOPE_MARKER)
-    return (
-        next(iter(obj)) == ENVELOPE_MARKER
-        and isinstance(marker, int)
-        and not isinstance(marker, bool)
-        and marker == 1
-    )
+
+
+# A body generation named anywhere in a raw head, for heads that do not
+# parse: their bodies are kept by the orphan sweep so a repair can recover
+# them.
+GEN_IN_RAW_RE = re.compile(r'"gen"\s*:\s*"(\d{13}-[0-9a-f]{16})"')
 
 
 def parse(raw: Any) -> Envelope | None:
     """Parse a raw stored value. ``None`` means a plain item (decode it as
     JSON); an ``Envelope`` means read the item through it.
 
-    Only a JSON object whose first key is the marker with exactly the value
-    ``1`` is an envelope (``carries_library_marker``). Anything else is a
-    plain item, including a value that merely starts like one: a pre-3.16
-    user item ``{"__aw_env": "x", ...}`` reads as that item, not as damage.
+    See ``_envelope_obj`` for what is plain: a pre-3.16 user item that
+    merely starts like an envelope (a non-int marker) reads as that item.
 
     Raises:
-        EnvelopeError: ``raw`` carries the library's marker but is
-            malformed: ``span`` with ``parts`` not an int from 1 to 9999,
-            ``gen`` not of the gen shape, ``bytes`` not a non-negative int
-            or ``sha256`` not 64 hex characters, ``key``/``tok`` not
-            strings, or neither ``v`` nor ``span``.
+        EnvelopeError: ``raw`` starts like an envelope but is damaged
+            (invalid JSON), of another format (an int marker other than
+            ``1``), or malformed: ``span`` with ``parts`` not an int from 1
+            to 9999, ``gen`` not of the gen shape, ``bytes`` not a
+            non-negative int or ``sha256`` not 64 hex characters,
+            ``key``/``tok`` not strings, or neither ``v`` nor ``span``.
     """
-    if not carries_library_marker(raw):
+    obj = _envelope_obj(raw)
+    if obj is None:
         return None
-    obj = json.loads(raw)
     key = obj.get("key")
     tok = obj.get("tok")
     if key is not None and not isinstance(key, str):

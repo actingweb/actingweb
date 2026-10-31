@@ -147,6 +147,25 @@ SECURITY
   vouches for that address unless it passes ``unvouch=True`` (new), which
   applies the endpoint's rules.
 
+- **A link on another site could delete a property through the web UI, and
+  a form on another site could change one.** ``GET
+  /<id>/www/properties/<name>?_method=DELETE`` deletes the property, and a
+  browser sends ``SameSite=Lax`` session cookies, and cached basic-auth
+  credentials, on a top-level navigation from any site; the web UI's
+  property and trust ``POST`` forms had no origin check either (only the
+  list item actions did, and only on ``Origin``). Every state-changing web
+  UI request (each ``POST`` under ``/<id>/www`` and the ``_method``
+  override on ``GET``) now answers 403 "Cross-site request refused" when
+  the browser says it is cross-site: ``Sec-Fetch-Site`` other than
+  ``same-origin`` or ``none`` when the browser sends it, else an ``Origin``
+  (or, without one, a ``Referer``) whose scheme, host and port are not
+  ``config.root``'s; ``Origin: null`` is refused. A request with none of
+  these headers (a script, ``curl``) passes as before. The property
+  creation form's ``redirect_to`` now only redirects within the actor's own
+  web UI. **Behavior change:** a page on another origin that posts to the
+  web UI, or links to ``?_method=DELETE``, now gets 403; serve it from the
+  application's own origin.
+
 REMOVED
 ~~~~~~~
 
@@ -507,15 +526,18 @@ CHANGED
   every entry before writing any, so its 413 means nothing was written, and
   ``PUT ?index=`` answers a broken span with the 409.
 
-- **Behavior change: the REST property handlers deny when the permission
-  evaluator raises.** For a peer request, ``PropertiesHandler``,
-  ``PropertyMetadataHandler`` and ``PropertyListItemsHandler`` caught any
-  evaluator exception and answered with the coarse legacy ``access`` table,
-  which for the default table allowed ``friend``, ``partner`` and ``admin``
-  every property method, so an evaluator bug turned an ``excluded_patterns``
-  denial into an allow. They now deny (403) and log at ERROR; a ``DbError``
-  still answers 503. The no-rule (``NOT_FOUND``) fallback is unchanged. A
-  deployment whose evaluator raises today sees 403s where it saw 200s.
+- **Behavior change: the REST property handlers deny when their permission
+  check raises.** For a peer request, ``PropertiesHandler``,
+  ``PropertyMetadataHandler`` and ``PropertyListItemsHandler`` caught an
+  exception from ``get_permission_evaluator()``, or from the legacy check
+  behind a ``NOT_FOUND`` result, and answered with the coarse legacy
+  ``access`` table, which for the default table allowed ``friend``,
+  ``partner`` and ``admin`` every property method. They now deny (403) and
+  log at ERROR; a ``DbError`` still answers 503. An error inside the
+  evaluator's own rule evaluation already answered ``DENIED`` and is
+  unchanged, as is the no-rule (``NOT_FOUND``) fallback. Only a deployment
+  whose evaluator cannot be built, or whose legacy check raises, sees 403s
+  where it saw 200s; check the ERROR log for "Error in permission evaluation".
 
 - **The web UI's list pages read item heads only and act by identity.**
   ``/<id>/www/properties/<list>`` no longer reads spanned items' bodies: it
@@ -526,11 +548,18 @@ CHANGED
   ``edit_entry``; a corrupted list sets ``list_error``. The item actions
   accept ``item_rank`` and ``item_digest`` and answer 409 when the item
   changed or went since the page was loaded, refuse writes on a list a put
-  hook makes read-only (403), refuse a cross-site ``Origin`` (403), refuse
-  invalid JSON when ``item_format=json``, and treat a whitespace-only value
-  as empty. **Behavior change:** a template that rendered ``list_items``
-  shows ``UNRESOLVED`` for a spanned item; the shipped templates use
-  ``list_entries``.
+  hook makes read-only (403), refuse a cross-site request (403, see
+  SECURITY), refuse invalid JSON when ``item_format=json``, keep a text
+  item's line breaks as ``\n`` (a textarea posts CRLF), and treat a
+  whitespace-only value as empty. A v1 list's items are edited by
+  position (``?edit_index=<i>``) and its actions accept ``item_digest``
+  too, answering 409 when that position now holds a different item. The
+  web UI's redirects and the error pages' back links keep the
+  deployment's base path (``config.root``). **Behavior change:** in ``list_items`` a spanned item is the
+  ``UNRESOLVED`` sentinel, so a custom template that prints ``list_items``
+  shows the text ``UNRESOLVED`` for it, and one that passes ``list_items``
+  through ``tojson`` raises ``TypeError``. Render ``list_entries`` instead,
+  as the shipped templates do (see ``docs/guides/web-ui.rst``).
 
 - **The web UI's list item actions answer with a reason.** The
   ``/<id>/www/properties/<list>/items`` actions answered errors with an empty

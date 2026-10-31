@@ -56,14 +56,20 @@
                         <label class="text-sm font-medium text-muted" for="edit-item">Edit item {{ edit_entry.index }} ({{ edit_entry.bytes }} bytes, {% if edit_entry.text is not none %}text{% else %}JSON{% endif %})</label>
                         <form method="post" action="{{ list_url }}/items" class="mt-xs">
                             <input type="hidden" name="action" value="update">
+                            {% if edit_entry.rank %}
                             <input type="hidden" name="item_rank" value="{{ edit_entry.rank }}">
+                            {% else %}
+                            <input type="hidden" name="item_index" value="{{ edit_entry.index }}">
+                            {% endif %}
                             <input type="hidden" name="item_digest" value="{{ edit_entry.digest }}">
                             {% if edit_entry.text is not none %}
                             <input type="hidden" name="item_format" value="text">
-                            <textarea id="edit-item" name="item_value" rows="8" class="list-item-editor" required>{{ edit_entry.text }}</textarea>
+                            <textarea id="edit-item" name="item_value" rows="8" class="list-item-editor" required>
+{{ edit_entry.text }}</textarea>
                             {% else %}
                             <input type="hidden" name="item_format" value="json">
-                            <textarea id="edit-item" name="item_value" rows="8" class="list-item-editor" required>{{ edit_entry.json }}</textarea>
+                            <textarea id="edit-item" name="item_value" rows="8" class="list-item-editor" required>
+{{ edit_entry.json }}</textarea>
                             {% endif %}
                             <div class="flex gap-sm mt-xs">
                                 <button type="submit" class="btn btn-primary btn-sm">Save item</button>
@@ -90,6 +96,8 @@
                             <div class="flex gap-sm mt-xs">
                                 {% if entry.rank %}
                                 <a href="{{ list_url }}?edit={{ entry.rank|urlencode }}" class="btn btn-secondary btn-sm">Edit</a>
+                                {% else %}
+                                <a href="{{ list_url }}?edit_index={{ entry.index }}" class="btn btn-secondary btn-sm">Edit</a>
                                 {% endif %}
                                 <form method="post" action="{{ list_url }}/items"
                                       onsubmit="return confirm('Delete item {{ entry.index }}?');">
@@ -99,6 +107,7 @@
                                     <input type="hidden" name="item_digest" value="{{ entry.digest }}">
                                     {% else %}
                                     <input type="hidden" name="item_index" value="{{ entry.index }}">
+                                    <input type="hidden" name="item_digest" value="{{ entry.digest }}">
                                     {% endif %}
                                     <button type="submit" class="btn btn-danger-outline btn-sm">Delete</button>
                                 </form>

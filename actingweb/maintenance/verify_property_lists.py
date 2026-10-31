@@ -152,10 +152,10 @@ def sweep_actor(
     ``spans`` passes ``verify(spans=True)``: enumerate each v2 list's body
     rows (every body byte, on DynamoDB). ``sweep_spans`` (with ``repair``)
     runs ``sweep_span_orphans()`` (no rebalance, no body copy) on every v2
-    list with orphan body generations, broken spans or malformed heads,
-    healthy or not: an orphan
-    generation does not make a list unhealthy, so the ``healthy``
-    short-circuit below would otherwise skip it.
+    list before verifying it, healthy or not: an orphan generation does not
+    make a list unhealthy. The sweep is the one body enumeration; the verify
+    after it reads bodies only with ``spans``. Without ``repair``,
+    ``sweep_spans`` reports what a sweep would find (``verify(spans=True)``).
 
     Returns (lists_checked, lists_unhealthy_after, lists_errored).
     """
@@ -174,15 +174,29 @@ def sweep_actor(
         checked += 1
         list_prop = ListProperty(actor_id=actor_id, name=name, config=config)
         try:
+            # The span sweep runs first, ahead of verify and of the healthy
+            # short-circuit (an orphan body generation does not make a list
+            # unhealthy). It enumerates the list's body rows itself, so the
+            # verify after it reads bodies again only when --spans asks:
+            # one content read for --repair --sweep-spans, not three.
+            if repair and sweep_spans and list_prop.storage_format() == 2:
+                swept = list_prop.sweep_span_orphans()
+                logger.info(
+                    f"actor={actor_id} list={name}: span sweep removed "
+                    f"{swept.get('orphan_span_gens_removed', 0)} orphan generation(s), "
+                    f"{swept.get('broken_spans_removed', 0)} broken span(s) and "
+                    f"{swept.get('malformed_heads_removed', 0)} malformed head(s)"
+                )
             # verify() fetches the actor's whole property partition, so this
             # is one dump per list. That is inherent to checking integrity
             # (which is this script's job) -- unlike the migrate script,
             # which only needs the format and uses storage_format().
             report = list_prop.verify(
-                identity_key=identity_key, spans=spans or sweep_spans
+                identity_key=identity_key,
+                spans=spans or (sweep_spans and not repair),
             )
         except Exception as e:  # folds DbError: counted as error, exit 1
-            logger.error(f"actor={actor_id} list={name}: verify() failed: {e}")
+            logger.error(f"actor={actor_id} list={name}: verify/span sweep failed: {e}")
             errored += 1
             continue
 
@@ -209,34 +223,6 @@ def sweep_actor(
                 f"storage envelope -- --repair --sweep-spans removes them, or "
                 f"remove the item(s) with delete_by_handle()"
             )
-
-        # The span sweep has its own path, ahead of the healthy
-        # short-circuit: a list with orphan body generations is healthy.
-        if (
-            repair
-            and sweep_spans
-            and is_v2
-            and (
-                report.get("orphan_span_gens")
-                or report.get("broken_spans")
-                or report.get("malformed_heads")
-            )
-        ):
-            try:
-                swept = list_prop.sweep_span_orphans()
-            except Exception as e:  # folds DbError: counted as error, exit 1
-                logger.error(
-                    f"actor={actor_id} list={name}: sweep_span_orphans() failed: {e}"
-                )
-                errored += 1
-                continue
-            logger.info(
-                f"actor={actor_id} list={name}: span sweep removed "
-                f"{swept.get('orphan_span_gens_removed', 0)} orphan generation(s), "
-                f"{swept.get('broken_spans_removed', 0)} broken span(s) and "
-                f"{swept.get('malformed_heads_removed', 0)} malformed head(s)"
-            )
-            report = list_prop.verify(identity_key=identity_key, spans=True)
 
         # Rows of the OTHER storage format sharing this list's name: what an
         # interrupted migration or downgrade leaves. Not a health failure --

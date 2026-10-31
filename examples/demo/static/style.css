@@ -1001,4 +1001,6 @@ pre code {
 /* A preview never reorders the text around it (bidi overrides stay inside). */
 .list-item-preview {
   unicode-bidi: isolate;
+  /* Line breaks in a text item show as line breaks. */
+  white-space: pre-wrap;
 }

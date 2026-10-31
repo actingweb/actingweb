@@ -4392,6 +4392,7 @@ class ListProperty:
         # head is gone.
         malformed_removed = 0
         malformed_kept: list[str] = []
+        gens_by_rank = {r: self._gens_named_by([raw_by_rank[r]]) for r in malformed}
         for rank in malformed:
             raw = raw_by_rank[rank]
             if carries_library_marker(raw) and get_property(
@@ -4411,12 +4412,13 @@ class ListProperty:
                     self.actor_id,
                     rank,
                     len(raw),
-                    sorted(self._gens_named_by([raw])) or "none",
+                    sorted(gens_by_rank[rank]) or "none",
                 )
             else:
                 malformed_kept.append(rank)
-        for gen in self._gens_named_by(raw_by_rank[r] for r in malformed):
-            orphans.pop(gen, None)
+        for gens in gens_by_rank.values():
+            for gen in gens:
+                orphans.pop(gen, None)
         span_by_rank = dict(span_heads)
         aux = self._aux_or_none()
         broken_removed = 0

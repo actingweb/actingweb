@@ -56,9 +56,14 @@ class RootHandler(base_handler.BaseHandler):
                 redirect_path = self.config.actor_path(actor_id_str, "/app")
 
             if self.response:
-                # Build full URL for redirect - config.root includes protocol, host, and any base path
-                # The integration uses response.redirect directly for RedirectResponse
-                full_redirect_url = f"{self.config.root.rstrip('/')}{redirect_path}"
+                # Full URL for the redirect: the origin of config.root plus the
+                # path, which already carries any base path (actor_path).
+                from urllib.parse import urlsplit
+
+                root_parts = urlsplit(self.config.root)
+                full_redirect_url = (
+                    f"{root_parts.scheme}://{root_parts.netloc}{redirect_path}"
+                )
                 self.response.set_redirect(full_redirect_url)
                 self.response.headers["Location"] = full_redirect_url
                 self.response.set_status(302, "Found")

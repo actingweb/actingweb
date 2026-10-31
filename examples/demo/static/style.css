@@ -1035,3 +1035,8 @@ pre code {
   /* Line breaks in a text item show as line breaks. */
   white-space: pre-wrap;
 }
+
+/* A property value keeps its line breaks. */
+.copy-field code {
+  white-space: pre-wrap;
+}

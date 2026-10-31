@@ -2644,6 +2644,108 @@ an address-bar `?_method=DELETE` with basic auth answers 403, and one with
 only an explicit Bearer token is not refused as cross-site (authentication
 answers it); no console errors; the trust page fits at 375 px.
 
+### 2026-10-31, after verification thoughts/verifications/2026-10-31-spanned-list-items-6.md
+
+#### 57. A peer's later base URI is checked too; outbound URLs as well (Z1, Z6, Z9)
+
+**Category**: Bug fix (security)
+
+**What changed**: `TrustPeerHandler.put` answers 400 "Invalid baseuri"
+for a base URI that `is_valid_peer_baseuri` refuses (the peer may PUT its
+own row); `create_reciprocal_trust` and its async twin refuse such a URL
+before fetching it; `is_valid_peer_id` uses `fullmatch` (a trailing
+newline passed `$`).
+
+**Files affected**: `actingweb/handlers/trust.py`, `actingweb/actor.py`,
+`actingweb/trust.py`, `tests/test_cross_site_and_peer_inputs.py`
+
+#### 58. The root redirect keeps one base path (Z2, a regression from entry 52)
+
+**Category**: Bug fix
+
+**What changed**: `RootHandler.get` prefixes the origin of `config.root`
+(scheme and host), not `config.root`, to `actor_path()`, which already
+carries the base path.
+
+**Files affected**: `actingweb/handlers/root.py`,
+`tests/test_cross_site_and_peer_inputs.py`
+
+#### 59. Cached basic auth on a cross-site state change is dropped (Z3, Z7, Z10, Z13)
+
+**Category**: Bug fix (security)
+
+**What changed**: both integrations drop a `Basic` Authorization header
+from a POST/PUT/PATCH/DELETE the browser reports as cross-site (or
+same-site), as they already refuse the cookie; they use the framework's
+own case-insensitive header lookup, only when needed. The docs say the
+protection relies on `Sec-Fetch-Site`, `Origin` and `Referer` reaching
+the app, and that a request with the cookie and a Bearer token counts as
+ambient.
+
+**Files affected**: `actingweb/cross_site.py`, both integrations,
+`CHANGELOG.rst`, `docs/reference/security.rst`,
+`docs/migration/v3.16.rst`
+
+#### 60. Library templates encode property names in URLs (Z4)
+
+**Category**: Bug fix (security)
+
+**What changed**: `aw-actor-www-properties.html` and
+`aw-actor-www-property.html` put names through `|urlencode` in every
+`href` and `action`, so a name with `?` cannot become a same-origin
+`?_method=DELETE` link.
+
+**Files affected**: `actingweb/templates/aw-actor-www-properties.html`,
+`aw-actor-www-property.html`, `tests/test_cross_site_and_peer_inputs.py`
+
+#### 61. Trust links: no link for a dot-only id; object rows get `peer_link` (Z5, Z11)
+
+**Category**: Bug fix
+
+**What changed**: `_trust_uri` returns "" for a relationship or id that is
+only dots (WHATWG parsing treats `%2E` as a dot), and the templates show no
+Approve or Delete for it; the object-like trust branch sets `peer_link`.
+
+**Files affected**: `actingweb/handlers/www.py`,
+`examples/demo/templates/aw-actor-www-trust.html`
+
+#### 62. Remaining base-path links and the verification page (Z8, Z12)
+
+**Category**: Bug fix
+
+**What changed**: the OAuth2 callback's SPA redirects use `actor_path`;
+both integrations set the verification page's `redirect_url` from
+`actor_path` when the handler did not (template and fallback), and the
+fallback page escapes the message and address. The ADDED entry notes the
+`oauth_completed` hook's `redirect_url` now carries the base path.
+
+**Files affected**: `actingweb/handlers/oauth2_callback.py`, both
+integrations, `CHANGELOG.rst`; the oauth email and SPA test doubles bind
+the real `Config.actor_path`
+
+#### 63. Seventh browser walk: the demo's simple properties can be edited
+
+**Category**: UX refinement (found by the seventh browser walk)
+
+**What changed**: the demo's property page gains a "New value" textarea
+and "Save value" for a simple property (a read-only one shows a note); the
+www property update stores CRLF as LF; a property value's display keeps
+its line breaks. The save lands on the properties list, as the library's
+update always has.
+
+**Files affected**: `examples/demo/templates/aw-actor-www-property.html`,
+`examples/demo/static/style.css`, `actingweb/handlers/www.py`
+
+**Browser walk** (headless Playwright, an owner and a peer on
+`localhost:5055`): `GET /<id>` in a browser answers 302 to exactly
+`http://localhost:5055/<id>/www`; with a pending trust the trust page fits
+at 375 px with Approve and Delete inside the card, Approve answers 302 and
+Delete (confirm names the peer) removes it; a cross-site `POST
+/<id>/properties` with basic auth answers 401 and writes nothing, while a
+same-origin or header-less one answers 201; a simple property is created,
+edited (`v2`, then a two-line value stored with `\n`) and deleted; list
+add, multi-line edit and delete work; no console errors.
+
 ## Evaluation Notes
 
 Five evaluators reviewed the first draft against the codebase on

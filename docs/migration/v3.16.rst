@@ -773,16 +773,18 @@ and no cookie, such as an SPA calling the API cross-origin, is not. A
 refused request answers 403 "Cross-site request refused" and changes
 nothing. Every ``POST`` under ``/<id>/www`` is refused when the browser
 reports a cross-site request, and the Flask and FastAPI integrations do not
-let the session cookie authenticate a ``POST``, ``PUT``, ``PATCH`` or
-``DELETE`` that the browser reports as started by another site, a sibling
-subdomain included.
+let the session cookie, or a ``Basic`` header, authenticate a ``POST``,
+``PUT``, ``PATCH`` or ``DELETE`` that the browser reports as started by
+another site, a sibling subdomain included. This needs the browser's
+``Sec-Fetch-Site``, ``Origin`` and ``Referer`` to reach the application.
 
 **Peer-supplied trust fields.** A peer's ``id`` must be letters, digits and
 ``_ . : @ + = -`` (at most 255 characters, starting with a letter or digit)
 and its ``baseuri`` a plain ``http`` or ``https`` URL with no user info,
 query or fragment. An incoming trust request outside those shapes answers
-400; ``create_reciprocal_trust`` returns ``False`` for a peer whose
-``/meta`` names such an id. Ids the library makes for OAuth2 and MCP
+400, and so does a peer's ``PUT`` that changes its ``baseuri`` to one;
+``create_reciprocal_trust`` returns ``False`` for such a URL, or for a peer
+whose ``/meta`` names such an id. Ids the library makes for OAuth2 and MCP
 trusts are not affected. The shipped templates no longer interpolate values
 inside inline event handlers; if yours do, move the value to a ``data-``
 attribute (HTML escaping does not protect a JavaScript string inside an

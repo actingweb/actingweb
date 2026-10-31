@@ -1541,6 +1541,13 @@ class Actor:
         """
         if len(url) == 0:
             return False
+        from .trust import is_valid_peer_baseuri
+
+        if not is_valid_peer_baseuri(url):
+            # Stored as the peer's base URI: the same shape a peer must
+            # give when it asks us.
+            logger.warning("Refused to request trust from an invalid peer URL")
+            return False
         if not secret or len(secret) == 0:
             return False
         res = self.get_peer_info(url)
@@ -1661,6 +1668,13 @@ class Actor:
         Creates a new reciprocal trust relationship locally and by requesting a relationship from a peer actor.
         """
         if len(url) == 0:
+            return False
+        from .trust import is_valid_peer_baseuri
+
+        if not is_valid_peer_baseuri(url):
+            # Stored as the peer's base URI: the same shape a peer must
+            # give when it asks us.
+            logger.warning("Refused to request trust from an invalid peer URL")
             return False
         if not secret or len(secret) == 0:
             return False

@@ -73,7 +73,7 @@
                                                 <line x1="10" y1="14" x2="21" y2="3"/>
                                             </svg>
                                         </a>{% endif %}
-                                        {% if not trust.approved %}
+                                        {% if not trust.approved and trust.approveuri %}
                                         <a href="{{ trust.approveuri }}?_method=PUT&approved=true" class="btn btn-sm btn-success">
                                             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                                 <polyline points="20 6 9 17 4 12"/>

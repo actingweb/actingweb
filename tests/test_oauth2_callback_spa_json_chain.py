@@ -9,6 +9,7 @@ import json
 from unittest.mock import MagicMock, patch
 
 from actingweb.aw_web_request import AWWebObj
+from actingweb.config import Config
 from actingweb.handlers.oauth2_callback import OAuth2CallbackHandler
 
 CALLBACK = "https://test.example.com/oauth/callback"
@@ -18,6 +19,10 @@ def _config() -> MagicMock:
     config = MagicMock()
     config.proto = "https://"
     config.fqdn = "test.example.com"
+    config.root = "https://test.example.com/"
+    config.actor_path.side_effect = lambda actor_id, suffix="": Config.actor_path(
+        config, actor_id, suffix
+    )
     config.oauth2_provider = "google"
     config.force_email_prop_as_creator = False
     config.service_registry = None

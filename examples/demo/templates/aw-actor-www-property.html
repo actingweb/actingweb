@@ -137,6 +137,16 @@
                             <code>{{ value }}</code>
                         </div>
                     </div>
+                    {% if not is_read_only %}
+                    <form method="post" action="{{ url }}/properties/{{ property|urlencode }}" class="mt-md">
+                        <label class="text-sm font-medium text-muted" for="edit-value">New value</label>
+                        <textarea id="edit-value" name="value" rows="3" class="list-item-editor mt-xs" required>
+{{ raw_value }}</textarea>
+                        <button type="submit" class="btn btn-primary btn-sm mt-xs">Save value</button>
+                    </form>
+                    {% else %}
+                    <p class="text-sm text-muted mt-md">This property is read-only.</p>
+                    {% endif %}
                     {% endif %}
                 </div>
             </div>

@@ -19,7 +19,7 @@ def is_valid_peer_id(value: Any) -> bool:
     with a letter or digit, at most 255 characters. No ``/``, ``?``, ``#``,
     ``%``, quotes or whitespace, so it can sit in a URL path segment and a
     page without escaping surprises."""
-    return isinstance(value, str) and bool(_PEER_ID_RE.match(value))
+    return isinstance(value, str) and bool(_PEER_ID_RE.fullmatch(value))
 
 
 def is_valid_peer_baseuri(value: Any) -> bool:

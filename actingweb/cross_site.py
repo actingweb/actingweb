@@ -7,7 +7,8 @@ integrations turn the cookie into a Bearer header. So a request that
 changes state with such *ambient* credentials must show it came from the
 application's own origin (scheme, host and port of ``config.root``; a base
 path does not matter). An explicit Bearer token cannot be attached by
-another site, so a request carrying one is never refused here.
+another site, so a request carrying one and no session cookie is never
+refused here; one that also carries the cookie counts as ambient.
 
 Pure functions over a header lookup, shared by ``BaseHandler`` and the
 Flask and FastAPI integrations.
@@ -86,12 +87,15 @@ SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
 
 def may_use_session_cookie(method: str, header: HeaderLookup, root: str) -> bool:
-    """For the integrations: whether the ``oauth_token`` cookie may stand in
-    for a Bearer header on this request. Always for a safe method (viewing a
-    page; a GET ``_method`` override is checked again by the handler), and
-    for a state-changing one only when the browser does not say another
-    site started it, so a form on a sibling subdomain or another site
-    cannot act with the owner's session."""
+    """For the integrations: whether an ambient credential (the
+    ``oauth_token`` cookie standing in for a Bearer header, or a Basic
+    header the browser cached) may authenticate this request. Always for a
+    safe method (viewing a page; a GET ``_method`` override is checked again
+    by the handler), and for a state-changing one only when the browser does
+    not say another site started it, so a form on a sibling subdomain or
+    another site cannot act with the owner's session. This relies on the
+    browser's ``Sec-Fetch-Site``, ``Origin`` and ``Referer`` reaching the
+    application: a proxy that strips all three turns it off."""
     if (method or "").upper() in SAFE_METHODS:
         return True
     return not cross_site(header, root)

@@ -696,7 +696,9 @@ class OAuth2CallbackHandler(BaseHandler):
             if "{actor_id}" in return_path:
                 final_redirect = return_path.replace("{actor_id}", actor_instance.id)
             else:
-                final_redirect = f"/{actor_instance.id}{return_path}"
+                final_redirect = self.config.actor_path(
+                    actor_instance.id or "", return_path
+                )
         else:
             # Traditional (non-SPA) mode: redirect based on config.ui setting
             if self.config.ui:
@@ -1278,7 +1280,7 @@ class OAuth2CallbackHandler(BaseHandler):
         if "{actor_id}" in return_path:
             final_redirect = return_path.replace("{actor_id}", actor_id_str)
         else:
-            final_redirect = f"/{actor_id_str}{return_path}"
+            final_redirect = self.config.actor_path(actor_id_str, return_path)
 
         # Store pending session data for SPA to retrieve
         # The SPA will call back to get this data using the session token

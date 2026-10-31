@@ -756,6 +756,15 @@ class TrustPeerHandler(base_handler.BaseHandler):
                 desc = self.request.get("desc")
             else:
                 desc = ""
+        from actingweb.trust import is_valid_peer_baseuri
+
+        if baseuri and not is_valid_peer_baseuri(baseuri):
+            # The peer may PUT its own row: the base URI it moves to must be
+            # as plain as the one it was admitted with (it is fetched and
+            # shown).
+            if self.response:
+                self.response.set_status(400, "Invalid baseuri")
+            return
         # Use developer API - ActorInterface with TrustManager
         if actor_interface is None:
             actor_interface = self._get_actor_interface(myself)

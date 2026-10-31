@@ -33,13 +33,16 @@ Access Control
   ``Referer``); a request with none of these passes unless it carries the
   session cookie. Web UI ``POST`` forms are refused when the browser
   reports a cross-site request, and the integrations do not let the
-  session cookie authenticate a state-changing request another site
-  (sibling subdomains included) started. A cross-site request with cached
-  basic-auth credentials and no browser headers at all passes: prefer
-  OAuth2 sessions for browser use.
+  session cookie or a Basic header authenticate a state-changing request
+  another site (sibling subdomains included) started. Both rely on the
+  browser's ``Sec-Fetch-Site``, ``Origin`` and ``Referer`` reaching the
+  application: do not strip them at a proxy. A cross-site request with
+  cached basic-auth credentials and no browser headers at all passes:
+  prefer OAuth2 sessions for browser use.
 - **Peer-supplied trust fields are shapes, not markup.** A peer's id and
-  base URI are checked when trust is requested in either direction (an id
-  of letters, digits and ``_ . : @ + = -``; a plain ``http(s)`` base URI).
+  base URI are checked when trust is requested in either direction and when
+  a peer changes its base URI (an id of letters, digits and
+  ``_ . : @ + = -``; a plain ``http(s)`` base URI).
   Templates of your own must not interpolate values inside inline event
   handlers: HTML escaping does not protect a JavaScript string there; use a
   ``data-`` attribute.

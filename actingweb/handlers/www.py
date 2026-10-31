@@ -153,17 +153,17 @@ class WwwHandler(base_handler.BaseHandler):
     def _trust_uri(self, actor_id: str, relationship: str, peerid: str) -> str:
         """The trust row's URL, with the relationship and peer id quoted as
         path segments: a stored id from before 3.16 may hold characters
-        (``/``, ``?``, ``.``) that would point the link somewhere else."""
+        (``/``, ``?``) that would point the link somewhere else. Empty for
+        an id that is only dots."""
         from urllib.parse import quote
 
-        def segment(value: str, safe: str) -> str:
-            quoted = quote(value, safe=safe)
-            # A dot segment would be resolved away by the browser.
-            return quoted.replace(".", "%2E") if quoted in (".", "..") else quoted
-
+        # A segment that is all dots is resolved away by the browser, quoted
+        # or not ("%2E" counts as "."): such a row gets no link at all.
+        if str(relationship).strip(".") == "" or str(peerid).strip(".") == "":
+            return ""
         return (
             f"{self.config.root}{actor_id}/trust/"
-            f"{segment(str(relationship), '')}/{segment(str(peerid), ':@')}"
+            f"{quote(str(relationship), safe='')}/{quote(str(peerid), safe=':@')}"
         )
 
     def _v1_item_changed(self, list_prop: Any, index: int) -> bool:
@@ -731,6 +731,8 @@ class WwwHandler(base_handler.BaseHandler):
                     peerid = getattr(t, "peerid", "")
                     try:
                         t.approveuri = self._trust_uri(myself.id or "", rel, peerid)
+                        baseuri = getattr(t, "baseuri", "") or ""
+                        t.peer_link = baseuri if is_valid_peer_baseuri(baseuri) else ""
                         t.has_custom_permissions = self._has_custom_permissions(
                             myself.id or "", peerid
                         )
@@ -1388,6 +1390,8 @@ class WwwHandler(base_handler.BaseHandler):
             property_value = self.request.get("property_value") or self.request.get(
                 "value"
             )
+            # A textarea posts line breaks as CRLF; store them as LF.
+            property_value = property_value.replace("\r\n", "\n")
             property_type = "simple"  # Individual property updates are always simple
         # Handle property operations
         if property_name:

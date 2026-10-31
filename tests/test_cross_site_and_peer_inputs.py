@@ -151,7 +151,7 @@ def test_trust_links_quote_a_stored_peer_id() -> None:
     assert handler._trust_uri("a1", "friend", "../../x") == (
         "https://demo.actingweb.io/a1/trust/friend/..%2F..%2Fx"
     )
-    assert handler._trust_uri("a1", "friend", "..").endswith("/friend/%2E%2E")
+    assert handler._trust_uri("a1", "friend", "..") == ""
     assert handler._trust_uri("a1", "friend", "a?_method=DELETE#").endswith(
         "/friend/a%3F_method%3DDELETE%23"
     )
@@ -308,3 +308,133 @@ def test_root_redirect_keeps_the_base_path() -> None:
     assert config.actor_path("a1", "/www") == "/base/a1/www"
     assert _config().actor_path("a1") == "/a1"
     assert root.RootHandler  # imported for the handler map
+
+
+# --- Sixth verification, Z1-Z12 ---------------------------------------------
+
+
+def test_trust_put_refuses_a_bad_baseuri() -> None:
+    """Z1: the peer may PUT its own row; the base URI must stay plain."""
+    webobj = AWWebObj(body=json.dumps({"baseuri": "javascript:alert(1)"}))
+    handler = trust.TrustPeerHandler(webobj, _config())
+    auth = mock.Mock(actor=mock.Mock(id="a1"))
+    auth.authorize.return_value = True
+    with (
+        mock.patch.object(handler, "authenticate_actor", return_value=auth),
+        mock.patch.object(handler, "_get_actor_interface") as interface,
+    ):
+        handler.put("a1", "friend", "p1")
+    assert webobj.response.status_code == 400
+    interface.return_value.trust.modify_and_notify.assert_not_called()
+
+
+def test_root_browser_redirect_keeps_one_base_path() -> None:
+    """Z2: the origin of config.root, then actor_path (which has the base)."""
+    config = _config()
+    config.root = "https://demo.actingweb.io/base/"
+    config.ui = True
+    webobj = AWWebObj(headers={"Accept": "text/html"})
+    handler = root.RootHandler(webobj, config)
+    auth = mock.Mock(success=True, actor=mock.Mock(id="a1"))
+    with (
+        mock.patch.object(handler, "authenticate_actor", return_value=auth),
+        mock.patch.object(handler, "_wants_html", return_value=True),
+    ):
+        handler.get("a1")
+    assert webobj.response.status_code == 302
+    assert webobj.response.redirect == "https://demo.actingweb.io/base/a1/www"
+
+
+@pytest.mark.parametrize(
+    "fetch_site,kept",
+    [("cross-site", False), ("same-site", False), ("same-origin", True)],
+)
+def test_flask_drops_a_cached_basic_header_on_a_cross_site_post(
+    fetch_site: str, kept: bool
+) -> None:
+    """Z3: a form on another site carries the browser's cached Basic header."""
+    from flask import Flask
+
+    integration = _flask_integration()
+    app = Flask("t")
+    with app.test_request_context(
+        "/a1/properties",
+        method="POST",
+        headers={"Authorization": "Basic eDp5", "Sec-Fetch-Site": fetch_site},
+    ):
+        headers = integration._normalize_request()["headers"]
+    assert ("Authorization" in headers) is kept
+
+
+def test_flask_keeps_an_explicit_bearer_on_a_cross_site_post() -> None:
+    from flask import Flask
+
+    integration = _flask_integration()
+    app = Flask("t")
+    with app.test_request_context(
+        "/a1/properties",
+        method="POST",
+        headers={"Authorization": "Bearer t", "Sec-Fetch-Site": "cross-site"},
+    ):
+        headers = integration._normalize_request()["headers"]
+    assert headers["Authorization"] == "Bearer t"
+
+
+def test_library_templates_encode_property_names_in_urls() -> None:
+    """Z4: a name with "?" must not become a ?_method= link."""
+    env = jinja2.Environment(
+        loader=jinja2.FileSystemLoader(REPO / "actingweb/templates"), autoescape=True
+    )
+    name = "email?_method=DELETE"
+    listing = env.get_template("aw-actor-www-properties.html").render(
+        properties={name: "v"}, actor_www="/a1/www", id="a1"
+    )
+    page = env.get_template("aw-actor-www-property.html").render(
+        property=name, qual="a", value="v", actor_www="/a1/www", id="a1"
+    )
+    for html in (listing, page):
+        assert "/properties/email?_method" not in html
+        assert "/properties/email%3F_method%3DDELETE" in html
+
+
+def test_dot_only_trust_ids_get_no_link() -> None:
+    """Z5: "%2E" is a dot to the browser, so such a row has no action URL."""
+    from actingweb.handlers.www import WwwHandler
+
+    handler = WwwHandler(AWWebObj(), _config())
+    assert handler._trust_uri("a1", "friend", "..") == ""
+    assert handler._trust_uri("a1", "..", "p1") == ""
+
+
+def test_reciprocal_trust_refuses_an_invalid_url() -> None:
+    """Z6."""
+    from actingweb.actor import Actor
+
+    actor = Actor.__new__(Actor)
+    actor.id = "a1"
+    actor.config = _config()
+    with mock.patch.object(Actor, "get_peer_info") as fetched:
+        assert (
+            actor.create_reciprocal_trust(
+                url="https://peer.example/p1?x=1", secret="s", relationship="friend"
+            )
+            is False
+        )
+    fetched.assert_not_called()
+
+
+def test_peer_id_refuses_a_trailing_newline() -> None:
+    """Z9."""
+    assert not is_valid_peer_id("abc\n")
+
+
+def test_verification_page_continue_link_keeps_the_base_path() -> None:
+    """Z12."""
+    config = _config()
+    config.root = "https://demo.actingweb.io/base/"
+    integration = _flask_integration()
+    integration.aw_app.get_config.return_value = config
+    values = integration._with_verification_redirect(
+        {"actor_id": "a1", "status": "success"}
+    )
+    assert values["redirect_url"] == "/base/a1/www"

@@ -172,10 +172,13 @@ SECURITY
   (``Sec-Fetch-Site`` other than ``same-origin`` or ``none``, or a foreign
   or ``null`` ``Origin``, or a foreign ``Referer``). The Flask and FastAPI
   integrations no longer turn the ``oauth_token`` cookie into a Bearer
-  header for a ``POST``, ``PUT``, ``PATCH`` or ``DELETE`` that the browser
-  says another site, a sibling subdomain included, started: a browser
-  sends the ``Lax`` cookie on any same-site request and on a top-level
-  ``GET`` from any site. "Same origin" is the scheme, host and port of
+  header, and drop a ``Basic`` Authorization header, for a ``POST``,
+  ``PUT``, ``PATCH`` or ``DELETE`` that the browser says another site, a
+  sibling subdomain included, started: a browser sends the ``Lax`` cookie
+  on any same-site request and on a top-level ``GET`` from any site, and
+  cached basic-auth credentials on any request. This relies on the
+  browser's ``Sec-Fetch-Site``, ``Origin`` and ``Referer`` reaching the
+  application; a proxy that strips all three turns it off. "Same origin" is the scheme, host and port of
   ``config.root``; a base path does not matter. Peers and SPAs (Bearer
   tokens) are unaffected. The property creation form's ``redirect_to``
   now only redirects within the actor's own web UI (no other actor, no dot
@@ -202,12 +205,17 @@ SECURITY
   letters, digits and ``_ . : @ + = -`` (at most 255, starting with a
   letter or digit) and its base URI a plain ``http(s)`` URL with no user
   info, query or fragment, both when a peer asks for trust (400 "Invalid id
-  or baseuri") and when this actor asks a peer (``create_reciprocal_trust``
-  returns ``False``); ``Actor.create_verified_trust`` refuses them too. The
-  shipped templates put no value inside an inline handler (the confirm text
-  is a ``data-confirm`` attribute), the trust page quotes the id in its
-  links, and the demo links to a peer only through ``peer_link``, set only
-  for a valid base URI. **Behavior change:** a peer whose id or base URI
+  or baseuri"), when a peer changes its base URI with ``PUT
+  /<id>/trust/<rel>/<peer>`` (400 "Invalid baseuri"), and when this actor
+  asks a peer (``create_reciprocal_trust`` returns ``False`` for such a URL
+  or a peer id outside the shape); ``Actor.create_verified_trust`` refuses
+  them too. The shipped templates put no value inside an inline handler
+  (the confirm text is a ``data-confirm`` attribute), encode property names
+  in their URLs (a name with ``?`` made a same-origin ``?_method=DELETE``
+  link), quote the peer id in the trust page's links (a row whose id is
+  only dots gets none), and the demo links to a peer only through
+  ``peer_link``, set only for a valid base URI. The email-verification
+  fallback page escapes the message and address. **Behavior change:** a peer whose id or base URI
   falls outside those shapes can no longer establish trust; ids the library
   makes for OAuth2 and MCP trusts are not affected. A custom template that
   interpolates a value inside ``onsubmit``/``onclick`` should move it to a
@@ -638,8 +646,12 @@ ADDED
 - **``Config.actor_path(actor_id, suffix="")``** returns an actor's path
   with the deployment's base path (the path part of ``config.root``). The
   library's redirects after sign-in, after the email flow, from ``/<id>``
-  in a browser and from the trust and web UI pages use it, so a deployment
-  mounted under a base path no longer lands on ``/<id>/www`` without it.
+  in a browser, from the email-verification page and from the trust and
+  web UI pages use it, so a deployment mounted under a base path no longer
+  lands on ``/<id>/www`` without it. **Behavior change:** the
+  ``redirect_url`` the OAuth2 callback passes to the ``oauth_completed``
+  hook, and returns to an SPA, now carries the base path; a hook that
+  prefixed ``config.root`` to it should prefix the origin only.
 
 - **``actingweb-unique-creators``** (``report``, ``resolve``, ``enable``,
   ``disable``; dry run unless ``--apply``). ``report`` lists actors sharing

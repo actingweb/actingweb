@@ -252,6 +252,9 @@ class _PermissionEnforcingListView:
     def sizes_from_rows(self, rows: dict[str, Any]) -> list[int]:
         return self._list_prop.sizes_from_rows(rows)
 
+    def check_item_size(self, item: Any) -> None:
+        self._list_prop.check_item_size(item)
+
     def slice(self, start: int, end: int, consistent: bool = True) -> list[Any]:
         return self._list_prop.slice(start, end, consistent=consistent)
 

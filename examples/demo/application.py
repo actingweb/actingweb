@@ -51,22 +51,6 @@ aw_app = (
         fqdn=os.getenv("APP_HOST_FQDN", "localhost:5000"),
         proto=os.getenv("APP_HOST_PROTOCOL", "https://"),
     )
-    # OAuth2 configuration - supports Google and GitHub providers via the new authentication system
-    .with_oauth(
-        client_id=os.getenv(
-            "OAUTH_CLIENT_ID",
-            os.getenv("APP_OAUTH_ID", ""),
-        ),
-        client_secret=os.getenv("OAUTH_CLIENT_SECRET", os.getenv("APP_OAUTH_KEY", "")),
-        scope=os.getenv(
-            "OAUTH_SCOPE", "openid email profile"
-        ),  # Default to Google scopes
-        auth_uri=os.getenv(
-            "OAUTH_AUTH_URI", "https://accounts.google.com/o/oauth2/v2/auth"
-        ),
-        token_uri=os.getenv("OAUTH_TOKEN_URI", "https://oauth2.googleapis.com/token"),
-        redirect_uri=f"{os.getenv('APP_HOST_PROTOCOL', 'https://')}{os.getenv('APP_HOST_FQDN', 'localhost:5000')}/oauth/callback",
-    )
     .with_web_ui(enable=True)
     # Defaults to disabled -- this is the code behind demo.actingweb.io, and
     # devtest exposes mutation/read endpoints plus a passphrase OAuth grant
@@ -108,6 +92,39 @@ aw_app = (
     )
 )
 
+# Local QA only: DEMO_QA_BASIC_AUTH=true leaves OAuth off, so the web UI
+# (/<actor_id>/www) signs in with the library's basic auth: the creator and
+# passphrase of a throwaway actor made through POST / (see
+# examples/demo/README.md, "Local QA account"). Never set in a deployment:
+# it turns sign-in through the provider off. Refused unless the host is
+# localhost or 127.0.0.1.
+DEMO_QA_BASIC_AUTH = os.getenv("DEMO_QA_BASIC_AUTH", "false").lower() == "true"
+_demo_host = os.getenv("APP_HOST_FQDN", "localhost:5000").split(":")[0]
+if DEMO_QA_BASIC_AUTH and _demo_host not in ("localhost", "127.0.0.1"):
+    raise RuntimeError("DEMO_QA_BASIC_AUTH is for a local run only (APP_HOST_FQDN)")
+if not DEMO_QA_BASIC_AUTH:
+    # OAuth2 configuration - supports Google and GitHub providers
+    aw_app.with_oauth(
+        client_id=os.getenv(
+            "OAUTH_CLIENT_ID",
+            os.getenv("APP_OAUTH_ID", ""),
+        ),
+        client_secret=os.getenv("OAUTH_CLIENT_SECRET", os.getenv("APP_OAUTH_KEY", "")),
+        scope=os.getenv(
+            "OAUTH_SCOPE", "openid email profile"
+        ),  # Default to Google scopes
+        auth_uri=os.getenv(
+            "OAUTH_AUTH_URI", "https://accounts.google.com/o/oauth2/v2/auth"
+        ),
+        token_uri=os.getenv("OAUTH_TOKEN_URI", "https://oauth2.googleapis.com/token"),
+        redirect_uri=f"{os.getenv('APP_HOST_PROTOCOL', 'https://')}{os.getenv('APP_HOST_FQDN', 'localhost:5000')}/oauth/callback",
+    )
+else:
+    LOG.warning(
+        "DEMO_QA_BASIC_AUTH is on: OAuth is off and /<actor_id>/www uses basic "
+        "auth. Local QA only."
+    )
+
 # Configure OAuth2 provider and trust relationship settings
 oauth_provider = os.getenv("OAUTH_PROVIDER", "google")  # "google" or "github"
 try:
@@ -145,6 +162,10 @@ app = Flask(__name__, static_url_path="/static")
 # around it, before it is read. (A FastAPI deployment uses an ASGI body-limit
 # middleware or its reverse proxy's body-size setting for the same purpose.)
 app.config["MAX_CONTENT_LENGTH"] = LIST_ITEM_MAX_BYTES + 64 * 1024
+# Flask also caps a non-file form field at 500,000 bytes by default
+# (MAX_FORM_MEMORY_SIZE), below one maximal list item: the web UI's item edit
+# form posts the whole item as one field. Match it to the same bound.
+app.config["MAX_FORM_MEMORY_SIZE"] = LIST_ITEM_MAX_BYTES + 64 * 1024
 
 # Trust proxy headers (X-Forwarded-Proto, X-Forwarded-Host, etc.) from ngrok/reverse proxies
 # This ensures request.url uses https:// when behind a proxy that terminates SSL
@@ -291,4 +312,4 @@ if __name__ == "__main__":
     LOG.info("Starting ActingWeb Demo...")
 
     # Run in development mode
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5000")), debug=True)

@@ -1351,6 +1351,9 @@ class PropertiesHandler(base_handler.BaseHandler):
                                             for k, v in item_spec.items()
                                             if k != "index"
                                         }
+                                        # Size-check during validation, before any entry
+                                        # is written: a 413 must mean nothing landed.
+                                        list_prop.check_item_size(item_data)
                                         pending_updates_v2.append((index, item_data))
 
                                 # Resolve the final value for each targeted
@@ -1584,6 +1587,9 @@ class PropertiesHandler(base_handler.BaseHandler):
                                         for k, v in item_spec.items()
                                         if k != "index"
                                     }
+                                    # Size-check during validation, before any entry
+                                    # is written: a 413 must mean nothing landed.
+                                    list_prop.check_item_size(item_data)
                                     pending_updates.append((index, item_data))
 
                             # Pass 1: updates, in the given order.

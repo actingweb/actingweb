@@ -543,6 +543,7 @@ _PROXY_READS = {
     "items_with_handles",
     "item_at",
     "sizes_from_rows",
+    "check_item_size",
     "verify",
 }
 

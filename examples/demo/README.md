@@ -50,6 +50,35 @@ deployable on its own.
 4. Visit `http://localhost:5000` and log in. The API explorer for the demo's
    hooks is at `/{actor_id}/www/demo` once an actor exists.
 
+## Local QA account
+
+A browser test of the web UI cannot sign in through a real OAuth2 provider,
+and must never use a real account. For a local run, `DEMO_QA_BASIC_AUTH=true`
+leaves OAuth off, so `/<actor_id>/www` signs in with the library's basic
+auth: the creator and passphrase of a throwaway actor created through the
+factory. The app refuses to start in this mode unless `APP_HOST_FQDN` is
+`localhost` or `127.0.0.1`; never set it in a deployment.
+
+```bash
+docker compose -f docker-compose.test.yml up -d dynamodb-test
+export AWS_DB_HOST=http://localhost:8001 AWS_DB_PREFIX=demoqa \
+  AWS_ACCESS_KEY_ID=local AWS_SECRET_ACCESS_KEY=local AWS_DEFAULT_REGION=us-east-1
+# Once per fresh database: the demo runs with_unique_creator().
+poetry run actingweb-unique-creators enable --apply
+PORT=5055 APP_HOST_FQDN=localhost:5055 APP_HOST_PROTOCOL=http:// \
+  DEMO_QA_BASIC_AUTH=true poetry run python examples/demo/application.py
+
+# In another shell: a throwaway account. The response carries the id and
+# passphrase; sign in to http://localhost:5055/<id>/www as the creator.
+curl -s -X POST localhost:5055/ -H 'Content-Type: application/json' \
+  -d '{"creator": "qa@example.test"}'
+```
+
+`PORT` (default 5000) moves the app off a port another local service holds.
+Delete the actor afterwards with `curl -X DELETE -u qa@example.test:<passphrase>
+localhost:5055/<id>`, or drop the `demoqa` tables with the container
+(`docker compose -f docker-compose.test.yml down -v`).
+
 ## The `/nuke` endpoint
 
 `application.py` registers `GET /nuke?secret=<NUKE_SECRET>`, which deletes

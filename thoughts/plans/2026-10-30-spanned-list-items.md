@@ -169,7 +169,12 @@ deferred were put to the owner the same day and are marked **[Owner,
   call, not once per rank-collision retry. Every part is non-empty and at
   most `_SPAN_PART_BYTES` (an empty part would be a silent delete in
   `DbProperty.set`, `dynamodb/property.py:386`); the splitter raises on an
-  off-by-one rather than storing nothing.
+  off-by-one rather than storing nothing. **[Updated 2026-10-31]** A failed
+  head write is ambiguous, so the new bodies are deleted only when the head
+  is known not to have landed: a raise keeps them (an orphan for the aged
+  sweep if the head did not land), and a `False` from a conditional write
+  is checked by reading the head back (a spanned head's bytes are unique to
+  the call). Iteration 1.
 - **A reader re-reads the head and the bodies strongly before calling a
   span broken, at most twice.** **[Updated 2026-10-30]** A concurrent
   `update_by_handle` deletes the old gen after swapping the head, so a
@@ -182,7 +187,9 @@ deferred were put to the owner the same day and are marked **[Owner,
   unchanged, the bodies strongly; a changed gen is resolved instead, **at
   most two hops** (two concurrent updates can otherwise chain), then
   `ListItemSpanError`; only a head that still names a gen whose strong
-  read is short, or a head that is gone, raises. "Short" means the part
+  read is short raises. **[Updated 2026-10-31]** A head that is gone on the
+  strong re-read is a concurrent delete, not damage: whole-list reads drop
+  the item and point reads raise a plain `IndexError` (iteration 2). "Short" means the part
   set is not exactly `p0000..p{parts-1}` (a prefix read returns every row
   under the prefix, so a count is not enough). That error subclasses
   `ListCorruptionError`, so the handlers' 409 applies, with its own
@@ -1664,6 +1671,188 @@ Integration (both backends):
 ### Implementation Status: Not Started
 
 ---
+
+## Iterations
+
+### 2026-10-31, after verification thoughts/verifications/2026-10-31-spanned-list-items.md
+
+The plan stays `status: active` (Phase 3 is not built); these entries fix
+the verification's High findings and the Mediums it marked as blocking PR 1,
+plus the user's request for a test account so the web UI can be verified in
+a browser. The rest of its findings are in
+`thoughts/todo/spanned-list-items-followups.md`. Regression tests for 1-7
+are in `tests/test_property_list_span_iterations.py` (one class per finding,
+each failing before its fix) and `tests/test_list_item_limits.py`.
+
+#### 1. An ambiguous head write no longer deletes the bodies of a head that landed (H1)
+
+**Category**: Bug fix
+
+**What changed**: `_write_spanning` keeps the new bodies when the head write
+raises, and on a `False` reads the head back (`head_name`) and treats an
+exact match as landed; the append, insert and extend rank loops read a
+spanned candidate back after a `False` the same way (`_landed_anyway`), so a
+retried create no longer writes a second head; `_v2_extend` keeps the bodies
+of the item whose write raised; compact's head writes no longer delete the
+copy on a fault.
+
+**Files affected**:
+- `actingweb/property_list.py` — `_write_spanning`, `_landed_anyway`,
+  `_v2_write_item_at_new_rank`, `_v2_insert`, `_v2_extend`,
+  `update_by_handle`, `_v2_compact`
+
+**Rationale**: a timeout after DynamoDB applied a write raises, and a
+PynamoDB retry of a committed conditional write returns `False`; deleting
+the bodies then broke a committed item (a 409, and the aged sweep later
+deleted the only copy). Unkeyed plain heads still cannot be told apart from
+a concurrent identical write (`conditional-write-ambiguous-after-sdk-retry.md`).
+
+#### 2. A concurrent delete under a reader is not corruption (H2)
+
+**Category**: Bug fix
+
+**What changed**: `_resolve` raises the internal `_ItemGone` (an
+`IndexError`) when the strong head re-read finds no row; `_resolve_pairs`
+drops such items from `to_list()`, `to_list_from_rows()` and
+`items_with_handles()`; `pop()` re-resolves; value scans treat it as no
+match.
+
+**Files affected**:
+- `actingweb/property_list.py` — `_ItemGone`, `_resolve`, `_resolve_pairs`,
+  `_v2_to_list`, `to_list_from_rows`, `_v2_items_with_handles`, `_v2_pop`,
+  `_head_equals`, `_identity_of`
+
+**Rationale**: a reader that loaded a spanned head while another request
+deleted it answered 409 "corrupted" for an undamaged list.
+
+#### 3. `compact()` copies spans before writing any head (H3)
+
+**Category**: Bug fix
+
+**What changed**: every spanned head that will move is copied to a fresh
+generation before the first head write; a copy that cannot be read raises
+with nothing moved and the copies made so far deleted. A head rewritten in
+place by a retry cascades its old generation.
+
+**Files affected**:
+- `actingweb/property_list.py` — `_v2_compact`
+
+**Rationale**: `_copy_span_head` raising inside the write loop left the
+documented crash-window duplicates without a crash.
+
+#### 4. `delete()` keeps a fresh unnamed body generation (M1)
+
+**Category**: Bug fix
+
+**What changed**: `delete()` reads the heads with values and deletes the
+generations they name plus unnamed generations older than
+`_SPAN_ORPHAN_MIN_AGE_SECONDS`; key rows all go.
+
+**Files affected**:
+- `actingweb/property_list.py` — `delete`
+
+**Rationale**: deleting an in-flight append's bodies left its head, landing
+a moment later, with none.
+
+#### 5. Malformed heads can be handled and removed (M2)
+
+**Category**: Bug fix
+
+**What changed**: `_handle_for` gives a malformed head a plain handle,
+`_unresolved_or_item` returns `UNRESOLVED` for it and `_head_equals` treats it
+as no match, so handle mutators and value scans work around it;
+`_sweep_spans` removes malformed heads (`malformed_heads_removed`); the
+verify script runs the sweep for them and names it in its message.
+
+**Files affected**:
+- `actingweb/property_list.py` — `_handle_for`, `_unresolved_or_item`,
+  `_head_equals`, `_sweep_spans`
+- `actingweb/maintenance/verify_property_lists.py` — sweep trigger, messages
+
+**Rationale**: one malformed head blocked every handle-based mutation and
+value scan, and no named remedy reached it.
+
+#### 6. `verify(identity_key=...)` reports a broken span instead of raising (M3)
+
+**Category**: Bug fix
+
+**What changed**: `_identity_of` catches `ListItemSpanError` (and
+`_ItemGone`) and excludes the row; `verify(spans=True)` reports it under
+`broken_spans`.
+
+**Files affected**:
+- `actingweb/property_list.py` — `_identity_of` (landed with entry 2)
+
+**Rationale**: with `--identity-key`, the verify script counted the list as
+errored before `--sweep-spans` could repair it.
+
+#### 7. The bulk POST size-checks every entry before writing any (M4)
+
+**Category**: Bug fix
+
+**What changed**: new `ListProperty.check_item_size(item)` (passed through by
+`NotifyingListProperty` and `_PermissionEnforcingListView`); both bulk
+validation passes call it, so the 413 now means nothing was written.
+
+**Files affected**:
+- `actingweb/property_list.py` — `check_item_size`
+- `actingweb/interface/property_store.py`,
+  `actingweb/interface/authenticated_views.py` — passthroughs
+- `actingweb/handlers/properties.py` — the two bulk validation loops
+- `tests/test_authenticated_views.py` — the new read method classified
+
+**Rationale**: an oversized later entry answered 413 after earlier entries
+had committed, with no diff and the deletes skipped.
+
+#### 8. A local QA account for the demo web UI
+
+**Category**: New functionality (requested 2026-10-31)
+
+**What changed**: `DEMO_QA_BASIC_AUTH=true` starts the demo without OAuth so
+the web UI uses the library's basic auth; a throwaway actor made through
+`POST /` signs in with its creator and passphrase. Refused unless
+`APP_HOST_FQDN` is localhost. `PORT` sets the dev server's port. The
+contract's "Test account" and "App" sections describe the flow.
+
+**Files affected**:
+- `examples/demo/application.py` — the QA switch, the localhost guard,
+  `PORT`
+- `examples/demo/README.md`, `examples/demo/.env.example` — "Local QA
+  account"
+- `CLAUDE.md` — "Test account", "App"
+
+**Rationale**: the verification could not exercise `/<actor_id>/www`,
+because sign-in needed a real provider and the contract forbids a real
+account. Basic auth is existing library behaviour, so the switch adds no
+new login path; the localhost guard keeps it out of `demo.actingweb.io`.
+Deduced, not confirmed: the choice of basic auth over a devtest login
+shortcut. Learned while setting it up: port 5000 was held by the sibling
+`actingweb_mcp` dev server, and a first request meant for the demo created
+an actor there; it was deleted with its own credentials (204, then 404).
+
+#### 9. The demo's web form accepts an item up to the configured ceiling
+
+**Category**: Bug fix (found by the browser walk the QA account made
+possible)
+
+**What changed**: the demo sets Flask's `MAX_FORM_MEMORY_SIZE` to the same
+bound as `MAX_CONTENT_LENGTH` (`list_item_max_bytes` plus 64 KiB).
+
+**Files affected**:
+- `examples/demo/application.py` — `MAX_FORM_MEMORY_SIZE`
+
+**Rationale**: Phase 1 set the request-size limit only; Flask also caps one
+non-file form field at 500,000 bytes, so editing a 500 KB item through the
+web form answered 413 although the library would have stored it. Re-tested
+through the same form POST: 302, the item reads back with its 500,000-byte
+body. The walk's other findings predate this work and are in
+`thoughts/todo/demo-www-list-ui-gaps.md`.
+
+**Browser walk** (headless Playwright Chromium, local QA account,
+`localhost:5055`): `/www`, `/www/properties` and the list page load with no
+console errors and fit at 375 px; editing and deleting small items through
+the items form persist; bad indexes and a missing action answer 400 with the
+data unchanged; special characters and a 200,000-character value round-trip.
 
 ## Evaluation Notes
 

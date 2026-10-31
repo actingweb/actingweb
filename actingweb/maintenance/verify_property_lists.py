@@ -205,7 +205,8 @@ def sweep_actor(
             logger.warning(
                 f"actor={actor_id} list={name}: "
                 f"{len(report['malformed_heads'])} head row(s) hold a malformed "
-                f"storage envelope -- remove the item(s) with delete_by_handle()"
+                f"storage envelope -- --repair --sweep-spans removes them, or "
+                f"remove the item(s) with delete_by_handle()"
             )
 
         # The span sweep has its own path, ahead of the healthy
@@ -214,7 +215,11 @@ def sweep_actor(
             repair
             and sweep_spans
             and is_v2
-            and (report.get("orphan_span_gens") or report.get("broken_spans"))
+            and (
+                report.get("orphan_span_gens")
+                or report.get("broken_spans")
+                or report.get("malformed_heads")
+            )
         ):
             try:
                 swept = list_prop.compact(sweep_span_orphans=True)
@@ -227,8 +232,9 @@ def sweep_actor(
                 continue
             logger.info(
                 f"actor={actor_id} list={name}: span sweep removed "
-                f"{swept.get('orphan_span_gens_removed', 0)} orphan generation(s) "
-                f"and {swept.get('broken_spans_removed', 0)} broken span(s)"
+                f"{swept.get('orphan_span_gens_removed', 0)} orphan generation(s), "
+                f"{swept.get('broken_spans_removed', 0)} broken span(s) and "
+                f"{swept.get('malformed_heads_removed', 0)} malformed head(s)"
             )
             report = list_prop.verify(identity_key=identity_key, spans=True)
 

@@ -289,6 +289,13 @@ class ListItemSpanError(ListCorruptionError):
         )
 
 
+class _ItemGone(IndexError):
+    """A spanned item's head vanished between a reader's head read and its
+    body read: another request deleted the item. Not corruption. Whole-list
+    readers drop the item (the delete won the race); point reads see an
+    ordinary ``IndexError``."""
+
+
 class ListMetadataContentionError(RuntimeError):
     """A list's metadata row stayed under contention through every
     compare-and-swap retry this mutation was willing to make.
@@ -710,6 +717,14 @@ class ListProperty:
             )
         return False
 
+    def check_item_size(self, item: Any) -> None:
+        """Raise ``ListItemTooLargeError`` (or ``ValueError`` for an item
+        carrying the reserved envelope key) if writing ``item`` to this list
+        would be refused, without writing anything. For a caller that
+        validates a whole batch before its first write, as the bulk REST
+        update does."""
+        self._check_item_size(self._encode_item(item), can_span=self._is_v2())
+
     def _decode_item(self, item_str: str) -> Any:
         try:
             return json.loads(item_str)
@@ -878,26 +893,58 @@ class ListProperty:
         head_write: Callable[[str], bool],
         *,
         carry: Envelope | None = None,
+        head_name: str | None = None,
     ) -> tuple[bool, str]:
         """Bodies first, then the head through ``head_write`` (the caller's
         own conditional or unconditional write), once per call.
 
-        Returns ``(landed, head)``. When the head write returns ``False`` or
-        raises, the bodies just written are deleted (best-effort) and the
-        outcome propagates; a crash in between leaves an orphan generation
-        for the aged sweep, never a head without bodies. Deleting the
-        previous generation is the caller's (it knows the old head).
+        Returns ``(landed, head)``. Deleting the previous generation is the
+        caller's (it knows the old head).
+
+        A failed head write is **ambiguous**, so the new bodies are kept
+        unless the head is known not to have landed. A raise (a timeout
+        after the backend applied the write) leaves them: if the head did
+        not land they are an orphan for the aged sweep; deleting them would
+        break a head that did. A ``False`` from a conditional write can be
+        an SDK retry of a write that committed and then failed its own
+        condition, so with ``head_name`` the head is read back once: if it
+        holds exactly this head (a spanned head names a fresh generation,
+        so the bytes are unique to this call) the write landed. Only a
+        ``False`` that the read-back confirms deletes the bodies.
         """
         span = self._write_bodies(value_str) if spans else None
         head = self._make_head(value_str, span, carry)
         try:
             landed = head_write(head)
         except BaseException:
-            self._span_delete_bodies(span)
+            if span is not None:
+                logger.warning(
+                    "List '%s' (actor %s): a spanned head write failed with an "
+                    "unknown outcome; its body generation %s is kept (an orphan "
+                    "for the aged sweep if the head did not land)",
+                    self.name,
+                    self.actor_id,
+                    span.gen,
+                )
             raise
-        if not landed:
+        if not landed and span is not None:
+            if head_name is not None and self._landed_anyway(head_name, head):
+                return True, head
             self._span_delete_bodies(span)
         return landed, head
+
+    def _landed_anyway(self, name: str, head: str) -> bool:
+        """After a ``False`` from a conditional write of a spanned head:
+        does the row hold exactly ``head`` (this call's write committed and
+        a retry then failed its condition)? A plain head cannot be told from
+        a concurrent byte-identical write, so only spanned heads qualify."""
+        try:
+            env = parse(head)
+        except EnvelopeError:
+            return False
+        if env is None or env.span is None:
+            return False
+        return get_property(self.config).get(actor_id=self.actor_id, name=name) == head
 
     # -- spanned items: reading ----------------------------------------
 
@@ -962,7 +1009,13 @@ class ListProperty:
             return raw, None
 
     def _handle_for(self, rank: str, raw: str) -> ListItemHandle:
-        env = self._parse_head(raw, rank)
+        """A handle for a head. A malformed envelope gets a plain handle
+        (``spanned=False``), so the item can still be deleted or replaced by
+        handle -- the remedy ``ListItemSpanError`` names."""
+        try:
+            env = parse(raw)
+        except EnvelopeError:
+            return ListItemHandle(rank=rank, raw_value=raw)
         if env is not None and env.span is not None:
             return ListItemHandle(
                 rank=rank, raw_value=raw, spanned=True, bytes=env.span.bytes
@@ -981,8 +1034,9 @@ class ListProperty:
 
         Raises:
             ListItemSpanError: The head is malformed, or after the re-reads
-                it still names a generation whose bodies are short, or it is
-                gone.
+                it still names a generation whose bodies are short.
+            _ItemGone: (an ``IndexError``) the head was deleted while it was
+                being read; whole-list readers drop the item.
         """
         env = self._parse_head(raw, rank)
         if env is None:
@@ -996,13 +1050,11 @@ class ListProperty:
         for _ in range(_SPAN_MAX_REREADS):
             head_raw, head_env = self._read_head(rank, consistent=True)
             if head_raw is None:
-                raise ListItemSpanError(
-                    self.name,
-                    rank,
-                    detail=(
-                        f"spans {current.parts} body row(s), {found} were found, "
-                        f"and its head is gone"
-                    ),
+                # Deleted under us (its delete cascaded the bodies): the
+                # item is gone, the list is not damaged.
+                raise _ItemGone(
+                    f"List '{self.name}' item at rank {rank!r} was deleted "
+                    f"while it was being read"
                 )
             if head_env is None:
                 return self._decode_item(head_raw)
@@ -1135,9 +1187,25 @@ class ListProperty:
         """Every item, resolved: one range read of the heads, plus one
         paged body read per spanned item (with the same consistency)."""
         return [
-            self._resolve(value, rank=rank, consistent=consistent)
-            for rank, value in self._v2_load_full(consistent=consistent)
+            item
+            for _, _, item in self._resolve_pairs(
+                self._v2_load_full(consistent=consistent), consistent=consistent
+            )
         ]
+
+    def _resolve_pairs(
+        self, pairs: list[tuple[str, str]], *, consistent: bool
+    ) -> list[tuple[str, str, Any]]:
+        """``(rank, raw, item)`` for every head, resolved, dropping an item
+        deleted while it was being read (``_ItemGone``)."""
+        resolved: list[tuple[str, str, Any]] = []
+        for rank, raw in pairs:
+            try:
+                item = self._resolve(raw, rank=rank, consistent=consistent)
+            except _ItemGone:
+                continue
+            resolved.append((rank, raw, item))
+        return resolved
 
     def _create_default_metadata_v2(self) -> dict[str, Any]:
         """Default metadata for a brand-new (v2) list. No `length` key --
@@ -1609,8 +1677,12 @@ class ListProperty:
 
     def _unresolved_or_item(self, rank: str, raw: str) -> Any:
         """A head's item without reading bodies: ``UNRESOLVED`` for a
-        spanned item, the item otherwise."""
-        env = self._parse_head(raw, rank)
+        spanned item or a malformed envelope (unreadable; ``item_at()``
+        raises ``ListItemSpanError`` for it), the item otherwise."""
+        try:
+            env = parse(raw)
+        except EnvelopeError:
+            return UNRESOLVED
         if env is None:
             return self._decode_item(raw)
         if env.span is not None:
@@ -1711,10 +1783,7 @@ class ListProperty:
             self._v2_rank_cache = [rank for rank, _ in pairs]
             if not resolve:
                 return [self._unresolved_or_item(rank, value) for rank, value in pairs]
-            return [
-                self._resolve(value, rank=rank, consistent=False)
-                for rank, value in pairs
-            ]
+            return [item for _, _, item in self._resolve_pairs(pairs, consistent=False)]
 
         length = len(self)
         result: list[Any] = []
@@ -2309,11 +2378,10 @@ class ListProperty:
                     f"chars -- run compact() to rebalance"
                 )
             item_db = get_property(self.config)
+            name = self._v2_item_name(candidate)
             if item_db.create_if_not_exists(
-                actor_id=self.actor_id,
-                name=self._v2_item_name(candidate),
-                value=head,
-            ):
+                actor_id=self.actor_id, name=name, value=head
+            ) or self._landed_anyway(name, head):
                 return candidate
             # Collision: another writer took this rank between our read
             # and the write. Re-read the last rank for the next attempt --
@@ -2422,10 +2490,12 @@ class ListProperty:
                             f"chars -- run compact() to rebalance"
                         )
                     item_db = get_property(self.config)
-                    if not item_db.create_if_not_exists(
-                        actor_id=self.actor_id,
-                        name=self._v2_item_name(candidate),
-                        value=value_str,
+                    name = self._v2_item_name(candidate)
+                    if not (
+                        item_db.create_if_not_exists(
+                            actor_id=self.actor_id, name=name, value=value_str
+                        )
+                        or self._landed_anyway(name, value_str)
                     ):
                         # Collision: another writer took this rank. The items
                         # before it already landed; re-key from here.
@@ -2441,9 +2511,11 @@ class ListProperty:
                 if attempt < _V2_MAX_RANK_RETRIES - 1:
                     last = self._v2_last_rank()
         except BaseException:
-            # A fault part-way: the landed items stay, with their bodies;
-            # the un-landed tail's bodies go.
-            for span in head_spans[created:]:
+            # A fault part-way: the landed items stay, with their bodies.
+            # The item whose write raised may have landed (an unknown
+            # outcome), so its bodies stay too, an orphan for the aged sweep
+            # if it did not; only the bodies of items never written go.
+            for span in head_spans[created + 1 :]:
                 self._span_delete_bodies(span)
             if created_ranks and self._v2_rank_cache is not None:
                 self._v2_rank_cache.extend(created_ranks)
@@ -2671,15 +2743,35 @@ class ListProperty:
         self.sweep_foreign_format_rows()
 
         if self._is_v2():
-            item_names = self._v2_item_names_in_range()
+            # Heads with values: they name the generations that go with
+            # them.
+            pairs = self._v2_load_full()
+            item_names = [self._v2_item_name(rank) for rank, _ in pairs]
             if item_names:
                 get_property(self.config).batch_delete(
                     actor_id=self.actor_id, names=item_names
                 )
-            # Every side-partition row of the list, orphan generations
-            # included: the only way they leave with the list. Enumerating
-            # $span- rows costs every body byte on DynamoDB.
-            self._delete_aux_rows(self._aux_names("span") + self._aux_names("key"))
+            # The side partition: generations the deleted heads named, and
+            # orphan generations old enough that no append can still be
+            # about to write their head (a younger unnamed one may be an
+            # append in flight; deleting it would leave that head with no
+            # bodies). Key rows all go. Enumerating $span- rows costs every
+            # body byte on DynamoDB.
+            span_heads, _ = self._span_heads(pairs)
+            named = {span.gen for _, span in span_heads}
+            span_names = self._aux_names("span")
+            _, orphans = self._span_inventory(span_heads, span_names)
+            young = {
+                name
+                for gen, names in orphans.items()
+                if gen not in named
+                and gen_age_seconds(gen) < _SPAN_ORPHAN_MIN_AGE_SECONDS
+                for name in names
+            }
+            self._delete_aux_rows(
+                [name for name in span_names if name not in young]
+                + self._aux_names("key")
+            )
             meta_db = get_property(self.config)
             if not meta_db.set(
                 actor_id=self.actor_id, name=self._get_meta_property_name(), value=None
@@ -2844,7 +2936,10 @@ class ListProperty:
                 # writer removed it. Re-resolve rather than calling it
                 # corruption.
                 continue
-            item = self._resolve(item_str, rank=rank, consistent=True)
+            try:
+                item = self._resolve(item_str, rank=rank, consistent=True)
+            except _ItemGone:
+                continue  # deleted under us: re-resolve, as for a vanished row
 
             del_db = get_property(self.config)
             if del_db.delete_if_value_equals(
@@ -2916,11 +3011,10 @@ class ListProperty:
                         f"chars -- run compact() to rebalance"
                     )
                 item_db = get_property(self.config)
+                name = self._v2_item_name(candidate)
                 if item_db.create_if_not_exists(
-                    actor_id=self.actor_id,
-                    name=self._v2_item_name(candidate),
-                    value=head,
-                ):
+                    actor_id=self.actor_id, name=name, value=head
+                ) or self._landed_anyway(name, head):
                     ranks.insert(pos, candidate)
                     return True
                 # Collision: force a fresh read (recomputing neighbours at
@@ -3001,15 +3095,22 @@ class ListProperty:
 
     def _head_equals(self, raw: str, rank: str, value: Any, sought_small: bool) -> bool:
         """Whether the item a head stands for equals ``value``, reading a
-        spanned item's bodies only when it could match."""
-        env = self._parse_head(raw, rank)
+        spanned item's bodies only when it could match. A malformed head
+        equals nothing (``verify()`` reports it), so a scan passes it."""
+        try:
+            env = parse(raw)
+        except EnvelopeError:
+            return False
         if env is None:
             return bool(self._decode_item(raw) == value)
         if env.span is None:
             return bool(env.value == value)
         if sought_small:
             return False
-        return bool(self._resolve(raw, rank=rank, consistent=True) == value)
+        try:
+            return bool(self._resolve(raw, rank=rank, consistent=True) == value)
+        except _ItemGone:
+            return False
 
     def _v2_remove(self, value: Any) -> None:
         """Delete the first item equal to ``value``, by RANK.
@@ -3270,16 +3371,14 @@ class ListProperty:
         callers must already know the list is v2.
         """
         pairs = self._v2_load_full()  # default consistent=True, no override
+        if resolve:
+            return [
+                (self._handle_for(rank, raw), item)
+                for rank, raw, item in self._resolve_pairs(pairs, consistent=True)
+            ]
         return [
-            (
-                self._handle_for(rank, raw_value),
-                (
-                    self._resolve(raw_value, rank=rank, consistent=True)
-                    if resolve
-                    else self._unresolved_or_item(rank, raw_value)
-                ),
-            )
-            for rank, raw_value in pairs
+            (self._handle_for(rank, raw), self._unresolved_or_item(rank, raw))
+            for rank, raw in pairs
         ]
 
     def delete_by_handle(self, handle: ListItemHandle) -> bool:
@@ -3365,7 +3464,13 @@ class ListProperty:
         # Bodies first, then the head CAS; a lost CAS deletes the new
         # bodies again and returns False. The envelope's key, token and
         # unknown fields are carried into the new head.
-        landed, _ = self._write_spanning(value_str, spans, head_write, carry=old_env)
+        landed, _ = self._write_spanning(
+            value_str,
+            spans,
+            head_write,
+            carry=old_env,
+            head_name=self._v2_item_name(handle.rank),
+        )
         if not landed:
             return False
         self._cascade(handle.raw_value)
@@ -3502,11 +3607,16 @@ class ListProperty:
         identity" bucket would report every such row as a duplicate of
         every other.
         """
-        decoded = (
-            self._resolve(raw_value, rank=rank, consistent=True)
-            if rank is not None
-            else self._decode_item(raw_value)
-        )
+        if rank is None:
+            decoded = self._decode_item(raw_value)
+        else:
+            try:
+                decoded = self._resolve(raw_value, rank=rank, consistent=True)
+            except (_ItemGone, ListItemSpanError):
+                # Gone, or a broken span: not identity-addressable here.
+                # verify(spans=True) reports a broken one; raising would stop
+                # the repair tool that removes it.
+                return None
         if not isinstance(decoded, dict) or identity_key not in decoded:
             return None
         value = decoded[identity_key]
@@ -3981,7 +4091,26 @@ class ListProperty:
         old_names = {self._v2_item_name(rank) for rank in old_ranks}
         target_ranks = fi.generate_n_keys_between(None, None, n)
 
+        # Copy every spanned head that will move to a fresh generation
+        # BEFORE the first head is written: a span that cannot be read must
+        # stop compact() with nothing moved, not part-way through the write
+        # loop with some items already duplicated at new ranks. Copies
+        # already made are deleted again (no head names them yet).
+        copies: dict[str, tuple[str, SpanInfo | None]] = {}
+        try:
+            for (old_rank, value), target_rank in zip(pairs, target_ranks, strict=True):
+                if target_rank != old_rank:
+                    copies[old_rank] = self._copy_span_head(value, old_rank)
+        except BaseException:
+            for _, copied_span in copies.values():
+                self._span_delete_bodies(copied_span)
+            raise
+
         written_ranks: list[str] = []
+        # Old heads overwritten in place with a fresh generation (a retry
+        # landing back on its own rank): their old generation is cascaded
+        # with the cleanup below.
+        rewritten_in_place: list[str] = []
         for i, ((old_rank, value), target_rank) in enumerate(
             zip(pairs, target_ranks, strict=True)
         ):
@@ -3993,23 +4122,19 @@ class ListProperty:
             for attempt in range(_V2_MAX_RANK_RETRIES + 1):
                 new_name = self._v2_item_name(rank)
                 if new_name not in old_names or rank == old_rank:
-                    moved = rank != old_rank
-                    new_value, new_span = (
-                        self._copy_span_head(value, old_rank)
-                        if moved
-                        else (value, None)
-                    )
+                    new_value, new_span = copies[old_rank]
                     item_db = get_property(self.config)
-                    try:
-                        if not item_db.set(
-                            actor_id=self.actor_id, name=new_name, value=new_value
-                        ):
-                            raise RuntimeError(
-                                f"list item write failed for '{self.name}' during compact()"
-                            )
-                    except BaseException:
-                        self._span_delete_bodies(new_span)
-                        raise
+                    # A fault here has an unknown outcome: the copy's bodies
+                    # stay (an orphan for the aged sweep if the head did not
+                    # land), see _write_spanning().
+                    if not item_db.set(
+                        actor_id=self.actor_id, name=new_name, value=new_value
+                    ):
+                        raise RuntimeError(
+                            f"list item write failed for '{self.name}' during compact()"
+                        )
+                    if rank == old_rank and new_span is not None:
+                        rewritten_in_place.append(value)
                     written_ranks.append(rank)
                     break
                 if attempt == _V2_MAX_RANK_RETRIES:
@@ -4042,6 +4167,8 @@ class ListProperty:
                 # The moved copy has its own generation; the old one goes
                 # with its head.
                 self._cascade(old_value)
+        for old_value in rewritten_in_place:
+            self._cascade(old_value)
 
         self._v2_rank_cache = sorted(written_ranks)
         # compact() just counted every row it rewrote -- write the exact
@@ -4077,7 +4204,7 @@ class ListProperty:
         list's body rows, then remove aged orphan generations and heads
         whose bodies are not all there. See ``_v2_compact()``."""
         pairs = self._v2_load_full()
-        span_heads, _ = self._span_heads(pairs)
+        span_heads, malformed = self._span_heads(pairs)
         span_names = self._aux_names("span")
         broken, orphans = self._span_inventory(span_heads, span_names)
         raw_by_rank = dict(pairs)
@@ -4106,7 +4233,24 @@ class ListProperty:
             if aux is not None:
                 get_property(self.config).batch_delete(actor_id=aux, names=names)
             orphans_removed += 1
-        if broken_removed:
+        malformed_removed = 0
+        for rank in malformed:
+            # A head that is not a valid envelope names no readable item;
+            # removing it makes the list readable again.
+            if get_property(self.config).delete_if_value_equals(
+                actor_id=self.actor_id,
+                name=self._v2_item_name(rank),
+                value=raw_by_rank[rank],
+            ):
+                malformed_removed += 1
+                logger.warning(
+                    "List '%s' (actor %s): removed the item at rank %r, whose "
+                    "head was a malformed storage envelope",
+                    self.name,
+                    self.actor_id,
+                    rank,
+                )
+        if broken_removed or malformed_removed:
             self._v2_rank_cache = None
         return {
             "span_body_rows": len(span_names),
@@ -4114,6 +4258,7 @@ class ListProperty:
             "broken_spans": broken,
             "orphan_span_gens_removed": orphans_removed,
             "broken_spans_removed": broken_removed,
+            "malformed_heads_removed": malformed_removed,
         }
 
     def compact(

@@ -387,3 +387,20 @@ class TestHandlers413:
         assert body["error"] == "list_item_too_large"
         assert body["list"] == "bulk"
         assert myself.property_lists.bulk.to_list() == [{"n": 0}]
+
+
+class TestBulk413WritesNothing:
+    """Verification 2026-10-31, M4: an oversized entry anywhere in a bulk
+    batch is refused before any entry is written."""
+
+    def test_earlier_entries_are_not_written(self, live: Any) -> None:
+        myself, config = live
+        myself.property_lists.bulk2.append({"n": 0})
+        webobj = _post_bulk(
+            myself,
+            config,
+            "bulk2",
+            [{"index": 0, "n": "changed"}, {"index": 1, "blob": "y" * 20_000}],
+        )
+        assert webobj.response.status_code == 413
+        assert myself.property_lists.bulk2.to_list() == [{"n": 0}]

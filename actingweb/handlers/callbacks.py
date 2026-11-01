@@ -7,6 +7,7 @@ from actingweb import auth
 from actingweb.handlers import base_handler
 
 from ..db.exceptions import DbError
+from ..permission_evaluator import glob_has_wildcard, glob_match
 
 if TYPE_CHECKING:
     from actingweb.aw_proxy import AwProxy
@@ -18,8 +19,10 @@ logger = logging.getLogger(__name__)
 
 
 def _has_wildcard(pattern: str) -> bool:
-    """Check if a pattern contains wildcard characters."""
-    return "*" in pattern or "?" in pattern or "[" in pattern
+    """Whether a pattern must go through the glob matcher rather than be
+    read as one exact name: it holds an unescaped wildcard, or a backslash
+    (so ``a\\*b`` is matched as the name ``a*b``, not fetched literally)."""
+    return glob_has_wildcard(pattern) or "\\" in pattern
 
 
 class CallbacksHandler(base_handler.BaseHandler):
@@ -842,8 +845,6 @@ class CallbacksHandler(base_handler.BaseHandler):
             peer_id: The peer who granted access
             granted_patterns: List of property patterns that were newly granted
         """
-        import fnmatch
-
         from actingweb.aw_proxy import AwProxy
         from actingweb.remote_storage import RemotePeerStore
 
@@ -870,7 +871,7 @@ class CallbacksHandler(base_handler.BaseHandler):
             if _has_wildcard(pattern):
                 # Wildcard pattern: fetch property list and filter
                 self._fetch_wildcard_properties(
-                    proxy, remote_store, peer_id, pattern, fnmatch.fnmatch
+                    proxy, remote_store, peer_id, pattern, glob_match
                 )
             else:
                 # Exact property name: fetch directly
@@ -1023,8 +1024,6 @@ class CallbacksHandler(base_handler.BaseHandler):
             peer_id: The peer who revoked access
             revoked_patterns: List of property patterns that were revoked
         """
-        import fnmatch
-
         from actingweb.remote_storage import RemotePeerStore
 
         if not revoked_patterns:
@@ -1040,7 +1039,7 @@ class CallbacksHandler(base_handler.BaseHandler):
             for list_name in all_lists:
                 # Check if this list matches any revoked pattern
                 for pattern in revoked_patterns:
-                    if fnmatch.fnmatch(list_name, pattern):
+                    if glob_match(list_name, pattern):
                         try:
                             store.delete_list(list_name)
                             deleted_count += 1

@@ -496,7 +496,7 @@ Function Signature
 
 .. code-block:: python
 
-    def check_and_verify_auth(appreq=None, actor_id=None, config=None):
+    def check_and_verify_auth(appreq=None, actor_id=None, *, config):
         """Check and verify authentication for non-ActingWeb routes.
         
         Args:
@@ -752,7 +752,7 @@ might receive OAuth2 tokens that need validation against the provider.
 
 .. code-block:: python
 
-    async def check_and_verify_auth_async(appreq=None, actor_id=None, config=None):
+    async def check_and_verify_auth_async(appreq=None, actor_id=None, *, config):
         """Async version: Check and verify authentication for non-ActingWeb routes.
 
         Args:

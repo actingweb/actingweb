@@ -1551,13 +1551,15 @@ class FlaskIntegration(BaseActingWebIntegration):
             import json
 
             # Parse JSON body for POST requests
+            # An empty body or one that is not JSON is a parse error (-32700),
+            # answered before authentication.
             try:
                 if webobj.request.body:
                     data = json.loads(webobj.request.body)
                 else:
-                    data = {}
+                    data = mcp.UNPARSEABLE_BODY
             except (json.JSONDecodeError, ValueError):
-                data = {}
+                data = mcp.UNPARSEABLE_BODY
 
             result = handler.post(data)
         else:

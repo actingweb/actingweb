@@ -16,6 +16,7 @@ The evaluator supports checking permissions for:
 - Prompts (MCP prompt access)
 """
 
+import functools
 import logging
 import re
 from enum import Enum
@@ -33,6 +34,104 @@ logger = logging.getLogger(__name__)
 
 # Upper bound on cached compiled glob patterns per evaluator; see __init__.
 _PATTERN_CACHE_MAX_ENTRIES = 1024
+
+
+def _glob_tokens(pattern: str) -> list[tuple[str, str]]:
+    r"""Scan a glob pattern into ``("lit", char)``, ``("any", "")`` (``?``)
+    and ``("star", "")`` tokens.
+
+    A backslash escapes the next character when it is ``*``, ``?`` or
+    ``\\``: ``\*`` is a literal ``*``, ``\?`` a literal ``?``, ``\\`` a
+    literal backslash. A backslash before anything else, or at the end, is a
+    literal backslash. There are no character classes: ``[abc]`` is literal.
+    """
+    tokens: list[tuple[str, str]] = []
+    i = 0
+    n = len(pattern)
+    while i < n:
+        c = pattern[i]
+        if c == "\\":
+            if i + 1 < n and pattern[i + 1] in "*?\\":
+                tokens.append(("lit", pattern[i + 1]))
+                i += 2
+                continue
+            tokens.append(("lit", "\\"))
+        elif c == "*":
+            if not tokens or tokens[-1][0] != "star":
+                tokens.append(("star", ""))
+        elif c == "?":
+            tokens.append(("any", ""))
+        else:
+            tokens.append(("lit", c))
+        i += 1
+    return tokens
+
+
+def glob_has_wildcard(pattern: str) -> bool:
+    """Whether the pattern holds an unescaped ``*`` or ``?``."""
+    return any(kind != "lit" for kind, _ in _glob_tokens(pattern))
+
+
+def glob_to_regex(pattern: str) -> str:
+    """Translate a glob pattern into an anchored regex source (``^...\\Z``,
+    to be compiled with ``re.DOTALL``).
+
+    Linear-time: each ``*`` that is followed by another ``*`` later in the
+    pattern becomes an atomic lazy segment ``(?>.*?fixed)`` as
+    ``fnmatch.translate`` emits, and the last ``*`` a plain ``.*`` before the
+    final literal run, so a pattern of many stars cannot backtrack
+    exponentially. The patterns come from peers (permission callbacks, property
+    filters), so that matters.
+    """
+    segments: list[list[str]] = [[]]
+    for kind, char in _glob_tokens(pattern):
+        if kind == "star":
+            segments.append([])
+        else:
+            segments[-1].append("." if kind == "any" else re.escape(char))
+    stars = len(segments) - 1
+    parts = ["".join(segments[0])]
+    for index in range(1, stars + 1):
+        fixed = "".join(segments[index])
+        if index < stars:
+            parts.append(f"(?>.*?{fixed})")
+        else:
+            parts.append(f".*{fixed}")
+    # ``\\Z`` rather than ``$``: ``$`` also matches just before a trailing
+    # newline, so ``notes$`` accepted ``notes\n``.
+    return "^" + "".join(parts) + "\\Z"
+
+
+@functools.lru_cache(maxsize=_PATTERN_CACHE_MAX_ENTRIES)
+def _compile_glob(pattern: str) -> re.Pattern[str]:
+    # DOTALL makes ``*`` and ``?`` match a newline the way they match every
+    # other character, which is what a glob means. An LRU, not a dict that
+    # clears itself: a peer sending distinct patterns must not flush the
+    # authorization hot set.
+    return re.compile(glob_to_regex(pattern), re.DOTALL)
+
+
+def glob_match(target: str, pattern: str) -> bool:
+    """Whether ``target`` matches the glob ``pattern``.
+
+    Supports ``*`` (any characters), ``?`` (one character) and the escapes
+    ``\\*``, ``\\?`` and ``\\\\``; matching is case-sensitive and there are no
+    character classes. A pattern of ``"*"`` matches everything. A pattern
+    ending in ``://`` with no unescaped wildcard is matched as that pattern
+    plus ``*``, so ``notes://`` matches ``notes://work/projects``. ``..``
+    segments are not normalised: a resource reader that maps URIs to storage
+    validates its own path.
+    """
+    if pattern == "*":
+        return True
+    # The equality shortcut is only for patterns without a backslash:
+    # otherwise ``a\*b`` would match the literal string ``a\*b`` as well as
+    # ``a*b``.
+    if "\\" not in pattern and pattern == target:
+        return True
+    if pattern.endswith("://") and not glob_has_wildcard(pattern):
+        pattern = pattern + "*"
+    return bool(_compile_glob(pattern).match(target))
 
 
 class PermissionResult(Enum):
@@ -71,7 +170,6 @@ class PermissionEvaluator:
         # Patterns are owner-authored config so cardinality is small; the
         # bound is a backstop against a rule source that never repeats
         # (dynamic per-peer patterns), and a cold recompile is cheap.
-        self._pattern_cache: dict[str, re.Pattern] = {}
 
     def evaluate_permission(
         self,
@@ -667,60 +765,12 @@ class PermissionEvaluator:
         return False
 
     def _matches_pattern(self, target: str, pattern: str) -> bool:
-        """
-        Check if target matches a single pattern.
-
-        Supports:
-        - Exact matches
-        - Glob-style patterns with * (any characters) and ? (single character)
-        - Special case: "*" matches everything
-        - Prefix form: a pattern ending in "://" with no "*" or "?" is
-          matched as that pattern plus "*", so "notes://" matches
-          "notes://work/projects". ``..`` segments are not normalised: a
-          resource reader that maps URIs to storage validates its own path.
-        """
-        if pattern == "*":
-            return True
-
-        if pattern == target:
-            return True
-
-        # The prefix form goes through the glob path like every other
-        # pattern: one code path. A pattern that already holds a wildcard
-        # (such as "*://") is left as written, since appending "*" would
-        # widen what it matches.
-        if pattern.endswith("://") and "*" not in pattern and "?" not in pattern:
-            pattern = pattern + "*"
-
-        # Use cached compiled regex if available
-        if pattern in self._pattern_cache:
-            regex = self._pattern_cache[pattern]
-        else:
-            if len(self._pattern_cache) >= _PATTERN_CACHE_MAX_ENTRIES:
-                self._pattern_cache.clear()
-            # Convert glob pattern to regex. This is the only compile site and
-            # the cache key is the bare pattern, so the flags must stay fixed
-            # here: DOTALL makes ``*`` and ``?`` match a newline the way they
-            # match every other character, which is what a glob means.
-            regex_pattern = self._glob_to_regex(pattern)
-            regex = re.compile(regex_pattern, re.DOTALL)
-            self._pattern_cache[pattern] = regex
-
-        return bool(regex.match(target))
+        """Check if target matches a single pattern (see :func:`glob_match`)."""
+        return glob_match(target, pattern)
 
     def _glob_to_regex(self, pattern: str) -> str:
-        """Convert glob pattern to regex pattern."""
-        # Escape special regex characters except * and ?
-        escaped = re.escape(pattern)
-
-        # Replace escaped glob wildcards with regex equivalents
-        escaped = escaped.replace(r"\*", ".*")  # * matches any characters
-        escaped = escaped.replace(r"\?", ".")  # ? matches single character
-
-        # Anchor the pattern to match the entire string. ``\Z`` rather than
-        # ``$``: ``$`` also matches just before a trailing newline, so
-        # ``notes$`` accepted ``notes\n``.
-        return f"^{escaped}\\Z"
+        """The regex source for a glob pattern (see :func:`glob_to_regex`)."""
+        return glob_to_regex(pattern)
 
 
 # Convenience functions for common permission checks

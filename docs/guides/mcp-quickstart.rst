@@ -101,6 +101,11 @@ Call initialize (no auth required):
      -H 'Content-Type: application/json' \
      -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"curl"}}}'
 
+A ``POST /mcp`` whose body is empty or not JSON answers ``400`` with JSON-RPC
+``-32700 Parse error`` (``id: null``) **before** authentication, as a body that is
+JSON but not an object answers ``-32600``; a well-formed request without
+credentials still gets the 401 challenge.
+
 Every other method — ``tools/list``, ``prompts/list``, ``tools/call``, etc. —
 **requires an OAuth2 bearer token** (only ``initialize``, ``ping`` — a
 liveness check — and messages that get no reply are unauthenticated: a

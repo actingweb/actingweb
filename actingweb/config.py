@@ -238,7 +238,7 @@ class Config:
             # An empty client_id turns off oauth capabilities
             "client_id": "",
             "client_secret": "",
-            "redirect_uri": self.proto + self.fqdn + "/oauth",
+            "redirect_uri": "",  # derived after the kwargs below, from proto/fqdn
             "scope": "",
             "auth_uri": "",
             "token_uri": "",
@@ -358,6 +358,10 @@ class Config:
         # caller's values have landed, before root/auth_realm are derived.
         self.fqdn = _validated_host_setting("fqdn", self.fqdn, "APP_HOST_FQDN")
         self.proto = _validated_host_setting("proto", self.proto, "APP_HOST_PROTOCOL")
+        # The OAuth redirect URI follows the host the caller gave, not the
+        # default one the dict was built with; a caller's own value wins.
+        if not self.oauth.get("redirect_uri"):
+            self.oauth["redirect_uri"] = self.proto + self.fqdn + "/oauth"
 
         # Environment variable overrides for property lookup configuration
         if os.getenv("INDEXED_PROPERTIES"):
@@ -421,35 +425,9 @@ class Config:
         # This app follows the actingweb specification specified
         self.aw_version = "1.0"
 
-        # Base supported options
-        base_supported = [
-            "www",
-            "oauth",
-            "callbacks",
-            "trust",
-            "onewaytrust",
-            "subscriptions",
-            "subscriptionresync",  # Support for resync callbacks (ActingWeb v1.4)
-            "subscriptionbatch",  # Support for batching subscription callbacks
-            "actions",
-            "resources",
-            "methods",
-            "sessions",
-            "nestedproperties",
-        ]
-
-        # Add optional features if available
-        if self._check_trust_permissions_available():
-            base_supported.append("trustpermissions")
-
         self.mcp: bool = kwargs.get("mcp", False)
-        if self.mcp:
-            base_supported.append("mcp")
-
         self.mcp_server_name = kwargs.get("mcp_server_name", "actingweb")
         self.mcp_instructions: str | None = kwargs.get("mcp_instructions", None)
-
-        self.aw_supported = ",".join(base_supported)
 
         # These are the supported formats
         self.aw_formats = "json"
@@ -538,29 +516,51 @@ class Config:
         tok = binascii.hexlify(os.urandom(int(length // 2)))
         return tok.decode("utf-8")
 
-    def update_supported_options(self) -> None:
-        """Update aw_supported based on enabled features.
+    def _supported_options(self) -> list[str]:
+        """The option tags this configuration advertises, sorted.
 
-        This method is called when features are dynamically enabled after
-        Config initialization (e.g., via ActingWebApp builder methods).
+        Computed from the configuration on every call, so a feature switched
+        on or off after construction (``with_mcp()``, ``with_web_ui()``,
+        ``with_oauth()``) cannot leave a stale tag. A tag is advertised only
+        when the path or behaviour it names exists: ``www`` needs the web UI,
+        ``oauth`` needs a configured provider, and ``sessions``,
+        ``onewaytrust``, ``callbackcompression``, ``proxy`` and the
+        subscription health tags are never advertised (no route or no
+        support).
         """
-        # Parse existing options into a set
-        current_options = set(self.aw_supported.split(","))
-
-        # Keep the "mcp" capability tag in sync with the enable flag so that
-        # toggling MCP via the builder after Config construction is reflected in
-        # the advertised /meta capabilities.
+        options = [
+            "callbacks",
+            "trust",
+            "subscriptions",
+            "subscriptionresync",  # resync callbacks (ActingWeb v1.4)
+            "subscriptionbatch",  # batched subscription callbacks
+            "actions",
+            "resources",
+            "methods",
+            "nestedproperties",
+            "listproperties",
+        ]
+        if self.ui:
+            options.append("www")
+        if self.oauth_providers or self.oauth.get("client_id"):
+            options.append("oauth")
+        if self._check_trust_permissions_available():
+            options.append("trustpermissions")
         if getattr(self, "mcp", False):
-            current_options.add("mcp")
-        else:
-            current_options.discard("mcp")
-
-        # Add permission-related option tags if peer permissions caching is enabled
+            options.append("mcp")
         if getattr(self, "peer_permissions_caching", False):
-            # permissioncallback - supports receiving permission change notifications
-            current_options.add("permissioncallback")
-            # permissionquery - supports GET /{actor_id}/permissions/{peer_id}
-            current_options.add("permissionquery")
+            # permissioncallback: receives permission change notifications;
+            # permissionquery: GET /{actor_id}/permissions/{peer_id}
+            options.append("permissioncallback")
+            options.append("permissionquery")
+        return sorted(options)
 
-        # Update aw_supported with the new set of options
-        self.aw_supported = ",".join(sorted(current_options))
+    @property
+    def aw_supported(self) -> str:
+        """The comma-separated option tags served at ``/meta/actingweb/supported``
+        (read-only; see :meth:`_supported_options`)."""
+        return ",".join(self._supported_options())
+
+    def update_supported_options(self) -> None:
+        """No-op since 3.16: ``aw_supported`` is computed from the
+        configuration on every read. Kept for callers of the old method."""

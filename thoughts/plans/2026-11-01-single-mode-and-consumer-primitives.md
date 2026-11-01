@@ -1,5 +1,6 @@
 ---
-status: active
+status: done
+verified: thoughts/verifications/2026-11-01-single-mode-and-consumer-primitives.md
 ---
 
 # Implementation Plan: One mode after the 3.16 upgrade, and the two consumer primitives
@@ -1330,7 +1331,33 @@ and the todo housekeeping each closes.
 - [ ] `grep -rn "sessions\|onewaytrust" actingweb/config.py docs/guides/access-control*.rst` shows no tag
 - [ ] Manual: `curl -s localhost:5055/<id>/meta/actingweb/supported` on the demo lists `listproperties`, `www`, `oauth` and not `sessions`
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+**Implementation notes (Phase 4):**
+
+- Done as planned: `config` is a required keyword-only argument of `Auth`,
+  `check_and_verify_auth` and the async variant (an explicit `None` raises
+  `TypeError` too, from the review); `Config.oauth["redirect_uri"]` follows the
+  host the caller gave; one glob engine (`glob_to_regex`, `glob_match`,
+  `glob_has_wildcard`) with escapes, atomic segments and an LRU, used by the
+  evaluator, `PeerPermissions` and the callbacks (no `fnmatch` left in the
+  library); the MCP `UNPARSEABLE_BODY` sentinel answers `-32700` before
+  authentication in both integrations; `Config._supported_options()` and a
+  read-only `aw_supported` property; the registration trust-list walk is gone;
+  the todo housekeeping is done (two deleted, the glob todo trimmed and renamed
+  `unicode-normalisation-of-names.md`, the sessions todo trimmed to the route,
+  the registration-expiry todo rewritten with the research's findings).
+- **Beyond the plan:** `with_mcp()` now applies its flag to the config straight
+  away (it skipped `_apply_runtime_changes_to_config()` before, so `config.mcp`
+  and the tag were stale until another builder call); the callbacks'
+  `_has_wildcard` uses the new scanner and treats a pattern with a backslash as
+  a glob; `PeerPermissions` and the callbacks now also fold a bare `://` pattern
+  to a prefix, which the evaluator already did (the review found it; the
+  migration guide says so).
+- The two guide example lists for `/meta/actingweb/supported` are pinned to the
+  code by a test.
+- The plan's manual `curl` of `/meta/actingweb/supported` on the demo was not
+  run; the tests read the same value.
 
 ---
 
@@ -1545,3 +1572,34 @@ reviewer. Both independently found the same high finding.
   Alembic omits (`schema.py:42-46`) - a backend asymmetry in the Phase 2
   audit (tests).
 - `report`'s exit codes vs `unique_creators`'s 0/1/2 convention (usability).
+
+## Implementation Summary
+
+**Completed:** 2026-11-01
+**All phases:** Complete
+**Test status:** All passing (Full tier on both backends, twice against one store; ruff, pyright and `sphinx -W` clean)
+
+### Deviations from Plan
+- Phase 1: "empty store" ignores the `_actingweb_*` system actors; D15 on PostgreSQL
+  needed no source change; the test seam lives in `tests/_lookup_probe.py`.
+- Phase 2: the audit of fixed-creator tests was much wider than the eight files
+  named; `MCPHandler` lost its import-time config default too.
+- Phase 3: a lost `create_attr_if_absent` write whose winner vanished is retried
+  once.
+- Phase 4: `with_mcp()` applies its flag at once; a bare `://` pattern folds to a
+  prefix in the peer-permission and callbacks matchers as well.
+- The database containers were unreachable for most of the session, so the Full
+  tier ran against a local DynamoDB Local jar and a local PostgreSQL; the compose
+  file was used for the first Phase 1 runs only.
+- Phases 2 to 4 were implemented and verified together and then committed as three
+  commits cut from the tree (each slice passed lint, types and the unit tier).
+
+### Learnings
+- A system actor's rows exist before the first request, so "the table is empty"
+  never holds for properties or actors; readiness has to ignore `_actingweb_*`.
+- A PynamoDB `scan(limit=N)` caps the total; `page_size` is what bounds a read.
+- Two xdist workers share one recorded name set per store, so tests that write it
+  need an xdist group.
+- Open, filed as todos: stale lookup owners and races
+  (`property-lookup-stale-owner-and-races.md`), and the direct-`Config` creators
+  table (`unique-creator-direct-config-auto-create.md`).

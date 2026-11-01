@@ -2503,9 +2503,9 @@ class FastAPIIntegration(BaseActingWebIntegration):
                 if webobj.request.body:
                     data = json.loads(webobj.request.body)
                 else:
-                    data = {}
+                    data = mcp.UNPARSEABLE_BODY
             except (json.JSONDecodeError, ValueError):
-                data = {}
+                data = mcp.UNPARSEABLE_BODY
 
             result = await handler.post_async(data)
         else:

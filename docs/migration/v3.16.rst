@@ -643,6 +643,56 @@ For creator uniqueness, ``DbActor`` must also:
   another creator and returns whether it did (a backend whose uniqueness
   lives on the actor row, as PostgreSQL's does, returns False).
 
+Direct ``check_and_verify_auth()`` callers
+------------------------------------------
+
+``check_and_verify_auth()``, ``check_and_verify_auth_async()`` and ``Auth()``
+take ``config`` as a **required keyword-only** argument. Before, an omitted
+``config`` silently built a default ``Config()``, whose library defaults
+(``devtest=True``, the demo host) are not the application's. A call without it
+raises ``TypeError: ... missing 1 required keyword-only argument: 'config'``;
+one that passed it positionally (``Auth(actor_id, "basic", config)``) raises
+``TypeError`` too. The documented examples already pass ``config=``. Separately,
+``Config(fqdn=..., proto=...)`` without ``oauth=`` now derives
+``oauth["redirect_uri"]`` from that host instead of the default one.
+
+Advertised option tags
+----------------------
+
+``/meta/actingweb/supported`` (``Config.aw_supported``) advertises what the
+application serves. ``sessions`` and ``onewaytrust`` are gone (no route; trust
+is always reciprocal), ``listproperties`` is added, ``www`` is listed only when
+the web UI is on and ``oauth`` only when a provider is configured. The value is
+computed from the configuration on every read, so ``with_mcp()`` and the other
+builder calls cannot leave it stale, and ``Config.aw_supported`` is **read-only**
+(an assignment raises ``AttributeError``). A peer that keyed on ``sessions`` or
+``onewaytrust`` finds neither; none that we know of does.
+
+Permission pattern escapes
+--------------------------
+
+A permission pattern now treats a backslash as an escape: ``\*``, ``\?`` and
+``\\`` are a literal ``*``, ``?`` and backslash, so a pattern that contains one
+changes meaning. The peer-permission cache and the callbacks' property filters
+used ``fnmatch`` and now use the evaluator's matcher: no ``[seq]`` character
+classes (a ``[`` is literal), case-sensitive (``fnmatch`` folded case on some
+platforms), and a pattern ending in ``://`` with no wildcard (``files://``) also
+matches what follows it, as it already did in the evaluator (before, a stored peer
+pattern ``files://`` matched only that exact name, and the callbacks' revoke
+deleted only the list of that name). The matcher is linear-time, so a peer-supplied pattern with many
+``*`` cannot hang a request. Check any rule you wrote that holds a backslash or
+``[``; none shipped, in the demo or in the docs does. See
+:doc:`../guides/access-control` ("Pattern syntax").
+
+``POST /mcp`` parse errors
+--------------------------
+
+A ``POST /mcp`` whose body is empty or not JSON now answers **400 with JSON-RPC
+``-32700 Parse error``** (``id: null``), before authentication. It used to be
+treated as an empty request. A well-formed request without credentials still gets
+the 401 challenge, so discovery works; only a client that probes with an empty
+body now sees 400 where it saw 401.
+
 SPA error codes
 ---------------
 

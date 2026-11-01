@@ -277,8 +277,6 @@ class ActingWebApp:
         # Allowed CORS origins for the SPA OAuth endpoints
         if hasattr(self, "_spa_cors_origins"):
             self._config.spa_cors_origins = list(self._spa_cors_origins)
-        # Update supported options based on enabled features
-        self._config.update_supported_options()
         # Keep service registry reference in sync
         self._attach_service_registry_to_config()
 
@@ -590,8 +588,9 @@ class ActingWebApp:
         self._enable_mcp = enable
         self._mcp_server_name = server_name
         self._mcp_instructions = instructions
-        # Note: aw_supported is computed in Config.__init__. We keep this minimal
-        # to avoid touching unrelated features; OAuth fix does not require recompute.
+        # Config.aw_supported is computed on every read, so the ``mcp`` tag
+        # follows the flag as soon as it is applied to the config.
+        self._apply_runtime_changes_to_config()
         return self
 
     def with_sync_callbacks(self, enable: bool = True) -> "ActingWebApp":

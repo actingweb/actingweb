@@ -276,6 +276,33 @@ CHANGED
   without it is not". A gateway must pass the header through; the body ``code``
   arrives either way. The email endpoints keep their own ``code`` values.
 
+- **Breaking: ``check_and_verify_auth()``, its async variant and ``Auth()``
+  require ``config`` as a keyword-only argument.** Without it they raised
+  nothing and built a default ``Config()`` (``devtest=True``, the demo host);
+  now a call without it raises ``TypeError`` naming the argument, and one that
+  passes it positionally raises ``TypeError`` too.
+
+- **Breaking: ``/meta/actingweb/supported`` advertises what the application
+  serves.** ``sessions`` and ``onewaytrust`` are dropped (no route; trust is
+  always reciprocal), ``listproperties`` is added, ``www`` appears only when the
+  web UI is on and ``oauth`` only when a provider is configured.
+  ``Config.aw_supported`` is a read-only property computed on every read, so
+  ``with_mcp()`` and the other builder calls cannot leave it stale; assigning
+  to it raises ``AttributeError``. ``with_mcp()`` now applies its flag to the
+  config immediately.
+
+- **Breaking: a backslash in a permission pattern is an escape** (``\*``,
+  ``\?``, ``\\``), so a pattern that contains one changes meaning. The
+  peer-permission cache and the callbacks' property filters now use the
+  evaluator's matcher instead of ``fnmatch``: no ``[seq]`` character classes
+  and case-sensitive. See ``docs/guides/access-control.rst`` ("Pattern
+  syntax").
+
+- **Breaking: ``POST /mcp`` with a body that is empty or not JSON answers 400
+  with JSON-RPC ``-32700`` before authentication.** It used to be treated as an
+  empty request. A well-formed request without credentials still gets the 401
+  challenge.
+
 - **Breaking: ``DbProperty`` and ``DbPropertyList`` require
   ``indexed_properties``.** The constructors take a required, keyword-only
   ``indexed_properties: list[str]`` on both backends and read no environment
@@ -995,6 +1022,22 @@ ADDED
 
 FIXED
 ~~~~~
+
+- **A glob with many ``*`` no longer backtracks exponentially (security).**
+  The evaluator's translation turned every ``*`` into ``.*`` and measured 12
+  stars against 40 characters at over 20 seconds, and the callbacks and
+  peer-permission patterns are peer-supplied. One matcher now serves all three
+  places, with the atomic segments ``fnmatch.translate`` uses and an LRU cache
+  (a peer sending distinct patterns can no longer flush the whole cache). The
+  call sites that used ``fnmatch`` were linear already, so the fix is to the
+  evaluator's own engine.
+
+- **``Config(fqdn=...)`` without ``oauth=`` composed ``redirect_uri`` from the
+  default host.** It is now derived from the host the caller gave, and a
+  caller's own ``redirect_uri`` still wins.
+
+- **Registering an OAuth2 client listed the actor's trust relationships** to
+  build a log string; the read is gone.
 
 - **A ``GET /<id>/callbacks/<name>?_method=POST`` ran the POST and then
   the GET.** ``CallbacksHandler.get`` did not return after dispatching an

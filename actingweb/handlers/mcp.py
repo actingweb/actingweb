@@ -92,6 +92,20 @@ from .base_handler import BaseHandler  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
+
+class _UnparseableBody:
+    """Marker type of :data:`UNPARSEABLE_BODY`."""
+
+    def __repr__(self) -> str:
+        return "UNPARSEABLE_BODY"
+
+
+#: What the integrations pass to :meth:`MCPHandler.post` when the request body
+#: is empty or is not JSON. The handler answers it with HTTP 400 and JSON-RPC
+#: ``-32700 Parse error``, before authentication, in the same pre-auth branch
+#: that answers ``-32600`` for a body that is JSON but not an object.
+UNPARSEABLE_BODY = _UnparseableBody()
+
 # Global caches for MCP performance optimization
 _token_cache: dict[str, dict[str, Any]] = {}  # token -> validation data
 _actor_cache: dict[str, dict[str, Any]] = {}  # actor_id -> {actor, last_accessed}
@@ -867,13 +881,20 @@ class MCPHandler(BaseHandler):
 
         The answer is HTTP ``400`` with JSON-RPC ``-32600 Invalid Request`` and
         ``id: null`` — the one place JSON-RPC requires a null id, because no
-        request id could be read.
+        request id could be read. A body that is empty or not JSON
+        (:data:`UNPARSEABLE_BODY`) is ``-32700 Parse error`` instead; both are
+        answered before authentication.
 
         Batches are declined rather than processed. MCP 2025-06-18 removed
         batching, but 2025-03-26, which this server still negotiates, required
         servers to receive them; that gap is recorded in
         ``thoughts/todo/mcp-batch-receive.md``.
         """
+        if data is UNPARSEABLE_BODY:
+            # The log line names the kind, never the body bytes.
+            logger.info("MCP POST rejected: body is empty or not JSON")
+            self.response.set_status(400, "Bad Request")
+            return self._create_jsonrpc_error(None, -32700, "Parse error")
         kind = "array (batch)" if isinstance(data, list) else type(data).__name__
         logger.info("MCP POST rejected: body is a JSON %s, not an object", kind)
         self.response.set_status(400, "Bad Request")

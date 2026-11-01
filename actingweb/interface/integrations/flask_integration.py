@@ -13,6 +13,7 @@ from werkzeug.wrappers import Response as WerkzeugResponse
 
 from ... import request_context, runtime_context
 from ...aw_web_request import AWWebObj
+from ...constants import ERROR_CODE_HEADER
 from ...db.exceptions import DbError
 from ...handlers import bot, factory, mcp, services
 from ._errors import (
@@ -1464,6 +1465,10 @@ class FlaskIntegration(BaseActingWebIntegration):
         retry_after = getattr(webobj.response, "headers", {}).get("Retry-After")
         if retry_after:
             json_response.headers["Retry-After"] = str(retry_after)
+        # The error code of an error answer (the body's ``code`` repeats it).
+        error_code = getattr(webobj.response, "headers", {}).get(ERROR_CODE_HEADER)
+        if error_code:
+            json_response.headers[ERROR_CODE_HEADER] = str(error_code)
 
         # Copy cookies from handler response
         if hasattr(webobj.response, "cookies"):

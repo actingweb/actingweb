@@ -26,10 +26,14 @@ import json
 import logging
 import secrets
 import time
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Literal, Optional
 from urllib.parse import urlparse
 
-from ..constants import REFRESH_TOKEN_GRACE_DEFAULT, SPA_REFRESH_TOKEN_REUSE_WINDOW
+from ..constants import (
+    ERROR_CODE_HEADER,
+    REFRESH_TOKEN_GRACE_DEFAULT,
+    SPA_REFRESH_TOKEN_REUSE_WINDOW,
+)
 from ..db.exceptions import DbError
 from ..secret_compare import secret_digest_equals, secret_equals
 from ..single_use import classify_reuse, refresh_token_grace
@@ -132,6 +136,22 @@ def verify_pkce(code_verifier: str, stored_challenge: str) -> bool:
     return secret_digest_equals(computed_challenge, stored_challenge)
 
 
+SpaErrorCode = Literal[
+    "invalid_request",
+    "invalid_grant",
+    "refresh_token_reused",
+    "unsupported_grant_type",
+    "access_denied",
+    "not_found",
+    "server_error",
+    "temporarily_unavailable",
+]
+"""Every code an SPA token endpoint answers (the vocabulary table in
+``docs/guides/spa-authentication.rst``). The OAuth names mean what RFC 6749
+gives them; ``refresh_token_reused`` is the library's: the chain was revoked
+because a used token came back inside the detection window."""
+
+
 def spa_cors_headers(
     config: Any,
     origin: str | None,
@@ -169,7 +189,7 @@ def spa_cors_headers(
         "Access-Control-Allow-Methods": methods,
         "Access-Control-Allow-Headers": "Authorization, Content-Type, Accept",
         "Access-Control-Allow-Credentials": "true",
-        "Access-Control-Expose-Headers": "Retry-After",
+        "Access-Control-Expose-Headers": f"Retry-After, {ERROR_CODE_HEADER}",
         "Access-Control-Max-Age": "86400",
     }
 
@@ -239,9 +259,10 @@ class OAuth2SPAHandler(BaseHandler):
                 400,
                 "OAuth callbacks should go to /oauth/callback. "
                 "The callback endpoint auto-detects SPA mode via the state parameter.",
+                "invalid_request",
             )
         else:
-            return self._json_error(404, f"Unknown SPA endpoint: {path}")
+            return self._json_error(404, f"Unknown SPA endpoint: {path}", "not_found")
 
     def post(self, path: str = "") -> dict[str, Any]:
         """
@@ -270,7 +291,7 @@ class OAuth2SPAHandler(BaseHandler):
         elif path == "revoke":
             return self._handle_revoke()
         else:
-            return self._json_error(404, f"Unknown SPA endpoint: {path}")
+            return self._json_error(404, f"Unknown SPA endpoint: {path}", "not_found")
 
     def _handle_config(self) -> dict[str, Any]:
         """
@@ -429,7 +450,9 @@ class OAuth2SPAHandler(BaseHandler):
 
             params = json.loads(body_str) if body_str else {}
         except json.JSONDecodeError:
-            return self._json_error(400, "Invalid JSON in request body")
+            return self._json_error(
+                400, "Invalid JSON in request body", "invalid_request"
+            )
 
         provider = params.get("provider", "google")
         # trust_type: None = user login, "mcp_client" etc = MCP authorization
@@ -446,17 +469,20 @@ class OAuth2SPAHandler(BaseHandler):
             return self._json_error(
                 400,
                 f"Invalid prompt: {prompt!r}; accepted: {', '.join(SPA_PROMPT_VALUES)}",
+                "invalid_request",
             )
 
         # Validate token_delivery mode
         if token_delivery not in ["json", "cookie", "hybrid"]:
             return self._json_error(
-                400, f"Invalid token_delivery mode: {token_delivery}"
+                400, f"Invalid token_delivery mode: {token_delivery}", "invalid_request"
             )
 
         # Validate provider name (must be a known provider or variant)
         if not _is_known_provider(provider):
-            return self._json_error(400, f"Unknown OAuth provider: {provider}")
+            return self._json_error(
+                400, f"Unknown OAuth provider: {provider}", "invalid_request"
+            )
 
         # Validate the post-auth redirect target. After OAuth completes the
         # browser is redirected here with a one-time ?session= id, so an
@@ -465,7 +491,7 @@ class OAuth2SPAHandler(BaseHandler):
             from .oauth2_callback import is_safe_spa_redirect
 
             if not is_safe_spa_redirect(self.config, redirect_uri):
-                return self._json_error(400, "Invalid redirect_uri")
+                return self._json_error(400, "Invalid redirect_uri", "invalid_request")
 
         # Get the appropriate authenticator
         try:
@@ -475,14 +501,14 @@ class OAuth2SPAHandler(BaseHandler):
 
             if not authenticator.is_enabled():
                 return self._json_error(
-                    400, f"OAuth provider {provider} is not enabled"
+                    400, f"OAuth provider {provider} is not enabled", "invalid_request"
                 )
 
         except DbError:
             raise
         except Exception as e:
             logger.error(f"Failed to create authenticator: {e}")
-            return self._json_error(500, "OAuth configuration error")
+            return self._json_error(500, "OAuth configuration error", "server_error")
 
         # Handle PKCE
         code_challenge = None
@@ -497,10 +523,14 @@ class OAuth2SPAHandler(BaseHandler):
             code_challenge_method = params.get("code_challenge_method", "S256")
 
             if not code_challenge:
-                return self._json_error(400, "code_challenge required when pkce=client")
+                return self._json_error(
+                    400, "code_challenge required when pkce=client", "invalid_request"
+                )
             if code_challenge_method != "S256":
                 return self._json_error(
-                    400, "Only S256 code_challenge_method is supported"
+                    400,
+                    "Only S256 code_challenge_method is supported",
+                    "invalid_request",
                 )
 
         # Build state with SPA-specific fields
@@ -562,7 +592,9 @@ class OAuth2SPAHandler(BaseHandler):
             raise
         except Exception as e:
             logger.error(f"Failed to create authorization URL: {e}")
-            return self._json_error(500, "Failed to create authorization URL")
+            return self._json_error(
+                500, "Failed to create authorization URL", "server_error"
+            )
 
         response_data: dict[str, Any] = {
             "authorization_url": auth_url,
@@ -614,14 +646,16 @@ class OAuth2SPAHandler(BaseHandler):
 
             params = json.loads(body_str) if body_str else {}
         except json.JSONDecodeError:
-            return self._json_error(400, "Invalid JSON in request body")
+            return self._json_error(
+                400, "Invalid JSON in request body", "invalid_request"
+            )
 
         grant_type = params.get("grant_type")
         token_delivery = params.get("token_delivery", "json")
 
         if token_delivery not in ["json", "cookie", "hybrid"]:
             return self._json_error(
-                400, f"Invalid token_delivery mode: {token_delivery}"
+                400, f"Invalid token_delivery mode: {token_delivery}", "invalid_request"
             )
 
         if grant_type == "refresh_token":
@@ -637,7 +671,9 @@ class OAuth2SPAHandler(BaseHandler):
         elif grant_type == "passphrase":
             result = self._handle_passphrase_exchange(params, token_delivery)
         else:
-            return self._json_error(400, f"Unsupported grant_type: {grant_type}")
+            return self._json_error(
+                400, f"Unsupported grant_type: {grant_type}", "unsupported_grant_type"
+            )
 
         # Opportunistic, self-contained cleanup of expired SPA tokens. The token
         # endpoint is the natural heartbeat for this, and the underlying call is
@@ -674,7 +710,7 @@ class OAuth2SPAHandler(BaseHandler):
                 refresh_token = self.request.cookies.get("refresh_token")
 
         if not refresh_token:
-            return self._json_error(400, "Missing refresh_token")
+            return self._json_error(400, "Missing refresh_token", "invalid_request")
 
         # Validate refresh token and get associated actor
         from ..oauth_session import _REFRESH_TOKEN_BUCKET, get_oauth2_session_manager
@@ -694,13 +730,15 @@ class OAuth2SPAHandler(BaseHandler):
             return self._store_unavailable()
 
         if not token_data:
-            return self._json_error(401, "Invalid or expired refresh_token")
+            return self._json_error(
+                401, "Invalid or expired refresh_token", "invalid_grant"
+            )
 
         actor_id = token_data.get("actor_id")
         identifier = token_data.get("identifier")
 
         if not actor_id:
-            return self._json_error(401, "Invalid refresh token data")
+            return self._json_error(401, "Invalid refresh token data", "invalid_grant")
 
         # If token was already used, classify the reuse (single_use.
         # classify_reuse, shared with the MCP ladder; grace =
@@ -766,7 +804,9 @@ class OAuth2SPAHandler(BaseHandler):
                     f"actor {actor_id} - past the reuse-detection window, "
                     f"treating as expired (no revocation)"
                 )
-                return self._json_error(401, "Invalid or expired refresh_token")
+                return self._json_error(
+                    401, "Invalid or expired refresh_token", "invalid_grant"
+                )
             else:
                 # Token reuse within the detection window (after the grace
                 # period) - potential theft. Scope the response to the offending
@@ -806,7 +846,9 @@ class OAuth2SPAHandler(BaseHandler):
                     logger.error(f"Could not revoke the reused token's chain: {e}")
                     return self._store_unavailable()
                 return self._json_error(
-                    401, "Refresh token already used - session revoked for security"
+                    401,
+                    "Refresh token already used - session revoked for security",
+                    "refresh_token_reused",
                 )
 
         # Generate new tokens (rotation). Propagate the consumed token's chain_id
@@ -881,10 +923,14 @@ class OAuth2SPAHandler(BaseHandler):
         code_verifier = params.get("code_verifier")
 
         if not code:
-            return self._json_error(400, "Missing authorization code")
+            return self._json_error(
+                400, "Missing authorization code", "invalid_request"
+            )
 
         if not _is_known_provider(provider):
-            return self._json_error(400, f"Unknown OAuth provider: {provider}")
+            return self._json_error(
+                400, f"Unknown OAuth provider: {provider}", "invalid_request"
+            )
 
         # PKCE is mandatory (fail-closed) for native authorization_code exchanges:
         # a native/`-mobile` provider, or any custom-scheme (non-http[s])
@@ -904,6 +950,7 @@ class OAuth2SPAHandler(BaseHandler):
                     400,
                     "PKCE code_verifier required for native authorization_code "
                     "exchange",
+                    "invalid_request",
                 )
             logger.warning(
                 "authorization_code exchange without PKCE code_verifier. "
@@ -918,13 +965,13 @@ class OAuth2SPAHandler(BaseHandler):
 
             if not authenticator.is_enabled():
                 return self._json_error(
-                    400, f"OAuth provider {provider} is not enabled"
+                    400, f"OAuth provider {provider} is not enabled", "invalid_request"
                 )
         except DbError:
             raise
         except Exception as e:
             logger.error(f"Failed to create authenticator for {provider}: {e}")
-            return self._json_error(500, "OAuth configuration error")
+            return self._json_error(500, "OAuth configuration error", "server_error")
 
         # Exchange authorization code for tokens
         token_data = authenticator.exchange_code_for_token(
@@ -932,7 +979,7 @@ class OAuth2SPAHandler(BaseHandler):
         )
         if not token_data or "access_token" not in token_data:
             logger.error("Failed to exchange authorization code for access token")
-            return self._json_error(401, "Token exchange failed")
+            return self._json_error(401, "Token exchange failed", "invalid_grant")
 
         provider_access_token = token_data["access_token"]
         provider_refresh_token = token_data.get("refresh_token")
@@ -944,7 +991,7 @@ class OAuth2SPAHandler(BaseHandler):
         )
         if not user_info:
             logger.error("Failed to validate token or extract user info")
-            return self._json_error(401, "Token validation failed")
+            return self._json_error(401, "Token validation failed", "invalid_grant")
 
         # Normalize the user_info shape so the oauth_success hook sees a
         # consistent (display_name / given_name / family_name / email) shape.
@@ -961,12 +1008,15 @@ class OAuth2SPAHandler(BaseHandler):
         if not identifier:
             if not require_email:
                 return self._json_error(
-                    401, "OAuth provider did not return user identifier"
+                    401,
+                    "OAuth provider did not return user identifier",
+                    "invalid_grant",
                 )
             return self._json_error(
                 401,
                 "Email required but not provided by OAuth provider. "
                 f"Configure your {authenticator.provider.name} account to make email public.",
+                "invalid_grant",
             )
 
         # Lookup or create actor
@@ -995,7 +1045,7 @@ class OAuth2SPAHandler(BaseHandler):
 
         if not actor_instance:
             logger.error(f"Failed to lookup or create actor for {identifier}")
-            return self._json_error(500, "Actor creation failed")
+            return self._json_error(500, "Actor creation failed", "server_error")
 
         # Store OAuth tokens in actor properties
         if actor_instance.store:
@@ -1041,7 +1091,7 @@ class OAuth2SPAHandler(BaseHandler):
             logger.warning(
                 f"OAuth success hook rejected authentication for {identifier}"
             )
-            return self._json_error(403, "Authentication rejected")
+            return self._json_error(403, "Authentication rejected", "access_denied")
 
         # Generate ActingWeb SPA tokens
         actor_id = actor_instance.id or ""
@@ -1170,7 +1220,7 @@ class OAuth2SPAHandler(BaseHandler):
 
         if not actor_instance:
             logger.error(f"Failed to lookup or create actor for {identifier}")
-            return self._json_error(500, "Actor creation failed")
+            return self._json_error(500, "Actor creation failed", "server_error")
 
         # Persist upstream provider tokens when we have them (apple_mobile_ticket).
         if actor_instance.store and provider_access_token:
@@ -1215,7 +1265,7 @@ class OAuth2SPAHandler(BaseHandler):
             logger.warning(
                 f"OAuth success hook rejected authentication for {identifier}"
             )
-            return self._json_error(403, "Authentication rejected")
+            return self._json_error(403, "Authentication rejected", "access_denied")
 
         actor_id = actor_instance.id or ""
         from ..oauth2_server.token_manager import TokenStoreUnavailable
@@ -1281,23 +1331,29 @@ class OAuth2SPAHandler(BaseHandler):
         nonce = params.get("nonce")
 
         if not provider or not _is_known_provider(provider):
-            return self._json_error(400, f"Unknown OAuth provider: {provider}")
+            return self._json_error(
+                400, f"Unknown OAuth provider: {provider}", "invalid_request"
+            )
         if not assertion:
-            return self._json_error(400, "Missing assertion (id_token)")
+            return self._json_error(
+                400, "Missing assertion (id_token)", "invalid_request"
+            )
         if nonce is None or nonce == "":
-            return self._json_error(400, "Missing nonce")
+            return self._json_error(400, "Missing nonce", "invalid_request")
 
         authenticator, claims, error = self._validate_id_token_for_provider(
             provider, assertion, nonce
         )
         if error or not claims or authenticator is None:
-            return self._json_error(400, error or "id_token validation failed")
+            return self._json_error(
+                400, error or "id_token validation failed", "invalid_request"
+            )
 
         # Replay protection: an id_token may be presented only once.
         from ..oauth2_replay import IdTokenReplayCache
 
         if not IdTokenReplayCache(self.config).check_and_record(claims):
-            return self._json_error(400, "id_token replay rejected")
+            return self._json_error(400, "id_token replay rejected", "invalid_request")
 
         # Honor email-as-creator mode: reject a provider-ID-only id_token when the
         # app requires email as the actor creator (parity with the web flow).
@@ -1306,7 +1362,9 @@ class OAuth2SPAHandler(BaseHandler):
             claims, require_email=require_email
         )
         if not identifier:
-            return self._json_error(401, "id_token did not yield a user identifier")
+            return self._json_error(
+                401, "id_token did not yield a user identifier", "invalid_grant"
+            )
 
         user_info = normalize_user_info(provider, claims)
         return self._finalize_native_session(
@@ -1335,19 +1393,21 @@ class OAuth2SPAHandler(BaseHandler):
         """
         ticket = params.get("ticket", "")
         if not ticket:
-            return self._json_error(400, "Missing ticket")
+            return self._json_error(400, "Missing ticket", "invalid_request")
 
         from ..oauth_state_store import MobileTicketStore
 
         stored = MobileTicketStore(self.config).consume(ticket)
         if not stored:
-            return self._json_error(400, "Invalid or expired ticket")
+            return self._json_error(400, "Invalid or expired ticket", "invalid_grant")
 
         provider = str(stored.get("provider", "apple-mobile"))
         code = str(stored.get("code", ""))
         redirect_uri = str(stored.get("redirect_uri", ""))
         if not code:
-            return self._json_error(400, "Ticket missing authorization code")
+            return self._json_error(
+                400, "Ticket missing authorization code", "invalid_request"
+            )
 
         # Recover the server-managed PKCE verifier when the authorize step sent a
         # code_challenge (e.g. GitHub). Without it the provider rejects the
@@ -1371,7 +1431,7 @@ class OAuth2SPAHandler(BaseHandler):
             code, redirect_uri=redirect_uri, code_verifier=code_verifier
         )
         if not token_data or "access_token" not in token_data:
-            return self._json_error(401, "Token exchange failed")
+            return self._json_error(401, "Token exchange failed", "invalid_grant")
 
         # Identity: OIDC providers (Apple) carry it in the id_token within the
         # token response; others (GitHub) fetch it from the userinfo endpoint.
@@ -1383,7 +1443,7 @@ class OAuth2SPAHandler(BaseHandler):
                 token_data["access_token"]
             )
         if not claims:
-            return self._json_error(401, "Failed to extract user info")
+            return self._json_error(401, "Failed to extract user info", "invalid_grant")
 
         # Honor email-as-creator mode: in that configuration a provider-ID
         # identifier (apple:sub / github:id) must not be accepted.
@@ -1392,7 +1452,9 @@ class OAuth2SPAHandler(BaseHandler):
             claims, token_data.get("access_token", ""), require_email=require_email
         )
         if not identifier:
-            return self._json_error(401, "Sign-in did not yield a user identifier")
+            return self._json_error(
+                401, "Sign-in did not yield a user identifier", "invalid_grant"
+            )
 
         user_info = normalize_user_info(provider, claims)
         return self._finalize_native_session(
@@ -1441,7 +1503,9 @@ class OAuth2SPAHandler(BaseHandler):
         if not self.config.devtest:
             logger.warning("Passphrase grant attempted but devtest mode is disabled")
             return self._json_error(
-                403, "Passphrase grant is only available in devtest mode"
+                403,
+                "Passphrase grant is only available in devtest mode",
+                "access_denied",
             )
 
         # Validate required parameters
@@ -1449,10 +1513,14 @@ class OAuth2SPAHandler(BaseHandler):
         passphrase = params.get("passphrase")
 
         if not actor_id:
-            return self._json_error(400, "Missing required parameter: actor_id")
+            return self._json_error(
+                400, "Missing required parameter: actor_id", "invalid_request"
+            )
 
         if not passphrase:
-            return self._json_error(400, "Missing required parameter: passphrase")
+            return self._json_error(
+                400, "Missing required parameter: passphrase", "invalid_request"
+            )
 
         # Load and validate actor
         from ..actor import Actor
@@ -1461,14 +1529,14 @@ class OAuth2SPAHandler(BaseHandler):
 
         if not actor.id:
             logger.debug(f"Passphrase grant failed: actor {actor_id} not found")
-            return self._json_error(404, "Actor not found")
+            return self._json_error(404, "Actor not found", "not_found")
 
         # Validate passphrase
         if not actor.passphrase or not secret_equals(passphrase, actor.passphrase):
             logger.debug(
                 f"Passphrase grant failed: invalid passphrase for actor {actor_id}"
             )
-            return self._json_error(401, "Invalid passphrase")
+            return self._json_error(401, "Invalid passphrase", "invalid_grant")
 
         # Generate tokens
         identifier = actor.creator or ""
@@ -1563,9 +1631,13 @@ class OAuth2SPAHandler(BaseHandler):
 
             params = json.loads(body_str) if body_str else {}
         except json.JSONDecodeError:
-            return self._json_error(400, "Invalid JSON in request body")
+            return self._json_error(
+                400, "Invalid JSON in request body", "invalid_request"
+            )
         if not isinstance(params, dict):
-            return self._json_error(400, "Request body must be a JSON object")
+            return self._json_error(
+                400, "Request body must be a JSON object", "invalid_request"
+            )
 
         token = params.get("token")
         token_type_hint = str(params.get("token_type_hint") or "access_token")
@@ -1589,7 +1661,7 @@ class OAuth2SPAHandler(BaseHandler):
             token = cookies.get("access_token") or cookies.get("oauth_token")
 
         if not token:
-            return self._json_error(400, "No token provided")
+            return self._json_error(400, "No token provided", "invalid_request")
 
         from ..oauth_session import get_oauth2_session_manager
 
@@ -1826,19 +1898,32 @@ class OAuth2SPAHandler(BaseHandler):
         as the MCP token endpoint answers. A 401 would tell the client
         its token is invalid, and a client following the SPA guide treats a
         401 on refresh as final and signs the user out."""
-        result = self._json_error(503, "Token store temporarily unavailable; retry")
+        result = self._json_error(
+            503, "Token store temporarily unavailable; retry", "temporarily_unavailable"
+        )
         if self.response:
             self.response.headers["Retry-After"] = "5"
         return result
 
-    def _json_error(self, status_code: int, message: str) -> dict[str, Any]:
-        """Create JSON error response."""
+    def _json_error(
+        self, status_code: int, message: str, code: SpaErrorCode
+    ) -> dict[str, Any]:
+        """Create a JSON error response.
+
+        ``code`` is the stable machine-readable reason: it goes in the body's
+        ``code`` key and in the ``X-ActingWeb-Error`` header, so a client can
+        tell a 401 that is the library's and final (it carries the header)
+        from one a gateway produced. The ``Literal`` type makes pyright
+        refuse a missing or unknown code at every call site.
+        """
         if self.response:
             self.response.set_status(status_code)
             self.response.headers["Content-Type"] = "application/json"
+            self.response.headers[ERROR_CODE_HEADER] = code
 
         return {
             "error": True,
             "status_code": status_code,
             "message": message,
+            "code": code,
         }

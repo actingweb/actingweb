@@ -607,6 +607,93 @@ class DbAttribute:
             return False
 
     @staticmethod
+    def create_attr_if_absent(
+        actor_id: str | None = None,
+        bucket: str | None = None,
+        name: str | None = None,
+        data: Any = None,
+        timestamp: datetime | None = None,
+        ttl_seconds: int | None = None,
+    ) -> bool:
+        """
+        Create an attribute only if no live row holds its name.
+
+        See ``DbAttributeProtocol.create_attr_if_absent`` for the contract.
+        One ``INSERT ... ON CONFLICT DO UPDATE ... WHERE`` that replaces the
+        existing row only when it is in the same bucket with a
+        ``ttl_timestamp`` at or before now. A lost condition (no row
+        written) is followed by one read: JSONB-equal stored data means the
+        row is this call's own.
+        """
+        if not actor_id or not bucket or not name:
+            raise ValueError("create_attr_if_absent needs actor_id, bucket and name")
+
+        from actingweb.db.utils import sanitize_json_data
+
+        bucket_name = bucket + ":" + name
+        data = sanitize_json_data(data, log_source="attribute")
+        encoded = json.dumps(data)
+        try:
+            with get_connection() as conn:
+                with conn.cursor() as cur:
+                    # A lost write can be followed by the winner's row
+                    # vanishing before the read-back (a delete, the TTL
+                    # reaper): the name is then free, so it is tried once
+                    # more rather than reported as lost.
+                    for attempt in range(2):
+                        cur.execute(
+                            """
+                            INSERT INTO attributes (
+                                id, bucket_name, bucket, name, data, timestamp,
+                                ttl_timestamp
+                            ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                            ON CONFLICT (id, bucket_name)
+                            DO UPDATE SET
+                                bucket = EXCLUDED.bucket,
+                                name = EXCLUDED.name,
+                                data = EXCLUDED.data,
+                                timestamp = EXCLUDED.timestamp,
+                                ttl_timestamp = EXCLUDED.ttl_timestamp
+                            WHERE attributes.bucket = EXCLUDED.bucket
+                              AND attributes.ttl_timestamp IS NOT NULL
+                              AND attributes.ttl_timestamp <= %s
+                            """,
+                            (
+                                actor_id,
+                                bucket_name,
+                                bucket,
+                                name,
+                                encoded,
+                                timestamp,
+                                ttl_deadline(ttl_seconds)
+                                if ttl_seconds is not None
+                                else None,
+                                int(time.time()),
+                            ),
+                        )
+                        if cur.rowcount == 1:
+                            written = True
+                            break
+                        cur.execute(
+                            """
+                            SELECT bucket = %s AND data = %s::jsonb
+                            FROM attributes WHERE id = %s AND bucket_name = %s
+                            """,
+                            (bucket, encoded, actor_id, bucket_name),
+                        )
+                        row = cur.fetchone()
+                        if row is None and attempt == 0:
+                            continue  # the winner is gone: the name is free
+                        written = bool(row and row[0])
+                        break
+                    else:  # pragma: no cover - the loop always breaks
+                        written = False
+                conn.commit()
+            return written
+        except Exception as e:
+            raise DbError("attribute create", actor_id) from e
+
+    @staticmethod
     def delete_bucket(actor_id: str | None = None, bucket: str | None = None) -> bool:
         """
         Delete an entire bucket.

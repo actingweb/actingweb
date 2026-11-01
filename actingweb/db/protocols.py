@@ -25,6 +25,11 @@ docstring says otherwise:
 - **Conditional operations are exempt.** ``delete_attr_conditional``,
   ``conditional_update_attr`` and every ``*_if_*`` method answer True only
   when THIS call changed the row; single-use consumption depends on it.
+  ``create_attr_if_absent`` is the exception to the exception: it raises
+  ``DbError`` on a fault, because its callers (a retried create) must tell a
+  lost race from an outage. ``delete_attr_conditional`` and
+  ``conditional_update_attr`` answer False on a fault (callers tell the two
+  apart with ``get_attr_strict``).
 - **Writes raise.** A ``create``, ``modify`` or ``set`` that faults raises
   ``DbError``; False is reserved for the documented non-fault refusals
   (missing arguments or handle, an id that is taken).
@@ -1375,7 +1380,58 @@ class DbAttributeProtocol(Protocol):
 
         Returns:
             True if update succeeded (current matched old_data), False otherwise
-            (a mismatch, a missing row, or a backend fault)
+            (a mismatch, a missing row, or a backend fault; use
+            ``get_attr_strict`` to tell the last apart)
+        """
+        ...
+
+    @staticmethod
+    def create_attr_if_absent(
+        actor_id: str | None = None,
+        bucket: str | None = None,
+        name: str | None = None,
+        data: Any = None,
+        timestamp: datetime | None = None,
+        ttl_seconds: int | None = None,
+    ) -> bool:
+        """
+        Create an attribute only if no live row holds its name (atomic).
+
+        One conditional write; never an overwrite of a live row. An
+        expired-but-present row (``ttl_timestamp`` in the past, the rule
+        ``get_attr_strict`` applies) counts as absent and is replaced in the
+        same write.
+
+        Args:
+            actor_id: The actor ID
+            bucket: Bucket name
+            name: Attribute name
+            data: The data to store (stored as given; a falsy value is
+                stored, not a delete)
+            timestamp: Optional timestamp
+            ttl_seconds: When given, the row's storage TTL, as ``set_attr``
+
+        Returns:
+            True when this call created the row or replaced an expired one
+            (both mean "you won"), or when the row already holds JSON-equal
+            data to what this call wrote (an SDK-retried create that landed
+            must not be reported as lost). False when a live row holds the
+            name, or another bucket owns the key.
+
+        Raises:
+            ValueError: ``actor_id``, ``bucket`` or ``name`` is missing (a
+                False there would read as "lost").
+            DbError: on a backend fault, including a fault while reading the
+                row back after a lost condition.
+
+        Two callers that write identical data both get True. A caller that
+        needs exactly one winner puts a per-call nonce in ``data`` (the
+        ``consume_id`` pattern of single-use consumption). Do not use it on
+        names an untrusted party chooses, in a bucket where an expired row
+        still carries meaning (a consumed marker under ``consumed_ttl``): it
+        replaces an expired row. A caller that then reads the row should use
+        ``get_attr_strict`` to see the same expiry rule (``get_attr`` returns
+        expired rows).
         """
         ...
 

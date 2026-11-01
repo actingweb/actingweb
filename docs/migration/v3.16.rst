@@ -592,7 +592,16 @@ module docstring of ``actingweb.db.protocols`` states:
 - answer ``True`` from a delete through a loaded handle when the row is gone,
   absent rows included;
 - keep ``delete_attr_conditional`` and ``conditional_update_attr`` answering
-  ``True`` only when that call changed the row;
+  ``True`` only when that call changed the row (and ``False`` on a fault: the
+  single-use consume step relies on it);
+- implement ``DbAttribute.create_attr_if_absent(actor_id, bucket, name, data,
+  timestamp=None, ttl_seconds=None) -> bool`` as one conditional write that
+  creates the row, or replaces one whose stored ``ttl_timestamp`` is in the
+  past, and answers ``True``; ``False`` when a live row (or another bucket's
+  row) holds the name; ``True`` when a lost condition leaves a JSON-equal
+  row (an SDK-retried create); ``ValueError`` for a missing
+  ``actor_id``, ``bucket`` or ``name``; ``DbError`` on a fault. This is
+  the one conditional write that raises on a fault;
 - implement ``DbSubscription.increment_seq(actor_id=None, peerid=None,
   subid=None)`` as one atomic update that returns the new sequence number
   (None when the row is gone). The library no longer writes ``previous + 1``
@@ -633,6 +642,28 @@ For creator uniqueness, ``DbActor`` must also:
   actor_id)``, which removes a record naming an actor that is gone or holds
   another creator and returns whether it did (a backend whose uniqueness
   lives on the actor row, as PostgreSQL's does, returns False).
+
+SPA error codes
+---------------
+
+Every error the SPA token endpoints answer (``/oauth/spa/*``, ``/oauth/revoke``
+and ``/oauth/logout``) now carries a stable code, in the response header
+``X-ActingWeb-Error`` and in the JSON body's ``code`` key beside ``error: true``.
+The codes are ``invalid_request``, ``unsupported_grant_type``, ``invalid_grant``,
+``refresh_token_reused``, ``access_denied``, ``not_found``, ``server_error`` and
+``temporarily_unavailable``; the table is in :doc:`../guides/spa-authentication`.
+The database fault handler's answers on the SPA and ``/oauth/*`` paths carry the
+header too (``temporarily_unavailable``, ``conflict``, ``internal_error``), and
+``Access-Control-Expose-Headers`` on those answers now lists ``Retry-After`` and
+``X-ActingWeb-Error``.
+
+This is the predicate rule 7 of the SPA guide now uses: **a 401 on refresh that
+carries the header is the library's and final** (sign the user out); one without
+it is not the library's (a gateway's, say) and keeps the session. A client that
+treated every 401 as final is unaffected. The gateway in front of the application
+must pass the header through and, for a cross-origin browser, list it in its
+exposed headers; the body ``code`` arrives either way. The email endpoints
+(``/oauth/email``) keep their own ``code`` values.
 
 Creator uniqueness
 ------------------

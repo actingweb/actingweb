@@ -257,6 +257,25 @@ REMOVED
 CHANGED
 ~~~~~~~
 
+- **Breaking: a custom ``DbAttribute`` backend must implement
+  ``create_attr_if_absent``** (the fourth custom-backend requirement of 3.16;
+  the migration guide's list has it). ``delete_attr_conditional`` and
+  ``conditional_update_attr`` keep answering ``False`` on a fault, and a test
+  now pins that on both backends because single-use consumption depends on it.
+
+- **Breaking: every SPA token-endpoint error answers a stable code.** The
+  response carries ``X-ActingWeb-Error: <code>`` and the JSON body gains
+  ``code`` beside ``error: true`` (``invalid_request``,
+  ``unsupported_grant_type``, ``invalid_grant``, ``refresh_token_reused``,
+  ``access_denied``, ``not_found``, ``server_error``,
+  ``temporarily_unavailable``). The database fault handler's answers on the SPA
+  and ``/oauth/*`` paths carry the header too, and
+  ``Access-Control-Expose-Headers`` on them now lists both ``Retry-After`` and
+  ``X-ActingWeb-Error``. **Behavior change:** rule 7 of the SPA guide is now "a
+  401 on refresh that carries the header is the library's and final; one
+  without it is not". A gateway must pass the header through; the body ``code``
+  arrives either way. The email endpoints keep their own ``code`` values.
+
 - **Breaking: ``DbProperty`` and ``DbPropertyList`` require
   ``indexed_properties``.** The constructors take a required, keyword-only
   ``indexed_properties: list[str]`` on both backends and read no environment
@@ -735,6 +754,18 @@ CHANGED
 
 ADDED
 ~~~~~
+
+- **``create_attr_if_absent``** (the attribute protocol, both backends and
+  ``Attributes``) creates an attribute only if no live row holds its name, in
+  one conditional write. An expired row (its stored ``ttl_timestamp`` in the
+  past, the rule ``get_attr_strict`` applies) counts as absent and is replaced
+  in the same write; a row in another bucket is never touched; a lost condition
+  whose stored row is JSON-equal to the data written is ``True`` (a create that
+  landed and was retried by the SDK); a fault raises ``DbError``. **Behavior
+  change to know:** two callers writing identical data both get ``True``, so a
+  caller that needs exactly one winner puts a per-call nonce in ``data``.
+  After a ``False``, ``Attributes.get_attr(name)`` on the same instance reads
+  the winner's row through. See ``docs/sdk/attributes-buckets.rst``.
 
 - **``actingweb-property-lookup``** (``report``, ``backfill``,
   ``mark-complete``, ``unmark``; dry-run unless ``--apply``) makes the

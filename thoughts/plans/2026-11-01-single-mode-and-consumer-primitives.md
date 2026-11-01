@@ -1104,7 +1104,30 @@ flowchart TD
       guard that every `_json_error` call carries a known code)
 - [ ] Manual: against the demo in local QA mode, `curl -i -X POST /oauth/spa/token -d '{"grant_type":"refresh_token","refresh_token":"x"}'` shows `X-ActingWeb-Error: invalid_grant` and `"code": "invalid_grant"`
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+**Implementation notes (Phase 3):**
+
+- Done as planned: `create_attr_if_absent` in the protocol, both backends and
+  `Attributes`; `normalize_json` hoisted to module level; the fault contract
+  text in the protocol and the older docstrings; D10 pinned by fault-injection
+  tests on both backends (the two older methods answer False); `_json_error`
+  takes a required `SpaErrorCode` literal (pyright is the guard, no AST test);
+  `X-ActingWeb-Error` is forwarded in both translators, set by the FastAPI
+  session endpoint and by `db_error_answer()`, and listed in the CORS
+  expose-headers on every path that listed `Retry-After`; the SPA guide's rule 7,
+  the vocabulary table and the migration section are written.
+- 55 `_json_error` call sites (the plan said 56 counting the definition) got
+  codes by status, with the plan's exceptions: the in-window reuse is
+  `refresh_token_reused`, the expired mobile ticket (a 400) is `invalid_grant`.
+- **Added from the review:** a lost condition whose winning row has vanished by
+  the read-back means the name is free, so the write is tried once more instead
+  of being reported as lost (both backends; a DynamoDB test pins it).
+- **Left as written:** `Attributes.create_attr_if_absent` caches the caller's own
+  data on a win, as the plan says; after a retry-win the cached timestamp is the
+  caller's, not the stored one. The logout and revoke answers produced in the
+  OAuth2 endpoints handler (other than the store-fault 503) carry no code; the
+  SPA guide says the header is the marker only where listed.
 
 ---
 

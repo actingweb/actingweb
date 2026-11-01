@@ -535,7 +535,13 @@ Since 3.16 both backends answer a database fault the same way, and
   after the call, including a row that was already absent; a fault raises.
 - **Conditional operations keep their meaning.** ``delete_attr_conditional``,
   ``conditional_update_attr`` and the ``*_if_*`` methods answer True only
-  when *this* call changed the row, which single-use consumption needs.
+  when *this* call changed the row, which single-use consumption needs; a
+  fault answers False for the two attribute methods (a caller tells the two
+  apart with ``get_attr_strict``). ``create_attr_if_absent`` is the one
+  conditional write that **raises** ``DbError`` on a fault, because a retried
+  create must tell a lost race from an outage. A custom ``DbAttribute`` backend
+  implements it (see :doc:`../migration/v3.16`); two callers writing identical
+  data both get True, so a caller that needs one winner stores a nonce.
 - **Writes raise.** A ``create``, ``modify`` or ``set`` that faults raises;
   False is kept for the documented refusals (missing arguments or handle, an
   id that is taken).

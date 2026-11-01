@@ -724,12 +724,10 @@ class MCPHandler(BaseHandler):
     def __init__(
         self,
         webobj: aw_web_request.AWWebObj = aw_web_request.AWWebObj(),
-        # mcp=True: production call sites always pass their real config
-        # (built via ActingWebApp, which defaults MCP on unless
-        # .with_mcp(enable=False) was called); this bare default only
-        # backs ad hoc/test construction of MCPHandler(), and every such
-        # caller is specifically exercising MCP behavior.
-        config: config_class.Config = config_class.Config(mcp=True),
+        # No import-time ``Config()`` default (see BaseHandler): the handler
+        # takes the application's config, which ActingWebApp builds with MCP
+        # on unless .with_mcp(enable=False) was called.
+        config: config_class.Config | None = None,
         hooks: HookRegistry | None = None,
     ) -> None:
         super().__init__(webobj, config, hooks)

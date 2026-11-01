@@ -9,6 +9,11 @@ tests/test_mcp_quickstart.py, so the document and the test exercise the same
 code.
 
 Run with: python examples/mcp_quickstart.py
+
+First run on a fresh database: creator uniqueness is on by default, so the
+first start creates the tables and stops with ``UniqueCreatorNotReady``. Run
+``actingweb-unique-creators enable --apply`` and start again. (Add
+``.with_unique_creator(False)`` to the app to opt out.)
 """
 
 import os

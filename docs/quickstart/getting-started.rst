@@ -183,8 +183,22 @@ The modern interface uses a fluent configuration API that's much simpler than th
     ).with_bot(
         token="bot-token",
         email="bot@example.com"
-    ).with_unique_creator(enable=True
+    ).with_unique_creator(enable=True  # the default; False opts out
     ).add_actor_type("myself", relationship="friend")
+
+First run
+---------
+
+Creator uniqueness is on by default, so the first start on a fresh database
+creates the tables and stops with ``UniqueCreatorNotReady``. Run the command
+once and start again::
+
+    python app.py                                    # creates the tables, then stops
+    actingweb-unique-creators enable --apply
+    python app.py                                    # serves
+
+``.with_unique_creator(False)`` opts out and keeps the older, duplicate-tolerant
+behaviour.
 
 All Configuration Options
 --------------------------
@@ -202,7 +216,7 @@ Configuration methods:
 - ``.with_web_ui(enable=True)`` - Enable/disable web UI at /www
 - ``.with_devtest(enable=True)`` - Enable/disable development endpoints (MUST be False in production)
 - ``.with_bot(token, email, secret, admin_room)`` - Configure bot integration
-- ``.with_unique_creator(enable=True)`` - One actor per creator, enforced by the database; run ``actingweb-unique-creators enable --apply`` first (see :doc:`../migration/v3.16`)
+- ``.with_unique_creator(enable=True)`` - One actor per creator, enforced by the database. **On by default**; ``False`` opts out. See the first-run note below and :doc:`../migration/v3.16`
 - ``.with_open_factory(enable=True)`` - Open or close the actor factory (``POST /``); close it for OAuth-only deployments
 - ``.with_email_as_creator(enable=True)`` - Use email property as creator
 - ``.add_actor_type(name, factory, relationship)`` - Add known actor type

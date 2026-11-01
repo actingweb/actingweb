@@ -46,7 +46,9 @@ def _is_dynamodb() -> bool:
 
 @pytest.fixture
 def config():
-    return Config()
+    # Fixed creators on the shared, never-wiped store: uniqueness would make
+    # the second run fail with CreatorTaken.
+    return Config(unique_creator=False)
 
 
 @pytest.fixture

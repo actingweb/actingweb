@@ -87,8 +87,7 @@ class TestTrustHandlerPermissions(unittest.TestCase):
         )
         self.permission_store.get_permissions.return_value = test_permissions
 
-        handler = TrustPeerHandler()
-        handler.config = self.config
+        handler = TrustPeerHandler(config=self.config)
         handler.request = Mock()
         handler.request.get = Mock(
             side_effect=lambda key: "true" if key == "permissions" else None
@@ -126,8 +125,7 @@ class TestTrustHandlerPermissions(unittest.TestCase):
         mock_permissions = Mock()
         mock_create_override.return_value = mock_permissions
 
-        handler = TrustPeerHandler()
-        handler.config = self.config
+        handler = TrustPeerHandler(config=self.config)
         handler.request = self.request
         handler.response = self.response
 
@@ -180,8 +178,7 @@ class TestTrustHandlerPermissions(unittest.TestCase):
         )
         self.permission_store.get_permissions.return_value = test_permissions
 
-        handler = TrustPermissionHandler()
-        handler.config = self.config
+        handler = TrustPermissionHandler(config=self.config)
         handler.request = Mock()
         handler.response = self.response
 

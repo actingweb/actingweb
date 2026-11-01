@@ -18,6 +18,7 @@ import unittest
 from typing import Any
 from unittest.mock import Mock, patch
 
+from actingweb.config import Config
 from actingweb.handlers.async_mcp import AsyncMCPHandler
 from actingweb.handlers.mcp import MCPHandler
 from actingweb.interface.hooks import HookRegistry
@@ -58,7 +59,7 @@ class TestExactResolverMatching(unittest.TestCase):
     """`_lookup_mcp_trust_relationship` matches by exact identity only."""
 
     def setUp(self) -> None:
-        self.handler = MCPHandler()
+        self.handler = MCPHandler(config=Config(mcp=True, unique_creator=False))
 
     def _lookup(self, actor: FakeActor, client_id: str, token_data: dict) -> Any:
         # FakeActor duck-types ActorInterface (only .id and .trust.relationships
@@ -231,12 +232,12 @@ class TestFailClosedAcrossAllGates(unittest.TestCase):
         self.hooks = _make_resource_prompt_tool_hooks()
 
     def _sync_handler(self) -> MCPHandler:
-        handler = MCPHandler()
+        handler = MCPHandler(config=Config(mcp=True, unique_creator=False))
         handler.hooks = self.hooks
         return handler
 
     def _async_handler(self) -> AsyncMCPHandler:
-        handler = AsyncMCPHandler()
+        handler = AsyncMCPHandler(config=Config(mcp=True, unique_creator=False))
         handler.hooks = self.hooks
         return handler
 
@@ -418,7 +419,7 @@ class TestFailClosedOnEvaluatorErrors(unittest.TestCase):
         return ctx
 
     def _sync(self, method: str, params: dict) -> dict:
-        handler = MCPHandler()
+        handler = MCPHandler(config=Config(mcp=True, unique_creator=False))
         handler.hooks = self.hooks
         with (
             patch.object(
@@ -439,7 +440,7 @@ class TestFailClosedOnEvaluatorErrors(unittest.TestCase):
     def _async(self, method: str, params: dict) -> dict:
         import asyncio
 
-        handler = AsyncMCPHandler()
+        handler = AsyncMCPHandler(config=Config(mcp=True, unique_creator=False))
         handler.hooks = self.hooks
         with (
             patch.object(
@@ -501,7 +502,7 @@ class TestNoTrustDenialSurvivesBrokenEvaluator(unittest.TestCase):
     """
 
     def test_denial_survives_evaluator_construction_raising(self) -> None:
-        handler = MCPHandler()
+        handler = MCPHandler(config=Config(mcp=True, unique_creator=False))
         handler.hooks = _make_resource_prompt_tool_hooks()
         actor = FakeAuthedActor()
 
@@ -541,7 +542,7 @@ class TestListFiltersFailClosedOnEvaluatorErrors(unittest.TestCase):
         self.actor = FakeAuthedActor()
 
     def _handler(self) -> MCPHandler:
-        handler = MCPHandler()
+        handler = MCPHandler(config=Config(mcp=True, unique_creator=False))
         handler.hooks = _make_resource_prompt_tool_hooks()
 
         @mcp_tool(description="another tool")

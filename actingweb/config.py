@@ -116,7 +116,7 @@ class Config:
         # Enable /devtest path for test purposes, MUST be False in production
         self.devtest = True
         # Will enforce unique creator field across all actors
-        self.unique_creator = False
+        self.unique_creator = True
         # Whether the actor factory (``POST /``) accepts requests. Set False for
         # an OAuth-only deployment: the unauthenticated factory is the only way
         # to create an actor for an address nobody has proven.

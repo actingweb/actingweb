@@ -68,6 +68,12 @@ Wire it up and run it:
    # or: uvicorn myapp:api --reload --port 5000, against your own app module
 
 .. note::
+   **First run.** Creator uniqueness is on by default, so on a fresh database the
+   first start creates the tables and stops with ``UniqueCreatorNotReady``. Run
+   ``actingweb-unique-creators enable --apply`` and start again. To opt out, add
+   ``.with_unique_creator(False)`` to the app.
+
+.. note::
    **Async Hook Support**: MCP tools and prompts can be async functions for optimal performance.
    FastAPI automatically uses ``AsyncMCPHandler`` which executes async hooks natively in the
    event loop without thread pool overhead. This enables true concurrent execution and significantly

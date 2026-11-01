@@ -73,12 +73,16 @@ def aw_app(worker_info):  # noqa: ARG001 -- ensures docker_services/setup_databa
         os.environ["PG_DB_PREFIX"] = worker_info["db_prefix"]
         os.environ["PG_DB_SCHEMA"] = "public"
 
-    return ActingWebApp(
-        aw_type=AW_TYPE,
-        database=DATABASE_BACKEND,
-        fqdn="mcp-notification.example.com",
-        proto="https://",
-    ).with_mcp(server_name="emm")
+    return (
+        ActingWebApp(
+            aw_type=AW_TYPE,
+            database=DATABASE_BACKEND,
+            fqdn="mcp-notification.example.com",
+            proto="https://",
+        )
+        .with_unique_creator(False)
+        .with_mcp(server_name="emm")
+    )
 
 
 @pytest.fixture

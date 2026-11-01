@@ -12,17 +12,22 @@ Start here
 ==========
 
 3.16 closes a squat on the actor factory, makes a database fault an error
-instead of a guess, makes ``with_unique_creator()`` a guarantee the database
-enforces, and adds ``prompt`` to the SPA sign-in. Most applications need to
+instead of a guess, makes creator uniqueness (on by default) a guarantee the
+database enforces, and adds ``prompt`` to the SPA sign-in. Most applications need to
 check only the first three items and item 11.
 
 .. warning::
 
-   **An application that calls ``with_unique_creator()`` does not start on
-   3.16 until you have run ``actingweb-unique-creators``** (the demo
-   application and ``actingweb_mcp`` both do). Run `Step 0`_ against the
-   production database before the deploy; the application otherwise raises
-   ``UniqueCreatorNotReady`` from ``integrate_flask`` / ``integrate_fastapi``.
+   **An application does not start on 3.16 until you have run
+   ``actingweb-unique-creators``,** because creator uniqueness is on by
+   default (the demo application and ``actingweb_mcp`` already used it). Run
+   `Step 0`_ against the production database before the deploy; the
+   application otherwise raises ``UniqueCreatorNotReady`` from
+   ``integrate_flask`` / ``integrate_fastapi``. A **fresh** deployment starts
+   once (which creates the tables and stops), runs
+   ``actingweb-unique-creators enable --apply``, and starts again; with no
+   actors yet the refusal says so in one line. To keep the old behaviour, call
+   ``with_unique_creator(False)``.
 
 1. **An actor created before 3.16 with no marker is cleaned at its first
    sign-in after the upgrade.** That covers the factory, the email form,
@@ -655,11 +660,18 @@ actor back. In 3.16 the database holds one actor per creator:
 with ``@``) are lowercased before they are stored; provider ids such as
 ``apple:…`` compare exactly.
 
-The flag stays **off by default** in 3.16 and turns on at the next major.
+The flag is **on by default**. An application that cannot take the step
+below yet opts out with ``with_unique_creator(False)``, which keeps the
+duplicate-tolerant path (the adoption rules for several actors sharing a
+creator). Code that builds ``Config()`` and creates actors without
+``integrate_*`` should call ``ActingWebApp.check_ready()`` as an
+application does; ``BaseHandler`` no longer defaults its ``config``, so a
+handler built without one raises ``ValueError`` instead of enforcing a store
+that was never checked.
 
 .. _Step 0:
 
-**Step 0, for a deployment that runs the flag on.** Neither the index nor
+**Step 0, for every deployment that keeps the default.** Neither the index nor
 the table can be switched on while actors share a creator, so in order,
 with the application's environment (``DATABASE_BACKEND``, the database
 settings, ``AWS_DB_PREFIX``, credentials).

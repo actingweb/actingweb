@@ -10,7 +10,6 @@ import uuid
 
 import pytest
 
-
 pytestmark = pytest.mark.xdist_group(name="property_lookup_markers")
 
 

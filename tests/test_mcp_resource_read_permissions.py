@@ -18,6 +18,7 @@ import asyncio
 import unittest
 from unittest.mock import Mock, patch
 
+from actingweb.config import Config
 from actingweb.handlers.async_mcp import AsyncMCPHandler
 from actingweb.handlers.mcp import MCPHandler
 from actingweb.interface.hooks import HookRegistry
@@ -55,7 +56,7 @@ def _eval_perm_allow_notes(actor_id, peer_id, perm_type, target, operation="acce
 class TestSyncResourceReadPermissions(unittest.TestCase):
     def setUp(self) -> None:
         self.actor = FakeActor()
-        self.handler = MCPHandler()
+        self.handler = MCPHandler(config=Config(mcp=True, unique_creator=False))
         self.handler.hooks = make_hooks()
 
     def _read(self, uri: str, peer_id: str | None):
@@ -112,7 +113,7 @@ class TestSyncAsyncResourceReadParity(unittest.TestCase):
     """Sync and async resources/read must reach the same decision."""
 
     def _sync_decision(self, peer_id: str | None) -> bool:
-        handler = MCPHandler()
+        handler = MCPHandler(config=Config(mcp=True, unique_creator=False))
         handler.hooks = make_hooks()
         actor = FakeActor()
         with (
@@ -142,7 +143,7 @@ class TestSyncAsyncResourceReadParity(unittest.TestCase):
         return "error" not in resp
 
     def _async_decision(self, peer_id: str | None) -> bool:
-        handler = AsyncMCPHandler()
+        handler = AsyncMCPHandler(config=Config(mcp=True, unique_creator=False))
         handler.hooks = make_hooks()
         actor = FakeActor()
         with (

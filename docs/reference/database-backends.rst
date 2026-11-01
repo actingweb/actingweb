@@ -209,6 +209,10 @@ Example: 1 million requests/day
     - Storage: 10GB × $0.25/GB = $2.50/month
     Total: ~$12/month (62% savings with provisioned)
 
+With creator uniqueness on (the default since 3.16) an actor create, delete or
+creator change costs about 4-6 write units on DynamoDB instead of 1 (see
+:ref:`creator-uniqueness-backends`); the figures above assume the opt-out.
+
 **PostgreSQL Costs (AWS RDS):**
 
 .. code-block:: text
@@ -561,7 +565,7 @@ whenever the ``ux_actors_creator`` index exists (see
 Creator uniqueness
 ~~~~~~~~~~~~~~~~~~
 
-With ``with_unique_creator()`` each backend holds one actor per creator other
+By default (``with_unique_creator()``; ``with_unique_creator(False)`` opts out) each backend holds one actor per creator other
 than ``trustee``, ``creator`` and the empty string (the rules are in
 ``actingweb.db.creator_rules``):
 
@@ -589,8 +593,8 @@ Both implement ``replace_creator_holder`` (the sign-in's atomic swap from a
 consistent lookup of the one holder) and ``release_stale_creator`` (the
 sign-in's repair of a record whose actor is gone or renamed; PostgreSQL
 has no separate record and returns False). ``python -m
-actingweb.db.verify_tables --unique-creator`` includes the ``creators``
-table.
+actingweb.db.verify_tables`` includes the ``creators`` table by default
+(``--no-unique-creator`` for an application that opts out).
 
 Data Types
 ~~~~~~~~~~

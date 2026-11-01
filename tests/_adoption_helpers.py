@@ -34,6 +34,9 @@ def make_config(hooks: Any = None) -> Config:
         database="dynamodb",
         aw_type="urn:actingweb:test:adoption",
         devtest=True,
+        # The adoption suite tests the duplicate-tolerant path, which is what
+        # with_unique_creator(False) keeps now that uniqueness is the default.
+        unique_creator=False,
     )
     if hooks is not None:
         config._hooks = hooks  # type: ignore[attr-defined]

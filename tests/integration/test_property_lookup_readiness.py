@@ -2,8 +2,8 @@
 
 Runs on the isolated store (``tests/integration/_isolated_store.py``) in the
 ``unique_creator`` xdist group; each test starts from an empty store. The
-apps here say ``with_unique_creator(enable=False)`` explicitly: the uniqueness
-default is a separate change and these tests are about the lookup check only.
+apps here say ``with_unique_creator(enable=False)`` explicitly: uniqueness is
+on by default and these tests are about the lookup check only.
 """
 
 from __future__ import annotations

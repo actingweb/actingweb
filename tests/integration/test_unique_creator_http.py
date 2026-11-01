@@ -257,6 +257,7 @@ def _app(unique: bool = True) -> ActingWebApp:
     ).with_unique_creator(enable=unique)
 
 
+@pytest.mark.usefixtures("real_unique_probe")
 class TestStartupCheck:
     def test_a_store_never_enabled_refuses_with_the_command_name(
         self, fresh_store: Any

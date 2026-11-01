@@ -55,12 +55,16 @@ def db_config(test_app, worker_info):  # noqa: ARG001 -- test_app sets the env
     The harness runs in this process, so the environment ``test_app``
     exported is what the library reads here too.
     """
-    return ActingWebApp(
-        aw_type="urn:actingweb:test:property_path_control_chars",
-        database=DATABASE_BACKEND,
-        fqdn="test.example.com",
-        proto="http://",
-    ).get_config()
+    return (
+        ActingWebApp(
+            aw_type="urn:actingweb:test:property_path_control_chars",
+            database=DATABASE_BACKEND,
+            fqdn="test.example.com",
+            proto="http://",
+        )
+        .with_unique_creator(False)
+        .get_config()
+    )
 
 
 class TestPeerBypassIsClosed:
@@ -221,12 +225,16 @@ def flask_client(worker_info):  # noqa: ARG001 -- ensures docker_services/setup_
         os.environ["PG_DB_PREFIX"] = worker_info["db_prefix"]
         os.environ["PG_DB_SCHEMA"] = "public"
 
-    aw_app = ActingWebApp(
-        aw_type="urn:actingweb:test:flask_control_chars",
-        database=DATABASE_BACKEND,
-        fqdn="flask-control-chars.example.com",
-        proto="http://",
-    ).with_web_ui(enable=False)
+    aw_app = (
+        ActingWebApp(
+            aw_type="urn:actingweb:test:flask_control_chars",
+            database=DATABASE_BACKEND,
+            fqdn="flask-control-chars.example.com",
+            proto="http://",
+        )
+        .with_unique_creator(False)
+        .with_web_ui(enable=False)
+    )
     flask_app = Flask(__name__)
     flask_app.config["TESTING"] = True
     aw_app.integrate_flask(flask_app)

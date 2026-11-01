@@ -124,10 +124,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--unique-creator",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=True,
         help=(
-            "The app runs with_unique_creator(), which needs the creators "
-            "table (actingweb-unique-creators enable creates and fills it)."
+            "Creator uniqueness is on by default (with_unique_creator()), "
+            "which needs the creators table (actingweb-unique-creators "
+            "enable creates and fills it). Pass --no-unique-creator for an "
+            "application that opts out."
         ),
     )
     parser.add_argument(

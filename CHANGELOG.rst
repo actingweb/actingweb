@@ -304,6 +304,28 @@ CHANGED
   An application that never uses reverse lookup calls
   ``with_indexed_properties([])``.
 
+- **Behavior change: ``unique_creator`` defaults to on.** ``Config`` and
+  ``ActingWebApp`` now default to creator uniqueness, with
+  ``with_unique_creator(False)`` as the opt-out (the duplicate-tolerant
+  adoption code stays for it). A deployment with duplicate creators refuses to
+  start with ``UniqueCreatorNotReady`` until ``actingweb-unique-creators``
+  ``report``, ``resolve --apply`` and ``enable --apply`` have run, or it opts
+  out. A fresh deployment starts once (which creates the tables and stops),
+  runs ``enable --apply``, and starts again; with no actors yet the refusal
+  says exactly that. The consumer-visible shifts the flag brought, now the
+  default: a held creator at ``POST /`` answers 403, ``PUT /trust/trustee``
+  409, a store whose enforcement cannot be read 503, and DynamoDB actor
+  creates, deletes and creator changes cost about 4-6 write units (the
+  application's role needs ``ConditionCheckItem`` on the actor table).
+  **Breaking:** ``BaseHandler`` requires ``config`` (a handler built without
+  one raises ``ValueError``; the import-time ``Config()`` default would have
+  built an enforced handler that never ran ``check_ready()``), and
+  ``python -m actingweb.db.verify_tables`` lists the ``creators`` table unless
+  given ``--no-unique-creator``. The readiness check now reads one consistent
+  item instead of calling ``DescribeTable``, so ``DescribeTable`` can still be
+  dropped from the runtime role. Code that builds ``Config()`` and creates
+  actors without ``integrate_*`` should call ``check_ready()``.
+
 - **Breaking: ``with_unique_creator()`` is enforced by the database.** Before
   3.16 the flag made ``Actor.create`` list the creator's actors and refuse
   when there was one, a check-then-insert that two concurrent sign-ins or
@@ -377,14 +399,14 @@ CHANGED
   - Two applications sharing one actor table can no longer both bootstrap
     their system actors (``system``, ``oauth2-system``) with the flag on.
   - On DynamoDB an actor create, delete or creator change costs about 4-6
-    write units instead of 1, on opted-in tables only.
+    write units instead of 1 (uniqueness is on by default; the opt-out keeps 1).
 
   **Check:** the migration guide's "Creator uniqueness" section has the
   rollout order (Step 0: ``report``, ``resolve --apply``, ``enable --apply``
   before the deploy) and the IAM grants (``ConditionCheckItem`` on the actor
   table); the demo application and ``actingweb_mcp`` run the flag on and
-  need both before they serve 3.16, or they refuse to start. ``unique_creator`` stays off by default
-  in 3.16 and turns on at the next major.
+  need both before they serve 3.16, or they refuse to start. See the entry
+  "Behavior change: ``unique_creator`` defaults to on" below.
 
 - **Breaking: the factory form no longer redirects to an existing actor.**
   A form ``POST /`` for a creator that has an actor redirected to

@@ -99,7 +99,7 @@ class ActingWebApp:
         self._enable_bot = False
         self._bot_config: dict[str, Any] | None = None
         self._www_auth = "basic"
-        self._unique_creator = False
+        self._unique_creator = True
         self._force_email_prop_as_creator = False
         self._enable_mcp = True  # MCP enabled by default
         self._mcp_server_name = "actingweb"
@@ -544,7 +544,15 @@ class ActingWebApp:
         return self
 
     def with_unique_creator(self, enable: bool = True) -> "ActingWebApp":
-        """Enable unique creator constraint."""
+        """Set creator uniqueness, which is **on by default** since 3.16.
+
+        With it on the database holds one actor per creator and
+        :meth:`check_ready` refuses to start until
+        ``actingweb-unique-creators enable --apply`` has run (a fresh
+        deployment runs it once, after its first start). Pass
+        ``with_unique_creator(False)`` to opt out and keep the older,
+        duplicate-tolerant behaviour.
+        """
         self._unique_creator = enable
         self._apply_runtime_changes_to_config()
         return self
@@ -1560,7 +1568,7 @@ class ActingWebApp:
           cannot be read. An empty store marks itself ready. With
           ``with_indexed_properties([])`` nothing is read.
         - **Creator uniqueness.** With ``with_unique_creator()`` on (the
-          default) raises :class:`UniqueCreatorNotReady` when the DynamoDB
+          default; ``with_unique_creator(False)`` opts out) raises :class:`UniqueCreatorNotReady` when the DynamoDB
           ``creators`` table or its backfill-complete item is missing, or the
           PostgreSQL index ``ux_actors_creator`` is missing or INVALID. A
           fault while probing is refused the same way: starting unchecked
@@ -1643,16 +1651,28 @@ class ActingWebApp:
             # empty, auto-created creators table would make every existing
             # user's next sign-in create a second actor.
             raise UniqueCreatorNotReady(
-                "with_unique_creator() is on but whether the database enforces "
-                f"it could not be checked ({e}); fix the database connection "
-                "or permissions and start again, or turn the flag off."
+                "Creator uniqueness is on (the default) but whether the "
+                f"database enforces it could not be checked ({e}); fix the "
+                "database connection or permissions and start again, or opt "
+                "out with with_unique_creator(False)."
             ) from e
         if missing:
+            from ..maintenance.unique_creators import no_actors
+
+            if no_actors(config):
+                raise UniqueCreatorNotReady(
+                    f"Creator uniqueness is on (the default) but {missing}. "
+                    "There are no actors yet: run "
+                    "'actingweb-unique-creators enable --apply' and start "
+                    "again, or opt out with with_unique_creator(False) "
+                    '(docs/migration/v3.16.rst, "Creator uniqueness").'
+                )
             raise UniqueCreatorNotReady(
-                f"with_unique_creator() is on but {missing}. Run "
+                f"Creator uniqueness is on (the default) but {missing}. Run "
                 "'actingweb-unique-creators report', then 'resolve --apply' "
                 "and 'enable --apply' (docs/migration/v3.16.rst, "
-                '"Creator uniqueness"), or turn the flag off.'
+                '"Creator uniqueness"), or opt out with '
+                "with_unique_creator(False)."
             )
         self._unique_creator_checked = True
 

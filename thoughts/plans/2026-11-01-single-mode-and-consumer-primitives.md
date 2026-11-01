@@ -860,7 +860,34 @@ explicit opt-out.
 - [ ] `grep -rn "stays off by default\|next major" CHANGELOG.rst docs/migration/v3.16.rst docs/migration/index.rst` shows no uniqueness reference
 - [ ] Manual: `examples/demo/README.md` local QA sequence still works; `python examples/mcp_quickstart.py` against a fresh DynamoDB Local prefix stops with `UniqueCreatorNotReady` in its short "no actors yet" form, and starts after `actingweb-unique-creators enable --apply`
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+**Implementation notes (Phase 2):**
+
+- Done as planned: the flip in `Config` and `ActingWebApp`; `missing_enforcement`
+  and `backfill_complete` read the backfill item with one consistent `GetItem`
+  and classify `ResourceNotFound` as "table missing" (no `DescribeTable`, pinned
+  by a test); `BaseHandler` requires `config` (`ValueError`); `verify_tables
+  --unique-creator` is `BooleanOptionalAction` defaulting on; the first-run
+  sequence is in both quickstart docstrings and guides, the getting-started
+  guide, the configuration IAM text, security, authentication, database
+  backends (cost and the uniqueness section), the migration guide and index; the
+  changelog entry replaces the "next major" sentences; the todo and its row are
+  deleted.
+- **Beyond the plan, from the review and the audit:** `MCPHandler` had its own
+  import-time `Config(mcp=True)` default, the same hazard as `BaseHandler`'s; it
+  is `None` now and the six test files that built `MCPHandler()` pass a config.
+  The refusal text for a store with no actors uses `no_actors()`, which ignores
+  the `_actingweb_*` system actors.
+- **The audit was wider than the plan's eight files.** Running the suite twice
+  against one prefix showed many more fixed-creator sites (the property-list,
+  attribute-list, trust, OAuth-client and runtime-context integration tests, the
+  tombstone and rename unit tests); each opts out with `unique_creator=False` or
+  `.with_unique_creator(False)`. The adoption helper opts out too.
+- **Test seam:** `tests/_lookup_probe.py` also stubs `_check_unique_creator_ready`
+  for the session (`real_unique_probe` restores it); the shared stores hold
+  deliberate duplicates and never ran `enable`.
+- Filed, not fixed (plan accepted it): `thoughts/todo/unique-creator-direct-config-auto-create.md`.
 
 ---
 

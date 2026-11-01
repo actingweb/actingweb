@@ -8,6 +8,7 @@ exceptions are treated as "not visible" (fail-closed).
 import unittest
 from unittest.mock import Mock, patch
 
+from actingweb.config import Config
 from actingweb.handlers.mcp import MCPHandler
 from actingweb.interface.hooks import HookRegistry
 from actingweb.mcp.decorators import get_mcp_metadata, mcp_tool
@@ -77,7 +78,7 @@ def _make_hooks_with_predicates(predicates: dict) -> HookRegistry:
 class TestVisibilityPredicateFiltering(unittest.TestCase):
     def setUp(self) -> None:
         self.actor = FakeActor()
-        self.handler = MCPHandler()
+        self.handler = MCPHandler(config=Config(mcp=True, unique_creator=False))
 
     def _list_tool_names(self) -> set[str]:
         with (
@@ -168,7 +169,7 @@ def _make_hooks_with_description_predicates(predicates: dict) -> HookRegistry:
 class TestDescriptionPredicate(unittest.TestCase):
     def setUp(self) -> None:
         self.actor = FakeActor()
-        self.handler = MCPHandler()
+        self.handler = MCPHandler(config=Config(mcp=True, unique_creator=False))
 
     def _list_tools(self) -> list:
         with (

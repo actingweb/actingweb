@@ -78,7 +78,6 @@ neglected work.
 | [A `prop#`/`list#` key-prefix scheme](prop-list-key-prefix-scheme.md) | Also the **next major version bump**. Raises or removes the 1 MB per-partition DynamoDB Query ceiling — the consumer's largest list measured at 964 KB in one page, 94% of the limit — and is the only place the remaining out-of-band payload problem and the attribute composite-key collision can be fixed. The legacy GSI is gone (3.16), so the scheme is designed against the lookup-table-only shape |
 | [Dual-era MCP support](mcp-2026-07-28-dual-era-support.md) | A client we serve going **modern-only**. A dual-era client needs nothing from us, so "supports 2026-07-28" is not the signal — a *sustained* stream of 400/`-32600` from one origin is, and the library now fires that criterion itself. Also blocked-adjacent: `actingweb_mcp`'s `require_mcp_auth_for_init` middleware silently becomes a no-op under the modern revision |
 | [AI agent discoverability follow-ups](ai-agent-discoverability-followups.md) | Resources this environment does not have: a Context7 account, a real OAuth2 provider and MCP client, a throwaway consumer repo |
-| [Creator uniqueness on by default](unique-creator-default-on-next-major.md) | The **next major version bump**. Flips `unique_creator` to on and deletes the duplicate-tolerant adoption code (ranking, sibling sweep, `SWEEP_LIMIT`, the recursive hand-off) the flag-off path needs; a test pins the default until then |
 
 ## 4. Registers — deferred items, not schedulable work
 
@@ -91,6 +90,7 @@ being re-litigated.
 | --- | --- |
 | [DynamoDB known-next](dynamodb-known-next.md) | Seven items deferred from the v3.13 scalability plan — the remaining unbatched delete loops, the `consistent_read` audit's ~36 surviving sites, `SubscriptionDiff` seqnr ordering, unpaginated `DbActorList.fetch`, import-time table-name freezing, GSI-based secret uniqueness, lookup-table write amplification |
 | [Reverse-lookup: stale owners and races](property-lookup-stale-owner-and-races.md) | A lookup row held by an actor that no longer has the value counts as a collision forever; a same-actor stale-handle race leaves the losing value's row; one over-long value aborts the PostgreSQL backfill |
+| [A default-uniqueness `Config` that skips `check_ready()` creates an empty `creators` table](unique-creator-direct-config-auto-create.md) | A worker or cron entry point that builds `Config()` without `check_ready()` claims creators against an auto-created empty table, so a second actor can be created for an existing creator | Decide who creates the `creators` table: `DbActor` (today) or only `enable` and the prewarm |
 | [MCP cache lifecycle and revocation](mcp-cache-lifecycle-and-revocation.md) | Cross-process invalidation (the large one), trust-freshness policy, `_mcp_client_info_cache`'s client-supplied key, the surviving substring peer-id match on the deletion path, registration not hard-failing on trust-creation failure, module-global cache keys assuming one app per interpreter, and a sync/async `resources/read` formatting divergence |
 
 ---

@@ -31,7 +31,7 @@ from actingweb.maintenance import property_lookup as command
 # The recorded name set is one shared row per store: tests that write it run
 # in one xdist group so parallel workers do not overwrite each other's set.
 pytestmark = [
-    pytest.mark.usefixtures("real_lookup_probe"),
+    pytest.mark.usefixtures("real_lookup_probe", "real_unique_probe"),
     pytest.mark.xdist_group(name="property_lookup_markers"),
 ]
 

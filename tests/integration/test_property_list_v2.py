@@ -35,7 +35,7 @@ def aw_app(docker_services, setup_database, worker_info):  # noqa: ARG001
         database=DATABASE_BACKEND,
         fqdn="test.example.com",
         proto="http://",
-    )
+    ).with_unique_creator(False)
 
 
 @pytest.fixture

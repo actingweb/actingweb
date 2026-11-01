@@ -21,7 +21,7 @@ class TestConditionalUpdateAttrBasic:
 
     def setup_method(self):
         """Set up test fixtures."""
-        self.config = Config()
+        self.config = Config(unique_creator=False)
         self.backend = os.getenv("DATABASE_BACKEND", "dynamodb")
         # Create a unique test actor for each test
         self.test_actor_id = f"cond_test_{int(time.time() * 1000000)}"
@@ -224,7 +224,7 @@ class TestConditionalUpdateAttrJSONComparison:
 
     def setup_method(self):
         """Set up test fixtures."""
-        self.config = Config()
+        self.config = Config(unique_creator=False)
         self.backend = os.getenv("DATABASE_BACKEND", "dynamodb")
         self.test_actor_id = f"cond_json_{int(time.time() * 1000000)}"
 
@@ -320,7 +320,7 @@ class TestConditionalUpdateAttrConcurrency:
 
     def setup_method(self):
         """Set up test fixtures."""
-        self.config = Config()
+        self.config = Config(unique_creator=False)
         self.backend = os.getenv("DATABASE_BACKEND", "dynamodb")
         self.test_actor_id = f"cond_race_{int(time.time() * 1000000)}"
 
@@ -437,7 +437,7 @@ class TestTryMarkRefreshTokenUsed:
         """Set up test fixtures."""
         from actingweb.constants import OAUTH2_SYSTEM_ACTOR
 
-        self.config = Config()
+        self.config = Config(unique_creator=False)
         self.backend = os.getenv("DATABASE_BACKEND", "dynamodb")
         self.oauth2_system_actor = OAUTH2_SYSTEM_ACTOR
 
@@ -607,7 +607,7 @@ class TestTryMarkRefreshTokenUsedConcurrency:
         """Set up test fixtures."""
         from actingweb.constants import OAUTH2_SYSTEM_ACTOR
 
-        self.config = Config()
+        self.config = Config(unique_creator=False)
         self.oauth2_system_actor = OAUTH2_SYSTEM_ACTOR
 
         # Ensure the OAuth2 system actor exists

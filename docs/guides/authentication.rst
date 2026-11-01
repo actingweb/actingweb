@@ -1036,12 +1036,12 @@ Email verification behavior is controlled by the ``force_email_prop_as_creator``
     app = (
         ActingWebApp(...)
         .with_email_as_creator(enable=True)  # Requires email addresses (default)
-        .with_unique_creator(enable=True)
+        .with_unique_creator(enable=True)  # the default since 3.16; False opts out
     )
 
 .. note::
 
-   Since 3.16 ``with_unique_creator()`` is enforced by the database: a second
+   Since 3.16 ``with_unique_creator()`` is on by default and enforced by the database: a second
    actor for a creator raises ``CreatorTaken`` (409; the factory answers
    403), and the application refuses to start until
    ``actingweb-unique-creators enable --apply`` has run. Run ``report`` and
@@ -1337,7 +1337,7 @@ Enable provider ID mode by disabling email-as-creator:
     app = (
         ActingWebApp(...)
         .with_email_as_creator(enable=False)  # Use provider IDs
-        .with_unique_creator(enable=True)
+        .with_unique_creator(enable=True)  # the default since 3.16
     )
 
 **Effect:**

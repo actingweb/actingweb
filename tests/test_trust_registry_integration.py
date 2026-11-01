@@ -71,7 +71,7 @@ class TestTrustRegistryIntegration(unittest.TestCase):
 
     def setUp(self):
         """Set up test fixtures."""
-        self.config = config_class.Config()
+        self.config = config_class.Config(unique_creator=False)
         # Clear any existing registry instance
         import actingweb.trust_type_registry
 

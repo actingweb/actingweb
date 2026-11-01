@@ -26,6 +26,7 @@ from typing import Any
 import pytest
 
 _real_probe: Callable[[Any], None] | None = None
+_real_unique: Callable[[Any], None] | None = None
 
 
 def real_probe() -> Callable[[Any], None]:
@@ -53,3 +54,38 @@ def real_lookup_probe(monkeypatch: pytest.MonkeyPatch) -> None:
     from actingweb.interface.app import ActingWebApp
 
     monkeypatch.setattr(ActingWebApp, "_check_property_lookup_ready", real_probe())
+
+
+def real_unique_probe_fn() -> Callable[[Any], None]:
+    """The real ``ActingWebApp._check_unique_creator_ready``."""
+    global _real_unique
+    if _real_unique is None:
+        from actingweb.interface.app import ActingWebApp
+
+        _real_unique = ActingWebApp._check_unique_creator_ready  # pyright: ignore[reportPrivateUsage]
+    return _real_unique
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _stub_unique_creator_probe() -> None:
+    """Stub the creator-uniqueness readiness probe for the whole process.
+
+    Uniqueness is on by default, so every ``integrate_*`` call would refuse
+    on a shared store that never ran ``actingweb-unique-creators enable``
+    (and the shared stores hold deliberate duplicate creators). Tests that
+    are about the probe request ``real_unique_probe``.
+    """
+    from actingweb.interface.app import ActingWebApp
+
+    real_unique_probe_fn()
+    ActingWebApp._check_unique_creator_ready = lambda self: None  # type: ignore[method-assign]  # pyright: ignore[reportPrivateUsage]
+
+
+@pytest.fixture
+def real_unique_probe(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Run the real creator-uniqueness readiness probe in this test."""
+    from actingweb.interface.app import ActingWebApp
+
+    monkeypatch.setattr(
+        ActingWebApp, "_check_unique_creator_ready", real_unique_probe_fn()
+    )

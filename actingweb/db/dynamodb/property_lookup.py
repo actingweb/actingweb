@@ -26,13 +26,17 @@ Why digests instead of the v1 ``(property_name, value)`` composite key:
 - conditional puts turn silent cross-actor overwrites into detectable,
   logged collisions.
 
-The v1 model below is retained read-only for the migration fallback and
-is never auto-created. Migration: run scripts/backfill_property_lookup.py
-(rebuilds v2 from the properties table — the source of truth), verify,
-then drop the v1 table.
+Reserved rows share the table: ``#meta#backfill#<name>`` (the per-name
+backfill-complete marker) and ``#meta#configured`` (the indexed-name set the
+last passing readiness probe saw). Real keys are 64-character hex digests,
+so a reserved key cannot collide. They are written by
+``actingweb-property-lookup`` and the startup readiness check (see
+:mod:`actingweb.maintenance.property_lookup`) and read by
+:func:`read_readiness`.
 """
 
 import hashlib
+import json
 import logging
 import os
 
@@ -71,46 +75,106 @@ class PropertyLookupV2(Model):
     property_name = UnicodeAttribute()
 
 
-class PropertyLookup(Model):
-    """DEPRECATED v1 lookup row — read-only migration fallback.
-
-    Never auto-created; a missing table is a normal state handled by the
-    fallback read path. Removed (with the table) in the next major release.
-    """
-
-    class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
-        table_name = os.getenv("AWS_DB_PREFIX", "demo_actingweb") + "_property_lookup"
-        billing_mode = PAY_PER_REQUEST_BILLING_MODE
-        region = os.getenv("AWS_DEFAULT_REGION", "us-west-1")
-        host = os.getenv("AWS_DB_HOST", None)
-
-    property_name = UnicodeAttribute(hash_key=True)
-    value = UnicodeAttribute(range_key=True)
-    actor_id = UnicodeAttribute()
-
-
 def _digest_prefix(property_name: str, value: str) -> str:
     """Short digest prefix for log correlation — never log the value."""
     return compute_lookup_key(property_name, value)[:12]
 
 
-def is_missing_resource(e: Exception) -> bool:
-    """Whether a PynamoDB error says the table or index does not exist.
-
-    For the migration fallbacks (the v1 table, the legacy GSI) that is a
-    normal state, not a fault.
-    """
-    code = getattr(e, "cause_response_code", None)
-    if code in ("ResourceNotFoundException", "ValidationException"):
+def is_resource_not_found(e: BaseException) -> bool:
+    """Whether a PynamoDB error says the table does not exist."""
+    if getattr(e, "cause_response_code", None) == "ResourceNotFoundException":
         return True
     if type(e).__name__ == "TableDoesNotExist":
         return True
     text = str(e)
-    return (
-        "ResourceNotFound" in text
-        or "Requested resource not found" in text
-        or "does not have the specified index" in text
-    )
+    return "ResourceNotFound" in text or "Requested resource not found" in text
+
+
+LOOKUP_BACKFILL_PREFIX = "#meta#backfill#"
+LOOKUP_CONFIGURED_KEY = "#meta#configured"
+LOOKUP_META_ACTOR = "#meta"
+
+
+def _marker_key(name: str) -> str:
+    return LOOKUP_BACKFILL_PREFIX + name
+
+
+def read_readiness(names: list[str]) -> tuple[set[str], set[str] | None]:
+    """The names with a backfill-complete marker, and the recorded name set.
+
+    One consistent ``BatchGetItem`` of the per-name markers and the
+    configured-set row. Module-level and never creates the table: a missing
+    table is reported as ``DbError("lookup table missing")`` (the startup
+    check must not paper over a wrong ``AWS_DB_PREFIX`` by creating an empty
+    table), and any other fault raises ``DbError`` too. The second element is
+    ``None`` when no set has been recorded yet.
+    """
+    keys = [_marker_key(n) for n in names] + [LOOKUP_CONFIGURED_KEY]
+    marked: set[str] = set()
+    configured: set[str] | None = None
+    try:
+        for row in PropertyLookupV2.batch_get(keys, consistent_read=True):
+            key = str(row.lookup_key)
+            if key == LOOKUP_CONFIGURED_KEY:
+                configured = set(json.loads(str(row.property_name)))
+            elif key.startswith(LOOKUP_BACKFILL_PREFIX):
+                marked.add(key[len(LOOKUP_BACKFILL_PREFIX) :])
+    except Exception as e:
+        if is_resource_not_found(e):
+            raise DbError(
+                f"lookup table missing: {PropertyLookupV2.Meta.table_name}"
+            ) from e
+        raise DbError("property lookup readiness read") from e
+    return marked, configured
+
+
+def mark_backfilled(names: list[str]) -> None:
+    """Write the backfill-complete marker of each name (idempotent).
+
+    A lost condition is success: two first starts racing write one row.
+    """
+    for name in names:
+        row = PropertyLookupV2(
+            lookup_key=_marker_key(name),
+            actor_id=LOOKUP_META_ACTOR,
+            property_name=name,
+        )
+        try:
+            row.save(condition=PropertyLookupV2.lookup_key.does_not_exist())
+        except PutError as e:
+            if (
+                getattr(e, "cause_response_code", None)
+                == "ConditionalCheckFailedException"
+            ):
+                continue
+            raise DbError("property lookup mark") from e
+        except Exception as e:
+            raise DbError("property lookup mark") from e
+
+
+def unmark(names: list[str]) -> None:
+    """Remove the backfill-complete marker of each name (idempotent)."""
+    for name in names:
+        try:
+            PropertyLookupV2(
+                lookup_key=_marker_key(name),
+                actor_id=LOOKUP_META_ACTOR,
+                property_name=name,
+            ).delete()
+        except Exception as e:
+            raise DbError("property lookup unmark") from e
+
+
+def record_configured(names: list[str]) -> None:
+    """Record the configured indexed-name set (unconditional put)."""
+    try:
+        PropertyLookupV2(
+            lookup_key=LOOKUP_CONFIGURED_KEY,
+            actor_id=LOOKUP_META_ACTOR,
+            property_name=json.dumps(sorted(set(names))),
+        ).save()
+    except Exception as e:
+        raise DbError("property lookup record") from e
 
 
 class DbPropertyLookup:
@@ -166,32 +230,6 @@ class DbPropertyLookup:
                 raise DbError("property lookup get") from e
             return None
 
-    def get_v1(
-        self,
-        property_name: str | None = None,
-        value: str | None = None,
-        *,
-        strict: bool = True,
-    ) -> str | None:
-        """Read-only fallback against the deprecated v1 table.
-
-        Returns None when the v1 table does not exist (normal for fresh
-        deployments) or holds no row. A hit means the deployment has not
-        run the v2 backfill yet. Any other read fault raises ``DbError``
-        (``strict=False`` answers it with None).
-        """
-        if not property_name or not value:
-            return None
-        try:
-            row = PropertyLookup.get(property_name, value, consistent_read=True)
-            return str(row.actor_id) if row.actor_id else None
-        except DoesNotExist:
-            return None
-        except Exception as e:
-            if is_missing_resource(e) or not strict:
-                return None
-            raise DbError("property lookup get_v1") from e
-
     def create(
         self,
         property_name: str | None = None,
@@ -209,7 +247,10 @@ class DbPropertyLookup:
 
         Returns:
             True on success (including idempotent re-create), False on
-            collision or write failure.
+            collision.
+
+        Raises:
+            DbError: on a write fault (a fault is not a collision).
         """
         if not property_name or not value or not actor_id:
             return False
@@ -228,7 +269,10 @@ class DbPropertyLookup:
             self.handle = row
             return True
         except PutError as e:
-            if "ConditionalCheckFailed" in str(e):
+            if (
+                getattr(e, "cause_response_code", None)
+                == "ConditionalCheckFailedException"
+            ):
                 try:
                     existing = PropertyLookupV2.get(key, consistent_read=True)
                 except Exception:
@@ -248,13 +292,13 @@ class DbPropertyLookup:
                 f"LOOKUP_CREATE_FAILED: property={property_name} "
                 f"digest={key[:12]} actor={actor_id} error={e}"
             )
-            return False
+            raise DbError("property lookup create", actor_id) from e
         except Exception as e:
             logger.error(
                 f"LOOKUP_CREATE_FAILED: property={property_name} "
                 f"digest={key[:12]} actor={actor_id} error={e}"
             )
-            return False
+            raise DbError("property lookup create", actor_id) from e
 
     def delete(
         self, property_name: str | None = None, value: str | None = None

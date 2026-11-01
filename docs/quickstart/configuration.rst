@@ -40,7 +40,7 @@ Runtime Switches
 - ``ui``: Enable ``/<actor_id>/www`` web UI (``with_web_ui()``). Also affects browser redirects.
 - ``devtest``: Enable development endpoints; MUST be ``False`` in production.
 - ``www_auth``: ``basic`` or ``oauth``; set by ``with_oauth()``.
-- ``unique_creator``: One actor per creator, enforced by the database (``with_unique_creator()``; default ``False``, on at the next major). DynamoDB writes a ``<prefix>_creators`` record in the same transaction as each actor create and creator change, and releases it after a delete; PostgreSQL enforces the partial unique index ``ux_actors_creator``. ``trustee``, ``creator`` and the empty creator stay shared. A second actor for a creator raises ``CreatorTaken`` (409; the factory answers 403). Before turning it on, run ``actingweb-unique-creators report``, ``resolve --apply`` and ``enable --apply``: with the flag on the application refuses to start until the database enforces it (``ActingWebApp.check_ready()``). See :doc:`../migration/v3.16` ("Creator uniqueness").
+- ``unique_creator``: One actor per creator, enforced by the database (``with_unique_creator()``; **default ``True``** since 3.16, ``with_unique_creator(False)`` opts out). DynamoDB writes a ``<prefix>_creators`` record in the same transaction as each actor create and creator change, and releases it after a delete; PostgreSQL enforces the partial unique index ``ux_actors_creator``. ``trustee``, ``creator`` and the empty creator stay shared. A second actor for a creator raises ``CreatorTaken`` (409; the factory answers 403). A deployment with existing actors runs ``actingweb-unique-creators report``, ``resolve --apply`` and ``enable --apply`` before the deploy, and a fresh one runs ``enable --apply`` after its first start: the application refuses to start until the database enforces it (``ActingWebApp.check_ready()``). Code that builds ``Config()`` and creates actors without ``integrate_*`` should call ``check_ready()`` too. See :doc:`../migration/v3.16` ("Creator uniqueness").
 - ``force_email_prop_as_creator``: Copy ``email`` property to ``creator``.
 - ``open_factory``: Whether the actor factory (``POST /``) accepts requests (``with_open_factory()``; default ``True``). ``False`` closes the factory for an OAuth-only deployment: ``POST /`` answers 403 (the JSON error body, or the error page for a form), ``trustee_root`` instantiation and the form fallback are closed with it, and so is the existing-creator form redirect (which goes to ``/login`` and names no actor id since 3.16). Sign-in through OAuth is then the only way to get an actor. A deviation from the protocol's mandatory factory; a basic-auth deployment that needs the factory form login keeps it open. A value assigned on the Config survives until ``with_open_factory()`` is called, after which the builder's value wins. "Factory" here means the actor factory (``POST /``), not the authenticator factory functions. See :doc:`../reference/security`.
 - ``mcp``: Include MCP capability; toggle via ``with_mcp()``.
@@ -235,10 +235,10 @@ Other DynamoDB environment variables:
 Production (AWS DynamoDB)
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 
-- Configure IAM with least-privilege on the app's tables: ``dynamodb:GetItem``, ``PutItem``, ``UpdateItem``, ``DeleteItem``, ``Query``, ``Scan``. With ``with_unique_creator()`` the tables include ``<prefix>_creators``, and the actor table needs ``ConditionCheckItem`` as well (see :doc:`../migration/v3.16`, "Creator uniqueness").
+- Configure IAM with least-privilege on the app's tables: ``dynamodb:GetItem``, ``PutItem``, ``UpdateItem``, ``DeleteItem``, ``Query``, ``Scan``. By default (uniqueness on) the tables include ``<prefix>_creators``, and the actor table needs ``ConditionCheckItem`` as well; an application that opts out with ``with_unique_creator(False)`` needs neither (see :doc:`../migration/v3.16`, "Creator uniqueness"). With reverse lookup on (any indexed property), ``ConditionCheckItem`` is needed on the properties and actor tables whatever the uniqueness setting: an unchanged indexed write that claims a free lookup row checks both in the same transaction.
   With auto-creation enabled (the default) the role also needs
   ``dynamodb:CreateTable`` and ``dynamodb:DescribeTable``; with
-  ``AWS_DB_AUTO_CREATE_TABLES=false`` both can be dropped.
+  ``AWS_DB_AUTO_CREATE_TABLES=false`` both can be dropped (the uniqueness check reads one consistent item and needs no ``DescribeTable``).
 - Ensure tables exist (actor, properties, attributes, subscriptions, trust, and related indexes) before first traffic; the library's DB modules are under ``actingweb.db.dynamodb``.
 - Set region/credentials via standard AWS mechanisms (env vars, instance roles, profiles).
 
@@ -447,23 +447,22 @@ ActingWeb supports efficient reverse lookups (find actor by property value) usin
 
 **How it works**
 
-Lookup-table mode is the **default** (since v3.13) and the mechanism of
-record. On DynamoDB, lookup rows are keyed by a SHA-256 digest of the
-(property name, value) pair — no value-size limit, uniform partition
-distribution, and no plaintext values in the lookup table.
+Reverse lookup always goes through a dedicated lookup table (the only
+mechanism since 3.16). On DynamoDB, lookup rows are keyed by a SHA-256 digest
+of the (property name, value) pair — no value-size limit, uniform partition
+distribution, and no plaintext values in the lookup table. On PostgreSQL the
+``property_lookup`` table is keyed by ``(property_name, value)``.
 
-The deprecated legacy mode used database indexes instead:
-
-- **DynamoDB**: Global Secondary Index (GSI) on the ``value`` field — limited to 2048 bytes
-- **PostgreSQL**: unindexed query on the ``value`` column — a full-table scan
-
-Legacy mode remains available for migration (``with_legacy_property_index(enable=True)``)
-and is removed in the next major release.
+An indexed property write and its lookup row succeed or fail together: if
+the lookup row cannot be written the property write raises ``DbError`` (the
+integrations answer 503) instead of leaving a value that reverse lookup can
+never find. A value another actor already holds is a logged collision, not a
+failure.
 
 Configuration
 ~~~~~~~~~~~~~
 
-Enable lookup tables via API or environment variables:
+Choose the indexed property names via API or environment variable:
 
 .. code-block:: python
 
@@ -474,24 +473,26 @@ Enable lookup tables via API or environment variables:
         fqdn="myapp.example.com"
     ).with_indexed_properties(["oauthId", "email", "externalUserId"])
 
-    # Lookup-table mode is the default; pin legacy mode only for migration:
-    # app.with_legacy_property_index(enable=True)
-
 **Environment Variables:**
 
 .. code-block:: bash
 
-    export USE_PROPERTY_LOOKUP_TABLE=false                         # Pin deprecated legacy mode
     export INDEXED_PROPERTIES=oauthId,email,externalUserId         # Which properties to index
 
 **Default Configuration:**
 
-- ``USE_PROPERTY_LOOKUP_TABLE``: ``true`` (lookup-table mode; set ``false`` to pin the deprecated legacy GSI/index)
 - ``INDEXED_PROPERTIES``: ``["oauthId", "email", "externalUserId"]``
 
-Precedence: an explicit ``with_indexed_properties()`` /
-``with_legacy_property_index()`` call beats the environment variable,
-which beats the library default.
+Precedence: an explicit ``with_indexed_properties()`` call beats the
+environment variable, which beats the library default.
+
+.. note::
+
+   ``USE_PROPERTY_LOOKUP_TABLE=false``, ``Config(use_lookup_table=False)`` and
+   ``with_legacy_property_index()`` were removed in 3.16 and fail at
+   configure time with a pointer to :doc:`../migration/v3.16` ("One
+   reverse-lookup mechanism"). ``USE_PROPERTY_LOOKUP_TABLE=true`` is ignored
+   with a ``DeprecationWarning``.
 
 .. note::
 
@@ -545,26 +546,68 @@ The lookup happens automatically when you set indexed properties:
 Migration Guide
 ~~~~~~~~~~~~~~~
 
-**New deployments** need nothing — lookup-table mode is the default.
+**New deployments** need nothing: on a store with no properties yet the first
+start marks every indexed name ready.
 
-**Deployments upgrading from pre-3.13** (or from the v1 lookup-table
-format): reverse lookups keep working through deprecated fallbacks, but
-you must populate the v2 lookup table:
+**Startup check.** ``ActingWebApp.check_ready()`` (called by
+``integrate_flask`` and ``integrate_fastapi``) refuses to start when a
+configured indexed name has property data but no backfill-complete marker.
+It raises ``PropertyLookupNotReady`` naming the command that fixes it. The
+marker is kept per name on both backends, together with a record of the
+indexed-name set the last passing start saw, so adding a name later, or
+dropping one for a deploy and restoring it, is refused until that name is
+backfilled again.
+
+**Every process on a store configures the same names.** The recorded set is
+the last passing start's, whichever process made it (or the union a
+``backfill --apply`` or ``mark-complete --apply`` wrote). A process with a
+non-empty indexed set that lacks a name (an older version during a rollout, a worker with its own
+configuration) writes that name's values with no lookup rows and records the
+smaller set, and the next start that has the name refuses until it is
+backfilled again. To add an indexed name to a running deployment:
+
+1. Deploy the version that adds it. Its first start refuses, naming the name;
+   the old version keeps serving.
+2. Run ``actingweb-property-lookup backfill --apply`` and start the new
+   version. While any old-version process can still start (a Lambda cold
+   start, an autoscaled instance), that start records the smaller set and
+   the next new-version start refuses again: finish the rollout before
+   relying on new starts, or keep the old version from scaling out.
+3. Once the last old-version process has stopped, run ``backfill --apply``
+   once more: it indexes the values the old version wrote in between, and
+   is idempotent for the rest. New starts pass from then on.
+
+A DynamoDB dry run keeps, in memory, one entry per distinct indexed value it
+reads (that is how it predicts two actors sharing one); on a very large table
+run ``report`` instead, or the dry run with ``--properties`` one name at a
+time.
+
+**Deployments with existing data** run the packaged command with the same
+environment as the application:
 
 .. code-block:: bash
 
-    # With the same environment as the app:
-    poetry run python scripts/backfill_property_lookup.py --dry-run
-    poetry run python scripts/backfill_property_lookup.py --rps 50
+    actingweb-property-lookup report                  # per name: rows, markers
+    actingweb-property-lookup backfill                # dry run
+    actingweb-property-lookup backfill --apply        # write rows, mark, record
 
-The script is streaming, rate-limited, resumable and idempotent, and
-reports (without overwriting) any value shared by two actors. See
-:doc:`../migration/v3.13` for the full decision tree, verification steps,
-and the optional legacy-GSI / v1-table cleanup.
+The backfill is streaming, rate-limited (``--rps``, ``--read-rcu``),
+resumable and idempotent, and reports (without overwriting) any value shared
+by two actors; a name with a collision stays unmarked. On PostgreSQL it runs
+in primary-key batches that commit alone (run it off-peak on a large table).
+A deployment that already ran the 3.13 backfill can mark its names without
+rescanning: ``mark-complete --apply`` (it refuses a name that has property
+rows and no lookup rows unless ``--force``). ``unmark --apply`` removes a
+marker. The marker is an operator assertion that the backfill ran: data
+copied into a store by a tool, not written through the library, needs
+``backfill --apply`` after the copy.
 
-**Rollback:** Set ``USE_PROPERTY_LOOKUP_TABLE=false`` (or call
-``with_legacy_property_index(enable=True)``) to pin the deprecated
-legacy GSI/index mode.
+An application that never uses reverse lookup can call
+``with_indexed_properties([])`` instead; nothing is read at startup.
+
+See :doc:`../migration/v3.16` ("One reverse-lookup mechanism") for the full
+upgrade path, including dropping the old ``property-index`` GSI and the v1
+lookup table.
 
 Size Limits
 ~~~~~~~~~~~
@@ -576,14 +619,11 @@ Size Limits
    * - Configuration
      - DynamoDB Limit
      - PostgreSQL Limit
-   * - Legacy GSI/Index
-     - 2048 bytes
-     - 8191 bytes (btree index)
    * - Lookup Table
      - No limit (fixed-size digest key)
      - No limit (TEXT column)
 
-**Recommendation:** Use lookup tables if you need to store OAuth tokens, long external IDs, or any property values exceeding 2KB.
+Indexed values of any length work: the lookup table has no size limit.
 
 .. note::
    On DynamoDB, lookup rows are keyed by a SHA-256 digest of

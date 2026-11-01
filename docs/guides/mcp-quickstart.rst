@@ -68,6 +68,12 @@ Wire it up and run it:
    # or: uvicorn myapp:api --reload --port 5000, against your own app module
 
 .. note::
+   **First run.** Creator uniqueness is on by default, so on a fresh database the
+   first start creates the tables and stops with ``UniqueCreatorNotReady``. Run
+   ``actingweb-unique-creators enable --apply`` and start again. To opt out, add
+   ``.with_unique_creator(False)`` to the app.
+
+.. note::
    **Async Hook Support**: MCP tools and prompts can be async functions for optimal performance.
    FastAPI automatically uses ``AsyncMCPHandler`` which executes async hooks natively in the
    event loop without thread pool overhead. This enables true concurrent execution and significantly
@@ -94,6 +100,11 @@ Call initialize (no auth required):
    curl -s http://localhost:5000/mcp \
      -H 'Content-Type: application/json' \
      -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"curl"}}}'
+
+A ``POST /mcp`` whose body is empty or not JSON answers ``400`` with JSON-RPC
+``-32700 Parse error`` (``id: null``) **before** authentication, as a body that is
+JSON but not an object answers ``-32600``; a well-formed request without
+credentials still gets the 401 challenge.
 
 Every other method — ``tools/list``, ``prompts/list``, ``tools/call``, etc. —
 **requires an OAuth2 bearer token** (only ``initialize``, ``ping`` — a

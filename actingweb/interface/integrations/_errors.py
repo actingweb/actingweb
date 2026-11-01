@@ -17,6 +17,7 @@ import json
 import logging
 from typing import Any
 
+from actingweb.constants import ERROR_CODE_HEADER
 from actingweb.db.exceptions import CreatorTaken, DbError
 
 logger = logging.getLogger(__name__)
@@ -82,11 +83,26 @@ def db_error_answer(exc: BaseException) -> tuple[int, dict[str, str], dict[str, 
     unrelated exception by accident.
     """
     if isinstance(exc, CreatorTaken):
-        return 409, {}, dict(CONFLICT_BODY)
+        return (
+            409,
+            {ERROR_CODE_HEADER: CONFLICT_BODY["error"]},
+            {**CONFLICT_BODY, "code": CONFLICT_BODY["error"]},
+        )
     if isinstance(exc, DbError):
         if is_permanent(exc):
-            return 500, {}, dict(INTERNAL_BODY)
-        return 503, {"Retry-After": RETRY_AFTER_SECONDS}, dict(UNAVAILABLE_BODY)
+            return (
+                500,
+                {ERROR_CODE_HEADER: INTERNAL_BODY["error"]},
+                {**INTERNAL_BODY, "code": INTERNAL_BODY["error"]},
+            )
+        return (
+            503,
+            {
+                "Retry-After": RETRY_AFTER_SECONDS,
+                ERROR_CODE_HEADER: UNAVAILABLE_BODY["error"],
+            },
+            {**UNAVAILABLE_BODY, "code": UNAVAILABLE_BODY["error"]},
+        )
     raise TypeError(f"not a DbError: {type(exc).__name__}")
 
 
@@ -190,14 +206,17 @@ def error_cors_headers(path: str, origin: str, config: Any) -> dict[str, str]:
             "Access-Control-Allow-Origin": "*",
             "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
             "Access-Control-Allow-Headers": "Authorization, Content-Type, Accept",
-            "Access-Control-Expose-Headers": "Retry-After",
+            "Access-Control-Expose-Headers": f"Retry-After, {ERROR_CODE_HEADER}",
         }
     if is_spa_path(path):
         from ...handlers.oauth2_spa import spa_cors_headers
 
         return spa_cors_headers(config, origin)
     if path.startswith("/oauth/"):
-        return {**_WILDCARD_CORS, "Access-Control-Expose-Headers": "Retry-After"}
+        return {
+            **_WILDCARD_CORS,
+            "Access-Control-Expose-Headers": f"Retry-After, {ERROR_CODE_HEADER}",
+        }
     return {}
 
 

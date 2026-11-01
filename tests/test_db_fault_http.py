@@ -49,7 +49,7 @@ def _actor_reads_fault() -> Any:
 def _assert_unavailable(status: int, headers: Any, body: Any, text: str) -> None:
     assert status == 503
     assert headers.get("Retry-After") == "5"
-    assert body == UNAVAILABLE_BODY
+    assert body == {**UNAVAILABLE_BODY, "code": UNAVAILABLE_BODY["error"]}
     assert ACTOR_ID not in text
     assert "Traceback" not in text
 

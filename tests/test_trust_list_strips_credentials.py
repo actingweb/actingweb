@@ -31,8 +31,7 @@ ROWS = [
 
 
 def _handler(cls: Any, rows: list[Any]) -> Any:
-    handler = cls()
-    handler.config = Mock()
+    handler = cls(config=Mock())
     handler.request = Mock()
     handler.request.get = Mock(return_value=None)
     handler.response = Mock()

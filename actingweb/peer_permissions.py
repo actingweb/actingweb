@@ -207,9 +207,9 @@ class PeerPermissions:
         Returns:
             True if name matches pattern
         """
-        import fnmatch
+        from actingweb.permission_evaluator import glob_match
 
-        return fnmatch.fnmatch(name, pattern)
+        return glob_match(name, pattern)
 
 
 class PeerPermissionStore:

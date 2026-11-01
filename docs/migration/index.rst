@@ -45,9 +45,14 @@ Version Migrations
    ``with_open_factory`` to close the factory, the ``actor_adopted`` hook, and
    ``prompt=select_account`` on the SPA sign-in. Database faults now raise
    ``DbError`` (answered 503 with ``Retry-After``) instead of reading as
-   absence, which custom backends must follow. Opt-in creator uniqueness
-   (``with_unique_creator()``) makes the database hold one actor per creator;
-   with it on, the application refuses to start until Step 0 has run.
+   absence, which custom backends must follow. Creator uniqueness
+   (``with_unique_creator()``, **on by default**) makes the database hold one
+   actor per creator; the application refuses to start until Step 0 has run
+   (``with_unique_creator(False)`` opts out). The
+   legacy reverse lookup (GSI, v1 table, PostgreSQL scan,
+   ``USE_PROPERTY_LOOKUP_TABLE``) is removed: ``check_ready()`` refuses a store
+   whose indexed property names were never backfilled, and
+   ``actingweb-property-lookup`` makes it ready.
 
 **v3.15 Migration**
    Guide for upgrading to ActingWeb 3.15, a security release for the MCP

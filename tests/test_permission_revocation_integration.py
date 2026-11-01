@@ -314,27 +314,27 @@ class TestGlobPatternMatching:
     """Test that glob pattern matching works correctly for deletion."""
 
     def test_wildcard_matching(self):
-        """Test that fnmatch works for wildcard patterns."""
-        import fnmatch
+        """Test that the library glob matcher works for wildcard patterns."""
+        from actingweb.permission_evaluator import glob_match
 
         # Test cases for pattern matching
-        assert fnmatch.fnmatch("memory_travel", "memory_*") is True
-        assert fnmatch.fnmatch("memory_work", "memory_*") is True
-        assert fnmatch.fnmatch("profile_info", "memory_*") is False
-        assert fnmatch.fnmatch("profile_info", "profile_*") is True
-        assert fnmatch.fnmatch("settings_prefs", "*_prefs") is True
-        assert fnmatch.fnmatch("any_data", "*") is True
+        assert glob_match("memory_travel", "memory_*") is True
+        assert glob_match("memory_work", "memory_*") is True
+        assert glob_match("profile_info", "memory_*") is False
+        assert glob_match("profile_info", "profile_*") is True
+        assert glob_match("settings_prefs", "*_prefs") is True
+        assert glob_match("any_data", "*") is True
 
     def test_exact_matching(self):
         """Test exact pattern matching."""
-        import fnmatch
+        from actingweb.permission_evaluator import glob_match
 
-        assert fnmatch.fnmatch("memory_travel", "memory_travel") is True
-        assert fnmatch.fnmatch("memory_travel", "memory_work") is False
+        assert glob_match("memory_travel", "memory_travel") is True
+        assert glob_match("memory_travel", "memory_work") is False
 
     def test_question_mark_matching(self):
         """Test single character wildcard matching."""
-        import fnmatch
+        from actingweb.permission_evaluator import glob_match
 
-        assert fnmatch.fnmatch("item1", "item?") is True
-        assert fnmatch.fnmatch("item12", "item?") is False
+        assert glob_match("item1", "item?") is True
+        assert glob_match("item12", "item?") is False

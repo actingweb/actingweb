@@ -2238,7 +2238,7 @@ When evaluating permissions for a trust relationship, the system SHOULD:
 
 1. Start with base permissions defined by the trust type
 2. Apply any per-relationship permission overrides  
-3. Evaluate patterns using glob matching with ``*`` (any characters) and ``?`` (single character)
+3. Evaluate patterns using glob matching with ``*`` (any characters) and ``?`` (single character); a backslash escapes ``*``, ``?`` and itself (``\*`` is a literal ``*``), and matching is case-sensitive without character classes
 4. Apply precedence: explicit deny > explicit allow > trust type defaults
 5. Default to deny if no matching rule is found
 

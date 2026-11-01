@@ -251,10 +251,8 @@ def _dynamodb_rows(table: str, limiter: RateLimiter) -> Iterator[tuple[str, str,
     if table == "property":
         from actingweb.db.dynamodb.property import Property
 
-        # Property and PropertyLegacy map to the SAME table with the same
-        # (id, name) key schema -- scanning Property alone covers every
-        # property row, including list:-prefixed ones, regardless of which
-        # model wrote it.
+        # Scanning Property covers every property row, including
+        # list:-prefixed ones.
         for item in Property.scan(
             consistent_read=True, attributes_to_get=["id", "name"]
         ):

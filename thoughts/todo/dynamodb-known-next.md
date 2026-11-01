@@ -30,7 +30,7 @@ and the mutators are compare-and-swap. Batching is only available where the
 delete is unconditional — which is what `clear()`/`delete()` are and the handle
 path is not.
 
-## 2. `consistent_read` audit (~26 sites)
+## 2. `consistent_read` audit (~36 sites)
 
 Strongly-consistent reads cost 2× RCU and exclude DAX. Candidates for
 relaxation: bulk list fetches (property fetch/fetch_all, trust list, attribute
@@ -41,19 +41,14 @@ behavioural change the test suite and some same-request flows may depend on.
 
 Remaining sites by module: `attribute.py` (8), `property_lookup.py` (4),
 `subscription_diff.py` (4), `property.py` (3, excluding `get_range`),
-`subscription.py` (3), `trust.py` (3), `actor.py` (1), `peertrustee.py` (1).
+`subscription.py` (3), `trust.py` (3), `actor.py` (8, the creator-uniqueness
+reads among them), `peertrustee.py` (3). Recount before relaxing anything;
+this list has drifted once already.
 
 `get_range` is out of this list: it takes a per-call `consistent=` parameter,
 split by call site — pure reads may relax, the rank cache feeding a positional
 write may not, because a stale rank means touching the wrong row. **Apply the
 same split to any site this audit relaxes.**
-
-**Correct one comment while here.** `_v2_ensure_rank_cache` describes itself as
-"one keys-only range query", which reads as a cheap probe. DynamoDB charges
-capacity on the items *read*, before the projection is applied, so a keys-only
-query over an 81-row list measured **241.0 RCU — identical to the full
-projection**, and 120.5 eventually consistent. Keys-only buys network bytes and
-no RCU.
 
 ## 3. `SubscriptionDiff` seqnr ordering / unbounded backlog read
 
@@ -98,11 +93,14 @@ matters.
 
 ## 7. Lookup-table write path amplification
 
-`_update_lookup_entry` on a value change is an ownership-check GetItem plus a
-delete plus a conditional put. Fine at current scale. A transactional
-(`TransactWriteItems`) property+lookup write would also close the "property
-saved, lookup write failed" inconsistency window that today is only logged
-(`LOOKUP_TABLE_SYNC_FAILED` / `LOOKUP_CREATE_FAILED`).
+Since 3.16 an indexed property write is one `TransactWriteItems` (the property,
+its lookup row and the old value's lookup row), which closes the "property
+saved, lookup write failed" window (it raises `DbError` instead) and costs
+about twice the write units of a plain put on indexed names only. What
+remains is the cost: a value change still pays the transaction's three items,
+and the unchanged-value shortcut keeps repeated writes of the same value at
+one plain put. Revisit only if a measured workload rewrites indexed values
+often.
 
 ## Related
 

@@ -26,9 +26,27 @@ if TYPE_CHECKING:
 _UNSET: Any = object()
 
 
-class UniqueCreatorNotReady(RuntimeError):
+class StoreNotReady(RuntimeError):
+    """The database is not ready for this version of the library (see
+    :meth:`ActingWebApp.check_ready`).
+
+    The base of :class:`UniqueCreatorNotReady` and
+    :class:`PropertyLookupNotReady`. ``check_ready()`` raises the specific
+    subclass when one check refuses and a plain ``StoreNotReady`` listing
+    both messages when both do, so an operator runs both commands in one
+    deploy window; catch this class to handle either.
+    """
+
+
+class UniqueCreatorNotReady(StoreNotReady):
     """``with_unique_creator()`` is on, but the database does not enforce it
     yet (see :meth:`ActingWebApp.check_ready`)."""
+
+
+class PropertyLookupNotReady(StoreNotReady):
+    """The reverse-lookup table is not ready for the configured indexed
+    properties (see :meth:`ActingWebApp.check_ready`). The message names the
+    ``actingweb-property-lookup`` command that makes it ready."""
 
 
 class ActingWebApp:
@@ -81,7 +99,7 @@ class ActingWebApp:
         self._enable_bot = False
         self._bot_config: dict[str, Any] | None = None
         self._www_auth = "basic"
-        self._unique_creator = False
+        self._unique_creator = True
         self._force_email_prop_as_creator = False
         self._enable_mcp = True  # MCP enabled by default
         self._mcp_server_name = "actingweb"
@@ -103,12 +121,10 @@ class ActingWebApp:
         )
 
         # Property lookup configuration. None means "not set via the builder":
-        # Config's own default and the INDEXED_PROPERTIES /
-        # USE_PROPERTY_LOOKUP_TABLE env overrides stay authoritative. An
-        # explicit with_indexed_properties()/with_legacy_property_index() call
-        # takes precedence over both (builder > env > default).
+        # Config's own default and the INDEXED_PROPERTIES env override stay
+        # authoritative. An explicit with_indexed_properties() call takes
+        # precedence over both (builder > env > default).
         self._indexed_properties: list[str] | None = None
-        self._use_lookup_table: bool | None = None
 
         # Peer profile caching configuration
         # None = disabled, list of attributes = enabled
@@ -218,13 +234,11 @@ class ActingWebApp:
             self._config.bot = dict(self._bot_config or {})
         # Property lookup configuration. Only stamp values the builder was
         # explicitly given; None must leave Config's default and the
-        # INDEXED_PROPERTIES / USE_PROPERTY_LOOKUP_TABLE env overrides intact.
+        # INDEXED_PROPERTIES env override intact.
         # (An unconditional hasattr() guard here used to clobber the env vars
         # on every with_*() call.)
         if self._indexed_properties is not None:
             self._config.indexed_properties = self._indexed_properties
-        if self._use_lookup_table is not None:
-            self._config.use_lookup_table = self._use_lookup_table
         # Subscription callback mode
         if hasattr(self, "_sync_subscription_callbacks"):
             self._config.sync_subscription_callbacks = self._sync_subscription_callbacks
@@ -263,8 +277,6 @@ class ActingWebApp:
         # Allowed CORS origins for the SPA OAuth endpoints
         if hasattr(self, "_spa_cors_origins"):
             self._config.spa_cors_origins = list(self._spa_cors_origins)
-        # Update supported options based on enabled features
-        self._config.update_supported_options()
         # Keep service registry reference in sync
         self._attach_service_registry_to_config()
 
@@ -471,28 +483,23 @@ class ActingWebApp:
         return self
 
     def with_legacy_property_index(self, enable: bool = False) -> "ActingWebApp":
+        """Removed in 3.16; always raises ``RuntimeError``.
+
+        The legacy GSI/index reverse lookup is gone and the lookup table is
+        the only mechanism, so there is nothing to switch. The method stays
+        as a tombstone so a leftover call fails at configure time with the
+        migration pointer instead of with an ``AttributeError`` deep in
+        startup. It is removed at the next major release.
+
+        Raises:
+            RuntimeError: always; the message names the migration guide and
+                ``actingweb-property-lookup``.
         """
-        Enable legacy GSI/index-based property reverse lookup (for migration).
+        from actingweb.config import LEGACY_LOOKUP_REMOVED
 
-        When False, uses the new lookup table approach which supports property
-        values larger than 2048 bytes. When True, uses the legacy DynamoDB GSI
-        or PostgreSQL index on the value field (limited to 2048 bytes).
-
-        Args:
-            enable: True to use legacy GSI/index, False for new lookup table
-
-        Returns:
-            Self for method chaining
-
-        Note:
-            An explicit call to this method takes precedence over the
-            USE_PROPERTY_LOOKUP_TABLE environment variable. If this method is
-            never called, the env variable (when set) overrides the library
-            default, which is currently the legacy GSI/index path.
-        """
-        self._use_lookup_table = not enable
-        self._apply_runtime_changes_to_config()
-        return self
+        raise RuntimeError(
+            LEGACY_LOOKUP_REMOVED.format(what=f"with_legacy_property_index({enable!r})")
+        )
 
     def with_dynamodb(self, auto_create_tables: bool = True) -> "ActingWebApp":
         """Configure DynamoDB backend options.
@@ -535,7 +542,15 @@ class ActingWebApp:
         return self
 
     def with_unique_creator(self, enable: bool = True) -> "ActingWebApp":
-        """Enable unique creator constraint."""
+        """Set creator uniqueness, which is **on by default** since 3.16.
+
+        With it on the database holds one actor per creator and
+        :meth:`check_ready` refuses to start until
+        ``actingweb-unique-creators enable --apply`` has run (a fresh
+        deployment runs it once, after its first start). Pass
+        ``with_unique_creator(False)`` to opt out and keep the older,
+        duplicate-tolerant behaviour.
+        """
         self._unique_creator = enable
         self._apply_runtime_changes_to_config()
         return self
@@ -573,8 +588,9 @@ class ActingWebApp:
         self._enable_mcp = enable
         self._mcp_server_name = server_name
         self._mcp_instructions = instructions
-        # Note: aw_supported is computed in Config.__init__. We keep this minimal
-        # to avoid touching unrelated features; OAuth fix does not require recompute.
+        # Config.aw_supported is computed on every read, so the ``mcp`` tag
+        # follows the flag as soon as it is applied to the config.
+        self._apply_runtime_changes_to_config()
         return self
 
     def with_sync_callbacks(self, enable: bool = True) -> "ActingWebApp":
@@ -1456,13 +1472,11 @@ class ActingWebApp:
                 peer_permissions_caching=self._peer_permissions_caching,
             )
             # Property lookup settings are deliberately NOT passed as kwargs:
-            # Config applies its INDEXED_PROPERTIES / USE_PROPERTY_LOOKUP_TABLE
-            # env overrides after kwargs, so kwargs could never win. Stamping
-            # explicit builder values here gives builder > env > default.
+            # Config applies its INDEXED_PROPERTIES env override after
+            # kwargs, so kwargs could never win. Stamping explicit builder
+            # values here gives builder > env > default.
             if self._indexed_properties is not None:
                 self._config.indexed_properties = self._indexed_properties
-            if self._use_lookup_table is not None:
-                self._config.use_lookup_table = self._use_lookup_table
             if self._refresh_token_grace_period is not None:
                 self._config.refresh_token_grace_period = (
                     self._refresh_token_grace_period
@@ -1524,9 +1538,7 @@ class ActingWebApp:
             # (python -m actingweb.db.verify_tables), so what we create and
             # what we tell operators to pre-create cannot drift apart.
             config = self.get_config()
-            models = required_models(
-                bool(config.use_lookup_table), bool(config.unique_creator)
-            )
+            models = required_models(unique_creator=bool(config.unique_creator))
 
             with ThreadPoolExecutor(max_workers=len(models)) as pool:
                 futures = {m: pool.submit(ensure_table, m) for m in models}
@@ -1542,78 +1554,100 @@ class ActingWebApp:
         except Exception as e:  # folds DbError: startup best-effort pre-warm, lazy per-accessor creation still runs
             logger.info(f"Table pre-warm skipped: {e}")
 
-    def _check_lookup_backfill_needed(self) -> None:
-        """Warn loudly when reverse lookups would silently miss.
-
-        Fires when lookup-table mode is active, the properties table has
-        data, but the v2 lookup table is empty — the state every upgrading
-        deployment is in until it runs the backfill. Without the backfill,
-        indexed lookups are served by deprecated fallbacks (or return None
-        once those are removed). One cheap single-item probe per table,
-        once per process. Modeled on _warn_lambda_async_callbacks.
-        """
-        if self.database != "dynamodb" or getattr(self, "_backfill_checked", False):
-            return
-        self._backfill_checked = True
-        import logging
-
-        logger = logging.getLogger(__name__)
-        try:
-            if not self.get_config().use_lookup_table:
-                return
-            from ..db.dynamodb.property import Property
-            from ..db.dynamodb.property_lookup import (
-                PropertyLookup,
-                PropertyLookupV2,
-            )
-
-            if any(True for _ in PropertyLookupV2.scan(limit=1)):
-                return  # v2 populated — nothing to do
-            if not any(True for _ in Property.scan(limit=1)):
-                return  # fresh deployment, nothing to backfill
-            v1_has_rows = False
-            try:
-                v1_has_rows = any(True for _ in PropertyLookup.scan(limit=1))
-            except Exception:  # folds DbError: startup diagnostic probe, log only
-                pass
-            if v1_has_rows:
-                logger.error(
-                    "Property lookup table needs migration: the v1 lookup "
-                    "table has data but the v2 table "
-                    f"('{PropertyLookupV2.Meta.table_name}') is empty. "
-                    "Reverse lookups are being served by a deprecated "
-                    "fallback. Run scripts/backfill_property_lookup.py to "
-                    "rebuild the v2 table from the properties table, verify, "
-                    "then drop the v1 table. See docs/migration/v3.13."
-                )
-            else:
-                logger.error(
-                    "Property lookup table is empty but the properties table "
-                    "has data: reverse lookups (e.g. find-actor-by-email) "
-                    "depend on a deprecated fallback or will return None. "
-                    "Run scripts/backfill_property_lookup.py to populate "
-                    f"'{PropertyLookupV2.Meta.table_name}'. "
-                    "See docs/migration/v3.13."
-                )
-        except Exception as e:  # folds DbError: startup diagnostic probe, log only
-            logger.debug(f"Lookup backfill check skipped: {e}")
-
     def check_ready(self) -> None:
-        """Refuse to run with ``with_unique_creator()`` when the database does
-        not enforce it yet.
+        """Refuse to start on a database that is not ready for this version.
 
         ``integrate_flask`` and ``integrate_fastapi`` call it; an application
-        that uses neither calls it once before serving. With the flag on it
-        raises :class:`UniqueCreatorNotReady` (naming the command that fixes
-        it) when it finds definite absence: the DynamoDB ``creators`` table
-        or its backfill-complete item is missing, or the PostgreSQL index
-        ``ux_actors_creator`` is missing or INVALID. A fault while probing is
-        refused the same way: starting unchecked could let every existing
-        user's next sign-in create a second actor (DynamoDB). Runs once per
-        process; with the flag off it does nothing.
+        that uses neither calls it once before serving. It pre-warms the
+        DynamoDB tables first, then runs two checks, each once per process:
 
+        - **Reverse lookup.** Raises :class:`PropertyLookupNotReady` (naming
+          ``actingweb-property-lookup``) when a configured indexed property
+          has data but no backfill-complete marker, or when the lookup table
+          cannot be read. An empty store marks itself ready. With
+          ``with_indexed_properties([])`` nothing is read.
+        - **Creator uniqueness.** With ``with_unique_creator()`` on (the
+          default; ``with_unique_creator(False)`` opts out) raises :class:`UniqueCreatorNotReady` when the DynamoDB
+          ``creators`` table or its backfill-complete item is missing, or the
+          PostgreSQL index ``ux_actors_creator`` is missing or INVALID. A
+          fault while probing is refused the same way: starting unchecked
+          could let every existing user's next sign-in create a second actor
+          (DynamoDB). With the flag off it does nothing.
+
+        When both refuse, a single :class:`StoreNotReady` carries both
+        messages. Catch :class:`StoreNotReady` to handle either.
         """
-        self._check_unique_creator_ready()
+        self._prewarm_dynamodb_tables()
+        refusals: list[StoreNotReady] = []
+        for check in (
+            self._check_property_lookup_ready,
+            self._check_unique_creator_ready,
+        ):
+            try:
+                check()
+            except StoreNotReady as e:
+                refusals.append(e)
+        if len(refusals) == 1:
+            raise refusals[0]
+        if refusals:
+            raise StoreNotReady(
+                "The database is not ready in two ways:\n\n"
+                + "\n\n".join(str(r) for r in refusals)
+            ) from refusals[0]
+
+    def _check_property_lookup_ready(self) -> None:
+        if getattr(self, "_property_lookup_checked", False):
+            return
+        config = self.get_config()
+        names = list(dict.fromkeys(config.indexed_properties))
+        if not names:
+            self._property_lookup_checked = True
+            return
+        from ..maintenance.property_lookup import settle
+
+        try:
+            state = settle(config)
+        except Exception as e:  # folds DbError: fails closed, like absence
+            cause = e.__cause__ or e
+            raise PropertyLookupNotReady(
+                "Reverse lookup could not be checked "
+                f"({e}: {cause}). Fix the database connection or "
+                "permissions, or (if this deployment never uses reverse "
+                "lookup) call with_indexed_properties([]). The check reads "
+                "the lookup table and its backfill markers; on PostgreSQL "
+                "run 'alembic upgrade head' if the property_lookup_backfill "
+                "table is missing."
+            ) from e
+        if state.attention:
+            dropped = [n for n in state.attention if n in state.marked]
+            set_note = ""
+            if dropped and state.recorded is not None:
+                recorded = ", ".join(sorted(state.recorded)) or "(none)"
+                set_note = (
+                    f" {', '.join(dropped)} has a marker but is absent from "
+                    f"the recorded indexed set ({recorded}): a process on "
+                    "this store ran without it and may have written its "
+                    "values unindexed. Every process sharing a "
+                    "store must configure the same names; during a rollout "
+                    "that adds a name, run the backfill for it again once the "
+                    "old version is gone."
+                )
+            raise PropertyLookupNotReady(
+                "Reverse lookup is not ready for the indexed properties "
+                f"{', '.join(state.attention)}: the properties table holds data "
+                "but no backfill-complete marker covers them (or a name was "
+                "dropped from the indexed set and restored)."
+                f"{set_note} Run "
+                "'actingweb-property-lookup report', then "
+                "'actingweb-property-lookup backfill --apply' "
+                '(docs/migration/v3.16.rst, "One reverse-lookup mechanism"). '
+                "The command reads INDEXED_PROPERTIES; if this application "
+                "sets the names with with_indexed_properties(), pass the same "
+                "names with --properties a,b. "
+                "A deployment that never uses reverse lookup can call "
+                "with_indexed_properties([]) instead."
+            )
+        self._property_lookup_checked = True
 
     def _check_unique_creator_ready(self) -> None:
         if getattr(self, "_unique_creator_checked", False):
@@ -1630,16 +1664,28 @@ class ActingWebApp:
             # empty, auto-created creators table would make every existing
             # user's next sign-in create a second actor.
             raise UniqueCreatorNotReady(
-                "with_unique_creator() is on but whether the database enforces "
-                f"it could not be checked ({e}); fix the database connection "
-                "or permissions and start again, or turn the flag off."
+                "Creator uniqueness is on (the default) but whether the "
+                f"database enforces it could not be checked ({e}); fix the "
+                "database connection or permissions and start again, or opt "
+                "out with with_unique_creator(False)."
             ) from e
         if missing:
+            from ..maintenance.unique_creators import no_actors
+
+            if no_actors(config):
+                raise UniqueCreatorNotReady(
+                    f"Creator uniqueness is on (the default) but {missing}. "
+                    "There are no actors yet: run "
+                    "'actingweb-unique-creators enable --apply' and start "
+                    "again, or opt out with with_unique_creator(False) "
+                    '(docs/migration/v3.16.rst, "Creator uniqueness").'
+                )
             raise UniqueCreatorNotReady(
-                f"with_unique_creator() is on but {missing}. Run "
+                f"Creator uniqueness is on (the default) but {missing}. Run "
                 "'actingweb-unique-creators report', then 'resolve --apply' "
                 "and 'enable --apply' (docs/migration/v3.16.rst, "
-                '"Creator uniqueness"), or turn the flag off.'
+                '"Creator uniqueness"), or opt out with '
+                "with_unique_creator(False)."
             )
         self._unique_creator_checked = True
 
@@ -1652,9 +1698,7 @@ class ActingWebApp:
                 "Flask integration requires Flask to be installed. "
                 "Install with: pip install 'actingweb[flask]'"
             ) from e
-        self._prewarm_dynamodb_tables()
-        self._check_lookup_backfill_needed()
-        self._check_unique_creator_ready()
+        self.check_ready()
         integration = FlaskIntegration(self, flask_app)
         integration.setup_routes()
         return integration
@@ -1684,9 +1728,7 @@ class ActingWebApp:
                 "Install with: pip install 'actingweb[fastapi]'"
             ) from e
 
-        self._prewarm_dynamodb_tables()
-        self._check_lookup_backfill_needed()
-        self._check_unique_creator_ready()
+        self.check_ready()
         integration = FastAPIIntegration(
             self,
             fastapi_app,

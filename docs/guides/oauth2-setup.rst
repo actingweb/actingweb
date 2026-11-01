@@ -248,7 +248,7 @@ a central location to store client registrations and lookup indexes.
 .. code-block:: text
 
     OAUTH2_SYSTEM_ACTOR (_actingweb_oauth2)
-    ├── mcp_clients_index        # client_id -> actor_id (O(1) client lookup)
+    ├── _client_index            # client_id -> actor_id (O(1) client lookup)
     ├── auth_code_index          # auth_code -> actor_id (O(1) code exchange)
     ├── access_token_index       # access_token -> actor_id (O(1) token validation)
     └── refresh_token_index      # refresh_token -> actor_id (O(1) token refresh)

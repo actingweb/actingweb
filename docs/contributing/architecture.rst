@@ -486,15 +486,16 @@ Config-Aware DB Accessors
 
 .. code-block:: python
 
-    # Avoid - bypasses configuration injection
-    db_property = config.DbProperty.DbProperty()
+    # Avoid - bypasses configuration injection (and raises TypeError: since
+    # 3.16 the constructor requires the keyword-only indexed_properties)
+    db_property = config.DbProperty.DbProperty(indexed_properties=["email"])
 
 **Why This Matters**:
 
-- Property lookup table settings (``use_lookup_table``, ``indexed_properties``) must be properly configured
-- Directly-constructed accessors fall back to environment variables, which can
-  silently disagree with app-level configuration (e.g. reverse-lookup mode) —
-  the factory injects the resolved config
+- The indexed property names (``indexed_properties``) must come from the app-level configuration
+- ``DbProperty`` and ``DbPropertyList`` require ``indexed_properties`` and read no
+  environment variable, so a directly-constructed accessor cannot silently disagree
+  with app-level configuration — the factory injects the resolved config
 - Accessor functions provide type-safe, testable interfaces
 - Clearer dependency on configuration
 

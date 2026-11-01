@@ -37,8 +37,8 @@ def _dynamodb_models() -> list[Any]:
     from actingweb.db.dynamodb.attribute import Attribute
     from actingweb.db.dynamodb.creator import Creator
     from actingweb.db.dynamodb.peertrustee import PeerTrustee
-    from actingweb.db.dynamodb.property import Property, PropertyLegacy
-    from actingweb.db.dynamodb.property_lookup import PropertyLookup, PropertyLookupV2
+    from actingweb.db.dynamodb.property import Property
+    from actingweb.db.dynamodb.property_lookup import PropertyLookupV2
     from actingweb.db.dynamodb.subscription import Subscription
     from actingweb.db.dynamodb.subscription_diff import SubscriptionDiff
     from actingweb.db.dynamodb.subscription_suspension import SubscriptionSuspension
@@ -50,8 +50,6 @@ def _dynamodb_models() -> list[Any]:
         Creator,
         PeerTrustee,
         Property,
-        PropertyLegacy,
-        PropertyLookup,
         PropertyLookupV2,
         Subscription,
         SubscriptionDiff,

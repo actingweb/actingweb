@@ -23,8 +23,9 @@ thoughts/plans/2026-10-28-db-fault-semantics-and-creator-uniqueness.md left:
   it today.
 - **Inline normalisation copies.** `creator.lower() if "@" in creator`
   remains in `actor.py` (`get_from_creator`, `creator_change_pinned`,
-  `modify_creator_unvouched`, `modify`) and `handlers/factory.py`. Call
-  `normalise_creator`.
+  `modify_creator_unvouched`, `modify`); `handlers/factory.py` strips and
+  lowercases with its own expression. Call `normalise_creator` in all of
+  them.
 - **`#…` addresses with the flag off.** `#team@x.com` is a legal address,
   and `Actor.create` refuses it whether or not the flag is on. Consider
   refusing only with the flag on, or only `#meta#…` and `#dup-`.

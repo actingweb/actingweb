@@ -2,6 +2,8 @@ import logging
 import os
 import time
 from collections.abc import Sequence
+from datetime import datetime
+from typing import Any
 
 from pynamodb.attributes import (
     JSONAttribute,
@@ -10,7 +12,7 @@ from pynamodb.attributes import (
     UTCDateTimeAttribute,
 )
 from pynamodb.constants import PAY_PER_REQUEST_BILLING_MODE
-from pynamodb.exceptions import DoesNotExist
+from pynamodb.exceptions import DoesNotExist, PutError
 from pynamodb.models import Model
 
 from actingweb.db.dynamodb._ensure import ensure_table
@@ -61,6 +63,16 @@ class Attribute(Model):
     # TTL timestamp for automatic DynamoDB expiration (Unix epoch timestamp)
     # Enable DynamoDB TTL on this field for automatic cleanup
     ttl_timestamp = NumberAttribute(null=True)
+
+
+def normalize_json(data: Any) -> Any:
+    """Normalize JSON data by serializing with sorted keys, so that
+    ``{"a": 1, "b": 2}`` and ``{"b": 2, "a": 1}`` compare equal."""
+    import json
+
+    if data is None:
+        return None
+    return json.loads(json.dumps(data, sort_keys=True))
 
 
 class DbAttribute:
@@ -309,8 +321,6 @@ class DbAttribute:
         Returns:
             True if update succeeded (current matched old_data), False otherwise
         """
-        import json
-
         if not actor_id or not bucket or not name:
             return False
 
@@ -330,12 +340,6 @@ class DbAttribute:
 
             # Normalize JSON for order-independent comparison
             # This ensures {"a": 1, "b": 2} == {"b": 2, "a": 1}
-            def normalize_json(data):
-                """Normalize JSON data by serializing with sorted keys."""
-                if data is None:
-                    return None
-                return json.loads(json.dumps(data, sort_keys=True))
-
             old_data_normalized = normalize_json(old_data)
             current_data_normalized = normalize_json(item.data)
 
@@ -365,6 +369,72 @@ class DbAttribute:
         except Exception:
             # Item doesn't exist or condition check failed (race condition)
             return False
+
+    @staticmethod
+    def create_attr_if_absent(
+        actor_id: str | None = None,
+        bucket: str | None = None,
+        name: str | None = None,
+        data: Any = None,
+        timestamp: datetime | None = None,
+        ttl_seconds: int | None = None,
+    ) -> bool:
+        """Create an attribute only if no live row holds its name.
+
+        See ``DbAttributeProtocol.create_attr_if_absent`` for the contract.
+        One ``PutItem`` conditioned on the key being absent, or on the stored
+        row being in the same bucket with a ``ttl_timestamp`` at or before
+        now (the expiry rule ``get_attr_strict`` applies). A lost condition
+        is followed by one consistent read: JSON-equal stored data means the
+        row is this call's own (an SDK retry of a write that landed).
+        """
+        if not actor_id or not bucket or not name:
+            raise ValueError("create_attr_if_absent needs actor_id, bucket and name")
+
+        from actingweb.db.utils import sanitize_json_data
+
+        bucket_name = bucket + ":" + name
+        data = sanitize_json_data(data, log_source="attribute")
+        item = Attribute(
+            id=actor_id,
+            bucket_name=bucket_name,
+            bucket=bucket,
+            name=name,
+            data=data,
+            timestamp=timestamp,
+            ttl_timestamp=(
+                ttl_deadline(ttl_seconds) if ttl_seconds is not None else None
+            ),
+        )
+        # A lost condition can be followed by the winner's row vanishing before
+        # the read-back (a delete, the TTL reaper): the name is then free, so
+        # the write is tried once more rather than reported as lost.
+        for attempt in range(2):
+            now = int(time.time())
+            try:
+                item.save(
+                    condition=Attribute.id.does_not_exist()
+                    | ((Attribute.bucket == bucket) & (Attribute.ttl_timestamp <= now))
+                )
+                return True
+            except PutError as e:
+                if e.cause_response_code != "ConditionalCheckFailedException":
+                    raise DbError("attribute create", actor_id) from e
+            except Exception as e:
+                raise DbError("attribute create", actor_id) from e
+
+            try:
+                stored = Attribute.get(actor_id, bucket_name, consistent_read=True)
+            except DoesNotExist:
+                if attempt == 0:
+                    continue
+                return False
+            except Exception as e:
+                raise DbError("attribute create read-back", actor_id) from e
+            if stored.bucket != bucket:
+                return False
+            return normalize_json(stored.data) == normalize_json(data)
+        return False
 
     @staticmethod
     def delete_bucket(actor_id=None, bucket=None):

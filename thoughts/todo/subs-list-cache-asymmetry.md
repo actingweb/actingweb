@@ -12,7 +12,7 @@ regression; both predate 3.13.
 `self.subs_list`, guarded by **truthiness** rather than `is None`:
 
 ```python
-# actingweb/actor.py:1620
+# actingweb/actor.py:2346
 if not self.subs_list:
     self.subs_list = subscription.Subscriptions(
         actor_id=self.id, config=self.config
@@ -64,14 +64,16 @@ the argument for fixing the cache-lifetime question rather than against it.
 ## Correctness: staleness survives across processes
 
 `create_subscription()` and the delete paths invalidate `self.subs_list`
-themselves (`actor.py:1513`, `:1714`, `:1748`), so the single-instance window is
+themselves (`actor.py:2233`, `:2440`, `:2476`), so the single-instance window is
 closed. What remains is cross-process: a **different** process can hold a truthy
 stale `subs_list`, because nothing invalidates it there.
 
-The exposed site is the trust-deletion sibling at `actor.py:1351`, same
+The exposed site is the trust-deletion sibling at `actor.py:1961`, same
 `if not self.subs_list` idiom. It reads the list to delete a peer's
 subscriptions, so a stale cache means a subscription created elsewhere is left
-undeleted during trust teardown.
+undeleted during trust teardown. Since 3.16 that fetch is `strict=False`
+(`:1964`): a fault there reads as an empty list and leaves the peer's
+subscriptions orphaned the same way.
 
 The MCP path is what makes the window wide: `handlers/mcp.py` keeps a
 module-global `_actor_cache` holding the `ActorInterface` — and therefore the
@@ -106,9 +108,9 @@ bounded cost bug for an unbounded correctness one.
    instance-level memo.
 2. **Fix the guard** in `get_subscriptions()`: `if self.subs_list is None:`.
    **Blocked on item 1.**
-3. **Fix the sibling call site** at `actor.py:1351` (trust deletion) — same
+3. **Fix the sibling call site** at `actor.py:1961` (trust deletion) — same
    idiom, and it is the one where staleness loses data rather than costing RCU.
-4. **Drop the hand-rolled reset** at `handlers/subscription.py:262`. It is
+4. **Drop the hand-rolled reset** at `handlers/subscription.py:270`. It is
    redundant now that `create_subscription()` invalidates, and it advertises the
    wrong pattern (invariant enforced by convention at call sites).
 5. **Consider whether `consistent_read=True` is required** on the subscription

@@ -403,27 +403,28 @@ API clients always receive JSON. See `docs/reference/routing-overview.rst`.
 
 ## Property Reverse Lookup
 
-ActingWeb supports reverse lookups (find actor by property value) via lookup tables:
+ActingWeb supports reverse lookups (find actor by property value) through one mechanism, the lookup table:
 
 ```python
 app.with_indexed_properties(["oauthId", "email", "externalUserId"])
-app.with_legacy_property_index(enable=False)  # Recommended for new deployments
 ```
 
 **Key Points:**
-- **Default**: Lookup table mode disabled (`USE_PROPERTY_LOOKUP_TABLE=false`) for backward compatibility
-- **Legacy mode**: Uses DynamoDB GSI (2048-byte limit) or PostgreSQL index
-- **Lookup table mode**: No size limits, better performance for indexed properties
-- **Migration**: Dual-mode support for gradual transition
-- **Cleanup**: Automatic when properties/actors deleted
+- **One mechanism** (since 3.16): DynamoDB `property_lookup_v2` (digest keys) or PostgreSQL `property_lookup`. The legacy GSI path, the v1 table, the PostgreSQL value scan, `USE_PROPERTY_LOOKUP_TABLE` and `with_legacy_property_index()` are gone; the last two fail at configure time with a pointer to the migration guide.
+- **No size limits**, no plaintext values in the DynamoDB table.
+- **Fail closed**: an indexed property write and its lookup row succeed or fail together (`DbError` on a fault); a value another actor holds is a logged collision.
+- **Readiness**: `check_ready()` (called by `integrate_*`) raises `PropertyLookupNotReady` when a configured name has data but no backfill-complete marker, naming `actingweb-property-lookup backfill --apply`. A store with no properties marks itself ready. `with_indexed_properties([])` turns reverse lookup off.
+- **Constructors**: `DbProperty`/`DbPropertyList` require the keyword-only `indexed_properties`; use `get_property(config)`.
+- **Cleanup**: automatic when properties/actors are deleted.
 
-**Environment Variables:**
+**Environment Variable:**
 ```bash
-export USE_PROPERTY_LOOKUP_TABLE=true                    # Enable lookup tables
 export INDEXED_PROPERTIES=oauthId,email,externalUserId  # Configure indexed properties
 ```
 
-See `docs/quickstart/configuration.rst` for full migration guide and best practices.
+**Operator command** (same environment as the app): `actingweb-property-lookup report | backfill [--apply] | mark-complete [--apply] | unmark [--apply]`.
+
+See `docs/quickstart/configuration.rst` and `docs/migration/v3.16.rst` ("One reverse-lookup mechanism").
 
 ## Logging and Request Correlation
 

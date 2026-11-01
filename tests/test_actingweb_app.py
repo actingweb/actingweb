@@ -46,7 +46,7 @@ class TestActingWebAppInit:
         assert app._enable_devtest is False
         assert app._enable_bot is False
         assert app._www_auth == "basic"
-        assert app._unique_creator is False
+        assert app._unique_creator is True
         assert app._force_email_prop_as_creator is False
         assert app._enable_mcp is True
 

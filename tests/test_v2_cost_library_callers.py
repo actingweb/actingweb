@@ -36,7 +36,8 @@ def _require_dynamodb():
 def config():
     from actingweb.config import Config
 
-    return Config(database="dynamodb")
+    # Fixed creators on the shared, never-wiped store: opt out of uniqueness.
+    return Config(database="dynamodb", unique_creator=False)
 
 
 @pytest.fixture

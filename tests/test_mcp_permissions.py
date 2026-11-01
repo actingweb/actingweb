@@ -1,6 +1,7 @@
 import unittest
 from unittest.mock import Mock, patch
 
+from actingweb.config import Config
 from actingweb.handlers.mcp import MCPHandler
 from actingweb.interface.hooks import HookRegistry
 from actingweb.mcp.decorators import mcp_prompt, mcp_tool
@@ -47,7 +48,7 @@ class TestMcpPermissions(unittest.TestCase):
         self.peer_id = "oauth2:test_peer"
         self.fake_actor = FakeActor(self.actor_id, self.peer_id)
         self.hooks = make_hooks()
-        self.handler = MCPHandler()
+        self.handler = MCPHandler(config=Config(mcp=True, unique_creator=False))
         # Inject hooks
         self.handler.hooks = self.hooks
 

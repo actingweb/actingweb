@@ -80,11 +80,9 @@ aw_app = (
         relationship="friend",
     )
     # Property lookup table configuration for large property values
-    # This enables reverse lookups (find actor by property value) without the 2048-byte GSI limit
+    # This enables reverse lookups (find actor by property value) without a
+    # value-size limit
     .with_indexed_properties(["oauthId", "email", "externalUserId"])
-    .with_legacy_property_index(
-        enable=False
-    )  # Use new lookup table instead of legacy GSI
     # Property-list item limits, set explicitly so the demo behaves the same
     # on DynamoDB and PostgreSQL (PostgreSQL's own defaults never span and
     # set no ceiling).

@@ -41,7 +41,7 @@ class TestDynamoDbGetPrefix:
     def _db(self):
         from actingweb.db.dynamodb.property import DbProperty
 
-        return DbProperty()
+        return DbProperty(indexed_properties=["oauthId", "email", "externalUserId"])
 
     def test_forwards_consistent_read_and_projects_all_attributes(self, monkeypatch):
         from actingweb.db.dynamodb import property as dynamo_property
@@ -110,7 +110,7 @@ class TestPostgreSqlGetPrefix:
     def _db(self):
         from actingweb.db.postgresql.property import DbProperty
 
-        return DbProperty()
+        return DbProperty(indexed_properties=["oauthId", "email", "externalUserId"])
 
     def _patch_connection(self, monkeypatch, rows, fail=False):
         """Patch get_connection with a cursor recording every execute()."""

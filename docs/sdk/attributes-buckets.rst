@@ -102,7 +102,10 @@ requests might modify the same attribute simultaneously.
 - **PostgreSQL**: Uses ``UPDATE ... WHERE data = old_data`` for atomic compare-and-swap
 - **DynamoDB**: Uses conditional update expressions with ``condition=(Attribute.data == old_data)``
 - Returns ``True`` only if the current database value exactly matches ``old_data``
-- Returns ``False`` if value was modified by another request (no update performed)
+- Returns ``False`` if value was modified by another request (no update performed),
+  and also if the backend faulted: a caller that must tell the two apart re-reads with
+  the backend's ``get_attr_strict``. (``create_attr_if_absent`` below raises ``DbError``
+  on a fault instead.)
 
 **Use Cases:**
 
@@ -110,6 +113,59 @@ requests might modify the same attribute simultaneously.
 - Distributed counters and rate limiting
 - Session management with concurrent requests
 - Any scenario requiring optimistic locking
+
+Create if absent (v3.16+)
+-------------------------
+
+``create_attr_if_absent()`` creates an attribute only if no live row holds its name,
+in one conditional write. It is the primitive for a once-only claim (an unlock request,
+an idempotency key) where a read-then-write would let two requests both win.
+
+.. code-block:: python
+
+   import uuid
+   from actingweb import attribute
+
+   asks = attribute.Attributes(actor_id=actor_id, bucket="unlock_asks", config=config)
+
+   # A per-call nonce makes exactly one caller the winner (see below).
+   request_id = uuid.uuid4().hex
+   if asks.create_attr_if_absent(
+       name=f"unlock:{user_id}",
+       data={"request_id": request_id},
+       ttl_seconds=600,
+   ):
+       send_the_unlock_mail(user_id)      # this request owns the ask
+   else:
+       pass                               # a live ask exists; read it with get_attr
+
+**The rules:**
+
+- ``True`` means this call created the row or replaced an **expired** one (a row whose
+  stored ``ttl_timestamp`` is in the past, the rule ``get_attr_strict`` applies; use
+  ``get_attr_strict`` to read the row back under the same rule, because ``get_attr``
+  returns expired rows).
+- ``False`` means a live row holds the name, or another bucket owns the key. The row is
+  untouched, and a later ``get_attr(name)`` on the same ``Attributes`` reads the
+  winner's row through.
+- A lost condition whose stored row is **JSON-equal** to the data this call wrote is
+  ``True``: a create that landed, then was retried by the SDK, must not read as lost.
+  The consequence: two callers writing identical ``data`` both get ``True``. A caller
+  that needs exactly one winner puts a per-call nonce in ``data``, as above.
+- **When a name frees up.** The stored ``ttl_timestamp`` is ``ttl_seconds`` plus
+  ``TTL_CLOCK_SKEW_BUFFER`` (one hour) from the write, as for every attribute with a
+  TTL, so the purge never removes a row early. A row written with ``ttl_seconds=600``
+  therefore holds its name for 70 minutes, and ``get_attr_strict`` reports it live for
+  that span. When the application's own expiry is shorter, keep the deadline in
+  ``data`` (``{"request_id": ..., "expires_at": ...}``). Once it has passed, take the
+  name over with ``conditional_update_attr(name, old_data=<the data you read>,
+  new_data=<the new ask>, ttl_seconds=...)``: a compare-and-swap, so only one caller
+  replaces a given stale ask.
+- A fault raises ``DbError`` (the integrations answer 503). A missing ``name`` raises
+  ``ValueError``.
+- Do not use it on names an untrusted party chooses, in a bucket where an expired row
+  still carries meaning (a consumed marker kept for ``consumed_ttl``): it replaces an
+  expired row.
 
 Complete Bucket Reference
 -------------------------

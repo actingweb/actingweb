@@ -68,8 +68,7 @@ class TestTrustPermissionsFeatureTag(unittest.TestCase):
 
         # Mock the dependencies
         config = Config()
-        handler = MetaHandler()
-        handler.config = config
+        handler = MetaHandler(config=config)
         handler.response = Mock()
         handler.response.headers = {}
 

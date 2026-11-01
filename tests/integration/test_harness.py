@@ -58,8 +58,12 @@ def create_test_app(
             fqdn=fqdn,
             proto=proto,
         )
+        .with_unique_creator(False)
         .with_web_ui(enable=True)
         .with_devtest(enable=enable_devtest)
+        # Explicit: the shared test_w0_ tables hold deliberate duplicate
+        # creators (the adoption and squat tests), so the harness opts out
+        # unless a test asks for uniqueness on its isolated store.
         .with_unique_creator(enable=unique_creator)
         .with_email_as_creator(enable=False)
         .with_open_factory(enable=open_factory)

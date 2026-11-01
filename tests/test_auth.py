@@ -3,6 +3,8 @@
 import base64
 from unittest.mock import Mock, patch
 
+import pytest
+
 from actingweb.auth import (
     Auth,
     add_auth_response,
@@ -98,21 +100,22 @@ class TestAuthClassInitialization:
             assert auth.acl["peerid"] == ""
             assert auth.acl["approved"] is False
 
-    def test_auth_init_without_config_creates_default(self):
-        """Test Auth initialization without config creates default Config."""
-        with patch("actingweb.auth.actor.Actor") as mock_actor_class:
-            with patch("actingweb.auth.config_class.Config") as mock_config_class:
-                mock_config = Mock()
-                mock_config.auth_realm = "DefaultRealm"
-                mock_config_class.return_value = mock_config
-                mock_actor = Mock()
-                mock_actor.id = "test_actor"
-                mock_actor_class.return_value = mock_actor
+    def test_auth_init_without_config_raises(self):
+        """``config`` is required and keyword-only (3.16): no default Config."""
+        with pytest.raises(TypeError, match="config"):
+            Auth("test_actor")  # type: ignore[call-arg]
+        with pytest.raises(TypeError):
+            Auth("test_actor", "basic", Mock())  # type: ignore[misc]  # positional
 
-                auth = Auth("test_actor", auth_type="basic", config=None)
+    def test_check_and_verify_auth_requires_config(self):
+        import asyncio
 
-                mock_config_class.assert_called_once()
-                assert auth.config == mock_config
+        from actingweb.auth import check_and_verify_auth, check_and_verify_auth_async
+
+        with pytest.raises(TypeError, match="config"):
+            check_and_verify_auth(Mock(), "a1")  # type: ignore[call-arg]
+        with pytest.raises(TypeError, match="config"):
+            asyncio.run(check_and_verify_auth_async(Mock(), "a1"))  # type: ignore[call-arg]
 
 
 class TestBasicAuthentication:

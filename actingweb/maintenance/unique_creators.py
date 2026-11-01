@@ -141,7 +141,8 @@ class Report:
 
 
 def make_config() -> Any:
-    """The command's own config: the application's backend, and no
+    """The command's own config (``unique_creator`` stays off now that the
+    library default is on): the application's backend, and no
     ``force_email_prop_as_creator`` rewrite while it reads actors.
 
     ``unique_creator`` stays off here: the command writes the DynamoDB
@@ -271,20 +272,38 @@ def _group_in_memory(rows: dict[str, str], only: str | None, report: Report) -> 
     )
 
 
-def backfill_complete() -> bool:
-    """Whether the DynamoDB backfill-complete item exists (False when the
-    table does not). Raises on a read fault."""
+def _backfill_state() -> str:
+    """``"table-missing"``, ``"not-backfilled"`` or ``"complete"``.
+
+    One consistent ``GetItem`` of the backfill-complete item: a missing table
+    answers ``ResourceNotFound``, so no ``DescribeTable`` is needed (with
+    uniqueness on by default, two of them on every cold start would be the
+    cost class ``tests/test_cold_start_budget.py`` guards against, and would
+    make the IAM note "with auto-create off ``DescribeTable`` can be dropped"
+    false). Raises on any other read fault.
+    """
     from pynamodb.exceptions import DoesNotExist
 
     from actingweb.db.dynamodb.creator import Creator
+    from actingweb.db.dynamodb.property_lookup import is_resource_not_found
 
-    if not Creator.exists():
-        return False
     try:
         Creator.get(BACKFILL_KEY, consistent_read=True)
     except DoesNotExist:
-        return False
-    return True
+        return "not-backfilled"
+    except (
+        Exception
+    ) as e:  # folds DbError: a missing table is an answer, anything else re-raises
+        if is_resource_not_found(e):
+            return "table-missing"
+        raise
+    return "complete"
+
+
+def backfill_complete() -> bool:
+    """Whether the DynamoDB backfill-complete item exists (False when the
+    table does not). Raises on a read fault."""
+    return _backfill_state() == "complete"
 
 
 def _dynamodb_records(
@@ -961,6 +980,36 @@ def disable(config: Any, *, apply: bool = False) -> str:
 # ---------------------------------------------------------------------------
 
 
+def no_actors(config: Any) -> bool:
+    """Whether the actor table holds no actor of a user (False on a fault or a
+    missing table), to tell a fresh deployment from one with data to resolve.
+
+    The library's own system actors (``_actingweb_*``) exist before the first
+    request and do not count.
+    """
+    prefix = "_actingweb_"
+    try:
+        if config.database == "postgresql":
+            from actingweb.db.postgresql.connection import get_connection
+
+            with get_connection() as conn, conn.cursor() as cur:
+                cur.execute(
+                    "SELECT 1 FROM actors WHERE NOT starts_with(id, %s) LIMIT 1",
+                    (prefix,),
+                )
+                return cur.fetchone() is None
+        from actingweb.db.dynamodb.actor import Actor
+
+        for row in Actor.scan(page_size=25, attributes_to_get=["id"]):
+            if not str(row.id).startswith(prefix):
+                return False
+        return True
+    except Exception as e:  # folds DbError: only picks the shorter message
+        # Say why the short message is not given: a role without Scan, say.
+        logger.info("Could not tell whether the actor table is empty: %s", e)
+        return False
+
+
 def missing_enforcement(config: Any) -> str | None:
     """Why enforcement is not in place, or None when it is.
 
@@ -977,9 +1026,10 @@ def missing_enforcement(config: Any) -> str | None:
         return None
     from actingweb.db.dynamodb.creator import Creator
 
-    if not Creator.exists():
+    state = _backfill_state()
+    if state == "table-missing":
         return f"the DynamoDB table {Creator.Meta.table_name} does not exist"
-    if not backfill_complete():
+    if state == "not-backfilled":
         return f"the DynamoDB table {Creator.Meta.table_name} is not backfilled"
     return None
 

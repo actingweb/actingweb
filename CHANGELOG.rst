@@ -234,8 +234,75 @@ REMOVED
   a gap (see the sequence-number entry under FIXED). Nothing in the library
   called it after that change; code that did should drop the call.
 
+- **The legacy reverse-lookup mechanisms are removed.** Reverse lookup (find an
+  actor by an indexed property value) now always uses the lookup table. The
+  value-keyed ``property-index`` GSI path (``PropertyLegacy``,
+  ``PropertyIndex``) on DynamoDB, the v1 ``<prefix>_property_lookup`` table
+  and its read fallback (``PropertyLookup``, ``get_v1``), the unindexed
+  ``properties`` value scan on PostgreSQL, ``Config.use_lookup_table``, the
+  ``USE_PROPERTY_LOOKUP_TABLE`` variable, the ``use_lookup_table`` arguments
+  of ``DbProperty``/``DbPropertyList`` and ``--legacy``/``--lookup-table`` on
+  ``python -m actingweb.db.verify_tables`` are gone. **Behavior change:**
+  ``ActingWebApp.with_legacy_property_index()`` now raises ``RuntimeError``
+  (a tombstone, removed at the next major), and ``Config`` raises it for
+  ``USE_PROPERTY_LOOKUP_TABLE=false`` and ``Config(use_lookup_table=False)``;
+  the message names ``docs/migration/v3.16.rst`` and
+  ``actingweb-property-lookup``. A true value is ignored with a
+  ``DeprecationWarning``. **Check:** drop the setting, run
+  ``actingweb-property-lookup report`` and ``backfill --apply`` before the
+  deploy if the lookup table was never populated (see the entry under
+  CHANGED), and, once verified, drop the old table and GSI; nothing reads
+  them.
+
 CHANGED
 ~~~~~~~
+
+- **Breaking: ``DbProperty`` and ``DbPropertyList`` require
+  ``indexed_properties``.** The constructors take a required, keyword-only
+  ``indexed_properties: list[str]`` on both backends and read no environment
+  variable, so a direct construction can no longer disagree with the
+  configured set. ``actingweb.db.get_property`` and ``get_property_list``
+  pass it. **Check:** custom code that built the accessors directly (and any
+  custom database backend) gets a ``TypeError`` naming the argument.
+
+- **Breaking: a custom ``DbPropertyLookup`` backend gains four readiness
+  functions.** ``read_readiness(names)``, ``mark_backfilled(names)``,
+  ``unmark(names)`` and ``record_configured(names)`` are module-level
+  functions of the backend's ``property_lookup`` module (the startup check
+  and ``actingweb-property-lookup`` call them). A missing table or any fault
+  raises ``DbError``.
+
+- **Behavior change: an indexed property write whose lookup row cannot be
+  written fails with ``DbError`` (503) instead of succeeding.** Before, a
+  DynamoDB write logged ``LOOKUP_TABLE_SYNC_FAILED`` and committed the
+  property anyway, leaving a value that reverse lookup could never find (the
+  legacy GSI had masked this for older deployments). Now the property, its
+  lookup row and the old value's lookup row are one ``TransactWriteItems``
+  and a fault raises with nothing written; PostgreSQL already rolled the pair
+  back together. A value another actor already holds is still a logged
+  ``LOOKUP_COLLISION``, not a failure. An indexed write costs about twice the
+  write units of a plain put on DynamoDB (non-indexed writes are unchanged),
+  and the IAM role needs ``PutItem`` and ``DeleteItem`` on both tables.
+  ``DbPropertyLookup.create`` (DynamoDB) now raises ``DbError`` on a write
+  fault instead of returning False, which only means a collision.
+
+- **Behavior change: ``check_ready()`` and ``integrate_*`` raise
+  ``PropertyLookupNotReady`` for an indexed name that was never backfilled.**
+  The startup check reads a per-name backfill-complete marker (reserved
+  ``#meta#`` rows in the DynamoDB ``property_lookup_v2`` table, or the new
+  PostgreSQL table ``property_lookup_backfill``) and the indexed-name set the
+  last passing start saw. It refuses a name that has property data and no
+  marker, or that was dropped from the indexed set for a deploy and restored,
+  and it refuses a lookup table it cannot read ("could not be checked"). A
+  store with no properties marks itself ready. ``check_ready()`` now
+  pre-warms the DynamoDB tables first and runs this and the
+  creator-uniqueness check together; when both refuse it raises
+  ``StoreNotReady`` listing both. **Check:** an application that catches only
+  ``UniqueCreatorNotReady`` should catch ``StoreNotReady`` (their common base
+  class), or the combined refusal escapes it. A PostgreSQL deployment must
+  run ``alembic upgrade head`` (revision ``f6a7b8c9d0e1``) before the deploy.
+  An application that never uses reverse lookup calls
+  ``with_indexed_properties([])``.
 
 - **Breaking: ``with_unique_creator()`` is enforced by the database.** Before
   3.16 the flag made ``Actor.create`` list the creator's actors and refuse
@@ -646,6 +713,21 @@ CHANGED
 
 ADDED
 ~~~~~
+
+- **``actingweb-property-lookup``** (``report``, ``backfill``,
+  ``mark-complete``, ``unmark``; dry-run unless ``--apply``) makes the
+  reverse-lookup table ready on both backends, and ships in the wheel
+  (``scripts/`` does not). ``backfill`` rebuilds the lookup rows from the
+  properties table (DynamoDB: rate-limited segment scan, resumable; a write
+  fault is retried and never reported as a collision; PostgreSQL: primary-key
+  batches that commit alone, orphaned property rows skipped and counted),
+  marks each name that finished with no fault and no collision, and records
+  the name set. ``mark-complete`` marks without a scan and refuses a name with
+  property rows and no lookup rows unless ``--force``. ``report`` exits 1
+  when the startup check would refuse.
+  ``scripts/backfill_property_lookup.py`` stays as a shim that delegates.
+  New exports: ``StoreNotReady`` and ``PropertyLookupNotReady`` from
+  ``actingweb.interface``.
 
 - **``Config.actor_path(actor_id, suffix="")``** returns an actor's path
   with the deployment's base path (the path part of ``config.root``). The

@@ -46,11 +46,10 @@ That's why it waits for a major version.
    differ from DynamoDB's per-partition byte ceiling, so the case for moving
    PostgreSQL's `properties` table layout at all should be argued
    independently rather than assumed to follow DynamoDB's reasoning.
-4. Sequence after `thoughts/todo/legacy-property-gsi-removal.md` —
-   both are next-major, both touch property storage layout, and doing the
-   legacy-GSI removal first means the new scheme is designed against the
-   *final* lookup-table-only shape rather than one that still has to carry
-   the legacy fallback tiers.
+4. The legacy GSI machinery is gone (3.16, `thoughts/plans/2026-11-01-single-mode-and-consumer-primitives.md`),
+   so the new scheme is designed against the final lookup-table-only shape,
+   with the lookup row written in the same `TransactWriteItems` as an indexed
+   property.
 
 ## A second requirement: out-of-band per-item payload
 

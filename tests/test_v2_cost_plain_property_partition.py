@@ -49,7 +49,7 @@ class TestDynamoDBPlainPropertyFetch:
 
         from actingweb.db.dynamodb.property import DbProperty, DbPropertyList, Property
 
-        db = DbProperty()
+        db = DbProperty(indexed_properties=["oauthId", "email", "externalUserId"])
         for i in range(5):
             db.set(actor_id=actor_id, name=f"prop{i}", value=f"val{i}")
 
@@ -67,7 +67,9 @@ class TestDynamoDBPlainPropertyFetch:
                 yielded_names.append(str(item.name))
                 yield item
 
-        db_list = DbPropertyList()
+        db_list = DbPropertyList(
+            indexed_properties=["oauthId", "email", "externalUserId"]
+        )
         with mock.patch.object(Property, "query", classmethod(spy)):
             result = db_list.fetch(actor_id=actor_id)
 
@@ -89,7 +91,9 @@ class TestDynamoDBPlainPropertyFetch:
         lst = ListProperty(actor_id, "étag", config)  # 'é' > '~' in bytes
         lst.append("x")
 
-        db_list = DbPropertyList()
+        db_list = DbPropertyList(
+            indexed_properties=["oauthId", "email", "externalUserId"]
+        )
         result = db_list.fetch(actor_id=actor_id)
         assert result == {}
 
@@ -100,11 +104,13 @@ class TestDynamoDBPlainPropertyFetch:
     ):
         from actingweb.db.dynamodb.property import DbProperty, DbPropertyList
 
-        db = DbProperty()
+        db = DbProperty(indexed_properties=["oauthId", "email", "externalUserId"])
         db.set(actor_id=actor_id, name="list", value="a")
         db.set(actor_id=actor_id, name="listen", value="b")
 
-        db_list = DbPropertyList()
+        db_list = DbPropertyList(
+            indexed_properties=["oauthId", "email", "externalUserId"]
+        )
         result = db_list.fetch(actor_id=actor_id)
         assert result == {"list": "a", "listen": "b"}
 
@@ -117,7 +123,9 @@ class TestDynamoDBPlainPropertyFetch:
         lst = ListProperty(actor_id, "onlylist", config)
         lst.append("x")
 
-        db_list = DbPropertyList()
+        db_list = DbPropertyList(
+            indexed_properties=["oauthId", "email", "externalUserId"]
+        )
         result = db_list.fetch(actor_id=actor_id)
         assert result == {}
         assert result is not None
@@ -128,12 +136,14 @@ class TestDynamoDBPlainPropertyFetch:
         from actingweb.db.dynamodb.property import DbProperty, DbPropertyList
         from actingweb.property_list import ListProperty
 
-        db = DbProperty()
+        db = DbProperty(indexed_properties=["oauthId", "email", "externalUserId"])
         db.set(actor_id=actor_id, name="plain", value="v")
         lst = ListProperty(actor_id, "notes", config)
         lst.append("a")
 
-        db_list = DbPropertyList()
+        db_list = DbPropertyList(
+            indexed_properties=["oauthId", "email", "externalUserId"]
+        )
         result = db_list.fetch_all_including_lists(actor_id=actor_id) or {}
         assert result.get("plain") == "v"
         assert any(k.startswith("list:notes-") for k in result)
@@ -151,14 +161,16 @@ class TestPostgreSQLPlainPropertyFetch:
         from actingweb.db.postgresql.property import DbProperty, DbPropertyList
         from actingweb.property_list import ListProperty
 
-        db = DbProperty()
+        db = DbProperty(indexed_properties=["oauthId", "email", "externalUserId"])
         for i in range(5):
             db.set(actor_id=actor_id, name=f"prop{i}", value=f"val{i}")
         lst = ListProperty(actor_id, "biglist", config)
         for i in range(20):
             lst.append(f"item{i}")
 
-        db_list = DbPropertyList()
+        db_list = DbPropertyList(
+            indexed_properties=["oauthId", "email", "externalUserId"]
+        )
         result = db_list.fetch(actor_id=actor_id)
         assert result == {f"prop{i}": f"val{i}" for i in range(5)}
 
@@ -169,11 +181,13 @@ class TestPostgreSQLPlainPropertyFetch:
     ):
         from actingweb.db.postgresql.property import DbProperty, DbPropertyList
 
-        db = DbProperty()
+        db = DbProperty(indexed_properties=["oauthId", "email", "externalUserId"])
         db.set(actor_id=actor_id, name="list", value="a")
         db.set(actor_id=actor_id, name="listen", value="b")
 
-        db_list = DbPropertyList()
+        db_list = DbPropertyList(
+            indexed_properties=["oauthId", "email", "externalUserId"]
+        )
         result = db_list.fetch(actor_id=actor_id)
         assert result == {"list": "a", "listen": "b"}
 
@@ -186,7 +200,9 @@ class TestPostgreSQLPlainPropertyFetch:
         lst = ListProperty(actor_id, "onlylist", config)
         lst.append("x")
 
-        db_list = DbPropertyList()
+        db_list = DbPropertyList(
+            indexed_properties=["oauthId", "email", "externalUserId"]
+        )
         result = db_list.fetch(actor_id=actor_id)
         assert result == {}
         assert result is not None
@@ -197,12 +213,14 @@ class TestPostgreSQLPlainPropertyFetch:
         from actingweb.db.postgresql.property import DbProperty, DbPropertyList
         from actingweb.property_list import ListProperty
 
-        db = DbProperty()
+        db = DbProperty(indexed_properties=["oauthId", "email", "externalUserId"])
         db.set(actor_id=actor_id, name="plain", value="v")
         lst = ListProperty(actor_id, "notes", config)
         lst.append("a")
 
-        db_list = DbPropertyList()
+        db_list = DbPropertyList(
+            indexed_properties=["oauthId", "email", "externalUserId"]
+        )
         result = db_list.fetch_all_including_lists(actor_id=actor_id) or {}
         assert result.get("plain") == "v"
         assert any(k.startswith("list:notes-") for k in result)

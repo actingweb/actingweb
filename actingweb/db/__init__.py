@@ -19,7 +19,7 @@ Config-Aware Accessors
 ----------------------
 This module provides factory functions for creating database instances with
 configuration automatically injected. This ensures all DB objects respect
-application settings like indexed_properties and use_lookup_table.
+application settings like indexed_properties.
 
 Example usage:
     from actingweb.db import get_property, get_actor
@@ -71,38 +71,34 @@ def get_property(config: "Config") -> "DbPropertyProtocol":
     """Create a DbProperty instance with configuration injected.
 
     This is the recommended way to instantiate DbProperty objects as it ensures
-    that property lookup table settings (use_lookup_table, indexed_properties)
-    are properly configured.
+    that the configured ``indexed_properties`` reach the property accessors.
 
     Args:
         config: ActingWeb configuration instance
 
     Returns:
-        DbProperty instance configured with indexed_properties and use_lookup_table
+        DbProperty instance configured with indexed_properties
 
     Example:
         >>> from actingweb.db import get_property
         >>> db = get_property(config)
         >>> db.set(actor_id="abc123", name="email", value="user@example.com")
     """
-    return config.DbProperty.DbProperty(
-        use_lookup_table=config.use_lookup_table,
-        indexed_properties=config.indexed_properties,
-    )
+    return config.DbProperty.DbProperty(indexed_properties=config.indexed_properties)
 
 
 def get_property_list(config: "Config") -> "DbPropertyListProtocol":
     """Create a DbPropertyList instance with configuration injected.
 
     This ensures batch operations (e.g. deleting all of an actor's properties)
-    respect the same use_lookup_table / indexed_properties settings as
+    respect the same indexed_properties setting as
     get_property(), so lookup table rows stay in sync on bulk delete.
 
     Args:
         config: ActingWeb configuration instance
 
     Returns:
-        DbPropertyList instance configured with indexed_properties and use_lookup_table
+        DbPropertyList instance configured with indexed_properties
 
     Example:
         >>> from actingweb.db import get_property_list
@@ -110,8 +106,7 @@ def get_property_list(config: "Config") -> "DbPropertyListProtocol":
         >>> props = db_list.fetch(actor_id="abc123")
     """
     return config.DbProperty.DbPropertyList(
-        use_lookup_table=config.use_lookup_table,
-        indexed_properties=config.indexed_properties,
+        indexed_properties=config.indexed_properties
     )
 
 

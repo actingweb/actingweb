@@ -641,7 +641,56 @@ flowchart TD
 - [ ] `cd actingweb/db/postgresql/migrations && poetry run alembic upgrade head && poetry run alembic downgrade -1 && poetry run alembic upgrade head` against the test container succeeds
 - [ ] Manual: the demo in local QA mode (CLAUDE.md "App") starts on a fresh prefix without a lookup refusal; seeding a property with an indexed name directly and running `unmark --apply` for that name makes the next start refuse with the command named
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+**Implementation notes (Phase 1):**
+
+- Source: legacy classes and the v1 tier removed; `indexed_properties`
+  required and keyword-only; D15 as one `TransactWriteItems` on DynamoDB
+  (reusing `DbActor._run_transaction`; items go out as delete, property put,
+  lookup put, so the lookup create is the last index; a delete that loses to
+  another actor's row from a past collision is retried without the delete);
+  readiness functions on both backends; Alembic `f6a7b8c9d0e1` and
+  `PropertyLookupBackfill` in `schema.py`; `Config` and builder tombstones;
+  `StoreNotReady` hierarchy; `check_ready()` pre-warms and runs both probes;
+  `actingweb.maintenance.property_lookup` with the script shim;
+  `verify_tables` without modes; demo and `CLAUDE.md` updated.
+- **Deviation, D15 on PostgreSQL:** the write path already re-raised from the
+  lookup sync inside the one transaction, so no source change was needed; a
+  real-database test (`tests/test_property_lookup_sync.py`) pins it. The log
+  tag `LOOKUP_TABLE_SYNC_FAILED` stays on that path (it logs, then raises).
+- **Deviation, "empty store":** the plan's `Scan(limit=1)` on the properties
+  table can never be empty, because the library's system actors write
+  `trust_type:*` rows to it before the probe runs. Empty now means no row
+  whose id does not start with `_actingweb_` (DynamoDB: a scan page of 25;
+  PostgreSQL: `NOT starts_with(id, '_actingweb_') LIMIT 1`).
+- **Deviation, test seam:** `tests/_lookup_probe.py` holds the session stub of
+  `_check_property_lookup_ready` and the `real_lookup_probe` fixture, imported
+  by both conftests (an integration-only run takes its rootdir from the
+  integration `pytest.ini` and does not load `tests/conftest.py`). The real
+  probe is captured once and the stub is never undone: two conftest scopes
+  would otherwise stub the stub and restore it under running tests.
+- **Found, a hazard in the shipped script:** the default `--checkpoint-file`
+  is relative to the working directory, so two backfills (or two parallel
+  test workers) in one directory race on it. Kept for compatibility; the
+  tests pass a file of their own, and the migration guide names `--checkpoint-file`.
+- `DbPropertyLookup.create` (DynamoDB) now raises `DbError` on a write fault;
+  `_write_indexed` calls `ensure_table(PropertyLookupV2)` so the transaction
+  does not require the table to exist already (lazy creation as before).
+- `verify_tables.required_models` keeps the lookup table last, so existing
+  suffix-order tests hold.
+- Verification: Full tier green on DynamoDB (4999) and PostgreSQL (4816);
+  Alembic round trip clean; sphinx `-W` clean. Verification note:
+  `thoughts/verifications/2026-11-01-single-mode-and-consumer-primitives-phase-1.md`.
+  The outside-voice review (fresh-context; Codex cannot start in the sandbox)
+  found a false-ready empty-store probe (`limit` vs `page_size`), a reusable
+  checkpoint, orphan rows, a PG configured-set race and a `report` subset
+  false pass; all fixed. Open, filed as a todo: stale lookup owners, a
+  same-actor stale-handle race, one over-long PG value.
+- The shared unit-test store has one recorded name set, so the tests that write
+  it run in the xdist group `property_lookup_markers`. A PostgreSQL unit run
+  needs `alembic upgrade head` on the target schema first (CI does it; the
+  existing todo `postgres-unit-tests-need-integration-schema.md` is the cause).
 
 ---
 

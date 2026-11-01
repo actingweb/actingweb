@@ -19,6 +19,12 @@ import filelock
 import pytest
 import requests
 
+# An integration-only run does not load tests/conftest.py (see the module).
+from tests._lookup_probe import (  # noqa: F401
+    _stub_property_lookup_probe,  # pyright: ignore[reportUnusedImport]
+    real_lookup_probe,  # pyright: ignore[reportUnusedImport]
+)
+
 
 def _prewarm_botocore():
     """

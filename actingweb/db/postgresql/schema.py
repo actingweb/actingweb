@@ -101,6 +101,28 @@ class PropertyLookup(Base):
     actor_id = Column(String(255), nullable=False)
 
 
+class PropertyLookupBackfill(Base):
+    """Operator assertions about the reverse-lookup table.
+
+    One row per indexed property name (``kind = 'name'``: the lookup table
+    was backfilled for that name) and one row for the indexed-name set the
+    last passing readiness check saw (``kind = 'configured'``, ``property_name = '*'``,
+    the names JSON-encoded in ``value``). Written by
+    ``actingweb-property-lookup`` and the startup readiness check.
+    """
+
+    __tablename__ = "property_lookup_backfill"
+    __table_args__ = (PrimaryKeyConstraint("property_name", "kind"),)
+
+    property_name = Column(String(255), nullable=False)
+    kind = Column(String(16), nullable=False, server_default="name")
+    # The name set, JSON-encoded, on the single ``configured`` row.
+    value = Column(Text)
+    completed_at = Column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+
 class Trust(Base):
     """Trust table - trust relationships between actors."""
 

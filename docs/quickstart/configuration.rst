@@ -447,23 +447,22 @@ ActingWeb supports efficient reverse lookups (find actor by property value) usin
 
 **How it works**
 
-Lookup-table mode is the **default** (since v3.13) and the mechanism of
-record. On DynamoDB, lookup rows are keyed by a SHA-256 digest of the
-(property name, value) pair — no value-size limit, uniform partition
-distribution, and no plaintext values in the lookup table.
+Reverse lookup always goes through a dedicated lookup table (the only
+mechanism since 3.16). On DynamoDB, lookup rows are keyed by a SHA-256 digest
+of the (property name, value) pair — no value-size limit, uniform partition
+distribution, and no plaintext values in the lookup table. On PostgreSQL the
+``property_lookup`` table is keyed by ``(property_name, value)``.
 
-The deprecated legacy mode used database indexes instead:
-
-- **DynamoDB**: Global Secondary Index (GSI) on the ``value`` field — limited to 2048 bytes
-- **PostgreSQL**: unindexed query on the ``value`` column — a full-table scan
-
-Legacy mode remains available for migration (``with_legacy_property_index(enable=True)``)
-and is removed in the next major release.
+An indexed property write and its lookup row succeed or fail together: if
+the lookup row cannot be written the property write raises ``DbError`` (the
+integrations answer 503) instead of leaving a value that reverse lookup can
+never find. A value another actor already holds is a logged collision, not a
+failure.
 
 Configuration
 ~~~~~~~~~~~~~
 
-Enable lookup tables via API or environment variables:
+Choose the indexed property names via API or environment variable:
 
 .. code-block:: python
 
@@ -474,24 +473,26 @@ Enable lookup tables via API or environment variables:
         fqdn="myapp.example.com"
     ).with_indexed_properties(["oauthId", "email", "externalUserId"])
 
-    # Lookup-table mode is the default; pin legacy mode only for migration:
-    # app.with_legacy_property_index(enable=True)
-
 **Environment Variables:**
 
 .. code-block:: bash
 
-    export USE_PROPERTY_LOOKUP_TABLE=false                         # Pin deprecated legacy mode
     export INDEXED_PROPERTIES=oauthId,email,externalUserId         # Which properties to index
 
 **Default Configuration:**
 
-- ``USE_PROPERTY_LOOKUP_TABLE``: ``true`` (lookup-table mode; set ``false`` to pin the deprecated legacy GSI/index)
 - ``INDEXED_PROPERTIES``: ``["oauthId", "email", "externalUserId"]``
 
-Precedence: an explicit ``with_indexed_properties()`` /
-``with_legacy_property_index()`` call beats the environment variable,
-which beats the library default.
+Precedence: an explicit ``with_indexed_properties()`` call beats the
+environment variable, which beats the library default.
+
+.. note::
+
+   ``USE_PROPERTY_LOOKUP_TABLE=false``, ``Config(use_lookup_table=False)`` and
+   ``with_legacy_property_index()`` were removed in 3.16 and fail at
+   configure time with a pointer to :doc:`../migration/v3.16` ("One
+   reverse-lookup mechanism"). ``USE_PROPERTY_LOOKUP_TABLE=true`` is ignored
+   with a ``DeprecationWarning``.
 
 .. note::
 
@@ -545,26 +546,44 @@ The lookup happens automatically when you set indexed properties:
 Migration Guide
 ~~~~~~~~~~~~~~~
 
-**New deployments** need nothing — lookup-table mode is the default.
+**New deployments** need nothing: on a store with no properties yet the first
+start marks every indexed name ready.
 
-**Deployments upgrading from pre-3.13** (or from the v1 lookup-table
-format): reverse lookups keep working through deprecated fallbacks, but
-you must populate the v2 lookup table:
+**Startup check.** ``ActingWebApp.check_ready()`` (called by
+``integrate_flask`` and ``integrate_fastapi``) refuses to start when a
+configured indexed name has property data but no backfill-complete marker.
+It raises ``PropertyLookupNotReady`` naming the command that fixes it. The
+marker is kept per name on both backends, together with a record of the
+indexed-name set the last passing start saw, so adding a name later, or
+dropping one for a deploy and restoring it, is refused until that name is
+backfilled again.
+
+**Deployments with existing data** run the packaged command with the same
+environment as the application:
 
 .. code-block:: bash
 
-    # With the same environment as the app:
-    poetry run python scripts/backfill_property_lookup.py --dry-run
-    poetry run python scripts/backfill_property_lookup.py --rps 50
+    actingweb-property-lookup report                  # per name: rows, markers
+    actingweb-property-lookup backfill                # dry run
+    actingweb-property-lookup backfill --apply        # write rows, mark, record
 
-The script is streaming, rate-limited, resumable and idempotent, and
-reports (without overwriting) any value shared by two actors. See
-:doc:`../migration/v3.13` for the full decision tree, verification steps,
-and the optional legacy-GSI / v1-table cleanup.
+The backfill is streaming, rate-limited (``--rps``, ``--read-rcu``),
+resumable and idempotent, and reports (without overwriting) any value shared
+by two actors; a name with a collision stays unmarked. On PostgreSQL it runs
+in primary-key batches that commit alone (run it off-peak on a large table).
+A deployment that already ran the 3.13 backfill can mark its names without
+rescanning: ``mark-complete --apply`` (it refuses a name that has property
+rows and no lookup rows unless ``--force``). ``unmark --apply`` removes a
+marker. The marker is an operator assertion that the backfill ran: data
+copied into a store by a tool, not written through the library, needs
+``backfill --apply`` after the copy.
 
-**Rollback:** Set ``USE_PROPERTY_LOOKUP_TABLE=false`` (or call
-``with_legacy_property_index(enable=True)``) to pin the deprecated
-legacy GSI/index mode.
+An application that never uses reverse lookup can call
+``with_indexed_properties([])`` instead; nothing is read at startup.
+
+See :doc:`../migration/v3.16` ("One reverse-lookup mechanism") for the full
+upgrade path, including dropping the old ``property-index`` GSI and the v1
+lookup table.
 
 Size Limits
 ~~~~~~~~~~~
@@ -576,14 +595,11 @@ Size Limits
    * - Configuration
      - DynamoDB Limit
      - PostgreSQL Limit
-   * - Legacy GSI/Index
-     - 2048 bytes
-     - 8191 bytes (btree index)
    * - Lookup Table
      - No limit (fixed-size digest key)
      - No limit (TEXT column)
 
-**Recommendation:** Use lookup tables if you need to store OAuth tokens, long external IDs, or any property values exceeding 2KB.
+Indexed values of any length work: the lookup table has no size limit.
 
 .. note::
    On DynamoDB, lookup rows are keyed by a SHA-256 digest of

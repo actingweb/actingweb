@@ -40,18 +40,24 @@ class TestPropertyDeleteScope:
         actor_a, actor_b = actor_pair
         for actor in (actor_a, actor_b):
             for name in ("p1", "p2"):
-                assert DbProperty().set(actor_id=actor, name=name, value=f"v-{actor}")
+                assert DbProperty(
+                    indexed_properties=["oauthId", "email", "externalUserId"]
+                ).set(actor_id=actor, name=name, value=f"v-{actor}")
 
-        lst = DbPropertyList()
+        lst = DbPropertyList(indexed_properties=["oauthId", "email", "externalUserId"])
         assert lst.fetch(actor_id=actor_a)
         assert lst.delete() is True
 
-        assert DbPropertyList().fetch(actor_id=actor_a) in (None, {})
-        remaining = DbPropertyList().fetch(actor_id=actor_b)
+        assert DbPropertyList(
+            indexed_properties=["oauthId", "email", "externalUserId"]
+        ).fetch(actor_id=actor_a) in (None, {})
+        remaining = DbPropertyList(
+            indexed_properties=["oauthId", "email", "externalUserId"]
+        ).fetch(actor_id=actor_b)
         assert remaining is not None and set(remaining) == {"p1", "p2"}
 
         # Cleanup
-        b = DbPropertyList()
+        b = DbPropertyList(indexed_properties=["oauthId", "email", "externalUserId"])
         b.fetch(actor_id=actor_b)
         b.delete()
 

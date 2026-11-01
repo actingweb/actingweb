@@ -32,7 +32,6 @@ if TYPE_CHECKING:
     from pynamodb.models import Model
 
 __all__ = [
-    "lookup_mode_enabled",
     "required_models",
     "required_table_names",
     "verify_tables",
@@ -40,22 +39,7 @@ __all__ = [
 ]
 
 
-def lookup_mode_enabled() -> bool:
-    """Whether property reverse lookup uses the lookup table (the default).
-
-    Mirrors ``Config.use_lookup_table`` for callers that only have the
-    environment (a CLI has no ``ActingWebApp`` instance to ask).
-    """
-    return os.getenv("USE_PROPERTY_LOOKUP_TABLE", "true").strip().lower() not in (
-        "false",
-        "0",
-        "no",
-    )
-
-
-def required_models(
-    use_lookup_table: bool | None = None, unique_creator: bool = False
-) -> list[type[Model]]:
+def required_models(unique_creator: bool = False) -> list[type[Model]]:
     """The DynamoDB model classes whose tables must exist for this config.
 
     This is the single source of truth for "which tables does ActingWeb need"
@@ -63,20 +47,17 @@ def required_models(
     the documented set and the created set cannot drift apart.
 
     Args:
-        use_lookup_table: Reverse-lookup mode. ``None`` reads the environment.
         unique_creator: ``with_unique_creator()`` is on, which needs the
             ``creators`` table.
 
     Returns:
         Model classes, in a stable order.
     """
-    if use_lookup_table is None:
-        use_lookup_table = lookup_mode_enabled()
-
     from .dynamodb.actor import Actor
     from .dynamodb.attribute import Attribute
     from .dynamodb.peertrustee import PeerTrustee
-    from .dynamodb.property import Property, PropertyLegacy
+    from .dynamodb.property import Property
+    from .dynamodb.property_lookup import PropertyLookupV2
     from .dynamodb.subscription import Subscription
     from .dynamodb.subscription_diff import SubscriptionDiff
     from .dynamodb.subscription_suspension import SubscriptionSuspension
@@ -86,20 +67,13 @@ def required_models(
         Actor,
         Attribute,
         PeerTrustee,
-        # Same table name either way; the schemas differ (lookup mode creates
-        # it without the legacy value-keyed GSI).
-        Property if use_lookup_table else PropertyLegacy,
+        Property,
         Subscription,
         SubscriptionDiff,
         SubscriptionSuspension,
         Trust,
+        PropertyLookupV2,
     ]
-    # The v2 lookup table exists only in lookup mode. The deprecated v1 table
-    # is read-only fallback and never required.
-    if use_lookup_table:
-        from .dynamodb.property_lookup import PropertyLookupV2
-
-        models.append(PropertyLookupV2)
     if unique_creator:
         from .dynamodb.creator import Creator
 
@@ -107,26 +81,15 @@ def required_models(
     return models
 
 
-def required_table_names(
-    use_lookup_table: bool | None = None, unique_creator: bool = False
-) -> list[str]:
+def required_table_names(unique_creator: bool = False) -> list[str]:
     """Resolved table names (``AWS_DB_PREFIX`` applied) that must exist."""
-    return [
-        str(m.Meta.table_name)
-        for m in required_models(use_lookup_table, unique_creator)
-    ]
+    return [str(m.Meta.table_name) for m in required_models(unique_creator)]
 
 
-def verify_tables(
-    use_lookup_table: bool | None = None,
-    unique_creator: bool = False,
-) -> tuple[list[str], list[str]]:
+def verify_tables(unique_creator: bool = False) -> tuple[list[str], list[str]]:
     """Check each required table for existence.
 
     Issues one ``DescribeTable`` per model. Never creates anything.
-
-    Args:
-        use_lookup_table: Reverse-lookup mode. ``None`` reads the environment.
 
     Returns:
         ``(present, missing)`` — resolved table names, each list sorted as in
@@ -139,7 +102,7 @@ def verify_tables(
     """
     present: list[str] = []
     missing: list[str] = []
-    for model in required_models(use_lookup_table, unique_creator):
+    for model in required_models(unique_creator):
         name = str(model.Meta.table_name)
         if model.exists():
             present.append(name)
@@ -158,20 +121,6 @@ def main(argv: list[str] | None = None) -> int:
             "dynamodb:DescribeTable (an operator role, not the slimmed "
             "runtime role)."
         ),
-    )
-    mode = parser.add_mutually_exclusive_group()
-    mode.add_argument(
-        "--lookup-table",
-        dest="use_lookup_table",
-        action="store_true",
-        default=None,
-        help="Assume lookup-table reverse lookup (the 3.13 default).",
-    )
-    mode.add_argument(
-        "--legacy",
-        dest="use_lookup_table",
-        action="store_false",
-        help="Assume deprecated legacy GSI reverse lookup.",
     )
     parser.add_argument(
         "--unique-creator",
@@ -199,19 +148,12 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     try:
-        names = required_table_names(args.use_lookup_table, args.unique_creator)
+        names = required_table_names(args.unique_creator)
     except ImportError as e:
         print(f"Could not load the DynamoDB backend: {e}", file=sys.stderr)
         return 2
 
-    use_lookup = (
-        lookup_mode_enabled()
-        if args.use_lookup_table is None
-        else args.use_lookup_table
-    )
-    mode_label = "lookup-table" if use_lookup else "legacy (deprecated)"
     prefix = os.getenv("AWS_DB_PREFIX", "demo_actingweb")
-    print(f"Reverse-lookup mode: {mode_label}")
     print(f"Table prefix:        {prefix}")
     print(f"Required tables:     {len(names)}")
 
@@ -221,7 +163,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     try:
-        present, missing = verify_tables(args.use_lookup_table, args.unique_creator)
+        present, missing = verify_tables(args.unique_creator)
     except Exception as e:  # credentials, permissions, endpoint
         print(f"\nCheck could not be performed: {e}", file=sys.stderr)
         print(

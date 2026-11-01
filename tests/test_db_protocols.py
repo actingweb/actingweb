@@ -59,13 +59,17 @@ class TestPhase2ProtocolCompliance:
     def test_property_protocol_compliance(self, backend: str) -> None:
         """Verify DbProperty implements DbPropertyProtocol."""
         mod = importlib.import_module(f"actingweb.db.{backend}.property")
-        instance = mod.DbProperty()
+        instance = mod.DbProperty(
+            indexed_properties=["oauthId", "email", "externalUserId"]
+        )
         assert isinstance(instance, DbPropertyProtocol)
 
     def test_property_list_protocol_compliance(self, backend: str) -> None:
         """Verify DbPropertyList implements DbPropertyListProtocol."""
         mod = importlib.import_module(f"actingweb.db.{backend}.property")
-        instance = mod.DbPropertyList()
+        instance = mod.DbPropertyList(
+            indexed_properties=["oauthId", "email", "externalUserId"]
+        )
         assert isinstance(instance, DbPropertyListProtocol)
 
 

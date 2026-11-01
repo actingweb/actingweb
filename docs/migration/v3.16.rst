@@ -107,6 +107,15 @@ check only the first three items and item 11.
     except that a v2 list's ``verify()`` report gains ``key_rows``,
     ``dangling_key_rows``, ``duplicate_keyed_items`` and
     ``unkeyed_keyed_items``. Deploy 3.16 everywhere before the first call.
+17. **One reverse-lookup mechanism, and a startup check for it** (see
+    `One reverse-lookup mechanism`_). The legacy ``property-index`` GSI path,
+    the v1 lookup table, the PostgreSQL value scan and
+    ``USE_PROPERTY_LOOKUP_TABLE`` are gone. A deployment whose properties hold
+    data but whose indexed names were never backfilled does not start:
+    ``check_ready()`` raises ``PropertyLookupNotReady`` naming
+    ``actingweb-property-lookup backfill --apply``. An indexed property write
+    whose lookup row cannot be written now fails with ``DbError`` (503).
+    ``DbProperty`` and ``DbPropertyList`` require ``indexed_properties``.
 
 
 What changed and why
@@ -454,6 +463,115 @@ the returned count against the number of subscribers.
 - A hook that must degrade instead of failing the request on a fault: catch
   ``DbError`` inside the hook.
 
+One reverse-lookup mechanism
+----------------------------
+
+3.13 made the lookup table the default and kept the older mechanisms as
+fallbacks. 3.16 removes them.
+
+**What was removed**
+
+- The ``property-index`` GSI path on DynamoDB and the ``PropertyLegacy`` and
+  ``PropertyIndex`` models; the v1 ``<prefix>_property_lookup`` table and its
+  read fallback; the unindexed ``properties`` value scan on PostgreSQL.
+- ``Config.use_lookup_table``, the ``USE_PROPERTY_LOOKUP_TABLE`` variable, the
+  ``use_lookup_table`` constructor arguments, ``--legacy`` and
+  ``--lookup-table`` on ``python -m actingweb.db.verify_tables``.
+- ``ActingWebApp.with_legacy_property_index()`` stays as a tombstone that
+  raises ``RuntimeError``, and ``Config`` refuses
+  ``USE_PROPERTY_LOOKUP_TABLE=false`` and ``use_lookup_table=False`` at
+  configure time. Both messages point here. A true value is ignored with a
+  ``DeprecationWarning``. Delete the setting.
+
+**The startup refusal**
+
+``check_ready()`` (called by ``integrate_flask`` and ``integrate_fastapi``)
+checks every configured indexed name. A name is ready when it carries a
+backfill-complete marker, or when the properties table holds no row of an
+actor's own (a fresh store marks itself on the first start; the library's
+own ``_actingweb_*`` system-actor rows do not count). A name with data and no marker is
+refused:
+
+.. code-block:: text
+
+    PropertyLookupNotReady: Reverse lookup is not ready for the indexed
+    properties email: the properties table holds data but no backfill-complete
+    marker covers them ... Run 'actingweb-property-lookup report', then
+    'actingweb-property-lookup backfill --apply' ...
+
+The check also records the indexed-name set on a passing start. A name that
+was marked, dropped from ``with_indexed_properties()`` for a deploy and put
+back is refused again, because values written while it was unindexed have no
+lookup row. A store that cannot be read (missing lookup table, missing
+permission, connection error) is refused with "could not be checked" naming
+the table. ``check_ready()`` pre-warms DynamoDB tables first and reports this
+and the creator-uniqueness refusal together in one ``StoreNotReady``; catch
+``StoreNotReady`` (the base class of ``UniqueCreatorNotReady`` and
+``PropertyLookupNotReady``) where you caught only ``UniqueCreatorNotReady``.
+An application that never uses reverse lookup calls
+``with_indexed_properties([])``. While the list is empty nothing is recorded,
+so a name dropped that way and restored later is not caught: run
+``actingweb-property-lookup backfill --apply`` for it first.
+
+**What to run**
+
+With the application's environment (``DATABASE_BACKEND``, ``AWS_DB_PREFIX``,
+``INDEXED_PROPERTIES``, credentials). The command reads the indexed names from
+``INDEXED_PROPERTIES`` or the library default; if the application sets them with
+``with_indexed_properties()``, pass the same names with ``--properties a,b`` to
+every subcommand. ``backfill`` skips property rows whose actor no longer exists
+and counts them, and its checkpoint file (``--checkpoint-file``, default
+relative to the working directory) is kept only after a fault:
+
+.. code-block:: bash
+
+    actingweb-property-lookup report                  # read only
+    actingweb-property-lookup backfill --apply        # rows, then markers
+    actingweb-property-lookup mark-complete --apply   # ran the 3.13 backfill
+    actingweb-property-lookup unmark --apply          # roll a name back
+
+``backfill`` marks a name only when its pass finished with no fault and no
+collision (two actors sharing an indexed value); the other names are still
+marked. ``mark-complete`` refuses a name that has property rows and no
+lookup rows unless ``--force``. The marker is an operator assertion that the
+backfill ran: after copying data into a store with a tool that bypasses the
+library, run ``backfill --apply`` again. ``scripts/backfill_property_lookup.py``
+remains as a shim that delegates (its ``--dry-run`` is the command's default;
+running without it means ``--apply``).
+
+**Storage changes**
+
+- *DynamoDB:* the markers are reserved rows in the existing
+  ``<prefix>_property_lookup_v2`` table (``#meta#backfill#<name>`` and
+  ``#meta#configured``); no new table. With auto-create off, the runtime role
+  also needs ``PutItem`` and ``BatchGetItem`` on that table. You can drop the
+  v1 ``<prefix>_property_lookup`` table and the ``property-index`` GSI on
+  ``<prefix>_properties`` once the backfill is verified; nothing reads them.
+- *PostgreSQL:* a new table ``property_lookup_backfill``. Run
+  ``alembic upgrade head`` (revision ``f6a7b8c9d0e1``) **before** the deploy,
+  or the startup check is refused as "could not be checked". The backfill
+  inserts in primary-key batches that commit alone; run it off-peak on a large
+  ``properties`` table.
+
+**An indexed write and its lookup row now commit together**
+
+Before 3.16 a DynamoDB indexed property write that could not write its
+lookup row logged ``LOOKUP_TABLE_SYNC_FAILED`` and succeeded, leaving a value
+that reverse lookup could never find (the legacy GSI had masked this for
+older deployments). Now the property and its lookup row are one
+``TransactWriteItems`` and a fault raises ``DbError`` (503), with nothing
+written. PostgreSQL already rolled the pair back together. A value another
+actor already holds is still a logged collision (``LOOKUP_COLLISION``), not a
+failure: the property is written and the first owner keeps the lookup row.
+An indexed write costs about twice the write units of a plain put on
+DynamoDB; writes of non-indexed names are unchanged.
+
+**Wrong prefix.** Markers written under a wrong ``AWS_DB_PREFIX`` land in
+that prefix's (empty) tables, and the real tables stay unmarked and are
+refused when the prefix is fixed. The maintenance command refuses to run
+when the actors or properties table does not exist, so a wrong prefix is
+never read as an empty store.
+
 Custom database backends
 ------------------------
 
@@ -478,6 +596,20 @@ module docstring of ``actingweb.db.protocols`` states:
 
 A backend without ``strict`` fails with ``TypeError`` at its first call; one
 without ``increment_seq`` fails with ``AttributeError`` at its first diff.
+
+For reverse lookup (see `One reverse-lookup mechanism`_) a backend must also:
+
+- accept a keyword-only, required ``indexed_properties: list[str]`` in the
+  constructors of ``DbProperty`` and ``DbPropertyList`` and no
+  ``use_lookup_table`` (``actingweb.db.get_property`` and
+  ``get_property_list`` pass only ``indexed_properties``);
+- write an indexed property and its lookup row together or not at all, and
+  raise ``DbError`` from the property write when it cannot;
+- provide four module-level functions in its ``property_lookup`` module:
+  ``read_readiness(names)`` returning ``(marked names, recorded name set or
+  None)``, ``mark_backfilled(names)``, ``unmark(names)`` and
+  ``record_configured(names)``; a missing table or any other fault raises
+  ``DbError``.
 
 For creator uniqueness, ``DbActor`` must also:
 

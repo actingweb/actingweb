@@ -170,7 +170,9 @@ class TestPropertyPerformance:
             prop_name = f"perf_prop_{prop_counter[0]}"
             prop_counter[0] += 1
 
-            db_property = config.DbProperty.DbProperty()  # type: ignore[misc]
+            db_property = config.DbProperty.DbProperty(
+                indexed_properties=["oauthId", "email", "externalUserId"]
+            )  # type: ignore[misc]
             return db_property.set(
                 actor_id=sample_actor_id, name=prop_name, value="test_value"
             )
@@ -193,11 +195,15 @@ class TestPropertyPerformance:
 
         # Create test property
         prop_name = f"perf_read_prop_{int(time.time())}"
-        db_property = config.DbProperty.DbProperty()  # type: ignore[misc]
+        db_property = config.DbProperty.DbProperty(
+            indexed_properties=["oauthId", "email", "externalUserId"]
+        )  # type: ignore[misc]
         db_property.set(actor_id=sample_actor_id, name=prop_name, value="test_value")
 
         def read_property() -> str | None:
-            db_property = config.DbProperty.DbProperty()  # type: ignore[misc]
+            db_property = config.DbProperty.DbProperty(
+                indexed_properties=["oauthId", "email", "externalUserId"]
+            )  # type: ignore[misc]
             return db_property.get(actor_id=sample_actor_id, name=prop_name)
 
         result = benchmark(read_property)
@@ -218,13 +224,17 @@ class TestPropertyPerformance:
 
         # Create 10 test properties
         for i in range(10):
-            db_property = config.DbProperty.DbProperty()  # type: ignore[misc]
+            db_property = config.DbProperty.DbProperty(
+                indexed_properties=["oauthId", "email", "externalUserId"]
+            )  # type: ignore[misc]
             db_property.set(
                 actor_id=sample_actor_id, name=f"list_prop_{i}", value=f"value_{i}"
             )
 
         def list_properties() -> dict[str, Any]:
-            db_property_list = config.DbProperty.DbPropertyList()  # type: ignore[misc]
+            db_property_list = config.DbProperty.DbPropertyList(
+                indexed_properties=["oauthId", "email", "externalUserId"]
+            )  # type: ignore[misc]
             result = db_property_list.fetch(actor_id=sample_actor_id)
             return result if result else {}
 
@@ -488,7 +498,9 @@ class TestBulkOperations:
         def bulk_write_properties() -> int:
             count = 0
             for i in range(100):
-                db_property = config.DbProperty.DbProperty()  # type: ignore[misc]
+                db_property = config.DbProperty.DbProperty(
+                    indexed_properties=["oauthId", "email", "externalUserId"]
+                )  # type: ignore[misc]
                 if db_property.set(
                     actor_id=sample_actor_id, name=f"bulk_{i}", value=f"value_{i}"
                 ):
@@ -515,7 +527,9 @@ class TestBulkOperations:
 
         # Create test properties
         for i in range(100):
-            db_property = config.DbProperty.DbProperty()  # type: ignore[misc]
+            db_property = config.DbProperty.DbProperty(
+                indexed_properties=["oauthId", "email", "externalUserId"]
+            )  # type: ignore[misc]
             db_property.set(
                 actor_id=sample_actor_id, name=f"bulk_read_{i}", value=f"value_{i}"
             )
@@ -523,7 +537,9 @@ class TestBulkOperations:
         def bulk_read_properties() -> int:
             count = 0
             for i in range(100):
-                db_property = config.DbProperty.DbProperty()  # type: ignore[misc]
+                db_property = config.DbProperty.DbProperty(
+                    indexed_properties=["oauthId", "email", "externalUserId"]
+                )  # type: ignore[misc]
                 value = db_property.get(actor_id=sample_actor_id, name=f"bulk_read_{i}")
                 if value:
                     count += 1

@@ -2,7 +2,6 @@
 
 import json
 import logging
-import os
 from typing import Any
 
 from actingweb.db.exceptions import DbError
@@ -51,51 +50,31 @@ class DbProperty:
     # the application configures one (Config.list_item_max_bytes).
     MAX_ROW_BYTES: int | None = None
 
-    def __init__(
-        self,
-        use_lookup_table: bool | None = None,
-        indexed_properties: list[str] | None = None,
-    ) -> None:
+    def __init__(self, *, indexed_properties: list[str]) -> None:
         """Initialize DbProperty.
 
         Args:
-            use_lookup_table: Whether to use property lookup table. If None, reads from env.
-            indexed_properties: List of property names to index. If None, uses defaults.
+            indexed_properties: Property names that support reverse lookup.
+                Required: the names come from ``Config.indexed_properties``
+                (use :func:`actingweb.db.get_property`), never from the
+                environment, so a direct construction cannot silently
+                disagree with the configured set.
         """
         self.handle = None
-        # Store configuration for lookup table
-        if use_lookup_table is not None:
-            self._use_lookup_table = use_lookup_table
-        else:
-            self._use_lookup_table = (
-                os.getenv("USE_PROPERTY_LOOKUP_TABLE", "true").lower() == "true"
-            )
-
-        if indexed_properties is not None:
-            self._indexed_properties = indexed_properties
-        else:
-            self._indexed_properties = ["oauthId", "email", "externalUserId"]
-            if os.getenv("INDEXED_PROPERTIES"):
-                env_props = os.getenv("INDEXED_PROPERTIES", "").split(",")
-                self._indexed_properties = [p.strip() for p in env_props if p.strip()]
+        self._indexed_properties = list(indexed_properties)
 
     def _should_index_property(self, name: str) -> bool:
         """
         Check if property should be indexed in lookup table.
 
         Returns True if:
-        1. Lookup table mode is enabled
-        2. Property name is in configured indexed_properties list
-        3. Property is not a list-property item/meta row (belt-and-braces —
+        1. Property name is in configured indexed_properties list
+        2. Property is not a list-property item/meta row (belt-and-braces —
            list names are never configured as indexed properties, but this
            makes it structurally impossible for lookup-table sync to touch
            list storage rows)
         """
-        return (
-            self._use_lookup_table
-            and name in self._indexed_properties
-            and not name.startswith("list:")
-        )
+        return name in self._indexed_properties and not name.startswith("list:")
 
     def get(self, actor_id: str | None = None, name: str | None = None) -> str | None:
         """
@@ -150,7 +129,7 @@ class DbProperty:
         """
         Reverse lookup: find actor by property value.
 
-        Uses lookup table if configured, otherwise falls back to indexed query.
+        Resolved through the ``property_lookup`` table.
 
         Args:
             name: Property name (e.g., "oauthId")
@@ -174,12 +153,9 @@ class DbProperty:
             return None
 
     def _get_actor_id_from_property(self, name: str, value: str) -> str | None:
-
-        if self._use_lookup_table and name not in self._indexed_properties:
-            # Same contract as the DynamoDB backend: only properties
-            # configured via with_indexed_properties() support reverse
-            # lookup in lookup-table mode. The old behaviour silently fell
-            # through to an unindexed full-table sequential scan.
+        if name not in self._indexed_properties:
+            # Only properties configured via with_indexed_properties()
+            # support reverse lookup.
             logger.warning(
                 f"Reverse lookup requested for non-indexed property "
                 f"'{name}' — add it to with_indexed_properties() (or "
@@ -188,74 +164,13 @@ class DbProperty:
             )
             return None
 
-        if self._use_lookup_table and name in self._indexed_properties:
-            # Use new lookup table approach
-            from actingweb.db.postgresql.property_lookup import DbPropertyLookup
+        from actingweb.db.postgresql.property_lookup import DbPropertyLookup
 
-            lookup = DbPropertyLookup()
-            actor_id = lookup.get(property_name=name, value=value)
+        lookup = DbPropertyLookup()
+        actor_id = lookup.get(property_name=name, value=value)
 
-            if actor_id is None:
-                # Migration fallback: an un-backfilled lookup table on an
-                # upgrading deployment. The legacy query is an unindexed
-                # sequential scan (the value index was dropped by migration
-                # c3d4e5f6a7b8) — populate the lookup table to escape it.
-                try:
-                    with get_connection() as conn:
-                        with conn.cursor() as cur:
-                            cur.execute(
-                                """
-                                SELECT id FROM properties
-                                WHERE name = %s AND value = %s
-                                LIMIT 1
-                                """,
-                                (name, value),
-                            )
-                            row = cur.fetchone()
-                            if row:
-                                actor_id = row[0]
-                except Exception as e:
-                    raise DbError("property reverse lookup") from e
-                if actor_id:
-                    logger.warning(
-                        f"DEPRECATED: reverse lookup for '{name}' served by a "
-                        f"full-table scan of the properties table — run "
-                        f"scripts/backfill_property_lookup.py to populate the "
-                        f"lookup table. This fallback is removed in the next "
-                        f"major release."
-                    )
-
-            if actor_id:
-                # Load the property into self.handle for subsequent operations
-                try:
-                    with get_connection() as conn:
-                        with conn.cursor() as cur:
-                            cur.execute(
-                                """
-                                SELECT id, name, value
-                                FROM properties
-                                WHERE id = %s AND name = %s
-                                """,
-                                (actor_id, name),
-                            )
-                            row = cur.fetchone()
-                            if row:
-                                self.handle = {
-                                    "id": row[0],
-                                    "name": row[1],
-                                    "value": row[2],
-                                }
-                            else:
-                                logger.warning(
-                                    f"Lookup found actor {actor_id} but property {name} doesn't exist"
-                                )
-                                return None
-                except Exception as e:
-                    raise DbError("property reverse lookup") from e
-
-            return actor_id
-        else:
-            # Fall back to legacy indexed query approach
+        if actor_id:
+            # Load the property into self.handle for subsequent operations
             try:
                 with get_connection() as conn:
                     with conn.cursor() as cur:
@@ -263,24 +178,26 @@ class DbProperty:
                             """
                             SELECT id, name, value
                             FROM properties
-                            WHERE value = %s
-                            LIMIT 1
+                            WHERE id = %s AND name = %s
                             """,
-                            (value,),
+                            (actor_id, name),
                         )
                         row = cur.fetchone()
-
                         if row:
                             self.handle = {
                                 "id": row[0],
                                 "name": row[1],
                                 "value": row[2],
                             }
-                            return row[0]
                         else:
+                            logger.warning(
+                                f"Lookup found actor {actor_id} but property {name} doesn't exist"
+                            )
                             return None
             except Exception as e:
                 raise DbError("property reverse lookup") from e
+
+        return actor_id
 
     def set(
         self, actor_id: str | None = None, name: str | None = None, value: Any = None
@@ -801,35 +718,17 @@ class DbPropertyList:
     actor_id: str | None
     props: dict[str, str] | None
 
-    def __init__(
-        self,
-        use_lookup_table: bool | None = None,
-        indexed_properties: list[str] | None = None,
-    ) -> None:
+    def __init__(self, *, indexed_properties: list[str]) -> None:
         """Initialize DbPropertyList.
 
         Args:
-            use_lookup_table: Whether to use property lookup table. If None, reads from env.
-            indexed_properties: List of property names to index. If None, uses defaults.
+            indexed_properties: Property names that support reverse lookup
+                (required; see :class:`DbProperty`).
         """
         self.handle = None
         self.actor_id = None
         self.props = None
-
-        if use_lookup_table is not None:
-            self._use_lookup_table = use_lookup_table
-        else:
-            self._use_lookup_table = (
-                os.getenv("USE_PROPERTY_LOOKUP_TABLE", "true").lower() == "true"
-            )
-
-        if indexed_properties is not None:
-            self._indexed_properties = indexed_properties
-        else:
-            self._indexed_properties = ["oauthId", "email", "externalUserId"]
-            if os.getenv("INDEXED_PROPERTIES"):
-                env_props = os.getenv("INDEXED_PROPERTIES", "").split(",")
-                self._indexed_properties = [p.strip() for p in env_props if p.strip()]
+        self._indexed_properties = list(indexed_properties)
 
     def fetch(
         self, actor_id: str | None = None, *, strict: bool = True
@@ -960,22 +859,19 @@ class DbPropertyList:
         try:
             with get_connection() as conn:
                 with conn.cursor() as cur:
-                    # If using lookup table, collect indexed properties before deletion
+                    # Collect indexed properties before deletion
                     indexed_props: list[tuple[str, str]] = []
-                    if self._use_lookup_table:
-                        cur.execute(
-                            """
-                            SELECT name, value
-                            FROM properties
-                            WHERE id = %s
-                            """,
-                            (self.actor_id,),
-                        )
-                        rows = cur.fetchall()
-                        for row in rows:
-                            name, value = row
-                            if name in self._indexed_properties:
-                                indexed_props.append((name, value))
+                    cur.execute(
+                        """
+                        SELECT name, value
+                        FROM properties
+                        WHERE id = %s
+                        """,
+                        (self.actor_id,),
+                    )
+                    for name, value in cur.fetchall():
+                        if name in self._indexed_properties:
+                            indexed_props.append((name, value))
 
                     # Delete all properties
                     cur.execute(

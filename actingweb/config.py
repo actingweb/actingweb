@@ -48,6 +48,36 @@ def _validated_host_setting(name: str, value: Any, env_var: str) -> str:
     return text
 
 
+LEGACY_LOOKUP_REMOVED = (
+    "{what}: the legacy property-index reverse lookup was removed in 3.16; "
+    "reverse lookup always uses the lookup table. Remove the setting, run "
+    "'actingweb-property-lookup backfill --apply' if the lookup table was "
+    "never populated, and see docs/migration/v3.16.rst "
+    '"One reverse-lookup mechanism".'
+)
+
+
+def _handle_removed_lookup_switch(what: str, enabled: bool) -> None:
+    """Refuse the removed legacy-lookup switch; warn on its redundant form.
+
+    Turning the legacy mode on or off is gone, so a deployment that pinned it
+    to ``False`` must not silently run on the lookup table without its
+    backfill: it fails at configure time with the migration pointer. A
+    ``True`` value is what 3.13-era docs told operators to set; it is ignored
+    with a ``DeprecationWarning``.
+    """
+    if not enabled:
+        raise RuntimeError(LEGACY_LOOKUP_REMOVED.format(what=what))
+    import warnings
+
+    warnings.warn(
+        f"{what} is ignored: the lookup table is the only reverse-lookup "
+        "mechanism since 3.16. Remove the setting.",
+        DeprecationWarning,
+        stacklevel=3,
+    )
+
+
 class Config:
     # Optional hook registry, set by ActingWebApp.get_config()
     _hooks: Optional["HookRegistry"]
@@ -101,12 +131,9 @@ class Config:
         # Property lookup configuration (backward compatible defaults)
         #########
         self.indexed_properties: list[str] = ["oauthId", "email", "externalUserId"]
-        # True = lookup-table reverse lookup (the mechanism of record since
-        # v3.13; no value-size limit, no legacy GSI). Legacy GSI/index mode
-        # is deprecated — pin it with use_lookup_table=False /
-        # USE_PROPERTY_LOOKUP_TABLE=false / with_legacy_property_index(True)
-        # only while migrating; see docs/migration/v3.13.rst.
-        self.use_lookup_table: bool = True
+        # Reverse lookup always goes through the lookup table (since 3.16 the
+        # legacy GSI and the use_lookup_table switch are gone; see
+        # docs/migration/v3.16.rst "One reverse-lookup mechanism").
         #########
         # Peer profile caching configuration
         #########
@@ -318,6 +345,9 @@ class Config:
         ]
         # Pick up the config variables
         for k, v in kwargs.items():
+            if k == "use_lookup_table":
+                _handle_removed_lookup_switch(f"Config(use_lookup_table={v!r})", v)
+                continue
             self.__setattr__(k, v)
         # The pair rule is checked once, after every kwarg landed, so the two
         # limits can be given in either order.
@@ -334,9 +364,11 @@ class Config:
             env_props = os.getenv("INDEXED_PROPERTIES", "").split(",")
             self.indexed_properties = [p.strip() for p in env_props if p.strip()]
 
-        if os.getenv("USE_PROPERTY_LOOKUP_TABLE"):
-            self.use_lookup_table = (
-                os.getenv("USE_PROPERTY_LOOKUP_TABLE", "false").lower() == "true"
+        env_switch = os.getenv("USE_PROPERTY_LOOKUP_TABLE")
+        if env_switch:
+            _handle_removed_lookup_switch(
+                f"USE_PROPERTY_LOOKUP_TABLE={env_switch}",
+                env_switch.strip().lower() in ("1", "true", "yes", "on"),
             )
 
         if self.database == "dynamodb":

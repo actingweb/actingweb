@@ -93,11 +93,14 @@ matters.
 
 ## 7. Lookup-table write path amplification
 
-`_update_lookup_entry` on a value change is an ownership-check GetItem plus a
-delete plus a conditional put. Fine at current scale. A transactional
-(`TransactWriteItems`) property+lookup write would also close the "property
-saved, lookup write failed" inconsistency window that today is only logged
-(`LOOKUP_TABLE_SYNC_FAILED` / `LOOKUP_CREATE_FAILED`).
+Since 3.16 an indexed property write is one `TransactWriteItems` (the property,
+its lookup row and the old value's lookup row), which closes the "property
+saved, lookup write failed" window (it raises `DbError` instead) and costs
+about twice the write units of a plain put on indexed names only. What
+remains is the cost: a value change still pays the transaction's three items,
+and the unchanged-value shortcut keeps repeated writes of the same value at
+one plain put. Revisit only if a measured workload rewrites indexed values
+often.
 
 ## Related
 

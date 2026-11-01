@@ -11,7 +11,7 @@ safe regardless of caller discipline).
 
 Lives under tests/integration/ (not tests/) because PostgreSQL needs the
 migrated schema the session fixtures below provision; DynamoDB self-creates
-its table on DbProperty() construction but PostgreSQL does not.
+its table on DbProperty(indexed_properties=["oauthId", "email", "externalUserId"]) construction but PostgreSQL does not.
 """
 
 import os

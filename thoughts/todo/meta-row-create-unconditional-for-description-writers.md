@@ -12,8 +12,9 @@ write). Depends on that plan having landed.
 `_save_metadata()` calls with `create_if_absent=True`, the default) still
 create a missing meta row through `_save_metadata()`'s creation branch, whose
 write is an **unconditional** `set()` (`_replace_metadata()` with
-`expected_raw=None`). The v1 length writers and `clear()`'s replace go
-through the same branch, unconditionally, by the same recorded decision.
+`expected_raw=None`). The v1 length writers go through the same branch,
+unconditionally, by the same recorded decision; `clear()` calls
+`_replace_metadata()` directly, not through the branch.
 
 After the 2026-09-14 plan, a list's first `append()`/`extend()`/`insert()`
 creates the meta row **conditionally** (`create_if_not_exists`). A
@@ -41,15 +42,16 @@ first-mutation fix introduced a narrower version of.
 ## What has to be decided first
 
 Whether the shared creation branch inside `_save_metadata()` — used by
-`set_description()`/`set_explanation()`, the v1 length writers (with
-`create_if_absent=False`, so this doesn't apply to them the same way), and
-`clear()`'s replace — should:
+`set_description()`/`set_explanation()` and the v1 length writers (with
+`create_if_absent=False`, so this doesn't apply to them the same way) —
+should:
 
 - route through `_v2_create_meta_row()` (a v2-only creation path, so the
   branch would need to stay for v1 callers), or
 - grow its own conditional create shaped for whatever fields the calling
-  writer carries (`description`/`explanation` for these two, `format`/
-  `length` for `clear()`'s replace).
+  writer carries (`description`/`explanation` for these two).
 
-Either shape changes a branch three different call sites share; work out the
-call-site fields each needs before touching the branch itself.
+Either shape changes a branch two call sites share, and `clear()`'s direct
+`_replace_metadata()` is a third unconditional creation to decide about
+separately; work out the call-site fields each needs before touching the
+branch itself.

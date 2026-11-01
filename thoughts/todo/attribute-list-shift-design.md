@@ -14,8 +14,12 @@ path.
 bucket-scoped storage used by hooks and internal state), not user-facing
 *properties* — distinct class, distinct storage keys, distinct call sites
 (`attribute_list_store.py`, `tests/test_attribute_list.py`,
-`tests/integration/test_attribute_lists_advanced.py`). Blast radius is
-materially lower than the property-list case: no known production incident.
+`tests/integration/test_attribute_lists_advanced.py`). The blast radius is
+wider than the class name suggests: `RemotePeerStore` keeps every peer
+replica in an `AttributeListStore` (`actingweb/remote_storage.py`) and
+applies incoming subscription diffs through `ListAttribute.insert()` /
+`del` / `pop()`, so each subscribed replica passes through the shift loop on
+every `insert`/`remove` diff. No known production incident.
 
 **The approach is the full v2 port** — adopt the same fractional-rank storage
 format `ListProperty` uses, which makes the shift-loop corruption class
@@ -35,9 +39,10 @@ leave the non-atomicity itself in place.)
   `remote_storage.py`'s diff vocabulary is closed on both sides — an
   unrecognised operation makes a peer replica silently diverge — and it changed
   for `ListProperty` (`remove`/`update` diffs gained value-addressed semantics,
-  `update` gained an optional `old_item`). If `ListAttribute` mutations are
-  notified or subscribed the same way, the port needs equivalent diff support;
-  establish whether they are before designing.
+  `update` gained an optional `old_item`). `ListAttribute` is the
+  *receiving* side of those diffs (the replicas above), so the port must keep
+  applying every operation the publisher sends, including the spanned-item
+  references 3.16 added, which the receiver deliberately does not resolve.
 - **Adopt the handle API rather than reinvent an identity-addressed
   primitive.** `ListItemHandle` / `items_with_handles()` / `find()` and the
   handle-based mutators (`delete_by_handle`, `update_by_handle`, `remove_where`,

@@ -9,7 +9,9 @@ verification records what was actioned.
   (`test_property_list_notifications.py`, `test_remote_storage.py`), but
   no test drives a real `remove_where()`/`update_where()` diff through
   subscription delivery into a `RemotePeerStore` — the plan named this
-  test and it was never written.
+  test and it was never written. Since 3.16 a spanned item's diff carries a
+  reference the receiver deliberately does not resolve
+  (`remote_storage.py`), which the same test should cover.
 - **Cross-backend interleaved-append integration test (Phase 9B).**
   Two instances appending alternately, asserting iteration order matches
   insertion order, on both backends. Nearest existing coverage is the
@@ -18,6 +20,7 @@ verification records what was actioned.
   credit each request entry (`items_deleted` can exceed rows removed by
   design, matching update counting) — noise-level; revisit only if a
   consumer reads these counts strictly.
-- **Phase 8 `DbError`-on-genuine-fault path untested** — hard to inject
-  against a real backend; would need a fault-injection seam in the
-  DynamoDB/PostgreSQL property modules.
+- **Phase 8 `DbError`-on-genuine-fault path untested.** A store-wrapping
+  seam now exists (`actingweb/spans.py`, and the `tests/test_db_fault_*.py`
+  files use the pattern), so this is cheap; nothing yet faults `get_range`
+  or `find` and asserts `DbError`.

@@ -31,7 +31,8 @@ The duplicate-handling code the flag-off path needs (research §6):
 - `actingweb/oauth2.py`: `_factory_siblings`,
   `_sweep_factory_actors`, `SWEEP_LIMIT`, the successor step's `remaining`
   logic, the recursive hand-off to `_adopt_actor` and its `carried` argument.
-- `actingweb/actor.py`: the ranking in `get_from_creator` and
-  `factory_sibling_ids` / `creator_ids` / `creator_classes`.
+- `actingweb/actor.py`: the ranking in `get_from_creator` and the
+  `factory_sibling_ids` / `creator_ids` / `creator_classes` attributes it
+  fills (read in `oauth2.py`'s adoption steps).
 - Decide then whether `with_unique_creator(False)` survives at all; if it
   does, the code above survives with it.

@@ -2,11 +2,12 @@
 
 Found by the 3.14.4 architecture review
 (`thoughts/plans/2026-09-02-identifier-matching-and-metadata-fidelity.md`).
-Verified at the 3.14.4 tree.
+Verified at the 3.14.4 tree; still true at `99b2885` (2026-11-01), line
+numbers re-pinned then.
 
 ## Backslash escapes
 
-`actingweb/permission_evaluator.py` `_glob_to_regex()` is `re.escape()`
+`actingweb/permission_evaluator.py` `_glob_to_regex()` (`:711`) is `re.escape()`
 followed by `.replace(r"\*", ".*")` and `.replace(r"\?", ".")`. A glob that
 tries to escape a wildcard, `a\*b`, is escaped to `a\\\*b` and then the
 `\*` inside it is rewritten, so the pattern still matches `aXYZb`. There is no

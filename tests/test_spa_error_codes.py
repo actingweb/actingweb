@@ -150,6 +150,8 @@ def test_a_db_error_through_the_fault_handler_carries_the_header(
         resp = make_client().post(path, json={}, headers={"Origin": ORIGIN})
     assert resp.status_code == 503
     assert resp.headers[HEADER] == "temporarily_unavailable"
+    # The body repeats the header's code under ``code``, as SPA answers do.
+    assert _body(resp)["code"] == "temporarily_unavailable"
     assert HEADER in _exposed(resp)
     assert "Retry-After" in _exposed(resp)
 
@@ -178,3 +180,106 @@ def test_the_passphrase_grant_outside_devtest_is_access_denied(
         headers={"Origin": ORIGIN},
     )
     _assert_coded(resp, 403, "access_denied")
+
+
+def _allowlisted_fastapi() -> Any:
+    app = FastAPI()
+    _app().with_spa_cors_origins(ORIGIN).integrate_fastapi(app)
+    return TestClient(app)
+
+
+class _AllowlistedFlaskClient(_FlaskClient):
+    def __init__(self) -> None:  # noqa: D107 - same adapter, allowlisted app
+        app = Flask(__name__)
+        _app().with_spa_cors_origins(ORIGIN).integrate_flask(app)
+        self._client = app.test_client()
+
+
+@pytest.mark.parametrize(
+    "make_client",
+    [
+        pytest.param(_allowlisted_fastapi, id="fastapi"),
+        pytest.param(_AllowlistedFlaskClient, id="flask"),
+    ],
+)
+def test_an_allowlisted_origin_can_read_the_code_on_an_error(
+    make_client: Any, store_faults: MemoryStore
+) -> None:
+    """With ``with_spa_cors_origins`` set, an error answer still exposes both
+    ``X-ActingWeb-Error`` and ``Retry-After`` to the allowlisted origin."""
+    resp = make_client().post(
+        "/oauth/spa/token",
+        json={"grant_type": "refresh_token", "refresh_token": "unknown"},
+        headers={"Origin": ORIGIN},
+    )
+    assert resp.headers["Access-Control-Allow-Origin"] == ORIGIN
+    _assert_coded(resp, 401, "invalid_grant")
+
+
+@pytest.mark.parametrize("make_client", CLIENTS)
+@pytest.mark.parametrize("path", ["/oauth/spa/token", "/oauth/spa/authorize"])
+@pytest.mark.parametrize("body", ["[]", "null", '"x"', "3"])
+def test_a_json_body_that_is_not_an_object_is_invalid_request(
+    make_client: Any, path: str, body: str, store_faults: MemoryStore
+) -> None:
+    """Valid JSON that is not an object used to raise ``AttributeError``
+    (a 500 with no code)."""
+    resp = make_client().post(
+        path,
+        data=body,
+        headers={"Origin": ORIGIN, "Content-Type": "application/json"},
+    )
+    _assert_coded(resp, 400, "invalid_request")
+
+
+def test_a_wrong_passphrase_is_invalid_grant(store_faults: MemoryStore) -> None:
+    """In devtest the passphrase grant answers a wrong passphrase with
+    ``invalid_grant`` (401), an unknown actor with ``not_found``."""
+    app = FastAPI()
+    _app().with_devtest(True).integrate_fastapi(app)
+    client = TestClient(app)
+    actor = mock.MagicMock(id="a1", passphrase="right")
+    with mock.patch("actingweb.actor.Actor", return_value=actor):
+        resp = client.post(
+            "/oauth/spa/token",
+            json={"grant_type": "passphrase", "actor_id": "a1", "passphrase": "x"},
+            headers={"Origin": ORIGIN},
+        )
+    _assert_coded(resp, 401, "invalid_grant")
+    with mock.patch("actingweb.actor.Actor", return_value=mock.MagicMock(id=None)):
+        resp = client.post(
+            "/oauth/spa/token",
+            json={"grant_type": "passphrase", "actor_id": "zz", "passphrase": "x"},
+            headers={"Origin": ORIGIN},
+        )
+    _assert_coded(resp, 404, "not_found")
+
+
+@pytest.mark.parametrize("make_client", CLIENTS)
+@pytest.mark.parametrize(
+    ("path", "body"),
+    [
+        ("/oauth/spa/authorize", {"provider": ["google"]}),
+        ("/oauth/spa/authorize", {"provider": {"a": 1}}),
+        ("/oauth/spa/token", {"grant_type": "refresh_token", "refresh_token": ["a"]}),
+        (
+            "/oauth/spa/token",
+            {"grant_type": "refresh_token", "refresh_token": {"a": 1}},
+        ),
+        (
+            "/oauth/spa/token",
+            {"grant_type": "authorization_code", "code": "x", "provider": 1},
+        ),
+        ("/oauth/spa/token", {"grant_type": "authorization_code", "code": ["x"]}),
+        ("/oauth/spa/authorize", {"redirect_uri": {"a": 1}}),
+        ("/oauth/spa/token", {"grant_type": "passphrase", "actor_id": ["a"]}),
+        ("/oauth/revoke", {"token": ["t"]}),
+    ],
+)
+def test_a_wrongly_typed_field_is_invalid_request(
+    make_client: Any, path: str, body: dict[str, Any], store_faults: MemoryStore
+) -> None:
+    """A list or object where a string belongs used to answer an uncoded 500
+    (``provider``) or a 503 that blamed the store (``refresh_token``)."""
+    resp = make_client().post(path, json=body, headers={"Origin": ORIGIN})
+    _assert_coded(resp, 400, "invalid_request")

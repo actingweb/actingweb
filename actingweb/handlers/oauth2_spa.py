@@ -74,8 +74,45 @@ GRACE_PERIOD_EXTENDED = REFRESH_TOKEN_GRACE_DEFAULT
 _KNOWN_PROVIDER_PREFIXES = ("google", "github", "apple", "google-native")
 
 
+# Request fields the SPA endpoints read as strings. A list or object there
+# used to reach ``str`` methods and answer an uncoded 500.
+_STRING_PARAMS = (
+    "actor_id",
+    "assertion",
+    "code",
+    "code_challenge",
+    "code_challenge_method",
+    "code_verifier",
+    "grant_type",
+    "nonce",
+    "passphrase",
+    "pkce",
+    "prompt",
+    "provider",
+    "redirect_uri",
+    "refresh_token",
+    "return_path",
+    "ticket",
+    "token",
+    "token_delivery",
+    "token_type_hint",
+    "trust_type",
+)
+
+
+def _non_string_param(params: dict[str, Any]) -> str | None:
+    """The first string field that holds something other than a string."""
+    for key in _STRING_PARAMS:
+        value = params.get(key)
+        if value is not None and not isinstance(value, str):
+            return key
+    return None
+
+
 def _is_known_provider(name: str) -> bool:
     """Check if a provider name is a known provider or variant (e.g. google-mobile)."""
+    if not isinstance(name, str):
+        return False
     return any(
         name == prefix or name.startswith(f"{prefix}-")
         for prefix in _KNOWN_PROVIDER_PREFIXES
@@ -453,6 +490,13 @@ class OAuth2SPAHandler(BaseHandler):
             return self._json_error(
                 400, "Invalid JSON in request body", "invalid_request"
             )
+        if not isinstance(params, dict):
+            return self._json_error(
+                400, "Request body must be a JSON object", "invalid_request"
+            )
+        bad = _non_string_param(params)
+        if bad:
+            return self._json_error(400, f"{bad} must be a string", "invalid_request")
 
         provider = params.get("provider", "google")
         # trust_type: None = user login, "mcp_client" etc = MCP authorization
@@ -649,6 +693,13 @@ class OAuth2SPAHandler(BaseHandler):
             return self._json_error(
                 400, "Invalid JSON in request body", "invalid_request"
             )
+        if not isinstance(params, dict):
+            return self._json_error(
+                400, "Request body must be a JSON object", "invalid_request"
+            )
+        bad = _non_string_param(params)
+        if bad:
+            return self._json_error(400, f"{bad} must be a string", "invalid_request")
 
         grant_type = params.get("grant_type")
         token_delivery = params.get("token_delivery", "json")
@@ -711,6 +762,10 @@ class OAuth2SPAHandler(BaseHandler):
 
         if not refresh_token:
             return self._json_error(400, "Missing refresh_token", "invalid_request")
+        if not isinstance(refresh_token, str):
+            return self._json_error(
+                400, "refresh_token must be a string", "invalid_request"
+            )
 
         # Validate refresh token and get associated actor
         from ..oauth_session import _REFRESH_TOKEN_BUCKET, get_oauth2_session_manager
@@ -1638,6 +1693,9 @@ class OAuth2SPAHandler(BaseHandler):
             return self._json_error(
                 400, "Request body must be a JSON object", "invalid_request"
             )
+        bad = _non_string_param(params)
+        if bad:
+            return self._json_error(400, f"{bad} must be a string", "invalid_request")
 
         token = params.get("token")
         token_type_hint = str(params.get("token_type_hint") or "access_token")

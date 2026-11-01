@@ -2,6 +2,7 @@ import base64
 import logging
 import math
 from datetime import datetime
+from typing import TYPE_CHECKING, Any
 
 from pynamodb.exceptions import DoesNotExist, PutError, UpdateError
 
@@ -9,6 +10,9 @@ from actingweb import actor, request_context, trust
 from actingweb.constants import TRUSTEE_CREATOR
 from actingweb.db.exceptions import DbError
 from actingweb.secret_compare import secret_equals
+
+if TYPE_CHECKING:
+    from actingweb.config import Config
 
 # This is where each path and subpath in actingweb is assigned an authentication type
 # Currently only basic auth is supported. OAuth2 peer auth is automatic if an Authorization Bearer <token> header is
@@ -79,7 +83,9 @@ class Auth:
 
     """
 
-    def __init__(self, actor_id, auth_type="basic", *, config):
+    def __init__(
+        self, actor_id: str | None, auth_type: str = "basic", *, config: "Config"
+    ) -> None:
         # ``config`` is required: a default ``Config()`` would silently use
         # the library defaults (``devtest=True``) instead of the application's.
         if config is None:
@@ -807,7 +813,9 @@ class Auth:
         return False
 
 
-def check_and_verify_auth(appreq=None, actor_id=None, *, config):
+def check_and_verify_auth(
+    appreq: Any = None, actor_id: str | None = None, *, config: "Config"
+) -> dict[str, Any]:
     """Check and verify authentication for non-ActingWeb routes.
 
     This function provides authentication verification for custom routes that don't go through
@@ -882,7 +890,9 @@ def check_and_verify_auth(appreq=None, actor_id=None, *, config):
     return result
 
 
-async def check_and_verify_auth_async(appreq=None, actor_id=None, *, config):
+async def check_and_verify_auth_async(
+    appreq: Any = None, actor_id: str | None = None, *, config: "Config"
+) -> dict[str, Any]:
     """Async version: Check and verify authentication for non-ActingWeb routes.
 
     This async function provides authentication verification for custom routes that don't

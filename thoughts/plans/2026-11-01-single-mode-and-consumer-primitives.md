@@ -1,6 +1,6 @@
 ---
 status: done
-verified: thoughts/verifications/2026-11-01-single-mode-and-consumer-primitives.md
+verified: thoughts/verifications/2026-11-01-single-mode-and-consumer-primitives-reverify.md
 ---
 
 # Implementation Plan: One mode after the 3.16 upgrade, and the two consumer primitives
@@ -1600,6 +1600,325 @@ reviewer. Both independently found the same high finding.
 - A PynamoDB `scan(limit=N)` caps the total; `page_size` is what bounds a read.
 - Two xdist workers share one recorded name set per store, so tests that write it
   need an xdist group.
+- A test suite that always reuses one store hides fixtures that depend on run
+  order; run the Full tier once from an empty store.
+- A fix scoped to the probed call (one field, one endpoint) leaves the path open;
+  the re-verification needed three review rounds to converge (Iterations 1-15).
 - Open, filed as todos: stale lookup owners and races
   (`property-lookup-stale-owner-and-races.md`), and the direct-`Config` creators
   table (`unique-creator-direct-config-auto-create.md`).
+
+## Iterations
+
+### 2026-11-01, after implementation (commit `c3dba9e`)
+
+A re-verification ran the Full tier from an empty DynamoDB store, the built-in
+code review (high), the security review, the outside voice (codex and a
+fresh-context Claude) and a scenario-to-test mapping. Its findings, fixed here:
+
+#### 1. Backfill test fixtures assumed the tables existed
+
+**Category**: Bug fix (tests)
+
+**What changed**: the actor and store fixtures create the actor, properties and
+lookup tables before their bare model saves.
+
+**Files affected**:
+- `tests/test_lookup_migration.py`: `actor_id` ensures the three tables.
+- `tests/test_property_lookup_command.py`: `store` ensures them; a duplicated
+  actor-delete loop is dropped.
+
+**Rationale**: on a fresh store a worker can run these files first; the earlier
+runs reused one store, so 5 errors appeared only on an empty DynamoDB Local.
+
+#### 2. A resumed backfill marked a name that had collided
+
+**Category**: Verification fix
+
+**What changed**: the checkpoint records each collision on disk at once, and a
+resumed run starts with those collisions, so `completed_names()` keeps the name
+unmarked.
+
+**Files affected**:
+- `actingweb/maintenance/property_lookup.py`: `Checkpoint.note_collision()`,
+  `_write()`, collisions loaded and carried into `BackfillStats`.
+- `tests/test_property_lookup_command.py`: the collision-behind-the-checkpoint
+  test (fails without the fix).
+
+**Rationale**: found by the code review and the outside voice. A segment that
+finished with a collision checkpointed "done"; the re-run after another
+segment's fault skipped it and marked the name, so its collided values stayed
+unindexed with the marker saying otherwise.
+
+#### 3. The dry run did not predict collisions
+
+**Category**: Verification fix
+
+**What changed**: the DynamoDB dry run reads each lookup row and tracks values
+seen in the run; the PostgreSQL dry run also counts shared values that have no
+lookup row yet. Both exit 1 when `--apply` would collide.
+
+**Files affected**:
+- `actingweb/maintenance/property_lookup.py`: `_lookup_owner()`,
+  `dry_run_owners`, the PostgreSQL `GROUP BY ... HAVING count(*) > 1` query.
+- `tests/test_property_lookup_command.py`: the dry-run collision test (both
+  backends).
+
+**Rationale**: a dry run that exits 0 for a store that cannot become ready
+misleads the operator. A lookup table that does not exist yet reads as empty in the dry run
+(it creates no table); `tests/integration/test_property_lookup_readiness.py`
+caught that on a fresh store.
+
+#### 4. A collision loser was never indexed after the owner let go
+
+**Category**: Decision changed (D15)
+
+**What changed**: a write that leaves an indexed value unchanged stays a plain
+put, then reads the lookup row and claims it when it is free (DynamoDB:
+best-effort, one consistent read; PostgreSQL: the `ON CONFLICT DO NOTHING`
+insert in the same transaction).
+
+**Files affected**:
+- `actingweb/db/dynamodb/property.py`: `_heal_lookup()`.
+- `actingweb/db/postgresql/property.py`: the unchanged-value insert.
+- `tests/test_property_lookup_sync.py`: the loser-indexed and
+  owner-row-kept tests.
+
+**Rationale**: the unchanged-value skip meant a value stored during a
+collision stayed unfindable for good, even once the row was free.
+
+#### 5. Mixed indexed sets on one store (D16)
+
+**Category**: Verification fix (docs and message)
+
+**What changed**: the refusal names the recorded set and says every process on
+a store must configure the same names. The configuration guide gives the
+add-a-name rollout (deploy, backfill, start, backfill again once the old
+version is gone), and the migration guide summarises it.
+
+**Files affected**:
+- `actingweb/interface/app.py`: the refusal message.
+- `docs/quickstart/configuration.rst`, `docs/migration/v3.16.rst`.
+- `tests/test_property_lookup_readiness.py`: the message is pinned.
+
+**Rationale**: D16's refusal is right when an old version wrote the name
+unindexed, but nothing told an operator why it fired or how to roll out.
+
+#### 6. Consumer-visible contract fixes
+
+**Category**: Bug fix
+
+**What changed**:
+- A JSON body that is not an object on `/oauth/spa/token` and
+  `/oauth/spa/authorize` answers 400 `invalid_request` instead of an uncoded 500.
+- The fault handler's body carries `code`, like the header.
+- `verify_tables`' `required_models()`, `required_table_names()` and
+  `verify_tables()` take `unique_creator` by keyword only, so a 3.15 positional
+  call fails loudly.
+
+**Files affected**:
+- `actingweb/handlers/oauth2_spa.py`, `actingweb/interface/integrations/_errors.py`.
+- `actingweb/db/verify_tables.py`, `actingweb/interface/app.py`.
+- `tests/test_spa_error_codes.py`, `tests/test_db_fault_http.py`.
+
+**Rationale**: found by the outside voice (the 500) and the code review (the
+body shape and the reinterpreted positional argument).
+
+#### 7. `create_attr_if_absent` frees a name an hour late
+
+**Category**: Verification fix (docs)
+
+**What changed**: the docs, the protocol docstring and the changelog state that
+the stored deadline carries `TTL_CLOCK_SKEW_BUFFER` (a 600 s ask holds its name
+for 70 minutes). They show the pattern for a shorter application expiry: keep
+the deadline in `data`, then take over with `conditional_update_attr`.
+
+**Files affected**:
+- `docs/sdk/attributes-buckets.rst`, `actingweb/db/protocols.py`, `CHANGELOG.rst`.
+
+**Rationale**: the behaviour matches every attribute TTL (`get_attr_strict`
+uses the same rule), so the fix is exact wording, not a second deadline field.
+
+#### 8. Hygiene and promised tests
+
+**Category**: Verification fix
+
+**What changed**:
+- Type hints on `Auth`, `check_and_verify_auth(_async)`, `normalize_json` and
+  the DynamoDB `create_attr_if_absent`.
+- The dead `_glob_to_regex` wrapper and its stale cache comment are removed.
+- The tests the plan promised are added:
+  - a marker or set write fault refuses;
+  - the shim prints the new command;
+  - a faulted backfill page is retried;
+  - `refresh_token_reused` and the past-window `invalid_grant`;
+  - a wrong passphrase gives `invalid_grant`;
+  - an allowlisted CORS origin reads the code;
+  - the callbacks revoke path reads brackets literally and runs in linear time;
+  - `test_trust_permissions_unit.py` uses `glob_match`;
+  - an authenticated non-JSON MCP body gives `-32700`;
+  - a form body on a non-MCP route is not a JSON-RPC error;
+  - no `WWW-Authenticate` is sent for an unparseable body.
+
+**Files affected**:
+- `actingweb/auth.py`, `actingweb/db/dynamodb/attribute.py`,
+  `actingweb/permission_evaluator.py`.
+- `tests/test_permission_pattern_matching.py`,
+  `tests/test_property_lookup_readiness.py`,
+  `tests/test_property_lookup_command.py`,
+  `tests/test_oauth2_spa_refresh_rotation.py`, `tests/test_spa_error_codes.py`,
+  `tests/test_glob_matching.py`, `tests/test_trust_permissions_unit.py`,
+  `tests/test_mcp_parse_error.py`.
+
+**Rationale**: the CLAUDE.md type-hint rule. The scenario mapping found these
+promised tests missing.
+
+**Accepted as planned, not changed**:
+- The wrong-prefix pre-warm (Phase 1 Failure Scenarios, D4).
+- The empty-store uniqueness refusal (Phase 2's "no actors yet" message, an
+  owner decision).
+- The PostgreSQL `VARCHAR(255)` property name. It predates this plan: the
+  lookup table had the same cap.
+
+### 2026-11-01, after the review of the first batch
+
+A fresh-context review of the uncommitted fixes (codex could not start) found:
+
+#### 9. The DynamoDB heal could index a value the actor had given up
+
+**Category**: Bug fix (from entry 4)
+
+**What changed**: the claim is one `TransactWriteItems`: a `ConditionCheck`
+that the property still holds the value, plus the conditional lookup put. A
+failed condition is no fault. The read-first fast path stays.
+
+**Files affected**:
+- `actingweb/db/dynamodb/property.py`: `_heal_lookup()`.
+- `tests/test_property_lookup_sync.py`: the late-heal test (the unconditioned
+  heal created the stale row) and the heal-fault test.
+- `docs/quickstart/configuration.rst`: `ConditionCheckItem` on the properties
+  table.
+
+**Rationale**: a value change or actor delete landing between the read and the
+create left a permanent row for a value the actor no longer held. Nothing
+reaps such rows on DynamoDB, and they block the value's rightful owner.
+
+#### 10. Backfill bookkeeping and wording
+
+**Category**: Verification fix
+
+**What changed**:
+- Collisions are deduplicated by their detail line, in the stats and in the
+  checkpoint, so a resumed run that rescans the faulted page counts each
+  colliding row once and keeps its detail.
+- The dry run checks its cache before reading, and counts a read fault rather
+  than ending the segment.
+- The missing-table test uses `is_resource_not_found`.
+- The PostgreSQL detail names the actors sharing the value rather than a
+  winner `--apply` does not guarantee.
+
+**Files affected**:
+- `actingweb/maintenance/property_lookup.py`.
+- `tests/test_property_lookup_command.py`: the real-resume and held-row
+  dry-run tests.
+
+**Rationale**: the counts and detail lines are what the operator acts on.
+
+#### 11. Exact wording for the rollout, the PostgreSQL heal and the refusal
+
+**Category**: Verification fix (docs)
+
+**What changed**:
+- The add-a-name steps say an old-version start during the rollout can make
+  new starts refuse again until the final backfill.
+- The configuration guide says a DynamoDB dry run keeps one entry per
+  unindexed value.
+- The changelog separates the DynamoDB heal (best effort) from PostgreSQL
+  (fails closed, and a write for a deleted actor now fails on the foreign key).
+- The refusal says "may have written".
+
+**Files affected**:
+- `docs/quickstart/configuration.rst`, `docs/migration/v3.16.rst`,
+  `CHANGELOG.rst`.
+- `actingweb/interface/app.py`, `tests/test_property_lookup_readiness.py`.
+
+**Rationale**: the claims were stronger than the state proves.
+
+#### 12. Wrongly typed SPA fields
+
+**Category**: Bug fix
+
+**What changed**: a `provider` or `refresh_token` that is not a string answers
+400 `invalid_request`.
+
+**Files affected**:
+- `actingweb/handlers/oauth2_spa.py`.
+- `tests/test_spa_error_codes.py` (fails without the fix).
+
+**Rationale**: a probe of the review's unverified note found an uncoded 500
+for `provider` and a 503 blaming the store for `refresh_token`.
+
+### 2026-11-01, after the review of the second batch
+
+The second batch was reviewed by codex and a fresh-context Claude. Both
+confirmed the heal transaction's call shape and that the value-change race is
+closed. They found:
+
+#### 13. The heal could still index a value for a deleted actor
+
+**Category**: Bug fix (from entry 9)
+
+**What changed**: the heal transaction also checks that the actor row exists.
+The sync tests' fixture now creates real actor rows on DynamoDB.
+
+**Files affected**:
+- `actingweb/db/dynamodb/property.py`.
+- `tests/test_property_lookup_sync.py`: the deleted-actor test and the fixture.
+
+**Rationale**: an actor delete racing an unchanged write could leave a lookup
+row on DynamoDB that nothing reaps.
+
+#### 14. Every SPA string field is type-checked
+
+**Category**: Bug fix (from entry 12)
+
+**What changed**: one `_non_string_param()` check runs at all three SPA parse
+sites (authorize, token, revoke), and it covers every field the endpoints read
+as a string. `_is_known_provider` answers False for a non-string.
+
+**Files affected**:
+- `actingweb/handlers/oauth2_spa.py`.
+- `tests/test_spa_error_codes.py`: `code`, `provider` on the token path,
+  `redirect_uri`, `actor_id` and the revoke `token`.
+
+**Rationale**: entry 12 fixed the field that was probed, not the path. A
+`provider` on the token grant, and other string fields, could still reach
+`str` methods.
+
+#### 15. Dry-run actor faults, checkpoint writes, wording
+
+**Category**: Verification fix
+
+**What changed**:
+- A dry run counts an unreadable actor row as a fault, where it used to pass
+  silently.
+- Collisions reach the checkpoint with each `set()` and with a final flush
+  after a faulted run, no longer as one full rewrite per collision.
+- The collision message says to delete the checkpoint file once collisions
+  found before it are resolved.
+- The docs:
+  - the `ConditionCheckItem` requirement for reverse lookup is a sentence of
+    its own;
+  - "non-empty indexed set";
+  - the recorded set can also be a backfill's union;
+  - the dry-run memory note says "distinct value read";
+  - the PostgreSQL foreign-key sentence is scoped.
+
+**Files affected**:
+- `actingweb/maintenance/property_lookup.py`.
+- `docs/quickstart/configuration.rst`, `docs/migration/v3.16.rst`,
+  `CHANGELOG.rst`.
+- `tests/test_property_lookup_command.py`: the dry-run fault test.
+
+**Rationale**: claims stronger than the code, and a write cost that grew with
+the number of collisions.

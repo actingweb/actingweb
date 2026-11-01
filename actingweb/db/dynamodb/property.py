@@ -279,19 +279,71 @@ class DbProperty:
         else:
             self.handle.value = value
 
+        heal_actor_id: str | None = None
         if self._should_index_property(name):
             # D15: an indexed value and its lookup row commit together.
             handle_actor_id = str(self.handle.id) if self.handle.id else actor_id
             if handle_actor_id and (old_value is None or old_value != value):
                 self._write_indexed(handle_actor_id, name, old_value, value)
                 return True
+            heal_actor_id = handle_actor_id
 
         try:
             self.handle.save()
         except Exception as e:
             raise DbError("property write", actor_id) from e
 
+        if heal_actor_id:
+            self._heal_lookup(heal_actor_id, name, value)
         return True
+
+    def _heal_lookup(self, actor_id: str, name: str, value: str) -> None:
+        """Index an unchanged value whose lookup row is missing.
+
+        A value stored during a collision has no lookup row; once the other
+        actor lets the value go, the next write of the same value claims the
+        free row. One consistent read when the row exists (the usual case);
+        a held row is left with its owner. The claim is one transaction whose
+        condition checks confirm the property still holds ``value`` and the
+        actor row still exists, so neither a concurrent value change nor a
+        racing actor delete can leave a row pointing at a value the actor
+        gave up. Best effort: the property write itself
+        already succeeded, so a fault here is logged, not raised.
+        """
+        from actingweb.db.dynamodb.actor import Actor, DbActor
+        from actingweb.db.dynamodb.property_lookup import (
+            DbPropertyLookup,
+            PropertyLookupV2,
+            compute_lookup_key,
+        )
+
+        try:
+            if DbPropertyLookup().get(property_name=name, value=value) is not None:
+                return
+
+            def build(t: Any) -> None:
+                # The actor too: a delete that removed the actor row between
+                # the write and here must not get a lookup row back.
+                t.condition_check(Actor, actor_id, condition=Actor.id.exists())
+                t.condition_check(
+                    Property, actor_id, name, condition=Property.value == value
+                )
+                t.save(
+                    PropertyLookupV2(
+                        lookup_key=compute_lookup_key(name, value),
+                        actor_id=actor_id,
+                        property_name=name,
+                    ),
+                    condition=PropertyLookupV2.lookup_key.does_not_exist(),
+                )
+
+            # A failed condition (the value moved on, or another actor took
+            # the row first) is not a fault: nothing to heal.
+            DbActor._run_transaction(build, op="property lookup heal")  # pyright: ignore[reportPrivateUsage]
+        except Exception as e:  # folds DbError: best effort, logged
+            logger.warning(
+                f"LOOKUP_HEAL_FAILED: property={name} actor={actor_id} error={e}"
+            )
 
     def _write_indexed(
         self, actor_id: str, name: str, old_value: str | None, new_value: str

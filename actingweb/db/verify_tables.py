@@ -39,7 +39,7 @@ __all__ = [
 ]
 
 
-def required_models(unique_creator: bool = False) -> list[type[Model]]:
+def required_models(*, unique_creator: bool = False) -> list[type[Model]]:
     """The DynamoDB model classes whose tables must exist for this config.
 
     This is the single source of truth for "which tables does ActingWeb need"
@@ -81,12 +81,14 @@ def required_models(unique_creator: bool = False) -> list[type[Model]]:
     return models
 
 
-def required_table_names(unique_creator: bool = False) -> list[str]:
+def required_table_names(*, unique_creator: bool = False) -> list[str]:
     """Resolved table names (``AWS_DB_PREFIX`` applied) that must exist."""
-    return [str(m.Meta.table_name) for m in required_models(unique_creator)]
+    return [
+        str(m.Meta.table_name) for m in required_models(unique_creator=unique_creator)
+    ]
 
 
-def verify_tables(unique_creator: bool = False) -> tuple[list[str], list[str]]:
+def verify_tables(*, unique_creator: bool = False) -> tuple[list[str], list[str]]:
     """Check each required table for existence.
 
     Issues one ``DescribeTable`` per model. Never creates anything.
@@ -102,7 +104,7 @@ def verify_tables(unique_creator: bool = False) -> tuple[list[str], list[str]]:
     """
     present: list[str] = []
     missing: list[str] = []
-    for model in required_models(unique_creator):
+    for model in required_models(unique_creator=unique_creator):
         name = str(model.Meta.table_name)
         if model.exists():
             present.append(name)
@@ -151,7 +153,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     try:
-        names = required_table_names(args.unique_creator)
+        names = required_table_names(unique_creator=args.unique_creator)
     except ImportError as e:
         print(f"Could not load the DynamoDB backend: {e}", file=sys.stderr)
         return 2
@@ -166,7 +168,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     try:
-        present, missing = verify_tables(args.unique_creator)
+        present, missing = verify_tables(unique_creator=args.unique_creator)
     except Exception as e:  # credentials, permissions, endpoint
         print(f"\nCheck could not be performed: {e}", file=sys.stderr)
         print(

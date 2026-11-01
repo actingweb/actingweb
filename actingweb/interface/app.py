@@ -1538,7 +1538,7 @@ class ActingWebApp:
             # (python -m actingweb.db.verify_tables), so what we create and
             # what we tell operators to pre-create cannot drift apart.
             config = self.get_config()
-            models = required_models(bool(config.unique_creator))
+            models = required_models(unique_creator=bool(config.unique_creator))
 
             with ThreadPoolExecutor(max_workers=len(models)) as pool:
                 futures = {m: pool.submit(ensure_table, m) for m in models}
@@ -1619,11 +1619,25 @@ class ActingWebApp:
                 "table is missing."
             ) from e
         if state.attention:
+            dropped = [n for n in state.attention if n in state.marked]
+            set_note = ""
+            if dropped and state.recorded is not None:
+                recorded = ", ".join(sorted(state.recorded)) or "(none)"
+                set_note = (
+                    f" {', '.join(dropped)} has a marker but is absent from "
+                    f"the recorded indexed set ({recorded}): a process on "
+                    "this store ran without it and may have written its "
+                    "values unindexed. Every process sharing a "
+                    "store must configure the same names; during a rollout "
+                    "that adds a name, run the backfill for it again once the "
+                    "old version is gone."
+                )
             raise PropertyLookupNotReady(
                 "Reverse lookup is not ready for the indexed properties "
                 f"{', '.join(state.attention)}: the properties table holds data "
                 "but no backfill-complete marker covers them (or a name was "
-                "dropped from the indexed set and restored). Run "
+                "dropped from the indexed set and restored)."
+                f"{set_note} Run "
                 "'actingweb-property-lookup report', then "
                 "'actingweb-property-lookup backfill --apply' "
                 '(docs/migration/v3.16.rst, "One reverse-lookup mechanism"). '

@@ -159,6 +159,10 @@ class TestProbe:
         with pytest.raises(PropertyLookupNotReady) as raised:
             _check(_app(indexed=["email", "oauthId"]))  # restored, still marked
         assert "oauthId" in str(raised.value)
+        # The refusal names the recorded set and the same-names rule, so a
+        # mixed fleet (an old version without the name) is diagnosable.
+        assert "recorded indexed set (email)" in str(raised.value)
+        assert "same names" in str(raised.value)
 
     def test_no_indexed_names_reads_nothing(self, store: SimpleNamespace) -> None:
         _check(_app(indexed=[]))
@@ -174,6 +178,24 @@ class TestProbe:
         message = str(raised.value)
         assert "could not be checked" in message
         assert "with_indexed_properties([])" in message
+
+    @pytest.mark.parametrize("empty", [True, False])
+    def test_a_marker_or_set_write_fault_says_it_could_not_be_checked(
+        self, store: SimpleNamespace, empty: bool
+    ) -> None:
+        """A ``PutItem`` permission failure on the marker write (empty store)
+        or on the set record (passing store) refuses, never starts."""
+        store.empty = empty
+        if not empty:
+            store.backend.marked = {"email"}
+        fault = DbError("property lookup readiness write")
+        with (
+            mock.patch.object(store.backend, "mark_backfilled", side_effect=fault),
+            mock.patch.object(store.backend, "record_configured", side_effect=fault),
+            pytest.raises(PropertyLookupNotReady) as raised,
+        ):
+            _check(_app(indexed=["email"]))
+        assert "could not be checked" in str(raised.value)
 
     def test_a_missing_table_names_it(self, store: SimpleNamespace) -> None:
         store.backend.read_error = DbError("lookup table missing: x_property_lookup_v2")

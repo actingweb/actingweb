@@ -120,6 +120,29 @@ class TestEntryPoints:
         assert callbacks._has_wildcard("[abc]") is False  # no character classes
         assert callbacks._has_wildcard("a\\*b") is True  # goes through the matcher
 
+    def _revoke(self, lists: list[str], patterns: list[str]) -> list[str]:
+        """Run the callbacks revoke path over a fake peer store; return the
+        list names it deleted."""
+        from unittest import mock
+
+        from actingweb.handlers.callbacks import CallbacksHandler
+
+        handler = object.__new__(CallbacksHandler)
+        store = mock.MagicMock()
+        store.list_all_lists.return_value = lists
+        with mock.patch("actingweb.remote_storage.RemotePeerStore", return_value=store):
+            handler._delete_revoked_peer_data(mock.MagicMock(), "peer1", patterns)
+        return [c.args[0] for c in store.delete_list.call_args_list]
+
+    def test_callbacks_revoke_reads_brackets_literally(self) -> None:
+        deleted = self._revoke(["[abc]", "a", "b"], ["[abc]"])
+        assert deleted == ["[abc]"]
+
+    def test_callbacks_revoke_is_linear_time(self) -> None:
+        start = time.perf_counter()
+        assert self._revoke(["x" * 4000], ["*" * 40 + "a"]) == []
+        assert time.perf_counter() - start < 0.05
+
     def test_no_fnmatch_left_in_the_library(self) -> None:
         import pathlib
         import re

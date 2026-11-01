@@ -73,7 +73,12 @@ class _FastAPIClient:
 
     def post(self, **kwargs: object) -> tuple[int, dict]:
         resp = self._client.post("/mcp", **kwargs)  # type: ignore[arg-type]
+        self.headers = resp.headers
         return resp.status_code, resp.json()
+
+    def post_raw(self, path: str, **kwargs: object) -> tuple[int, str]:
+        resp = self._client.post(path, **kwargs)  # type: ignore[arg-type]
+        return resp.status_code, resp.text
 
 
 class _FlaskClient:
@@ -84,7 +89,12 @@ class _FlaskClient:
 
     def post(self, **kwargs: object) -> tuple[int, dict]:
         resp = self._client.post("/mcp", **kwargs)
+        self.headers = resp.headers
         return resp.status_code, resp.get_json()
+
+    def post_raw(self, path: str, **kwargs: object) -> tuple[int, str]:
+        resp = self._client.post(path, **kwargs)
+        return resp.status_code, resp.get_data(as_text=True)
 
 
 CLIENTS = [
@@ -96,12 +106,39 @@ CLIENTS = [
 @pytest.mark.parametrize("make_client", CLIENTS)
 @pytest.mark.parametrize("body", ["not json", "{'a': 1}", ""])
 def test_unparseable_bodies_are_32700_before_auth(make_client: type, body: str) -> None:
-    status, payload = make_client().post(
+    client = make_client()
+    status, payload = client.post(
         data=body, headers={"Content-Type": "application/json"}
     )
     assert status == 400
     assert payload["error"]["code"] == -32700
     assert payload["id"] is None
+    assert "WWW-Authenticate" not in client.headers  # no challenge for junk
+
+
+@pytest.mark.parametrize("make_client", CLIENTS)
+def test_an_unparseable_body_with_credentials_is_still_32700(
+    make_client: type,
+) -> None:
+    status, payload = make_client().post(
+        data="not json",
+        headers={"Content-Type": "application/json", "Authorization": "Bearer abc"},
+    )
+    assert status == 400
+    assert payload["error"]["code"] == -32700
+
+
+@pytest.mark.parametrize("make_client", CLIENTS)
+def test_a_form_body_on_a_non_mcp_route_is_not_a_json_rpc_error(
+    make_client: type,
+) -> None:
+    status, text = make_client().post_raw(
+        "/no-such-actor/properties",
+        data="name=value",
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+    )
+    assert status != 400
+    assert "-32700" not in text
 
 
 @pytest.mark.parametrize("make_client", CLIENTS)

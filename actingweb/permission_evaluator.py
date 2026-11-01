@@ -166,11 +166,6 @@ class PermissionEvaluator:
         self.trust_type_registry = get_trust_type_registry(config)
         self.permission_store = get_trust_permission_store(config)
 
-        # Cache for compiled regex patterns, keyed by the glob pattern alone.
-        # Patterns are owner-authored config so cardinality is small; the
-        # bound is a backstop against a rule source that never repeats
-        # (dynamic per-peer patterns), and a cold recompile is cheap.
-
     def evaluate_permission(
         self,
         actor_id: str,
@@ -767,10 +762,6 @@ class PermissionEvaluator:
     def _matches_pattern(self, target: str, pattern: str) -> bool:
         """Check if target matches a single pattern (see :func:`glob_match`)."""
         return glob_match(target, pattern)
-
-    def _glob_to_regex(self, pattern: str) -> str:
-        """The regex source for a glob pattern (see :func:`glob_to_regex`)."""
-        return glob_to_regex(pattern)
 
 
 # Convenience functions for common permission checks

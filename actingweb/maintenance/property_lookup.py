@@ -318,6 +318,9 @@ class Checkpoint:
         self._signature = signature
         self._lock = threading.Lock()
         self._state: dict[str, dict[str, Any] | str] = {}
+        # Collisions found before the checkpoint: a resumed run skips those
+        # rows, so it must still leave their names unmarked.
+        self.collisions: dict[str, list[str]] = {}
         if path and os.path.exists(path):
             try:
                 with open(path) as f:
@@ -327,6 +330,11 @@ class Checkpoint:
                     and saved.get("signature", "") == signature
                 ):
                     self._state = saved.get("segments", {})
+                    self.collisions = {
+                        str(k): [str(d) for d in v]
+                        for k, v in (saved.get("collisions") or {}).items()
+                        if isinstance(v, list)
+                    }
                     logger.info(f"Resuming from checkpoint {path}")
                 else:
                     logger.warning(
@@ -340,23 +348,42 @@ class Checkpoint:
     def get(self, segment: int) -> dict[str, Any] | str | None:
         return self._state.get(str(segment))
 
+    def note_collision(self, name: str, detail: str) -> None:
+        """Remember a collision. It reaches disk with the next ``set()`` (so
+        a checkpointed page never loses its collisions) or ``flush()``; a
+        page that was not checkpointed is rescanned anyway."""
+        with self._lock:
+            details = self.collisions.setdefault(name, [])
+            if detail not in details:
+                details.append(detail)
+
+    def flush(self) -> None:
+        with self._lock:
+            self._write()
+
     def set(self, segment: int, last_evaluated_key: dict[str, Any] | None) -> None:
         with self._lock:
             self._state[str(segment)] = (
                 last_evaluated_key if last_evaluated_key is not None else "done"
             )
-            if self._path:
-                tmp = f"{self._path}.tmp"
-                with open(tmp, "w") as f:
-                    json.dump(
-                        {
-                            "total_segments": self._total_segments,
-                            "signature": self._signature,
-                            "segments": self._state,
-                        },
-                        f,
-                    )
-                os.replace(tmp, self._path)
+            self._write()
+
+    def _write(self) -> None:
+        """Persist the state; the caller holds the lock."""
+        if not self._path:
+            return
+        tmp = f"{self._path}.tmp"
+        with open(tmp, "w") as f:
+            json.dump(
+                {
+                    "total_segments": self._total_segments,
+                    "signature": self._signature,
+                    "segments": self._state,
+                    "collisions": self.collisions,
+                },
+                f,
+            )
+        os.replace(tmp, self._path)
 
 
 @dataclass
@@ -378,7 +405,11 @@ class BackfillStats:
             setattr(self, attr, getattr(self, attr) + amount)
 
     def collision(self, name: str, detail: str) -> None:
+        """Count one colliding row; a row seen again (a resumed run rescans
+        the page that faulted) is counted once."""
         with self._lock:
+            if detail in self.collision_details:
+                return
             self.collisions[name] = self.collisions.get(name, 0) + 1
             self.collision_details.append(detail)
 
@@ -390,6 +421,26 @@ class BackfillStats:
         if self.faults:
             return []
         return [n for n in names if n not in self.collisions]
+
+
+def _lookup_owner(key: str) -> str | None:
+    """The actor holding a v2 lookup row, or None; raises ``DbError``."""
+    from pynamodb.exceptions import DoesNotExist
+
+    from actingweb.db.dynamodb.property_lookup import PropertyLookupV2
+
+    try:
+        row = PropertyLookupV2.get(key, consistent_read=True)
+    except DoesNotExist:
+        return None
+    except Exception as e:
+        from actingweb.db.dynamodb.property_lookup import is_resource_not_found
+
+        # A dry run does not create tables: no lookup table yet holds nothing.
+        if is_resource_not_found(e):
+            return None
+        raise DbError("property lookup read", None) from e
+    return str(row.actor_id) if row.actor_id else None
 
 
 def _put_lookup_row(lookup: Any, name: str, value: str, actor_id: str) -> bool | None:
@@ -418,9 +469,10 @@ def _put_lookup_row(lookup: Any, name: str, value: str, actor_id: str) -> bool |
     return str(existing.actor_id) == actor_id
 
 
-def _actor_exists(actor_id: str) -> bool:
+def _actor_exists(actor_id: str, stats: BackfillStats | None = None) -> bool:
     """Whether the actor row exists; a read fault counts as existing so the
-    row is processed (and a write fault reported) rather than skipped."""
+    row is processed (and a write fault reported) rather than skipped. A dry
+    run, which writes nothing, passes ``stats`` so the fault is counted."""
     from pynamodb.exceptions import DoesNotExist
 
     from actingweb.db.dynamodb.actor import Actor
@@ -430,6 +482,8 @@ def _actor_exists(actor_id: str) -> bool:
     except DoesNotExist:
         return False
     except Exception:  # folds DbError: reported
+        if stats is not None:
+            stats.fault()
         return True
     return True
 
@@ -444,10 +498,13 @@ def _run_segment(
     apply: bool,
     read_rcu: float | None,
     page_size: int = 100,
+    dry_run_owners: dict[str, str] | None = None,
 ) -> None:
     from actingweb.db.dynamodb.property import Property
     from actingweb.db.dynamodb.property_lookup import compute_lookup_key
 
+    if dry_run_owners is None:
+        dry_run_owners = {}
     start_key = checkpoint.get(segment)
     if start_key == "done":
         logger.info(f"segment {segment}: already complete (checkpoint)")
@@ -471,23 +528,41 @@ def _run_segment(
             value = str(item.value)  # verbatim, exactly as stored
             actor_id = str(item.id)
             limiter.wait()
-            if not _actor_exists(actor_id):
+            if not _actor_exists(actor_id, None if apply else stats):
                 # An orphaned property row (its actor is gone) would take the
                 # lookup row of a user who signs up again with the same value.
                 stats.bump("orphans")
                 continue
             if not apply:
-                stats.bump("written")
+                # Predict what --apply would do: a row another actor holds,
+                # in the table or earlier in this dry run, is a collision.
+                key = compute_lookup_key(name, value)
+                owner = dry_run_owners.get(key)
+                if owner is None:
+                    try:
+                        held = _lookup_owner(key)
+                    except DbError:  # folds DbError: counted as a fault
+                        stats.fault()  # reported; the dry run goes on
+                        continue
+                    owner = dry_run_owners.setdefault(key, held or actor_id)
+                if owner == actor_id:
+                    stats.bump("written")
+                else:
+                    stats.collision(
+                        name,
+                        f"property={name} actor={actor_id} digest={key[:12]}",
+                    )
             else:
                 outcome = _put_lookup_row(None, name, value, actor_id)
                 if outcome is True:
                     stats.bump("written")
                 elif outcome is False:
-                    stats.collision(
-                        name,
+                    detail = (
                         f"property={name} actor={actor_id} "
-                        f"digest={compute_lookup_key(name, value)[:12]}",
+                        f"digest={compute_lookup_key(name, value)[:12]}"
                     )
+                    checkpoint.note_collision(name, detail)
+                    stats.collision(name, detail)
                 else:
                     # A write fault is not a collision: do not checkpoint
                     # past this page, so a re-run retries the row.
@@ -521,7 +596,13 @@ def backfill_dynamodb(
 
     signature = f"{Property.Meta.table_name}|{','.join(sorted(names))}"
     checkpoint = Checkpoint(checkpoint_file if apply else None, segments, signature)
+    # Collisions behind the checkpoint are not seen again; carry them.
+    for name, details in checkpoint.collisions.items():
+        for detail in details:
+            stats.collision(name, detail)
     indexed = set(names)
+    # Shared by the segments; dict.setdefault is atomic under the GIL.
+    dry_run_owners: dict[str, str] = {}
     with ThreadPoolExecutor(max_workers=segments) as pool:
         futures = [
             pool.submit(
@@ -534,6 +615,7 @@ def backfill_dynamodb(
                 stats,
                 apply,
                 read_rcu,
+                dry_run_owners=dry_run_owners,
             )
             for seg in range(segments)
         ]
@@ -543,6 +625,8 @@ def backfill_dynamodb(
         except Exception as e:  # folds DbError: reported
             logger.error(f"Segment failed: {e}")
             stats.fault()
+    if apply and stats.faults and checkpoint_file:
+        checkpoint.flush()  # the collisions of pages that were checkpointed
     # Only a fault leaves a checkpoint to resume from. After a collision the
     # operator resolves it and must re-scan: a kept "done" segment would skip
     # the rows that collided.
@@ -591,6 +675,25 @@ def backfill_postgresql(
                     )
                     row = cur.fetchone()
                     stats.written = int(row[0]) if row else 0
+                    # Two actors sharing a value with no lookup row yet:
+                    # --apply gives the row to one, the rest collide.
+                    cur.execute(
+                        "SELECT p.name, array_agg(p.id ORDER BY p.id) "
+                        "FROM properties p JOIN actors a ON a.id = p.id "
+                        "LEFT JOIN property_lookup l ON l.property_name = p.name "
+                        "AND l.value = p.value "
+                        "WHERE p.name = ANY(%s) AND l.property_name IS NULL "
+                        "GROUP BY p.name, p.value HAVING count(*) > 1",
+                        (names,),
+                    )
+                    for name, ids in cur.fetchall():
+                        for actor_id in ids[1:]:
+                            stats.written -= 1
+                            stats.collision(
+                                name,
+                                f"property={name} actor={actor_id} "
+                                f"shares_with={','.join(i for i in ids if i != actor_id)}",
+                            )
             conn.rollback()
             if apply:
                 for after, upto in _pg_batches_conn(conn, names, batch_size):
@@ -781,7 +884,9 @@ def cmd_backfill(args: argparse.Namespace) -> int:
         print(
             f"Left unmarked (collisions): {', '.join(skipped)}. Two actors "
             "share an indexed value; the earlier lookup row was kept. "
-            "Resolve it, then re-run (idempotent)."
+            "Resolve it, then re-run (idempotent). A run resumed from a "
+            "checkpoint still reports collisions found before the checkpoint: "
+            "after resolving them, delete the checkpoint file first."
         )
         return 1
     print(f"Marked backfill-complete: {', '.join(done)}.")

@@ -152,6 +152,15 @@ an idempotency key) where a read-then-write would let two requests both win.
   ``True``: a create that landed, then was retried by the SDK, must not read as lost.
   The consequence: two callers writing identical ``data`` both get ``True``. A caller
   that needs exactly one winner puts a per-call nonce in ``data``, as above.
+- **When a name frees up.** The stored ``ttl_timestamp`` is ``ttl_seconds`` plus
+  ``TTL_CLOCK_SKEW_BUFFER`` (one hour) from the write, as for every attribute with a
+  TTL, so the purge never removes a row early. A row written with ``ttl_seconds=600``
+  therefore holds its name for 70 minutes, and ``get_attr_strict`` reports it live for
+  that span. When the application's own expiry is shorter, keep the deadline in
+  ``data`` (``{"request_id": ..., "expires_at": ...}``). Once it has passed, take the
+  name over with ``conditional_update_attr(name, old_data=<the data you read>,
+  new_data=<the new ask>, ttl_seconds=...)``: a compare-and-swap, so only one caller
+  replaces a given stale ask.
 - A fault raises ``DbError`` (the integrations answer 503). A missing ``name`` raises
   ``ValueError``.
 - Do not use it on names an untrusted party chooses, in a bucket where an expired row

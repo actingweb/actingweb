@@ -309,7 +309,7 @@ class DbProperty:
                     (name, old_value, actor_id),
                 )
 
-            # Create new lookup entry (skip if value unchanged)
+            # Create new lookup entry
             if not old_value or old_value != new_value:
                 cur.execute(
                     """
@@ -326,6 +326,18 @@ class DbProperty:
                         f"value_len={len(new_value)} actor={actor_id} - "
                         f"value already claimed by another actor"
                     )
+            else:
+                # Unchanged value: claim a free row. A value stored during a
+                # collision has none; once the other actor lets it go, this
+                # write indexes it. A held row (own or another's) is left.
+                cur.execute(
+                    """
+                    INSERT INTO property_lookup (property_name, value, actor_id)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (property_name, value) DO NOTHING
+                    """,
+                    (name, new_value, actor_id),
+                )
 
         except Exception as e:
             logger.error(

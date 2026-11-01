@@ -7,6 +7,7 @@ indexed-property names per test so the shared tables are left as found.
 from __future__ import annotations
 
 import importlib
+import json
 import os
 import tempfile
 import uuid
@@ -109,11 +110,6 @@ class Store:
                     Actor.get(actor_id).delete()
                 except Exception:  # noqa: BLE001
                     pass
-            for actor_id in self.actors:
-                try:
-                    Actor.get(actor_id).delete()
-                except Exception:  # noqa: BLE001
-                    pass
             for name, value in self.lookup_values:
                 lookup.DbPropertyLookup().delete(name, value)
         lookup.unmark(self.names)
@@ -122,9 +118,16 @@ class Store:
 @pytest.fixture
 def store() -> Iterator[Store]:
     if BACKEND == "dynamodb":
+        from actingweb.db.dynamodb._ensure import ensure_table
+        from actingweb.db.dynamodb.actor import Actor
+        from actingweb.db.dynamodb.property import Property
         from actingweb.db.dynamodb.property_lookup import DbPropertyLookup
 
         DbPropertyLookup()  # ensure the v2 table
+        # Store seeds with bare model saves, which do not create tables; on a
+        # fresh store this file can be the first thing a worker runs.
+        ensure_table(Actor)
+        ensure_table(Property)
     s = Store()
     saved = _lookup_module().read_readiness([])[1]
     yield s
@@ -250,6 +253,20 @@ class TestBackfill:
         assert _lookup(name, value) is None
         assert not _marked(name)
 
+    def test_a_dry_run_predicts_the_collision_apply_would_find(
+        self, store: Store, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Two actors share a value and neither has a lookup row: the dry run
+        exits 1 and counts the collision, as ``--apply`` would."""
+        name = store.name()
+        shared = f"shared-{uuid.uuid4()}"
+        store.seed(store.actor(), name, shared)
+        store.seed(store.actor(), name, shared)
+        assert _run("backfill", "--properties", name, "--segments", "2") == 1
+        assert "collisions=1" in capsys.readouterr().out
+        assert _lookup(name, shared) is None  # a dry run writes nothing
+        assert not _marked(name)
+
     def test_apply_writes_rows_then_the_marker_then_the_set(self, store: Store) -> None:
         name = store.name()
         actor = store.actor()
@@ -323,7 +340,8 @@ class TestBackfill:
         from actingweb.db.dynamodb.property_lookup import PropertyLookupV2
 
         name = store.name()
-        store.seed(store.actor(), name, f"v-{uuid.uuid4()}")
+        actor, value = store.actor(), f"v-{uuid.uuid4()}"
+        store.seed(actor, name, value)
         checkpoint = str(tmp_path / "ckpt.json")
         with mock.patch.object(
             PropertyLookupV2,
@@ -339,6 +357,109 @@ class TestBackfill:
         # The segment is not checkpointed "done", so a re-run retries it.
         assert command.Checkpoint(checkpoint, 1).get(0) != "done"
         assert not _marked(name)
+        # The re-run retries the faulted page and completes.
+        again = command.backfill_dynamodb(
+            [name], apply=True, rps=0, segments=1, checkpoint_file=checkpoint
+        )
+        assert again.faults == 0
+        assert _lookup(name, value) == actor
+        assert again.completed_names([name]) == [name]
+
+    @pytest.mark.skipif(BACKEND != "dynamodb", reason="DynamoDB checkpoint")
+    def test_a_collision_behind_the_checkpoint_keeps_its_name_unmarked(
+        self, store: Store, tmp_path: Any
+    ) -> None:
+        """Run 1 finds a collision and faults on another row, so the
+        checkpoint is kept. Run 2 resumes past the collided rows and is
+        clean, yet must still leave the colliding name unmarked."""
+        clash, fine = store.name(), store.name()
+        shared = f"shared-{uuid.uuid4()}"
+        store.seed(store.actor(), clash, shared)
+        store.seed(store.actor(), clash, shared)
+        store.seed(store.actor(), fine, f"v-{uuid.uuid4()}")
+        checkpoint = str(tmp_path / "ckpt.json")
+        real_put = command._put_lookup_row
+
+        def put(conn: Any, name: str, value: str, actor_id: str) -> Any:
+            if name == fine:
+                return None  # a write fault on the other name
+            return real_put(conn, name, value, actor_id)
+
+        with mock.patch.object(command, "_put_lookup_row", side_effect=put):
+            first = command.backfill_dynamodb(
+                [clash, fine], apply=True, rps=0, segments=1, checkpoint_file=checkpoint
+            )
+        assert first.faults >= 1 and clash in first.collisions
+        with open(checkpoint) as f:
+            saved = json.load(f)
+        assert saved["collisions"].get(clash)
+
+        # Pretend run 1 had finished the segment: run 2 then scans nothing.
+        saved["segments"] = {"0": "done"}
+        with open(checkpoint, "w") as f:
+            json.dump(saved, f)
+        second = command.backfill_dynamodb(
+            [clash, fine], apply=True, rps=0, segments=1, checkpoint_file=checkpoint
+        )
+        assert second.faults == 0
+        assert clash in second.collisions
+        assert clash not in second.completed_names([clash, fine])
+
+    @pytest.mark.skipif(BACKEND != "dynamodb", reason="DynamoDB checkpoint")
+    def test_a_real_resume_counts_a_collision_once_and_keeps_its_detail(
+        self, store: Store, tmp_path: Any
+    ) -> None:
+        """The faulted page is rescanned on resume and finds the same
+        collision again: it is counted once, with its detail line."""
+        clash, fine = store.name(), store.name()
+        shared = f"shared-{uuid.uuid4()}"
+        store.seed(store.actor(), clash, shared)
+        store.seed(store.actor(), clash, shared)
+        store.seed(store.actor(), fine, f"v-{uuid.uuid4()}")
+        checkpoint = str(tmp_path / "ckpt.json")
+        real_put = command._put_lookup_row
+
+        def put(conn: Any, name: str, value: str, actor_id: str) -> Any:
+            return None if name == fine else real_put(conn, name, value, actor_id)
+
+        with mock.patch.object(command, "_put_lookup_row", side_effect=put):
+            command.backfill_dynamodb(
+                [clash, fine], apply=True, rps=0, segments=1, checkpoint_file=checkpoint
+            )
+        again = command.backfill_dynamodb(
+            [clash, fine], apply=True, rps=0, segments=1, checkpoint_file=checkpoint
+        )
+        assert again.faults == 0
+        assert again.collisions == {clash: 1}
+        assert len(again.collision_details) == 1
+        assert again.completed_names([clash, fine]) == [fine]
+
+    @pytest.mark.skipif(BACKEND != "dynamodb", reason="DynamoDB dry run")
+    def test_a_dry_run_counts_an_actor_read_fault(self, store: Store) -> None:
+        """A dry run writes nothing, so an unreadable actor row must be a
+        counted fault, never a silent pass."""
+        name = store.name()
+        store.seed(store.actor(), name, f"v-{uuid.uuid4()}")
+        from actingweb.db.dynamodb.actor import Actor
+
+        with mock.patch.object(Actor, "get", side_effect=RuntimeError("AccessDenied")):
+            stats = command.backfill_dynamodb(
+                [name], apply=False, rps=0, segments=1, checkpoint_file=None
+            )
+        assert stats.faults >= 1
+
+    @pytest.mark.skipif(BACKEND != "dynamodb", reason="DynamoDB dry run")
+    def test_a_dry_run_sees_a_row_another_actor_holds(
+        self, store: Store, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        name = store.name()
+        value = f"held-{uuid.uuid4()}"
+        holder, other = store.actor(), store.actor()
+        store.seed(other, name, value)
+        _lookup_module().DbPropertyLookup().create(name, value, holder)
+        assert _run("backfill", "--properties", name, "--segments", "1") == 1
+        assert "collisions=1" in capsys.readouterr().out
+        assert _lookup(name, value) == holder
 
     @pytest.mark.skipif(BACKEND != "postgresql", reason="PostgreSQL batches")
     def test_orphaned_property_rows_are_skipped_and_reported(
@@ -481,7 +602,7 @@ class TestUnmark:
 class TestShim:
     """``scripts/backfill_property_lookup.py`` maps its old flags."""
 
-    def _translate(self, argv: list[str]) -> list[str]:
+    def _module(self) -> Any:
         import importlib.util
         import pathlib
 
@@ -494,7 +615,20 @@ class TestShim:
         assert spec is not None and spec.loader is not None
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
-        return module.translate(argv)
+        return module
+
+    def _translate(self, argv: list[str]) -> list[str]:
+        return self._module().translate(argv)
+
+    def test_main_prints_the_new_command_and_delegates(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        with mock.patch.object(command, "main", return_value=0) as delegated:
+            assert self._module().main(["--dry-run", "--properties", "email"]) == 0
+        delegated.assert_called_once_with(["backfill", "--properties", "email"])
+        err = capsys.readouterr().err
+        assert "deprecated" in err
+        assert "actingweb-property-lookup backfill --properties email" in err
 
     def test_dry_run_becomes_the_commands_default(self) -> None:
         assert self._translate(["--dry-run"]) == ["backfill"]

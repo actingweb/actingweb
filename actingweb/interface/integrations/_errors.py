@@ -83,13 +83,17 @@ def db_error_answer(exc: BaseException) -> tuple[int, dict[str, str], dict[str, 
     unrelated exception by accident.
     """
     if isinstance(exc, CreatorTaken):
-        return 409, {ERROR_CODE_HEADER: CONFLICT_BODY["error"]}, dict(CONFLICT_BODY)
+        return (
+            409,
+            {ERROR_CODE_HEADER: CONFLICT_BODY["error"]},
+            {**CONFLICT_BODY, "code": CONFLICT_BODY["error"]},
+        )
     if isinstance(exc, DbError):
         if is_permanent(exc):
             return (
                 500,
                 {ERROR_CODE_HEADER: INTERNAL_BODY["error"]},
-                dict(INTERNAL_BODY),
+                {**INTERNAL_BODY, "code": INTERNAL_BODY["error"]},
             )
         return (
             503,
@@ -97,7 +101,7 @@ def db_error_answer(exc: BaseException) -> tuple[int, dict[str, str], dict[str, 
                 "Retry-After": RETRY_AFTER_SECONDS,
                 ERROR_CODE_HEADER: UNAVAILABLE_BODY["error"],
             },
-            dict(UNAVAILABLE_BODY),
+            {**UNAVAILABLE_BODY, "code": UNAVAILABLE_BODY["error"]},
         )
     raise TypeError(f"not a DbError: {type(exc).__name__}")
 

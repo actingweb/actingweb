@@ -2,6 +2,8 @@ import logging
 import os
 import time
 from collections.abc import Sequence
+from datetime import datetime
+from typing import Any
 
 from pynamodb.attributes import (
     JSONAttribute,
@@ -63,7 +65,7 @@ class Attribute(Model):
     ttl_timestamp = NumberAttribute(null=True)
 
 
-def normalize_json(data):
+def normalize_json(data: Any) -> Any:
     """Normalize JSON data by serializing with sorted keys, so that
     ``{"a": 1, "b": 2}`` and ``{"b": 2, "a": 1}`` compare equal."""
     import json
@@ -370,13 +372,13 @@ class DbAttribute:
 
     @staticmethod
     def create_attr_if_absent(
-        actor_id=None,
-        bucket=None,
-        name=None,
-        data=None,
-        timestamp=None,
-        ttl_seconds=None,
-    ):  # type: ignore[misc]
+        actor_id: str | None = None,
+        bucket: str | None = None,
+        name: str | None = None,
+        data: Any = None,
+        timestamp: datetime | None = None,
+        ttl_seconds: int | None = None,
+    ) -> bool:
         """Create an attribute only if no live row holds its name.
 
         See ``DbAttributeProtocol.create_attr_if_absent`` for the contract.

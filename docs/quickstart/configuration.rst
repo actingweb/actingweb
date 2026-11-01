@@ -235,7 +235,7 @@ Other DynamoDB environment variables:
 Production (AWS DynamoDB)
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 
-- Configure IAM with least-privilege on the app's tables: ``dynamodb:GetItem``, ``PutItem``, ``UpdateItem``, ``DeleteItem``, ``Query``, ``Scan``. By default (uniqueness on) the tables include ``<prefix>_creators``, and the actor table needs ``ConditionCheckItem`` as well; an application that opts out with ``with_unique_creator(False)`` needs neither (see :doc:`../migration/v3.16`, "Creator uniqueness").
+- Configure IAM with least-privilege on the app's tables: ``dynamodb:GetItem``, ``PutItem``, ``UpdateItem``, ``DeleteItem``, ``Query``, ``Scan``. By default (uniqueness on) the tables include ``<prefix>_creators``, and the actor table needs ``ConditionCheckItem`` as well; an application that opts out with ``with_unique_creator(False)`` needs neither (see :doc:`../migration/v3.16`, "Creator uniqueness"). With reverse lookup on (any indexed property), ``ConditionCheckItem`` is needed on the properties and actor tables whatever the uniqueness setting: an unchanged indexed write that claims a free lookup row checks both in the same transaction.
   With auto-creation enabled (the default) the role also needs
   ``dynamodb:CreateTable`` and ``dynamodb:DescribeTable``; with
   ``AWS_DB_AUTO_CREATE_TABLES=false`` both can be dropped (the uniqueness check reads one consistent item and needs no ``DescribeTable``).
@@ -557,6 +557,30 @@ marker is kept per name on both backends, together with a record of the
 indexed-name set the last passing start saw, so adding a name later, or
 dropping one for a deploy and restoring it, is refused until that name is
 backfilled again.
+
+**Every process on a store configures the same names.** The recorded set is
+the last passing start's, whichever process made it (or the union a
+``backfill --apply`` or ``mark-complete --apply`` wrote). A process with a
+non-empty indexed set that lacks a name (an older version during a rollout, a worker with its own
+configuration) writes that name's values with no lookup rows and records the
+smaller set, and the next start that has the name refuses until it is
+backfilled again. To add an indexed name to a running deployment:
+
+1. Deploy the version that adds it. Its first start refuses, naming the name;
+   the old version keeps serving.
+2. Run ``actingweb-property-lookup backfill --apply`` and start the new
+   version. While any old-version process can still start (a Lambda cold
+   start, an autoscaled instance), that start records the smaller set and
+   the next new-version start refuses again: finish the rollout before
+   relying on new starts, or keep the old version from scaling out.
+3. Once the last old-version process has stopped, run ``backfill --apply``
+   once more: it indexes the values the old version wrote in between, and
+   is idempotent for the rest. New starts pass from then on.
+
+A DynamoDB dry run keeps, in memory, one entry per distinct indexed value it
+reads (that is how it predicts two actors sharing one); on a very large table
+run ``report`` instead, or the dry run with ``--properties`` one name at a
+time.
 
 **Deployments with existing data** run the packaged command with the same
 environment as the application:

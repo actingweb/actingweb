@@ -1409,7 +1409,9 @@ class DbAttributeProtocol(Protocol):
             data: The data to store (stored as given; a falsy value is
                 stored, not a delete)
             timestamp: Optional timestamp
-            ttl_seconds: When given, the row's storage TTL, as ``set_attr``
+            ttl_seconds: When given, the row's storage TTL, as ``set_attr``:
+                the stored deadline includes ``TTL_CLOCK_SKEW_BUFFER``, so the
+                name frees up ``ttl_seconds`` plus one hour after the write
 
         Returns:
             True when this call created the row or replaced an expired one

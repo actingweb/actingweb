@@ -24,8 +24,15 @@ def _require_dynamodb():
 @pytest.fixture
 def actor_id():
     """An actor with a row of its own (the backfill skips orphaned rows)."""
+    from actingweb.db.dynamodb._ensure import ensure_table
     from actingweb.db.dynamodb.actor import Actor
+    from actingweb.db.dynamodb.property import Property
+    from actingweb.db.dynamodb.property_lookup import PropertyLookupV2
 
+    # Bare model saves do not create tables; on a fresh store this file can
+    # be the first thing a worker runs.
+    for model in (Actor, Property, PropertyLookupV2):
+        ensure_table(model)
     actor = f"migration-{uuid.uuid4()}"
     Actor(id=actor, creator=f"{actor}@x.test", passphrase="").save()
     yield actor

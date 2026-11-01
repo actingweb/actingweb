@@ -518,6 +518,16 @@ An application that never uses reverse lookup calls
 so a name dropped that way and restored later is not caught: run
 ``actingweb-property-lookup backfill --apply`` for it first.
 
+The recorded set is the last passing start's, whichever process made it (or
+the union a ``backfill --apply`` or ``mark-complete --apply`` wrote), so
+every process that shares a store must configure the same names. A process
+with a non-empty indexed set that lacks a name (an old version during a rollout that adds one) writes that
+name unindexed and records the smaller set; the refusal then names the
+recorded set. Adding a name: deploy, run ``backfill --apply``, start the new
+version, and run ``backfill --apply`` once more after the old version is gone;
+until then an old-version start can make new starts refuse again
+(``docs/quickstart/configuration.rst``).
+
 **What to run**
 
 With the application's environment (``DATABASE_BACKEND``, ``AWS_DB_PREFIX``,

@@ -269,7 +269,14 @@ CHANGED
   ``unsupported_grant_type``, ``invalid_grant``, ``refresh_token_reused``,
   ``access_denied``, ``not_found``, ``server_error``,
   ``temporarily_unavailable``). The database fault handler's answers on the SPA
-  and ``/oauth/*`` paths carry the header too, and
+  and ``/oauth/*`` paths carry the header too, and their body (``error``,
+  ``message``) gains the same ``code`` key on every route; a JSON body that is
+  not an object (``[]``, ``null``) on ``/oauth/spa/token`` and
+  ``/oauth/spa/authorize`` (and ``/oauth/revoke``), and a field those
+  endpoints read as a string (``provider``, ``refresh_token``, ``code``,
+  ``redirect_uri``, ``actor_id`` and the rest) holding a list or object, now
+  answer 400 ``invalid_request`` instead of a 500 with no code (or, for
+  ``refresh_token``, a 503 that blamed the store); and
   ``Access-Control-Expose-Headers`` on them now lists both ``Retry-After`` and
   ``X-ActingWeb-Error``. **Behavior change:** rule 7 of the SPA guide is now "a
   401 on refresh that carries the header is the library's and final; one
@@ -328,7 +335,20 @@ CHANGED
   back together. A value another actor already holds is still a logged
   ``LOOKUP_COLLISION``, not a failure. An indexed write costs about twice the
   write units of a plain put on DynamoDB (non-indexed writes are unchanged),
-  and the IAM role needs ``PutItem`` and ``DeleteItem`` on both tables.
+  and the IAM role needs ``PutItem`` and ``DeleteItem`` on both tables. A
+  write that leaves an indexed value unchanged claims a missing lookup row
+  (the value was stored during a collision and the other actor has since let
+  it go), so the value becomes findable. On DynamoDB it stays a plain put
+  plus one consistent lookup read; the claim, when needed, is a transaction
+  conditioned on the property still holding the value and the actor row
+  still existing, and a fault in it is
+  logged as ``LOOKUP_HEAL_FAILED`` and never fails the write (the role needs
+  ``ConditionCheckItem`` on the properties and actor tables, uniqueness on or
+  off). On PostgreSQL the claim is
+  an insert in the property's own transaction, so it fails closed like any
+  indexed write: a fault rolls the write back with ``DbError``, and a write
+  for an actor that no longer exists now fails on the lookup row's foreign
+  key when no other actor holds that value's lookup row.
   ``DbPropertyLookup.create`` (DynamoDB) now raises ``DbError`` on a write
   fault instead of returning False, which only means a collision.
 
@@ -367,7 +387,10 @@ CHANGED
   one raises ``ValueError``; the import-time ``Config()`` default would have
   built an enforced handler that never ran ``check_ready()``), and
   ``python -m actingweb.db.verify_tables`` lists the ``creators`` table unless
-  given ``--no-unique-creator``. The readiness check now reads one consistent
+  given ``--no-unique-creator``. Its ``required_models()``,
+  ``required_table_names()`` and ``verify_tables()`` take ``unique_creator``
+  as a keyword only: a 3.15 positional ``use_lookup_table`` argument raises
+  ``TypeError`` instead of being read as ``unique_creator``. The readiness check now reads one consistent
   item instead of calling ``DescribeTable``, so ``DescribeTable`` can still be
   dropped from the runtime role. Code that builds ``Config()`` and creates
   actors without ``integrate_*`` should call ``check_ready()``.
@@ -792,7 +815,12 @@ ADDED
   change to know:** two callers writing identical data both get ``True``, so a
   caller that needs exactly one winner puts a per-call nonce in ``data``.
   After a ``False``, ``Attributes.get_attr(name)`` on the same instance reads
-  the winner's row through. See ``docs/sdk/attributes-buckets.rst``.
+  the winner's row through. The stored ``ttl_timestamp`` carries the
+  one-hour ``TTL_CLOCK_SKEW_BUFFER`` like every attribute TTL, so a row
+  written with ``ttl_seconds=600`` holds its name for 70 minutes; an
+  application with a shorter expiry keeps its deadline in ``data`` and takes
+  a stale row over with ``conditional_update_attr``. See
+  ``docs/sdk/attributes-buckets.rst``.
 
 - **``actingweb-property-lookup``** (``report``, ``backfill``,
   ``mark-complete``, ``unmark``; dry-run unless ``--apply``) makes the
@@ -802,7 +830,11 @@ ADDED
   fault is retried and never reported as a collision; PostgreSQL: primary-key
   batches that commit alone, orphaned property rows skipped and counted),
   marks each name that finished with no fault and no collision, and records
-  the name set. ``mark-complete`` marks without a scan and refuses a name with
+  the name set. A collision is kept in the checkpoint, so a run resumed after
+  a fault still leaves that name unmarked; the dry run predicts the
+  collisions ``--apply`` would find (a value another actor's lookup row
+  holds, or two actors sharing a value with no row yet) and exits 1 for
+  them. ``mark-complete`` marks without a scan and refuses a name with
   property rows and no lookup rows unless ``--force``. ``report`` exits 1
   when the startup check would refuse.
   ``scripts/backfill_property_lookup.py`` stays as a shim that delegates.

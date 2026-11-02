@@ -1,4 +1,4 @@
-# Reverse-lookup: stale owners, a stale-handle race, one bad value
+# Reverse-lookup: stale owners and a stale-handle race
 
 Found by the Phase 1 outside-voice review of
 `thoughts/plans/2026-11-01-single-mode-and-consumer-primitives.md`; not fixed in
@@ -16,7 +16,3 @@ Found by the Phase 1 outside-voice review of
    calls both read `old_value=x`) leaves the lookup row of the losing value.
    `_write_indexed` checks only the lookup owner. Fix: condition the property
    put on the value read, or compare the stored value on reverse lookup.
-3. **PostgreSQL backfill: one over-long value aborts the pass.** A value over
-   about 2.7 KB breaks the btree row limit on `property_lookup`; the pass faults
-   at the same batch on every run. Fix: catch per batch, report the actor and
-   name, skip the row.

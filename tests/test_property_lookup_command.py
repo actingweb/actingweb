@@ -506,6 +506,102 @@ class TestBackfill:
         assert not _marked(name)
 
 
+def _incompressible(nbytes: int) -> str:
+    """Random hex: PostgreSQL's compression cannot bring it under the index's
+    row limit, so the insert is refused for its real size."""
+    return os.urandom(nbytes).hex()
+
+
+class TestBackfillUnindexableValue:
+    """A value too long for the lookup index (SQLSTATE 54000) used to fault
+    the whole PostgreSQL pass at the same batch on every run."""
+
+    @pytest.mark.skipif(BACKEND != "postgresql", reason="PostgreSQL index limit")
+    def test_apply_writes_the_rest_and_reports_the_long_value(
+        self, store: Store, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        name = store.name()
+        long_actor, short_actor = sorted(store.actor() for _ in range(2))
+        store.seed(long_actor, name, _incompressible(4000))
+        short_value = f"v-{uuid.uuid4()}"
+        store.seed(short_actor, name, short_value)
+        assert _run("backfill", "--apply", "--properties", name) == 1
+        out = capsys.readouterr().out
+        assert "unindexable=1" in out and "faults=0" in out
+        assert "values too long to index" in out
+        assert "Shorten or remove" in out and "Two actors" not in out
+        assert _lookup(name, short_value) == short_actor
+        assert not _marked(name)
+
+    @pytest.mark.skipif(BACKEND != "postgresql", reason="PostgreSQL index limit")
+    def test_the_long_value_is_skipped_within_one_batch(self, store: Store) -> None:
+        name = store.name()
+        actors = sorted(store.actor() for _ in range(3))
+        values = {a: f"v-{uuid.uuid4()}" for a in actors}
+        values[actors[1]] = _incompressible(4000)
+        for a in actors:
+            store.seed(a, name, values[a])
+        stats = command.backfill_postgresql([name], apply=True, batch_size=1000)
+        assert stats.faults == 0
+        assert stats.unindexable == {name: 1}
+        assert f"actor={actors[1]}" in stats.unindexable_details[0]
+        assert "value_bytes=8000" in stats.unindexable_details[0]
+        assert stats.written == 2
+        assert _lookup(name, values[actors[0]]) == actors[0]
+        assert _lookup(name, values[actors[2]]) == actors[2]
+        assert stats.completed_names([name]) == []
+
+    @pytest.mark.skipif(BACKEND != "postgresql", reason="PostgreSQL index limit")
+    def test_the_dry_run_says_it_may_be_too_long_without_failing(
+        self, store: Store, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        name = store.name()
+        store.seed(store.actor(), name, _incompressible(4000))
+        assert _run("backfill", "--properties", name) == 0
+        out = capsys.readouterr().out
+        assert "may be too long" in out and "collisions=0" in out
+
+    @pytest.mark.skipif(BACKEND != "postgresql", reason="PostgreSQL index limit")
+    def test_the_dry_run_still_counts_a_shared_large_value_as_a_collision(
+        self, store: Store, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # Compressible, so it indexes; two actors share it, so --apply collides.
+        name = store.name()
+        value = "x" * 3000 + uuid.uuid4().hex
+        for actor_id in (store.actor(), store.actor()):
+            store.seed(actor_id, name, value)
+        assert _run("backfill", "--properties", name) == 1
+        out = capsys.readouterr().out
+        assert "collisions=1" in out and "may be too long" in out
+
+    @pytest.mark.skipif(BACKEND != "postgresql", reason="PostgreSQL index limit")
+    def test_a_name_with_both_causes_gets_both_messages(
+        self, store: Store, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        name = store.name()
+        holder, other, long_actor = store.actor(), store.actor(), store.actor()
+        held = f"held-{uuid.uuid4()}"
+        store.seed(other, name, held)
+        _lookup_module().DbPropertyLookup().create(name, held, holder)
+        store.seed(long_actor, name, _incompressible(4000))
+        assert _run("backfill", "--apply", "--properties", name) == 1
+        out = capsys.readouterr().out
+        assert "(collisions)" in out and "values too long to index" in out
+
+    @pytest.mark.skipif(BACKEND != "postgresql", reason="PostgreSQL index limit")
+    def test_another_error_in_the_row_fallback_is_still_a_fault(
+        self, store: Store
+    ) -> None:
+        name = store.name()
+        store.seed(store.actor(), name, _incompressible(4000))
+        with mock.patch.object(
+            command, "_pg_insert_rows_one_by_one", side_effect=RuntimeError("boom")
+        ):
+            stats = command.backfill_postgresql([name], apply=True)
+        assert stats.faults == 1
+        assert not _marked(name)
+
+
 class TestBackfillDynamoDbSafety:
     @pytest.mark.skipif(BACKEND != "dynamodb", reason="DynamoDB backfill")
     def test_an_orphaned_property_row_is_skipped_and_counted(

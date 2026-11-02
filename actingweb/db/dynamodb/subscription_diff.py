@@ -1,6 +1,7 @@
 import datetime
 import logging
 import os
+from typing import Any
 
 from pynamodb.attributes import NumberAttribute, UnicodeAttribute, UTCDateTimeAttribute
 from pynamodb.constants import PAY_PER_REQUEST_BILLING_MODE
@@ -42,7 +43,14 @@ class DbSubscriptionDiff:
     The  actor_id must always be set.
     """
 
-    def get(self, actor_id=None, subid=None, seqnr=None, *, strict=True):
+    def get(
+        self,
+        actor_id: str | None = None,
+        subid: str | None = None,
+        seqnr: int | None = None,
+        *,
+        strict: bool = True,
+    ) -> dict[str, Any] | None:
         """Retrieves the subscriptiondiff from the database.
 
         None when absent. A read fault raises ``DbError``; ``strict=False``
@@ -152,7 +160,13 @@ class DbSubscriptionDiffList:
     The actor_id must always be set.
     """
 
-    def fetch(self, actor_id=None, subid=None, *, strict=True):
+    def fetch(
+        self,
+        actor_id: str | None = None,
+        subid: str | None = None,
+        *,
+        strict: bool = True,
+    ) -> list[dict[str, Any]] | None:
         """Retrieves the subscription diffs of an actor_id from the database as an array
 
         ``[]`` when there are none. A read fault raises ``DbError``;

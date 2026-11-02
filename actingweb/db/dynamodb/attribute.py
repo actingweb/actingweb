@@ -85,7 +85,9 @@ class DbAttribute:
     """
 
     @staticmethod
-    def get_bucket(actor_id=None, bucket=None, *, strict=True):
+    def get_bucket(
+        actor_id: str | None = None, bucket: str | None = None, *, strict: bool = True
+    ) -> dict[str, dict[str, Any]] | None:
         """Returns a dict of attributes from a bucket, each with data and timestamp
 
         ``{}`` for an empty bucket. A read fault raises ``DbError``;
@@ -128,7 +130,13 @@ class DbAttribute:
         return ret
 
     @staticmethod
-    def get_attr(actor_id=None, bucket=None, name=None, *, strict=True):
+    def get_attr(
+        actor_id: str | None = None,
+        bucket: str | None = None,
+        name: str | None = None,
+        *,
+        strict: bool = True,
+    ) -> dict[str, Any] | None:
         """One attribute as ``{"data", "timestamp"}``, None when absent.
 
         A read fault raises ``DbError``; ``strict=False`` answers it with
@@ -155,7 +163,9 @@ class DbAttribute:
         }
 
     @staticmethod
-    def get_attr_strict(actor_id=None, bucket=None, name=None):
+    def get_attr_strict(
+        actor_id: str | None = None, bucket: str | None = None, name: str | None = None
+    ) -> dict[str, Any] | None:
         """Point-read one attribute, distinguishing absence from failure.
 
         ``get_attr()`` collapses every outcome into ``None``: a missing row, a
@@ -568,7 +578,9 @@ class DbAttributeBucketList:
     """
 
     @staticmethod
-    def fetch(actor_id=None, *, strict=True):
+    def fetch(
+        actor_id: str | None = None, *, strict: bool = True
+    ) -> dict[str, dict[str, dict[str, Any]]] | None:
         """Retrieves all the attributes of an actor_id from the database.
 
         A read fault raises ``DbError``; ``strict=False`` answers it with None.
@@ -592,7 +604,9 @@ class DbAttributeBucketList:
         return ret
 
     @staticmethod
-    def fetch_timestamps(actor_id=None, *, strict=True):
+    def fetch_timestamps(
+        actor_id: str | None = None, *, strict: bool = True
+    ) -> dict[str, Any] | None:
         """Retrieves timestamps for all buckets of an actor_id.
 
         A read fault raises ``DbError``; ``strict=False`` answers it with None.

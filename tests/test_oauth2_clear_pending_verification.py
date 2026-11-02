@@ -18,6 +18,7 @@ def _actor(email_verified: str | None = "false", token: str | None = "tok-abc"):
     actor.store.email_verified = email_verified
     actor.store.email_verification_token = token
     actor.store.email_verification_created_at = "1234"
+    actor.store.email_verification_address = "typed@example.com"
     return actor
 
 
@@ -38,6 +39,8 @@ class TestClearPendingEmailVerification:
         actor.store.set_confirmed.assert_called_once_with("email_verified", None)
         assert actor.store.email_verification_token is None
         assert actor.store.email_verification_created_at is None
+        # The abandoned link's address goes with its token.
+        assert actor.store.email_verification_address is None
 
     def test_noop_when_not_pending(self):
         """An actor whose email is provider-verified (absent) or link-verified

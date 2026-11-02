@@ -20,6 +20,7 @@ entries until TTL — §2 of
 
 import pytest
 
+from actingweb._bounded_cache import BoundedDict
 from actingweb.handlers import mcp as mcp_module
 from actingweb.mcp.invalidation import evict_caches_for_actor, evict_caches_for_token
 
@@ -174,7 +175,7 @@ class TestEveryWiredCallSiteActuallyFires:
         )
 
         store = tp.TrustPermissionStore.__new__(tp.TrustPermissionStore)
-        store._cache = {}
+        store._cache = BoundedDict(16)
         store.config = None  # type: ignore[assignment]
         monkeypatch.setattr(
             store,
@@ -200,7 +201,7 @@ class TestEveryWiredCallSiteActuallyFires:
         )
 
         store = tp.TrustPermissionStore.__new__(tp.TrustPermissionStore)
-        store._cache = {}
+        store._cache = BoundedDict(16)
         store.config = None  # type: ignore[assignment]
         monkeypatch.setattr(
             store,

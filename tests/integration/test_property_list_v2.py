@@ -206,6 +206,32 @@ class TestV2InterleavedMutationStaleCache:
         fresh = ListProperty(test_actor.id, "interleaved2", test_actor.config)
         assert fresh.to_list() == ["a", "b"]
 
+    def test_two_handles_appending_alternately_keep_insertion_order(
+        self, test_actor: ActorInterface
+    ) -> None:
+        """Two handles on one list append in turn, ten times: each sees the
+        other's appends and the list reads back in insertion order, through
+        either writer and through a fresh handle."""
+        actor_id = test_actor.id
+        assert actor_id is not None
+        writers = [
+            ListProperty(actor_id, "alternating", test_actor.config),
+            ListProperty(actor_id, "alternating", test_actor.config),
+        ]
+        expected: list[str] = []
+        for i in range(10):
+            item = f"item-{i}"
+            writers[i % 2].append(item)
+            expected.append(item)
+
+        fresh = ListProperty(actor_id, "alternating", test_actor.config)
+        assert fresh.storage_format() == 2
+        assert fresh.to_list() == expected
+        assert list(fresh) == expected
+        assert writers[0].to_list() == expected
+        assert writers[1].to_list() == expected
+        assert [fresh[i] for i in range(10)] == expected
+
 
 class TestV2FirstMutationLeavesAHealthyMetaRow:
     """thoughts/plans/2026-09-14-v2-list-mutation-raises-after-its-write-

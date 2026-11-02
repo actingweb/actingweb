@@ -160,7 +160,7 @@ class TestPeerTrusteeScope:
         self._create(actor_b, "peer-3", peer_type="type-x")
 
         found = DbPeerTrustee().get(actor_id=actor_a, peer_type="type-x")
-        assert found and found["peerid"] == "peer-1"
+        assert isinstance(found, dict) and found["peerid"] == "peer-1"
 
         # >1 match of the same type within one actor is ambiguous -> False
         self._create(actor_a, "peer-4", peer_type="type-x")

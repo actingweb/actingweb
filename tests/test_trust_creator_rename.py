@@ -287,7 +287,9 @@ class TestConcurrentRestore:
             assert actor.modify_creator_unvouched(uuid_email())
         assert not is_vouched_actor(_reload(config, actor))
 
-    def test_r8_a_clean_that_landed_meanwhile_is_not_restored_over(self) -> None:
+    def test_r8_a_clean_that_landed_meanwhile_is_not_restored_over(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
         # Finding 3 of round 8: the restore only replaces this change's
         # "creator_changed", not the marker a sign-in wrote since.
         config = self._config()
@@ -296,8 +298,61 @@ class TestConcurrentRestore:
         assert store.set_confirmed("auth_method", "creator_changed")
         other = istore(_reload(config, actor))
         assert other.set_confirmed("auth_method", "email_verified")  # the clean
-        assert not Actor._restore_marker(store, "email_unverified", owner)
+        with caplog.at_level("WARNING", logger="actingweb.actor"):
+            assert not Actor._restore_marker(store, "email_unverified", owner)
+        assert "changed since" in caplog.text
+        assert "store fault" not in caplog.text
         assert istore(_reload(config, actor)).auth_method == "email_verified"
+
+    def test_a_restore_whose_answer_was_lost_counts_as_restored(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # The update committed but answered False (a fault after the commit):
+        # the re-read finds the restored marker, so nothing is blamed.
+        config = self._config()
+        actor, owner = _vouched(config)
+        store = istore(actor)
+        assert store.set_confirmed("auth_method", "creator_changed")
+        db = store.__dict__["_db"]
+        with (
+            patch.object(db, "conditional_update_attr", return_value=False),
+            patch.object(
+                db.dbprop,
+                "get_attr_strict",
+                Mock(return_value={"data": "email_unverified"}),
+            ),
+            caplog.at_level("WARNING", logger="actingweb.actor"),
+        ):
+            assert Actor._restore_marker(store, "email_unverified", owner)
+        assert caplog.text == ""
+        assert store.__dict__["auth_method"] == "email_unverified"
+
+    @pytest.mark.parametrize("reread", ["raises", "unchanged"])
+    def test_a_fault_on_the_restore_is_logged_as_a_fault(
+        self, caplog: pytest.LogCaptureFixture, reread: str
+    ) -> None:
+        # The conditional update answers False on a fault too; the log used to
+        # say the marker changed, blaming a sign-in that never happened.
+        from actingweb.db.exceptions import DbError
+
+        config = self._config()
+        actor, owner = _vouched(config)
+        store = istore(actor)
+        assert store.set_confirmed("auth_method", "creator_changed")
+        db = store.__dict__["_db"]
+        if reread == "raises":
+            strict: Any = Mock(side_effect=DbError("attribute get", actor.id))
+        else:
+            strict = Mock(return_value={"data": "creator_changed"})
+        with (
+            patch.object(db, "conditional_update_attr", return_value=False),
+            patch.object(db.dbprop, "get_attr_strict", strict),
+            caplog.at_level("WARNING", logger="actingweb.actor"),
+        ):
+            # An unvouched marker: the restore goes straight to the update.
+            assert not Actor._restore_marker(store, "email_unverified", owner)
+        assert "store fault" in caplog.text
+        assert "changed since" not in caplog.text
 
 
 class TestApplicationRename:

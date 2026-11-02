@@ -739,10 +739,11 @@ class FastAPIIntegration(BaseActingWebIntegration):
                 )
 
                 if mcp_context:
-                    self.logger.debug(
-                        "Using MCP OAuth2 callback handler with context: "
-                        f"{summarize_payload(mcp_context)}"
-                    )
+                    if self.logger.isEnabledFor(logging.DEBUG):
+                        self.logger.debug(
+                            "Using MCP OAuth2 callback handler with context: "
+                            f"{summarize_payload(mcp_context)}"
+                        )
                     # This is an MCP OAuth2 callback
                     return await self._handle_oauth2_endpoint(request, "callback")
                 else:
@@ -1444,7 +1445,8 @@ class FastAPIIntegration(BaseActingWebIntegration):
 
         # Debug logging for trust endpoint
         if "/trust" in str(request.url.path) and params:
-            self.logger.debug(f"Trust query params: {summarize_payload(params)}")
+            if self.logger.isEnabledFor(logging.DEBUG):
+                self.logger.debug(f"Trust query params: {summarize_payload(params)}")
 
         return {
             "method": request.method,
@@ -2185,10 +2187,11 @@ class FastAPIIntegration(BaseActingWebIntegration):
             hasattr(webobj.response, "template_values")
             and webobj.response.template_values
         ):
-            self.logger.debug(
-                "OAuth2 template values found: "
-                f"{summarize_payload(webobj.response.template_values)}"
-            )
+            if self.logger.isEnabledFor(logging.DEBUG):
+                self.logger.debug(
+                    "OAuth2 template values found: "
+                    f"{summarize_payload(webobj.response.template_values)}"
+                )
             if self.templates:
                 # This is an HTML template response
                 template_name = (
@@ -2621,9 +2624,10 @@ class FastAPIIntegration(BaseActingWebIntegration):
                         args.append(relationship)
                         if peerid:
                             args.append(peerid)
-                    self.logger.debug(
-                        f"Trust handler args: {args}, kwargs: {summarize_payload(kwargs)}"
-                    )
+                    if self.logger.isEnabledFor(logging.DEBUG):
+                        self.logger.debug(
+                            f"Trust handler args: {args}, kwargs: {summarize_payload(kwargs)}"
+                        )
             elif endpoint == "permissions":
                 # Permission query endpoint: /{actor_id}/permissions/{peer_id}
                 if kwargs.get("peer_id"):

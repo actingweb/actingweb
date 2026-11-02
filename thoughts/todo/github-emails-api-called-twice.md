@@ -37,6 +37,21 @@ Two options, not evaluated against each other yet:
    verified entry) instead of hitting the API independently. Changes the
    base-class contract for every provider, not just GitHub.
 
+## Where a cache can live (found 2026-11-02)
+
+The outside-voice review of `thoughts/plans/2026-11-02-3-16-small-followups.md`
+traced the callers:
+- The only path that calls both methods for one token builds its authenticator
+  per request (`handlers/oauth2_callback.py:153,280,1416`, and the SPA path at
+  `:1083-1101`).
+- The one long-lived authenticator (`oauth2_server/oauth2_server.py:65`) calls
+  only `get_primary_email` (`:373`).
+
+So a request-local fix works: memoise on the per-request authenticator, or
+fetch once at the two callback sites and derive both answers there. A
+provider-level cache with a TTL would straddle requests. Still to decide:
+where the memo lives, and whether a failed fetch is reused.
+
 ## Constraints inherited from the 3.14.5 plan
 
 - This path only exists because of the GitHub-failure discriminator added in

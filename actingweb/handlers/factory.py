@@ -2,7 +2,7 @@ import json
 import logging
 
 from actingweb import actor
-from actingweb.db.creator_rules import is_refused_from_callers
+from actingweb.db.creator_rules import is_refused_from_callers, normalise_creator
 from actingweb.db.exceptions import CreatorTaken
 from actingweb.handlers import base_handler
 
@@ -252,9 +252,8 @@ class RootFactoryHandler(base_handler.BaseHandler):
 
         # Normalise creator when using email login flow
         if isinstance(creator, str):
-            creator = creator.strip()
-            if "@" in creator:
-                creator = creator.lower()
+            # The form value is stripped; the helper itself does not strip.
+            creator = normalise_creator(creator.strip())
 
         if isinstance(creator, str) and is_refused_from_callers(creator):
             # "#…" and "#dup-" belong to the uniqueness bookkeeping.

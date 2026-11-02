@@ -1055,6 +1055,63 @@ ADDED
 FIXED
 ~~~~~
 
+- **The PostgreSQL ``actingweb-property-lookup backfill`` faulted at the same
+  batch on every run when one indexed value was too long to index.**
+  ``property_lookup``'s primary key is a btree on ``(property_name, value)``.
+  PostgreSQL refuses a key row over about 2,704 bytes after compression
+  (SQLSTATE 54000), and that error aborted the whole pass. A refused batch is
+  now retried row by row. Each refused row is logged as ``UNINDEXABLE``
+  (actor, name, size, never the value) and counted as ``unindexable=N``.
+  Every other row in a batch that commits is written; each row is re-read
+  as it is inserted, so a concurrent ``set()`` cannot leave a lookup row for
+  a value the actor no longer holds. **Behavior change:** the command commits the
+  other rows, leaves that name unmarked and exits 1, where it used to fault
+  and write nothing past the bad batch. The dry run notes values that may be
+  too long; that note does not change its exit status. **Check:** that actor cannot
+  write the property at all until the value is shortened. The property and
+  its lookup row succeed or fail together, so every write raises
+  ``DbError``. Shorten or remove the value and re-run; marking the name
+  complete would hide that failure.
+
+- **``Actor.modify_trust_and_notify_async`` never notified the peer.** It
+  built ``AwProxy(peer_target=...)`` without the ``id`` key the proxy reads,
+  and the ``KeyError`` was folded into a debug line ("Not able to notify peer
+  async"). It also sent ``PUT`` where the peer's trust route treats only
+  ``POST`` as an approval notification. It now runs the sync
+  ``modify_trust_and_notify`` in a worker thread (``asyncio.to_thread``), so
+  the two send the same ``POST`` and handle errors around the trust write the
+  same way. **Behavior change:** for applications that call the async method
+  directly (nothing in the library does), the peer is now told of the
+  approval and, once both sides have approved, its
+  ``trust_fully_approved_remote`` hook runs, as for the sync method.
+  Cancelling the await does not stop the worker thread: the trust write and
+  the notification still complete.
+
+- **A provider-verified sign-in left the abandoned verification address
+  behind.** ``clear_pending_email_verification`` removed the token and the
+  pending flag but kept ``email_verification_address``. Nothing could use it
+  without the token; it is now cleared with the token, as the verify
+  handler's own success path does.
+
+- **The marker restore after a failed creator change logged "auth_method
+  changed since this creator change wrote it" for a store fault.** The
+  conditional update answers False for both cases. A strict re-read now tells
+  them apart, and an outage logs "could not restore auth_method (store
+  fault)". The actor stays unvouched either way.
+
+- **Four per-process permission caches grew with every actor and peer pair
+  the process saw.** ``TrustPermissionStore``, ``PeerProfileStore``,
+  ``PeerPermissionStore`` and ``CachedCapabilitiesStore`` cached in a plain
+  dict on a process-wide singleton, with no bound. They now keep at most
+  4,096 entries each (least recently used goes first), read under one lock.
+  A pair evicted from the cache is read from the store again, which is
+  correct, only slower.
+
+- **Payload summaries in log lines were built at every log level.**
+  ``summarize_payload`` sat inside eager log arguments on 17 lines, including
+  the subscription callback sender, which runs once per subscriber. Each line
+  now checks its own level first.
+
 - **A glob with many ``*`` no longer backtracks exponentially (security).**
   The evaluator's translation turned every ``*`` into ``.*`` and measured 12
   stars against 40 characters at over 20 seconds, and the callbacks and

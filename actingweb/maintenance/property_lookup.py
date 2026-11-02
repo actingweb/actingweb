@@ -397,6 +397,13 @@ class BackfillStats:
     # name -> number of rows another actor already holds
     collisions: dict[str, int] = field(default_factory=dict)
     collision_details: list[str] = field(default_factory=list)
+    # PostgreSQL: name -> rows whose value the lookup index refuses
+    # (SQLSTATE 54000, the btree row limit). Blocks the name like a collision.
+    unindexable: dict[str, int] = field(default_factory=dict)
+    unindexable_details: list[str] = field(default_factory=list)
+    # PostgreSQL dry run: rows large enough that they may be refused. A hint
+    # only; it changes neither the exit status nor completed_names().
+    maybe_unindexable: int = 0
     faults: int = 0
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
@@ -413,14 +420,25 @@ class BackfillStats:
             self.collisions[name] = self.collisions.get(name, 0) + 1
             self.collision_details.append(detail)
 
+    def unindexable_row(self, name: str, detail: str) -> None:
+        """Count one row the lookup index cannot hold, once per detail."""
+        with self._lock:
+            if detail in self.unindexable_details:
+                return
+            self.unindexable[name] = self.unindexable.get(name, 0) + 1
+            self.unindexable_details.append(detail)
+
     def fault(self) -> None:
         self.bump("faults")
 
     def completed_names(self, names: list[str]) -> list[str]:
-        """The names whose pass finished with no fault and no collision."""
+        """The names whose pass finished with no fault, no collision and no
+        unindexable value."""
         if self.faults:
             return []
-        return [n for n in names if n not in self.collisions]
+        return [
+            n for n in names if n not in self.collisions and n not in self.unindexable
+        ]
 
 
 def _lookup_owner(key: str) -> str | None:
@@ -640,6 +658,11 @@ def backfill_dynamodb(
 # Backfill, PostgreSQL
 # ---------------------------------------------------------------------------
 
+# The lookup table's primary key is a btree on (property_name, value), whose
+# rows are limited to about 2,704 bytes after compression. A raw size above
+# this is only a hint that an insert may be refused; the insert decides.
+_PG_MAYBE_UNINDEXABLE_BYTES = 2600
+
 
 def backfill_postgresql(
     names: list[str], *, apply: bool, batch_size: int = 1000, pause: float = 0.0
@@ -650,7 +673,14 @@ def backfill_postgresql(
     alone, so ``DbProperty.set()``'s own inserts and actor deletes wait at
     most one batch. Rows whose actor no longer exists are skipped (they would
     fail the foreign key) and counted.
+
+    A value too large for the lookup index (SQLSTATE 54000) fails its whole
+    batch insert; that batch is then retried row by row, each under a
+    savepoint, and the refused rows are counted as unindexable instead of
+    aborting the pass.
     """
+    import psycopg
+
     from actingweb.db.postgresql.connection import get_connection
 
     stats = BackfillStats()
@@ -666,15 +696,17 @@ def backfill_postgresql(
                 stats.orphans = int(row[0]) if row else 0
                 if not apply:
                     cur.execute(
-                        "SELECT count(*) FROM properties p "
+                        "SELECT count(*), count(*) FILTER "
+                        "(WHERE octet_length(p.value) > %s) FROM properties p "
                         "JOIN actors a ON a.id = p.id "
                         "LEFT JOIN property_lookup l ON l.property_name = p.name "
                         "AND l.value = p.value "
                         "WHERE p.name = ANY(%s) AND l.property_name IS NULL",
-                        (names,),
+                        (_PG_MAYBE_UNINDEXABLE_BYTES, names),
                     )
                     row = cur.fetchone()
                     stats.written = int(row[0]) if row else 0
+                    stats.maybe_unindexable = int(row[1]) if row else 0
                     # Two actors sharing a value with no lookup row yet:
                     # --apply gives the row to one, the rest collide.
                     cur.execute(
@@ -697,17 +729,21 @@ def backfill_postgresql(
             conn.rollback()
             if apply:
                 for after, upto in _pg_batches_conn(conn, names, batch_size):
-                    with conn.cursor() as cur:
-                        cur.execute(
-                            "INSERT INTO property_lookup "
-                            "(property_name, value, actor_id) "
-                            "SELECT p.name, p.value, p.id FROM properties p "
-                            "JOIN actors a ON a.id = p.id "
-                            "WHERE p.name = ANY(%s) AND p.id > %s AND p.id <= %s "
-                            "ON CONFLICT DO NOTHING",
-                            (names, after, upto),
-                        )
-                        stats.written += max(cur.rowcount, 0)
+                    try:
+                        with conn.cursor() as cur:
+                            cur.execute(
+                                "INSERT INTO property_lookup "
+                                "(property_name, value, actor_id) "
+                                "SELECT p.name, p.value, p.id FROM properties p "
+                                "JOIN actors a ON a.id = p.id "
+                                "WHERE p.name = ANY(%s) AND p.id > %s "
+                                "AND p.id <= %s ON CONFLICT DO NOTHING",
+                                (names, after, upto),
+                            )
+                            stats.written += max(cur.rowcount, 0)
+                    except psycopg.errors.ProgramLimitExceeded:
+                        conn.rollback()
+                        _pg_insert_rows_one_by_one(conn, names, after, upto, stats)
                     conn.commit()
                     if pause:
                         time.sleep(pause)
@@ -729,6 +765,43 @@ def backfill_postgresql(
         logger.error(f"PostgreSQL backfill fault: {e}")
         stats.fault()
     return stats
+
+
+def _pg_insert_rows_one_by_one(
+    conn: Any, names: list[str], after: str, upto: str, stats: BackfillStats
+) -> None:
+    """Insert one batch's rows singly; count those the index refuses.
+
+    Each insert re-reads its row's current value (``INSERT ... SELECT`` on
+    the row's key), as the batch statement does, so a ``DbProperty.set()``
+    that lands between the listing and the insert cannot leave a lookup row
+    for a value the actor no longer holds.
+    """
+    import psycopg
+
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT p.name, p.id, octet_length(p.value) FROM properties p "
+            "JOIN actors a ON a.id = p.id "
+            "WHERE p.name = ANY(%s) AND p.id > %s AND p.id <= %s ORDER BY p.id",
+            (names, after, upto),
+        )
+        rows = cur.fetchall()
+    for name, actor_id, value_bytes in rows:
+        try:
+            with conn.transaction(), conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO property_lookup (property_name, value, actor_id) "
+                    "SELECT p.name, p.value, p.id FROM properties p "
+                    "JOIN actors a ON a.id = p.id "
+                    "WHERE p.id = %s AND p.name = %s ON CONFLICT DO NOTHING",
+                    (actor_id, name),
+                )
+                stats.written += max(cur.rowcount, 0)
+        except psycopg.errors.ProgramLimitExceeded:
+            stats.unindexable_row(
+                name, f"property={name} actor={actor_id} value_bytes={value_bytes}"
+            )
 
 
 def _pg_batches_conn(
@@ -849,11 +922,20 @@ def cmd_backfill(args: argparse.Namespace) -> int:
     print(
         f"Summary: scanned={stats.scanned} matches={stats.matched} "
         f"{'written-or-present' if apply else 'would-write'}={stats.written} "
-        f"collisions={sum(stats.collisions.values())} orphans={stats.orphans} "
+        f"collisions={sum(stats.collisions.values())} "
+        f"unindexable={sum(stats.unindexable.values())} orphans={stats.orphans} "
         f"faults={stats.faults}"
     )
     for detail in stats.collision_details:
         logger.warning(f"COLLISION (not overwritten): {detail}")
+    for detail in stats.unindexable_details:
+        logger.warning(f"UNINDEXABLE (value too long to index): {detail}")
+    if stats.maybe_unindexable:
+        print(
+            f"{stats.maybe_unindexable} value(s) are over "
+            f"{_PG_MAYBE_UNINDEXABLE_BYTES} bytes and may be too long for the "
+            "lookup index; --apply reports any it refuses."
+        )
     if stats.orphans:
         print(
             f"{stats.orphans} property row(s) belong to actors that no longer "
@@ -879,15 +961,25 @@ def cmd_backfill(args: argparse.Namespace) -> int:
         except DbError as e:  # folds DbError: reported
             print(f"Could not write the markers: {e}", file=sys.stderr)
             return 1
-    skipped = [n for n in names if n not in done]
-    if skipped:
+    colliding = [n for n in names if n in stats.collisions]
+    if colliding:
         print(
-            f"Left unmarked (collisions): {', '.join(skipped)}. Two actors "
+            f"Left unmarked (collisions): {', '.join(colliding)}. Two actors "
             "share an indexed value; the earlier lookup row was kept. "
             "Resolve it, then re-run (idempotent). A run resumed from a "
             "checkpoint still reports collisions found before the checkpoint: "
             "after resolving them, delete the checkpoint file first."
         )
+    too_long = [n for n in names if n in stats.unindexable]
+    if too_long:
+        print(
+            f"Left unmarked (values too long to index): {', '.join(too_long)}. "
+            "The UNINDEXABLE lines name each actor. Shorten or remove that "
+            "property on that actor, then re-run (idempotent). Marking the "
+            "name complete is not a way out: every later write of that "
+            "property on that actor fails until the value is shorter."
+        )
+    if colliding or too_long:
         return 1
     print(f"Marked backfill-complete: {', '.join(done)}.")
     return 0

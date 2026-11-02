@@ -1618,6 +1618,9 @@ def clear_pending_email_verification(
 
     actor_instance.store.email_verification_token = None
     actor_instance.store.email_verification_created_at = None
+    # The address the abandoned link was for goes with its token, as the
+    # verify handler's own success path clears it (handlers/oauth_email.py).
+    actor_instance.store.email_verification_address = None
     return actor_instance.store.set_confirmed("email_verified", None)
 
 

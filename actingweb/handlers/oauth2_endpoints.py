@@ -279,20 +279,22 @@ class OAuth2EndpointsHandler(BaseHandler):
                 }
 
             # Debug logging for MCP OAuth2 flow
-            logger.debug(
-                f"OAuth2 authorization {method} request with params: "
-                f"{summarize_payload(params)}"
-            )
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    f"OAuth2 authorization {method} request with params: "
+                    f"{summarize_payload(params)}"
+                )
 
             # Handle using OAuth2 server
             server_response = self.oauth2_server.handle_authorization_request(
                 params, method
             )
 
-            logger.debug(
-                f"OAuth2 server response: action={server_response.get('action')} "
-                f"{summarize_payload(server_response)}"
-            )
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    f"OAuth2 server response: action={server_response.get('action')} "
+                    f"{summarize_payload(server_response)}"
+                )
 
             if server_response.get("action") == "show_form":
                 # Show email form (preserve existing UX)

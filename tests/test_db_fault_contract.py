@@ -13,6 +13,7 @@ whichever backend the suite is configured for: PostgreSQL's
 
 from __future__ import annotations
 
+import os
 import time
 import uuid
 from collections.abc import Callable, Iterator
@@ -513,6 +514,46 @@ class TestDynamoWriteFaults:
         db.handle.delete.side_effect = _Throttled("throttled")
         with pytest.raises(DbError):
             db.delete()
+
+
+class _ThrottledResponse(Exception):
+    """A botocore-shaped cause whose code is not a failed condition."""
+
+    response = {"Error": {"Code": "ProvisionedThroughputExceededException"}}
+
+
+@pytest.mark.skipif(
+    os.environ.get("DATABASE_BACKEND", "dynamodb") != "dynamodb",
+    reason="DynamoDB DbActor.modify; needs DynamoDB Local",
+)
+class TestDynamoActorModifyFaults:
+    """``DbActor.modify`` on DynamoDB: a save that faults for any reason
+    other than its condition raises ``DbError`` and leaves the handle as
+    stored, the counterpart of the PostgreSQL
+    ``test_actor_modify_raises_and_keeps_the_handle``."""
+
+    def _modify_with_save_raising(self, error: Exception) -> Any:
+        m = _ddb()["actor"]
+        obj = m.DbActor()
+        obj.handle = m.Actor(id="a", creator="old@example.com", passphrase="p")
+        with mock.patch.object(m.Actor, "save", side_effect=error):
+            with pytest.raises(DbError):
+                obj.modify(creator="new@example.com", passphrase=b"q")
+        return obj.handle
+
+    def test_non_conditional_put_error_raises_and_keeps_the_handle(self) -> None:
+        from pynamodb.exceptions import PutError
+
+        error = PutError("throttled (simulated)", cause=_ThrottledResponse())
+        assert error.cause_response_code == "ProvisionedThroughputExceededException"
+        handle = self._modify_with_save_raising(error)
+        assert handle.creator == "old@example.com"
+        assert handle.passphrase == "p"
+
+    def test_generic_exception_raises_and_keeps_the_handle(self) -> None:
+        handle = self._modify_with_save_raising(_Throttled("connection reset"))
+        assert handle.creator == "old@example.com"
+        assert handle.passphrase == "p"
 
 
 # ---------------------------------------------------------------------------

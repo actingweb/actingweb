@@ -13,6 +13,7 @@ from actingweb.db.exceptions import DbError
 
 logger = logging.getLogger(__name__)
 
+
 """
     DbProperty handles all db operations for a property
     AWS DynamoDB is used as a backend.
@@ -245,7 +246,9 @@ class DbProperty:
 
         # Handle empty value (deletion)
         if not value or (hasattr(value, "__len__") and len(value) == 0):
-            if self.get(actor_id=actor_id, name=name):
+            if self._should_index_property(name) and actor_id:
+                self._delete_indexed(actor_id, name)
+            elif self.get(actor_id=actor_id, name=name):
                 self.delete()  # This will also delete lookup entry
             return True
 
@@ -258,18 +261,14 @@ class DbProperty:
             # (actor_id, name) must never be reused.
             self.handle = None
 
-        # Get old value before updating (for lookup sync)
-        old_value = None
         if self._should_index_property(name):
-            if self.handle and self.handle.value:
-                old_value = str(self.handle.value)
-            elif actor_id:
-                # PropertyStore.__setattr__ builds a fresh DbProperty for
-                # every write, so self.handle is unset on the primary public
-                # path. Read the current stored value (like the PostgreSQL
-                # backend) so changing an indexed value deletes its stale
-                # lookup row instead of leaving it to resolve forever.
-                old_value = self.get(actor_id=actor_id, name=name)
+            handle_actor_id = (
+                str(self.handle.id) if self.handle and self.handle.id else actor_id
+            )
+            if not handle_actor_id:
+                return False
+            self._set_indexed(handle_actor_id, name, value)
+            return True
 
         # Save property
         if not self.handle:
@@ -278,36 +277,70 @@ class DbProperty:
             self.handle = Property(id=actor_id, name=name, value=value)
         else:
             self.handle.value = value
-
-        heal_actor_id: str | None = None
-        if self._should_index_property(name):
-            # D15: an indexed value and its lookup row commit together.
-            handle_actor_id = str(self.handle.id) if self.handle.id else actor_id
-            if handle_actor_id and (old_value is None or old_value != value):
-                self._write_indexed(handle_actor_id, name, old_value, value)
-                return True
-            heal_actor_id = handle_actor_id
-
         try:
             self.handle.save()
         except Exception as e:
             raise DbError("property write", actor_id) from e
-
-        if heal_actor_id:
-            self._heal_lookup(heal_actor_id, name, value)
         return True
 
+    # One budget for every attempt of an indexed write: a lost race against
+    # another writer of this (actor, name), and a failed takeover, both
+    # re-read and try again.
+    INDEXED_WRITE_ATTEMPTS = 3
+
+    def _stored_value(self, actor_id: str, name: str) -> str | None:
+        """The value stored now, from a consistent read (``refresh()`` on a
+        handle is not consistent). Raises ``DbError`` on a fault."""
+        try:
+            row = Property.get(actor_id, name, consistent_read=True)
+        except DoesNotExist:
+            return None
+        except Exception as e:
+            raise DbError("property read", actor_id) from e
+        return str(row.value) if row.value else None
+
+    @staticmethod
+    def _value_is(old_value: str | None) -> Any:
+        """The condition that the property row still holds ``old_value``
+        (or holds none)."""
+        if old_value is None:
+            return Property.value.does_not_exist()
+        return Property.value == old_value
+
+    def _set_indexed(self, actor_id: str, name: str, value: str) -> None:
+        """Write an indexed property conditioned on the value it read, and
+        keep its lookup row in step; a lost race re-reads and retries."""
+        for _ in range(self.INDEXED_WRITE_ATTEMPTS):
+            old_value = self._stored_value(actor_id, name)
+            if old_value == value:
+                # Nothing to write: the stored value is the new one. The heal
+                # claims a missing (or stale) lookup row, conditioned on the
+                # value still being stored.
+                self.handle = Property(id=actor_id, name=name, value=value)
+                self._heal_lookup(actor_id, name, value)
+                return
+            if self._write_indexed(actor_id, name, old_value, value):
+                return
+        logger.error(
+            f"PROPERTY_WRITE_RACE_EXHAUSTED: property={name} actor={actor_id} "
+            f"attempts={self.INDEXED_WRITE_ATTEMPTS}"
+        )
+        raise DbError(
+            f"property write: lost {self.INDEXED_WRITE_ATTEMPTS} races", actor_id
+        )
+
     def _heal_lookup(self, actor_id: str, name: str, value: str) -> None:
-        """Index an unchanged value whose lookup row is missing.
+        """Index an unchanged value whose lookup row is missing or stale.
 
         A value stored during a collision has no lookup row; once the other
         actor lets the value go, the next write of the same value claims the
-        free row. One consistent read when the row exists (the usual case);
-        a held row is left with its owner. The claim is one transaction whose
-        condition checks confirm the property still holds ``value`` and the
-        actor row still exists, so neither a concurrent value change nor a
-        racing actor delete can leave a row pointing at a value the actor
-        gave up. Best effort: the property write itself
+        free row, or takes it over when the previous owner no longer holds
+        the value (:func:`~actingweb.db.dynamodb.property_lookup.take_over`).
+        One consistent read when the row is this actor's (the usual case).
+        The claim's condition checks confirm the property still holds
+        ``value`` and the actor row still exists, so neither a concurrent
+        value change nor a racing actor delete can leave a row pointing at a
+        value the actor gave up. Best effort: the property write itself
         already succeeded, so a fault here is logged, not raised.
         """
         from actingweb.db.dynamodb.actor import Actor, DbActor
@@ -315,19 +348,31 @@ class DbProperty:
             DbPropertyLookup,
             PropertyLookupV2,
             compute_lookup_key,
+            owner_holds,
+            take_over,
         )
 
+        def own_checks(t: Any) -> None:
+            # The actor too: a delete that removed the actor row between
+            # the write and here must not get a lookup row back.
+            t.condition_check(Actor, actor_id, condition=Actor.id.exists())
+            t.condition_check(
+                Property, actor_id, name, condition=Property.value == value
+            )
+
         try:
-            if DbPropertyLookup().get(property_name=name, value=value) is not None:
+            owner = DbPropertyLookup().get(property_name=name, value=value)
+            if owner == actor_id:
+                return
+            if owner is not None:
+                if not owner_holds(owner, name, value):
+                    take_over(
+                        name, value, owner=owner, new_owner=actor_id, extra=own_checks
+                    )
                 return
 
             def build(t: Any) -> None:
-                # The actor too: a delete that removed the actor row between
-                # the write and here must not get a lookup row back.
-                t.condition_check(Actor, actor_id, condition=Actor.id.exists())
-                t.condition_check(
-                    Property, actor_id, name, condition=Property.value == value
-                )
+                own_checks(t)
                 t.save(
                     PropertyLookupV2(
                         lookup_key=compute_lookup_key(name, value),
@@ -347,21 +392,26 @@ class DbProperty:
 
     def _write_indexed(
         self, actor_id: str, name: str, old_value: str | None, new_value: str
-    ) -> None:
-        """Write an indexed property and its lookup row in one transaction.
+    ) -> bool:
+        """Write an indexed property and its lookup row in one transaction,
+        conditioned on the property still holding ``old_value``.
 
         The lookup create succeeds when no row exists or the actor already
-        owns it; a row owned by another actor is a collision, which is logged
-        and leaves the property written without a lookup row (the unique
-        reverse mapping stays with its first owner). The old value's lookup
-        row is deleted in the same transaction when this actor owns it. Any
-        other failure raises ``DbError`` and nothing is written.
+        owns it. A row owned by another actor that still holds the value is
+        a collision: logged, and the property is written without a lookup
+        row (the unique reverse mapping stays with its owner). A row whose
+        owner no longer holds the value is taken over. The old value's
+        lookup row is released in the same transaction when this actor owns
+        it. False when another writer changed the property first (the
+        caller re-reads); any other failure raises ``DbError``.
         """
         from actingweb.db.dynamodb.actor import DbActor
         from actingweb.db.dynamodb.property_lookup import (
             DbPropertyLookup,
             PropertyLookupV2,
             compute_lookup_key,
+            owner_holds,
+            take_over,
         )
 
         ensure_table(PropertyLookupV2)  # cached: created lazily like the property table
@@ -371,20 +421,30 @@ class DbProperty:
         )
         include_delete = bool(old_value and old_value != new_value)
         old_key = compute_lookup_key(name, old_value) if old_value else None
+        value_is_old = self._value_is(old_value)
+
+        def release_and_save(t: Any, with_delete: bool) -> None:
+            if with_delete and old_key:
+                t.delete(
+                    PropertyLookupV2(
+                        lookup_key=old_key, actor_id=actor_id, property_name=name
+                    ),
+                    condition=own_or_absent,
+                )
+            t.save(
+                Property(id=actor_id, name=name, value=new_value),
+                condition=value_is_old,
+            )
+
         # A delete whose row another actor owns (a past collision) cannot be
-        # part of the transaction; it is retried without the delete.
+        # part of the transaction; it is retried without the delete. That
+        # retry is structural, not a lost race, and is not counted as one.
         for _ in range(2):
 
             def build(t: Any, with_delete: bool = include_delete) -> None:
-                # TransactWriteItems order: deletes, then puts.
-                if with_delete and old_key:
-                    t.delete(
-                        PropertyLookupV2(
-                            lookup_key=old_key, actor_id=actor_id, property_name=name
-                        ),
-                        condition=own_or_absent,
-                    )
-                t.save(Property(id=actor_id, name=name, value=new_value))
+                # Items are ordered deletes, then puts: [delete], Property,
+                # lookup row.
+                release_and_save(t, with_delete)
                 t.save(
                     PropertyLookupV2(
                         lookup_key=new_key, actor_id=actor_id, property_name=name
@@ -395,42 +455,117 @@ class DbProperty:
             codes = DbActor._run_transaction(build, op="property set")  # pyright: ignore[reportPrivateUsage]
             if codes is None:
                 self.handle = Property(id=actor_id, name=name, value=new_value)
-                return
+                return True
             offset = 1 if include_delete else 0
+            if len(codes) > offset and codes[offset] == "ConditionalCheckFailed":
+                return False  # the property changed since it was read
             create_failed = (
                 len(codes) > offset + 1
                 and codes[offset + 1] == "ConditionalCheckFailed"
             )
             delete_failed = include_delete and codes[0] == "ConditionalCheckFailed"
             if create_failed:
+                owner = DbPropertyLookup().get(property_name=name, value=new_value)
+                if owner is None:
+                    return False  # released meanwhile: the retry claims it
+                if owner == actor_id:
+                    return False
+                if not owner_holds(owner, name, new_value):
+                    with_delete = include_delete and not delete_failed
+                    taken = take_over(
+                        name,
+                        new_value,
+                        owner=owner,
+                        new_owner=actor_id,
+                        extra=lambda t, w=with_delete: release_and_save(t, w),
+                    )
+                    if taken:
+                        self.handle = Property(id=actor_id, name=name, value=new_value)
+                    return taken
                 logger.error(
                     f"LOOKUP_COLLISION: property={name} "
                     f"digest={new_key[:12]} actor={actor_id} — "
                     "two actors share an indexed value; not overwriting"
                 )
-                if include_delete and old_value:
-                    # Release the old mapping this actor owns, then write the
-                    # property alone: the value stays unindexed.
-                    try:
-                        lookup = DbPropertyLookup()
-                        if lookup.get(property_name=name, value=old_value) == actor_id:
-                            lookup.delete()
-                    except DbError:
-                        raise
-                    except Exception as e:
-                        raise DbError("property set", actor_id) from e
-                try:
-                    handle = Property(id=actor_id, name=name, value=new_value)
-                    handle.save()
-                    self.handle = handle
-                except Exception as e:
-                    raise DbError("property write", actor_id) from e
-                return
+                # Release the old mapping this actor owns and write the
+                # property alone, in one transaction: the value stays
+                # unindexed, and a lost race releases nothing.
+                with_delete = include_delete and not delete_failed
+                fallback = DbActor._run_transaction(  # pyright: ignore[reportPrivateUsage]
+                    lambda t, w=with_delete: release_and_save(t, w),
+                    op="property set",
+                )
+                if fallback is None:
+                    self.handle = Property(id=actor_id, name=name, value=new_value)
+                    return True
+                offset_fb = 1 if with_delete else 0
+                if (
+                    len(fallback) > offset_fb
+                    and fallback[offset_fb] == "ConditionalCheckFailed"
+                ):
+                    return False  # the property changed since it was read
+                if with_delete:
+                    include_delete = False  # the old row is not ours: retry
+                    continue
+                raise DbError("property set", actor_id)
             if delete_failed:
                 include_delete = False
                 continue
             raise DbError("property set", actor_id)
         raise DbError("property set", actor_id)
+
+    def _delete_indexed(self, actor_id: str, name: str) -> None:
+        """Delete an indexed property conditioned on the value read and
+        release that value's lookup row (not a stale handle's) in one
+        transaction, the release conditioned on the row still being this
+        actor's: a row a takeover gave to another actor stays."""
+        from actingweb.db.dynamodb.actor import DbActor
+        from actingweb.db.dynamodb.property_lookup import (
+            PropertyLookupV2,
+            compute_lookup_key,
+        )
+
+        for _ in range(self.INDEXED_WRITE_ATTEMPTS):
+            stored = self._stored_value(actor_id, name)
+            if stored is None:
+                self.handle = None
+                return
+            key = compute_lookup_key(name, stored)
+            for with_release in (True, False):
+
+                def build(
+                    t: Any, w: bool = with_release, v: str = stored, k: str = key
+                ) -> None:
+                    t.delete(
+                        Property(id=actor_id, name=name),
+                        condition=Property.value == v,
+                    )
+                    if w:
+                        t.delete(
+                            PropertyLookupV2(
+                                lookup_key=k, actor_id=actor_id, property_name=name
+                            ),
+                            condition=PropertyLookupV2.lookup_key.does_not_exist()
+                            | (PropertyLookupV2.actor_id == actor_id),
+                        )
+
+                codes = DbActor._run_transaction(build, op="property delete")  # pyright: ignore[reportPrivateUsage]
+                if codes is None:
+                    self.handle = None
+                    return
+                if codes and codes[0] == "ConditionalCheckFailed":
+                    break  # the property changed since it was read: re-read
+                # The lookup row is another actor's (a past collision or a
+                # takeover): delete the property alone.
+            else:
+                raise DbError("property delete", actor_id)
+        logger.error(
+            f"PROPERTY_WRITE_RACE_EXHAUSTED: property={name} actor={actor_id} "
+            f"attempts={self.INDEXED_WRITE_ATTEMPTS} (delete)"
+        )
+        raise DbError(
+            f"property delete: lost {self.INDEXED_WRITE_ATTEMPTS} races", actor_id
+        )
 
     def _delete_lookup_entry(self, actor_id: str | None, name: str, value: str) -> None:
         """
@@ -439,12 +574,12 @@ class DbProperty:
         Best-effort deletion - logs errors but doesn't fail property delete.
         """
         try:
-            from actingweb.db.dynamodb.property_lookup import DbPropertyLookup
+            from actingweb.db.dynamodb.property_lookup import delete_if_owner
 
-            db = DbPropertyLookup()
-            # Verify it belongs to the same actor before deleting
-            if db.get(property_name=name, value=value) == actor_id:
-                db.delete()
+            # Only while it is this actor's: a row a takeover gave to another
+            # actor meanwhile stays.
+            if actor_id:
+                delete_if_owner(name, value, actor_id)
         except Exception as e:
             logger.warning(
                 f"LOOKUP_DELETE_FAILED: actor={actor_id} property={name} "
@@ -461,6 +596,12 @@ class DbProperty:
         actor_id = str(self.handle.id) if self.handle.id else None
         name = str(self.handle.name) if self.handle.name else None
         value = str(self.handle.value) if self.handle.value else None
+
+        if actor_id and name and self._should_index_property(name):
+            # Conditioned on the stored value, and its lookup row released,
+            # whatever this handle last read.
+            self._delete_indexed(actor_id, name)
+            return True
 
         # Delete property
         self.handle.delete()
@@ -800,17 +941,15 @@ class DbPropertyList:
                 raise DbError("property batch delete", self.actor_id) from e
 
         # Delete lookup entries
-        if indexed_props:
-            from actingweb.db.dynamodb.property_lookup import DbPropertyLookup
+        if indexed_props and self.actor_id:
+            from actingweb.db.dynamodb.property_lookup import delete_if_owner
 
-            db = DbPropertyLookup()
             for name, value in indexed_props:
                 try:
-                    # Verify ownership before deleting: a shared indexed value
-                    # may map to another actor's row, which must survive this
-                    # actor's deletion.
-                    if db.get(property_name=name, value=value) == self.actor_id:
-                        db.delete()
+                    # Only while it is this actor's: a shared indexed value
+                    # may map to another actor's row (a collision, or a
+                    # takeover), which must survive this actor's deletion.
+                    delete_if_owner(name, value, self.actor_id)
                 except Exception as e:
                     logger.warning(
                         f"Failed to delete lookup entry for property {name}: {e}"

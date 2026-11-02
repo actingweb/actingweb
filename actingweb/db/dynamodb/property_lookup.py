@@ -39,6 +39,8 @@ import hashlib
 import json
 import logging
 import os
+from collections.abc import Callable
+from typing import Any
 
 from pynamodb.attributes import UnicodeAttribute
 from pynamodb.constants import PAY_PER_REQUEST_BILLING_MODE
@@ -175,6 +177,120 @@ def record_configured(names: list[str]) -> None:
         ).save()
     except Exception as e:
         raise DbError("property lookup record") from e
+
+
+def owner_holds(owner: str, property_name: str, value: str) -> bool:
+    """Whether ``owner`` still holds ``value`` in ``property_name``: its
+    property row holds the value and its actor row exists (consistent
+    reads; an orphaned property row of a deleted actor holds nothing, as on
+    PostgreSQL). Raises ``DbError`` on a fault."""
+    from actingweb.db.dynamodb.property import Property
+
+    try:
+        row = Property.get(owner, property_name, consistent_read=True)
+    except DoesNotExist:
+        return False
+    except Exception as e:
+        raise DbError("property lookup owner read", owner) from e
+    if not row.value or str(row.value) != value:
+        return False
+    return _actor_exists(owner)
+
+
+def _actor_exists(actor_id: str) -> bool:
+    from actingweb.db.dynamodb.actor import Actor
+
+    try:
+        Actor.get(actor_id, consistent_read=True)
+    except DoesNotExist:
+        return False
+    except Exception as e:
+        raise DbError("property lookup owner read", actor_id) from e
+    return True
+
+
+def take_over(
+    property_name: str,
+    value: str,
+    *,
+    owner: str,
+    new_owner: str,
+    extra: Callable[[Any], None] | None = None,
+) -> bool:
+    """Move a lookup row from ``owner``, who no longer holds ``value``, to
+    ``new_owner``, in one transaction.
+
+    The transaction checks that ``owner``'s property row is absent or holds
+    another value, and writes the row conditioned on still naming ``owner``
+    (or being absent, when it was released meanwhile), so an owner that
+    re-acquires the value first wins and nothing changes. ``extra`` adds the
+    caller's own items (its property write, the release of its old row).
+    True when the row now names ``new_owner``; False when a condition failed.
+    Raises ``DbError`` on a fault. Logs ``LOOKUP_TAKEOVER`` with the value's
+    digest, never the value.
+    """
+    from actingweb.db.dynamodb.actor import Actor, DbActor
+    from actingweb.db.dynamodb.property import Property
+
+    ensure_table(PropertyLookupV2)
+    key = compute_lookup_key(property_name, value)
+    # A transaction ANDs its conditions, so "the property moved or the actor
+    # is gone" is decided by a read, and only that fact is checked.
+    owner_gone = not _actor_exists(owner)
+
+    def build(t: Any) -> None:
+        if owner_gone:
+            t.condition_check(Actor, owner, condition=Actor.id.does_not_exist())
+        else:
+            t.condition_check(
+                Property,
+                owner,
+                property_name,
+                condition=Property.value.does_not_exist() | (Property.value != value),
+            )
+        if extra is not None:
+            extra(t)
+        t.save(
+            PropertyLookupV2(
+                lookup_key=key, actor_id=new_owner, property_name=property_name
+            ),
+            condition=PropertyLookupV2.lookup_key.does_not_exist()
+            | (PropertyLookupV2.actor_id == owner),
+        )
+
+    codes = DbActor._run_transaction(build, op="property lookup takeover")  # pyright: ignore[reportPrivateUsage]
+    if codes is not None:
+        return False
+    logger.warning(
+        f"LOOKUP_TAKEOVER: property={property_name} digest={key[:12]} "
+        f"previous_owner={owner} actor={new_owner} — the previous owner no "
+        "longer holds the value"
+    )
+    return True
+
+
+def delete_if_owner(property_name: str, value: str, actor_id: str) -> bool:
+    """Delete the lookup row of (name, value) only while it names
+    ``actor_id``: a row a takeover gave to another actor meanwhile stays.
+    True when deleted; False when it was absent or names another actor.
+    Raises ``DbError`` on a fault."""
+    from pynamodb.exceptions import DeleteError
+
+    ensure_table(PropertyLookupV2)
+    row = PropertyLookupV2(
+        lookup_key=compute_lookup_key(property_name, value),
+        actor_id=actor_id,
+        property_name=property_name,
+    )
+    try:
+        row.delete(condition=PropertyLookupV2.actor_id == actor_id)
+    except DeleteError as e:
+        if getattr(e, "cause_response_code", None) == "ConditionalCheckFailedException":
+            return False
+        raise DbError("property lookup delete", actor_id) from e
+    except Exception as e:
+        raise DbError("property lookup delete", actor_id) from e
+    return True
 
 
 class DbPropertyLookup:

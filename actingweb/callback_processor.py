@@ -4,8 +4,11 @@ Callback processor for subscription callbacks.
 Handles sequencing, deduplication, and resync per ActingWeb protocol v1.4.
 """
 
+import asyncio
+import copy
 import logging
 import time
+import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from enum import Enum
@@ -27,6 +30,9 @@ class ProcessResult(Enum):
     PENDING = "pending"  # Callback stored in pending queue (gap detected)
     RESYNC_TRIGGERED = "resync_triggered"  # Gap timeout exceeded, resync needed
     REJECTED = "rejected"  # Callback rejected (back-pressure)
+    # Another delivery holds a live claim on this sequence and is running its
+    # handler: not handled yet, so the caller must not acknowledge (clear) it.
+    IN_PROGRESS = "in_progress"
 
 
 class CallbackType(Enum):
@@ -61,6 +67,15 @@ class CallbackProcessor:
 
     Storage: Uses actor's internal attributes (bucket: _callback_state).
     """
+
+    # How long a claim on a batch (see ``_claim``) keeps other deliveries of
+    # its sequences out. A delivery that crashed while holding one is taken
+    # over after this by the next delivery of those sequences (a poll or a
+    # gap resync), so they are not hidden for good. Limits: the lease is not
+    # renewed, so a handler that runs longer can overlap a second delivery
+    # of its batch; and it compares the reading process's clock with the
+    # claiming one's, so the processes need synchronised clocks.
+    CLAIM_LEASE_SECONDS = 60.0
 
     def __init__(
         self,
@@ -136,6 +151,141 @@ class CallbackProcessor:
         state = attr.get("data") if attr else None
         return state or {"version": 0, "resync_pending": False}
 
+    def _read_state_row(
+        self, peer_id: str, subscription_id: str
+    ) -> dict[str, Any] | None:
+        """The state row exactly as stored (a deep copy), or ``None`` when
+        there is none. The compare-and-swap compares against this, never
+        against a defaulted or modified dict. Raises ``DbError`` on a fault."""
+        from .attribute import Attributes
+
+        db = Attributes(
+            actor_id=self._actor.id,
+            bucket=self._state_bucket,
+            config=self._actor.config,
+        )
+        attr = db.get_attr(name=self._get_state_key(peer_id, subscription_id))
+        data = attr.get("data") if attr else None
+        return copy.deepcopy(data) if isinstance(data, dict) else None
+
+    def _cas_state(
+        self,
+        peer_id: str,
+        subscription_id: str,
+        read_row: dict[str, Any] | None,
+        new_state: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """Replace the state row ``read_row`` with ``new_state``, atomically.
+
+        Returns the row written (with its per-write ``nonce``) when this call
+        won, ``None`` when another writer changed the row first. The nonce
+        makes two identical writes distinct (``create_attr_if_absent`` lets
+        identical data both win). ``conditional_update_attr`` answers False
+        for a lost race and for a fault alike, so a False is re-read
+        strictly: the row this call wrote means a retried write that landed,
+        another row means a lost race, the row as read means neither (a
+        fault). Raises ``DbError`` on a fault.
+        """
+        from .attribute import Attributes
+
+        name = self._get_state_key(peer_id, subscription_id)
+        db = Attributes(
+            actor_id=self._actor.id,
+            bucket=self._state_bucket,
+            config=self._actor.config,
+        )
+        written = {**new_state, "nonce": uuid.uuid4().hex}
+        if read_row is None:
+            # Raises DbError on a fault; False when a row exists now.
+            return (
+                written if db.create_attr_if_absent(name=name, data=written) else None
+            )
+        if db.conditional_update_attr(name=name, old_data=read_row, new_data=written):
+            return written
+        backend = db.dbprop
+        if backend is None:
+            raise DbError("callback state", self._actor.id)
+        row = backend.get_attr_strict(
+            actor_id=self._actor.id, bucket=self._state_bucket, name=name
+        )
+        current = row.get("data") if isinstance(row, dict) else None
+        if current == written:
+            return written
+        if current != read_row:
+            return None
+        raise DbError("callback state", self._actor.id)
+
+    def _claim(
+        self,
+        peer_id: str,
+        subscription_id: str,
+        read_row: dict[str, Any] | None,
+        through_seq: int,
+    ) -> dict[str, Any] | None:
+        """Claim the sequences up to ``through_seq`` for this delivery: a
+        concurrent delivery of any of them then reads them as handled."""
+        state = dict(read_row or {})
+        state["version"] = int(state.get("version", 0) or 0) + 1
+        state["resync_pending"] = False
+        state["claimed_seq"] = through_seq
+        state["claimed_at"] = time.time()
+        return self._cas_state(peer_id, subscription_id, read_row, state)
+
+    def precheck(
+        self, peer_id: str, subscription_id: str, sequence: int
+    ) -> ProcessResult | None:
+        """``DUPLICATE`` for a sequence already handled, ``IN_PROGRESS`` for
+        one inside another delivery's live claim, else None. Read-only: a
+        caller about to fetch a low-granularity diff (which the publisher
+        deletes on the fetch) asks first. Raises ``DbError`` on a fault."""
+        row = self._read_state_row(peer_id, subscription_id)
+        last_seq = self._get_last_seq(peer_id, subscription_id)
+        if sequence <= last_seq:
+            return ProcessResult.DUPLICATE
+        if sequence <= self._live_claim(dict(row or {}), last_seq):
+            return ProcessResult.IN_PROGRESS
+        return None
+
+    def _live_claim(self, state: dict[str, Any], last_seq: int) -> int:
+        """The sequence another delivery has claimed beyond ``last_seq`` and
+        may still be handling, or 0 when there is none (or its lease ran
+        out: the delivery that took it is treated as gone)."""
+        claimed = int(state.get("claimed_seq", 0) or 0)
+        if claimed <= last_seq:
+            return 0
+        claimed_at = state.get("claimed_at")
+        if not isinstance(claimed_at, int | float):
+            return 0
+        if time.time() - claimed_at >= self.CLAIM_LEASE_SECONDS:
+            return 0
+        return claimed
+
+    def _release_claim(
+        self,
+        peer_id: str,
+        subscription_id: str,
+        claimed_row: dict[str, Any],
+        last_seq: int,
+    ) -> None:
+        """Hand back a claim whose handler raised ``DbError``, so the next
+        delivery of the batch (a poll, a gap resync) runs the handler again.
+        Best effort: a claim left behind holds its sequences until its lease
+        runs out."""
+        state = dict(claimed_row)
+        state.pop("nonce", None)
+        state["version"] = int(state.get("version", 0) or 0) + 1
+        state["claimed_seq"] = last_seq
+        try:
+            if self._cas_state(peer_id, subscription_id, claimed_row, state) is None:
+                logger.error(
+                    f"Releasing the claim on {peer_id}:{subscription_id} lost a "
+                    "race; its sequences wait for a resync"
+                )
+        except DbError as e:  # folds DbError: best effort; caller re-raises
+            logger.error(
+                f"Releasing the claim on {peer_id}:{subscription_id} faulted: {e}"
+            )
+
     def _update_last_seq(
         self, peer_id: str, subscription_id: str, new_seq: int
     ) -> bool:
@@ -175,17 +325,13 @@ class CallbackProcessor:
             )
             return False
 
-    def _set_state(
-        self,
-        peer_id: str,
-        subscription_id: str,
-        state: dict[str, Any],
-        expected_version: int | None = None,
-    ) -> bool:
-        """Set callback state with optimistic locking.
-
-        Note: last_seq is no longer stored here - it's read/written from subscription record.
-        """
+    def _reset_state(
+        self, peer_id: str, subscription_id: str, state: dict[str, Any]
+    ) -> None:
+        """Replace the state row unconditionally (the resync reset). The
+        version still only grows and ``claimed_seq`` goes back to 0, so a
+        compare-and-swap that read the row before the reset loses; every
+        other write goes through :meth:`_cas_state`."""
         from .attribute import Attributes
 
         db = Attributes(
@@ -193,20 +339,15 @@ class CallbackProcessor:
             bucket=self._state_bucket,
             config=self._actor.config,
         )
-
-        if expected_version is not None:
-            # Check current version
-            attr = db.get_attr(name=self._get_state_key(peer_id, subscription_id))
-            current = attr.get("data") if attr else None
-            current_version = (current or {}).get("version", 0)
-            if current_version != expected_version:
-                return False  # Version conflict
-
-        # Increment version
-        state["version"] = state.get("version", 0) + 1
-
-        db.set_attr(name=self._get_state_key(peer_id, subscription_id), data=state)
-        return True
+        attr = db.get_attr(name=self._get_state_key(peer_id, subscription_id))
+        current = attr.get("data") if attr else None
+        state["version"] = int((current or {}).get("version", 0) or 0) + 1
+        state["claimed_seq"] = 0
+        state["nonce"] = uuid.uuid4().hex
+        if not db.set_attr(
+            name=self._get_state_key(peer_id, subscription_id), data=state
+        ):
+            raise DbError("callback state reset", self._actor.id)
 
     def _get_pending(self, peer_id: str, subscription_id: str) -> list[dict[str, Any]]:
         """Get pending callbacks from storage."""
@@ -321,9 +462,12 @@ class CallbackProcessor:
 
         # Retry loop for optimistic locking
         for attempt in range(self._max_retries):
-            state = self._get_state(peer_id, subscription_id)
+            row = self._read_state_row(peer_id, subscription_id)
+            state = dict(row) if row else {"version": 0, "resync_pending": False}
             last_seq = self._get_last_seq(peer_id, subscription_id)
-            version = state.get("version", 0)
+            # A delivery that won the claim and is still running its handler
+            # has claimed sequences above last_seq.
+            claimed = self._live_claim(state, last_seq)
 
             # Check for duplicate
             if sequence <= last_seq:
@@ -331,6 +475,13 @@ class CallbackProcessor:
                     f"Duplicate callback: seq={sequence} <= last_seq={last_seq}"
                 )
                 return ProcessResult.DUPLICATE
+            if sequence <= claimed:
+                # Not handled yet: the other delivery may still fail. The
+                # caller answers so that the publisher keeps the diff.
+                logger.debug(
+                    f"Callback in progress: seq={sequence} <= claimed={claimed}"
+                )
+                return ProcessResult.IN_PROGRESS
 
             # Check for gap
             if sequence > last_seq + 1:
@@ -342,15 +493,23 @@ class CallbackProcessor:
                     if (c.get("sequence") or 0) > last_seq
                 ]
 
-                # Check gap timeout on existing pending
-                if self._check_gap_timeout(pending):
+                # Check gap timeout on existing pending. Not while another
+                # delivery holds a live claim: its sequence write is the
+                # progress the gap is waiting for.
+                if not claimed and self._check_gap_timeout(pending):
                     logger.warning(
                         f"Gap timeout exceeded for {peer_id}:{subscription_id}, "
                         f"triggering resync"
                     )
-                    # Mark resync pending and clear queue
-                    state["resync_pending"] = True
-                    self._set_state(peer_id, subscription_id, state, version)
+                    # Mark resync pending and clear queue. A lost race means
+                    # another delivery changed the state: read it again.
+                    marked = dict(state)
+                    marked["version"] = int(state.get("version", 0) or 0) + 1
+                    marked["resync_pending"] = True
+                    marked["claimed_seq"] = 0
+                    if self._cas_state(peer_id, subscription_id, row, marked) is None:
+                        await asyncio.sleep(self._retry_backoff * (2**attempt))
+                        continue
                     # Reset sequence to 0 to accept any sequence after resync
                     self._update_last_seq(peer_id, subscription_id, 0)
                     self._clear_pending(peer_id, subscription_id)
@@ -417,12 +576,16 @@ class CallbackProcessor:
                 drained.append(next_seq)
                 next_seq += 1
 
-            # Update CallbackProcessor-specific state FIRST (optimistic lock)
-            state["resync_pending"] = False
-            if not self._set_state(peer_id, subscription_id, state, version):
-                # Version conflict - retry
+            # Claim the batch FIRST (a compare-and-swap on the state row): a
+            # concurrent delivery of any of these sequences then reads them
+            # as handled instead of running the handler a second time.
+            claimed_row = self._claim(
+                peer_id, subscription_id, row, callbacks_to_process[-1].sequence
+            )
+            if claimed_row is None:
+                # Another delivery changed the state first - read it again
                 logger.debug(f"Version conflict, retrying (attempt {attempt + 1})")
-                time.sleep(self._retry_backoff * (2**attempt))
+                await asyncio.sleep(self._retry_backoff * (2**attempt))
                 continue
 
             # Invoke handler for all callbacks in order
@@ -431,6 +594,9 @@ class CallbackProcessor:
                     try:
                         await handler(cb)
                     except DbError:
+                        self._release_claim(
+                            peer_id, subscription_id, claimed_row, last_seq
+                        )
                         # The library's own storage write (auto-storage in the
                         # handler) faulted, and the sequence has not advanced.
                         # The 503 leaves the diff uncleared on the publisher,
@@ -478,10 +644,13 @@ class CallbackProcessor:
                         logger.error(f"Pruning processed callbacks faulted: {e}")
             else:
                 # Failed to update subscription - this is critical but we've already
-                # processed the callback, so log error but don't retry
+                # processed the callback, so log error but don't retry. The
+                # claim stays (at-most-once, as for a fault above): until its
+                # lease runs out a redelivery is answered as in progress
+                # instead of running the handlers again.
                 logger.error(
                     f"Failed to update sequence to {new_last_seq} after processing - "
-                    f"callback may be reprocessed on next invocation"
+                    f"the batch may run again once its claim expires"
                 )
 
             return ProcessResult.PROCESSED
@@ -504,12 +673,14 @@ class CallbackProcessor:
         # Clear pending queue
         self._clear_pending(peer_id, subscription_id)
 
-        # Reset CallbackProcessor-specific state
-        state = {
-            "version": 0,
+        # Reset CallbackProcessor-specific state. The version grows (see
+        # _reset_state), so a delivery that read the state before the reset
+        # loses its compare-and-swap. A resync carries a full baseline, so a
+        # second concurrent resync applies the same state again.
+        state: dict[str, Any] = {
             "resync_pending": False,
         }
-        self._set_state(peer_id, subscription_id, state, expected_version=None)
+        self._reset_state(peer_id, subscription_id, state)
 
         # Invoke handler with resync data
         if handler:
@@ -651,9 +822,12 @@ class CallbackProcessor:
 
         # Retry loop for optimistic locking
         for attempt in range(self._max_retries):
-            state = self._get_state(peer_id, subscription_id)
+            row = self._read_state_row(peer_id, subscription_id)
+            state = dict(row) if row else {"version": 0, "resync_pending": False}
             last_seq = self._get_last_seq(peer_id, subscription_id)
-            version = state.get("version", 0)
+            # A delivery that won the claim and is still running its handler
+            # has claimed sequences above last_seq.
+            claimed = self._live_claim(state, last_seq)
 
             # Check for duplicate
             if sequence <= last_seq:
@@ -661,6 +835,13 @@ class CallbackProcessor:
                     f"Duplicate callback: seq={sequence} <= last_seq={last_seq}"
                 )
                 return ProcessResult.DUPLICATE
+            if sequence <= claimed:
+                # Not handled yet: the other delivery may still fail. The
+                # caller answers so that the publisher keeps the diff.
+                logger.debug(
+                    f"Callback in progress: seq={sequence} <= claimed={claimed}"
+                )
+                return ProcessResult.IN_PROGRESS
 
             # Check for gap
             if sequence > last_seq + 1:
@@ -672,15 +853,23 @@ class CallbackProcessor:
                     if (c.get("sequence") or 0) > last_seq
                 ]
 
-                # Check gap timeout on existing pending
-                if self._check_gap_timeout(pending):
+                # Check gap timeout on existing pending. Not while another
+                # delivery holds a live claim: its sequence write is the
+                # progress the gap is waiting for.
+                if not claimed and self._check_gap_timeout(pending):
                     logger.warning(
                         f"Gap timeout exceeded for {peer_id}:{subscription_id}, "
                         f"triggering resync"
                     )
-                    # Mark resync pending and clear queue
-                    state["resync_pending"] = True
-                    self._set_state(peer_id, subscription_id, state, version)
+                    # Mark resync pending and clear queue. A lost race means
+                    # another delivery changed the state: read it again.
+                    marked = dict(state)
+                    marked["version"] = int(state.get("version", 0) or 0) + 1
+                    marked["resync_pending"] = True
+                    marked["claimed_seq"] = 0
+                    if self._cas_state(peer_id, subscription_id, row, marked) is None:
+                        time.sleep(self._retry_backoff * (2**attempt))
+                        continue
                     # Reset sequence to 0 to accept any sequence after resync
                     self._update_last_seq(peer_id, subscription_id, 0)
                     self._clear_pending(peer_id, subscription_id)
@@ -747,10 +936,14 @@ class CallbackProcessor:
                 drained.append(next_seq)
                 next_seq += 1
 
-            # Update CallbackProcessor-specific state FIRST (optimistic lock)
-            state["resync_pending"] = False
-            if not self._set_state(peer_id, subscription_id, state, version):
-                # Version conflict - retry
+            # Claim the batch FIRST (a compare-and-swap on the state row): a
+            # concurrent delivery of any of these sequences then reads them
+            # as handled instead of running the handler a second time.
+            claimed_row = self._claim(
+                peer_id, subscription_id, row, callbacks_to_process[-1].sequence
+            )
+            if claimed_row is None:
+                # Another delivery changed the state first - read it again
                 logger.debug(f"Version conflict, retrying (attempt {attempt + 1})")
                 time.sleep(self._retry_backoff * (2**attempt))
                 continue
@@ -761,6 +954,9 @@ class CallbackProcessor:
                     try:
                         handler(cb)
                     except DbError:
+                        self._release_claim(
+                            peer_id, subscription_id, claimed_row, last_seq
+                        )
                         # The library's own storage write (auto-storage in the
                         # handler) faulted, and the sequence has not advanced.
                         # The 503 leaves the diff uncleared on the publisher,
@@ -808,10 +1004,13 @@ class CallbackProcessor:
                         logger.error(f"Pruning processed callbacks faulted: {e}")
             else:
                 # Failed to update subscription - this is critical but we've already
-                # processed the callback, so log error but don't retry
+                # processed the callback, so log error but don't retry. The
+                # claim stays (at-most-once, as for a fault above): until its
+                # lease runs out a redelivery is answered as in progress
+                # instead of running the handlers again.
                 logger.error(
                     f"Failed to update sequence to {new_last_seq} after processing - "
-                    f"callback may be reprocessed on next invocation"
+                    f"the batch may run again once its claim expires"
                 )
 
             return ProcessResult.PROCESSED
@@ -834,12 +1033,14 @@ class CallbackProcessor:
         # Clear pending queue
         self._clear_pending(peer_id, subscription_id)
 
-        # Reset CallbackProcessor-specific state
-        state = {
-            "version": 0,
+        # Reset CallbackProcessor-specific state. The version grows (see
+        # _reset_state), so a delivery that read the state before the reset
+        # loses its compare-and-swap. A resync carries a full baseline, so a
+        # second concurrent resync applies the same state again.
+        state: dict[str, Any] = {
             "resync_pending": False,
         }
-        self._set_state(peer_id, subscription_id, state, expected_version=None)
+        self._reset_state(peer_id, subscription_id, state)
 
         # Invoke handler with resync data
         if handler:

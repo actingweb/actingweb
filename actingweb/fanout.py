@@ -24,9 +24,26 @@ if TYPE_CHECKING:
     from .interface.actor_interface import ActorInterface
     from .peer_capabilities import PeerCapabilities
 
+from .constants import CALLBACK_IN_PROGRESS_CODE, ERROR_CODE_HEADER
 from .db.exceptions import DbError
 
 logger = logging.getLogger(__name__)
+
+
+def _retry_after_seconds(headers: Any) -> int | None:
+    """``Retry-After`` in seconds (RFC 9110 delay-seconds: ASCII digits),
+    capped at a day, or None when absent or not that form (an HTTP-date is
+    valid but not used here)."""
+    value = headers.get("Retry-After") if headers is not None else None
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    if not value or not value.isascii() or not value.isdigit():
+        return None
+    if len(value) > 5:
+        return 86400  # past a day either way; int() refuses 4,300+ digits
+    return min(int(value), 86400)
+
 
 # Shared HTTP client for connection pooling (module-level singleton)
 _shared_client: httpx.AsyncClient | None = None
@@ -506,7 +523,6 @@ class FanOutManager:
                 )
             elif status == 429:
                 # Rate limited - respect Retry-After
-                retry_after = response.headers.get("Retry-After")
                 cb.record_failure()
                 self._persist_circuit_breaker(cb)
                 return DeliveryResult(
@@ -515,7 +531,27 @@ class FanOutManager:
                     success=False,
                     status_code=status,
                     error="rate_limited",
-                    retry_after=int(retry_after) if retry_after else None,
+                    retry_after=_retry_after_seconds(response.headers),
+                )
+            elif (
+                status == 503
+                and response.headers.get(ERROR_CODE_HEADER) == CALLBACK_IN_PROGRESS_CODE
+            ):
+                # A subscriber still handling another delivery of this
+                # sequence (3.16) is working, not failing: it does not count
+                # toward opening the breaker, and a half-open breaker's probe
+                # that gets it has its answer (the peer is up). Every other
+                # 503, the library's own fault answer included, still counts.
+                if cb.state == CircuitState.HALF_OPEN:
+                    cb.record_success()
+                    self._persist_circuit_breaker(cb)
+                return DeliveryResult(
+                    peer_id=peer_id,
+                    subscription_id=subscription_id,
+                    success=False,
+                    status_code=status,
+                    error="service_unavailable",
+                    retry_after=_retry_after_seconds(response.headers),
                 )
             elif status == 503:
                 cb.record_failure()
@@ -526,6 +562,7 @@ class FanOutManager:
                     success=False,
                     status_code=status,
                     error="service_unavailable",
+                    retry_after=_retry_after_seconds(response.headers),
                 )
             else:
                 cb.record_failure()

@@ -366,7 +366,15 @@ DynamoDB also a password change, a handle whose actor was deleted, and a
 rename through a handle loaded before a password rotation.
 
 ``ActorInterface.modify_creator()`` does not unvouch by default: the
-application vouches for the address it passes. A route of your own that
+application vouches for the address it passes. It records the new address as
+``vouched_creator_pending`` before the rename and moves it to
+``vouched_creator`` after, so a sign-in during a rename finds the actor
+vouched under either creator. Two concurrent renames of one actor share that
+one pending value; serialise renames of one actor. With
+``force_email_prop_as_creator`` on and a stored email, a rename moves the
+stored email to the new address (before 3.16 the next load rewrote the
+creator back to the old stored email), and a rename to a creator that is not
+an address is refused. A route of your own that
 passes user input to it should ask for the endpoint's rules::
 
     actor.modify_creator(new_address, unvouch=True)
@@ -419,6 +427,21 @@ raised under ``with_unique_creator()``, see `Creator uniqueness`_) answers
 A backend error a retry cannot fix (a validation, size or constraint error,
 such as an item over DynamoDB's 400 KB limit) answers ``500`` with
 ``{"error": "internal_error"}`` and no ``Retry-After``.
+
+An exception counts as the fault only when it is the ``DbError`` or was raised
+from one (``raise MyError(...) from e``). An error raised while a ``DbError``
+was being handled, without ``from``, is a bug in that handler and answers
+``500``. **Check:** in your own routes and hooks let the ``DbError`` itself
+propagate (re-raise it, do not wrap it): the app-level handlers and the hook
+runners match the type, so a wrapping exception answers ``500`` there, or in a
+hook is logged and dropped, with or without ``from``.
+
+``GET /?format=json`` answers ``Access-Control-Allow-Origin: *`` and no
+``Access-Control-Allow-Credentials`` (it used to reflect the ``Origin`` with
+credentials allowed). The document is public. **Check:** a cross-origin client
+that sends credentials on this fetch (``credentials: 'include'``, axios
+``withCredentials``) is refused by the browser now; drop them for this one
+request.
 
 **Hooks.** The hook runners let a ``DbError`` through. A hook whose own
 store read faults (an ``oauth_success`` allowlist kept in an attribute
@@ -779,7 +802,13 @@ check cannot read the table and the application refuses to start.
    (including addresses that differ only by case) and exits 1 if there are
    any.
 2. ``actingweb-unique-creators resolve`` prints which actor of each group it
-   keeps and how it renames the others; ``resolve --apply`` does it.
+   keeps and how it renames the others; ``resolve --apply`` does it. With
+   ``force_email_prop_as_creator`` on, add ``--default-creator-to-email``:
+   it moves each actor left with the default creator (``creator``) to its
+   stored email. A create no longer does that (3.15 swept them on every
+   default-creator create). Run it again after step 3: only then does the
+   move go through the uniqueness check, and before it a concurrent sign-in
+   can still take an address.
 3. ``actingweb-unique-creators enable --apply`` creates and fills the
    DynamoDB table or builds the PostgreSQL index ``CONCURRENTLY`` (it
    refuses while duplicates remain).
@@ -851,6 +880,9 @@ it exists, even with the flag off.
   ``actor_deleted`` for the squatter. There is no ranking of duplicates and
   no sibling sweep. If the squatter was renamed in the meantime the sign-in
   fails closed; if its deletion status cannot be read, it answers 503.
+- An actor the sign-in would clean in place (no marker, or an unvouched
+  one) answers 503 when its deletion status cannot be read, with or without
+  the flag, and is left as it is.
 - Two concurrent first sign-ins for one identifier (two tabs, a retried
   callback) both end on the actor the first one created; one that finds
   that actor before its ``auth_method`` marker is readable (only rows an

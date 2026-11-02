@@ -308,6 +308,8 @@ class GitHubOAuth2Provider(OAuth2Provider):
             else "",
         }
         super().__init__("github", github_config)
+        # (token, monotonic time, the /user/emails answer); see _emails_for.
+        self._emails_memo: tuple[str, float, list[dict[str, Any]] | None] | None = None
 
     def token_request_headers(self) -> dict[str, str]:
         headers = super().token_request_headers()
@@ -345,11 +347,38 @@ class GitHubOAuth2Provider(OAuth2Provider):
         if identifier.startswith("github:"):
             store.oauth_github_id = identifier.split(":", 1)[1]
 
+    # How long one ``/user/emails`` answer is reused for its token. A
+    # provider is built per authenticator, and the callback builds one per
+    # request, so in practice the memo lives for one sign-in; the bound keeps
+    # a long-lived authenticator from reusing an answer past it.
+    _EMAILS_MEMO_SECONDS = 30.0
+
+    def _emails_for(self, access_token: str) -> list[dict[str, Any]] | None:
+        """One ``/user/emails`` request per token per sign-in, success or not.
+
+        ``get_primary_email`` and ``get_verified_emails`` both read it, so a
+        sign-in that needs both pays one request (and at most one timeout).
+        Only the last token is kept.
+        """
+        memo = self._emails_memo
+        now = time.monotonic()
+        if (
+            memo is not None
+            and memo[0] == access_token
+            and now - memo[1] < self._EMAILS_MEMO_SECONDS
+        ):
+            return memo[2]
+        emails = _fetch_github_emails(access_token)
+        self._emails_memo = (access_token, now, emails)
+        return emails
+
     def get_primary_email(self, access_token: str) -> str | None:
-        return _get_github_primary_email(access_token)
+        emails = self._emails_for(access_token)
+        return _github_primary_from(emails) if emails is not None else None
 
     def get_verified_emails(self, access_token: str) -> list[str] | None:
-        return _get_github_verified_emails(access_token)
+        emails = self._emails_for(access_token)
+        return _github_verified_from(emails) if emails is not None else None
 
 
 class AppleOAuth2Provider(OAuth2Provider):
@@ -919,8 +948,12 @@ class OAuth2Authenticator:
     def _get_github_primary_email(self, access_token: str) -> str | None:
         """Get primary email from GitHub's emails API.
 
-        Backward-compat shim delegating to the module-level helper.
+        Backward-compat shim. With the GitHub provider it reads the
+        provider's per-token answer, so calling it beside
+        ``get_github_verified_emails`` makes one request.
         """
+        if isinstance(self.provider, GitHubOAuth2Provider):
+            return self.provider.get_primary_email(access_token)
         return _get_github_primary_email(access_token)
 
     def get_github_verified_emails(self, access_token: str) -> list[str] | None:
@@ -1247,11 +1280,14 @@ class OAuth2Authenticator:
 # Factory functions for backward compatibility and convenience
 
 
-def _get_github_primary_email(access_token: str) -> str | None:
-    """Get primary verified email from GitHub's emails API.
+def _fetch_github_emails(access_token: str) -> list[dict[str, Any]] | None:
+    """One request to GitHub's ``/user/emails``: the raw entries, or ``None``.
 
-    Lives at module level so it can be reused by ``GitHubOAuth2Provider``
-    without holding authenticator state.
+    ``None`` means the request itself failed (no token, a non-200 status such
+    as a 404 from a token whose scope omits ``user:email``, a network error or
+    a body that is not a list); ``[]`` means GitHub answered with no entries.
+    The primary and verified answers are both derived from this one response
+    (:func:`_github_primary_from`, :func:`_github_verified_from`).
     """
     if not access_token:
         return None
@@ -1263,86 +1299,70 @@ def _get_github_primary_email(access_token: str) -> str | None:
     }
 
     try:
-        # Use requests library with better timeout handling
         response = requests.get(
             url="https://api.github.com/user/emails",
             headers=headers,
             timeout=(5, 10),  # (connect timeout, read timeout)
         )
-
         if response.status_code != 200:
             logger.warning(f"GitHub emails API request failed: {response.status_code}")
             return None
-
         emails = response.json()
-
-        # Find the primary email (must also be verified to prevent
-        # account-linking attacks via unverified primary emails).
-        for email_info in emails:
-            if email_info.get("primary", False) and email_info.get("verified", False):
-                email = email_info.get("email")
-                return str(email) if email else None
-
-        # If no verified primary email found, use the first verified email
-        for email_info in emails:
-            if email_info.get("verified", False):
-                email = email_info.get("email")
-                return str(email) if email else None
-
-        return None
-
+        if not isinstance(emails, list):
+            logger.warning("GitHub emails API answered a body that is not a list")
+            return None
+        if not all(isinstance(e, dict) for e in emails):
+            logger.warning("GitHub emails API answered entries that are not objects")
+            return None
+        return emails
     except Exception as e:  # folds DbError: provider HTTP only
-        logger.warning(f"Failed to get GitHub primary email: {e}")
+        logger.warning(f"Failed to get GitHub emails: {e}")
         return None
+
+
+def _github_primary_from(emails: list[dict[str, Any]]) -> str | None:
+    """The primary address: verified **and** flagged primary, else the first
+    verified one. An unverified primary is never used (it would allow
+    account linking through an address GitHub has not verified)."""
+    for email_info in emails:
+        email = email_info.get("email")
+        if email and email_info.get("primary", False) and email_info.get("verified"):
+            return str(email)
+    for email_info in emails:
+        email = email_info.get("email")
+        if email and email_info.get("verified", False):
+            return str(email)
+    return None
+
+
+def _github_verified_from(emails: list[dict[str, Any]]) -> list[str]:
+    """Every verified address, lowercased, in GitHub's order."""
+    verified: list[str] = []
+    for email_info in emails:
+        if email_info.get("verified", False):
+            email = email_info.get("email")
+            if email:
+                verified.append(str(email).lower())
+    logger.debug(f"Found {len(verified)} verified emails from GitHub")
+    return verified
+
+
+def _get_github_primary_email(access_token: str) -> str | None:
+    """Get the primary verified email from GitHub's emails API (one request)."""
+    emails = _fetch_github_emails(access_token)
+    return _github_primary_from(emails) if emails is not None else None
 
 
 def _get_github_verified_emails(access_token: str) -> list[str] | None:
-    """Get all verified emails from GitHub's emails API.
-
-    Lives at module level so it can be reused by ``GitHubOAuth2Provider``
-    without holding authenticator state (mirrors ``_get_github_primary_email``).
+    """Get all verified emails from GitHub's emails API (one request).
 
     Returns ``[]`` when GitHub answered 200 with no verified emails (a
     legitimate "nothing to offer" result); ``None`` when the API call itself
-    failed — a non-200 status (e.g. a 404 from a token whose scope omits
-    ``user:email``) or a network exception — so callers can tell "GitHub
-    vouches for nothing" apart from "we could not ask GitHub".
+    failed, so callers can tell "GitHub vouches for nothing" apart from "we
+    could not ask GitHub".
     """
-    if not access_token:
-        return None
-
-    headers = {
-        "Authorization": f"Bearer {access_token}",
-        "Accept": "application/json",
-        "User-Agent": "ActingWeb-OAuth2-Client",
-    }
-
-    try:
-        response = requests.get(
-            url="https://api.github.com/user/emails",
-            headers=headers,
-            timeout=(5, 10),
-        )
-
-        if response.status_code != 200:
-            logger.warning(f"GitHub emails API request failed: {response.status_code}")
-            return None
-
-        emails = response.json()
-
-        verified = []
-        for email_info in emails:
-            if email_info.get("verified", False):
-                email = email_info.get("email")
-                if email:
-                    verified.append(str(email).lower())
-
-        logger.debug(f"Found {len(verified)} verified emails from GitHub")
-        return verified
-
-    except Exception as e:  # folds DbError: provider HTTP only
-        logger.warning(f"Failed to get GitHub verified emails: {e}")
-        return None
+    emails = _fetch_github_emails(access_token)
+    return _github_verified_from(emails) if emails is not None else None
 
 
 def _get_provider_config(
@@ -1684,6 +1704,11 @@ def is_vouched_actor(actor_instance: actor_module.Actor) -> bool:
 # the vouch stale when it is read, whatever order concurrent writes landed
 # in (a marker write cannot be conditioned on the actor row).
 VOUCHED_CREATOR = "vouched_creator"
+# The address an application rename (``ActorInterface.modify_creator``) is
+# moving the vouch to, written before the rename and promoted to
+# :data:`VOUCHED_CREATOR` after it, so a sign-in during the rename finds the
+# actor vouched under either creator. Only the application writes it.
+VOUCHED_CREATOR_PENDING = "vouched_creator_pending"
 
 
 def is_vouched_store(store: "InternalStore", creator: str | None = None) -> bool:
@@ -1710,6 +1735,9 @@ def is_vouched_store(store: "InternalStore", creator: str | None = None) -> bool
     current = normalise_creator(creator)
     if normalise_creator(bound) == current:
         return True
+    pending = getattr(store, VOUCHED_CREATOR_PENDING, None)
+    if isinstance(pending, str) and pending and normalise_creator(pending) == current:
+        return True  # an application rename to it is under way
     email = store.email
     return isinstance(email, str) and "@" in current and email.lower() == current
 
@@ -2225,6 +2253,43 @@ def adopt_actor(
         return None
 
 
+def _proven_email(creator: str | None, user_info: dict[str, Any] | None) -> str | None:
+    """The address a sign-in proves for ``creator``: the creator itself when
+    it is an address, else the provider's email when it gave one. A
+    provider-id creator ("apple:…") has no address of its own."""
+    if "@" in (creator or ""):
+        return (creator or "").lower()
+    return str((user_info or {}).get("email") or "").lower() or None
+
+
+def _seed_missing_email(
+    existing: actor_module.Actor,
+    store: "InternalStore",
+    user_info: dict[str, Any] | None,
+) -> None:
+    """Write the proven address into a vouched actor's store when it has none.
+
+    The create path seeds ``email`` after ``actor_created`` fired, so a fault
+    there leaves an announced, vouched actor without it; an actor vouched
+    without the OAuth create (``mark_actors_vouched``, an application) may
+    never have had one. Only a missing value is written, with one atomic
+    create, so a value another writer stored meanwhile is never overwritten.
+    The store the vouch check already loaded decides whether to try.
+    Bookkeeping: a fault is logged and the sign-in goes on; the next one
+    retries.
+    """
+    current = store.email
+    if isinstance(current, str) and current:
+        return
+    email = _proven_email(existing.creator, user_info)
+    if not email:
+        return
+    try:
+        store.set_if_absent("email", email)
+    except DbError as e:  # folds DbError: seeding bookkeeping on a vouched sign-in
+        logger.error(f"Sign-in to {existing.id}: seeding its email faulted: {e}")
+
+
 def _adopt_actor(
     existing: actor_module.Actor,
     *,
@@ -2260,6 +2325,8 @@ def _adopt_actor(
                 logger.error(
                     f"Sign-in to {existing.id}: recording the provider faulted: {e}"
                 )
+        if store is not None:
+            _seed_missing_email(existing, store, user_info)
         if existing.factory_sibling_ids and existing.creator:
             # The lookup found factory actors beside this one. No lookup
             # reaches them, but each one costs every later sign-in a read;
@@ -2295,8 +2362,9 @@ def _adopt_actor(
     # A tombstone on an unvouched actor that still resolves is a wipe that
     # stopped part-way: a replacement (or a DELETE) whose buckets, the marker
     # among them, are already gone. Finish it rather than clean what is left
-    # in place under a tombstone. UNKNOWN is not evidence of a wipe, so it
-    # falls through to the marker: cleaning in place keeps the data.
+    # in place under a tombstone. UNKNOWN cannot tell the two apart, so the
+    # clean in place below refuses it (503) rather than clean what may be a
+    # half-wiped actor and leave it tombstoned.
     deletion_status = get_deletion_status(actor_id, config)
     unfinished_wipe = deletion_status == DeletionStatus.DELETED
     if unfinished_wipe and provider is None:
@@ -2431,6 +2499,7 @@ def _adopt_actor(
             result = successor
             if result.store is not None:
                 result.store.oauth_provider = provider.name
+                _seed_missing_email(result, result.store, user_info)
         elif marker_class == "unvouched":
             # The owner's own unvouched actor (from before 3.16, or the email
             # form's) sat beside the factory ones: clean it in place instead
@@ -2462,6 +2531,12 @@ def _adopt_actor(
                 result.store.auth_method_replaced_actor_id = actor_id
         mode = "replaced"
     else:
+        if deletion_status == DeletionStatus.UNKNOWN:
+            # Whether a wipe of this actor stopped part-way cannot be read:
+            # cleaning it in place could keep it tombstoned with its late
+            # writes suppressed. Nothing is changed; the sign-in answers 503
+            # and is retried.
+            raise DbError("actor deletion status", actor_id)
         new_passphrase = config.new_token()
         if not new_passphrase:
             logger.error(f"Adoption of actor {actor_id} aborted: empty passphrase")
@@ -2490,6 +2565,9 @@ def _adopt_actor(
         # After the purge: with the client trusts gone, the registry's trust
         # cleanup has nothing left to notify.
         _delete_actor_clients(config, actor_id, client_ids)
+        # Again: a client holding the old credentials could obtain a token
+        # between the first revoke and the purge. Raises if one cannot be.
+        tokens_revoked += _revoke_all_actor_tokens(config, actor_id)
         removed_trusts = purged["trusts"]
         subscription_peers = purged["subscription_peers"]
         if store:
@@ -2514,16 +2592,14 @@ def _adopt_actor(
             }
             # A provider-id creator ("apple:…") has no address of its own: the
             # provider's email when it gave one, else none.
-            proven_email = (
-                (existing.creator or "").lower()
-                if "@" in (existing.creator or "")
-                else str((user_info or {}).get("email") or "").lower() or None
-            )
-            resets["email"] = proven_email
+            resets["email"] = _proven_email(existing.creator, user_info)
             # The address this sign-in proves, written before the vouched
             # marker: a rename landing during the clean leaves the vouch
             # stale instead of vouching the new address.
             resets[VOUCHED_CREATOR] = normalise_creator(existing.creator)
+            # A rename the previous creator's application left half-done
+            # must not keep vouching for its target.
+            resets[VOUCHED_CREATOR_PENDING] = None
             for name, value in resets.items():
                 if value is None and getattr(store, name, None) is None:
                     continue  # not there (the bucket read answered)

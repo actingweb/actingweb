@@ -20,3 +20,16 @@ What a plan for it would settle:
 - with `unique_creator`, when the creator is freed: the record goes only
   with the row, so a user who deletes their account and signs up again at
   once is refused while the wipe runs (the plan's unverified notes).
+
+## Also: a token minted across the clean's second revoke
+
+The clean in place (`oauth2._adopt_actor`) revokes the actor's tokens, purges,
+deletes its client registrations and revokes again
+(`thoughts/plans/2026-11-02-3-16-owner-decided-followups.md`, D12). A grant
+that loaded its client before the deletion and writes its token after the
+second revoke still survives, as does an SPA refresh in that window: two
+sub-second races by the previous creator. Closing it needs the mint paths
+(`oauth2_server/oauth2_server.py` grants, the SPA refresh) to re-check the
+actor's vouch or a creator generation at write time; it belongs with the
+resumable wipe, which needs the same "is this actor mid-clean" signal.
+

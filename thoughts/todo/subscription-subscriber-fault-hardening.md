@@ -64,3 +64,52 @@ site. The library side of the key now exists: `ListProperty.append_once(item,
 stores a list item at most once per key, so a re-applied `append` diff can
 use it once each diff carries a stable key (for example its sequence number
 and position).
+
+## Also, from the 3.16 callback claim (owner-decided plan, verified 2026-11-02)
+
+- **A callback at `claimed + 1` that arrives while a claim runs waits in
+  pending** (`callback_processor.py`, the gap branch): the gap branch never
+  drains pending, and the gap timeout waits while the claim is live, so on a
+  quiet subscription it waits for an application poll or a later callback's
+  gap resync. Fix: after the winner's sequence write, re-read pending and
+  drain `claimed + 1 ..` in the same delivery.
+- **A sequence-write fault after the handlers ran keeps the claim**, which
+  expires after `CLAIM_LEASE_SECONDS`; a later poll then runs the batch again
+  (auto-storage re-applies it). Retrying the sequence write once before
+  folding (above) would close most of it.
+- **A resync whose baseline fetch fails is applied as an empty baseline**
+  (`handlers/callbacks.py`, the resync branch): `_fetch_and_transform_baseline`
+  answers `None` for a failed fetch and for an empty response alike, and
+  `AwProxy.get_resource` answers `{}` for a non-JSON 2xx and passes some
+  error bodies through, so the callback cannot tell them apart; it applies
+  `{}` (which changes no stored data) and moves the sequence to the resync's.
+  A fix needs the proxy to report a failed fetch distinctly. (Verification
+  Issue 5 of the owner-decided plan; a first fix was reverted because it
+  refused legitimately empty baselines.)
+- **A poll records and clears past diffs it did not apply**
+  (`interface/subscription_manager.py`, `sync_subscription`): a PENDING,
+  REJECTED or RESYNC_TRIGGERED result still advances `max_sequence`, so the
+  poll clears the publisher past a gap. Stopping there must keep the
+  baseline fallback (the poll's way out after a gap reset, when every diff
+  reads as pending); a first fix that stopped there trapped a subscription
+  after a gap timeout and was reverted.
+- **The pre-fetch check is a read, not a claim**
+  (`CallbackProcessor.precheck()`, before a low-granularity diff is fetched):
+  two deliveries of one sequence can both pass it. The second finds the diff
+  gone (the first fetch deleted it) and answers 503, and a failed first
+  delivery is recovered only by a resync. Closing it means claiming before the
+  fetch, which moves the claim out of the handler (owner-decided plan, entry
+  15).
+- **The poll's upward-only sequence write reads, then writes**
+  (`sync_subscription`, sync and async): a callback recording a higher
+  sequence between the read and the write is overwritten. Both writers are
+  the same subscriber. The fix is a conditional write ("only if lower"), which
+  `DbSubscription.modify` cannot express today; the adoption plan's
+  `UpdateItem` item for DynamoDB `DbSubscription.modify`
+  (`thoughts/plans/2026-11-02-3-16-adoption-fault-followups.md`) is where it
+  fits.
+- **`_fetch_and_transform_baseline` reads a baseline with a property named
+  `error` as a failed fetch** (`"error" in baseline_response`, sync and async),
+  and a list baseline containing the string `"error"` raises on `.get`.
+  Belongs with the failed-fetch signal above.
+

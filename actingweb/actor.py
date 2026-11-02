@@ -352,6 +352,24 @@ class Actor:
         except Exception as e:  # folds DbError: best-effort cleanup of an unused id
             logger.warning(f"Marker for {actor_id} left behind: {e}")
 
+    def _email_held_elsewhere(self, email: str) -> bool:
+        """Under ``with_unique_creator()``, whether another actor holds
+        ``email`` (its ``creators`` record), so the force-email rewrite in
+        :meth:`get` is skipped instead of refused on every load. One
+        consistent read; a fault raises ``DbError``, as the rewrite does."""
+        if not self.config or not self.config.unique_creator or is_exempt(email):
+            return False
+        holder = get_actor(self.config).get_creator_holder(email)
+        if holder and holder != self.id:
+            # INFO: a record naming an actor that is gone (an orphan) blocks
+            # the rewrite too; ``actingweb-unique-creators report`` lists it.
+            logger.info(
+                f"Actor {self.id}: stored email is held by {holder}; creator "
+                "left unchanged"
+            )
+            return True
+        return False
+
     def get(
         self, actor_id: str | None = None, *, rewrite_email: bool = True
     ) -> dict[str, Any] | None:
@@ -385,10 +403,15 @@ class Actor:
                 and self.config.force_email_prop_as_creator
             ):
                 em = self.store.email
-                if em and em.lower() != self.creator:
+                if (
+                    em
+                    and em.lower() != self.creator
+                    and not self._email_held_elsewhere(em.lower())
+                ):
                     try:
                         self.modify(creator=em.lower())
                     except CreatorTaken:  # folds DbError: email held elsewhere
+                        # Taken between the holder read and the rename.
                         logger.warning(
                             f"Actor {self.id}: stored email is another actor's "
                             "creator; creator left unchanged"
@@ -651,21 +674,10 @@ class Actor:
                     victim = Actor(actor_id=victim_id, config=self.config)
                     if victim.id:
                         victim.delete()
-            elif (
-                self.config.force_email_prop_as_creator
-                and self.creator == DEFAULT_CREATOR
-            ):
-                # Uniqueness turned on later can leave many actors with the
-                # default creator: move each to its stored email.
-                existing = get_actor(self.config).get_by_creator(
-                    creator=self.creator, consistent=True
-                )
-                # Loading each (the constructor does) moves it to its stored
-                # email; get()'s rewrite leaves an address another actor
-                # holds alone.
-                for c in existing or []:
-                    if c:
-                        Actor(actor_id=c["id"], config=self.config)
+            # Actors left with the default creator are moved to their stored
+            # email by ``actingweb-unique-creators resolve
+            # --default-creator-to-email`` (and by get()'s rewrite as each is
+            # loaded), not by every create.
 
         if passphrase and len(passphrase) > 0:
             self.passphrase = passphrase

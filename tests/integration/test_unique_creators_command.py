@@ -409,3 +409,104 @@ class TestRecordsStayTrue:
         # D8: the record moved to the kept actor, with no gap for a sign-in.
         assert get_actor(enforced_store).get_creator_holder(creator) == kept
         assert unique_creators.main(["report"]) == 0
+
+
+class TestDefaultCreator:
+    """Actors left with the default creator (3.16, owner-decided plan D5):
+    the create path no longer moves them; ``resolve
+    --default-creator-to-email`` does."""
+
+    def test_report_lists_them_and_stays_clean(
+        self, fresh_store: Any, logs: pytest.LogCaptureFixture
+    ) -> None:
+        email = _email()
+        actor_id = _seed(fresh_store, "creator", email=email)
+        assert unique_creators.main(["report"]) == 0
+        assert f"default creator id={actor_id} email={email!r}" in logs.text
+
+    def test_resolve_without_the_flag_leaves_them(self, fresh_store: Any) -> None:
+        actor_id = _seed(fresh_store, "creator", email=_email())
+        assert unique_creators.main(["resolve", "--apply"]) == 0
+        assert _creator(fresh_store, actor_id) == "creator"
+
+    def test_the_flag_without_apply_writes_nothing(self, fresh_store: Any) -> None:
+        actor_id = _seed(fresh_store, "creator", email=_email())
+        assert unique_creators.main(["resolve", "--default-creator-to-email"]) == 0
+        assert _creator(fresh_store, actor_id) == "creator"
+
+    def test_before_enable_it_moves_to_the_email_and_keeps_it(
+        self, fresh_store: Any
+    ) -> None:
+        email = _email()
+        actor_id = _seed(fresh_store, "creator", email=email)
+        assert (
+            unique_creators.main(["resolve", "--default-creator-to-email", "--apply"])
+            == 0
+        )
+        assert _creator(fresh_store, actor_id) == email
+        moved = Actor(actor_id=actor_id, config=_off(fresh_store))
+        assert moved.store is not None and moved.store.email == email
+
+    def test_after_enable_it_is_recorded(self, enforced_store: Any) -> None:
+        email = _email()
+        actor_id = _seed(enforced_store, "creator", email=email)
+        assert (
+            unique_creators.main(["resolve", "--default-creator-to-email", "--apply"])
+            == 0
+        )
+        assert _creator(enforced_store, actor_id) == email
+        assert get_actor(enforced_store).get_creator_holder(email) == actor_id
+        assert unique_creators.main(["report"]) == 0
+
+    def test_a_held_email_is_reported_and_left(
+        self, enforced_store: Any, logs: pytest.LogCaptureFixture
+    ) -> None:
+        email = _email()
+        owner = Actor(config=enforced_store)
+        assert owner.create(
+            url="https://test.example.com/", creator=email, passphrase="pw"
+        )
+        actor_id = _seed(enforced_store, "creator", email=email)
+        assert (
+            unique_creators.main(["resolve", "--default-creator-to-email", "--apply"])
+            == 1
+        )
+        assert _creator(enforced_store, actor_id) == "creator"
+        assert get_actor(enforced_store).get_creator_holder(email) == owner.id
+        assert f"default-creator: {actor_id} -> {email} held by {owner.id}" in (
+            logs.text
+        )
+
+    def test_a_default_creator_create_no_longer_sweeps(
+        self, enforced_store: Any
+    ) -> None:
+        _seed(enforced_store, "creator", email=_email())
+        forced = copy.copy(enforced_store)
+        forced.force_email_prop_as_creator = True
+        db_class = type(get_actor(forced))
+        with mock.patch.object(
+            db_class, "get_by_creator", wraps=None, side_effect=AssertionError
+        ) as spy:
+            actor = Actor(config=forced)
+            assert actor.create(
+                url="https://test.example.com/", creator="", passphrase="pw"
+            )
+        spy.assert_not_called()
+
+    def test_an_unreadable_bucket_makes_resolve_exit_one(
+        self, fresh_store: Any
+    ) -> None:
+        from actingweb.attribute import InternalStore
+
+        _seed(fresh_store, "creator", email=_email())
+        with mock.patch.object(
+            InternalStore, "loaded", new_callable=mock.PropertyMock, return_value=False
+        ):
+            assert (
+                unique_creators.main(
+                    ["resolve", "--default-creator-to-email", "--apply"]
+                )
+                == 1
+            )
+            # report only lists: an unreadable bucket does not fail it
+            assert unique_creators.main(["report"]) == 0

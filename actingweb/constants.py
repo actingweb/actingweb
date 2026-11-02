@@ -282,3 +282,7 @@ _validate_ttl_constants()
 # token-endpoint or fault answer (the body's ``code`` key repeats it). A 401
 # that carries it is the library's and final; one without it is not.
 ERROR_CODE_HEADER = "X-ActingWeb-Error"
+# The X-ActingWeb-Error code of a subscription callback answered 503 because
+# another delivery of its sequence is still being handled: a subscriber that
+# is working, not failing, so a publisher's breaker does not count it.
+CALLBACK_IN_PROGRESS_CODE = "callback_in_progress"

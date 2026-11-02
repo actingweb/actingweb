@@ -10,6 +10,16 @@ from actingweb.db.postgresql.connection import get_connection
 logger = logging.getLogger(__name__)
 
 
+def _backoff(attempt: int) -> None:
+    """A short, jittered wait before retrying a transaction that lost a
+    deadlock or serialization check (both writers retrying at once would
+    meet again)."""
+    import random
+    import time
+
+    time.sleep(random.uniform(0.01, 0.05) * (attempt + 1))
+
+
 def _serialize_property_value(value: Any) -> str | None:
     """Serialize a property value the same way ``DbProperty.set()`` does.
 
@@ -237,17 +247,18 @@ class DbProperty:
 
         # Empty value means delete
         if not value or (hasattr(value, "__len__") and len(value) == 0):
-            if self.get(actor_id=actor_id, name=name):
+            if actor_id and self._should_index_property(name):
+                self._delete_indexed(actor_id, name)
+            elif self.get(actor_id=actor_id, name=name):
                 self.delete()  # This will also delete lookup entry
             return True
 
         if not actor_id:
             return False
 
-        # Get old value before updating (for lookup sync)
-        old_value = None
         if self._should_index_property(name):
-            old_value = self.get(actor_id=actor_id, name=name)
+            self._set_indexed(actor_id, name, value)
+            return True
 
         try:
             with get_connection() as conn:
@@ -262,13 +273,6 @@ class DbProperty:
                         """,
                         (actor_id, name, value),
                     )
-
-                    # Update lookup table if property is indexed
-                    if self._should_index_property(name):
-                        self._update_lookup_entry_in_transaction(
-                            cur, actor_id, name, old_value, value
-                        )
-
                 conn.commit()
 
             # Update handle
@@ -280,6 +284,122 @@ class DbProperty:
             return True
         except Exception as e:
             raise DbError("property set", actor_id) from e
+
+    # Attempts of one indexed write: a concurrent first insert of the same
+    # (actor, name), and a deadlock or serialization failure between two
+    # transactions, retry the whole transaction.
+    INDEXED_WRITE_ATTEMPTS = 3
+
+    def _set_indexed(self, actor_id: str, name: str, value: str) -> None:
+        """Write an indexed property and its lookup row in one transaction.
+
+        The stored value is read ``FOR UPDATE`` inside the transaction, so
+        two writers of one (actor, name) serialise and each releases the
+        lookup row of the value it actually replaced (a value read earlier,
+        outside, could be stale and leave the loser's row behind).
+        """
+        import psycopg
+
+        for attempt in range(self.INDEXED_WRITE_ATTEMPTS):
+            try:
+                with get_connection() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            """
+                            SELECT value FROM properties
+                            WHERE id = %s AND name = %s
+                            FOR UPDATE
+                            """,
+                            (actor_id, name),
+                        )
+                        row = cur.fetchone()
+                        old_value = str(row[0]) if row and row[0] else None
+                        if row is None:
+                            cur.execute(
+                                """
+                                INSERT INTO properties (id, name, value)
+                                VALUES (%s, %s, %s)
+                                ON CONFLICT (id, name) DO NOTHING
+                                """,
+                                (actor_id, name, value),
+                            )
+                            if not cur.rowcount:
+                                # A concurrent first insert won: read it
+                                # (locked) on the next attempt.
+                                conn.rollback()
+                                continue
+                        else:
+                            cur.execute(
+                                """
+                                UPDATE properties SET value = %s
+                                WHERE id = %s AND name = %s
+                                """,
+                                (value, actor_id, name),
+                            )
+                        self._update_lookup_entry_in_transaction(
+                            cur, actor_id, name, old_value, value
+                        )
+                    conn.commit()
+                self.handle = {"id": actor_id, "name": name, "value": value}
+                return
+            except (
+                psycopg.errors.DeadlockDetected,
+                psycopg.errors.SerializationFailure,
+            ):
+                _backoff(attempt)
+                continue
+            except Exception as e:
+                raise DbError("property set", actor_id) from e
+        logger.error(
+            f"PROPERTY_WRITE_RACE_EXHAUSTED: property={name} actor={actor_id} "
+            f"attempts={self.INDEXED_WRITE_ATTEMPTS}"
+        )
+        raise DbError(
+            f"property write: lost {self.INDEXED_WRITE_ATTEMPTS} races", actor_id
+        )
+
+    def _delete_indexed(self, actor_id: str, name: str) -> None:
+        """Delete an indexed property and release the lookup row of the value
+        it held at the delete (``RETURNING``), not a handle's. A deadlock with
+        a concurrent takeover (which holds the lookup row and waits on this
+        property row) retries the transaction."""
+        import psycopg
+
+        for attempt in range(self.INDEXED_WRITE_ATTEMPTS):
+            try:
+                with get_connection() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            """
+                            DELETE FROM properties
+                            WHERE id = %s AND name = %s
+                            RETURNING value
+                            """,
+                            (actor_id, name),
+                        )
+                        row = cur.fetchone()
+                        if row and row[0]:
+                            self._delete_lookup_entry_in_transaction(
+                                cur, actor_id, name, str(row[0])
+                            )
+                    conn.commit()
+                self.handle = None
+                return
+            except (
+                psycopg.errors.DeadlockDetected,
+                psycopg.errors.SerializationFailure,
+            ):
+                _backoff(attempt)
+                continue
+            except Exception as e:
+                raise DbError("property delete", actor_id) from e
+        logger.error(
+            f"PROPERTY_WRITE_RACE_EXHAUSTED: property={name} actor={actor_id} "
+            f"attempts={self.INDEXED_WRITE_ATTEMPTS} (delete)"
+        )
+        raise DbError(
+            f"property delete: lost {self.INDEXED_WRITE_ATTEMPTS} races", actor_id
+        )
 
     def _update_lookup_entry_in_transaction(
         self, cur: Any, actor_id: str, name: str, old_value: str | None, new_value: str
@@ -294,10 +414,19 @@ class DbProperty:
             old_value: Previous property value
             new_value: New property value
 
+        The new value is claimed through
+        :func:`~actingweb.db.postgresql.property_lookup.claim_in_transaction`,
+        which also takes over a row whose owner no longer holds the value, for
+        a changed value and an unchanged one alike (a value stored during a
+        collision has no row; once the other actor lets it go, this write
+        indexes it).
+
         A failed statement raises: it has aborted the transaction, so the
         caller's commit would roll the property write back while reporting
         success. The caller's transaction rolls back and raises instead.
         """
+        from .property_lookup import claim_in_transaction
+
         try:
             # Delete old lookup entry if exists (a DELETE of no row is no error)
             if old_value and old_value != new_value:
@@ -308,37 +437,7 @@ class DbProperty:
                     """,
                     (name, old_value, actor_id),
                 )
-
-            # Create new lookup entry
-            if not old_value or old_value != new_value:
-                cur.execute(
-                    """
-                    INSERT INTO property_lookup (property_name, value, actor_id)
-                    VALUES (%s, %s, %s)
-                    ON CONFLICT (property_name, value) DO NOTHING
-                    """,
-                    (name, new_value, actor_id),
-                )
-                # Log conflict if another actor already claimed this value
-                if cur.rowcount == 0:
-                    logger.warning(
-                        f"LOOKUP_CONFLICT: property={name} "
-                        f"value_len={len(new_value)} actor={actor_id} - "
-                        f"value already claimed by another actor"
-                    )
-            else:
-                # Unchanged value: claim a free row. A value stored during a
-                # collision has none; once the other actor lets it go, this
-                # write indexes it. A held row (own or another's) is left.
-                cur.execute(
-                    """
-                    INSERT INTO property_lookup (property_name, value, actor_id)
-                    VALUES (%s, %s, %s)
-                    ON CONFLICT (property_name, value) DO NOTHING
-                    """,
-                    (name, new_value, actor_id),
-                )
-
+            claim_in_transaction(cur, name, new_value, actor_id)
         except Exception as e:
             logger.error(
                 f"LOOKUP_TABLE_SYNC_FAILED: actor={actor_id} property={name} "
@@ -398,6 +497,12 @@ class DbProperty:
         if not actor_id or not name:
             logger.error("DbProperty handle missing id or name field")
             return False
+
+        if self._should_index_property(name):
+            # Releases the lookup row of the value stored at the delete,
+            # whatever this handle last read.
+            self._delete_indexed(actor_id, name)
+            return True
 
         try:
             with get_connection() as conn:

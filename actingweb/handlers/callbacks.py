@@ -413,6 +413,15 @@ class CallbacksHandler(base_handler.BaseHandler):
 
                 if result:
                     self.response.set_status(204, "Found")
+                elif getattr(self, "_callback_retry_later", False):
+                    from ..constants import CALLBACK_IN_PROGRESS_CODE, ERROR_CODE_HEADER
+
+                    self.response.headers["Retry-After"] = "5"
+                    if getattr(self, "_callback_in_progress", False):
+                        self.response.headers[ERROR_CODE_HEADER] = (
+                            CALLBACK_IN_PROGRESS_CODE
+                        )
+                    self.response.set_status(503, "Callback not processed yet")
                 else:
                     self.response.set_status(400, "Processing error")
                 return
@@ -509,6 +518,31 @@ class CallbacksHandler(base_handler.BaseHandler):
         # But low-granularity/resync with URL only → must send PUT to acknowledge
         fetched_from_url = bool(callback_url and not callback_data)
 
+        if fetched_from_url and callback_type != "resync":
+            fetched_seq = params.get("sequence")
+            if not isinstance(fetched_seq, int) or isinstance(fetched_seq, bool):
+                logger.warning(
+                    f"Callback from {peer_id} for {subscription_id}: "
+                    "the sequence is not an integer"
+                )
+                return False
+            # Decide a duplicate or an in-progress sequence before the fetch:
+            # the publisher deletes a low-granularity diff when it is fetched,
+            # so a redelivery of an applied sequence would find it gone (and
+            # answer 503 for ever), and a delivery inside a live claim would
+            # consume it before learning it must not process it.
+            early = CallbackProcessor(
+                actor_interface,
+                gap_timeout_seconds=config.gap_timeout_seconds,
+                max_pending=config.max_pending,
+            ).precheck(peer_id, subscription_id, fetched_seq)
+            if early == ProcessResult.DUPLICATE:
+                return True
+            if early == ProcessResult.IN_PROGRESS:
+                self._callback_in_progress = True
+                self._callback_retry_later = True
+                return False
+
         if callback_url and not callback_data:
             # Need to fetch data from URL
             fetch_type = (
@@ -550,6 +584,10 @@ class CallbacksHandler(base_handler.BaseHandler):
                             f"{len(callback_data)} {'keys' if isinstance(callback_data, dict) else 'items'}"
                         )
                     else:
+                        # An empty baseline and a failed fetch look the same
+                        # here (both None); applying {} moves the sequence on.
+                        # Telling them apart is in the subscriber-hardening
+                        # todo.
                         logger.warning(f"Failed to fetch resync baseline for {target}")
                         callback_data = {}
                 except DbError:
@@ -589,15 +627,21 @@ class CallbacksHandler(base_handler.BaseHandler):
                             f"Fetched low-granularity data: {len(callback_data)} keys"
                         )
                     else:
+                        # Not an empty diff: the data is unknown (another
+                        # delivery's GET may have taken it). Answer 503 and
+                        # process nothing, so the sequence does not advance
+                        # past data that was never applied.
                         logger.warning(
                             f"Failed to fetch low-granularity data: {response.status_code}"
                         )
-                        callback_data = {}
+                        self._callback_retry_later = True
+                        return False
                 except DbError:
                     raise
                 except Exception as e:
                     logger.error(f"Error fetching low-granularity callback data: {e}")
-                    callback_data = {}
+                    self._callback_retry_later = True
+                    return False
         else:
             callback_data = callback_data or {}
 
@@ -730,6 +774,15 @@ class CallbacksHandler(base_handler.BaseHandler):
                 ProcessResult.PENDING,
                 ProcessResult.RESYNC_TRIGGERED,
             )
+            # Another delivery of this sequence is still running its handler:
+            # answer 503, not 204. A publisher that deletes a diff on 204 (as
+            # the protocol allows) then keeps it in case that delivery fails.
+            # This library's publisher keeps a high-granularity diff until a
+            # poll or an acknowledgement clears it, so a poll (which stops at
+            # an in-progress sequence) or a gap resync brings it back; a
+            # low-granularity diff is deleted by the subscriber's own fetch.
+            self._callback_in_progress = result == ProcessResult.IN_PROGRESS
+            self._callback_retry_later = self._callback_in_progress
 
             if success:
                 logger.debug(

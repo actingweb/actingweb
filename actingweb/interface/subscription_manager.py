@@ -153,6 +153,10 @@ class SubscriptionSyncResult:
     final_sequence: int
     error: str | None = None
     error_code: int | None = None
+    # True when the poll stopped at a sequence a callback delivery is still
+    # handling: it neither cleared nor recorded past it, and a later poll
+    # picks the rest up.
+    in_flight: bool = False
 
 
 @dataclass
@@ -1043,6 +1047,7 @@ class SubscriptionManager:
 
         # Process each diff
         diffs_processed = 0
+        in_flight = False
         max_sequence = 0
 
         # Set up handler based on config
@@ -1085,6 +1090,12 @@ class SubscriptionManager:
                     handler=process_handler if config.auto_storage else None,
                 )
 
+                if result == ProcessResult.IN_PROGRESS:
+                    # A callback delivery is handling this sequence now: stop
+                    # here, so the poll neither clears nor records past it.
+                    in_flight = True
+                    break
+
                 if result == ProcessResult.PROCESSED:
                     diffs_processed += 1
 
@@ -1110,7 +1121,12 @@ class SubscriptionManager:
 
         # If we fetched diffs but processed none (all duplicates/rejected),
         # fetch baseline to ensure we're in sync
-        if diffs_fetched > 0 and diffs_processed == 0 and config.auto_storage:
+        if (
+            diffs_fetched > 0
+            and diffs_processed == 0
+            and config.auto_storage
+            and not in_flight
+        ):
             logger.warning(
                 f"Fetched {diffs_fetched} diffs but processed 0 (likely duplicates), "
                 f"fetching baseline for subscription {subscription_id}"
@@ -1218,7 +1234,12 @@ class SubscriptionManager:
                 callback=True,
                 config=self._core_actor.config,
             )
-            if sub_obj.handle:
+            # Only upward, and not past a live claim: a callback handling a
+            # later sequence may have recorded it already (the processor
+            # records each batch it handles), and a lower write here would
+            # set it back.
+            stored = (sub_obj.get() or {}).get("sequence", 0) if sub_obj.handle else 0
+            if sub_obj.handle and not in_flight and max_sequence > int(stored or 0):
                 sub_obj.handle.modify(seqnr=max_sequence)
                 logger.info(
                     f"Updated subscription {subscription_id} sequence to {max_sequence} "
@@ -1231,6 +1252,7 @@ class SubscriptionManager:
             diffs_fetched=diffs_fetched,
             diffs_processed=diffs_processed,
             final_sequence=max_sequence,
+            in_flight=in_flight,
         )
 
     def _transform_baseline_list_properties(
@@ -1912,6 +1934,7 @@ class SubscriptionManager:
         actor_interface = ActorInterface(self._core_actor)
 
         diffs_processed = 0
+        in_flight = False
         max_sequence = 0
 
         # Async handler for callback processing
@@ -1952,6 +1975,12 @@ class SubscriptionManager:
                     handler=process_handler_async if config.auto_storage else None,
                 )
 
+                if result == ProcessResult.IN_PROGRESS:
+                    # A callback delivery is handling this sequence now: stop
+                    # here, so the poll neither clears nor records past it.
+                    in_flight = True
+                    break
+
                 if result == ProcessResult.PROCESSED:
                     diffs_processed += 1
 
@@ -1976,7 +2005,12 @@ class SubscriptionManager:
 
         # If we fetched diffs but processed none (all duplicates/rejected),
         # fetch baseline to ensure we're in sync
-        if diffs_fetched > 0 and diffs_processed == 0 and config.auto_storage:
+        if (
+            diffs_fetched > 0
+            and diffs_processed == 0
+            and config.auto_storage
+            and not in_flight
+        ):
             logger.warning(
                 f"Fetched {diffs_fetched} diffs but processed 0 (likely duplicates), "
                 f"fetching baseline for subscription {subscription_id}"
@@ -2085,7 +2119,12 @@ class SubscriptionManager:
                 callback=True,
                 config=self._core_actor.config,
             )
-            if sub_obj.handle:
+            # Only upward, and not past a live claim: a callback handling a
+            # later sequence may have recorded it already (the processor
+            # records each batch it handles), and a lower write here would
+            # set it back.
+            stored = (sub_obj.get() or {}).get("sequence", 0) if sub_obj.handle else 0
+            if sub_obj.handle and not in_flight and max_sequence > int(stored or 0):
                 sub_obj.handle.modify(seqnr=max_sequence)
                 logger.info(
                     f"Updated subscription {subscription_id} sequence to {max_sequence} "
@@ -2098,6 +2137,7 @@ class SubscriptionManager:
             diffs_fetched=diffs_fetched,
             diffs_processed=diffs_processed,
             final_sequence=max_sequence,
+            in_flight=in_flight,
         )
 
     def _fetch_and_transform_baseline(

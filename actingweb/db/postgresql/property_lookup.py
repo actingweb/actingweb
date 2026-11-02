@@ -8,6 +8,119 @@ from .connection import get_connection
 
 logger = logging.getLogger(__name__)
 
+
+def _digest(property_name: str, value: str) -> str:
+    """A short digest of (name, value) for logs: never log the value."""
+    import hashlib
+
+    return hashlib.sha256(f"{property_name}\x00{value}".encode()).hexdigest()[:12]
+
+
+def claim_in_transaction(
+    cur: Any, property_name: str, value: str, actor_id: str
+) -> str:
+    """Index ``value`` for ``actor_id`` inside the caller's transaction.
+
+    Answers ``"own"`` (written now, or already this actor's), ``"taken_over"``
+    (the row named an actor that no longer holds the value) or ``"held"``
+    (another actor holds it: a collision, logged as ``LOOKUP_CONFLICT``).
+
+    The holder's row is locked ``FOR UPDATE`` and the holder's property is
+    read ``FOR SHARE`` by its key: an owner whose change of an existing row
+    to the value is in flight holds that row, so the read waits for it and
+    then sees the committed value. Under READ COMMITTED a plain
+    ``NOT EXISTS`` would read a snapshot and could hand the row away from an
+    owner that is about to hold it. (An owner whose very first write of the
+    property is in flight has no row to lock yet; its own claim then finds
+    the row taken and logs a conflict, so the result is still one owner.)
+    """
+    cur.execute(
+        """
+        INSERT INTO property_lookup (property_name, value, actor_id)
+        VALUES (%s, %s, %s)
+        ON CONFLICT (property_name, value) DO NOTHING
+        """,
+        (property_name, value, actor_id),
+    )
+    if cur.rowcount:
+        return "own"
+    cur.execute(
+        """
+        SELECT actor_id FROM property_lookup
+        WHERE property_name = %s AND value = %s
+        FOR UPDATE
+        """,
+        (property_name, value),
+    )
+    row = cur.fetchone()
+    if row is None:
+        # Released between the insert and the lock: claim it now.
+        cur.execute(
+            """
+            INSERT INTO property_lookup (property_name, value, actor_id)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (property_name, value) DO NOTHING
+            """,
+            (property_name, value, actor_id),
+        )
+        if cur.rowcount:
+            return "own"
+        logger.warning(
+            f"LOOKUP_CONFLICT: property={property_name} "
+            f"digest={_digest(property_name, value)} actor={actor_id} "
+            "- value claimed by another actor while it was being released"
+        )
+        return "held"
+    owner = str(row[0])
+    if owner == actor_id:
+        return "own"
+    if owner_holds_in_transaction(cur, owner, property_name, value):
+        logger.warning(
+            f"LOOKUP_CONFLICT: property={property_name} "
+            f"digest={_digest(property_name, value)} actor={actor_id} "
+            f"existing_actor={owner} - value already claimed by another actor"
+        )
+        return "held"
+    cur.execute(
+        """
+        UPDATE property_lookup SET actor_id = %s
+        WHERE property_name = %s AND value = %s AND actor_id = %s
+        """,
+        (actor_id, property_name, value, owner),
+    )
+    if not cur.rowcount:
+        return "held"
+    logger.warning(
+        f"LOOKUP_TAKEOVER: property={property_name} "
+        f"digest={_digest(property_name, value)} previous_owner={owner} "
+        f"actor={actor_id} - the previous owner no longer holds the value"
+    )
+    return "taken_over"
+
+
+def owner_holds_in_transaction(
+    cur: Any, owner: str, property_name: str, value: str
+) -> bool:
+    """Whether ``owner`` (an existing actor) holds ``value`` in
+    ``property_name`` now; waits for an in-flight write of that row.
+
+    The row is locked by its key only and the value compared after the
+    lock: under READ COMMITTED a ``WHERE`` on the value is evaluated against
+    the snapshot first, so a row whose committed value differs is neither
+    returned nor waited for, and an owner's uncommitted write of the value
+    would be missed."""
+    cur.execute(
+        """
+        SELECT p.value FROM properties p JOIN actors a ON a.id = p.id
+        WHERE p.id = %s AND p.name = %s
+        FOR SHARE OF p
+        """,
+        (owner, property_name),
+    )
+    row = cur.fetchone()
+    return row is not None and row[0] == value
+
+
 CONFIGURED_KIND = "configured"
 NAME_KIND = "name"
 

@@ -44,6 +44,22 @@ Subcommands:
   also lowercases addresses stored with capitals. A renamed actor no longer opens
   with its old creator (basic auth, OAuth): swap which actor is kept with
   ``--keep``.
+  With ``--default-creator-to-email`` it also moves each actor listed under
+  "default creator" to its stored email (below).
+- ``report`` and ``resolve`` also list actors left with the default creator
+  (``creator``) that have a stored ``email``: under
+  ``force_email_prop_as_creator`` each belongs at that address. Until 3.16
+  every default-creator create moved them; now ``resolve
+  --default-creator-to-email [--apply]`` does, keeping the stored email (an
+  actor whose stored email changed since the listing is skipped). Once
+  uniqueness is enabled the move goes through the backend's uniqueness check
+  (the DynamoDB record, the PostgreSQL index), and a held address is
+  reported and the actor left as it is. Before ``enable`` the check is a
+  consistent read followed by the rename, so a sign-in that takes the
+  address in between can still leave two actors sharing it; ``report``
+  lists them. The group is informational: it does not make
+  ``report`` exit 1, since the command cannot tell whether the deployment
+  pins the creator to the email.
 - ``enable [--apply]``: refuses while duplicates, orphaned records or
   addresses stored with capitals remain. DynamoDB: scans consistently,
   creates the ``creators`` table, re-reads each actor consistently and writes
@@ -80,6 +96,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import Any
 
+from actingweb.constants import DEFAULT_CREATOR
 from actingweb.db.creator_rules import (
     BACKFILL_KEY,
     DUP_MARKER,
@@ -117,6 +134,11 @@ class Report:
     # (actor_id, creator): an @ address stored with capitals, in no group
     unnormalised: list[tuple[str, str]] = field(default_factory=list)
     creators: dict[str, str] = field(default_factory=dict)  # id -> creator
+    # (actor_id, stored email): actors left with the default creator that have
+    # an email to move to (informational, not part of ``clean``)
+    default_creator: list[tuple[str, str]] = field(default_factory=list)
+    # default-creator actors whose _internal bucket could not be read
+    default_creator_unreadable: list[str] = field(default_factory=list)
 
     @property
     def groups(self) -> dict[str, list[str]]:
@@ -352,8 +374,31 @@ def collect(
     only: str | None = None,
     rate_limit: float | None = None,
     consistent: bool = False,
+    default_creator: bool = False,
 ) -> Report:
-    """Read the store and return what it holds. Raises ``StoreUnavailable``."""
+    """Read the store and return what it holds. Raises ``StoreUnavailable``.
+
+    ``default_creator`` also lists the actors left with the default creator
+    (``report`` and ``resolve --default-creator-to-email``; ``enable`` does
+    not need them)."""
+    report = _collect_creators(
+        config, only=only, rate_limit=rate_limit, consistent=consistent
+    )
+    if default_creator:
+        try:
+            _collect_default_creator(config, only, report)
+        except Exception as e:  # folds DbError: becomes StoreUnavailable (exit 2)
+            raise StoreUnavailable(f"the store could not be read: {e}") from e
+    return report
+
+
+def _collect_creators(
+    config: Any,
+    *,
+    only: str | None,
+    rate_limit: float | None,
+    consistent: bool,
+) -> Report:
     report = Report()
     try:
         if config.database == "postgresql":
@@ -404,6 +449,34 @@ def collect(
     return report
 
 
+def _collect_default_creator(config: Any, only: str | None, report: Report) -> None:
+    """Actors with the default creator and a stored email (one ``_internal``
+    read each; the default creator is exempt from every group above)."""
+    if not _wanted(DEFAULT_CREATOR, only):
+        return
+    from actingweb.attribute import InternalStore
+    from actingweb.db import get_actor
+
+    rows = get_actor(config).get_by_creator(creator=DEFAULT_CREATOR, ids_only=True)
+    for row in rows or []:
+        actor_id = row.get("id") if isinstance(row, dict) else None
+        if not actor_id:
+            continue
+        store = InternalStore(actor_id=actor_id, config=config)
+        if not store.loaded:
+            # Informational: one unreadable bucket must not stop the run.
+            logger.error(
+                f"default creator id={actor_id}: its _internal bucket could not "
+                "be read; not listed"
+            )
+            report.default_creator_unreadable.append(actor_id)
+            continue
+        email = store.email
+        if isinstance(email, str) and "@" in email:
+            report.default_creator.append((actor_id, normalise_creator(email)))
+    report.default_creator.sort()
+
+
 def print_report(report: Report) -> None:
     for creator, ids in report.exact.items():
         logger.info(f"duplicate creator={creator!r} ids={','.join(ids)}")
@@ -425,11 +498,17 @@ def print_report(report: Report) -> None:
             f"unrecorded actor id={actor_id} creator={creator!r} "
             "(run enable --apply again)"
         )
+    for actor_id, email in report.default_creator:
+        logger.info(
+            f"default creator id={actor_id} email={email!r} "
+            "(resolve --default-creator-to-email --apply moves it)"
+        )
     logger.info(
         f"scanned={report.scanned} exact_groups={len(report.exact)} "
         f"case_groups={len(report.case_only)} renamed={len(report.dup_actors)} "
         f"orphans={len(report.orphans)} unrecorded={len(report.unrecorded)} "
-        f"capitals={len(report.unnormalised)}"
+        f"capitals={len(report.unnormalised)} "
+        f"default_creator={len(report.default_creator)}"
     )
 
 
@@ -758,6 +837,97 @@ def _record_lone_holder(config: Any, key: str, report: Report) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _uniqueness_enforced(config: Any) -> bool:
+    """Whether the backend checks creators now (the DynamoDB records are
+    complete, or the PostgreSQL index is valid). Raises on a fault."""
+    if config.database == "postgresql":
+        return postgresql_index_state() == "valid"
+    return backfill_complete()
+
+
+def move_default_creator(config: Any, actor_id: str, email: str) -> str:
+    """Move one default-creator actor to its stored email, keeping the email.
+
+    Answers ``"renamed"``, ``"held by <id>"`` or ``"skipped"``. Once
+    uniqueness is enforced the rename runs under a ``unique_creator`` config,
+    so the backend's own check (the record, the index) refuses a held
+    address and the DynamoDB record is written in the same step. Before, a
+    consistent read of the address decides.
+    """
+    from actingweb.actor import Actor
+    from actingweb.config import Config
+    from actingweb.db import get_actor
+    from actingweb.db.exceptions import CreatorTaken
+
+    target = normalise_creator(email)
+    enforced = _uniqueness_enforced(config)
+    rename_config = (
+        Config(
+            database=config.database,
+            unique_creator=True,
+            force_email_prop_as_creator=False,
+        )
+        if enforced
+        else config
+    )
+    if enforced:
+        holder = get_actor(rename_config).get_creator_holder(target)
+        if holder and holder != actor_id:
+            return f"held by {holder}"
+    else:
+        held = get_actor(config).get_by_creator(creator=target, consistent=True)
+        for row in held if isinstance(held, list) else []:
+            if row.get("id") != actor_id:
+                return f"held by {row.get('id')}"
+    actor = Actor(config=rename_config)
+    if not actor.get(actor_id=actor_id) or actor.creator != DEFAULT_CREATOR:
+        return "skipped"  # gone, or moved since the listing
+    stored = actor.store.email if actor.store is not None else None
+    if not isinstance(stored, str) or normalise_creator(stored) != target:
+        return "skipped"  # its stored email changed since the listing
+    try:
+        if not actor.modify(creator=target):
+            return "skipped"
+    except CreatorTaken:  # folds DbError: a held address is the reported outcome
+        # Also reachable before enforcement on PostgreSQL, while the index is
+        # being built: name the holder from a consistent read then.
+        if enforced:
+            holder = get_actor(rename_config).get_creator_holder(target)
+        else:
+            rows = get_actor(config).get_by_creator(creator=target, consistent=True)
+            holder = next(
+                (r.get("id") for r in rows or [] if r.get("id") != actor_id), None
+            )
+        return f"held by {holder}"
+    return "renamed"
+
+
+def resolve_default_creators(
+    config: Any, report: Report, *, apply: bool = False
+) -> dict[str, int]:
+    """``resolve --default-creator-to-email``: move each listed actor."""
+    counts = {"moved": 0, "held": 0, "skipped": 0, "errors": 0}
+    prefix = "" if apply else "[dry-run] "
+    for actor_id, email in report.default_creator:
+        if not apply:
+            logger.info(f"{prefix}default-creator: {actor_id} -> {email}")
+            continue
+        try:
+            outcome = move_default_creator(config, actor_id, email)
+        except Exception as e:  # folds DbError: counted as error, exit 1
+            logger.error(f"default-creator: {actor_id} -> {email} failed: {e}")
+            counts["errors"] += 1
+            continue
+        logger.info(f"default-creator: {actor_id} -> {email} {outcome}")
+        if outcome == "renamed":
+            counts["moved"] += 1
+        elif outcome.startswith("held by"):
+            counts["held"] += 1
+        else:
+            counts["skipped"] += 1
+    return counts
+
+
 def _pg_admin_connection() -> Any:
     """An autocommit connection outside the pool (``CONCURRENTLY`` cannot
     run in a transaction, and must not hold a pooled connection for its
@@ -1065,6 +1235,11 @@ def main(argv: list[str] | None = None) -> int:
             p.add_argument("--apply", action="store_true", help="write")
         if name == "resolve":
             p.add_argument("--keep", default=None, help="keep this actor id")
+            p.add_argument(
+                "--default-creator-to-email",
+                action="store_true",
+                help="also move default-creator actors to their stored email",
+            )
         if name == "enable":
             p.add_argument(
                 "--lock-timeout",
@@ -1103,6 +1278,8 @@ def _run(args: argparse.Namespace, parser: argparse.ArgumentParser, config: Any)
             rate_limit=args.rate_limit,
             # enable writes from what it reads: never from a lagging scan.
             consistent=args.consistent or args.command == "enable",
+            default_creator=args.command == "report"
+            or bool(getattr(args, "default_creator_to_email", False)),
         )
 
         if args.command == "report":
@@ -1114,12 +1291,26 @@ def _run(args: argparse.Namespace, parser: argparse.ArgumentParser, config: Any)
             ):
                 parser.error(f"--keep {args.keep} is in no duplicate group")
             counts = resolve(config, report, apply=args.apply, keep=args.keep)
+            moved = {"moved": 0, "held": 0, "skipped": 0, "errors": 0}
+            if args.default_creator_to_email:
+                moved = resolve_default_creators(config, report, apply=args.apply)
             logger.info(
                 f"command=resolve apply={args.apply} groups={counts['groups']} "
                 f"renamed={counts['renamed']} skipped={counts['skipped']} "
                 f"repaired={counts['repaired']} errors={counts['errors']}"
+                + (
+                    f" default_moved={moved['moved']} default_held={moved['held']} "
+                    f"default_skipped={moved['skipped']} "
+                    f"default_errors={moved['errors']}"
+                    if args.default_creator_to_email
+                    else ""
+                )
             )
-            return 1 if counts["skipped"] or counts["errors"] else 0
+            failed = counts["skipped"] or counts["errors"]
+            failed = failed or moved["held"] or moved["skipped"] or moved["errors"]
+            if args.default_creator_to_email and report.default_creator_unreadable:
+                failed = True  # some actors could not be read, so not moved
+            return 1 if failed else 0
         outcome = enable(
             config, report, apply=args.apply, lock_timeout=args.lock_timeout
         )

@@ -125,8 +125,8 @@ class TestProviderGetVerifiedEmailsDefault:
         config.fqdn = "test.example.com"
         provider = GitHubOAuth2Provider(config)
         with patch(
-            "actingweb.oauth2._get_github_verified_emails",
-            return_value=["a@example.com"],
+            "actingweb.oauth2._fetch_github_emails",
+            return_value=[{"email": "A@example.com", "verified": True}],
         ) as mock_helper:
             result = provider.get_verified_emails("tok")
         mock_helper.assert_called_once_with("tok")

@@ -140,6 +140,15 @@ Event Details
     tell a factory-created actor from an OAuth one. ``oauth_success`` (below)
     is the hook that carries the tokens and provider info.
 
+    The OAuth path writes ``created_at``, ``oauth_provider`` and ``email``
+    after the hook. If one of those writes faults, the actor exists, vouched
+    and announced, without them; the next sign-in writes a missing
+    ``email`` (the creator when it is an address, else the provider's) and
+    does not fire ``actor_created`` again. When a sign-in replaces a
+    ``factory`` actor with ``with_unique_creator()`` on (the default), the
+    successor's ``actor_created`` fires before the squatter's
+    ``actor_deleted``; with it off, the squatter is removed first.
+
     **Signature**: ``func(actor: ActorInterface) -> None``
 
     .. note::

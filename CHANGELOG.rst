@@ -98,6 +98,22 @@ SECURITY
   statements; with it on the database refuses the second, see CHANGED); and ``devtest`` must be
   off in production, since it lets a caller rewrite ``_internal``. Close the
   factory with ``with_open_factory(False)`` for an OAuth-only deployment.
+  An actor about to be cleaned in place (no marker, or an unvouched one)
+  whose deletion status cannot be read answers 503 too and is left as it
+  is, so a half-wiped actor is never cleaned and kept tombstoned. The clean
+  revokes the actor's tokens again after its client registrations are
+  removed, so a token issued before the client was removed does not outlive
+  the clean (a grant already past its client check when the client goes, and
+  writing after the second revoke, still can). A vouched sign-in writes the proven address into ``store.email`` when
+  it is missing (the creator when it is an address, else the provider's
+  email), with one atomic create that never overwrites a stored value:
+  a fault in the create's seeding left it out, and an actor vouched without
+  the OAuth create (``mark_actors_vouched``, an application) may never have
+  had one. ``actor_created`` is not fired again. **Behavior change:** with
+  ``force_email_prop_as_creator`` on, such an actor's creator is pinned to
+  that email from then on, so ``PUT /<id>/trust/trustee`` to any other
+  address than it or ``trustee`` answers 400, as it already did for actors
+  with a stored email.
 
 - **Renaming one's own actor to someone else's address handed it to them,
   vouched, at their first login.** ``PUT /<id>/trust/trustee`` lets the
@@ -122,7 +138,37 @@ SECURITY
   stored email). An actor vouched before 3.16 has no recorded address and
   is judged by its marker alone until a sign-in or ``mark_actors_vouched``
   writes one. ``ActorInterface.modify_creator`` without ``unvouch`` moves
-  the recorded address with the rename (the application vouches for it).
+  the recorded address with the rename (the application vouches for it): it
+  writes the new address as ``vouched_creator_pending`` first and promotes
+  it after the rename, so a sign-in during a rename finds the actor vouched
+  under the old creator and the new one, for an email or a provider-id
+  creator alike. A fault writing the pending address refuses the rename
+  (False). The rename reads ``_internal`` afresh, and when the current
+  creator is vouched only through its stored email (a provider-id creator
+  that ``force_email_prop_as_creator`` moved to the email) it first records
+  the current creator as the vouched address, refusing (False) on a fault,
+  so the moves below never leave it unvouched. It answers True once the creator is renamed, also when moving
+  the recorded address afterwards faults (logged; the pending value keeps
+  the new creator vouched). **Behavior change:** with
+  ``force_email_prop_as_creator`` on, a vouched rename to an address moves
+  the stored email to the new address first, and writes one when there was
+  none (a sign-in seeding a missing email from the old creator would
+  otherwise move the creator back at the next load). Since every
+  load moves the creator to the stored email, that write commits the
+  rename: a ``DbError`` after it leaves the rename to complete at the next
+  load (or when the call is repeated), and a rename that loses because a
+  load already moved the creator counts as renamed. The email is put back
+  only when the rename definitely did not land (``CreatorTaken``, or a
+  fresh load still showing another creator), and only while it still holds
+  the new address; logged when it cannot be. Before, the next load rewrote
+  the creator back to the old stored email, undoing the rename.
+  Such a rename to a creator that is not an address is refused (False),
+  since the load would undo it too. ``modify_creator`` (without
+  ``unvouch``) refuses a rename when the actor's ``_internal`` bucket could
+  not be read, in every configuration: unread, a vouched actor looks
+  unvouched and its vouch would not move with it. Two concurrent renames of one actor share the one pending value,
+  so a sign-in between them can still find it unvouched; serialise renames
+  of one actor.
   The emailed verification link proves only the address it was sent to: an
   actor whose creator changed since answers 409, and the link stays
   unused. A restore after a failed change replaces only that change's
@@ -257,6 +303,30 @@ REMOVED
 CHANGED
 ~~~~~~~
 
+- **A create with the default creator loaded every actor left with it.**
+  With ``force_email_prop_as_creator`` and ``with_unique_creator()`` on, each
+  create whose creator was empty or ``creator`` listed every actor with that
+  creator and loaded each one, so the load moved it to its stored email.
+  **Behavior change:** a create no longer does this. ``actingweb-unique-creators
+  report`` lists those actors under "default creator", and ``resolve
+  --default-creator-to-email --apply`` moves each one to its stored email,
+  keeping the email; once uniqueness is enabled, an address another actor
+  holds is reported and left (before ``enable`` the check is a read
+  followed by the rename, so a concurrent sign-in can still take the
+  address; ``report`` then lists the pair). Each actor is still moved when
+  it is next loaded, as before. **Check:** if
+  you relied on the sweep, run the command once after the upgrade.
+
+- **``GET /?format=json`` allowed credentialed cross-origin reads of a public
+  document.** The factory's JSON configuration reflected the request's
+  ``Origin`` together with ``Access-Control-Allow-Credentials: true``, on both
+  integrations. Nothing in it depends on a cookie. **Behavior change:** it
+  answers ``Access-Control-Allow-Origin: *`` and no
+  ``Access-Control-Allow-Credentials``. **Check:** a cross-origin client that
+  sends credentials on this fetch (``credentials: 'include'``, axios
+  ``withCredentials``) is refused by the browser now; drop them for this one
+  request. The SPA and email endpoints keep their configured CORS.
+
 - **Breaking: a custom ``DbAttribute`` backend must implement
   ``create_attr_if_absent``** (the fourth custom-backend requirement of 3.16;
   the migration guide's list has it). ``delete_attr_conditional`` and
@@ -333,13 +403,17 @@ CHANGED
   lookup row and the old value's lookup row are one ``TransactWriteItems``
   and a fault raises with nothing written; PostgreSQL already rolled the pair
   back together. A value another actor already holds is still a logged
-  ``LOOKUP_COLLISION``, not a failure. An indexed write costs about twice the
-  write units of a plain put on DynamoDB (non-indexed writes are unchanged),
-  and the IAM role needs ``PutItem`` and ``DeleteItem`` on both tables. A
+  ``LOOKUP_COLLISION``, not a failure. On DynamoDB an indexed write that
+  changes the value is one consistent read of the property plus a
+  transaction of two or three items (the property, the new lookup row, the
+  old one), each billed at twice a plain write; non-indexed writes are
+  unchanged. The IAM role needs ``PutItem`` and ``DeleteItem`` on both
+  tables. A
   write that leaves an indexed value unchanged claims a missing lookup row
   (the value was stored during a collision and the other actor has since let
-  it go), so the value becomes findable. On DynamoDB it stays a plain put
-  plus one consistent lookup read; the claim, when needed, is a transaction
+  it go), so the value becomes findable. On DynamoDB it writes nothing: one
+  consistent property read plus one consistent lookup read; the claim, when
+  needed, is a transaction
   conditioned on the property still holding the value and the actor row
   still existing, and a fault in it is
   logged as ``LOOKUP_HEAL_FAILED`` and never fails the write (the role needs
@@ -350,7 +424,14 @@ CHANGED
   for an actor that no longer exists now fails on the lookup row's foreign
   key when no other actor holds that value's lookup row.
   ``DbPropertyLookup.create`` (DynamoDB) now raises ``DbError`` on a write
-  fault instead of returning False, which only means a collision.
+  fault instead of returning False, which only means a collision. The
+  property write is conditioned on the value it read (DynamoDB: a condition
+  on a consistent read; PostgreSQL: the row read ``FOR UPDATE`` inside the
+  transaction), so two concurrent writers of one indexed property cannot
+  leave the lookup row of the value that lost; deleting an indexed property
+  releases the lookup row of the value stored at the delete, not the one a
+  handle last read. A write that keeps losing to concurrent writers raises
+  ``DbError`` after three attempts (``PROPERTY_WRITE_RACE_EXHAUSTED``).
 
 - **Behavior change: ``check_ready()`` and ``integrate_*`` raise
   ``PropertyLookupNotReady`` for an indexed name that was never backfilled.**
@@ -434,6 +515,9 @@ CHANGED
     the squatter. There is no ranking and no sibling sweep with the flag on.
     A squatter mid-deletion is finished by the replacement; when its
     deletion status cannot be read the sign-in answers 503.
+  - With ``force_email_prop_as_creator`` on, loading an actor whose stored
+    email another actor holds leaves the creator as it is after one read of
+    the record, instead of a refused rename and a WARNING on every load.
   - Two concurrent sign-ins for one identifier (a first sign-in, or two
     replacing the same squatter) both end on the actor the winner created,
     unless that actor carries no ``auth_method`` marker (a row an older
@@ -541,7 +625,14 @@ CHANGED
   set on the other OAuth2 endpoints, and a wildcard set without credentials
   on ``/``. It never carries a redirect or cookie the handler set before the
   fault. A backend error a retry cannot fix (a validation, size or
-  constraint error) answers **500** without ``Retry-After``.
+  constraint error) answers **500** without ``Retry-After``. An exception
+  counts as the fault only when it is the ``DbError`` or was raised from one
+  (``raise ... from e``); an error raised while a ``DbError`` was being
+  handled, without ``from``, is a bug and answers **500**. **Check:** in your
+  own routes and hooks let the ``DbError`` itself propagate: the app-level
+  handlers and the hook runners match the type, so a wrapping exception
+  answers 500 there (or, in a hook, is logged and dropped) whether or not it
+  uses ``from``.
   ``CreatorTaken``, a new ``DbError`` subclass for a creator another actor
   holds, answers **409** (``with_unique_creator()`` raises it, see above).
   ``get_by_creator`` gains
@@ -1054,6 +1145,83 @@ ADDED
 
 FIXED
 ~~~~~
+
+- **A reverse-lookup row stayed with an actor that no longer held the
+  value.** Releasing an indexed value's lookup row is best effort, so a
+  throttled delete (or an actor removed without its rows) left the row
+  behind, and the next actor to hold the value was written as a logged
+  collision forever: reverse lookup never found it, and
+  ``actingweb-property-lookup backfill`` reported the same collision and
+  never marked the name. **Behavior change:** a write of an indexed value
+  whose lookup row names an actor that no longer holds it (its property is
+  gone or holds another value) takes the row over, in one step conditioned
+  on that actor still not holding it, and logs ``LOOKUP_TAKEOVER`` with the
+  value's digest. ``backfill`` does the same and counts it (``taken-over``,
+  ``would-take-over`` in a dry run); on PostgreSQL a stale row with two or
+  more current holders stays a collision, on DynamoDB the first current
+  holder the scan meets takes it. An owner that still holds the value keeps
+  its row, as before. **Check:** reverse lookup is not an identity proof
+  (sign-in resolves by creator); an application that treats
+  ``get_by_property`` as one should read the note on indexed properties in
+  ``docs/quickstart/configuration.rst``.
+
+- **Two concurrent deliveries of one subscription callback could both run
+  the handler.** The callback processor's version check read the state row,
+  compared the version and then wrote unconditionally, so two in-order
+  deliveries of the same diff (a retried callback, a poll beside a callback)
+  could both pass; and a delivery that lost the check retried after the
+  winner's state write but before its sequence write, so it ran the handler
+  again. The state write is now a compare-and-swap that also claims the
+  batch's sequences for 60 seconds. **Behavior change:** a concurrent
+  delivery of a claimed sequence is not handled
+  (``ProcessResult.IN_PROGRESS``, new): a callback answers **503** with
+  ``Retry-After: 5`` and ``X-ActingWeb-Error: callback_in_progress``
+  instead of 204, and the gap timeout waits while the claim is live. A
+  poll (``sync_subscription``) stops before such a sequence, neither
+  clearing nor recording past it (``SubscriptionSyncResult.in_flight``,
+  new), and after applying diffs it writes its sequence only when that is
+  above the one it read (a read, then a write; the baseline fallback still
+  writes the publisher's sequence as it is). A
+  high-granularity diff stays on this library's publisher until a poll or an
+  acknowledgement clears it (the publisher does not redeliver), so if the
+  claiming delivery fails, the next poll or gap resync applies it. A handler
+  ``DbError`` releases the claim; a delivery that crashes while holding one,
+  or whose sequence write faults, is taken over by the next delivery of its
+  sequences once 60 seconds have passed. A low-granularity diff is deleted
+  on the publisher by the subscriber's own fetch, so a low-granularity
+  callback is answered before the fetch when its sequence is already
+  handled (204) or claimed (503); a delivery that claims it between that
+  check and the fetch can still find it gone, and a failed delivery of one
+  is recovered only by a resync. One whose diff cannot be fetched now
+  answers 503 and processes nothing (it used to apply an empty diff and
+  advance the sequence). With subscription processing on and
+  ``auto_sequence`` at its default (on), a callback the subscriber fetches by URL (not a resync)
+  without an integer ``sequence`` answers 400. ``FanOutManager`` no longer counts
+  the in-progress answer toward opening a subscriber's circuit breaker, and
+  a half-open breaker that gets it closes; every other 503, a subscriber's
+  store-fault answer included, and a 429 still count. **Check:** the claim
+  holds once every instance runs 3.16 (an older instance ignores it),
+  between processes with synchronised clocks, and for handlers that finish
+  within the 60 seconds (the lease is not renewed).
+
+- **A GitHub sign-in with no public email asked GitHub's ``/user/emails``
+  twice.** With an email required, the callback asked for the primary
+  address, and when that failed asked the same endpoint again for the
+  verified list, each with a ``(5, 10)`` second timeout. The GitHub provider
+  now makes one request per token and derives both answers from it, a
+  failure included, so a failing GitHub costs one timeout before the existing
+  502 (or the SPA ``identifier_failed`` redirect), not two. The token and
+  userinfo requests keep their own timeouts. The primary address is the
+  verified entry GitHub flags primary, else the first verified entry; an
+  entry with no address is skipped. **Behavior change:** a response whose
+  entries are not objects counts as a failed request (the 502), and calling
+  the provider's ``get_primary_email`` and ``get_verified_emails`` for one
+  token within 30 seconds reuses the first answer.
+
+- **DynamoDB's trust, subscription and subscription-diff list ``fetch``
+  answered ``None`` for an empty actor id.** The protocol and PostgreSQL
+  answer ``[]``; DynamoDB does too now. **Behavior change:** a custom caller
+  that tested the result with ``is None`` sees an empty list instead.
 
 - **The PostgreSQL ``actingweb-property-lookup backfill`` faulted at the same
   batch on every run when one indexed value was too long to index.**

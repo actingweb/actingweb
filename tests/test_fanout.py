@@ -305,6 +305,7 @@ class TestFanOutManager:
 
         mock_response = MagicMock()
         mock_response.status_code = 503
+        mock_response.headers = {}
 
         with patch("httpx.AsyncClient") as mock_client_class:
             mock_client = AsyncMock()
@@ -319,6 +320,106 @@ class TestFanOutManager:
 
         assert result.failed == 1
         assert result.results[0].error == "service_unavailable"
+
+    @pytest.mark.asyncio
+    async def test_a_503_asking_to_retry_does_not_count_toward_the_breaker(
+        self,
+    ) -> None:
+        """A subscriber still handling the callback answers 503 with
+        Retry-After (3.16); that is not a broken peer."""
+        subscriptions = [
+            {
+                "peerid": "peer1",
+                "subid": "sub1",
+                "callback_url": "https://peer1.example.com/callback",
+                "granularity": "high",
+            }
+        ]
+        mock_response = MagicMock()
+        mock_response.status_code = 503
+        mock_response.headers = {
+            "Retry-After": "5",
+            "X-ActingWeb-Error": "callback_in_progress",
+        }
+
+        with patch("httpx.AsyncClient") as mock_client_class:
+            mock_client = AsyncMock()
+            mock_client.post.return_value = mock_response
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=None)
+            mock_client_class.return_value = mock_client
+
+            result = await self.manager.deliver_to_subscribers(
+                subscriptions, {"data": "test"}, "properties", 1
+            )
+
+        assert result.failed == 1
+        assert result.results[0].retry_after == 5
+        assert self.manager._get_circuit_breaker("peer1").failure_count == 0  # pyright: ignore[reportPrivateUsage]
+
+    @pytest.mark.asyncio
+    async def test_a_fault_503_with_retry_after_still_counts(self) -> None:
+        """A subscriber whose store is down answers the library's fault 503,
+        which carries Retry-After too: that is a failing peer."""
+        subscriptions = [
+            {
+                "peerid": "peer1",
+                "subid": "sub1",
+                "callback_url": "https://peer1.example.com/callback",
+                "granularity": "high",
+            }
+        ]
+        mock_response = MagicMock()
+        mock_response.status_code = 503
+        mock_response.headers = {
+            "Retry-After": "5",
+            "X-ActingWeb-Error": "temporarily_unavailable",
+        }
+
+        with patch("httpx.AsyncClient") as mock_client_class:
+            mock_client = AsyncMock()
+            mock_client.post.return_value = mock_response
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=None)
+            mock_client_class.return_value = mock_client
+
+            result = await self.manager.deliver_to_subscribers(
+                subscriptions, {"data": "test"}, "properties", 1
+            )
+
+        assert self.manager._get_circuit_breaker("peer1").failure_count == 1  # pyright: ignore[reportPrivateUsage]
+        assert result.results[0].retry_after == 5
+
+    @pytest.mark.asyncio
+    async def test_an_in_progress_answer_closes_a_half_open_breaker(self) -> None:
+        from actingweb.fanout import CircuitState
+
+        subscriptions = [
+            {
+                "peerid": "peer1",
+                "subid": "sub1",
+                "callback_url": "https://peer1.example.com/callback",
+                "granularity": "high",
+            }
+        ]
+        cb = self.manager._get_circuit_breaker("peer1")  # pyright: ignore[reportPrivateUsage]
+        cb.state = CircuitState.HALF_OPEN
+        mock_response = MagicMock()
+        mock_response.status_code = 503
+        mock_response.headers = {
+            "Retry-After": "5",
+            "X-ActingWeb-Error": "callback_in_progress",
+        }
+        with patch("httpx.AsyncClient") as mock_client_class:
+            mock_client = AsyncMock()
+            mock_client.post.return_value = mock_response
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=None)
+            mock_client_class.return_value = mock_client
+            await self.manager.deliver_to_subscribers(
+                subscriptions, {"data": "test"}, "properties", 1
+            )
+        assert cb.state == CircuitState.CLOSED
 
     @pytest.mark.asyncio
     async def test_deliver_timeout(self) -> None:
@@ -653,3 +754,21 @@ class TestFanOutResult:
             results=details,
         )
         assert len(result.results) == 2
+
+
+def test_retry_after_as_an_http_date_is_ignored() -> None:
+    from actingweb.fanout import (
+        _retry_after_seconds,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    assert _retry_after_seconds({"Retry-After": "30"}) == 30
+    assert (
+        _retry_after_seconds({"Retry-After": "Wed, 21 Oct 2026 07:28:00 GMT"}) is None
+    )
+    assert _retry_after_seconds({}) is None
+    assert _retry_after_seconds({"Retry-After": "\u00b2"}) is None
+    for bad in ("+5", "1_000", "-0", "\u0661\u0662"):
+        assert _retry_after_seconds({"Retry-After": bad}) is None
+    assert _retry_after_seconds({"Retry-After": " 7 "}) == 7
+    assert _retry_after_seconds({"Retry-After": "99999999999"}) == 86400
+    assert _retry_after_seconds({"Retry-After": "9" * 5000}) == 86400

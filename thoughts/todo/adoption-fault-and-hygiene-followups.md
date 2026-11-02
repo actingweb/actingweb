@@ -22,8 +22,6 @@ than catch and fold it.
   UNKNOWN and the marker is absent, fail closed, or clear the tombstone when
   a clean succeeds.
 - **Hygiene** (Issue L, the rest):
-  - **Duplicate tombstone:** the replace path calls
-    `deletion.mark_actor_deleted` before `delete()`, which writes it again.
   - **Summary reads fold:** the replace path's `actor_adopted` summary
     reads (trusts, subscriptions, properties) pass `strict=False` by design,
     so a fault reports nothing removed in the hook and the log.
@@ -32,8 +30,6 @@ than catch and fold it.
   - **`purge_relationships`** issues about 4+N list reads where 2 would do.
   - **Redundant cleanup:** on the replace path `delete_client` re-runs token
     and trust cleanup against a deleted actor. Only the index row is needed.
-  - **Missing type hints** on `delete_peer_trustee`, `delete_reciprocal_trust`
-    and the DynamoDB trust and subscription list `fetch(..., strict=True)`.
 - **`force_email_prop_as_creator` rewrites an unvouched actor's creator at
   load** (found in the fourth verification's iteration; older than 3.16).
   - `Actor.get` copies `store.email` into the creator whenever they differ
@@ -47,9 +43,6 @@ than catch and fold it.
     cover the pin being on at load.
   - Skip the rewrite for an unvouched actor, or pass the proven identifier
     into `adopt_actor`.
-- **No DynamoDB test for `DbActor.modify` leaving the handle as stored on a
-  failed save** (the change landed in the fourth iteration). PostgreSQL's is
-  in `tests/test_db_fault_contract.py`; DynamoDB needs `Model.save` to raise.
 - **A tombstone on a live vouched actor** (sixth verification, Issue AW;
   the 3.16 attempt to act on it was reverted).
   - Two paths leave one:
@@ -138,11 +131,6 @@ than catch and fold it.
   - **`DeletionStatus.UNKNOWN` proceeds** in `handlers/mcp.py` and
     `oauth2._race_winner` (`!= DELETED`). This is by design per
     `deletion.py`, and related to K above.
-  - **Possible pre-existing bug:** `actor.py`
-    `modify_trust_and_notify_async` builds
-    `AwProxy(peer_target={"baseuri", "secret"})`, but `AwProxy.__init__`
-    reads `peer_target["id"]`. The `KeyError` is caught, so the async peer
-    notification looks like it always fails. Not reproduced.
   - **DynamoDB `DbSubscription.modify` saves the whole item**, so a
     concurrent `modify` of another field writes back a stale `seqnr`. Only
     the subscriber's own rows still pass `seqnr` through `modify`; the
@@ -166,18 +154,21 @@ than catch and fold it.
     - `fanout.py`'s "the in-memory breaker still applies" holds within one
       process only;
     - with no vouched actor the ranked creator prefix is every actor, and a
-      replacement reads the victim's lists three times;
-    - type hints are still missing on the DynamoDB signatures this work
-      changed.
-- **Benchmarks on a fresh DynamoDB container:** the attribute benchmarks fail
-  with `ResourceNotFoundException ... test_attributes` until some other test
-  has created the table. The performance fixtures should create the tables
-  they use.
+      replacement reads the victim's lists three times.
+
 - **Flask `GET /?format=json` reflects `Origin` with credentials**
   (`handlers/factory.py:134-141`; eighth verification, notes). Older than
   3.16, and FastAPI already serves the same headers. The content is public
   configuration, so the impact is Low; tighten it to an allowlist or drop
   `Access-Control-Allow-Credentials`.
+
+## Constraint: the second tombstone write is deliberate
+
+The replace path (`oauth2.py`) and `DELETE /<id>` (`handlers/root.py`) write
+the deletion tombstone before firing `actor_deleted`, and `Actor.delete`
+writes it again. That second write re-stamps `deleted_at` and the TTL
+(`deletion.py`), so late-write suppression runs from the wipe, not from before
+a possibly long hook. Do not remove it as a duplicate.
 
 ## Why it waits
 

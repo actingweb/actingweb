@@ -36,8 +36,10 @@ invalidation channel (pub/sub, a version stamp read on each cache hit) or a
 documented acceptance of "revocation takes up to N minutes to propagate across a
 fleet", made explicit in `docs/reference/security.rst` rather than left implicit.
 
-This is also the design that would replace the four unbounded per-process dicts
-in `thoughts/todo/permission-path-unbounded-caches.md`.
+This is also the design that would replace the four per-process permission-path
+caches (`trust_permissions`, `peer_profile`, `peer_permissions`,
+`peer_capabilities`). Each is now a bounded LRU (`actingweb/_bounded_cache.py`),
+but it is still per process and never invalidated from another one.
 
 ## 2. No explicit trust-freshness policy
 

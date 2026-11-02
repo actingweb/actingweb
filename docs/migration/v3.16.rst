@@ -867,6 +867,16 @@ it exists, even with the flag off.
   creator up, to reach the actor.
 - Two applications sharing one actor table can no longer both bootstrap
   their system actors (``system``, ``oauth2-system``).
+- On DynamoDB a creator change writes the new ``creators`` record and the
+  actor in one transaction, then releases the old record in a second
+  step. Between the two the old creator still answers ``CreatorTaken``,
+  for about one write's latency. A create for the old address in that
+  moment fails and can be retried.
+- On DynamoDB a ``creators`` record edited by hand to point at the wrong
+  actor is not repaired by anything: a sign-in for that creator resolves
+  through the record. ``report`` lists it as an orphaned record
+  (``mismatch``), and nothing else finds it. Run ``report`` after any
+  manual edit of the table.
 
 - On DynamoDB an actor create, delete or creator change costs about 4-6
   write units instead of 1 (a transaction, and the conditional release of

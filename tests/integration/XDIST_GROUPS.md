@@ -54,6 +54,7 @@ Feature-specific tests that logically belong together.
 | `resync_state_handling` | Resync state management | test_resync_state_handling.py |
 | `suspension_subtarget` | Subscription subtarget suspension | test_suspension_subtarget.py |
 | `baseline_storage` | Baseline sync storage of simple and list properties | test_subscription_baseline_storage.py |
+| `list_diff_peer_replica` | `remove_where`/`update_where` list diffs delivered to a subscriber's RemotePeerStore, and a spanned item's diff skipped | test_list_diff_peer_replica.py |
 | `peer_profile_extraction` | Peer profile extraction during subscription sync | test_peer_profile_extraction.py |
 | `sync_coverage` | Subscription sync coverage tests (trust revocation, baseline fetch, error handling) | test_subscription_sync_coverage.py |
 | `subscription_lifecycle_hooks` | Subscription deleted hook execution (peer-initiated and owner-initiated) | test_subscription_lifecycle_hooks.py |

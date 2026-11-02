@@ -1,5 +1,5 @@
 ---
-status: active
+status: done
 ---
 
 # Implementation Plan: 3.16 small follow-ups (no owner input needed)
@@ -330,7 +330,14 @@ Every item that needs a choice stays in its todo, and "What We're NOT Doing" lis
 - [ ] `poetry run python tests/integration/verify_groups.py`
 - [ ] Full tier, including sphinx `-W`
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+- **Full tier:** DynamoDB 5,198 passed; PostgreSQL 5,011 passed. ruff, pyright, `verify_groups` (52 groups) and sphinx are clean.
+- **The spanned diff is covered end to end:** the publisher's span threshold is 2,000 bytes, so a 5,000-byte item spans. A direct `apply_callback_data` call was not needed.
+- **Deviation, documentation:** `docs/quickstart/configuration.rst` claimed "No limit (TEXT column)" for PostgreSQL lookup values, which is the very limit D2 handles. The size table and the sentence after it now state the limit. The CLAUDE.md "Property Reverse Lookup" note was corrected the same way.
+- **Deviation, the migration guide:** both notes are DynamoDB-specific, since the `creators` records and `report`'s orphan check exist only there.
+- **Learning, `delete()` order:** v2 `delete()` removes the item heads before listing the span rows. A `get_prefix` fault therefore leaves the meta and body rows, and a retry finishes the job (pinned by the new fault test). That matches the quiesced-writes assumption in its docstring.
+
 
 ---
 
@@ -388,3 +395,21 @@ Providers: codex (read-only, outside the sandbox) and a fresh-context Claude. Wh
 ### Unverified notes
 - Under `--dist loadgroup` a worker's unit tests may run after its integration `setup_database` has set `PG_DB_PREFIX` in the process (`tests/integration/conftest.py:366`), so those tests use the prefixed schema, not `public`. That is already true today and works in CI, because each schema is migrated. D1 does not change it.
 - **Whether `to_list` on a v1 list reads through `get_range`:** not checked. The list fault test names the v2 format it covers.
+
+## Implementation Summary
+
+**Completed:** 2026-11-02
+**All phases:** Complete
+**Test status:** All passing. Full tier on both backends after every phase.
+
+### Deviations from Plan
+- **The duplicate-tombstone item** was dropped during evaluation: the second write is deliberate. The GitHub item went back to the owner. Both are under What We're NOT Doing.
+- **D4 delegates to the sync method** instead of fixing the proxy target (outside voice).
+- **D2 has its own `unindexable` category** rather than reusing collisions (usability), and offers one exit only (outside voice).
+- **Phase 4 corrects a false documentation claim** about the PostgreSQL size limit.
+
+### Learnings
+- **A backend difference the type hints exposed:** the DynamoDB trust, subscription and subscription-diff `fetch` return `None` for a falsy actor id, while PostgreSQL and the protocol return a list. It is annotated as it is, not changed. It needs an owner call.
+- **PostgreSQL index limits apply after compression.** Any test of a size limit needs incompressible data.
+- **`set_confirmed` re-reads through the backend's `get_attr_strict`.** A test that patches that method changes `set_confirmed`'s answer too.
+

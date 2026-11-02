@@ -621,9 +621,17 @@ Size Limits
      - PostgreSQL Limit
    * - Lookup Table
      - No limit (fixed-size digest key)
-     - No limit (TEXT column)
+     - About 2.7 KB per value, after compression (the btree row limit of the
+       ``(property_name, value)`` key)
 
-Indexed values of any length work: the lookup table has no size limit.
+On DynamoDB indexed values of any length work. On PostgreSQL the lookup
+table's primary key is a btree on ``(property_name, value)``, and the
+database refuses a key row larger than about 2,704 bytes after compression.
+A large indexed value may exceed it. Writing such a value then raises
+``DbError``, because the property and its lookup row succeed or fail
+together, and ``actingweb-property-lookup backfill`` reports existing ones as
+``UNINDEXABLE`` and leaves the name unmarked until the value is shortened.
+Index identifiers (emails, provider ids), not free text.
 
 .. note::
    On DynamoDB, lookup rows are keyed by a SHA-256 digest of
@@ -635,7 +643,7 @@ Indexed values of any length work: the lookup table has no size limit.
 
 **Practical Size Limits:**
 
-While lookup tables remove hard limits, consider these guidelines for optimal performance:
+Beyond those limits, consider these guidelines for optimal performance:
 
 - **DynamoDB**: Hard limit of 400KB per item (applies to entire property record)
 - **PostgreSQL**: No hard limit (TEXT column), but very large values impact query performance

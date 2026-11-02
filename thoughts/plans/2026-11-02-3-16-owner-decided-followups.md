@@ -447,13 +447,15 @@ Providers: codex (`codex exec -s read-only`, unsandboxed) and a fresh-context Cl
 **All phases:** Complete
 **Test status:** All passing. The Full tier ran on both backends after every phase and every review round; the benchmarks after Phase 4 and its review round.
 
-Commits: `eca175e` Phase 1, `1022381` Phase 2, `d432a71` Phase 3, `6554c76` the Phase 2 and Phase 3 reviews (the claim extended at the owner's choice), `b8ca5c3` the claim review, `8716b2f` Phase 4, and the Phase 4 review commit.
+Commits: `eca175e` Phase 1, `1022381` Phase 2, `d432a71` Phase 3, `6554c76` the Phase 2 and Phase 3 reviews (the claim extended at the owner's choice), `b8ca5c3` the claim review, `8716b2f` Phase 4, `9dca508` the Phase 4 review. After the first verification (`7756e21`): iteration batches `ef77625`, `aa00a2e`, `df50a6e` (the reverts), `8861d22`, `d6527ae`; the rename audit `152bb82` and its review `73c2b86`; the re-verification and its fixes `96d3308`. PR #168 (with the PR 167 review fixes `15d0320` and the housekeeping `8659cd8`).
 
 ### Deviations from Plan
 - **D13 grew past the plan** at the owner's choice (2026-11-02): the claim takes a 60-second lease, a sequence inside a live claim answers `ProcessResult.IN_PROGRESS` (503 with `Retry-After` on a callback; a poll stops there and reports `SubscriptionSyncResult.in_flight`), and `FanOutManager` does not count such a 503 toward the breaker. Without that, the claim turned a double apply into a lost diff.
 - **D2's memo** lives on the GitHub provider instance (a single, 30-second slot) rather than on the authenticator; each authenticator builds its own provider.
 - **D14 on PostgreSQL** uses no advisory lock: the owner's property row is read `FOR SHARE` by key inside the claim (verified by a two-connection test that also caught a first cut with the value in the `WHERE`).
 - **D5's move** uses its own record-aware rename (`move_default_creator`) instead of `_settle_record`/`_rename`; the default-creator group is informational in `report`.
+- **D8 was redesigned by an audit** (entries 21-23) after six review rounds did not converge: under `force_email_prop_as_creator` the stored email is the rename's commit point, a fault past it completes at the next load, the email is put back only on a definite refusal, and `modify_creator` answers True once the creator is renamed. The remaining limits are in `thoughts/todo/vouched-rename-one-transaction.md`.
+- **Three fixes to pre-3.16 subscriber behaviour were reverted** (entry 16): the resync's empty baseline on a failed fetch and the poll's stop at unapplied diffs stay as they were; `thoughts/todo/subscription-subscriber-fault-hardening.md` records why the first fixes failed.
 - **D3's seeding** is an atomic create (`InternalStore.set_if_absent`) and carries a **Behavior change:** sentence for the creator pin it brings under `force_email_prop_as_creator`.
 
 ### Learnings
@@ -462,6 +464,8 @@ Commits: `eca175e` Phase 1, `1022381` Phase 2, `d432a71` Phase 3, `6554c76` the 
 - **A best-effort release becomes unsafe once takeovers exist:** every release of a lookup row has to be conditioned on its owner.
 - **A test that mocks a read must still do what the read does to shared state** (the handle), or it proves nothing about the old code.
 - Each phase's second opinion found real defects the plan's evaluation had missed; the per-phase codex pass earned its cost here.
+- **When review rounds keep finding finer faults in one function, stop patching and write its state table.** The rename's rounds each added a branch to undo an email move, against a load that moves the creator to the email on every read; the table showed the load is a writer in the protocol, and the redesign deleted code instead of adding it.
+- **A write path is also exercised by the reads of other requests:** `Actor.get` under the pin is a concurrent writer of the creator, so a conditional rename can lose to a load and still have landed.
 
 ## Iterations
 

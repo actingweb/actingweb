@@ -93,6 +93,21 @@ and position).
   baseline fallback (the poll's way out after a gap reset, when every diff
   reads as pending); a first fix that stopped there trapped a subscription
   after a gap timeout and was reverted.
+- **The pre-fetch check is a read, not a claim**
+  (`CallbackProcessor.precheck()`, before a low-granularity diff is fetched):
+  two deliveries of one sequence can both pass it. The second finds the diff
+  gone (the first fetch deleted it) and answers 503, and a failed first
+  delivery is recovered only by a resync. Closing it means claiming before the
+  fetch, which moves the claim out of the handler (owner-decided plan, entry
+  15).
+- **The poll's upward-only sequence write reads, then writes**
+  (`sync_subscription`, sync and async): a callback recording a higher
+  sequence between the read and the write is overwritten. Both writers are
+  the same subscriber. The fix is a conditional write ("only if lower"), which
+  `DbSubscription.modify` cannot express today; the adoption plan's
+  `UpdateItem` item for DynamoDB `DbSubscription.modify`
+  (`thoughts/plans/2026-11-02-3-16-adoption-fault-followups.md`) is where it
+  fits.
 - **`_fetch_and_transform_baseline` reads a baseline with a property named
   `error` as a failed fetch** (`"error" in baseline_response`, sync and async),
   and a list baseline containing the string `"error"` raises on `.get`.

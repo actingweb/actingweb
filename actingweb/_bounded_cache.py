@@ -83,6 +83,30 @@ class BoundedDict(OrderedDict[K, V]):
         with self._lock:
             super().__delitem__(key)
 
+    # The remaining mutators take the lock too, and the inserting ones go
+    # through __setitem__ so the bound holds.
+    def setdefault(self, key: K, default: Any = None) -> Any:  # type: ignore[override]
+        with self._lock:
+            hit, value = self.lookup(key)
+            if hit:
+                return value
+            self[key] = default
+            return default
+
+    def update(self, *args: Any, **kwargs: Any) -> None:  # type: ignore[override]
+        merged: dict[Any, Any] = dict(*args, **kwargs)
+        with self._lock:
+            for key, value in merged.items():
+                self[key] = value
+
+    def popitem(self, last: bool = True) -> tuple[K, V]:
+        with self._lock:
+            return super().popitem(last=last)
+
+    def move_to_end(self, key: K, last: bool = True) -> None:
+        with self._lock:
+            super().move_to_end(key, last=last)
+
     # Reads move entries, so iterating the live dict while indexing it (or
     # while another thread reads) would raise "mutated during iteration":
     # iterate a snapshot taken under the lock instead.

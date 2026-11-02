@@ -405,6 +405,10 @@ class BackfillStats:
     # only; it changes neither the exit status nor completed_names().
     maybe_unindexable: int = 0
     faults: int = 0
+    # Dedupe sets beside the ordered detail lists (a large pass can refuse or
+    # collide on many rows; a list scan per row would be quadratic).
+    _seen_collisions: set[str] = field(default_factory=set, repr=False)
+    _seen_unindexable: set[str] = field(default_factory=set, repr=False)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def bump(self, attr: str, amount: int = 1) -> None:
@@ -415,16 +419,18 @@ class BackfillStats:
         """Count one colliding row; a row seen again (a resumed run rescans
         the page that faulted) is counted once."""
         with self._lock:
-            if detail in self.collision_details:
+            if detail in self._seen_collisions:
                 return
+            self._seen_collisions.add(detail)
             self.collisions[name] = self.collisions.get(name, 0) + 1
             self.collision_details.append(detail)
 
     def unindexable_row(self, name: str, detail: str) -> None:
         """Count one row the lookup index cannot hold, once per detail."""
         with self._lock:
-            if detail in self.unindexable_details:
+            if detail in self._seen_unindexable:
                 return
+            self._seen_unindexable.add(detail)
             self.unindexable[name] = self.unindexable.get(name, 0) + 1
             self.unindexable_details.append(detail)
 
@@ -797,6 +803,8 @@ def _pg_insert_rows_one_by_one(
                     "WHERE p.id = %s AND p.name = %s ON CONFLICT DO NOTHING",
                     (actor_id, name),
                 )
+                # A conflict (rowcount 0) is not a collision here: the sweep
+                # after the batches reports every row another actor holds.
                 stats.written += max(cur.rowcount, 0)
         except psycopg.errors.ProgramLimitExceeded:
             stats.unindexable_row(

@@ -95,3 +95,12 @@ def test_copy_pickle_and_iterating_while_indexing_work() -> None:
     assert restored == cache and restored.maxsize == 3
     restored["d"] = 4
     assert len(restored) == 3
+
+
+def test_setdefault_and_update_respect_the_bound() -> None:
+    cache: BoundedDict[str, int] = BoundedDict(2)
+    assert cache.setdefault("a", 1) == 1
+    assert cache.setdefault("a", 9) == 1
+    cache.update({"b": 2, "c": 3})
+    assert list(cache) == ["b", "c"]
+    assert cache.popitem(last=False) == ("b", 2)

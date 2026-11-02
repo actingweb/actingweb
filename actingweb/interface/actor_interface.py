@@ -452,14 +452,15 @@ class ActorInterface:
         The ``_internal`` bucket is read afresh, then the writes, in order
         (each confirmed with a strict read-back):
 
-        0. ``vouched_creator`` := the current creator, when the actor is
+        0. ``vouched_creator`` := the stored creator (read afresh), when the actor is
            vouched for it only another way (its stored email, after the pin
            moved a provider-id creator; or a pending value) — a fault
            refuses the rename;
         1. ``vouched_creator_pending`` := the new address, when the actor is
            vouched with a recorded address (a fault refuses the rename);
-        2. under ``force_email_prop_as_creator`` with a stored email, the
-           email := the new address. This is the commit point: each load
+        2. under ``force_email_prop_as_creator``, for a rename to an address,
+           the email := the new address (also when none was stored: a
+           sign-in seeding a missing one would otherwise write the old). This is the commit point: each load
            moves the creator to the stored email, so from here the rename
            completes even if this call stops;
         3. the creator;
@@ -486,6 +487,7 @@ class ActorInterface:
         as it is. Concurrent renames of one actor are not serialised.
         """
         from ..attribute import InternalStore
+        from ..db import get_actor
         from ..db.creator_rules import normalise_creator
         from ..oauth2 import VOUCHED_CREATOR, VOUCHED_CREATOR_PENDING, is_vouched_store
 
@@ -495,19 +497,24 @@ class ActorInterface:
         # Read afresh: a sign-in since this actor was loaded may have vouched
         # it, and a cached copy would rename it without moving that vouch.
         store = InternalStore(actor_id=self.id, config=config)
-        self._core_actor.store = store
         if not store.loaded:
             logger.error(
                 f"Actor {self.id}: its _internal bucket could not be read; "
                 "rename refused"
             )
             return False
+        self._core_actor.store = store
         bound = (
             is_vouched_store(store)
             and getattr(store, VOUCHED_CREATOR, None) is not None
         )
         target = normalise_creator(new_creator)
-        current = self._core_actor.creator
+        # The stored creator, not this handle's copy: another request's load
+        # may have moved it (the pin) since this actor was loaded.
+        row = get_actor(config).get(actor_id=self.id)
+        if not row:
+            return False
+        current = row.get("creator")
         if (
             bound
             and isinstance(current, str)
@@ -532,6 +539,11 @@ class ActorInterface:
             and current_email
             else None
         )
+        # Under the pin a rename to an address always writes the email, also
+        # when there is none yet: a sign-in for the old address that seeds a
+        # missing email (from the creator it loaded) would otherwise write
+        # the old address after the rename, and the next load move it back.
+        email_led = config.force_email_prop_as_creator and "@" in target
         if pinned is not None and "@" not in target:
             logger.error(
                 f"Actor {self.id}: {target} is not an address and the creator is "
@@ -544,7 +556,7 @@ class ActorInterface:
                 "land; rename refused"
             )
             return False
-        if pinned is None:
+        if not email_led:
             if not self._core_actor.modify(creator=new_creator):
                 return False
         elif not self._rename_pinned(store, target, pinned, new_creator):
@@ -564,14 +576,18 @@ class ActorInterface:
         return True
 
     def _rename_pinned(
-        self, store: "InternalStore", target: str, pinned: str, new_creator: str
+        self,
+        store: "InternalStore",
+        target: str,
+        pinned: str | None,
+        new_creator: str,
     ) -> bool:
         """Steps 2 and 3 of :meth:`_rename_vouched` under the email pin: move
         the stored email (the commit point), then the creator. True once the
         creator is ``target``."""
         from ..db.exceptions import CreatorTaken
 
-        moved = pinned.lower() != target
+        moved = pinned is None or pinned.lower() != target
         if (
             moved
             and not store.set_confirmed("email", target)
@@ -604,21 +620,30 @@ class ActorInterface:
             self._core_actor.handle = fresh.handle
             self._core_actor.actor = fresh.actor
             self._core_actor.creator = target
+            self._core_actor.passphrase = fresh.passphrase
             return True
         if moved:
             self._restore_email(store, target, pinned)
         return False
 
     def _restore_email(
-        self, store: "InternalStore", moved_to: str, original: str
+        self, store: "InternalStore", moved_to: str, original: str | None
     ) -> None:
         """Put the stored email back after a rename that definitely did not
         land, only while it still holds the address this rename wrote: a
-        concurrent rename's email is left alone. Never raises."""
+        concurrent rename's email is left alone. ``original`` None (there was
+        none) removes it after a strict read shows it still the new address
+        (a read, then a delete: the backends have no delete-if-equal). Never
+        raises."""
         try:
-            if store.replace_if_equal("email", moved_to, original):
+            if original is None:
+                if store.read_strict("email") == moved_to:
+                    store.set_confirmed("email", None)
+                still_moved = store.read_strict("email") == moved_to
+            elif store.replace_if_equal("email", moved_to, original):
                 return
-            still_moved = store.read_strict("email") == moved_to
+            else:
+                still_moved = store.read_strict("email") == moved_to
         except Exception:  # folds DbError: best effort; the caller's outcome stands
             still_moved = True
         if still_moved:

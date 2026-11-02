@@ -1,6 +1,6 @@
 ---
 status: done
-verified: thoughts/verifications/2026-11-02-3-16-owner-decided-followups.md
+verified: thoughts/verifications/2026-11-02-3-16-owner-decided-followups-reverify.md
 ---
 
 # Implementation Plan: 3.16 follow-ups the owner decided (first block)
@@ -747,4 +747,22 @@ Without the pin (or with no stored email) E is skipped. A stop after P or a refu
 **Files affected**: `actingweb/interface/actor_interface.py`, `CHANGELOG.rst`, `tests/test_rename_pending_vouch.py` (a vouch written since the load moves; an email-only vouch stays vouched mid-rename; a failed anchor refuses). Each fails on `152bb82`.
 
 **Accepted**: an actor whose vouch is stale for every address (V, pending and email all differ from the creator) is vouched again by the rename (`bound` asks for a marker, not a match). This is what `modify_creator` without `unvouch` documents: the application vouches for the new address.
+
+### 2026-11-02, after the final review of `9dca508..73c2b86` (codex and a fresh-context Claude, for the re-verification)
+
+#### 23. A rename racing a sign-in's email seeding; step 0 reads the stored creator
+
+**Category**: Verification fix
+
+**What changed**:
+- Under the pin, a vouched rename to an address always writes the email (E), also when none was stored; `_rename_pinned` takes `pinned=None`, and the restore of an absent email reads, then deletes, while it still holds the new address. Before, with no stored email the rename skipped E. A vouched sign-in for the old address that loaded the actor before the rename then seeded `email := old` (D3) after it, and the next load moved the creator back with no error.
+- Step 0 compares against the stored creator (one strict actor-row read), not the handle's cached copy, which a load elsewhere may have moved under the pin.
+- A refused rename leaves the actor's own store in place (the fresh store is assigned only once it read).
+- The fresh-load True branch takes the passphrase too.
+
+**Files affected**: `actingweb/interface/actor_interface.py`, `CHANGELOG.rst`, `tests/test_rename_pending_vouch.py` (a rename without an email writes one under the pin and a late seed loses; none without the pin; a refused one removes what it wrote; step 0 reads the stored creator; a refused rename keeps the store). The three tests for changed behaviour fail on `73c2b86`.
+
+**Refuted**: codex's "the poll's upward-only write reads a fault as sequence 0". `Subscription.get()` is strict on both backends and raises `DbError`.
+
+**Accepted**: under the pin with no stored email, a rename to a provider id (no address, so no E) can still be undone by a racing sign-in's seeding. Writing a provider id as the email would make it the creator's pin, so this stays the pre-plan behaviour, narrowed to that case.
 

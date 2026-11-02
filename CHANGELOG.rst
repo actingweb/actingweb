@@ -150,8 +150,10 @@ SECURITY
   so the moves below never leave it unvouched. It answers True once the creator is renamed, also when moving
   the recorded address afterwards faults (logged; the pending value keeps
   the new creator vouched). **Behavior change:** with
-  ``force_email_prop_as_creator`` on, a vouched rename of an actor that has
-  a stored email moves the email to the new address first. Since every
+  ``force_email_prop_as_creator`` on, a vouched rename to an address moves
+  the stored email to the new address first, and writes one when there was
+  none (a sign-in seeding a missing email from the old creator would
+  otherwise move the creator back at the next load). Since every
   load moves the creator to the stored email, that write commits the
   rename: a ``DbError`` after it leaves the rename to complete at the next
   load (or when the call is repeated), and a rename that loses because a

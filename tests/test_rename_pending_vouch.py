@@ -127,17 +127,46 @@ def test_a_rename_survives_the_next_load_under_the_email_pin() -> None:
     assert istore(reloaded).email == new
 
 
-def test_a_rename_of_an_actor_without_a_stored_email_writes_none() -> None:
-    """No stored email: the load rewrites nothing, so none is created (which
-    would pin the creator)."""
+def test_a_rename_without_a_stored_email_writes_one_under_the_pin() -> None:
+    """No stored email: the rename writes the new address, so a sign-in for
+    the old address that seeds a missing email afterwards loses, and the
+    next load keeps the rename."""
     config = make_config()
     old, new = _mail(), _mail()
     actor = create_core_actor(config, old, auth_method="google_oauth2")
     istore(actor).email = None
     assert ActorInterface(actor).modify_creator(new)
+    # The racing sign-in's seeding, from the creator it loaded before.
+    late = istore(Actor(actor_id=aid(actor), config=config))
+    assert late.set_if_absent("email", old) is False
     reloaded = Actor(actor_id=aid(actor), config=config)
     assert reloaded.creator == new
-    assert istore(reloaded).email is None
+    assert istore(reloaded).email == new
+
+
+def test_a_rename_without_a_stored_email_writes_none_without_the_pin() -> None:
+    import copy
+
+    config = copy.copy(make_config())
+    config.force_email_prop_as_creator = False
+    old, new = _mail(), _mail()
+    actor = create_core_actor(config, old, auth_method="google_oauth2")
+    istore(actor).email = None
+    assert ActorInterface(actor).modify_creator(new)
+    assert istore(Actor(actor_id=aid(actor), config=config)).email is None
+
+
+def test_a_refused_rename_without_a_stored_email_removes_the_one_it_wrote() -> None:
+    config = make_config()
+    old, new = _mail(), _mail()
+    actor = create_core_actor(config, old, auth_method="google_oauth2")
+    istore(actor).email = None
+    with patch.object(Actor, "modify", side_effect=CreatorTaken(new)):
+        with pytest.raises(CreatorTaken):
+            ActorInterface(actor).modify_creator(new)
+    kept = Actor(actor_id=aid(actor), config=config)
+    assert kept.creator == old
+    assert istore(kept).email is None
 
 
 def test_a_refused_rename_puts_the_stored_email_back() -> None:
@@ -463,3 +492,44 @@ def test_a_failed_vouch_anchor_refuses_the_rename() -> None:
     assert kept.creator == current
     assert istore(kept).email == current
     assert is_vouched_store(istore(kept), current)
+
+
+def test_step_0_reads_the_stored_creator_not_the_handles_copy() -> None:
+    """This handle loaded a provider-id actor; since then a sign-in seeded its
+    email and another load moved the creator to it. The rename records the
+    stored creator's vouch, so a sign-in for it mid-rename finds it vouched."""
+    config = make_config()
+    pid, current, new = _pid(), _mail(), _mail()
+    handle = create_core_actor(config, pid, auth_method="google_oauth2")
+    istore(handle).email = None
+    assert handle.creator == pid
+    istore(Actor(actor_id=aid(handle), config=config)).email = current
+    assert Actor(actor_id=aid(handle), config=config).creator == current
+    seen: dict[str, bool] = {}
+    real_modify = Actor.modify
+
+    def modify(self: Actor, *a: Any, **k: Any) -> bool:
+        if "current" not in seen:
+            fresh = istore(Actor(actor_id=aid(handle), config=config))
+            seen["current"] = is_vouched_store(fresh, current)
+        return real_modify(self, *a, **k)
+
+    with patch.object(Actor, "modify", modify):
+        assert ActorInterface(handle).modify_creator(new) is True
+    assert seen == {"current": True}
+    reloaded = Actor(actor_id=aid(handle), config=config)
+    assert reloaded.creator == new
+    assert handle.passphrase == reloaded.passphrase
+
+
+def test_a_refused_rename_keeps_the_actors_own_store() -> None:
+    config = make_config()
+    actor = create_core_actor(config, _mail(), auth_method="google_oauth2")
+    own = actor.store
+    from actingweb.attribute import InternalStore
+
+    with patch.object(
+        InternalStore, "loaded", new_callable=lambda: property(lambda self: False)
+    ):
+        assert ActorInterface(actor).modify_creator(_mail()) is False
+    assert actor.store is own

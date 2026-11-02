@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: active
 ---
 
 # Implementation Plan: 3.16 follow-ups the owner decided (first block)
@@ -152,7 +152,13 @@ Owner, 2026-11-02, unless marked otherwise. Evaluation changes are marked `[Eval
 - [ ] Each regression fails with its fix stashed
 - [ ] Full tier before commit
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+- **Regressions:** with the fixes stashed, 13 of the new tests fail: the six DynamoDB `fetch` cases, the `find_db_error` context test, both CORS tests, and the provider-memo and callback one-request tests.
+- **Guards, not regressions:** the two consumer-route 500 tests and the `is_permanent` test pass on the old code too. The app-level handler matches on the `DbError` type, and `is_permanent` starts at `__cause__`. Only library routes, through `map_db_error`, followed `__context__`.
+- **Deviation, D2:** the memo lives on the GitHub provider instance as a single slot (the token, a monotonic time and the answer), bounded to 30 seconds. Each authenticator builds its own provider (`create_oauth2_authenticator`), so it is per request in the callback, and the long-lived MCP server authenticator never reuses an answer past the bound. `test_github_delegates_to_module_level_helper` now patches `_fetch_github_emails`.
+- **Deviation, D10:** `docs/guides/spa-authentication.rst`'s "CORS error" section names `/?format=json` as the one endpoint fetched without credentials.
+
 
 ---
 

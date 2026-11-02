@@ -131,15 +131,14 @@ class RootFactoryHandler(base_handler.BaseHandler):
         self.response.headers["Content-Type"] = "application/json"
         self.response.set_status(200)
 
-        # Set CORS headers for SPA access
-        if self.request.headers:
-            origin = self.request.headers.get("Origin", "*")
-            self.response.headers["Access-Control-Allow-Origin"] = origin
+        # CORS for SPA access. The body is public configuration, so any
+        # origin may read it and no credentials are allowed: a reflected
+        # origin without credentials is the same as ``*``.
+        self.response.headers["Access-Control-Allow-Origin"] = "*"
         self.response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
         self.response.headers["Access-Control-Allow-Headers"] = (
             "Authorization, Content-Type, Accept"
         )
-        self.response.headers["Access-Control-Allow-Credentials"] = "true"
 
         return response_data
 

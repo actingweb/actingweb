@@ -57,8 +57,9 @@ _PERMANENT_PG_CLASSES = frozenset(
 def is_permanent(exc: BaseException) -> bool:
     """Whether the backend error behind this ``DbError`` is not transient.
 
-    Walks the ``__cause__`` chain (the backend exception is chained with
-    ``raise DbError(op) from e``).
+    Walks the ``__cause__`` chain only (the backend exception is chained
+    with ``raise DbError(op) from e``); an exception reached only through
+    ``__context__`` does not decide it.
     """
     current: BaseException | None = exc.__cause__
     depth = 0
@@ -71,7 +72,7 @@ def is_permanent(exc: BaseException) -> bool:
                 "psycopg"
             ):
                 return True
-        current = current.__cause__ or current.__context__
+        current = current.__cause__
         depth += 1
     return False
 
@@ -109,15 +110,17 @@ def db_error_answer(exc: BaseException) -> tuple[int, dict[str, str], dict[str, 
 def find_db_error(exc: BaseException) -> DbError | None:
     """The ``DbError`` this exception is, or was raised from.
 
-    A handler that wraps a fault in its own exception still answers 503:
-    the ``__cause__``/``__context__`` chain is followed a few links deep.
+    A handler that wraps a fault in its own exception with
+    ``raise ... from e`` still answers 503: the ``__cause__`` chain is
+    followed a few links deep. ``__context__`` is not: an unrelated error
+    raised while a ``DbError`` was being handled is a bug and answers 500.
     """
     seen = 0
     current: BaseException | None = exc
     while current is not None and seen < 5:
         if isinstance(current, DbError):
             return current
-        current = current.__cause__ or current.__context__
+        current = current.__cause__
         seen += 1
     return None
 

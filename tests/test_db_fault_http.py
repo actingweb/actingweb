@@ -100,6 +100,22 @@ class TestFlask:
         assert "Retry-After" not in response.headers
         assert response.get_json()["error"] == "conflict"
 
+    def test_a_bug_while_handling_a_fault_answers_500(self) -> None:
+        # Raised inside ``except DbError`` without ``from``: the DbError is
+        # only its __context__, so it is a bug, not an availability fault.
+        app, client = self._client()
+
+        @app.route("/custom-bug")
+        def custom_bug() -> str:  # pyright: ignore[reportUnusedFunction]
+            try:
+                raise DbError("custom read", ACTOR_ID)
+            except DbError:
+                raise RuntimeError("bug in the fault handler")  # noqa: B904
+
+        response = client.get("/custom-bug")
+        assert response.status_code == 500
+        assert "Retry-After" not in response.headers
+
 
 class TestFastAPI:
     def _client(self, app: FastAPI | None = None) -> tuple[FastAPI, TestClient]:
@@ -144,6 +160,21 @@ class TestFastAPI:
         assert response.status_code == 409
         assert response.json()["error"] == "conflict"
 
+    def test_a_bug_while_handling_a_fault_answers_500(self) -> None:
+        app = FastAPI()
+
+        @app.get("/custom-bug")
+        async def custom_bug() -> dict[str, str]:  # pyright: ignore[reportUnusedFunction]
+            try:
+                raise DbError("custom read", ACTOR_ID)
+            except Exception:
+                raise RuntimeError("bug in the fault handler")  # noqa: B904
+
+        _app, client = self._client(app)
+        response = client.get("/custom-bug")
+        assert response.status_code == 500
+        assert "retry-after" not in response.headers
+
 
 class TestMapping:
     def test_a_wrapped_fault_is_still_found(self) -> None:
@@ -171,3 +202,37 @@ class TestMapping:
         response = AWResponse()
         assert map_db_error(response, exc)
         assert response.status_code == status
+
+    def test_a_fault_reached_only_through_context_is_not_found(self) -> None:
+        try:
+            try:
+                raise DbError("inner")
+            except DbError:
+                raise RuntimeError("unrelated bug")  # noqa: B904
+        except RuntimeError as outer:
+            assert outer.__context__ is not None
+            assert find_db_error(outer) is None
+
+    def test_permanence_ignores_a_backend_error_reached_only_through_context(
+        self,
+    ) -> None:
+        import psycopg
+
+        from actingweb.interface.integrations._errors import is_permanent
+
+        try:
+            try:
+                raise psycopg.errors.DataError("bad value")
+            except psycopg.errors.DataError:
+                raise DbError("property write")  # noqa: B904
+        except DbError as fault:
+            assert fault.__cause__ is None
+            assert is_permanent(fault) is False
+
+        try:
+            try:
+                raise psycopg.errors.DataError("bad value")
+            except psycopg.errors.DataError as e:
+                raise DbError("property write") from e
+        except DbError as fault:
+            assert is_permanent(fault) is True

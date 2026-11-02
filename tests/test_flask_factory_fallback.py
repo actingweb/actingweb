@@ -93,3 +93,13 @@ class TestFlaskFactoryJsonConfig:
 
         assert response.get_json()["spa_mode_supported"] is True
         assert not Actor(config=make_config()).get_from_creator(creator)
+
+    def test_format_json_cors_allows_any_origin_without_credentials(self) -> None:
+        # The configuration document is public; it used to reflect the
+        # Origin together with Access-Control-Allow-Credentials: true.
+        response = _client(open_factory=True).get(
+            "/?format=json", headers={"Origin": "https://a.example"}
+        )
+        assert response.status_code == 200
+        assert response.headers["Access-Control-Allow-Origin"] == "*"
+        assert "Access-Control-Allow-Credentials" not in response.headers

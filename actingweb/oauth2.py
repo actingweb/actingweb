@@ -308,6 +308,8 @@ class GitHubOAuth2Provider(OAuth2Provider):
             else "",
         }
         super().__init__("github", github_config)
+        # (token, monotonic time, the /user/emails answer); see _emails_for.
+        self._emails_memo: tuple[str, float, list[dict[str, Any]] | None] | None = None
 
     def token_request_headers(self) -> dict[str, str]:
         headers = super().token_request_headers()
@@ -345,11 +347,38 @@ class GitHubOAuth2Provider(OAuth2Provider):
         if identifier.startswith("github:"):
             store.oauth_github_id = identifier.split(":", 1)[1]
 
+    # How long one ``/user/emails`` answer is reused for its token. A
+    # provider is built per authenticator, and the callback builds one per
+    # request, so in practice the memo lives for one sign-in; the bound keeps
+    # a long-lived authenticator from reusing an answer past it.
+    _EMAILS_MEMO_SECONDS = 30.0
+
+    def _emails_for(self, access_token: str) -> list[dict[str, Any]] | None:
+        """One ``/user/emails`` request per token per sign-in, success or not.
+
+        ``get_primary_email`` and ``get_verified_emails`` both read it, so a
+        sign-in that needs both pays one request (and at most one timeout).
+        Only the last token is kept.
+        """
+        memo = self._emails_memo
+        now = time.monotonic()
+        if (
+            memo is not None
+            and memo[0] == access_token
+            and now - memo[1] < self._EMAILS_MEMO_SECONDS
+        ):
+            return memo[2]
+        emails = _fetch_github_emails(access_token)
+        self._emails_memo = (access_token, now, emails)
+        return emails
+
     def get_primary_email(self, access_token: str) -> str | None:
-        return _get_github_primary_email(access_token)
+        emails = self._emails_for(access_token)
+        return _github_primary_from(emails) if emails is not None else None
 
     def get_verified_emails(self, access_token: str) -> list[str] | None:
-        return _get_github_verified_emails(access_token)
+        emails = self._emails_for(access_token)
+        return _github_verified_from(emails) if emails is not None else None
 
 
 class AppleOAuth2Provider(OAuth2Provider):
@@ -1247,11 +1276,14 @@ class OAuth2Authenticator:
 # Factory functions for backward compatibility and convenience
 
 
-def _get_github_primary_email(access_token: str) -> str | None:
-    """Get primary verified email from GitHub's emails API.
+def _fetch_github_emails(access_token: str) -> list[dict[str, Any]] | None:
+    """One request to GitHub's ``/user/emails``: the raw entries, or ``None``.
 
-    Lives at module level so it can be reused by ``GitHubOAuth2Provider``
-    without holding authenticator state.
+    ``None`` means the request itself failed (no token, a non-200 status such
+    as a 404 from a token whose scope omits ``user:email``, a network error or
+    a body that is not a list); ``[]`` means GitHub answered with no entries.
+    The primary and verified answers are both derived from this one response
+    (:func:`_github_primary_from`, :func:`_github_verified_from`).
     """
     if not access_token:
         return None
@@ -1263,86 +1295,67 @@ def _get_github_primary_email(access_token: str) -> str | None:
     }
 
     try:
-        # Use requests library with better timeout handling
         response = requests.get(
             url="https://api.github.com/user/emails",
             headers=headers,
             timeout=(5, 10),  # (connect timeout, read timeout)
         )
-
         if response.status_code != 200:
             logger.warning(f"GitHub emails API request failed: {response.status_code}")
             return None
-
         emails = response.json()
-
-        # Find the primary email (must also be verified to prevent
-        # account-linking attacks via unverified primary emails).
-        for email_info in emails:
-            if email_info.get("primary", False) and email_info.get("verified", False):
-                email = email_info.get("email")
-                return str(email) if email else None
-
-        # If no verified primary email found, use the first verified email
-        for email_info in emails:
-            if email_info.get("verified", False):
-                email = email_info.get("email")
-                return str(email) if email else None
-
-        return None
-
+        if not isinstance(emails, list):
+            logger.warning("GitHub emails API answered a body that is not a list")
+            return None
+        return [e for e in emails if isinstance(e, dict)]
     except Exception as e:  # folds DbError: provider HTTP only
-        logger.warning(f"Failed to get GitHub primary email: {e}")
+        logger.warning(f"Failed to get GitHub emails: {e}")
         return None
+
+
+def _github_primary_from(emails: list[dict[str, Any]]) -> str | None:
+    """The primary address: verified **and** flagged primary, else the first
+    verified one. An unverified primary is never used (it would allow
+    account linking through an address GitHub has not verified)."""
+    for email_info in emails:
+        if email_info.get("primary", False) and email_info.get("verified", False):
+            email = email_info.get("email")
+            return str(email) if email else None
+    for email_info in emails:
+        if email_info.get("verified", False):
+            email = email_info.get("email")
+            return str(email) if email else None
+    return None
+
+
+def _github_verified_from(emails: list[dict[str, Any]]) -> list[str]:
+    """Every verified address, lowercased, in GitHub's order."""
+    verified: list[str] = []
+    for email_info in emails:
+        if email_info.get("verified", False):
+            email = email_info.get("email")
+            if email:
+                verified.append(str(email).lower())
+    logger.debug(f"Found {len(verified)} verified emails from GitHub")
+    return verified
+
+
+def _get_github_primary_email(access_token: str) -> str | None:
+    """Get the primary verified email from GitHub's emails API (one request)."""
+    emails = _fetch_github_emails(access_token)
+    return _github_primary_from(emails) if emails is not None else None
 
 
 def _get_github_verified_emails(access_token: str) -> list[str] | None:
-    """Get all verified emails from GitHub's emails API.
-
-    Lives at module level so it can be reused by ``GitHubOAuth2Provider``
-    without holding authenticator state (mirrors ``_get_github_primary_email``).
+    """Get all verified emails from GitHub's emails API (one request).
 
     Returns ``[]`` when GitHub answered 200 with no verified emails (a
     legitimate "nothing to offer" result); ``None`` when the API call itself
-    failed — a non-200 status (e.g. a 404 from a token whose scope omits
-    ``user:email``) or a network exception — so callers can tell "GitHub
-    vouches for nothing" apart from "we could not ask GitHub".
+    failed, so callers can tell "GitHub vouches for nothing" apart from "we
+    could not ask GitHub".
     """
-    if not access_token:
-        return None
-
-    headers = {
-        "Authorization": f"Bearer {access_token}",
-        "Accept": "application/json",
-        "User-Agent": "ActingWeb-OAuth2-Client",
-    }
-
-    try:
-        response = requests.get(
-            url="https://api.github.com/user/emails",
-            headers=headers,
-            timeout=(5, 10),
-        )
-
-        if response.status_code != 200:
-            logger.warning(f"GitHub emails API request failed: {response.status_code}")
-            return None
-
-        emails = response.json()
-
-        verified = []
-        for email_info in emails:
-            if email_info.get("verified", False):
-                email = email_info.get("email")
-                if email:
-                    verified.append(str(email).lower())
-
-        logger.debug(f"Found {len(verified)} verified emails from GitHub")
-        return verified
-
-    except Exception as e:  # folds DbError: provider HTTP only
-        logger.warning(f"Failed to get GitHub verified emails: {e}")
-        return None
+    emails = _fetch_github_emails(access_token)
+    return _github_verified_from(emails) if emails is not None else None
 
 
 def _get_provider_config(

@@ -257,6 +257,16 @@ REMOVED
 CHANGED
 ~~~~~~~
 
+- **``GET /?format=json`` allowed credentialed cross-origin reads of a public
+  document.** The factory's JSON configuration reflected the request's
+  ``Origin`` together with ``Access-Control-Allow-Credentials: true``, on both
+  integrations. Nothing in it depends on a cookie. **Behavior change:** it
+  answers ``Access-Control-Allow-Origin: *`` and no
+  ``Access-Control-Allow-Credentials``. **Check:** a cross-origin client that
+  sends credentials on this fetch (``credentials: 'include'``, axios
+  ``withCredentials``) is refused by the browser now; drop them for this one
+  request. The SPA and email endpoints keep their configured CORS.
+
 - **Breaking: a custom ``DbAttribute`` backend must implement
   ``create_attr_if_absent``** (the fourth custom-backend requirement of 3.16;
   the migration guide's list has it). ``delete_attr_conditional`` and
@@ -541,7 +551,12 @@ CHANGED
   set on the other OAuth2 endpoints, and a wildcard set without credentials
   on ``/``. It never carries a redirect or cookie the handler set before the
   fault. A backend error a retry cannot fix (a validation, size or
-  constraint error) answers **500** without ``Retry-After``.
+  constraint error) answers **500** without ``Retry-After``. An exception
+  counts as the fault only when it is the ``DbError`` or was raised from one
+  (``raise ... from e``); an error raised while a ``DbError`` was being
+  handled, without ``from``, is a bug and answers **500**. **Check:** a
+  wrapper of yours that turns a fault into its own exception needs ``from``
+  to keep the 503.
   ``CreatorTaken``, a new ``DbError`` subclass for a creator another actor
   holds, answers **409** (``with_unique_creator()`` raises it, see above).
   ``get_by_creator`` gains
@@ -1054,6 +1069,21 @@ ADDED
 
 FIXED
 ~~~~~
+
+- **A GitHub sign-in with no public email could wait about 30 seconds on
+  GitHub.** With an email required, the callback asked ``/user/emails`` for
+  the primary address, and when that failed asked the same endpoint again for
+  the verified list, each with a ``(5, 10)`` second timeout; with the userinfo
+  call before them that came close to 45 seconds, past API Gateway's 30. The
+  GitHub provider now asks once per token and derives both answers from that
+  one response, a failure included: one timeout, then the existing 502 (or
+  the SPA ``identifier_failed`` redirect). The primary address is still the
+  verified one GitHub flags primary, else the first verified one.
+
+- **DynamoDB's trust, subscription and subscription-diff list ``fetch``
+  answered ``None`` for an empty actor id.** The protocol and PostgreSQL
+  answer ``[]``; DynamoDB does too now. A custom caller that tested the
+  result with ``is None`` sees an empty list instead.
 
 - **The PostgreSQL ``actingweb-property-lookup backfill`` faulted at the same
   batch on every run when one indexed value was too long to index.**

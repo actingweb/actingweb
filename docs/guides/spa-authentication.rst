@@ -1878,7 +1878,9 @@ If you see this error AND the session is revoked (401 on subsequent requests), i
 "CORS error"
 ~~~~~~~~~~~~
 
-Ensure your SPA origin is allowed and credentials are included:
+Ensure your SPA origin is allowed and credentials are included (the factory's
+``GET /?format=json`` is the exception: it answers ``*`` and allows no
+credentials, so fetch it without them):
 
 .. code-block:: javascript
 

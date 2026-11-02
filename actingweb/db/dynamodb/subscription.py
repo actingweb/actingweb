@@ -232,14 +232,14 @@ class DbSubscriptionList:
 
     def fetch(
         self, actor_id: str | None, *, strict: bool = True
-    ) -> list[dict[str, Any]] | None:
+    ) -> list[dict[str, Any]]:
         """Retrieves the subscriptions of an actor_id from the database as an array
 
         ``[]`` when there are none. A read fault raises ``DbError``;
         ``strict=False`` answers it with ``[]``.
         """
         if not actor_id:
-            return None
+            return []
         self.actor_id = actor_id
         try:
             return self._fetch(actor_id)

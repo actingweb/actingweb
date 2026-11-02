@@ -420,6 +420,19 @@ A backend error a retry cannot fix (a validation, size or constraint error,
 such as an item over DynamoDB's 400 KB limit) answers ``500`` with
 ``{"error": "internal_error"}`` and no ``Retry-After``.
 
+An exception counts as the fault only when it is the ``DbError`` or was raised
+from one (``raise MyError(...) from e``). An error raised while a ``DbError``
+was being handled, without ``from``, is a bug in that handler and answers
+``500``. **Check:** a wrapper of yours that turns a fault into its own
+exception must chain it with ``from`` to keep the 503.
+
+``GET /?format=json`` answers ``Access-Control-Allow-Origin: *`` and no
+``Access-Control-Allow-Credentials`` (it used to reflect the ``Origin`` with
+credentials allowed). The document is public. **Check:** a cross-origin client
+that sends credentials on this fetch (``credentials: 'include'``, axios
+``withCredentials``) is refused by the browser now; drop them for this one
+request.
+
 **Hooks.** The hook runners let a ``DbError`` through. A hook whose own
 store read faults (an ``oauth_success`` allowlist kept in an attribute
 bucket, a property hook that reads another property) fails the request with

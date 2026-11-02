@@ -16,7 +16,7 @@ from unittest.mock import patch
 import pytest
 
 from actingweb.actor import Actor
-from actingweb.db.exceptions import CreatorTaken
+from actingweb.db.exceptions import CreatorTaken, DbError
 from actingweb.interface.actor_interface import ActorInterface
 from actingweb.oauth2 import (
     VOUCHED_CREATOR,
@@ -164,11 +164,19 @@ def test_a_rename_to_a_provider_id_under_the_email_pin_is_refused() -> None:
     assert getattr(istore(kept), VOUCHED_CREATOR_PENDING, None) is None
 
 
-def test_a_lost_email_move_confirmation_puts_the_email_back() -> None:
-    config = make_config()
-    old, new = _mail(), _mail()
+def _pinned_actor(config: Any) -> tuple[Actor, str]:
+    old = _mail()
     actor = create_core_actor(config, old, auth_method="google_oauth2")
     istore(actor).email = old
+    return actor, old
+
+
+def test_a_lost_email_move_confirmation_goes_on_with_the_rename() -> None:
+    """The email write landed but its confirmation was lost: the strict
+    re-read shows it moved (the commit point), so the rename goes on."""
+    config = make_config()
+    actor, _old = _pinned_actor(config)
+    new = _mail()
     store_cls = type(istore(actor))
     real = store_cls.set_confirmed
 
@@ -179,10 +187,123 @@ def test_a_lost_email_move_confirmation_puts_the_email_back() -> None:
         return real(self, k, v, **kw)
 
     with patch.object(store_cls, "set_confirmed", lost_ack):
-        assert ActorInterface(actor).modify_creator(new) is False
+        assert ActorInterface(actor).modify_creator(new) is True
     reloaded = Actor(actor_id=aid(actor), config=config)
-    assert reloaded.creator == old
-    assert istore(reloaded).email == old
+    assert reloaded.creator == new
+    assert istore(reloaded).email == new
+    assert getattr(istore(reloaded), VOUCHED_CREATOR) == new
+
+
+def test_an_email_move_that_did_not_land_refuses_the_rename() -> None:
+    config = make_config()
+    actor, old = _pinned_actor(config)
+    store_cls = type(istore(actor))
+    real = store_cls.set_confirmed
+
+    def fails(self: Any, k: str, v: Any, **kw: Any) -> bool:
+        if k == "email":
+            return False
+        return real(self, k, v, **kw)
+
+    with patch.object(store_cls, "set_confirmed", fails):
+        assert ActorInterface(actor).modify_creator(_mail()) is False
+    kept = Actor(actor_id=aid(actor), config=config)
+    assert kept.creator == old
+    assert istore(kept).email == old
+    assert is_vouched_store(istore(kept), old)
+
+
+def test_an_unreadable_email_after_an_unconfirmed_move_raises() -> None:
+    """Whether the commit point was passed is unknown: DbError, not False."""
+    config = make_config()
+    actor, _old = _pinned_actor(config)
+    store_cls = type(istore(actor))
+    real = store_cls.set_confirmed
+
+    def fails(self: Any, k: str, v: Any, **kw: Any) -> bool:
+        if k == "email":
+            return False
+        return real(self, k, v, **kw)
+
+    with (
+        patch.object(store_cls, "set_confirmed", fails),
+        patch.object(store_cls, "read_strict", side_effect=DbError("down")),
+    ):
+        with pytest.raises(DbError):
+            ActorInterface(actor).modify_creator(_mail())
+
+
+def test_a_load_that_moved_the_creator_first_counts_as_the_rename() -> None:
+    """A request loads the actor between the email move and the rename: its
+    load moves the creator to the new email, so this handle's conditional
+    rename loses. That is the rename landing, not a refusal; the email is
+    not put back."""
+    config = make_config()
+    actor, _old = _pinned_actor(config)
+    new = _mail()
+    real = Actor.modify
+    raced: list[bool] = []
+
+    def after_a_concurrent_load(self: Actor, *a: Any, **k: Any) -> bool:
+        if not raced:
+            raced.append(True)
+            assert Actor(actor_id=aid(actor), config=config).creator == new
+        return real(self, *a, **k)
+
+    with patch.object(Actor, "modify", after_a_concurrent_load):
+        assert ActorInterface(actor).modify_creator(new) is True
+    assert actor.creator == new
+    reloaded = Actor(actor_id=aid(actor), config=config)
+    assert reloaded.creator == new
+    assert istore(reloaded).email == new
+    assert getattr(istore(reloaded), VOUCHED_CREATOR) == new
+    assert getattr(istore(reloaded), VOUCHED_CREATOR_PENDING, None) is None
+
+
+def test_a_rename_that_raised_before_landing_completes_at_the_next_load() -> None:
+    """Past the commit point the outcome converges forward: the next load
+    moves the creator to the moved email, and the pending value vouches it."""
+    config = make_config()
+    actor, _old = _pinned_actor(config)
+    new = _mail()
+    with patch.object(Actor, "modify", side_effect=DbError("down")):
+        with pytest.raises(DbError):
+            ActorInterface(actor).modify_creator(new)
+    reloaded = Actor(actor_id=aid(actor), config=config)
+    assert reloaded.creator == new
+    assert istore(reloaded).email == new
+    assert is_vouched_store(istore(reloaded), new)
+    # The same call again finishes the bookkeeping.
+    assert ActorInterface(reloaded).modify_creator(new) is True
+    done = istore(Actor(actor_id=aid(actor), config=config))
+    assert getattr(done, VOUCHED_CREATOR) == new
+    assert getattr(done, VOUCHED_CREATOR_PENDING, None) is None
+
+
+@pytest.mark.parametrize("pin", [True, False])
+def test_a_vouch_promotion_fault_still_answers_renamed(pin: bool) -> None:
+    """The creator changed, so True; the pending value keeps the new creator
+    vouched until the next rename or clean."""
+    import copy
+
+    config = copy.copy(make_config())
+    config.force_email_prop_as_creator = pin
+    actor, _old = _pinned_actor(config)
+    new = _mail()
+    store_cls = type(istore(actor))
+    real = store_cls.set_confirmed
+
+    def fails(self: Any, k: str, v: Any, **kw: Any) -> bool:
+        if k == VOUCHED_CREATOR:
+            return False
+        return real(self, k, v, **kw)
+
+    with patch.object(store_cls, "set_confirmed", fails):
+        assert ActorInterface(actor).modify_creator(new) is True
+    reloaded = Actor(actor_id=aid(actor), config=config)
+    assert reloaded.creator == new
+    assert getattr(istore(reloaded), VOUCHED_CREATOR_PENDING) == new
+    assert is_vouched_store(istore(reloaded), new)
 
 
 @pytest.mark.parametrize("pin", [True, False])
@@ -225,3 +346,54 @@ def test_a_restore_leaves_a_concurrent_renames_email_alone() -> None:
     with patch.object(Actor, "modify", concurrent):
         assert ActorInterface(actor).modify_creator(mine) is False
     assert istore(Actor(actor_id=aid(actor), config=config)).email == theirs
+
+
+def test_a_faulting_restore_keeps_the_renames_own_outcome() -> None:
+    """The store faults during the rollback too: the rename's own exception
+    (CreatorTaken) still reaches the caller."""
+    config = make_config()
+    old, new = _mail(), _mail()
+    actor = create_core_actor(config, old, auth_method="google_oauth2")
+    istore(actor).email = old
+    store_cls = type(istore(actor))
+    with (
+        patch.object(Actor, "modify", side_effect=CreatorTaken(new)),
+        patch.object(store_cls, "replace_if_equal", side_effect=RuntimeError("down")),
+    ):
+        with pytest.raises(CreatorTaken):
+            ActorInterface(actor).modify_creator(new)
+
+
+def test_a_rename_that_landed_before_its_error_keeps_the_moved_email() -> None:
+    """modify raised after its write landed (a lost acknowledgement): the
+    fresh read shows the new creator, so the email is not put back."""
+    config = make_config()
+    old, new = _mail(), _mail()
+    actor = create_core_actor(config, old, auth_method="google_oauth2")
+    istore(actor).email = old
+    real = Actor.modify
+
+    def landed_then_raised(self: Actor, *a: Any, **k: Any) -> bool:
+        real(self, *a, **k)
+        raise DbError("acknowledgement lost")
+
+    with patch.object(Actor, "modify", landed_then_raised):
+        with pytest.raises(DbError):
+            ActorInterface(actor).modify_creator(new)
+    reloaded = Actor(actor_id=aid(actor), config=config)
+    assert reloaded.creator == new
+    assert istore(reloaded).email == new
+
+
+def test_a_lost_conditional_write_does_not_read_as_an_unreadable_store() -> None:
+    """A lost set_if_absent invalidates the Attributes cache on a healthy
+    backend; the store's own read outcome stays good, so a rename goes on."""
+    config = make_config()
+    old, new = _mail(), _mail()
+    actor = create_core_actor(config, old, auth_method="google_oauth2")
+    istore(actor).email = old
+    store = istore(actor)
+    assert store.set_if_absent("email", _mail()) is False  # loses: email held
+    assert store.loaded
+    assert ActorInterface(actor).modify_creator(new)
+    assert Actor(actor_id=aid(actor), config=config).creator == new

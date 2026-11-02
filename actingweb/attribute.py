@@ -38,6 +38,10 @@ class InternalStore:
         # The one folding read: ``actor.store.x`` never raises on a fault.
         # ``loaded`` stays False after one, and is the caller's signal.
         d = self.__dict__["_db"].get_bucket(strict=False)
+        # Kept here, not read from the Attributes cache flag: that flag also
+        # drops when a conditional write loses (the cache is invalidated) on
+        # a healthy backend, which is not a failed read.
+        self.__dict__["_read_ok"] = self.__dict__["_db"].loaded
         if d:
             for k, v in d.items():
                 # Populate directly — no write-through back to the database
@@ -53,7 +57,7 @@ class InternalStore:
         first.
         """
         self._ensure_loaded()
-        return self.__dict__["_db"].loaded
+        return bool(self.__dict__.get("_read_ok", False))
 
     def mark_empty(self) -> None:
         """Treat the bucket as read and empty, without a database read.
@@ -61,6 +65,7 @@ class InternalStore:
         For an actor that was just created: its bucket has nothing in it yet.
         """
         self.__dict__["_loaded"] = True
+        self.__dict__["_read_ok"] = True
         self.__dict__["_db"].mark_loaded_empty()
 
     def set_confirmed(self, k: str, v: Any, *, raise_on_fault: bool = False) -> bool:
@@ -106,14 +111,59 @@ class InternalStore:
         self.__dict__[k] = v
         return True
 
+    def read_strict(self, k: str) -> Any:
+        """Read ``k`` from the database now (not the cached copy) and cache
+        it; None when no row holds it. Raises ``DbError`` on a fault."""
+        self._ensure_loaded()
+        db = self.__dict__["_db"]
+        row = (
+            db.dbprop.get_attr_strict(actor_id=db.actor_id, bucket=db.bucket, name=k)
+            if db.dbprop
+            else None
+        )
+        if isinstance(row, dict) and "data" in row:
+            self.__dict__[k] = row["data"]
+            return row["data"]
+        self.__dict__.pop(k, None)
+        return None
+
     def replace_if_equal(self, k: str, expected: Any, v: Any) -> bool:
         """Replace ``k`` with ``v`` only while it holds ``expected`` (one
         conditional update). True when replaced. False when it holds
         something else, or on a fault (``conditional_update_attr`` folds
-        both); this instance then re-reads ``k`` on its next access."""
+        both, and so does this). On False this instance re-reads ``k`` at
+        once, strictly; when that read faults too, or the row is gone, it
+        answers None for ``k``. Never raises."""
         self._ensure_loaded()
         db = self.__dict__["_db"]
         if db.conditional_update_attr(name=k, old_data=expected, new_data=v):
+            self.__dict__[k] = v
+            return True
+        self.__dict__.pop(k, None)
+        try:
+            row = (
+                db.dbprop.get_attr_strict(
+                    actor_id=db.actor_id, bucket=db.bucket, name=k
+                )
+                if db.dbprop
+                else None
+            )
+        except DbError:  # folds DbError: the documented False; the key forgotten
+            return False
+        if isinstance(row, dict) and "data" in row:
+            self.__dict__[k] = row["data"]
+        return False
+
+    def set_if_absent(self, k: str, v: Any) -> bool:
+        """Write ``k`` only if no row holds it (one atomic create). True when
+        this call wrote it, or the stored value already equals ``v``; False
+        when another value is stored (this instance then reads the winner's
+        value, strictly, so it never answers None for a held key). Raises
+        ``DbError`` on a fault."""
+        self._ensure_loaded()
+        db = self.__dict__["_db"]
+        won = db.create_attr_if_absent(name=k, data=v)
+        if won:
             self.__dict__[k] = v
             return True
         self.__dict__.pop(k, None)
@@ -125,20 +175,6 @@ class InternalStore:
         if isinstance(row, dict) and "data" in row:
             self.__dict__[k] = row["data"]
         return False
-
-    def set_if_absent(self, k: str, v: Any) -> bool:
-        """Write ``k`` only if no row holds it (one atomic create). True when
-        this call wrote it, or the stored value already equals ``v``; False
-        when another value is stored (this instance then forgets ``k``, and a
-        fresh store reads the winner's value). Raises ``DbError`` on a
-        fault."""
-        self._ensure_loaded()
-        won = self.__dict__["_db"].create_attr_if_absent(name=k, data=v)
-        if won:
-            self.__dict__[k] = v
-        else:
-            self.__dict__.pop(k, None)
-        return bool(won)
 
     def __getitem__(self, k: str) -> Any:
         return self.__getattr__(k)

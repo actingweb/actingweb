@@ -771,3 +771,4 @@ def test_retry_after_as_an_http_date_is_ignored() -> None:
         assert _retry_after_seconds({"Retry-After": bad}) is None
     assert _retry_after_seconds({"Retry-After": " 7 "}) == 7
     assert _retry_after_seconds({"Retry-After": "99999999999"}) == 86400
+    assert _retry_after_seconds({"Retry-After": "9" * 5000}) == 86400

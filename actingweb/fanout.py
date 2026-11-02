@@ -40,6 +40,8 @@ def _retry_after_seconds(headers: Any) -> int | None:
     value = value.strip()
     if not value or not value.isascii() or not value.isdigit():
         return None
+    if len(value) > 5:
+        return 86400  # past a day either way; int() refuses 4,300+ digits
     return min(int(value), 86400)
 
 

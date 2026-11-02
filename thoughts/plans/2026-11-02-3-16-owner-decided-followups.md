@@ -43,7 +43,7 @@ Owner, 2026-11-02, unless marked otherwise. Evaluation changes are marked `[Eval
   - `[Outside voice]` Neither helper fits: `_settle_record` skips a row that does not hold the key yet (`unique_creators.py:561-562`), and `_rename` clears the stored email (`:491-493`). D5 gets its own record-aware rename: the `unique_creator` rename transaction (`db/dynamodb/actor.py:216`, `_modify_unique`; PostgreSQL's unique index) through a `Config` with `unique_creator=True`, keeping `store.email`. A held email answers `CreatorTaken` and is reported.
 - **D6. `unique_creator=` on custom backends:** keep passing it always. Closed, no change.
 - **D7. `#…` creators:** keep refusing every creator that starts with `#`. Closed, no change.
-- **D8. The SDK rename's binding window** (`interface/actor_interface.py:410-460`). `[Updated 2026-11-02, owner]` Writing `vouched_creator` first leaves a window for provider-id creators, and a failed restore makes the actor read unvouched, so the owner's next sign-in cleans it in place (`oauth2.py:1714`, `:2466-2492`). Approach: `modify_creator` writes `vouched_creator_pending` (the new address, `normalise_creator`), renames, then promotes it to `vouched_creator` and deletes the pending value. `is_vouched_store` accepts a creator equal to either. No window for either creator type and no restore step. A raising or refused rename leaves the pending value, which only ever names an address this actor's application chose; the next `modify_creator` overwrites it. A fault writing the pending value refuses the rename. A pre-3.16 actor without `vouched_creator` is renamed as today (nothing to bind).
+- **D8. The SDK rename's binding window** (`interface/actor_interface.py:410-460`). `[Updated 2026-11-02, owner]` Writing `vouched_creator` first leaves a window for provider-id creators, and a failed restore makes the actor read unvouched, so the owner's next sign-in cleans it in place (`oauth2.py:1714`, `:2466-2492`). Approach: `modify_creator` writes `vouched_creator_pending` (the new address, `normalise_creator`), renames, then promotes it to `vouched_creator` and deletes the pending value. `is_vouched_store` accepts a creator equal to either. No window for either creator type and no restore step. A raising or refused rename leaves the pending value, which only ever names an address this actor's application chose; the next `modify_creator` overwrites it. A fault writing the pending value refuses the rename. A pre-3.16 actor without `vouched_creator` is renamed as today (nothing to bind). `[Updated 2026-11-02, audit]` Under `force_email_prop_as_creator` the stored email is the commit point of the rename (each load moves the creator to it); the email is put back only on a definite refusal, and `modify_creator` answers True once the creator is renamed. See Iterations entry 21.
 - **D9. `find_db_error` and `is_permanent`** (`interface/integrations/_errors.py:109-122` and `:57-76`): follow `__cause__` only. A bug raised while handling a `DbError`, inside `except DbError` or a broader `except Exception`, answers 500. Library code is held to `from` by ruff's B904, so the change reaches consumer wrappers only. `[Eval]` A backend error reached only through `__context__` no longer decides "permanent"; such a `DbError` answers 503.
 - **D10. `GET /?format=json` CORS** (`handlers/factory.py:134-142`; both integrations copy the handler's headers): drop `Access-Control-Allow-Credentials`. `[Eval]` Without credentials a reflected origin is the same as `*`, so send `Access-Control-Allow-Origin: *` and no `Vary` question arises. The entry is scoped to `/?format=json`; the SPA and email endpoints keep their configured CORS.
   - `[Outside voice]` A cross-origin client that sends credentials on this fetch (axios `withCredentials`, `credentials: 'include'`) is refused by the browser once the answer carries `*`. The CHANGED entry tells consumers to drop credentials on this one request, and `docs/guides/spa-authentication.rst:1881-1887` is corrected.
@@ -675,4 +675,60 @@ Commits: `eca175e` Phase 1, `1022381` Phase 2, `d432a71` Phase 3, `6554c76` the 
 - The changelog names `auto_sequence` beside subscription processing for the 400, and moves the unreadable-bucket refusal to its own sentence.
 
 **Files affected**: `actingweb/interface/actor_interface.py`, `actingweb/attribute.py`, `actingweb/fanout.py`, `CHANGELOG.rst`; `tests/test_rename_pending_vouch.py` (unreadable store with and without the pin, asserting nothing was written; a concurrent rename's email kept), `tests/test_fanout.py`
+
+### 2026-11-02, after the review of `d6527ae` (codex, a fresh-context Claude, the built-in code review)
+
+#### 20. The store keeps its own read outcome; the restore never masks the rename's error
+
+**Category**: Verification fix
+
+**What changed**:
+- `InternalStore.loaded` reports the store's own bucket read (kept at load time), not the `Attributes` cache flag, which also drops when a conditional write loses on a healthy backend; with that, the rename uses the actor's own store again (no second read, no replaced store object), and `creator_change_pinned` no longer fails open after a lost `set_if_absent`.
+- `InternalStore.set_if_absent` re-reads the winner's value strictly when it loses, so a held key never reads as None (a lost seeding followed by a rename would otherwise have skipped the email move and been undone at the next load).
+- `replace_if_equal` folds a fault in its re-read (it is documented never to raise); `_restore_email` folds any fault, so the rename's own outcome (False, or `CreatorTaken`) reaches the caller.
+- When `modify` raises, the email is put back only once a fresh read shows the stored creator unchanged (a lost acknowledgement can follow a write that landed), as `modify_creator_unvouched` does for its marker.
+- `_retry_after_seconds` answers a day for a value over five digits before `int()` (which refuses 4,300+ digits).
+- The changelog states the restore's conditions, that the unreadable-bucket refusal covers every `modify_creator` without `unvouch`, and that `auto_sequence` is on by default while subscription processing is not.
+
+**Files affected**: `actingweb/attribute.py`, `actingweb/interface/actor_interface.py`, `actingweb/fanout.py`, `CHANGELOG.rst`; `tests/test_rename_pending_vouch.py` (a faulting restore keeps `CreatorTaken`; a landed rename keeps its email; a lost conditional write is not an unreadable store), `tests/test_fanout.py`
+
+**Accepted**: two concurrent renames of one actor can still leave the email of one with the creator of the other (the documented "serialise renames of one actor").
+
+### 2026-11-02, audit of the vouched rename (owner asked for an audit instead of further review rounds)
+
+#### 21. The rename as one state machine: the stored email is the commit point
+
+**Category**: Decision changed
+
+**Why an audit**: six review rounds each found a finer fault or race in `_rename_vouched`, and each fix added a branch (restore, conditional restore, fresh-read restore). The root cause was a design that fought the load: under `force_email_prop_as_creator`, `Actor.get` moves the creator to the stored email on every load, while the rename tried to undo an email move it could not prove had failed. The audit wrote down the invariant and every intermediate state, then kept only the code the table needs.
+
+**Invariant**: after any outcome (True, False, a raise, a stop mid-way) every sign-in for the old or the new address finds the actor vouched (if it was), and the four values converge to one address without a further call: the creator, `store.email` (under the pin), `vouched_creator`, `vouched_creator_pending`.
+
+**Writes, in order** (pinned + bound, the hardest case): P pending := new; E email := new; C creator := new; V vouched_creator := new; X pending removed.
+
+| Stopped after | Next load under the pin | Sign-in for old | Sign-in for new | Outcome |
+| --- | --- | --- | --- | --- |
+| nothing (P faults) | nothing changes | vouched (V) | not resolved | False |
+| P | nothing changes (email = creator) | vouched (V) | not resolved | False, stale pending (only an address the app chose; the next rename overwrites it) |
+| E (C raised, or the call stopped) | moves the creator to new (forward) | not resolved after the load | vouched (pending, email) | DbError; the rename completes at the next load or on a repeat call |
+| E, C lost to a concurrent load that already moved it | (already moved) | not resolved | vouched | True (fresh load shows new) |
+| E, C refused (`CreatorTaken`) | the email is held elsewhere, so the load skips it | vouched | another actor's | email put back while it still holds new; `CreatorTaken` |
+| C | (consistent) | not resolved | vouched (pending, email) | True; V faulting is logged |
+| V | (consistent) | not resolved | vouched | True; X faulting is logged (pending names the current creator) |
+
+Without the pin (or with no stored email) E is skipped. A stop after P or a refusal of C leaves only the stale pending value; a stop after C is True.
+
+**Previous defect found by the table**: `Actor.modify` is conditioned on the creator the handle loaded with. A request that loaded the actor between E and C moved the creator to new itself, so the rename's own `modify` answered False, and the code then put the email back. The next load reverted the creator to old and undid a rename that had landed. It is now handled by a fresh load that checks the creator. The table's other rows needed no restore at all.
+
+**What changed**:
+- `_rename_vouched` follows the table; the pinned steps (E, C) live in `_rename_pinned`. An unconfirmed email write is re-read strictly (`InternalStore.read_strict`, new): moved means go on, not moved means False, and an unreadable email raises `DbError`. A `modify` that answers False is followed by a fresh load (the load moves the creator if it can): True when the creator is new; otherwise, and on `CreatorTaken`, the email is put back while it still holds new. A `DbError` from `modify` propagates with nothing put back.
+- Removed: `_creator_unchanged` (the fresh-read restore after a raise) and the restore after a lost email confirmation. A faulting V answers True instead of False; the creator was renamed and the pending value keeps it vouched.
+- The fault-guard failure from batch 6 (an unmarked broad `except` in `_creator_unchanged`) went with the function.
+
+**Files affected**: `actingweb/interface/actor_interface.py`, `actingweb/attribute.py` (`read_strict`), `CHANGELOG.rst`, `tests/test_rename_pending_vouch.py` (one test per row: a lost email acknowledgement goes on; an email that did not land refuses; an unreadable email raises; a concurrent load's move counts as the rename; a raise past E completes at the next load and on a repeat; a faulting V answers True, with and without the pin; the existing `CreatorTaken`, refusal, concurrent-email and unreadable-store tests keep their rows).
+
+**Accepted** (recorded, not fixed):
+- Two concurrent renames of one actor are not serialised; the email of one can end with the creator of the other, and a sign-in between them can find the actor unvouched (documented: serialise renames of one actor).
+- A raise past E returns `DbError` although the rename will complete; the caller cannot tell "not renamed" from "renamed later" without reading the actor. Repeating the call is idempotent.
+- No cross-row transaction: the creator and `_internal` live in different tables. A single transactional write would remove the table, but it needs a new backend API on both backends and is out of scope for 3.16.
 

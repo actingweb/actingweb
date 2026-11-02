@@ -143,15 +143,24 @@ SECURITY
   it after the rename, so a sign-in during a rename finds the actor vouched
   under the old creator and the new one, for an email or a provider-id
   creator alike. A fault writing the pending address refuses the rename
-  (False). **Behavior change:** with ``force_email_prop_as_creator`` on, a
-  vouched rename of an actor that has a stored email moves the email to the
-  new address first (and back, best effort and logged if that faults, when
-  the rename does not land); before, the next
-  load rewrote the creator back to the old stored email, undoing the rename.
+  (False). It answers True once the creator is renamed, also when moving
+  the recorded address afterwards faults (logged; the pending value keeps
+  the new creator vouched). **Behavior change:** with
+  ``force_email_prop_as_creator`` on, a vouched rename of an actor that has
+  a stored email moves the email to the new address first. Since every
+  load moves the creator to the stored email, that write commits the
+  rename: a ``DbError`` after it leaves the rename to complete at the next
+  load (or when the call is repeated), and a rename that loses because a
+  load already moved the creator counts as renamed. The email is put back
+  only when the rename definitely did not land (``CreatorTaken``, or a
+  fresh load still showing another creator), and only while it still holds
+  the new address; logged when it cannot be. Before, the next load rewrote
+  the creator back to the old stored email, undoing the rename.
   Such a rename to a creator that is not an address is refused (False),
-  since the load would undo it too. A vouched rename whose ``_internal``
-  bucket cannot be read is refused in every configuration: unread, the
-  vouch would not move with it. Two concurrent renames of one actor share the one pending value,
+  since the load would undo it too. ``modify_creator`` (without
+  ``unvouch``) refuses a rename when the actor's ``_internal`` bucket could
+  not be read, in every configuration: unread, a vouched actor looks
+  unvouched and its vouch would not move with it. Two concurrent renames of one actor share the one pending value,
   so a sign-in between them can still find it unvouched; serialise renames
   of one actor.
   The emailed verification link proves only the address it was sent to: an
@@ -1179,8 +1188,8 @@ FIXED
   check and the fetch can still find it gone, and a failed delivery of one
   is recovered only by a resync. One whose diff cannot be fetched now
   answers 503 and processes nothing (it used to apply an empty diff and
-  advance the sequence). With subscription processing and ``auto_sequence``
-  on (the defaults), a callback the subscriber fetches by URL (not a resync)
+  advance the sequence). With subscription processing on and
+  ``auto_sequence`` at its default (on), a callback the subscriber fetches by URL (not a resync)
   without an integer ``sequence`` answers 400. ``FanOutManager`` no longer counts
   the in-progress answer toward opening a subscriber's circuit breaker, and
   a half-open breaker that gets it closes; every other 503, a subscriber's

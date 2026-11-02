@@ -519,9 +519,8 @@ class CallbacksHandler(base_handler.BaseHandler):
         fetched_from_url = bool(callback_url and not callback_data)
 
         if fetched_from_url and callback_type != "resync":
-            if not isinstance(params.get("sequence"), int) or isinstance(
-                params.get("sequence"), bool
-            ):
+            fetched_seq = params.get("sequence")
+            if not isinstance(fetched_seq, int) or isinstance(fetched_seq, bool):
                 logger.warning(
                     f"Callback from {peer_id} for {subscription_id}: "
                     "the sequence is not an integer"
@@ -536,7 +535,7 @@ class CallbacksHandler(base_handler.BaseHandler):
                 actor_interface,
                 gap_timeout_seconds=config.gap_timeout_seconds,
                 max_pending=config.max_pending,
-            ).precheck(peer_id, subscription_id, params.get("sequence", 0))
+            ).precheck(peer_id, subscription_id, fetched_seq)
             if early == ProcessResult.DUPLICATE:
                 return True
             if early == ProcessResult.IN_PROGRESS:

@@ -645,3 +645,20 @@ Commits: `eca175e` Phase 1, `1022381` Phase 2, `d432a71` Phase 3, `6554c76` the 
 
 **Files affected**: `actingweb/interface/actor_interface.py`, `actingweb/handlers/callbacks.py`, `actingweb/fanout.py`, `CHANGELOG.rst`; `tests/test_rename_pending_vouch.py`, `tests/test_callback_in_progress_answer.py`, `tests/test_fanout.py`
 
+### 2026-11-02, after the review of `df50a6e` (codex, a fresh-context Claude, the built-in code review)
+
+#### 18. Fault paths around the email pin, and wording
+
+**Category**: Verification fix
+
+**What changed**:
+- A rename whose `_internal` bucket cannot be read is refused under the pin (it used to run unpinned and be undone by the next good load).
+- A lost acknowledgement on the email move puts the email back before refusing, so the next load does not complete the refused rename.
+- `_retry_after_seconds` parses with `int()` under `try` (`isdigit()` accepts characters `int()` refuses).
+- The low-granularity check binds the sequence once; the changelog names what it really covers (a callback fetched by URL, subscription processing on), and states that the poll's upward-only write applies after applying diffs, not to the baseline fallback.
+- The `"error"`-key baseline check (older than 3.16, put back by entry 16) is recorded in the subscriber-hardening todo.
+
+**Files affected**: `actingweb/interface/actor_interface.py`, `actingweb/fanout.py`, `actingweb/handlers/callbacks.py`, `CHANGELOG.rst`, `thoughts/todo/subscription-subscriber-fault-hardening.md`; `tests/test_rename_pending_vouch.py` (two tests, and the creator assertion restored), `tests/test_fanout.py`
+
+**Accepted**: the sync and async copies of `sync_subscription` and the baseline fetch stay twins, as do the two 503 branches in `fanout.py`.
+

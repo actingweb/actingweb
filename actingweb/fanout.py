@@ -34,7 +34,13 @@ def _retry_after_seconds(headers: Any) -> int | None:
     """``Retry-After`` in seconds, or None when absent or not a number (an
     HTTP-date is valid but not used here)."""
     value = headers.get("Retry-After") if headers is not None else None
-    return int(value) if isinstance(value, str) and value.isdigit() else None
+    if not isinstance(value, str):
+        return None
+    try:
+        seconds = int(value.strip())
+    except ValueError:
+        return None
+    return seconds if seconds >= 0 else None
 
 
 # Shared HTTP client for connection pooling (module-level singleton)

@@ -144,11 +144,12 @@ def test_a_refused_rename_puts_the_stored_email_back() -> None:
     config = make_config()
     old, new = _mail(), _mail()
     actor = create_core_actor(config, old, auth_method="google_oauth2")
-    stored = old.replace("@", "@EXAMPLE.").replace("example.com", "com")
+    stored = old.replace("@example.com", "@EXAMPLE.com")
     istore(actor).email = stored  # mixed case, as a provider may store it
     with patch.object(Actor, "modify", return_value=False):
         assert ActorInterface(actor).modify_creator(new) is False
     reloaded = Actor(actor_id=aid(actor), config=config)
+    assert reloaded.creator == old
     assert istore(reloaded).email == stored  # put back exactly
 
 
@@ -161,3 +162,36 @@ def test_a_rename_to_a_provider_id_under_the_email_pin_is_refused() -> None:
     kept = Actor(actor_id=aid(actor), config=config)
     assert kept.creator == old
     assert getattr(istore(kept), VOUCHED_CREATOR_PENDING, None) is None
+
+
+def test_a_lost_email_move_confirmation_puts_the_email_back() -> None:
+    config = make_config()
+    old, new = _mail(), _mail()
+    actor = create_core_actor(config, old, auth_method="google_oauth2")
+    istore(actor).email = old
+    store_cls = type(istore(actor))
+    real = store_cls.set_confirmed
+
+    def lost_ack(self: Any, k: str, v: Any, **kw: Any) -> bool:
+        if k == "email" and v == new:
+            real(self, k, v, **kw)  # the write lands
+            return False  # the confirmation is lost
+        return real(self, k, v, **kw)
+
+    with patch.object(store_cls, "set_confirmed", lost_ack):
+        assert ActorInterface(actor).modify_creator(new) is False
+    reloaded = Actor(actor_id=aid(actor), config=config)
+    assert reloaded.creator == old
+    assert istore(reloaded).email == old
+
+
+def test_a_rename_with_an_unreadable_store_under_the_pin_is_refused() -> None:
+    config = make_config()
+    old = _mail()
+    actor = create_core_actor(config, old, auth_method="google_oauth2")
+    store_cls = type(istore(actor))
+    with patch.object(
+        store_cls, "loaded", new_callable=lambda: property(lambda self: False)
+    ):
+        assert ActorInterface(actor).modify_creator(_mail()) is False
+    assert Actor(actor_id=aid(actor), config=config).creator == old

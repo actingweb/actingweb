@@ -473,6 +473,20 @@ class ActorInterface:
         # rewrites the creator to it): a rename moves it first and puts it
         # back if the rename does not land. Decided before anything is
         # written.
+        config = self._core_actor.config
+        if (
+            config
+            and config.force_email_prop_as_creator
+            and store is not None
+            and not store.loaded
+        ):
+            # Whether the creator is pinned (and to what) cannot be read: a
+            # rename now could be undone by the next load.
+            logger.error(
+                f"Actor {self.id}: its _internal bucket could not be read; "
+                "rename refused"
+            )
+            return False
         pinned = self._pinned_email()
         if pinned is not None and "@" not in target:
             logger.error(
@@ -489,6 +503,9 @@ class ActorInterface:
                 return False
         moved = pinned is not None and pinned.lower() != target
         if moved and (store is None or not store.set_confirmed("email", target)):
+            # A write that landed with its confirmation lost would move the
+            # creator at the next load: put the email back.
+            self._restore_email(pinned)
             logger.error(
                 f"Actor {self.id}: the stored email could not be moved to "
                 f"{target}; rename refused"

@@ -766,3 +766,4 @@ def test_retry_after_as_an_http_date_is_ignored() -> None:
         _retry_after_seconds({"Retry-After": "Wed, 21 Oct 2026 07:28:00 GMT"}) is None
     )
     assert _retry_after_seconds({}) is None
+    assert _retry_after_seconds({"Retry-After": "\u00b2"}) is None

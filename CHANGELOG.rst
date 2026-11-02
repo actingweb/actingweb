@@ -146,7 +146,8 @@ SECURITY
   (False). **Behavior change:** with ``force_email_prop_as_creator`` on, a
   vouched rename of an actor that has a stored email moves the email to the
   new address first (and back, best effort and logged if that faults, when
-  the rename does not land); before, the next
+  the rename does not land); a rename whose ``_internal`` bucket cannot be
+  read is refused; before, the next
   load rewrote the creator back to the old stored email, undoing the rename.
   Such a rename to a creator that is not an address is refused (False),
   since the load would undo it too. Two concurrent renames of one actor share the one pending value,
@@ -1162,7 +1163,9 @@ FIXED
   instead of 204, and the gap timeout waits while the claim is live. A
   poll (``sync_subscription``) stops before such a sequence, neither
   clearing nor recording past it (``SubscriptionSyncResult.in_flight``,
-  new), and its final sequence write only raises the sequence it read. A
+  new), and after applying diffs it writes its sequence only when that is
+  above the one it read (a read, then a write; the baseline fallback still
+  writes the publisher's sequence as it is). A
   high-granularity diff stays on this library's publisher until a poll or an
   acknowledgement clears it (the publisher does not redeliver), so if the
   claiming delivery fails, the next poll or gap resync applies it. A handler
@@ -1175,8 +1178,9 @@ FIXED
   check and the fetch can still find it gone, and a failed delivery of one
   is recovered only by a resync. One whose diff cannot be fetched now
   answers 503 and processes nothing (it used to apply an empty diff and
-  advance the sequence). A low-granularity callback without an integer
-  ``sequence`` answers 400. ``FanOutManager`` no longer counts
+  advance the sequence). With subscription processing on, a callback the
+  subscriber fetches by URL (not a resync) without an integer ``sequence``
+  answers 400. ``FanOutManager`` no longer counts
   the in-progress answer toward opening a subscriber's circuit breaker, and
   a half-open breaker that gets it closes; every other 503, a subscriber's
   store-fault answer included, and a 429 still count. **Check:** the claim

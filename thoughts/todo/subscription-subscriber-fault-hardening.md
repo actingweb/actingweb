@@ -93,4 +93,8 @@ and position).
   baseline fallback (the poll's way out after a gap reset, when every diff
   reads as pending); a first fix that stopped there trapped a subscription
   after a gap timeout and was reverted.
+- **`_fetch_and_transform_baseline` reads a baseline with a property named
+  `error` as a failed fetch** (`"error" in baseline_response`, sync and async),
+  and a list baseline containing the string `"error"` raises on `.get`.
+  Belongs with the failed-fetch signal above.
 

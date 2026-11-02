@@ -379,13 +379,17 @@ CHANGED
   lookup row and the old value's lookup row are one ``TransactWriteItems``
   and a fault raises with nothing written; PostgreSQL already rolled the pair
   back together. A value another actor already holds is still a logged
-  ``LOOKUP_COLLISION``, not a failure. An indexed write costs about twice the
-  write units of a plain put on DynamoDB (non-indexed writes are unchanged),
-  and the IAM role needs ``PutItem`` and ``DeleteItem`` on both tables. A
+  ``LOOKUP_COLLISION``, not a failure. On DynamoDB an indexed write that
+  changes the value is one consistent read of the property plus a
+  transaction of two or three items (the property, the new lookup row, the
+  old one), each billed at twice a plain write; non-indexed writes are
+  unchanged. The IAM role needs ``PutItem`` and ``DeleteItem`` on both
+  tables. A
   write that leaves an indexed value unchanged claims a missing lookup row
   (the value was stored during a collision and the other actor has since let
-  it go), so the value becomes findable. On DynamoDB it stays a plain put
-  plus one consistent lookup read; the claim, when needed, is a transaction
+  it go), so the value becomes findable. On DynamoDB it writes nothing: one
+  consistent property read plus one consistent lookup read; the claim, when
+  needed, is a transaction
   conditioned on the property still holding the value and the actor row
   still existing, and a fault in it is
   logged as ``LOOKUP_HEAL_FAILED`` and never fails the write (the role needs

@@ -833,6 +833,17 @@ def _pg_take_over_stale(
     """
     from actingweb.db.postgresql.property_lookup import claim_in_transaction
 
+    stale = _pg_stale_rows(conn, names)
+    for name, value, previous, holders in stale:
+        _pg_take_over_one(
+            conn, stats, claim_in_transaction, name, value, previous, holders, apply
+        )
+
+
+def _pg_stale_rows(conn: Any, names: list[str]) -> list[Any]:
+    """(name, value, previous holder, [current holders]) for each lookup row
+    whose holder no longer holds the value (a snapshot; each takeover
+    re-checks under lock)."""
     with conn.cursor() as cur:
         cur.execute(
             "SELECT l.property_name, l.value, l.actor_id, "
@@ -848,26 +859,60 @@ def _pg_take_over_stale(
         )
         stale = cur.fetchall()
     conn.rollback()
-    for name, value, previous, holders in stale:
-        if len(holders) > 1:
-            for actor_id in holders:
-                stats.collision(
-                    name,
-                    f"property={name} actor={actor_id} held_by={previous} "
-                    f"(stale; shares_with="
-                    f"{','.join(i for i in holders if i != actor_id)})",
-                )
-            continue
-        if not apply:
-            stats.bump("taken_over")
-            stats.bump("written")
-            continue
+    return list(stale)
+
+
+def _pg_take_over_one(
+    conn: Any,
+    stats: BackfillStats,
+    claim_in_transaction: Any,
+    name: str,
+    value: str,
+    previous: str,
+    holders: list[str],
+    apply: bool,
+) -> None:
+    """One stale row: a collision with several current holders, else a
+    takeover for the one (counted by a dry run)."""
+    if len(holders) > 1:
+        for actor_id in holders:
+            stats.collision(
+                name,
+                f"property={name} actor={actor_id} held_by={previous} "
+                f"(stale; shares_with="
+                f"{','.join(i for i in holders if i != actor_id)})",
+            )
+        return
+    if not apply:
+        stats.bump("taken_over")
+        stats.bump("written")
+        return
+    new_owner = holders[0]
+    try:
         with conn.transaction(), conn.cursor() as cur:
-            outcome = claim_in_transaction(cur, name, value, holders[0])
+            # The new owner must still hold the value at the claim: lock
+            # its property row (by key) and re-check, so a holder that
+            # moved on since the listing is not given the row.
+            cur.execute(
+                "SELECT p.value FROM properties p JOIN actors a ON a.id = p.id "
+                "WHERE p.id = %s AND p.name = %s FOR SHARE OF p",
+                (new_owner, name),
+            )
+            row = cur.fetchone()
+            outcome = (
+                claim_in_transaction(cur, name, value, new_owner)
+                if row is not None and row[0] == value
+                else "skipped"
+            )
         conn.commit()
-        if outcome == "taken_over":
-            stats.bump("taken_over")
-            stats.bump("written")
+    except Exception as e:  # folds DbError: counted as a fault; the pass goes on
+        conn.rollback()
+        logger.error(f"LOOKUP_TAKEOVER_FAILED: property={name} actor={new_owner}: {e}")
+        stats.fault()
+        return
+    if outcome == "taken_over":
+        stats.bump("taken_over")
+        stats.bump("written")
 
 
 def _pg_insert_rows_one_by_one(

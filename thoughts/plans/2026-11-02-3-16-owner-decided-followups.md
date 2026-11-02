@@ -1,5 +1,5 @@
 ---
-status: active
+status: done
 ---
 
 # Implementation Plan: 3.16 follow-ups the owner decided (first block)
@@ -367,6 +367,16 @@ D15 lands first inside the phase, with the fast tier green, then D14.
 - **Deviation, D15 on PostgreSQL:** the stored value is read `FOR UPDATE` inside the transaction; a concurrent first insert is `ON CONFLICT DO NOTHING` plus a retry. `DbProperty.delete()` on an indexed name deletes with `RETURNING value` and releases that value's row.
 - **Existing tests adjusted:** two backfill collision tests seeded a lookup row for an actor that did not hold the value, which is now the takeover case; they seed the holder's property, so they stay collisions.
 - **Todos:** `unique-creator-small-followups.md`, `github-emails-api-called-twice.md` and `property-lookup-stale-owner-and-races.md` are deleted with their rows; the adoption todo drops J, K, the callback check, `find_db_error` and CORS; `oauth-email-verified-claim-unchecked.md` is new (see What We're NOT Doing).
+- **Second opinion on the phase diff** (codex and a fresh-context Claude). The takeover's interplay with the release paths was underweighted. Fixed in the review-fix commit after Phase 4:
+  - **DynamoDB releases are conditioned on the owner.** `delete_if_owner` deletes a lookup row only while it names the actor (`_delete_lookup_entry`, `DbPropertyList.delete`); a row a takeover gave to another actor between a delete and its release survives. `_delete_indexed` is one transaction: the conditioned property delete and the `own_or_absent` lookup delete (retried without the lookup item when the row is another actor's).
+  - **The DynamoDB collision fallback** releases the old row and writes the property alone in one transaction, so a lost race releases nothing.
+  - **An orphaned DynamoDB owner** (actor row gone, property row left) no longer holds the value, as on PostgreSQL: `owner_holds` also reads the actor, and `take_over` checks `Actor.id.does_not_exist()` instead of the property condition when the read found the actor gone.
+  - **The unchanged DynamoDB write** writes nothing: the heal's condition already checks the value.
+  - **The PostgreSQL backfill** locks the new owner's property row (by key) and re-checks it holds the value before the claim (`_pg_stale_rows` is the listing; `_pg_take_over_one` the per-row step), and a fault in one row's takeover is counted and the pass goes on.
+  - **PostgreSQL `_delete_indexed`** retries a deadlock (a concurrent takeover holds the lookup row and waits on the property row), and every retry backs off with jitter.
+  - **Logging:** the release-then-reclaim branch of `claim_in_transaction` logs `LOOKUP_CONFLICT` when it loses.
+  - **The changelog's DynamoDB cost lines** are exact (a consistent read plus a two- or three-item transaction for a change; two reads and no write for an unchanged value).
+  - **Not changed:** two PostgreSQL writers swapping values can deadlock; the retry with backoff absorbs it, and sustained contention ends in `DbError` (`PROPERTY_WRITE_RACE_EXHAUSTED`). A stored empty string reads as "no value" in the DynamoDB condition; the library never stores one (an empty `set()` deletes).
 
 
 ---
@@ -429,3 +439,26 @@ Providers: codex (`codex exec -s read-only`, unsandboxed) and a fresh-context Cl
 ### Unverified notes
 - D5: the command's record walk should page for large stores (scalability, unverified).
 - The `/?format=json` body carries an `auth_url` with a fresh `state`; CSRF protection is a server-side single-use nonce (`flask_integration.py:1123`), so `*` exposes nothing new (security, unverified).
+
+## Implementation Summary
+
+**Completed:** 2026-11-02
+**All phases:** Complete
+**Test status:** All passing. The Full tier ran on both backends after every phase and every review round; the benchmarks after Phase 4 and its review round.
+
+Commits: `eca175e` Phase 1, `1022381` Phase 2, `d432a71` Phase 3, `6554c76` the Phase 2 and Phase 3 reviews (the claim extended at the owner's choice), `b8ca5c3` the claim review, `8716b2f` Phase 4, and the Phase 4 review commit.
+
+### Deviations from Plan
+- **D13 grew past the plan** at the owner's choice (2026-11-02): the claim takes a 60-second lease, a sequence inside a live claim answers `ProcessResult.IN_PROGRESS` (503 with `Retry-After` on a callback; a poll stops there and reports `SubscriptionSyncResult.in_flight`), and `FanOutManager` does not count such a 503 toward the breaker. Without that, the claim turned a double apply into a lost diff.
+- **D2's memo** lives on the GitHub provider instance (a single, 30-second slot) rather than on the authenticator; each authenticator builds its own provider.
+- **D14 on PostgreSQL** uses no advisory lock: the owner's property row is read `FOR SHARE` by key inside the claim (verified by a two-connection test that also caught a first cut with the value in the `WHERE`).
+- **D5's move** uses its own record-aware rename (`move_default_creator`) instead of `_settle_record`/`_rename`; the default-creator group is informational in `report`.
+- **D3's seeding** is an atomic create (`InternalStore.set_if_absent`) and carries a **Behavior change:** sentence for the creator pin it brings under `force_email_prop_as_creator`.
+
+### Learnings
+- **This library's publisher never redelivers a diff**, and never deleted one on 204; what keeps a failed delivery recoverable is the poll stopping at the sequence, and a low-granularity diff is deleted by the subscriber's own fetch.
+- **Under READ COMMITTED a row-locking read with a value predicate does not wait** for a concurrent writer whose committed row does not match; lock by key and compare after.
+- **A best-effort release becomes unsafe once takeovers exist:** every release of a lookup row has to be conditioned on its owner.
+- **A test that mocks a read must still do what the read does to shared state** (the handle), or it proves nothing about the old code.
+- Each phase's second opinion found real defects the plan's evaluation had missed; the per-phase codex pass earned its cost here.
+

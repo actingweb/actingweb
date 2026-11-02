@@ -286,3 +286,96 @@ class TestStaleHandle:
             with pytest.raises(DbError):
                 _prop().set(actor_id=a, name="email", value=_addr("x"))
         assert any("PROPERTY_WRITE_RACE_EXHAUSTED" in r.message for r in caplog.records)
+
+
+class TestReleaseAfterTakeover:
+    """Releasing a lookup row is conditioned on it still naming the actor:
+    a row a takeover gave to another actor meanwhile survives (Phase 4
+    review)."""
+
+    @dynamodb_only
+    def test_a_late_release_leaves_a_row_taken_over_meanwhile(
+        self, actors: list[str]
+    ) -> None:
+        from actingweb.db.dynamodb import property_lookup
+
+        a, b, _ = actors
+        x = _addr("x")
+        assert _prop().set(actor_id=b, name="email", value=x)  # b holds the row
+        # a's release runs on a stale read that still names a (the read
+        # itself loads the row, now b's).
+        real_get = property_lookup.DbPropertyLookup.get
+
+        def stale_get(self: Any, *args: Any, **kwargs: Any) -> str | None:
+            real_get(self, *args, **kwargs)
+            return a
+
+        with mock.patch.object(property_lookup.DbPropertyLookup, "get", stale_get):
+            _prop()._delete_lookup_entry(a, "email", x)  # pyright: ignore[reportPrivateUsage]
+        assert _lookup(x) == b
+
+    def test_deleting_after_a_takeover_keeps_the_new_owners_row(
+        self, actors: list[str]
+    ) -> None:
+        a, b, _ = actors
+        x = _addr("x")
+        assert _prop().set(actor_id=a, name="email", value=x)
+        _raw_set(a, _addr("moved"))
+        assert _prop().set(actor_id=b, name="email", value=x)  # taken over
+        assert _prop().set(actor_id=a, name="email", value="")  # a deletes
+        assert _lookup(x) == b
+
+    @dynamodb_only
+    def test_an_owner_whose_actor_is_gone_is_taken_over(
+        self, actors: list[str]
+    ) -> None:
+        from actingweb.db.dynamodb.actor import Actor
+
+        a, b, _ = actors
+        x = _addr("x")
+        assert _prop().set(actor_id=a, name="email", value=x)
+        Actor.get(a).delete()  # the property row stays behind (an orphan)
+        assert _prop().set(actor_id=b, name="email", value=x)
+        assert _lookup(x) == b
+
+    @postgresql_only
+    def test_a_delete_that_deadlocks_is_retried(self, actors: list[str]) -> None:
+        import psycopg
+
+        a = actors[0]
+        x = _addr("x")
+        assert _prop().set(actor_id=a, name="email", value=x)
+        cls = type(_prop())
+        real = cls._delete_lookup_entry_in_transaction  # pyright: ignore[reportPrivateUsage]
+        calls = {"n": 0}
+
+        def once(self: Any, *args: Any) -> None:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise psycopg.errors.DeadlockDetected("deadlock")
+            real(self, *args)
+
+        with mock.patch.object(cls, "_delete_lookup_entry_in_transaction", once):
+            assert _prop().set(actor_id=a, name="email", value="")
+        assert _stored(a) is None
+        assert _lookup(x) is None
+
+
+@postgresql_only
+def test_the_backfill_rechecks_the_new_owner_at_the_claim(actors: list[str]) -> None:
+    """A holder listed as the one current holder that moved on before the
+    claim is not given the row."""
+    from actingweb.maintenance import property_lookup as command
+
+    a, b, _ = actors
+    x = _addr("x")
+    assert _prop().set(actor_id=a, name="email", value=x)
+    _raw_set(a, _addr("moved"))  # stale row for x
+    assert _prop().set(actor_id=b, name="email", value=_addr("other"))
+    # The listing (a snapshot) still shows b holding x.
+    with mock.patch.object(
+        command, "_pg_stale_rows", return_value=[("email", x, a, [b])]
+    ):
+        stats = command.backfill_postgresql(["email"], apply=True)
+    assert stats.taken_over == 0
+    assert _lookup(x) == a

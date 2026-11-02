@@ -26,10 +26,13 @@ def claim_in_transaction(
     (another actor holds it: a collision, logged as ``LOOKUP_CONFLICT``).
 
     The holder's row is locked ``FOR UPDATE`` and the holder's property is
-    read ``FOR SHARE``: an owner whose write of the value is in flight holds
-    its property row, so the read waits for it and then sees the committed
-    value. Under READ COMMITTED a plain ``NOT EXISTS`` would read a snapshot
-    and could hand the row away from an owner that is about to hold it.
+    read ``FOR SHARE`` by its key: an owner whose change of an existing row
+    to the value is in flight holds that row, so the read waits for it and
+    then sees the committed value. Under READ COMMITTED a plain
+    ``NOT EXISTS`` would read a snapshot and could hand the row away from an
+    owner that is about to hold it. (An owner whose very first write of the
+    property is in flight has no row to lock yet; its own claim then finds
+    the row taken and logs a conflict, so the result is still one owner.)
     """
     cur.execute(
         """
@@ -60,7 +63,14 @@ def claim_in_transaction(
             """,
             (property_name, value, actor_id),
         )
-        return "own" if cur.rowcount else "held"
+        if cur.rowcount:
+            return "own"
+        logger.warning(
+            f"LOOKUP_CONFLICT: property={property_name} "
+            f"digest={_digest(property_name, value)} actor={actor_id} "
+            "- value claimed by another actor while it was being released"
+        )
+        return "held"
     owner = str(row[0])
     if owner == actor_id:
         return "own"

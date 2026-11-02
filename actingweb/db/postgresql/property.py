@@ -10,6 +10,16 @@ from actingweb.db.postgresql.connection import get_connection
 logger = logging.getLogger(__name__)
 
 
+def _backoff(attempt: int) -> None:
+    """A short, jittered wait before retrying a transaction that lost a
+    deadlock or serialization check (both writers retrying at once would
+    meet again)."""
+    import random
+    import time
+
+    time.sleep(random.uniform(0.01, 0.05) * (attempt + 1))
+
+
 def _serialize_property_value(value: Any) -> str | None:
     """Serialize a property value the same way ``DbProperty.set()`` does.
 
@@ -290,7 +300,7 @@ class DbProperty:
         """
         import psycopg
 
-        for _ in range(self.INDEXED_WRITE_ATTEMPTS):
+        for attempt in range(self.INDEXED_WRITE_ATTEMPTS):
             try:
                 with get_connection() as conn:
                     with conn.cursor() as cur:
@@ -336,6 +346,7 @@ class DbProperty:
                 psycopg.errors.DeadlockDetected,
                 psycopg.errors.SerializationFailure,
             ):
+                _backoff(attempt)
                 continue
             except Exception as e:
                 raise DbError("property set", actor_id) from e
@@ -349,27 +360,46 @@ class DbProperty:
 
     def _delete_indexed(self, actor_id: str, name: str) -> None:
         """Delete an indexed property and release the lookup row of the value
-        it held at the delete (read ``FOR UPDATE``), not a handle's."""
-        try:
-            with get_connection() as conn:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        """
-                        DELETE FROM properties
-                        WHERE id = %s AND name = %s
-                        RETURNING value
-                        """,
-                        (actor_id, name),
-                    )
-                    row = cur.fetchone()
-                    if row and row[0]:
-                        self._delete_lookup_entry_in_transaction(
-                            cur, actor_id, name, str(row[0])
+        it held at the delete (``RETURNING``), not a handle's. A deadlock with
+        a concurrent takeover (which holds the lookup row and waits on this
+        property row) retries the transaction."""
+        import psycopg
+
+        for attempt in range(self.INDEXED_WRITE_ATTEMPTS):
+            try:
+                with get_connection() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            """
+                            DELETE FROM properties
+                            WHERE id = %s AND name = %s
+                            RETURNING value
+                            """,
+                            (actor_id, name),
                         )
-                conn.commit()
-            self.handle = None
-        except Exception as e:
-            raise DbError("property delete", actor_id) from e
+                        row = cur.fetchone()
+                        if row and row[0]:
+                            self._delete_lookup_entry_in_transaction(
+                                cur, actor_id, name, str(row[0])
+                            )
+                    conn.commit()
+                self.handle = None
+                return
+            except (
+                psycopg.errors.DeadlockDetected,
+                psycopg.errors.SerializationFailure,
+            ):
+                _backoff(attempt)
+                continue
+            except Exception as e:
+                raise DbError("property delete", actor_id) from e
+        logger.error(
+            f"PROPERTY_WRITE_RACE_EXHAUSTED: property={name} actor={actor_id} "
+            f"attempts={self.INDEXED_WRITE_ATTEMPTS} (delete)"
+        )
+        raise DbError(
+            f"property delete: lost {self.INDEXED_WRITE_ATTEMPTS} races", actor_id
+        )
 
     def _update_lookup_entry_in_transaction(
         self, cur: Any, actor_id: str, name: str, old_value: str | None, new_value: str

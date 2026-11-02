@@ -1,5 +1,6 @@
 ---
 status: done
+verified: thoughts/verifications/2026-11-02-3-16-owner-decided-followups.md
 ---
 
 # Implementation Plan: 3.16 follow-ups the owner decided (first block)

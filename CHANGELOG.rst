@@ -1099,6 +1099,20 @@ ADDED
 FIXED
 ~~~~~
 
+- **Two concurrent deliveries of one subscription callback could both run
+  the handler.** The callback processor's version check read the state row,
+  compared the version and then wrote unconditionally, so two in-order
+  deliveries of the same diff (a retried callback, a poll beside a callback)
+  could both pass; and a delivery that lost the check retried after the
+  winner's state write but before its sequence write, so it ran the handler
+  again. The state write is now a compare-and-swap that also claims the
+  batch's sequences: a concurrent delivery of a claimed sequence answers
+  ``duplicate`` while the winner's handler runs. A handler ``DbError``
+  releases the claim, so the redelivery the 503 asks for runs it again; a
+  delivery that crashes after claiming leaves its sequences handled until a
+  resync. A resync's reset keeps the state version growing, so a delivery
+  that read the state before the reset loses its swap.
+
 - **A GitHub sign-in with no public email asked GitHub's ``/user/emails``
   twice.** With an email required, the callback asked for the primary
   address, and when that failed asked the same endpoint again for the

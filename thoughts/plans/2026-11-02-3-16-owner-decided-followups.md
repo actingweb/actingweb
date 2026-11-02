@@ -272,7 +272,15 @@ flowchart TD
 - [ ] `python tests/integration/verify_groups.py`
 - [ ] Full tier before commit
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+- **Regressions:** with `callback_processor.py` stashed, 8 unit tests and the two-thread integration test fail. `test_a_db_error_in_the_handler_releases_the_claim` passes on the old code too (it had no claim to release); it guards the release.
+- **Deviation, the resync:** it does not take the claim. A resync carries a full baseline, so a second concurrent resync applies the same state again; it keeps the version growing (`_set_state` with `expected_version=None` writes `current + 1`, resets `claimed_seq` and writes a nonce), which is what makes a delivery that read before the reset lose its swap. The outside voice offered this or a claim; the baseline is idempotent, so the claim buys nothing there.
+- **Deviation, the barrier:** the integration test holds both threads after `_get_last_seq` (both versions call it after reading the state), not inside the claim, so it also reproduces the double run on the old code.
+- **Deviation, `test_version_conflict_retries`:** it built its own mock with no compare-and-swap backing and would have passed against anything. It now uses the shared fixture, whose `conditional_update_attr`, `create_attr_if_absent` and `dbprop.get_attr_strict` are backed by the in-memory store, and loses two races to an interfering writer before it wins.
+- **Group:** `callback_processor_cas` (53 groups).
+- **Existing tests adjusted:** `tests/test_db_fault_partial_state.py::TestKCallbackDrain` faults `_cas_state` (the state write is the claim now, not `_set_state`); the claim release's `except DbError` carries the fault-guard marker on its own line.
+
 
 ---
 

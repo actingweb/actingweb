@@ -5,6 +5,7 @@ worker during parallel execution, since they all patch actingweb.attribute.Attri
 """
 
 import asyncio
+import copy
 import time
 from collections.abc import Generator
 from typing import Any
@@ -18,6 +19,7 @@ from actingweb.callback_processor import (
     ProcessedCallback,
     ProcessResult,
 )
+from actingweb.db.exceptions import DbError
 
 # Mark all tests in this module to run on the same xdist worker as test_remote_storage
 # Both modules patch actingweb.attribute.Attributes, so they must run together
@@ -118,9 +120,40 @@ def mock_attributes() -> Generator[tuple[MagicMock, dict[str, Any]], None, None]
         mock_instance.set_attr.side_effect = set_attr_side_effect
         mock_instance.delete_attr.side_effect = delete_attr_side_effect
         mock_instance.get_bucket.side_effect = get_bucket_side_effect
+        _back_cas(mock_instance, storage)
         mock.return_value = mock_instance
 
         yield mock, storage
+
+
+def _back_cas(mock_instance: MagicMock, storage: dict[str, Any]) -> None:
+    """Back the compare-and-swap calls with ``storage``, as the backends do."""
+
+    def conditional_update(
+        name: str | None = None,
+        old_data: Any = None,
+        new_data: Any = None,
+        **_k: Any,
+    ) -> bool:
+        row = storage.get(name or "")
+        if row is None or row.get("data") != old_data:
+            return False
+        storage[name or ""] = {"data": copy.deepcopy(new_data), "timestamp": None}
+        return True
+
+    def create_if_absent(name: str | None = None, data: Any = None, **_k: Any) -> bool:
+        row = storage.get(name or "")
+        if row is not None:
+            return row.get("data") == data
+        storage[name or ""] = {"data": copy.deepcopy(data), "timestamp": None}
+        return True
+
+    def get_attr_strict(name: str | None = None, **_k: Any) -> dict[str, Any] | None:
+        return storage.get(name or "")
+
+    mock_instance.conditional_update_attr.side_effect = conditional_update
+    mock_instance.create_attr_if_absent.side_effect = create_if_absent
+    mock_instance.dbprop.get_attr_strict.side_effect = get_attr_strict
 
 
 # =============================================================================
@@ -563,69 +596,271 @@ class TestCallbackProcessorOptimisticLocking:
         self,
         mock_actor: MagicMock,
         mock_subscription: tuple[MagicMock, dict[str, int]],  # noqa: ARG002
+        mock_attributes: tuple[MagicMock, dict[str, Any]],
     ) -> None:
-        """Test that version conflicts trigger retries."""
-        with patch("actingweb.attribute.Attributes") as mock:
-            storage: dict[str, Any] = {}
-            call_count = [0]
+        """A compare-and-swap lost to another writer (that changed the row but
+        claimed nothing) is retried against the row as it is now."""
+        _mock, storage = mock_attributes
+        instance = _mock.return_value
+        real = instance.conditional_update_attr.side_effect
+        real_create = instance.create_attr_if_absent.side_effect
+        lost = [0]
 
-            def get_attr_side_effect(
-                name: str | None = None,
-            ) -> dict[str, Any] | None:
-                if name is None:
-                    return None
-                return storage.get(name)
+        def interfering_create(
+            name: str | None = None, data: Any = None, **k: Any
+        ) -> bool:
+            if lost[0] < 2 and "state:" in str(name):
+                lost[0] += 1
+                # Another writer got there first with an unrelated change.
+                storage[name or ""] = {
+                    "data": {"version": 7 + lost[0], "resync_pending": False},
+                    "timestamp": None,
+                }
+                return False
+            return real_create(name=name, data=data, **k)
 
-            def set_attr_side_effect(
-                name: str | None = None,
-                data: dict[str, Any] | None = None,
-                **_kwargs: Any,
-            ) -> bool:
-                if name is None:
-                    return False
-                call_count[0] += 1
-                # First two calls fail (version conflict), third succeeds
-                if call_count[0] <= 2 and "state:" in str(name):
-                    # Simulate external update by bumping version
-                    current = storage.get(name, {"data": {"version": 0}})
-                    if current:
-                        current_data = current.get("data") or {}
-                        version = data.get("version", 0) if data else 0
-                        current_data["version"] = version
-                        storage[name] = {"data": current_data, "timestamp": None}
-                    return True
-                storage[name] = {"data": data, "timestamp": None}
-                return True
+        def interfering_update(name: str | None = None, **k: Any) -> bool:
+            if lost[0] < 2 and "state:" in str(name):
+                lost[0] += 1
+                row = storage[name or ""]["data"]
+                storage[name or ""] = {
+                    "data": {**row, "version": row["version"] + 1},
+                    "timestamp": None,
+                }
+                return False
+            return real(name=name, **k)
 
-            def delete_attr_side_effect(name: str | None = None) -> bool:
-                if name is not None and name in storage:
-                    del storage[name]
-                return True
+        instance.create_attr_if_absent.side_effect = interfering_create
+        instance.conditional_update_attr.side_effect = interfering_update
+        processor = CallbackProcessor(
+            mock_actor, max_retries=3, retry_backoff_base=0.01
+        )
+        handled: list[int] = []
 
-            def get_bucket_side_effect(**kw: Any) -> dict[str, Any]:
-                return storage.copy()
+        async def handler(cb: ProcessedCallback) -> None:
+            handled.append(cb.sequence)
 
-            mock_instance = MagicMock()
-            mock_instance.get_attr.side_effect = get_attr_side_effect
-            mock_instance.set_attr.side_effect = set_attr_side_effect
-            mock_instance.delete_attr.side_effect = delete_attr_side_effect
-            mock_instance.get_bucket.side_effect = get_bucket_side_effect
-            mock.return_value = mock_instance
-
-            processor = CallbackProcessor(
-                mock_actor, max_retries=3, retry_backoff_base=0.01
+        result = asyncio.run(
+            processor.process_callback(
+                peer_id="peer1",
+                subscription_id="sub1",
+                sequence=1,
+                data={"value": "test"},
+                handler=handler,
             )
+        )
 
-            result = asyncio.run(
+        assert result == ProcessResult.PROCESSED
+        assert lost[0] == 2
+        assert handled == [1]
+
+
+class TestCallbackProcessorClaim:
+    """Two deliveries of one in-order callback run the handler once (3.16,
+    owner-decided plan D13): the winner claims the batch in the state row."""
+
+    def test_a_concurrent_delivery_of_a_claimed_sequence_is_a_duplicate(
+        self,
+        mock_actor: MagicMock,
+        mock_subscription: tuple[MagicMock, dict[str, int]],  # noqa: ARG002
+        mock_attributes: tuple[MagicMock, dict[str, Any]],  # noqa: ARG002
+    ) -> None:
+        processor = CallbackProcessor(mock_actor, max_retries=3, retry_backoff_base=0)
+        runs: list[int] = []
+        inner: dict[str, Any] = {}
+
+        async def handler(cb: ProcessedCallback) -> None:
+            runs.append(cb.sequence)
+            if len(runs) == 1:
+                # While the winner's handler runs (the sequence not yet
+                # recorded), the same callback is delivered again.
+                inner["result"] = await processor.process_callback(
+                    peer_id="peer1",
+                    subscription_id="sub1",
+                    sequence=1,
+                    data={"value": "x"},
+                    handler=handler,
+                )
+
+        result = asyncio.run(
+            processor.process_callback(
+                peer_id="peer1",
+                subscription_id="sub1",
+                sequence=1,
+                data={"value": "x"},
+                handler=handler,
+            )
+        )
+        assert result == ProcessResult.PROCESSED
+        assert inner["result"] == ProcessResult.DUPLICATE
+        assert runs == [1]
+
+    def test_two_identical_first_writes_have_one_winner(
+        self,
+        mock_actor: MagicMock,
+        mock_subscription: tuple[MagicMock, dict[str, int]],  # noqa: ARG002
+        mock_attributes: tuple[MagicMock, dict[str, Any]],  # noqa: ARG002
+    ) -> None:
+        processor = CallbackProcessor(mock_actor)
+        state = {"version": 1, "resync_pending": False, "claimed_seq": 1}
+        first = processor._cas_state("peer1", "sub1", None, dict(state))  # pyright: ignore[reportPrivateUsage]
+        second = processor._cas_state("peer1", "sub1", None, dict(state))  # pyright: ignore[reportPrivateUsage]
+        assert first is not None
+        assert second is None
+
+    def test_a_retried_write_that_landed_counts_as_won(
+        self,
+        mock_actor: MagicMock,
+        mock_subscription: tuple[MagicMock, dict[str, int]],  # noqa: ARG002
+        mock_attributes: tuple[MagicMock, dict[str, Any]],
+    ) -> None:
+        _mock, storage = mock_attributes
+        instance = _mock.return_value
+        real = instance.conditional_update_attr.side_effect
+
+        def landed_but_answered_false(**k: Any) -> bool:
+            real(**k)
+            return False
+
+        processor = CallbackProcessor(mock_actor)
+        row = processor._cas_state(  # pyright: ignore[reportPrivateUsage]
+            "peer1", "sub1", None, {"version": 1, "resync_pending": False}
+        )
+        assert row is not None
+        instance.conditional_update_attr.side_effect = landed_but_answered_false
+        won = processor._cas_state("peer1", "sub1", row, {"version": 2})  # pyright: ignore[reportPrivateUsage]
+        assert won is not None
+        assert storage["state:peer1:sub1"]["data"] == won
+
+    def test_a_false_with_an_unchanged_row_is_a_fault(
+        self,
+        mock_actor: MagicMock,
+        mock_subscription: tuple[MagicMock, dict[str, int]],  # noqa: ARG002
+        mock_attributes: tuple[MagicMock, dict[str, Any]],
+    ) -> None:
+        _mock, _storage = mock_attributes
+        instance = _mock.return_value
+        processor = CallbackProcessor(mock_actor)
+        row = processor._cas_state(  # pyright: ignore[reportPrivateUsage]
+            "peer1", "sub1", None, {"version": 1, "resync_pending": False}
+        )
+        assert row is not None
+        instance.conditional_update_attr.side_effect = lambda **k: False
+        with pytest.raises(DbError):
+            processor._cas_state("peer1", "sub1", row, {"version": 2})  # pyright: ignore[reportPrivateUsage]
+
+    def test_a_faulting_reread_raises(
+        self,
+        mock_actor: MagicMock,
+        mock_subscription: tuple[MagicMock, dict[str, int]],  # noqa: ARG002
+        mock_attributes: tuple[MagicMock, dict[str, Any]],
+    ) -> None:
+        _mock, _storage = mock_attributes
+        instance = _mock.return_value
+        processor = CallbackProcessor(mock_actor)
+        row = processor._cas_state(  # pyright: ignore[reportPrivateUsage]
+            "peer1", "sub1", None, {"version": 1, "resync_pending": False}
+        )
+        assert row is not None
+        instance.conditional_update_attr.side_effect = lambda **k: False
+        instance.dbprop.get_attr_strict.side_effect = DbError("throttled")
+        with pytest.raises(DbError):
+            processor._cas_state("peer1", "sub1", row, {"version": 2})  # pyright: ignore[reportPrivateUsage]
+
+    def test_a_db_error_in_the_handler_releases_the_claim(
+        self,
+        mock_actor: MagicMock,
+        mock_subscription: tuple[MagicMock, dict[str, int]],  # noqa: ARG002
+        mock_attributes: tuple[MagicMock, dict[str, Any]],  # noqa: ARG002
+    ) -> None:
+        processor = CallbackProcessor(mock_actor, retry_backoff_base=0)
+        attempts: list[int] = []
+
+        async def handler(cb: ProcessedCallback) -> None:
+            attempts.append(cb.sequence)
+            if len(attempts) == 1:
+                raise DbError("auto-storage write")
+
+        with pytest.raises(DbError):
+            asyncio.run(
                 processor.process_callback(
                     peer_id="peer1",
                     subscription_id="sub1",
                     sequence=1,
-                    data={"value": "test"},
+                    data={},
+                    handler=handler,
                 )
             )
+        # The redelivery the 503 asks for runs the handler again.
+        result = asyncio.run(
+            processor.process_callback(
+                peer_id="peer1",
+                subscription_id="sub1",
+                sequence=1,
+                data={},
+                handler=handler,
+            )
+        )
+        assert result == ProcessResult.PROCESSED
+        assert attempts == [1, 1]
 
-            assert result == ProcessResult.PROCESSED
+    def test_a_resync_reset_grows_the_version_so_a_stale_cas_loses(
+        self,
+        mock_actor: MagicMock,
+        mock_subscription: tuple[MagicMock, dict[str, int]],  # noqa: ARG002
+        mock_attributes: tuple[MagicMock, dict[str, Any]],  # noqa: ARG002
+    ) -> None:
+        processor = CallbackProcessor(mock_actor)
+        row = processor._cas_state(  # pyright: ignore[reportPrivateUsage]
+            "peer1", "sub1", None, {"version": 1, "resync_pending": True}
+        )
+        assert row is not None
+        asyncio.run(
+            processor.process_callback(
+                peer_id="peer1",
+                subscription_id="sub1",
+                sequence=5,
+                data={},
+                callback_type="resync",
+            )
+        )
+        after = processor._read_state_row("peer1", "sub1")  # pyright: ignore[reportPrivateUsage]
+        assert after is not None and after["version"] > row["version"]
+        assert processor._cas_state("peer1", "sub1", row, {"version": 2}) is None  # pyright: ignore[reportPrivateUsage]
+
+    def test_the_sync_twin_runs_the_handler_once(
+        self,
+        mock_actor: MagicMock,
+        mock_subscription: tuple[MagicMock, dict[str, int]],  # noqa: ARG002
+        mock_attributes: tuple[MagicMock, dict[str, Any]],  # noqa: ARG002
+    ) -> None:
+        processor = CallbackProcessor(mock_actor, retry_backoff_base=0)
+        runs: list[int] = []
+        inner: dict[str, Any] = {}
+
+        def handler(cb: ProcessedCallback) -> None:
+            runs.append(cb.sequence)
+            if len(runs) == 1:
+                inner["result"] = processor.process_callback_sync(
+                    peer_id="peer1",
+                    subscription_id="sub1",
+                    sequence=1,
+                    data={},
+                    handler=handler,
+                )
+
+        assert (
+            processor.process_callback_sync(
+                peer_id="peer1",
+                subscription_id="sub1",
+                sequence=1,
+                data={},
+                handler=handler,
+            )
+            == ProcessResult.PROCESSED
+        )
+        assert inner["result"] == ProcessResult.DUPLICATE
+        assert runs == [1]
 
 
 class TestCallbackProcessorCleanup:

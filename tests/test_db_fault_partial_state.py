@@ -105,7 +105,8 @@ class TestKCallbackDrain:
         processor._set_pending("p1", "s1", pending)
 
         with (
-            mock.patch.object(processor, "_set_state", _raise),
+            # The state write is the claim's compare-and-swap.
+            mock.patch.object(processor, "_cas_state", _raise),
             pytest.raises(DbError),
         ):
             processor.process_callback_sync(

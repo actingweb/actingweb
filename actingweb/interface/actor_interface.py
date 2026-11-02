@@ -449,8 +449,13 @@ class ActorInterface:
     def _rename_vouched(self, new_creator: str) -> bool:
         """Rename and move a vouched actor's recorded address with it.
 
-        The writes, in order (each confirmed with a strict read-back):
+        The ``_internal`` bucket is read afresh, then the writes, in order
+        (each confirmed with a strict read-back):
 
+        0. ``vouched_creator`` := the current creator, when the actor is
+           vouched for it only another way (its stored email, after the pin
+           moved a provider-id creator; or a pending value) — a fault
+           refuses the rename;
         1. ``vouched_creator_pending`` := the new address, when the actor is
            vouched with a recorded address (a fault refuses the rename);
         2. under ``force_email_prop_as_creator`` with a stored email, the
@@ -480,13 +485,17 @@ class ActorInterface:
         unvouched, or vouched before 3.16 (no recorded address), is renamed
         as it is. Concurrent renames of one actor are not serialised.
         """
+        from ..attribute import InternalStore
         from ..db.creator_rules import normalise_creator
         from ..oauth2 import VOUCHED_CREATOR, VOUCHED_CREATOR_PENDING, is_vouched_store
 
         config = self._core_actor.config
-        store = self._core_actor.store
-        if not self.id or config is None or store is None:
+        if not self.id or config is None or self._core_actor.store is None:
             return self._core_actor.modify(creator=new_creator)
+        # Read afresh: a sign-in since this actor was loaded may have vouched
+        # it, and a cached copy would rename it without moving that vouch.
+        store = InternalStore(actor_id=self.id, config=config)
+        self._core_actor.store = store
         if not store.loaded:
             logger.error(
                 f"Actor {self.id}: its _internal bucket could not be read; "
@@ -498,6 +507,23 @@ class ActorInterface:
             and getattr(store, VOUCHED_CREATOR, None) is not None
         )
         target = normalise_creator(new_creator)
+        current = self._core_actor.creator
+        if (
+            bound
+            and isinstance(current, str)
+            and normalise_creator(getattr(store, VOUCHED_CREATOR)) != current
+            and is_vouched_store(store, current)
+            and not store.set_confirmed(VOUCHED_CREATOR, current)
+        ):
+            # The current creator is vouched another way (the stored email,
+            # or a pending value a faulted rename left): the pending and
+            # email writes below would take that away while the creator is
+            # still the current one, so record it first.
+            logger.error(
+                f"Actor {self.id}: the vouch for the current creator could not "
+                "be recorded; rename refused"
+            )
+            return False
         current_email = store.email
         pinned = (
             current_email
@@ -573,9 +599,11 @@ class ActorInterface:
         # afresh (the load itself moves it, if it can) and look.
         fresh = CoreActor(actor_id=self.id, config=self._core_actor.config)
         if fresh.creator == target:
+            # Take the fresh handle too: a later modify on this interface is
+            # conditioned on the creator its handle was loaded with.
+            self._core_actor.handle = fresh.handle
+            self._core_actor.actor = fresh.actor
             self._core_actor.creator = target
-            if self._core_actor.actor:
-                self._core_actor.actor["creator"] = target
             return True
         if moved:
             self._restore_email(store, target, pinned)
@@ -590,7 +618,7 @@ class ActorInterface:
         try:
             if store.replace_if_equal("email", moved_to, original):
                 return
-            still_moved = store.email == moved_to
+            still_moved = store.read_strict("email") == moved_to
         except Exception:  # folds DbError: best effort; the caller's outcome stands
             still_moved = True
         if still_moved:

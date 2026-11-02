@@ -397,3 +397,69 @@ def test_a_lost_conditional_write_does_not_read_as_an_unreadable_store() -> None
     assert store.loaded
     assert ActorInterface(actor).modify_creator(new)
     assert Actor(actor_id=aid(actor), config=config).creator == new
+
+
+def test_a_vouch_written_since_the_load_moves_with_the_rename() -> None:
+    """A sign-in vouched the actor after this handle cached its store: the
+    rename reads the store afresh and moves that vouch."""
+    config = make_config()
+    old, new = _mail(), _mail()
+    actor = create_core_actor(config, old, auth_method="factory")
+    assert not is_vouched_store(istore(actor), old)  # cached: unvouched
+    other = istore(Actor(actor_id=aid(actor), config=config))
+    other.auth_method = "google_oauth2"
+    setattr(other, VOUCHED_CREATOR, old)
+    other.email = old
+    assert ActorInterface(actor).modify_creator(new) is True
+    done = istore(Actor(actor_id=aid(actor), config=config))
+    assert getattr(done, VOUCHED_CREATOR) == new
+    assert is_vouched_store(done, new)
+
+
+def test_a_creator_vouched_only_by_its_email_stays_vouched_mid_rename() -> None:
+    """A provider-id actor whose creator the pin moved to its email: the
+    recorded vouch still names the provider id, so the rename records the
+    current creator first. Mid-rename both addresses read vouched."""
+    config = make_config()
+    pid, current, new = _pid(), _mail(), _mail()
+    actor = create_core_actor(config, pid, auth_method="google_oauth2")
+    istore(actor).email = current
+    loaded = Actor(actor_id=aid(actor), config=config)
+    assert loaded.creator == current  # the pin moved it
+    assert getattr(istore(loaded), VOUCHED_CREATOR) == pid
+    seen: dict[str, bool] = {}
+    real_modify = Actor.modify
+
+    def modify(self: Actor, *a: Any, **k: Any) -> bool:
+        fresh = istore(Actor(actor_id=aid(actor), config=config))
+        seen["current"] = is_vouched_store(fresh, current)
+        seen["new"] = is_vouched_store(fresh, new)
+        return real_modify(self, *a, **k)
+
+    with patch.object(Actor, "modify", modify):
+        assert ActorInterface(loaded).modify_creator(new) is True
+    assert seen == {"current": True, "new": True}
+    done = istore(Actor(actor_id=aid(actor), config=config))
+    assert getattr(done, VOUCHED_CREATOR) == new
+
+
+def test_a_failed_vouch_anchor_refuses_the_rename() -> None:
+    config = make_config()
+    pid, current = _pid(), _mail()
+    actor = create_core_actor(config, pid, auth_method="google_oauth2")
+    istore(actor).email = current
+    loaded = Actor(actor_id=aid(actor), config=config)
+    store_cls = type(istore(loaded))
+    real = store_cls.set_confirmed
+
+    def fails(self: Any, k: str, v: Any, **kw: Any) -> bool:
+        if k == VOUCHED_CREATOR and v == current:
+            return False
+        return real(self, k, v, **kw)
+
+    with patch.object(store_cls, "set_confirmed", fails):
+        assert ActorInterface(loaded).modify_creator(_mail()) is False
+    kept = Actor(actor_id=aid(actor), config=config)
+    assert kept.creator == current
+    assert istore(kept).email == current
+    assert is_vouched_store(istore(kept), current)

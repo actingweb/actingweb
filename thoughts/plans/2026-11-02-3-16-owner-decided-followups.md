@@ -732,3 +732,19 @@ Without the pin (or with no stored email) E is skipped. A stop after P or a refu
 - A raise past E returns `DbError` although the rename will complete; the caller cannot tell "not renamed" from "renamed later" without reading the actor. Repeating the call is idempotent.
 - No cross-row transaction: the creator and `_internal` live in different tables. A single transactional write would remove the table, but it needs a new backend API on both backends and is out of scope for 3.16.
 
+### 2026-11-02, after the review of `152bb82` (codex and a fresh-context Claude, scoped to the audited rename)
+
+#### 22. Two table assumptions the review broke: a fresh store, and a vouch recorded for the current creator
+
+**Category**: Verification fix
+
+**What changed**:
+- The rename reads `_internal` afresh again (batch 6 had gone back to the cached store). A sign-in that vouched the actor after this handle loaded it would otherwise get no pending value: the creator moved, and the new address read unvouched.
+- Step 0, before P: when `vouched_creator` is not the current creator but the actor is vouched for it another way, `vouched_creator` := the current creator (confirmed; a fault refuses). The entry 21 table assumed V = the old creator. That does not hold for a provider-id actor whose creator the pin moved to its email (V stays `apple:…`), or after a V fault in an earlier rename. There, E (and without the pin, P) removed the current creator's only vouch while it was still the creator, and its next sign-in cleaned the actor in place.
+- `_restore_email` decides "still moved" from a strict read, so a faulting restore is logged instead of silently returning False while the email stays moved.
+- After the fresh-load True branch the interface takes the fresh handle too, so a later `modify` on it is not conditioned on the old creator.
+
+**Files affected**: `actingweb/interface/actor_interface.py`, `CHANGELOG.rst`, `tests/test_rename_pending_vouch.py` (a vouch written since the load moves; an email-only vouch stays vouched mid-rename; a failed anchor refuses). Each fails on `152bb82`.
+
+**Accepted**: an actor whose vouch is stale for every address (V, pending and email all differ from the creator) is vouched again by the rename (`bound` asks for a marker, not a match). This is what `modify_creator` without `unvouch` documents: the application vouches for the new address.
+

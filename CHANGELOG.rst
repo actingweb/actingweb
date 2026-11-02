@@ -143,7 +143,11 @@ SECURITY
   it after the rename, so a sign-in during a rename finds the actor vouched
   under the old creator and the new one, for an email or a provider-id
   creator alike. A fault writing the pending address refuses the rename
-  (False). It answers True once the creator is renamed, also when moving
+  (False). The rename reads ``_internal`` afresh, and when the current
+  creator is vouched only through its stored email (a provider-id creator
+  that ``force_email_prop_as_creator`` moved to the email) it first records
+  the current creator as the vouched address, refusing (False) on a fault,
+  so the moves below never leave it unvouched. It answers True once the creator is renamed, also when moving
   the recorded address afterwards faults (logged; the pending value keeps
   the new creator vouched). **Behavior change:** with
   ``force_email_prop_as_creator`` on, a vouched rename of an actor that has

@@ -102,8 +102,9 @@ SECURITY
   whose deletion status cannot be read answers 503 too and is left as it
   is, so a half-wiped actor is never cleaned and kept tombstoned. The clean
   revokes the actor's tokens again after its client registrations are
-  removed, so a token a client obtained during the clean does not outlive
-  it. A vouched sign-in writes the proven address into ``store.email`` when
+  removed, so a token issued before the client was removed does not outlive
+  the clean (a grant already past its client check when the client goes, and
+  writing after the second revoke, still can). A vouched sign-in writes the proven address into ``store.email`` when
   it is missing (the creator when it is an address, else the provider's
   email), with one atomic create that never overwrites a stored value:
   a fault in the create's seeding left it out, and an actor vouched without
@@ -142,7 +143,10 @@ SECURITY
   it after the rename, so a sign-in during a rename finds the actor vouched
   under the old creator and the new one, for an email or a provider-id
   creator alike. A fault writing the pending address refuses the rename
-  (False). Two concurrent renames of one actor share the one pending value,
+  (False). **Behavior change:** with ``force_email_prop_as_creator`` on (the
+  default), a vouched rename to an address also moves the stored email to
+  it; before, the next load rewrote the creator back to the old stored
+  email, undoing the rename. Two concurrent renames of one actor share the one pending value,
   so a sign-in between them can still find it unvouched; serialise renames
   of one actor.
   The emailed verification link proves only the address it was sent to: an
@@ -1148,9 +1152,11 @@ FIXED
   could both pass; and a delivery that lost the check retried after the
   winner's state write but before its sequence write, so it ran the handler
   again. The state write is now a compare-and-swap that also claims the
-  batch's sequences for 60 seconds. A concurrent delivery of a claimed
-  sequence is not handled (``ProcessResult.IN_PROGRESS``, new): a callback
-  answers **503** with ``Retry-After: 5`` instead of 204, a poll
+  batch's sequences for 60 seconds. **Behavior change:** a concurrent
+  delivery of a claimed sequence is not handled
+  (``ProcessResult.IN_PROGRESS``, new): a callback answers **503** with
+  ``Retry-After: 5`` and ``X-ActingWeb-Error: callback_in_progress``
+  instead of 204, a poll
   (``sync_subscription``) stops before that sequence and neither clears nor
   records past it (``SubscriptionSyncResult.in_flight``, new), and the gap
   timeout waits while the claim is live. The diff stays on this library's
@@ -1159,11 +1165,17 @@ FIXED
   or gap resync applies it. A handler ``DbError`` releases the claim; a
   delivery that crashes while holding one is taken over by the next
   delivery of its sequences once 60 seconds have passed. A low-granularity
-  callback whose diff cannot be fetched now answers 503 and processes
-  nothing; it used to apply an empty diff and advance the sequence.
-  ``FanOutManager`` no longer counts a 503 that carries ``Retry-After``
-  toward opening a subscriber's circuit breaker (a 503 without it, and a
-  429, still count). **Check:**
+  callback is answered before its diff is fetched when its sequence is
+  already handled (204) or claimed (503), since the publisher deletes the
+  diff on the fetch; one whose diff cannot be fetched now answers 503 and
+  processes nothing (it used to apply an empty diff and advance the
+  sequence), and so does a resync whose baseline cannot be fetched (it used
+  to reset to an empty baseline). A poll never writes a lower sequence than
+  the one stored.
+  ``FanOutManager`` no longer counts that in-progress answer (the 503 with
+  ``X-ActingWeb-Error: callback_in_progress``) toward opening a subscriber's
+  circuit breaker; every other 503, a subscriber's store-fault answer
+  included, and a 429 still count. **Check:**
   the claim holds once every instance runs 3.16 (an older instance ignores
   it), between processes with synchronised clocks, and for handlers that
   finish within the 60 seconds (the lease is not renewed). A low-granularity
@@ -1179,13 +1191,15 @@ FIXED
   502 (or the SPA ``identifier_failed`` redirect), not two. The token and
   userinfo requests keep their own timeouts. The primary address is the
   verified entry GitHub flags primary, else the first verified entry; an
-  entry with no address is skipped. A response whose entries are not objects
-  counts as a failed request.
+  entry with no address is skipped. **Behavior change:** a response whose
+  entries are not objects counts as a failed request (the 502), and calling
+  the provider's ``get_primary_email`` and ``get_verified_emails`` for one
+  token within 30 seconds reuses the first answer.
 
 - **DynamoDB's trust, subscription and subscription-diff list ``fetch``
   answered ``None`` for an empty actor id.** The protocol and PostgreSQL
-  answer ``[]``; DynamoDB does too now. A custom caller that tested the
-  result with ``is None`` sees an empty list instead.
+  answer ``[]``; DynamoDB does too now. **Behavior change:** a custom caller
+  that tested the result with ``is None`` sees an empty list instead.
 
 - **The PostgreSQL ``actingweb-property-lookup backfill`` faulted at the same
   batch on every run when one indexed value was too long to index.**

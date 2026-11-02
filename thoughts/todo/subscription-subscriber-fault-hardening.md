@@ -64,3 +64,17 @@ site. The library side of the key now exists: `ListProperty.append_once(item,
 stores a list item at most once per key, so a re-applied `append` diff can
 use it once each diff carries a stable key (for example its sequence number
 and position).
+
+## Also, from the 3.16 callback claim (owner-decided plan, verified 2026-11-02)
+
+- **A callback at `claimed + 1` that arrives while a claim runs waits in
+  pending** (`callback_processor.py`, the gap branch): the gap branch never
+  drains pending, and the gap timeout waits while the claim is live, so on a
+  quiet subscription it waits for an application poll or a later callback's
+  gap resync. Fix: after the winner's sequence write, re-read pending and
+  drain `claimed + 1 ..` in the same delivery.
+- **A sequence-write fault after the handlers ran keeps the claim**, which
+  expires after `CLAIM_LEASE_SECONDS`; a later poll then runs the batch again
+  (auto-storage re-applies it). Retrying the sequence write once before
+  folding (above) would close most of it.
+

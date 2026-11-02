@@ -794,3 +794,15 @@ class TestForceEmailRewriteHeld:
         ):
             with pytest.raises(DbError):
                 Actor(actor_id=actor.id, config=self._forced(enforced_store))
+
+    def test_a_holder_that_is_this_actor_still_rewrites(
+        self, enforced_store: Any
+    ) -> None:
+        email = _email()
+        actor = _actor(enforced_store, f"google:{_id()}", auth_method="google_oauth2")
+        assert actor.store is not None and actor.id
+        actor.store.email = email
+        db_class = type(get_actor(enforced_store))
+        with mock.patch.object(db_class, "get_creator_holder", return_value=actor.id):
+            loaded = Actor(actor_id=actor.id, config=self._forced(enforced_store))
+        assert loaded.creator == email

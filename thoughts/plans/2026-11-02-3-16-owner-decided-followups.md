@@ -100,7 +100,7 @@ Owner, 2026-11-02, unless marked otherwise. Evaluation changes are marked `[Eval
 - **A provider-level `/user/emails` cache:** it would straddle requests (`todo/github-emails-api-called-twice.md`).
 - **Changing `get_primary_email()`'s base-class contract:** every provider would change for a GitHub-only cost.
 - **Comparing the stored value on reverse lookup** (the todo's alternative for item 2): the owner chose the conditional write.
-- **Checking `email_verified` in `get_email_from_user_info`** (`oauth2.py:888-890`, found by the security pass): older than 3.16 and not widened here; a todo row is added in Phase 4.
+- **Checking `email_verified` in `get_email_from_user_info`** (`oauth2.py:888-890`, found by the security pass): older than 3.16; a todo row is added in Phase 4. D3's seeding widens it slightly (it can seed `user_info["email"]` for a provider-id creator, rarely reachable since such a creator usually means the sign-in had no email); the todo names the seeding.
 - **Closing D12's mint-path window:** belongs to `todo/resumable-actor-deletion.md`.
 
 ## What Already Exists
@@ -462,4 +462,111 @@ Commits: `eca175e` Phase 1, `1022381` Phase 2, `d432a71` Phase 3, `6554c76` the 
 - **A best-effort release becomes unsafe once takeovers exist:** every release of a lookup row has to be conditioned on its owner.
 - **A test that mocks a read must still do what the read does to shared state** (the handle), or it proves nothing about the old code.
 - Each phase's second opinion found real defects the plan's evaluation had missed; the per-phase codex pass earned its cost here.
+
+## Iterations
+
+### 2026-11-02, after verification thoughts/verifications/2026-11-02-3-16-owner-decided-followups.md
+
+#### 1. The breaker exemption covered the library's own fault 503
+
+**Category**: Verification fix (Issue 1)
+
+**What changed**: the in-progress 503 carries `X-ActingWeb-Error: callback_in_progress` (`constants.CALLBACK_IN_PROGRESS_CODE`), and `FanOutManager` exempts only that code; a store-fault 503 (which also carries `Retry-After`) counts again.
+
+**Files affected**:
+- `actingweb/constants.py`, `actingweb/handlers/callbacks.py`, `actingweb/fanout.py`
+- `tests/test_fanout.py` (`test_a_fault_503_with_retry_after_still_counts`), `tests/test_callback_in_progress_answer.py`
+
+**Rationale**: the exemption keyed on `Retry-After`, which every `DbError` answer carries, so a subscriber whose store was down never tripped the breaker.
+
+#### 2. A poll that stopped at a live claim could set the sequence back
+
+**Category**: Verification fix (Issue 2)
+
+**What changed**: both poll loops write the final sequence only upward, and not at all when the poll stopped at an in-progress sequence (the processor records each batch it handles itself).
+
+**Files affected**:
+- `actingweb/interface/subscription_manager.py`
+- `tests/test_subscription_sync.py` (`test_the_poll_never_writes_a_lower_sequence`; the in-flight test now asserts no write)
+
+**Rationale**: the claiming callback's `seqnr` write could be overwritten by the poll's lower one, bringing back the double apply.
+
+#### 3. A low-granularity callback is decided before its fetch
+
+**Category**: Verification fix (Issue 3)
+
+**What changed**: `CallbackProcessor.precheck()` (new, read-only) answers DUPLICATE or IN_PROGRESS from the state row and the sequence; the callback handler asks it before fetching a low-granularity diff, answering 204 or 503 without the fetch.
+
+**Files affected**:
+- `actingweb/callback_processor.py`, `actingweb/handlers/callbacks.py`
+- `tests/test_callback_in_progress_answer.py`, `tests/test_callback_processor.py` (`TestPrecheckAndKeptClaim`)
+
+**Rationale**: the publisher deletes the diff on the fetch, so a redelivery of an applied sequence answered 503 for ever, and a delivery inside a live claim consumed the diff before learning it must not process it.
+
+#### 4. A sequence write that answers False keeps the claim
+
+**Category**: Verification fix (Issue 4)
+
+**What changed**: the `recorded is False` branch no longer releases the claim (both twins), as the fault branch already did.
+
+**Files affected**: `actingweb/callback_processor.py`; `tests/test_callback_processor.py::TestPrecheckAndKeptClaim::test_a_sequence_write_that_answers_false_keeps_the_claim`
+
+**Rationale**: releasing re-ran the handlers on the next poll at once, against the at-most-once choice.
+
+#### 5. A resync whose baseline cannot be fetched is not processed
+
+**Category**: Verification fix (Issue 5)
+
+**What changed**: a `None` baseline or a fetch exception answers 503 and processes nothing; an empty baseline (`{}`) is still applied.
+
+**Files affected**: `actingweb/handlers/callbacks.py`; `tests/test_callback_in_progress_answer.py::test_a_resync_whose_baseline_cannot_be_fetched_is_not_processed`
+
+**Rationale**: applying `{}` reset the state and moved the sequence past data never applied.
+
+#### 6. A deadlocked backfill takeover is retried
+
+**Category**: Verification fix (Issue 6)
+
+**What changed**: `_pg_take_over_one` retries the row's transaction on `DeadlockDetected`/`SerializationFailure` (three attempts, short backoff) before counting a fault.
+
+**Files affected**: `actingweb/maintenance/property_lookup.py`; `tests/test_property_lookup_races.py::test_a_backfill_takeover_that_deadlocks_is_retried`
+
+#### 7. Changelog sentences
+
+**Category**: Verification fix (Issue 7)
+
+**What changed**: **Behavior change:** sentences for D13 (the 503 and its code), D2 and D1; D12's sentence states the window it closes and the one it leaves; the D13 entry names the pre-fetch decision, the resync fetch failure, the upward-only poll and the code-keyed breaker.
+
+**Files affected**: `CHANGELOG.rst`
+
+#### 8. A vouched SDK rename was undone at the next load
+
+**Category**: Bug fix (Issue 8; older than 3.16, confirmed by a test before the fix)
+
+**What changed**: `ActorInterface.modify_creator` (vouched) moves the stored email to the new address under `force_email_prop_as_creator` (the default), so the load's rewrite keeps the rename; a fault there returns False and is logged.
+
+**Files affected**:
+- `actingweb/interface/actor_interface.py` (`_move_pinned_email`)
+- `tests/test_rename_pending_vouch.py::test_a_rename_survives_the_next_load_under_the_email_pin`
+- `CHANGELOG.rst`, `docs/migration/v3.16.rst`
+
+**Rationale**: the rename wrote the creator but left `store.email`, which the next `Actor.get` copied back into the creator. The verification flagged it as widened by D3; the probe showed every vouched rename to an address was reverted.
+
+#### 9. The missing tests
+
+**Category**: Verification fix (Issue 9)
+
+**What changed**: the 500 in both forms on both frameworks; Google asks no emails endpoint; D4 with the holder being this actor; D11 with `email_verified == "false"`; a lost gap-timeout swap leaves `last_seq`; a non-fault handler error is at-most-once; D15's stale handle rewriting its old value; an owner-read fault fails the write on both backends. Not added: D3 "`actor_created` once over two sign-ins" (needs a fault inside the successor's create, which the existing adoption suite drives; the seeding itself is pinned) and PostgreSQL concurrent first inserts (the `ON CONFLICT DO NOTHING` retry is a single branch with no reproducible interleaving outside a two-connection harness).
+
+#### 10. Hygiene
+
+**Category**: Verification fix (Issue 10)
+
+**What changed**: the unused `_condition_failed` removed; `_set_state` and its dead compare-and-swap branch replaced by `_reset_state` (the one unconditional writer, the resync reset); the plan's `email_verified` line corrected. Kept as they are: the async and sync claim paths stay twins (each fix above applied to both), and the takeover's second actor read happens only on the orphan path.
+
+#### 11. Todos
+
+**Category**: Verification fix (Remaining Tasks)
+
+**What changed**: `resumable-actor-deletion.md` gains D12's mint-path window; `subscription-subscriber-fault-hardening.md` gains the `claimed + 1` stall and the lease note; `INDEX.md`'s adoption row no longer names J, K or the callback check.
 

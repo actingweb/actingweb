@@ -478,6 +478,8 @@ class ActorInterface:
                 return False
         if not self._core_actor.modify(creator=new_creator):
             return False
+        if not self._move_pinned_email(target):
+            return False
         if not bound or store is None:
             return True
         if not store.set_confirmed(VOUCHED_CREATOR, target):
@@ -494,6 +496,34 @@ class ActorInterface:
                 "the rename; it names the current creator"
             )
         return True
+
+    def _move_pinned_email(self, target: str) -> bool:
+        """Under ``force_email_prop_as_creator`` the stored email is the
+        creator: each load rewrites the creator back to it. A rename the
+        application vouches for, to an address, moves the stored email with
+        it, or the next load would undo the rename. False (logged) when the
+        address could not be stored; the creator is then back at the next
+        load."""
+        config = self._core_actor.config
+        store = self._core_actor.store
+        if (
+            not config
+            or not config.force_email_prop_as_creator
+            or "@" not in target
+            or store is None
+        ):
+            return True
+        current = store.email
+        if isinstance(current, str) and current.lower() == target:
+            return True
+        if store.set_confirmed("email", target):
+            return True
+        logger.error(
+            f"Actor {self.id}: renamed to {target}, but the stored email could "
+            "not be moved; force_email_prop_as_creator restores the old "
+            "creator at the next load"
+        )
+        return False
 
     def is_valid(self) -> bool:
         """Check if this actor is valid (has ID and exists)."""

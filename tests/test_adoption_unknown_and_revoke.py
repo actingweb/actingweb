@@ -80,6 +80,19 @@ class TestUnknownDeletionStatus:
         assert result is not None and result.id == owner.id
 
 
+def test_an_actor_unvouched_by_a_pending_verification_refuses_too(
+    auth: OAuth2Authenticator,
+) -> None:
+    config = auth.config
+    creator = uuid_email()
+    actor = create_core_actor(config, creator, auth_method="google_oauth2")
+    istore(actor).email_verified = "false"
+    with _unknown():
+        with pytest.raises(DbError):
+            auth.lookup_or_create_actor_by_identifier(creator)
+    assert Actor(actor_id=aid(actor), config=config).passphrase == "squatter-passphrase"
+
+
 class TestSecondRevoke:
     def test_the_clean_revokes_again_after_the_clients_go(
         self, auth: OAuth2Authenticator

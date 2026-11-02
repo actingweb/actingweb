@@ -24,6 +24,7 @@ if TYPE_CHECKING:
     from .interface.actor_interface import ActorInterface
     from .peer_capabilities import PeerCapabilities
 
+from .constants import CALLBACK_IN_PROGRESS_CODE, ERROR_CODE_HEADER
 from .db.exceptions import DbError
 
 logger = logging.getLogger(__name__)
@@ -517,10 +518,14 @@ class FanOutManager:
                     error="rate_limited",
                     retry_after=int(retry_after) if retry_after else None,
                 )
-            elif status == 503 and response.headers.get("Retry-After"):
-                # A subscriber asking to come back later (a callback another
-                # delivery is still handling, 3.16) is not a broken peer: it
-                # does not count toward opening the breaker.
+            elif (
+                status == 503
+                and response.headers.get(ERROR_CODE_HEADER) == CALLBACK_IN_PROGRESS_CODE
+            ):
+                # A subscriber still handling another delivery of this
+                # sequence (3.16) is working, not failing: it does not count
+                # toward opening the breaker. Every other 503, the library's
+                # own fault answer included, still does.
                 retry_after = response.headers.get("Retry-After")
                 return DeliveryResult(
                     peer_id=peer_id,

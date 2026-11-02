@@ -1295,3 +1295,107 @@ class TestProcessResultEnum:
         assert ProcessResult.PENDING.value == "pending"
         assert ProcessResult.RESYNC_TRIGGERED.value == "resync_triggered"
         assert ProcessResult.REJECTED.value == "rejected"
+
+
+class TestPrecheckAndKeptClaim:
+    def test_precheck_reads_duplicate_in_progress_and_new(
+        self,
+        mock_actor: MagicMock,
+        mock_subscription: tuple[MagicMock, dict[str, int]],
+        mock_attributes: tuple[MagicMock, dict[str, Any]],  # noqa: ARG002
+    ) -> None:
+        _sub, sequences = mock_subscription
+        processor = CallbackProcessor(mock_actor)
+        assert processor.precheck("peer1", "sub1", 1) is None
+        assert processor._claim("peer1", "sub1", None, 2)  # pyright: ignore[reportPrivateUsage]
+        assert processor.precheck("peer1", "sub1", 2) == ProcessResult.IN_PROGRESS
+        processor._update_last_seq("peer1", "sub1", 2)  # pyright: ignore[reportPrivateUsage]
+        assert processor.precheck("peer1", "sub1", 2) == ProcessResult.DUPLICATE
+        assert processor.precheck("peer1", "sub1", 3) is None
+        assert sequences is not None
+
+    def test_a_sequence_write_that_answers_false_keeps_the_claim(
+        self,
+        mock_actor: MagicMock,
+        mock_subscription: tuple[MagicMock, dict[str, int]],  # noqa: ARG002
+        mock_attributes: tuple[MagicMock, dict[str, Any]],  # noqa: ARG002
+    ) -> None:
+        processor = CallbackProcessor(mock_actor, retry_backoff_base=0)
+        runs: list[int] = []
+
+        async def handler(cb: ProcessedCallback) -> None:
+            runs.append(cb.sequence)
+
+        with patch.object(processor, "_update_last_seq", return_value=False):
+            first = asyncio.run(
+                processor.process_callback(
+                    peer_id="peer1",
+                    subscription_id="sub1",
+                    sequence=1,
+                    data={},
+                    handler=handler,
+                )
+            )
+        again = asyncio.run(
+            processor.process_callback(
+                peer_id="peer1",
+                subscription_id="sub1",
+                sequence=1,
+                data={},
+                handler=handler,
+            )
+        )
+        assert first == ProcessResult.PROCESSED
+        assert again == ProcessResult.IN_PROGRESS
+        assert runs == [1]
+
+    def test_a_lost_gap_timeout_swap_does_not_reset_the_sequence(
+        self,
+        mock_actor: MagicMock,
+        mock_subscription: tuple[MagicMock, dict[str, int]],
+        mock_attributes: tuple[MagicMock, dict[str, Any]],  # noqa: ARG002
+    ) -> None:
+        _sub, sequences = mock_subscription
+        processor = CallbackProcessor(
+            mock_actor, gap_timeout_seconds=0, max_retries=2, retry_backoff_base=0
+        )
+        processor._update_last_seq("peer1", "sub1", 3)  # pyright: ignore[reportPrivateUsage]
+        processor._set_pending(  # pyright: ignore[reportPrivateUsage]
+            "peer1",
+            "sub1",
+            [{"sequence": 6, "data": {}, "_received_at": time.time() - 100}],
+        )
+        with patch.object(processor, "_cas_state", return_value=None):
+            result = asyncio.run(
+                processor.process_callback(
+                    peer_id="peer1", subscription_id="sub1", sequence=7, data={}
+                )
+            )
+        assert result == ProcessResult.REJECTED
+        assert processor._get_last_seq("peer1", "sub1") == 3  # pyright: ignore[reportPrivateUsage]
+        assert sequences is not None
+
+    def test_a_handler_error_other_than_a_fault_is_at_most_once(
+        self,
+        mock_actor: MagicMock,
+        mock_subscription: tuple[MagicMock, dict[str, int]],  # noqa: ARG002
+        mock_attributes: tuple[MagicMock, dict[str, Any]],  # noqa: ARG002
+    ) -> None:
+        processor = CallbackProcessor(mock_actor, retry_backoff_base=0)
+        runs: list[int] = []
+
+        async def handler(cb: ProcessedCallback) -> None:
+            runs.append(cb.sequence)
+            raise ValueError("a consumer bug")
+
+        for _ in range(2):
+            asyncio.run(
+                processor.process_callback(
+                    peer_id="peer1",
+                    subscription_id="sub1",
+                    sequence=1,
+                    data={},
+                    handler=handler,
+                )
+            )
+        assert runs == [1]

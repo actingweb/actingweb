@@ -379,3 +379,82 @@ def test_the_backfill_rechecks_the_new_owner_at_the_claim(actors: list[str]) -> 
         stats = command.backfill_postgresql(["email"], apply=True)
     assert stats.taken_over == 0
     assert _lookup(x) == a
+
+
+@postgresql_only
+def test_a_backfill_takeover_that_deadlocks_is_retried(actors: list[str]) -> None:
+    import psycopg
+
+    from actingweb.db.postgresql import property_lookup as pg_lookup
+    from actingweb.maintenance import property_lookup as command
+
+    a, b, _ = actors
+    x = _addr("x")
+    assert _prop().set(actor_id=a, name="email", value=x)
+    _raw_set(a, _addr("moved"))  # stale row for x
+    from actingweb.db.postgresql.connection import get_connection
+
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO properties (id, name, value) VALUES (%s, 'email', %s)",
+            (b, x),
+        )
+        conn.commit()
+    real = pg_lookup.claim_in_transaction
+    calls = {"n": 0}
+
+    def once(*args: Any) -> str:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise psycopg.errors.DeadlockDetected("deadlock")
+        return real(*args)
+
+    with (
+        mock.patch.object(pg_lookup, "claim_in_transaction", once),
+        mock.patch.object(
+            command, "_pg_stale_rows", return_value=[("email", x, a, [b])]
+        ),
+    ):
+        stats = command.backfill_postgresql(["email"], apply=True)
+    assert stats.taken_over == 1
+    assert _lookup(x) == b
+
+
+def test_a_stale_handle_rewriting_its_old_value_releases_the_stored_one(
+    actors: list[str],
+) -> None:
+    a = actors[0]
+    x, z = _addr("x"), _addr("z")
+    assert _prop().set(actor_id=a, name="email", value=x)
+    stale = _prop()
+    assert stale.get(actor_id=a, name="email") == x
+    assert _prop().set(actor_id=a, name="email", value=z)
+    assert stale.set(actor_id=a, name="email", value=x)
+    assert _stored(a) == x
+    assert _lookup(x) == a
+    assert _lookup(z) is None
+
+
+def test_an_owner_read_fault_fails_the_write(actors: list[str]) -> None:
+    a, b, _ = actors
+    x = _addr("x")
+    assert _prop().set(actor_id=a, name="email", value=x)
+    _raw_set(a, _addr("moved"))
+    if BACKEND == "dynamodb":
+        from actingweb.db.dynamodb import property_lookup
+
+        fault = mock.patch.object(
+            property_lookup, "owner_holds", side_effect=DbError("throttled")
+        )
+    else:
+        from actingweb.db.postgresql import property_lookup
+
+        fault = mock.patch.object(
+            property_lookup,
+            "owner_holds_in_transaction",
+            side_effect=RuntimeError("connection lost"),
+        )
+    with fault:
+        with pytest.raises(DbError):
+            _prop().set(actor_id=b, name="email", value=x)
+    assert _lookup(x) == a

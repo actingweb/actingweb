@@ -337,7 +337,10 @@ class TestFanOutManager:
         ]
         mock_response = MagicMock()
         mock_response.status_code = 503
-        mock_response.headers = {"Retry-After": "5"}
+        mock_response.headers = {
+            "Retry-After": "5",
+            "X-ActingWeb-Error": "callback_in_progress",
+        }
 
         with patch("httpx.AsyncClient") as mock_client_class:
             mock_client = AsyncMock()
@@ -353,6 +356,38 @@ class TestFanOutManager:
         assert result.failed == 1
         assert result.results[0].retry_after == 5
         assert self.manager._get_circuit_breaker("peer1").failure_count == 0  # pyright: ignore[reportPrivateUsage]
+
+    @pytest.mark.asyncio
+    async def test_a_fault_503_with_retry_after_still_counts(self) -> None:
+        """A subscriber whose store is down answers the library's fault 503,
+        which carries Retry-After too: that is a failing peer."""
+        subscriptions = [
+            {
+                "peerid": "peer1",
+                "subid": "sub1",
+                "callback_url": "https://peer1.example.com/callback",
+                "granularity": "high",
+            }
+        ]
+        mock_response = MagicMock()
+        mock_response.status_code = 503
+        mock_response.headers = {
+            "Retry-After": "5",
+            "X-ActingWeb-Error": "temporarily_unavailable",
+        }
+
+        with patch("httpx.AsyncClient") as mock_client_class:
+            mock_client = AsyncMock()
+            mock_client.post.return_value = mock_response
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=None)
+            mock_client_class.return_value = mock_client
+
+            await self.manager.deliver_to_subscribers(
+                subscriptions, {"data": "test"}, "properties", 1
+            )
+
+        assert self.manager._get_circuit_breaker("peer1").failure_count == 1  # pyright: ignore[reportPrivateUsage]
 
     @pytest.mark.asyncio
     async def test_deliver_timeout(self) -> None:

@@ -236,3 +236,36 @@ class TestMapping:
                 raise DbError("property write") from e
         except DbError as fault:
             assert is_permanent(fault) is True
+
+
+@pytest.mark.parametrize("broad", [False, True])
+def test_a_bug_while_handling_a_fault_answers_500_in_both_forms(broad: bool) -> None:
+    """``except DbError`` and a broad ``except Exception`` around a fault,
+    each re-raising without ``from``, on Flask and FastAPI."""
+
+    def bug() -> None:
+        try:
+            raise DbError("custom read", ACTOR_ID)
+        except Exception if broad else DbError:  # noqa: B030
+            raise RuntimeError("bug in the fault handler")  # noqa: B904
+
+    flask_app = Flask(__name__)
+    _aw_app().integrate_flask(flask_app)
+
+    @flask_app.route("/both-forms")
+    def flask_route() -> str:  # pyright: ignore[reportUnusedFunction]
+        bug()
+        return ""
+
+    assert flask_app.test_client().get("/both-forms").status_code == 500
+
+    fastapi_app = FastAPI()
+
+    @fastapi_app.get("/both-forms")
+    async def fastapi_route() -> dict[str, str]:  # pyright: ignore[reportUnusedFunction]
+        bug()
+        return {}
+
+    _aw_app().integrate_fastapi(fastapi_app)
+    client = TestClient(fastapi_app, raise_server_exceptions=False)
+    assert client.get("/both-forms").status_code == 500

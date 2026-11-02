@@ -111,3 +111,17 @@ def test_an_actor_vouched_before_3_16_renames_as_it_did() -> None:
     done = istore(Actor(actor_id=aid(actor), config=config))
     assert getattr(done, VOUCHED_CREATOR, None) is None
     assert getattr(done, VOUCHED_CREATOR_PENDING, None) is None
+
+
+def test_a_rename_survives_the_next_load_under_the_email_pin() -> None:
+    """Under force_email_prop_as_creator (the default) the load rewrites the
+    creator to the stored email; a vouched rename moves the email with it."""
+    config = make_config()
+    assert config.force_email_prop_as_creator
+    old, new = _mail(), _mail()
+    actor = create_core_actor(config, old, auth_method="google_oauth2")
+    istore(actor).email = old
+    assert ActorInterface(actor).modify_creator(new)
+    reloaded = Actor(actor_id=aid(actor), config=config)
+    assert reloaded.creator == new
+    assert istore(reloaded).email == new

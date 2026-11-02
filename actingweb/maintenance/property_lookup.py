@@ -888,28 +888,47 @@ def _pg_take_over_one(
         stats.bump("written")
         return
     new_owner = holders[0]
-    try:
-        with conn.transaction(), conn.cursor() as cur:
-            # The new owner must still hold the value at the claim: lock
-            # its property row (by key) and re-check, so a holder that
-            # moved on since the listing is not given the row.
-            cur.execute(
-                "SELECT p.value FROM properties p JOIN actors a ON a.id = p.id "
-                "WHERE p.id = %s AND p.name = %s FOR SHARE OF p",
-                (new_owner, name),
+    import psycopg
+
+    outcome = "skipped"
+    for attempt in range(3):
+        try:
+            with conn.transaction(), conn.cursor() as cur:
+                # The new owner must still hold the value at the claim: lock
+                # its property row (by key) and re-check, so a holder that
+                # moved on since the listing is not given the row.
+                cur.execute(
+                    "SELECT p.value FROM properties p JOIN actors a ON a.id = p.id "
+                    "WHERE p.id = %s AND p.name = %s FOR SHARE OF p",
+                    (new_owner, name),
+                )
+                row = cur.fetchone()
+                outcome = (
+                    claim_in_transaction(cur, name, value, new_owner)
+                    if row is not None and row[0] == value
+                    else "skipped"
+                )
+            conn.commit()
+            break
+        except (
+            psycopg.errors.DeadlockDetected,
+            psycopg.errors.SerializationFailure,
+        ) as e:  # folds DbError: a lost lock race with a live writer is retried
+            conn.rollback()
+            if attempt == 2:
+                logger.error(
+                    f"LOOKUP_TAKEOVER_FAILED: property={name} actor={new_owner}: {e}"
+                )
+                stats.fault()
+                return
+            time.sleep(0.05 * (attempt + 1))
+        except Exception as e:  # folds DbError: counted as a fault; the pass goes on
+            conn.rollback()
+            logger.error(
+                f"LOOKUP_TAKEOVER_FAILED: property={name} actor={new_owner}: {e}"
             )
-            row = cur.fetchone()
-            outcome = (
-                claim_in_transaction(cur, name, value, new_owner)
-                if row is not None and row[0] == value
-                else "skipped"
-            )
-        conn.commit()
-    except Exception as e:  # folds DbError: counted as a fault; the pass goes on
-        conn.rollback()
-        logger.error(f"LOOKUP_TAKEOVER_FAILED: property={name} actor={new_owner}: {e}")
-        stats.fault()
-        return
+            stats.fault()
+            return
     if outcome == "taken_over":
         stats.bump("taken_over")
         stats.bump("written")

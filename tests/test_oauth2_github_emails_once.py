@@ -184,3 +184,13 @@ class TestMalformedAndEmptyEntries:
             assert auth._get_github_primary_email("tok") == "Main@example.com"  # pyright: ignore[reportPrivateUsage]
             assert auth.get_github_verified_emails("tok")
         assert get.call_count == 1
+
+
+def test_google_asks_no_emails_endpoint() -> None:
+    from actingweb.oauth2 import GoogleOAuth2Provider
+
+    provider = GoogleOAuth2Provider(_config())
+    with patch("actingweb.oauth2.requests.get") as get:
+        assert provider.get_primary_email("tok") is None
+        assert provider.get_verified_emails("tok") == []
+    get.assert_not_called()

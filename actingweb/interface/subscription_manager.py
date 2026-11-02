@@ -1234,7 +1234,12 @@ class SubscriptionManager:
                 callback=True,
                 config=self._core_actor.config,
             )
-            if sub_obj.handle:
+            # Only upward, and not past a live claim: a callback handling a
+            # later sequence may have recorded it already (the processor
+            # records each batch it handles), and a lower write here would
+            # set it back.
+            stored = (sub_obj.get() or {}).get("sequence", 0) if sub_obj.handle else 0
+            if sub_obj.handle and not in_flight and max_sequence > int(stored or 0):
                 sub_obj.handle.modify(seqnr=max_sequence)
                 logger.info(
                     f"Updated subscription {subscription_id} sequence to {max_sequence} "
@@ -2114,7 +2119,12 @@ class SubscriptionManager:
                 callback=True,
                 config=self._core_actor.config,
             )
-            if sub_obj.handle:
+            # Only upward, and not past a live claim: a callback handling a
+            # later sequence may have recorded it already (the processor
+            # records each batch it handles), and a lower write here would
+            # set it back.
+            stored = (sub_obj.get() or {}).get("sequence", 0) if sub_obj.handle else 0
+            if sub_obj.handle and not in_flight and max_sequence > int(stored or 0):
                 sub_obj.handle.modify(seqnr=max_sequence)
                 logger.info(
                     f"Updated subscription {subscription_id} sequence to {max_sequence} "

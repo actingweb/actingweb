@@ -14,11 +14,6 @@ from actingweb.db.exceptions import DbError
 logger = logging.getLogger(__name__)
 
 
-def _condition_failed(e: Exception) -> bool:
-    """Whether a pynamodb write failed on its condition (not a fault)."""
-    return getattr(e, "cause_response_code", None) == "ConditionalCheckFailedException"
-
-
 """
     DbProperty handles all db operations for a property
     AWS DynamoDB is used as a backend.

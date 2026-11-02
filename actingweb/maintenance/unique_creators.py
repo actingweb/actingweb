@@ -137,6 +137,8 @@ class Report:
     # (actor_id, stored email): actors left with the default creator that have
     # an email to move to (informational, not part of ``clean``)
     default_creator: list[tuple[str, str]] = field(default_factory=list)
+    # default-creator actors whose _internal bucket could not be read
+    default_creator_unreadable: list[str] = field(default_factory=list)
 
     @property
     def groups(self) -> dict[str, list[str]]:
@@ -467,6 +469,7 @@ def _collect_default_creator(config: Any, only: str | None, report: Report) -> N
                 f"default creator id={actor_id}: its _internal bucket could not "
                 "be read; not listed"
             )
+            report.default_creator_unreadable.append(actor_id)
             continue
         email = store.email
         if isinstance(email, str) and "@" in email:
@@ -1305,6 +1308,8 @@ def _run(args: argparse.Namespace, parser: argparse.ArgumentParser, config: Any)
             )
             failed = counts["skipped"] or counts["errors"]
             failed = failed or moved["held"] or moved["skipped"] or moved["errors"]
+            if args.default_creator_to_email and report.default_creator_unreadable:
+                failed = True  # some actors could not be read, so not moved
             return 1 if failed else 0
         outcome = enable(
             config, report, apply=args.apply, lock_timeout=args.lock_timeout

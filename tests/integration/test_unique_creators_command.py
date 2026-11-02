@@ -492,3 +492,21 @@ class TestDefaultCreator:
                 url="https://test.example.com/", creator="", passphrase="pw"
             )
         spy.assert_not_called()
+
+    def test_an_unreadable_bucket_makes_resolve_exit_one(
+        self, fresh_store: Any
+    ) -> None:
+        from actingweb.attribute import InternalStore
+
+        _seed(fresh_store, "creator", email=_email())
+        with mock.patch.object(
+            InternalStore, "loaded", new_callable=mock.PropertyMock, return_value=False
+        ):
+            assert (
+                unique_creators.main(
+                    ["resolve", "--default-creator-to-email", "--apply"]
+                )
+                == 1
+            )
+            # report only lists: an unreadable bucket does not fail it
+            assert unique_creators.main(["report"]) == 0

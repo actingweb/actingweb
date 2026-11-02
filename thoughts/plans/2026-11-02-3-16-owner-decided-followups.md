@@ -297,6 +297,15 @@ flowchart TD
   - A sequence write that answers False releases the claim.
   - The changelog entry states the lease, the 503 and the rolling-deploy limit; it no longer says a redelivery always comes back.
   - Not changed: the resync reset stays a read and an unconditional write (it resets the state by design), and the winner's sequence write is not conditioned on its claim (the gap timeout no longer revokes a live claim, which was the way to reach it).
+- **Second opinion on the extension** (codex and a fresh-context Claude). Its main correction: this library's publisher never redelivers a diff and never deleted one on 204, so the poll stopping at `IN_PROGRESS` is what keeps a failed delivery's diff recoverable, not the 503 itself. Fixed in a second review-fix commit:
+  - The changelog says so: the diff comes back through the next poll or gap resync; the 503 is for publishers that delete on 204; the lease limits (not renewed, synchronised clocks) and the rolling-deploy limit are stated, and the lease constant's comment carries them.
+  - A low-granularity callback whose diff fetch fails (a second delivery finds it already fetched and deleted) answers 503 and processes nothing; it applied an empty diff and advanced the sequence. A low-granularity diff is deleted by the subscriber's own fetch, so the changelog says a failed delivery of one is recovered by a resync only.
+  - `SubscriptionSyncResult.in_flight` (new) tells a caller the poll stopped early.
+  - `FanOutManager` does not count a 503 with `Retry-After` toward the subscriber's breaker (a plain 503 and a 429 still count).
+  - The async processor's backoffs are `await asyncio.sleep`.
+  - `resolve --default-creator-to-email` exits 1 when a default-creator bucket could not be read.
+  - Docstrings: `_release_claim` (the lease), `InternalStore.set_if_absent` (the instance forgets the key after a False).
+  - **Known limits, not fixed:** a sequence-write fault after the handlers ran keeps the claim, which now expires after the lease, so a later poll can run those handlers again (before the lease it hid them until a resync); and a callback at `claimed + 1` that arrives while the claim runs waits in pending for the next in-order arrival or the gap timeout (the same as before the claim).
 
 
 ---

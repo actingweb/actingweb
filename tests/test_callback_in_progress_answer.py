@@ -53,3 +53,38 @@ def test_the_answer_to_a_claimed_sequence(result: ProcessResult, status: int) ->
     assert webobj.response.status_code == status
     if status == 503:
         assert webobj.response.headers.get("Retry-After") == "5"
+
+
+def test_a_low_granularity_diff_that_cannot_be_fetched_is_not_processed() -> None:
+    """A second delivery's fetch can find the diff gone (the first fetch
+    deleted it): that is not an empty diff, so nothing advances and the
+    answer is 503."""
+    config = make_config()
+    config._subscription_config = SubscriptionProcessingConfig(  # type: ignore[attr-defined]
+        enabled=True, auto_sequence=True, auto_storage=False
+    )
+    actor = create_core_actor(config, uuid_email())
+    assert Subscription(
+        actor_id=aid(actor), peerid="peer1", subid="sub1", callback=True, config=config
+    ).create(target="properties", granularity="low")
+    body = {"sequence": 1, "url": "https://peer.example.com/diff/1"}
+    webobj = AWWebObj(url="https://test.example.com/x", body=json.dumps(body))
+    handler = CallbacksHandler(webobj, config)
+    check = mock.Mock()
+    check.check_authorisation.return_value = True
+    handler._authenticate_dual_context = mock.Mock(  # type: ignore[method-assign]
+        return_value=mock.Mock(actor=actor, auth_obj=check)
+    )
+    gone = mock.Mock(status_code=404)
+    client = mock.MagicMock()
+    client.__enter__.return_value.get.return_value = gone
+    with (
+        mock.patch("httpx.Client", return_value=client),
+        mock.patch("actingweb.trust.Trust") as trust,
+        mock.patch.object(CallbackProcessor, "process_callback_sync") as process,
+    ):
+        trust.return_value.get.return_value = {"secret": "s"}
+        handler.post(aid(actor), "subscriptions/peer1/sub1")
+
+    process.assert_not_called()
+    assert webobj.response.status_code == 503

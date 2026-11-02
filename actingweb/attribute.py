@@ -109,7 +109,9 @@ class InternalStore:
     def set_if_absent(self, k: str, v: Any) -> bool:
         """Write ``k`` only if no row holds it (one atomic create). True when
         this call wrote it, or the stored value already equals ``v``; False
-        when another value is stored. Raises ``DbError`` on a fault."""
+        when another value is stored (this instance then forgets ``k``, and a
+        fresh store reads the winner's value). Raises ``DbError`` on a
+        fault."""
         self._ensure_loaded()
         won = self.__dict__["_db"].create_attr_if_absent(name=k, data=v)
         if won:

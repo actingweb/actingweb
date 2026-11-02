@@ -4,6 +4,7 @@ Callback processor for subscription callbacks.
 Handles sequencing, deduplication, and resync per ActingWeb protocol v1.4.
 """
 
+import asyncio
 import copy
 import logging
 import time
@@ -69,7 +70,11 @@ class CallbackProcessor:
 
     # How long a claim on a batch (see ``_claim``) keeps other deliveries of
     # its sequences out. A delivery that crashed while holding one is taken
-    # over after this, so its sequences are not hidden for good.
+    # over after this by the next delivery of those sequences (a poll or a
+    # gap resync), so they are not hidden for good. Limits: the lease is not
+    # renewed, so a handler that runs longer can overlap a second delivery
+    # of its batch; and it compares the reading process's clock with the
+    # claiming one's, so the processes need synchronised clocks.
     CLAIM_LEASE_SECONDS = 60.0
 
     def __init__(
@@ -247,9 +252,10 @@ class CallbackProcessor:
         claimed_row: dict[str, Any],
         last_seq: int,
     ) -> None:
-        """Hand back a claim whose handler raised ``DbError``, so the
-        redelivery the 503 asks for runs the handler again. Best effort: a
-        claim left behind reads its sequences as handled until a resync."""
+        """Hand back a claim whose handler raised ``DbError`` (or whose
+        sequence write did not land), so the next delivery of the batch (a
+        poll, a gap resync) runs the handler again. Best effort: a claim left
+        behind holds its sequences until its lease runs out."""
         state = dict(claimed_row)
         state.pop("nonce", None)
         state["version"] = int(state.get("version", 0) or 0) + 1
@@ -502,7 +508,7 @@ class CallbackProcessor:
                     marked["resync_pending"] = True
                     marked["claimed_seq"] = 0
                     if self._cas_state(peer_id, subscription_id, row, marked) is None:
-                        time.sleep(self._retry_backoff * (2**attempt))
+                        await asyncio.sleep(self._retry_backoff * (2**attempt))
                         continue
                     # Reset sequence to 0 to accept any sequence after resync
                     self._update_last_seq(peer_id, subscription_id, 0)
@@ -579,7 +585,7 @@ class CallbackProcessor:
             if claimed_row is None:
                 # Another delivery changed the state first - read it again
                 logger.debug(f"Version conflict, retrying (attempt {attempt + 1})")
-                time.sleep(self._retry_backoff * (2**attempt))
+                await asyncio.sleep(self._retry_backoff * (2**attempt))
                 continue
 
             # Invoke handler for all callbacks in order

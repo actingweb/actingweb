@@ -153,6 +153,10 @@ class SubscriptionSyncResult:
     final_sequence: int
     error: str | None = None
     error_code: int | None = None
+    # True when the poll stopped at a sequence a callback delivery is still
+    # handling: it neither cleared nor recorded past it, and a later poll
+    # picks the rest up.
+    in_flight: bool = False
 
 
 @dataclass
@@ -1243,6 +1247,7 @@ class SubscriptionManager:
             diffs_fetched=diffs_fetched,
             diffs_processed=diffs_processed,
             final_sequence=max_sequence,
+            in_flight=in_flight,
         )
 
     def _transform_baseline_list_properties(
@@ -2122,6 +2127,7 @@ class SubscriptionManager:
             diffs_fetched=diffs_fetched,
             diffs_processed=diffs_processed,
             final_sequence=max_sequence,
+            in_flight=in_flight,
         )
 
     def _fetch_and_transform_baseline(

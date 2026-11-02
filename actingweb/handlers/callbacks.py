@@ -413,9 +413,9 @@ class CallbacksHandler(base_handler.BaseHandler):
 
                 if result:
                     self.response.set_status(204, "Found")
-                elif getattr(self, "_callback_in_progress", False):
+                elif getattr(self, "_callback_retry_later", False):
                     self.response.headers["Retry-After"] = "5"
-                    self.response.set_status(503, "Callback in progress")
+                    self.response.set_status(503, "Callback not processed yet")
                 else:
                     self.response.set_status(400, "Processing error")
                 return
@@ -592,15 +592,21 @@ class CallbacksHandler(base_handler.BaseHandler):
                             f"Fetched low-granularity data: {len(callback_data)} keys"
                         )
                     else:
+                        # Not an empty diff: the data is unknown (another
+                        # delivery's GET may have taken it). Answer 503 and
+                        # process nothing, so the sequence does not advance
+                        # past data that was never applied.
                         logger.warning(
                             f"Failed to fetch low-granularity data: {response.status_code}"
                         )
-                        callback_data = {}
+                        self._callback_retry_later = True
+                        return False
                 except DbError:
                     raise
                 except Exception as e:
                     logger.error(f"Error fetching low-granularity callback data: {e}")
-                    callback_data = {}
+                    self._callback_retry_later = True
+                    return False
         else:
             callback_data = callback_data or {}
 
@@ -734,9 +740,12 @@ class CallbacksHandler(base_handler.BaseHandler):
                 ProcessResult.RESYNC_TRIGGERED,
             )
             # Another delivery of this sequence is still running its handler:
-            # answer 503, not 204, so the publisher keeps the diff in case
-            # that delivery fails.
-            self._callback_in_progress = result == ProcessResult.IN_PROGRESS
+            # answer 503, not 204. A publisher that deletes a diff on 204 (as
+            # the protocol allows) then keeps it in case that delivery fails;
+            # this library's publisher keeps diffs either way, and a poll
+            # (which stops at an in-progress sequence) or a gap resync brings
+            # it back.
+            self._callback_retry_later = result == ProcessResult.IN_PROGRESS
 
             if success:
                 logger.debug(

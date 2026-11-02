@@ -1145,14 +1145,26 @@ FIXED
   winner's state write but before its sequence write, so it ran the handler
   again. The state write is now a compare-and-swap that also claims the
   batch's sequences for 60 seconds. A concurrent delivery of a claimed
-  sequence answers **503** with ``Retry-After: 5`` (``ProcessResult.IN_PROGRESS``,
-  new), not 204, so the publisher keeps the diff in case the claiming
-  delivery fails; a poll stops before such a sequence, and the gap timeout
-  waits while a claim is live. A handler ``DbError`` releases the claim, so a
-  later delivery runs it again; a delivery that crashes while holding a
-  claim is taken over once the 60 seconds pass. **Check:** the guarantee
-  holds once every instance runs 3.16; an older instance in a rolling
-  deploy ignores the claim.
+  sequence is not handled (``ProcessResult.IN_PROGRESS``, new): a callback
+  answers **503** with ``Retry-After: 5`` instead of 204, a poll
+  (``sync_subscription``) stops before that sequence and neither clears nor
+  records past it (``SubscriptionSyncResult.in_flight``, new), and the gap
+  timeout waits while the claim is live. The diff stays on this library's
+  publisher (it keeps diffs until a poll or an acknowledgement clears them,
+  and does not redeliver), so if the claiming delivery fails, the next poll
+  or gap resync applies it. A handler ``DbError`` releases the claim; a
+  delivery that crashes while holding one is taken over by the next
+  delivery of its sequences once 60 seconds have passed. A low-granularity
+  callback whose diff cannot be fetched now answers 503 and processes
+  nothing; it used to apply an empty diff and advance the sequence.
+  ``FanOutManager`` no longer counts a 503 that carries ``Retry-After``
+  toward opening a subscriber's circuit breaker (a 503 without it, and a
+  429, still count). **Check:**
+  the claim holds once every instance runs 3.16 (an older instance ignores
+  it), between processes with synchronised clocks, and for handlers that
+  finish within the 60 seconds (the lease is not renewed). A low-granularity
+  diff is deleted on the publisher by the subscriber's own fetch, so for it
+  a failed delivery is recovered only by a resync.
 
 - **A GitHub sign-in with no public email asked GitHub's ``/user/emails``
   twice.** With an email required, the callback asked for the primary

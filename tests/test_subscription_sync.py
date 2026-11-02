@@ -1049,6 +1049,7 @@ class TestSyncStopsAtAnInFlightClaim:
             )
 
         assert result.success is True
+        assert result.in_flight is True
         mock_proxy.change_resource.assert_called_once()
         assert mock_proxy.change_resource.call_args.kwargs["params"] == {"sequence": 4}
         mock_sub_instance.handle.modify.assert_called_once_with(seqnr=4)

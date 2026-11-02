@@ -517,6 +517,21 @@ class FanOutManager:
                     error="rate_limited",
                     retry_after=int(retry_after) if retry_after else None,
                 )
+            elif status == 503 and response.headers.get("Retry-After"):
+                # A subscriber asking to come back later (a callback another
+                # delivery is still handling, 3.16) is not a broken peer: it
+                # does not count toward opening the breaker.
+                retry_after = response.headers.get("Retry-After")
+                return DeliveryResult(
+                    peer_id=peer_id,
+                    subscription_id=subscription_id,
+                    success=False,
+                    status_code=status,
+                    error="service_unavailable",
+                    retry_after=int(retry_after)
+                    if retry_after and retry_after.isdigit()
+                    else None,
+                )
             elif status == 503:
                 cb.record_failure()
                 self._persist_circuit_breaker(cb)

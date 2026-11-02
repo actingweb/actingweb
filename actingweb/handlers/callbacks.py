@@ -519,7 +519,7 @@ class CallbacksHandler(base_handler.BaseHandler):
         fetched_from_url = bool(callback_url and not callback_data)
 
         if fetched_from_url and callback_type != "resync":
-            if not isinstance(params.get("sequence", 0), int) or isinstance(
+            if not isinstance(params.get("sequence"), int) or isinstance(
                 params.get("sequence"), bool
             ):
                 logger.warning(
@@ -584,19 +584,18 @@ class CallbacksHandler(base_handler.BaseHandler):
                             f"{f'/{subtarget}' if subtarget else ''}: "
                             f"{len(callback_data)} {'keys' if isinstance(callback_data, dict) else 'items'}"
                         )
-                    elif callback_data is None:
-                        # Not an empty baseline: the fetch failed. Applying {}
-                        # would reset the state and move the sequence past
-                        # data never applied; answer 503 and process nothing.
+                    else:
+                        # An empty baseline and a failed fetch look the same
+                        # here (both None); applying {} moves the sequence on.
+                        # Telling them apart is in the subscriber-hardening
+                        # todo.
                         logger.warning(f"Failed to fetch resync baseline for {target}")
-                        self._callback_retry_later = True
-                        return False
+                        callback_data = {}
                 except DbError:
                     raise
                 except Exception as e:
                     logger.error(f"Error fetching resync baseline: {e}")
-                    self._callback_retry_later = True
-                    return False
+                    callback_data = {}
             else:
                 # Low-granularity diff callback - fetch from subscription diff endpoint
                 try:

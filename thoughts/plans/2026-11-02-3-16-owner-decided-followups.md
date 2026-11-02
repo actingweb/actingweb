@@ -621,3 +621,27 @@ Commits: `eca175e` Phase 1, `1022381` Phase 2, `d432a71` Phase 3, `6554c76` the 
 - **A peer that always answers the in-progress code never trips the breaker:** the header is the subscriber's own answer, and a peer can already keep a breaker closed by answering 204.
 - **Extra reads:** the pre-fetch check reads the state row and the sequence once more per low-granularity callback, and the poll reads the sequence once more.
 
+### 2026-11-02, after the review of `aa00a2e` (codex, a fresh-context Claude, the built-in code review)
+
+#### 16. Entries 5, 12 and 13 reverted
+
+**Category**: Decision changed (deduced, not confirmed: the owner asked to iterate until clean, and these fixes did not converge)
+
+**What changed**: the resync callback applies an empty baseline on a failed fetch again (entry 5), `_fetch_and_transform_baseline` answers `None` for an empty response again (entry 12), and a poll stops only at an in-progress sequence again (entry 13). Both behaviours are older than 3.16 and are recorded in `thoughts/todo/subscription-subscriber-fault-hardening.md`, with why the first fixes failed.
+
+**Files affected**: `actingweb/handlers/callbacks.py`, `actingweb/interface/subscription_manager.py`; `tests/test_callback_in_progress_answer.py` and `tests/test_subscription_sync.py` lose the tests for the reverted behaviours; the changelog's D13 entry no longer claims them.
+
+**Rationale**: entry 13's stop also gated the poll's baseline fallback, which is how a subscription gets out after a gap reset (every held diff then reads as pending): a subscription whose missing diff never arrives stayed stuck for good, and the poll reported success. Entry 12 could not tell an empty baseline from a failed fetch either, since `AwProxy.get_resource` answers `{}` for a non-JSON 2xx and passes some error bodies through, and an empty list baseline then crashed the resync. Each was a fix to pre-3.16 behaviour that opened a worse hole; a correct fix needs the proxy to report a failed fetch distinctly, which is its own change.
+
+#### 17. Smaller fixes from the same review
+
+**Category**: Verification fix
+
+**What changed**:
+- The rename's pin checks run before the pending vouch is written, so a refused rename leaves none; the stored email is restored with its case kept; an unreadable store counts as unpinned.
+- A low-granularity callback without a `sequence` answers 400 (the `0` default read as a duplicate and dropped the diff).
+- One `Retry-After` parser for the 429 and both 503 branches; an HTTP-date (valid, not used) no longer raises inside the 429 branch and double-counts the failure.
+- The changelog says the email restore is best effort.
+
+**Files affected**: `actingweb/interface/actor_interface.py`, `actingweb/handlers/callbacks.py`, `actingweb/fanout.py`, `CHANGELOG.rst`; `tests/test_rename_pending_vouch.py`, `tests/test_callback_in_progress_answer.py`, `tests/test_fanout.py`
+

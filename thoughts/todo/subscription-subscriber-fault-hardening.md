@@ -77,4 +77,20 @@ and position).
   expires after `CLAIM_LEASE_SECONDS`; a later poll then runs the batch again
   (auto-storage re-applies it). Retrying the sequence write once before
   folding (above) would close most of it.
+- **A resync whose baseline fetch fails is applied as an empty baseline**
+  (`handlers/callbacks.py`, the resync branch): `_fetch_and_transform_baseline`
+  answers `None` for a failed fetch and for an empty response alike, and
+  `AwProxy.get_resource` answers `{}` for a non-JSON 2xx and passes some
+  error bodies through, so the callback cannot tell them apart; it applies
+  `{}` (which changes no stored data) and moves the sequence to the resync's.
+  A fix needs the proxy to report a failed fetch distinctly. (Verification
+  Issue 5 of the owner-decided plan; a first fix was reverted because it
+  refused legitimately empty baselines.)
+- **A poll records and clears past diffs it did not apply**
+  (`interface/subscription_manager.py`, `sync_subscription`): a PENDING,
+  REJECTED or RESYNC_TRIGGERED result still advances `max_sequence`, so the
+  poll clears the publisher past a gap. Stopping there must keep the
+  baseline fallback (the poll's way out after a gap reset, when every diff
+  reads as pending); a first fix that stopped there trapped a subscription
+  after a gap timeout and was reverted.
 

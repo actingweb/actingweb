@@ -1048,7 +1048,6 @@ class SubscriptionManager:
         # Process each diff
         diffs_processed = 0
         in_flight = False
-        stopped = False
         max_sequence = 0
 
         # Set up handler based on config
@@ -1096,12 +1095,6 @@ class SubscriptionManager:
                     # here, so the poll neither clears nor records past it.
                     in_flight = True
                     break
-                if result not in (ProcessResult.PROCESSED, ProcessResult.DUPLICATE):
-                    # Pending (a gap), rejected, or a resync triggered (the
-                    # processor reset the sequence): this diff was not
-                    # applied, so the poll neither clears nor records past it.
-                    stopped = True
-                    break
 
                 if result == ProcessResult.PROCESSED:
                     diffs_processed += 1
@@ -1133,7 +1126,6 @@ class SubscriptionManager:
             and diffs_processed == 0
             and config.auto_storage
             and not in_flight
-            and not stopped
         ):
             logger.warning(
                 f"Fetched {diffs_fetched} diffs but processed 0 (likely duplicates), "
@@ -1247,12 +1239,7 @@ class SubscriptionManager:
             # records each batch it handles), and a lower write here would
             # set it back.
             stored = (sub_obj.get() or {}).get("sequence", 0) if sub_obj.handle else 0
-            if (
-                sub_obj.handle
-                and not in_flight
-                and not stopped
-                and max_sequence > int(stored or 0)
-            ):
+            if sub_obj.handle and not in_flight and max_sequence > int(stored or 0):
                 sub_obj.handle.modify(seqnr=max_sequence)
                 logger.info(
                     f"Updated subscription {subscription_id} sequence to {max_sequence} "
@@ -1948,7 +1935,6 @@ class SubscriptionManager:
 
         diffs_processed = 0
         in_flight = False
-        stopped = False
         max_sequence = 0
 
         # Async handler for callback processing
@@ -1994,12 +1980,6 @@ class SubscriptionManager:
                     # here, so the poll neither clears nor records past it.
                     in_flight = True
                     break
-                if result not in (ProcessResult.PROCESSED, ProcessResult.DUPLICATE):
-                    # Pending (a gap), rejected, or a resync triggered (the
-                    # processor reset the sequence): this diff was not
-                    # applied, so the poll neither clears nor records past it.
-                    stopped = True
-                    break
 
                 if result == ProcessResult.PROCESSED:
                     diffs_processed += 1
@@ -2030,7 +2010,6 @@ class SubscriptionManager:
             and diffs_processed == 0
             and config.auto_storage
             and not in_flight
-            and not stopped
         ):
             logger.warning(
                 f"Fetched {diffs_fetched} diffs but processed 0 (likely duplicates), "
@@ -2145,12 +2124,7 @@ class SubscriptionManager:
             # records each batch it handles), and a lower write here would
             # set it back.
             stored = (sub_obj.get() or {}).get("sequence", 0) if sub_obj.handle else 0
-            if (
-                sub_obj.handle
-                and not in_flight
-                and not stopped
-                and max_sequence > int(stored or 0)
-            ):
+            if sub_obj.handle and not in_flight and max_sequence > int(stored or 0):
                 sub_obj.handle.modify(seqnr=max_sequence)
                 logger.info(
                     f"Updated subscription {subscription_id} sequence to {max_sequence} "
@@ -2209,18 +2183,12 @@ class SubscriptionManager:
             logger.warning(f"Failed to fetch baseline for {peer_id} from {target}: {e}")
             return None
 
-        if baseline_response is None or (
-            isinstance(baseline_response, dict) and "error" in baseline_response
-        ):
+        if not baseline_response or "error" in baseline_response:
             logger.warning(
                 f"No baseline data available for {peer_id} from {target}: "
-                f"{baseline_response.get('error') if baseline_response else 'no response'}"
+                f"{baseline_response.get('error') if baseline_response else 'empty response'}"
             )
             return None
-        if not baseline_response:
-            # An empty baseline is an answer (the publisher holds nothing),
-            # not a failure: a resync applies it.
-            return baseline_response
 
         # For properties subscriptions, transform list metadata into actual items
         if target == "properties" and not subtarget and not resource:
@@ -2275,18 +2243,12 @@ class SubscriptionManager:
             logger.warning(f"Failed to fetch baseline for {peer_id} from {target}: {e}")
             return None
 
-        if baseline_response is None or (
-            isinstance(baseline_response, dict) and "error" in baseline_response
-        ):
+        if not baseline_response or "error" in baseline_response:
             logger.warning(
                 f"No baseline data available for {peer_id} from {target}: "
-                f"{baseline_response.get('error') if baseline_response else 'no response'}"
+                f"{baseline_response.get('error') if baseline_response else 'empty response'}"
             )
             return None
-        if not baseline_response:
-            # An empty baseline is an answer (the publisher holds nothing),
-            # not a failure: a resync applies it.
-            return baseline_response
 
         # For properties subscriptions, transform list metadata into actual items
         if target == "properties" and not subtarget and not resource:

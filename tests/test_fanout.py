@@ -754,3 +754,15 @@ class TestFanOutResult:
             results=details,
         )
         assert len(result.results) == 2
+
+
+def test_retry_after_as_an_http_date_is_ignored() -> None:
+    from actingweb.fanout import (
+        _retry_after_seconds,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    assert _retry_after_seconds({"Retry-After": "30"}) == 30
+    assert (
+        _retry_after_seconds({"Retry-After": "Wed, 21 Oct 2026 07:28:00 GMT"}) is None
+    )
+    assert _retry_after_seconds({}) is None

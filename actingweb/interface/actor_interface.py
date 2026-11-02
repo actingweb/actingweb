@@ -469,16 +469,10 @@ class ActorInterface:
             and getattr(store, VOUCHED_CREATOR, None) is not None
         )
         target = normalise_creator(new_creator)
-        if bound and store is not None:
-            if not store.set_confirmed(VOUCHED_CREATOR_PENDING, target):
-                logger.error(
-                    f"Actor {self.id}: the pending vouch for {target} did not "
-                    "land; rename refused"
-                )
-                return False
         # Under the email pin the stored email is the creator (each load
-        # rewrites the creator to it): move it first, and put it back if the
-        # rename does not land.
+        # rewrites the creator to it): a rename moves it first and puts it
+        # back if the rename does not land. Decided before anything is
+        # written.
         pinned = self._pinned_email()
         if pinned is not None and "@" not in target:
             logger.error(
@@ -486,7 +480,14 @@ class ActorInterface:
                 "pinned to the stored email; rename refused"
             )
             return False
-        moved = pinned is not None and pinned != target
+        if bound and store is not None:
+            if not store.set_confirmed(VOUCHED_CREATOR_PENDING, target):
+                logger.error(
+                    f"Actor {self.id}: the pending vouch for {target} did not "
+                    "land; rename refused"
+                )
+                return False
+        moved = pinned is not None and pinned.lower() != target
         if moved and (store is None or not store.set_confirmed("email", target)):
             logger.error(
                 f"Actor {self.id}: the stored email could not be moved to "
@@ -522,15 +523,21 @@ class ActorInterface:
 
     def _pinned_email(self) -> str | None:
         """The stored email the creator is pinned to under
-        ``force_email_prop_as_creator`` (lowercased), or None when the pin is
-        off or the actor has no stored email (the load then rewrites
-        nothing, so a rename needs no email move)."""
+        ``force_email_prop_as_creator``, as stored (its case kept, so a
+        refused rename can put it back exactly), or None when the pin is off,
+        the store could not be read, or the actor has no stored email (the
+        load then rewrites nothing, so a rename needs no email move)."""
         config = self._core_actor.config
         store = self._core_actor.store
-        if not config or not config.force_email_prop_as_creator or store is None:
+        if (
+            not config
+            or not config.force_email_prop_as_creator
+            or store is None
+            or not store.loaded
+        ):
             return None
         current = store.email
-        return current.lower() if isinstance(current, str) and current else None
+        return current if isinstance(current, str) and current else None
 
     def _restore_email(self, email: str | None) -> None:
         """Put the stored email back after a rename that did not land."""

@@ -144,12 +144,12 @@ def test_a_refused_rename_puts_the_stored_email_back() -> None:
     config = make_config()
     old, new = _mail(), _mail()
     actor = create_core_actor(config, old, auth_method="google_oauth2")
-    istore(actor).email = old
+    stored = old.replace("@", "@EXAMPLE.").replace("example.com", "com")
+    istore(actor).email = stored  # mixed case, as a provider may store it
     with patch.object(Actor, "modify", return_value=False):
         assert ActorInterface(actor).modify_creator(new) is False
     reloaded = Actor(actor_id=aid(actor), config=config)
-    assert reloaded.creator == old
-    assert istore(reloaded).email == old
+    assert istore(reloaded).email == stored  # put back exactly
 
 
 def test_a_rename_to_a_provider_id_under_the_email_pin_is_refused() -> None:
@@ -158,4 +158,6 @@ def test_a_rename_to_a_provider_id_under_the_email_pin_is_refused() -> None:
     actor = create_core_actor(config, old, auth_method="google_oauth2")
     istore(actor).email = old
     assert ActorInterface(actor).modify_creator(_pid()) is False
-    assert Actor(actor_id=aid(actor), config=config).creator == old
+    kept = Actor(actor_id=aid(actor), config=config)
+    assert kept.creator == old
+    assert getattr(istore(kept), VOUCHED_CREATOR_PENDING, None) is None

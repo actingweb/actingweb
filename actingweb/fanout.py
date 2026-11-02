@@ -29,6 +29,14 @@ from .db.exceptions import DbError
 
 logger = logging.getLogger(__name__)
 
+
+def _retry_after_seconds(headers: Any) -> int | None:
+    """``Retry-After`` in seconds, or None when absent or not a number (an
+    HTTP-date is valid but not used here)."""
+    value = headers.get("Retry-After") if headers is not None else None
+    return int(value) if isinstance(value, str) and value.isdigit() else None
+
+
 # Shared HTTP client for connection pooling (module-level singleton)
 _shared_client: httpx.AsyncClient | None = None
 _client_lock = asyncio.Lock()
@@ -507,7 +515,6 @@ class FanOutManager:
                 )
             elif status == 429:
                 # Rate limited - respect Retry-After
-                retry_after = response.headers.get("Retry-After")
                 cb.record_failure()
                 self._persist_circuit_breaker(cb)
                 return DeliveryResult(
@@ -516,7 +523,7 @@ class FanOutManager:
                     success=False,
                     status_code=status,
                     error="rate_limited",
-                    retry_after=int(retry_after) if retry_after else None,
+                    retry_after=_retry_after_seconds(response.headers),
                 )
             elif (
                 status == 503
@@ -530,30 +537,24 @@ class FanOutManager:
                 if cb.state == CircuitState.HALF_OPEN:
                     cb.record_success()
                     self._persist_circuit_breaker(cb)
-                retry_after = response.headers.get("Retry-After")
                 return DeliveryResult(
                     peer_id=peer_id,
                     subscription_id=subscription_id,
                     success=False,
                     status_code=status,
                     error="service_unavailable",
-                    retry_after=int(retry_after)
-                    if retry_after and retry_after.isdigit()
-                    else None,
+                    retry_after=_retry_after_seconds(response.headers),
                 )
             elif status == 503:
                 cb.record_failure()
                 self._persist_circuit_breaker(cb)
-                retry_after = response.headers.get("Retry-After")
                 return DeliveryResult(
                     peer_id=peer_id,
                     subscription_id=subscription_id,
                     success=False,
                     status_code=status,
                     error="service_unavailable",
-                    retry_after=int(retry_after)
-                    if isinstance(retry_after, str) and retry_after.isdigit()
-                    else None,
+                    retry_after=_retry_after_seconds(response.headers),
                 )
             else:
                 cb.record_failure()

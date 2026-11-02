@@ -11,8 +11,10 @@ thoughts/plans/2026-11-02-3-16-owner-decided-followups.md carries them.
 - **`actor_created` for a kept successor.** When the create fails after the
   swap, the successor is kept unmarked, without `actor_created` or its store
   seeding (`created_at`, `email`), and the next sign-in fires only
-  `actor_adopted`. Approach: the clean-in-place step fires `actor_created`
-  and seeds `created_at` and `email` when the actor has no marker yet.
+  `actor_adopted`. Found on planning: the OAuth successor is pre-marked, so
+  the reachable gap is the store seeding after `actor_created`. Approach: a
+  vouched sign-in seeds a missing `store.email`; `actor_created` is not fired
+  again.
 - **The force-email rewrite under the flag.** It retries on every load for
   an actor whose stored email another actor holds: a cancelled transaction,
   a read and a WARNING each time (`actor.py` `get`). Approach: read the
@@ -26,6 +28,7 @@ thoughts/plans/2026-11-02-3-16-owner-decided-followups.md carries them.
 - **The SDK rename's binding window.** `ActorInterface.modify_creator`
   without `unvouch` renames, then moves `vouched_creator`
   (`interface/actor_interface.py` `_rebind_vouch`); in between, a sign-in for
-  the new address reads the actor as unvouched and cleans it. Approach:
-  write `vouched_creator` before the rename, which closes the window for
-  email creators. The provider-id window remains and is documented.
+  the new address reads the actor as unvouched and cleans it. Approach: a
+  `vouched_creator_pending` value written before the rename and promoted
+  after it, accepted by the vouch check, so neither creator type has a
+  window.

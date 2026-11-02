@@ -26,12 +26,11 @@ deployments per `docs/quickstart/deployment.rst`).
 
 ## Approach (owner, 2026-11-02)
 
-Fetch once at the two callback sites in `handlers/oauth2_callback.py`, web and
-SPA. Each site calls `get_verified_emails()` once and derives the primary from
-that list instead of calling `get_primary_email()` separately. A failed fetch
-is reused for the second lookup in the same sign-in: one timeout, then the
-existing 502. The base-class contract of `get_primary_email()` does not
-change, and nothing is cached on the provider.
+One fetch per sign-in, memoised on the per-request authenticator for its
+access token; a failed fetch is memoised too and reused: one timeout, then the
+existing 502 (web) or `identifier_failed` (SPA). `get_primary_email()` and
+`get_verified_emails()` become derivations over the one raw response, keeping
+the rule that the primary must be verified. Nothing public changes.
 
 ## Where a cache can live (found 2026-11-02)
 
@@ -43,8 +42,7 @@ traced the callers:
 - The one long-lived authenticator (`oauth2_server/oauth2_server.py:65`) calls
   only `get_primary_email` (`:373`).
 
-So a request-local fix works, and fetching at the callback sites is the one
-chosen. A provider-level cache with a TTL would straddle requests.
+So a request-local fix works, and the per-request memo is the one chosen. A provider-level cache with a TTL would straddle requests.
 
 ## Constraints inherited from the 3.14.5 plan
 

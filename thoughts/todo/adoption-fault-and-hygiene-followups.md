@@ -1,10 +1,10 @@
 # TODO: adoption rule — remaining fault and hygiene follow-ups
 
 **Status:** Open, approach chosen. Filed 2026-10-27; the owner chose an
-approach for every item on 2026-11-02, and
-`thoughts/plans/2026-11-02-3-16-owner-decided-followups.md` carries them
-(first block: J, K, the callback version check, `find_db_error` and the
-Flask CORS headers; second block: the rest).
+approach for every item on 2026-11-02.
+`thoughts/plans/2026-11-02-3-16-owner-decided-followups.md` carries J, K, the
+callback version check, `find_db_error` and the Flask CORS headers;
+`thoughts/plans/2026-11-02-3-16-adoption-fault-followups.md` carries the rest.
 **Filed by:** Greger Wedel (with Claude), during the 3.16 adoption work.
 **Source:** `thoughts/verifications/2026-10-27-oauth-adoption-vouching-and-open-factory-2.md`,
 Issues H-L, and the later verifications named per item.

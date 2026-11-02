@@ -458,54 +458,60 @@ class ActorInterface:
         ``modify_creator`` overwrites it. A fault writing it refuses the
         rename (False). An actor that is unvouched, or vouched before 3.16
         (no recorded address), is renamed as it is.
+
+        Under ``force_email_prop_as_creator`` the stored email is the creator
+        (each load rewrites the creator to it): when there is one, it moves
+        to the new address before the rename, and back if the rename does not
+        land; a rename to a creator that is not an address is refused. The
+        decision reads the ``_internal`` bucket afresh, and a bucket that
+        cannot be read refuses the rename, pin or not (unread, a vouched
+        actor would look unvouched and its vouch would not move).
         """
+        from ..attribute import InternalStore
         from ..db.creator_rules import normalise_creator
         from ..oauth2 import VOUCHED_CREATOR, VOUCHED_CREATOR_PENDING, is_vouched_store
 
-        store = self._core_actor.store
-        bound = (
-            store is not None
-            and is_vouched_store(store)
-            and getattr(store, VOUCHED_CREATOR, None) is not None
-        )
-        target = normalise_creator(new_creator)
-        # Under the email pin the stored email is the creator (each load
-        # rewrites the creator to it): a rename moves it first and puts it
-        # back if the rename does not land. Decided before anything is
-        # written.
         config = self._core_actor.config
-        if (
-            config
-            and config.force_email_prop_as_creator
-            and store is not None
-            and not store.loaded
-        ):
-            # Whether the creator is pinned (and to what) cannot be read: a
-            # rename now could be undone by the next load.
+        if not self.id or config is None:
+            return self._core_actor.modify(creator=new_creator)
+        store = InternalStore(actor_id=self.id, config=config)
+        if not store.loaded:
             logger.error(
                 f"Actor {self.id}: its _internal bucket could not be read; "
                 "rename refused"
             )
             return False
-        pinned = self._pinned_email()
+        self._core_actor.store = store
+        bound = (
+            is_vouched_store(store)
+            and getattr(store, VOUCHED_CREATOR, None) is not None
+        )
+        target = normalise_creator(new_creator)
+        current_email = store.email
+        pinned = (
+            current_email
+            if config.force_email_prop_as_creator
+            and isinstance(current_email, str)
+            and current_email
+            else None
+        )
         if pinned is not None and "@" not in target:
             logger.error(
                 f"Actor {self.id}: {target} is not an address and the creator is "
                 "pinned to the stored email; rename refused"
             )
             return False
-        if bound and store is not None:
-            if not store.set_confirmed(VOUCHED_CREATOR_PENDING, target):
-                logger.error(
-                    f"Actor {self.id}: the pending vouch for {target} did not "
-                    "land; rename refused"
-                )
-                return False
+        if bound and not store.set_confirmed(VOUCHED_CREATOR_PENDING, target):
+            logger.error(
+                f"Actor {self.id}: the pending vouch for {target} did not "
+                "land; rename refused"
+            )
+            return False
         moved = pinned is not None and pinned.lower() != target
-        if moved and (store is None or not store.set_confirmed("email", target)):
+        if moved and not store.set_confirmed("email", target):
             # A write that landed with its confirmation lost would move the
             # creator at the next load: put the email back.
-            self._restore_email(pinned)
+            self._restore_email(store, target, pinned)
             logger.error(
                 f"Actor {self.id}: the stored email could not be moved to "
                 f"{target}; rename refused"
@@ -515,13 +521,13 @@ class ActorInterface:
             renamed = self._core_actor.modify(creator=new_creator)
         except Exception:
             if moved:
-                self._restore_email(pinned)
+                self._restore_email(store, target, pinned)
             raise
         if not renamed:
             if moved:
-                self._restore_email(pinned)
+                self._restore_email(store, target, pinned)
             return False
-        if not bound or store is None:
+        if not bound:
             return True
         if not store.set_confirmed(VOUCHED_CREATOR, target):
             # The pending value still vouches for the new creator; the next
@@ -538,34 +544,21 @@ class ActorInterface:
             )
         return True
 
-    def _pinned_email(self) -> str | None:
-        """The stored email the creator is pinned to under
-        ``force_email_prop_as_creator``, as stored (its case kept, so a
-        refused rename can put it back exactly), or None when the pin is off,
-        the store could not be read, or the actor has no stored email (the
-        load then rewrites nothing, so a rename needs no email move)."""
-        config = self._core_actor.config
-        store = self._core_actor.store
-        if (
-            not config
-            or not config.force_email_prop_as_creator
-            or store is None
-            or not store.loaded
-        ):
-            return None
-        current = store.email
-        return current if isinstance(current, str) and current else None
-
-    def _restore_email(self, email: str | None) -> None:
-        """Put the stored email back after a rename that did not land."""
-        store = self._core_actor.store
-        if store is None or email is None or store.set_confirmed("email", email):
+    def _restore_email(self, store: Any, moved_to: str, original: str | None) -> None:
+        """Put the stored email back after a rename that did not land, only
+        while it still holds the address this rename wrote: a concurrent
+        rename's email is left alone, and a write that never landed needs
+        nothing put back."""
+        if original is None:
             return
-        logger.error(
-            f"Actor {self.id}: the rename did not land and the stored email "
-            f"could not be put back to {email}; the next load moves the creator "
-            "to the new address"
-        )
+        if store.replace_if_equal("email", moved_to, original):
+            return
+        if store.email == moved_to:
+            logger.error(
+                f"Actor {self.id}: the rename did not land and the stored email "
+                f"could not be put back to {original}; the next load moves the "
+                "creator to the new address"
+            )
 
     def is_valid(self) -> bool:
         """Check if this actor is valid (has ID and exists)."""

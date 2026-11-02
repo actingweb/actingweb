@@ -662,3 +662,17 @@ Commits: `eca175e` Phase 1, `1022381` Phase 2, `d432a71` Phase 3, `6554c76` the 
 
 **Accepted**: the sync and async copies of `sync_subscription` and the baseline fetch stay twins, as do the two 503 branches in `fanout.py`.
 
+### 2026-11-02, after the review of `8861d22` (codex, a fresh-context Claude, the built-in code review)
+
+#### 19. The rename reads its store afresh and restores conditionally
+
+**Category**: Verification fix
+
+**What changed**:
+- `_rename_vouched` reads a fresh `InternalStore`, so `loaded` means only "this read faulted" (the cached store's flag also drops after a lost conditional write on a healthy backend), and a bucket that cannot be read refuses the rename in every configuration, as `modify_creator_unvouched` already does: unread, a vouched actor looks unvouched and its vouch would not move.
+- The email restore is conditional (`InternalStore.replace_if_equal`, new): it fires only while the stored email still holds the address this rename wrote, so a concurrent rename's email is left alone and a write that never landed needs nothing put back; the ERROR is logged only when the moved email really stayed.
+- `_retry_after_seconds` accepts RFC 9110 delay-seconds only (ASCII digits) and caps at a day.
+- The changelog names `auto_sequence` beside subscription processing for the 400, and moves the unreadable-bucket refusal to its own sentence.
+
+**Files affected**: `actingweb/interface/actor_interface.py`, `actingweb/attribute.py`, `actingweb/fanout.py`, `CHANGELOG.rst`; `tests/test_rename_pending_vouch.py` (unreadable store with and without the pin, asserting nothing was written; a concurrent rename's email kept), `tests/test_fanout.py`
+

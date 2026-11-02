@@ -185,13 +185,43 @@ def test_a_lost_email_move_confirmation_puts_the_email_back() -> None:
     assert istore(reloaded).email == old
 
 
-def test_a_rename_with_an_unreadable_store_under_the_pin_is_refused() -> None:
-    config = make_config()
+@pytest.mark.parametrize("pin", [True, False])
+def test_a_rename_with_an_unreadable_store_is_refused(pin: bool) -> None:
+    """Unread, a vouched actor looks unvouched: renaming it would leave its
+    vouch on the old address (and, under the pin, its email)."""
+    import copy
+
+    config = copy.copy(make_config())
+    config.force_email_prop_as_creator = pin
     old = _mail()
     actor = create_core_actor(config, old, auth_method="google_oauth2")
-    store_cls = type(istore(actor))
+    istore(actor).email = old
+    from actingweb.attribute import InternalStore
+
     with patch.object(
-        store_cls, "loaded", new_callable=lambda: property(lambda self: False)
+        InternalStore, "loaded", new_callable=lambda: property(lambda self: False)
     ):
         assert ActorInterface(actor).modify_creator(_mail()) is False
-    assert Actor(actor_id=aid(actor), config=config).creator == old
+    kept = Actor(actor_id=aid(actor), config=config)
+    assert kept.creator == old
+    assert istore(kept).email == old
+    assert getattr(istore(kept), VOUCHED_CREATOR_PENDING, None) is None
+
+
+def test_a_restore_leaves_a_concurrent_renames_email_alone() -> None:
+    """The restore only fires while the stored email is still the address
+    this rename wrote."""
+    config = make_config()
+    old, mine, theirs = _mail(), _mail(), _mail()
+    actor = create_core_actor(config, old, auth_method="google_oauth2")
+    istore(actor).email = old
+
+    def concurrent(self: Actor, *a: Any, **k: Any) -> bool:
+        # Another rename moved the email on while this one ran, then this
+        # rename is refused.
+        istore(Actor(actor_id=aid(actor), config=config)).email = theirs
+        return False
+
+    with patch.object(Actor, "modify", concurrent):
+        assert ActorInterface(actor).modify_creator(mine) is False
+    assert istore(Actor(actor_id=aid(actor), config=config)).email == theirs

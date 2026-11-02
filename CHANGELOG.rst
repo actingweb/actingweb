@@ -146,11 +146,12 @@ SECURITY
   (False). **Behavior change:** with ``force_email_prop_as_creator`` on, a
   vouched rename of an actor that has a stored email moves the email to the
   new address first (and back, best effort and logged if that faults, when
-  the rename does not land); a rename whose ``_internal`` bucket cannot be
-  read is refused; before, the next
+  the rename does not land); before, the next
   load rewrote the creator back to the old stored email, undoing the rename.
   Such a rename to a creator that is not an address is refused (False),
-  since the load would undo it too. Two concurrent renames of one actor share the one pending value,
+  since the load would undo it too. A vouched rename whose ``_internal``
+  bucket cannot be read is refused in every configuration: unread, the
+  vouch would not move with it. Two concurrent renames of one actor share the one pending value,
   so a sign-in between them can still find it unvouched; serialise renames
   of one actor.
   The emailed verification link proves only the address it was sent to: an
@@ -1178,9 +1179,9 @@ FIXED
   check and the fetch can still find it gone, and a failed delivery of one
   is recovered only by a resync. One whose diff cannot be fetched now
   answers 503 and processes nothing (it used to apply an empty diff and
-  advance the sequence). With subscription processing on, a callback the
-  subscriber fetches by URL (not a resync) without an integer ``sequence``
-  answers 400. ``FanOutManager`` no longer counts
+  advance the sequence). With subscription processing and ``auto_sequence``
+  on (the defaults), a callback the subscriber fetches by URL (not a resync)
+  without an integer ``sequence`` answers 400. ``FanOutManager`` no longer counts
   the in-progress answer toward opening a subscriber's circuit breaker, and
   a half-open breaker that gets it closes; every other 503, a subscriber's
   store-fault answer included, and a 429 still count. **Check:** the claim

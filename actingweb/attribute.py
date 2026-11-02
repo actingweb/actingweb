@@ -106,6 +106,26 @@ class InternalStore:
         self.__dict__[k] = v
         return True
 
+    def replace_if_equal(self, k: str, expected: Any, v: Any) -> bool:
+        """Replace ``k`` with ``v`` only while it holds ``expected`` (one
+        conditional update). True when replaced. False when it holds
+        something else, or on a fault (``conditional_update_attr`` folds
+        both); this instance then re-reads ``k`` on its next access."""
+        self._ensure_loaded()
+        db = self.__dict__["_db"]
+        if db.conditional_update_attr(name=k, old_data=expected, new_data=v):
+            self.__dict__[k] = v
+            return True
+        self.__dict__.pop(k, None)
+        row = (
+            db.dbprop.get_attr_strict(actor_id=db.actor_id, bucket=db.bucket, name=k)
+            if db.dbprop
+            else None
+        )
+        if isinstance(row, dict) and "data" in row:
+            self.__dict__[k] = row["data"]
+        return False
+
     def set_if_absent(self, k: str, v: Any) -> bool:
         """Write ``k`` only if no row holds it (one atomic create). True when
         this call wrote it, or the stored value already equals ``v``; False

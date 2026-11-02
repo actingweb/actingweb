@@ -31,16 +31,16 @@ logger = logging.getLogger(__name__)
 
 
 def _retry_after_seconds(headers: Any) -> int | None:
-    """``Retry-After`` in seconds, or None when absent or not a number (an
-    HTTP-date is valid but not used here)."""
+    """``Retry-After`` in seconds (RFC 9110 delay-seconds: ASCII digits),
+    capped at a day, or None when absent or not that form (an HTTP-date is
+    valid but not used here)."""
     value = headers.get("Retry-After") if headers is not None else None
     if not isinstance(value, str):
         return None
-    try:
-        seconds = int(value.strip())
-    except ValueError:
+    value = value.strip()
+    if not value or not value.isascii() or not value.isdigit():
         return None
-    return seconds if seconds >= 0 else None
+    return min(int(value), 86400)
 
 
 # Shared HTTP client for connection pooling (module-level singleton)

@@ -6,7 +6,7 @@ status: proposed
 
 **Date:** 2026-11-02
 **Research:** the todo files named per item; the owner's decisions were taken on 2026-11-02 after `thoughts/plans/2026-11-02-3-16-small-followups.md` landed.
-**Branch:** a new `release/3.16.0-...` branch, cut after the small-followups PR merges. One PR, a commit per phase.
+**Branch:** `release/3.16.0-owner-decided-followups` for the first block (it also carries the PR 167 review fixes, `15d0320`); the second block gets its own branch and PR. A commit per phase.
 
 ## Overview
 

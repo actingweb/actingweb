@@ -1,6 +1,7 @@
 # TODO: GitHub's `/user/emails` API is called twice on the identifier-extraction failure path
 
-**Status:** Open. Split out 2026-09-10 from
+**Status:** Open, approach chosen 2026-11-02 (see "Approach" below);
+`thoughts/plans/2026-11-02-3-16-owner-decided-followups.md` carries it. Split out 2026-09-10 from
 `thoughts/plans/2026-09-10-oauth-email-form-writes-to-existing-actors.md`
 (Phase 1 scalability review, "What We're NOT Doing").
 **Filed by:** Greger Wedel (with Claude), during 3.14.5.
@@ -23,19 +24,14 @@ worst-case wall time for this path is close to 45 seconds — past API Gateway's
 30-second integration timeout on a Lambda deployment (`.with_sync_callbacks()`
 deployments per `docs/quickstart/deployment.rst`).
 
-## Fix shape (not decided)
+## Approach (owner, 2026-11-02)
 
-Two options, not evaluated against each other yet:
-
-1. **Per-token cache on the authenticator.** Cache the raw
-   `https://api.github.com/user/emails` response (or its parsed email list)
-   keyed by access token for the lifetime of the request/authenticator
-   instance, so `get_primary_email()` and `get_verified_emails()` share one
-   HTTP call when both are invoked for the same token.
-2. **Contract change:** make `get_primary_email()` derive its answer from
-   `get_verified_emails()` (call the list method once, pick the primary
-   verified entry) instead of hitting the API independently. Changes the
-   base-class contract for every provider, not just GitHub.
+Fetch once at the two callback sites in `handlers/oauth2_callback.py`, web and
+SPA. Each site calls `get_verified_emails()` once and derives the primary from
+that list instead of calling `get_primary_email()` separately. A failed fetch
+is reused for the second lookup in the same sign-in: one timeout, then the
+existing 502. The base-class contract of `get_primary_email()` does not
+change, and nothing is cached on the provider.
 
 ## Where a cache can live (found 2026-11-02)
 
@@ -47,10 +43,8 @@ traced the callers:
 - The one long-lived authenticator (`oauth2_server/oauth2_server.py:65`) calls
   only `get_primary_email` (`:373`).
 
-So a request-local fix works: memoise on the per-request authenticator, or
-fetch once at the two callback sites and derive both answers there. A
-provider-level cache with a TTL would straddle requests. Still to decide:
-where the memo lives, and whether a failed fetch is reused.
+So a request-local fix works, and fetching at the callback sites is the one
+chosen. A provider-level cache with a TTL would straddle requests.
 
 ## Constraints inherited from the 3.14.5 plan
 

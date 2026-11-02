@@ -1,7 +1,8 @@
 """Make the reverse-lookup table ready: ``actingweb-property-lookup``.
 
-Reverse lookup (``get_by_property``, OAuth sign-in by email) resolves an
-indexed property value to its actor through the lookup table. A deployment
+Reverse lookup (``get_by_property``; sign-in resolves an actor by its creator,
+not through this table) resolves an indexed property value to its actor
+through the lookup table. A deployment
 that held data before the table existed, or before a name was indexed, has
 properties with no lookup row. This command backfills those rows and records
 that it did, per indexed name, so the application's startup check
@@ -404,6 +405,10 @@ class BackfillStats:
     # PostgreSQL dry run: rows large enough that they may be refused. A hint
     # only; it changes neither the exit status nor completed_names().
     maybe_unindexable: int = 0
+    # Lookup rows moved from an actor that no longer holds the value to the
+    # one that does (``LOOKUP_TAKEOVER``); a dry run counts the ones --apply
+    # would move. Counted in ``written`` too.
+    taken_over: int = 0
     faults: int = 0
     # Dedupe sets beside the ordered detail lists (a large pass can refuse or
     # collide on many rows; a list scan per row would be quadratic).
@@ -467,11 +472,17 @@ def _lookup_owner(key: str) -> str | None:
     return str(row.actor_id) if row.actor_id else None
 
 
-def _put_lookup_row(lookup: Any, name: str, value: str, actor_id: str) -> bool | None:
-    """True written/present, False collision, None on a write fault."""
+def _put_lookup_row(
+    lookup: Any, name: str, value: str, actor_id: str
+) -> bool | str | None:
+    """True written/present, ``"taken_over"`` when the row named an actor
+    that no longer holds the value, False collision, None on a write fault."""
+    from actingweb.db.dynamodb.property import Property
     from actingweb.db.dynamodb.property_lookup import (
         PropertyLookupV2,
         compute_lookup_key,
+        owner_holds,
+        take_over,
     )
 
     key = compute_lookup_key(name, value)
@@ -484,13 +495,28 @@ def _put_lookup_row(lookup: Any, name: str, value: str, actor_id: str) -> bool |
         if code != "ConditionalCheckFailedException":
             logger.error(f"LOOKUP_CREATE_FAILED: property={name} actor={actor_id}: {e}")
             return None
-    # Conditional failure: identical mapping is fine, another actor is not.
+    # Conditional failure: identical mapping is fine; another actor is a
+    # collision only while it still holds the value (the scan meets holders
+    # one at a time, so the first current holder takes a stale row over).
     try:
         existing = PropertyLookupV2.get(key, consistent_read=True)
+        owner = str(existing.actor_id)
+        if owner == actor_id:
+            return True
+        if owner_holds(owner, name, value):
+            return False
+
+        def still_holds(t: Any) -> None:
+            t.condition_check(
+                Property, actor_id, name, condition=Property.value == value
+            )
+
+        if take_over(name, value, owner=owner, new_owner=actor_id, extra=still_holds):
+            return "taken_over"
+        return False
     except Exception as e:  # folds DbError: reported
         logger.error(f"LOOKUP_READ_FAILED: property={name} actor={actor_id}: {e}")
         return None
-    return str(existing.actor_id) == actor_id
 
 
 def _actor_exists(actor_id: str, stats: BackfillStats | None = None) -> bool:
@@ -525,7 +551,7 @@ def _run_segment(
     dry_run_owners: dict[str, str] | None = None,
 ) -> None:
     from actingweb.db.dynamodb.property import Property
-    from actingweb.db.dynamodb.property_lookup import compute_lookup_key
+    from actingweb.db.dynamodb.property_lookup import compute_lookup_key, owner_holds
 
     if dry_run_owners is None:
         dry_run_owners = {}
@@ -565,10 +591,22 @@ def _run_segment(
                 if owner is None:
                     try:
                         held = _lookup_owner(key)
+                        stale = bool(
+                            held
+                            and held != actor_id
+                            and not owner_holds(held, name, value)
+                        )
                     except DbError:  # folds DbError: counted as a fault
                         stats.fault()  # reported; the dry run goes on
                         continue
-                    owner = dry_run_owners.setdefault(key, held or actor_id)
+                    if stale:
+                        # --apply would take this row over for the first
+                        # current holder it meets.
+                        owner = dry_run_owners.setdefault(key, actor_id)
+                        if owner == actor_id:
+                            stats.bump("taken_over")
+                    else:
+                        owner = dry_run_owners.setdefault(key, held or actor_id)
                 if owner == actor_id:
                     stats.bump("written")
                 else:
@@ -578,7 +616,10 @@ def _run_segment(
                     )
             else:
                 outcome = _put_lookup_row(None, name, value, actor_id)
-                if outcome is True:
+                if outcome == "taken_over":
+                    stats.bump("written")
+                    stats.bump("taken_over")
+                elif outcome is True:
                     stats.bump("written")
                 elif outcome is False:
                     detail = (
@@ -753,13 +794,19 @@ def backfill_postgresql(
                     conn.commit()
                     if pause:
                         time.sleep(pause)
+            _pg_take_over_stale(conn, names, stats, apply=apply)
             with conn.cursor() as cur:
+                # Rows another actor holds while it still holds the value; a
+                # stale holder was taken over (or reported) just above.
                 cur.execute(
                     "SELECT p.name, p.id, l.actor_id FROM properties p "
                     "JOIN actors a ON a.id = p.id "
                     "JOIN property_lookup l ON l.property_name = p.name "
                     "AND l.value = p.value "
-                    "WHERE p.name = ANY(%s) AND l.actor_id <> p.id",
+                    "WHERE p.name = ANY(%s) AND l.actor_id <> p.id "
+                    "AND EXISTS (SELECT 1 FROM properties h "
+                    "JOIN actors ha ON ha.id = h.id WHERE h.id = l.actor_id "
+                    "AND h.name = l.property_name AND h.value = l.value)",
                     (names,),
                 )
                 for name, actor_id, holder in cur.fetchall():
@@ -771,6 +818,56 @@ def backfill_postgresql(
         logger.error(f"PostgreSQL backfill fault: {e}")
         stats.fault()
     return stats
+
+
+def _pg_take_over_stale(
+    conn: Any, names: list[str], stats: BackfillStats, *, apply: bool
+) -> None:
+    """Lookup rows whose holder no longer holds the value.
+
+    With exactly one actor holding the value now, the row moves to it (one
+    transaction per row, through the runtime's
+    :func:`~actingweb.db.postgresql.property_lookup.claim_in_transaction`,
+    which re-checks the holder under lock); a dry run counts it. With two or
+    more, each is a collision and the name stays unmarked.
+    """
+    from actingweb.db.postgresql.property_lookup import claim_in_transaction
+
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT l.property_name, l.value, l.actor_id, "
+            "array_agg(p.id ORDER BY p.id) FROM property_lookup l "
+            "JOIN properties p ON p.name = l.property_name AND p.value = l.value "
+            "JOIN actors a ON a.id = p.id "
+            "WHERE l.property_name = ANY(%s) AND p.id <> l.actor_id "
+            "AND NOT EXISTS (SELECT 1 FROM properties h "
+            "JOIN actors ha ON ha.id = h.id WHERE h.id = l.actor_id "
+            "AND h.name = l.property_name AND h.value = l.value) "
+            "GROUP BY l.property_name, l.value, l.actor_id",
+            (names,),
+        )
+        stale = cur.fetchall()
+    conn.rollback()
+    for name, value, previous, holders in stale:
+        if len(holders) > 1:
+            for actor_id in holders:
+                stats.collision(
+                    name,
+                    f"property={name} actor={actor_id} held_by={previous} "
+                    f"(stale; shares_with="
+                    f"{','.join(i for i in holders if i != actor_id)})",
+                )
+            continue
+        if not apply:
+            stats.bump("taken_over")
+            stats.bump("written")
+            continue
+        with conn.transaction(), conn.cursor() as cur:
+            outcome = claim_in_transaction(cur, name, value, holders[0])
+        conn.commit()
+        if outcome == "taken_over":
+            stats.bump("taken_over")
+            stats.bump("written")
 
 
 def _pg_insert_rows_one_by_one(
@@ -930,6 +1027,7 @@ def cmd_backfill(args: argparse.Namespace) -> int:
     print(
         f"Summary: scanned={stats.scanned} matches={stats.matched} "
         f"{'written-or-present' if apply else 'would-write'}={stats.written} "
+        f"{'taken-over' if apply else 'would-take-over'}={stats.taken_over} "
         f"collisions={sum(stats.collisions.values())} "
         f"unindexable={sum(stats.unindexable.values())} orphans={stats.orphans} "
         f"faults={stats.faults}"

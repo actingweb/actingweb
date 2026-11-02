@@ -1,10 +1,10 @@
 # TODO: adoption rule — remaining fault and hygiene follow-ups
 
 **Status:** Open, approach chosen. Filed 2026-10-27; the owner chose an
-approach for every item on 2026-11-02.
-`thoughts/plans/2026-11-02-3-16-owner-decided-followups.md` carries J, K, the
-callback version check, `find_db_error` and the Flask CORS headers;
-`thoughts/plans/2026-11-02-3-16-adoption-fault-followups.md` carries the rest.
+approach for every item on 2026-11-02, and
+`thoughts/plans/2026-11-02-3-16-adoption-fault-followups.md` carries them. J,
+K, the callback version check, `find_db_error` and the CORS headers landed
+with `thoughts/plans/2026-11-02-3-16-owner-decided-followups.md`.
 **Filed by:** Greger Wedel (with Claude), during the 3.16 adoption work.
 **Source:** `thoughts/verifications/2026-10-27-oauth-adoption-vouching-and-open-factory-2.md`,
 Issues H-L, and the later verifications named per item.
@@ -17,13 +17,6 @@ catch and fold it.
 
 ## What is still owed
 
-- **Tokens issued between the revoke and the purge** (Issue J). The clean
-  path revokes before purging, so a token an MCP client obtains inside that
-  window survives. Approach: revoke again after `_delete_actor_clients`.
-- **UNKNOWN tombstone read** (Issue K). A half-wiped actor whose tombstone
-  read faults is cleaned in place and stays tombstoned. Approach: fail
-  closed. With the status UNKNOWN and the marker absent, the sign-in answers
-  503.
 - **Hygiene** (Issue L, the rest):
   - **Summary reads fold:** the replace path's `actor_adopted` summary reads
     (trusts, subscriptions, properties) pass `strict=False`, so a fault
@@ -100,17 +93,9 @@ catch and fold it.
     (at-most-once) and the owner's factory sweep swallow `DbError` by
     design. Approach: document both in the hooks reference and the
     fault-contract docs.
-  - **`_errors.find_db_error` follows `__context__`:** a bug raised while
-    handling a `DbError` answers 503 instead of 500. Approach: follow
-    `__cause__` only.
 - **Fault-contract follow-ups from the guarded sweep**
   (`thoughts/verifications/2026-10-29-db-fault-semantics-and-creator-uniqueness-2.md`
   and the fourth verification's K4):
-  - **The callback version check is not conditional**
-    (`callback_processor.py` `_set_state`: read, compare, write); two
-    concurrent in-order deliveries can both run the handler. Approach: a
-    compare-and-swap with `conditional_update_attr`; the loser skips its
-    handler run.
   - **Ordering windows (O2).** Approach: reorder all three, each with a
     fault test:
     - the replacement's pre-reads run before its token revoke;
@@ -146,10 +131,6 @@ catch and fold it.
   - **`fanout.py`'s breaker** holds within one process only. Approach:
     correct the comment and say so in the deployment guide. A shared,
     cross-process breaker is not taken.
-- **Flask `GET /?format=json` reflects `Origin` with credentials**
-  (`handlers/factory.py`; eighth verification, notes). The content is public
-  configuration. Approach: keep reflecting the origin, drop
-  `Access-Control-Allow-Credentials`, and make FastAPI match.
 
 ## Constraint: the second tombstone write is deliberate
 
@@ -162,5 +143,5 @@ keeping it on 2026-11-02.
 
 ## Why it waits
 
-None of these lets an attacker in. J and K need a coinciding backend fault
-or a race; the rest is cost and tidiness.
+None of these lets an attacker in. AW needs a fault mid-wipe; the rest is a
+race, a coinciding fault, or cost and tidiness.

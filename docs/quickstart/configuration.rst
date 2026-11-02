@@ -457,7 +457,13 @@ An indexed property write and its lookup row succeed or fail together: if
 the lookup row cannot be written the property write raises ``DbError`` (the
 integrations answer 503) instead of leaving a value that reverse lookup can
 never find. A value another actor already holds is a logged collision, not a
-failure.
+failure, unless that actor no longer holds it: a lookup row left behind by a
+best-effort release (its owner's property is gone or holds another value) is
+taken over by the next actor to write the value, logged as
+``LOOKUP_TAKEOVER``. The write is conditioned on the value it read, so two
+concurrent writers of one indexed property cannot leave the lookup row of the
+value that lost. Reverse lookup maps a value to whichever actor holds it; it
+is not an identity proof (sign-in resolves by creator).
 
 Configuration
 ~~~~~~~~~~~~~
@@ -593,7 +599,8 @@ environment as the application:
 
 The backfill is streaming, rate-limited (``--rps``, ``--read-rcu``),
 resumable and idempotent, and reports (without overwriting) any value shared
-by two actors; a name with a collision stays unmarked. On PostgreSQL it runs
+by two actors (a row whose holder no longer holds the value is taken over,
+counted as ``taken-over``); a name with a collision stays unmarked. On PostgreSQL it runs
 in primary-key batches that commit alone (run it off-peak on a large table).
 A deployment that already ran the 3.13 backfill can mark its names without
 rescanning: ``mark-complete --apply`` (it refuses a name that has property

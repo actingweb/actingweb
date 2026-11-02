@@ -84,7 +84,10 @@ On DynamoDB the backfill scans the properties table (``--read-rcu`` and
 ``--rps`` bound reads and writes, ``--segments`` sets parallelism, and a
 checkpoint file resumes an interrupted run). On PostgreSQL it inserts in
 primary-key batches that commit alone, so run it off-peak on a large table
-(``--batch-size``, ``--pause``). Both are idempotent. After a verified run on
+(``--batch-size``, ``--pause``). Both are idempotent. A lookup row whose
+holder no longer holds the value is moved to the actor that does
+(``taken-over`` in the summary, ``would-take-over`` in a dry run); on
+PostgreSQL a stale row two current holders share stays a collision. After a verified run on
 DynamoDB, the old ``<prefix>_property_lookup`` (v1) table and the
 ``property-index`` GSI on the properties table are no longer read and can be
 dropped. See :doc:`../migration/v3.16` ("One reverse-lookup mechanism").

@@ -39,6 +39,8 @@ import hashlib
 import json
 import logging
 import os
+from collections.abc import Callable
+from typing import Any
 
 from pynamodb.attributes import UnicodeAttribute
 from pynamodb.constants import PAY_PER_REQUEST_BILLING_MODE
@@ -175,6 +177,74 @@ def record_configured(names: list[str]) -> None:
         ).save()
     except Exception as e:
         raise DbError("property lookup record") from e
+
+
+def owner_holds(owner: str, property_name: str, value: str) -> bool:
+    """Whether ``owner`` still holds ``value`` in ``property_name`` (one
+    consistent read of its property row). Raises ``DbError`` on a fault."""
+    from actingweb.db.dynamodb.property import Property
+
+    try:
+        row = Property.get(owner, property_name, consistent_read=True)
+    except DoesNotExist:
+        return False
+    except Exception as e:
+        raise DbError("property lookup owner read", owner) from e
+    return bool(row.value) and str(row.value) == value
+
+
+def take_over(
+    property_name: str,
+    value: str,
+    *,
+    owner: str,
+    new_owner: str,
+    extra: Callable[[Any], None] | None = None,
+) -> bool:
+    """Move a lookup row from ``owner``, who no longer holds ``value``, to
+    ``new_owner``, in one transaction.
+
+    The transaction checks that ``owner``'s property row is absent or holds
+    another value, and writes the row conditioned on still naming ``owner``
+    (or being absent, when it was released meanwhile), so an owner that
+    re-acquires the value first wins and nothing changes. ``extra`` adds the
+    caller's own items (its property write, the release of its old row).
+    True when the row now names ``new_owner``; False when a condition failed.
+    Raises ``DbError`` on a fault. Logs ``LOOKUP_TAKEOVER`` with the value's
+    digest, never the value.
+    """
+    from actingweb.db.dynamodb.actor import DbActor
+    from actingweb.db.dynamodb.property import Property
+
+    ensure_table(PropertyLookupV2)
+    key = compute_lookup_key(property_name, value)
+
+    def build(t: Any) -> None:
+        t.condition_check(
+            Property,
+            owner,
+            property_name,
+            condition=Property.value.does_not_exist() | (Property.value != value),
+        )
+        if extra is not None:
+            extra(t)
+        t.save(
+            PropertyLookupV2(
+                lookup_key=key, actor_id=new_owner, property_name=property_name
+            ),
+            condition=PropertyLookupV2.lookup_key.does_not_exist()
+            | (PropertyLookupV2.actor_id == owner),
+        )
+
+    codes = DbActor._run_transaction(build, op="property lookup takeover")  # pyright: ignore[reportPrivateUsage]
+    if codes is not None:
+        return False
+    logger.warning(
+        f"LOOKUP_TAKEOVER: property={property_name} digest={key[:12]} "
+        f"previous_owner={owner} actor={new_owner} — the previous owner no "
+        "longer holds the value"
+    )
+    return True
 
 
 class DbPropertyLookup:

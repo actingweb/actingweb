@@ -396,7 +396,14 @@ CHANGED
   for an actor that no longer exists now fails on the lookup row's foreign
   key when no other actor holds that value's lookup row.
   ``DbPropertyLookup.create`` (DynamoDB) now raises ``DbError`` on a write
-  fault instead of returning False, which only means a collision.
+  fault instead of returning False, which only means a collision. The
+  property write is conditioned on the value it read (DynamoDB: a condition
+  on a consistent read; PostgreSQL: the row read ``FOR UPDATE`` inside the
+  transaction), so two concurrent writers of one indexed property cannot
+  leave the lookup row of the value that lost; deleting an indexed property
+  releases the lookup row of the value stored at the delete, not the one a
+  handle last read. A write that keeps losing to concurrent writers raises
+  ``DbError`` after three attempts (``PROPERTY_WRITE_RACE_EXHAUSTED``).
 
 - **Behavior change: ``check_ready()`` and ``integrate_*`` raise
   ``PropertyLookupNotReady`` for an indexed name that was never backfilled.**
@@ -1110,6 +1117,25 @@ ADDED
 
 FIXED
 ~~~~~
+
+- **A reverse-lookup row stayed with an actor that no longer held the
+  value.** Releasing an indexed value's lookup row is best effort, so a
+  throttled delete (or an actor removed without its rows) left the row
+  behind, and the next actor to hold the value was written as a logged
+  collision forever: reverse lookup never found it, and
+  ``actingweb-property-lookup backfill`` reported the same collision and
+  never marked the name. **Behavior change:** a write of an indexed value
+  whose lookup row names an actor that no longer holds it (its property is
+  gone or holds another value) takes the row over, in one step conditioned
+  on that actor still not holding it, and logs ``LOOKUP_TAKEOVER`` with the
+  value's digest. ``backfill`` does the same and counts it (``taken-over``,
+  ``would-take-over`` in a dry run); on PostgreSQL a stale row with two or
+  more current holders stays a collision, on DynamoDB the first current
+  holder the scan meets takes it. An owner that still holds the value keeps
+  its row, as before. **Check:** reverse lookup is not an identity proof
+  (sign-in resolves by creator); an application that treats
+  ``get_by_property`` as one should read the note on indexed properties in
+  ``docs/quickstart/configuration.rst``.
 
 - **Two concurrent deliveries of one subscription callback could both run
   the handler.** The callback processor's version check read the state row,

@@ -349,7 +349,16 @@ D15 lands first inside the phase, with the fast tier green, then D14.
 - [ ] `pytest tests/performance -m benchmark -p no:rerunfailures` alone (the property write path changes)
 - [ ] Full tier before commit
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+- **Regressions:** with the Phase 4 source stashed, 11 tests fail on DynamoDB and 8 on PostgreSQL (`tests/test_property_lookup_races.py`, `tests/test_property_lookup_command.py::TestBackfillStaleOwner`). The plain collision and "second write at once" tests pass on the old code too; they are guards.
+- **Deviation, the PostgreSQL lock (the deduced choice, verified):** no advisory lock. `claim_in_transaction` locks the lookup row `FOR UPDATE` and reads the owner's property `FOR SHARE` **by key only**, comparing the value after the lock. The first cut put the value in the `WHERE`; the two-connection test showed it did not wait: under READ COMMITTED a row whose committed value differs from the predicate is neither returned nor locked, so an owner's uncommitted write was missed. A deadlock or serialization failure retries the whole transaction.
+- **Deviation, the DynamoDB takeover:** `take_over` checks "the owner's property is absent or holds another value" as one single-item condition (`does_not_exist() | value <> v`); an orphan property row left by a deleted actor is a collision on DynamoDB unless the row is gone too. Any failed takeover goes back to the write loop for a fresh read, within the three-attempt budget; a real collision (the owner still holds the value) costs no retry.
+- **Deviation, the codes:** `_write_indexed` reads the own-property failure at the property item's index (deletes, then puts in the order added); the takeover's failures are not decoded at all, since a re-read decides.
+- **Deviation, D15 on PostgreSQL:** the stored value is read `FOR UPDATE` inside the transaction; a concurrent first insert is `ON CONFLICT DO NOTHING` plus a retry. `DbProperty.delete()` on an indexed name deletes with `RETURNING value` and releases that value's row.
+- **Existing tests adjusted:** two backfill collision tests seeded a lookup row for an actor that did not hold the value, which is now the takeover case; they seed the holder's property, so they stay collisions.
+- **Todos:** `unique-creator-small-followups.md`, `github-emails-api-called-twice.md` and `property-lookup-stale-owner-and-races.md` are deleted with their rows; the adoption todo drops J, K, the callback check, `find_db_error` and CORS; `oauth-email-verified-claim-unchecked.md` is new (see What We're NOT Doing).
+
 
 ---
 

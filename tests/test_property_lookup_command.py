@@ -455,6 +455,7 @@ class TestBackfill:
         name = store.name()
         value = f"held-{uuid.uuid4()}"
         holder, other = store.actor(), store.actor()
+        store.seed(holder, name, value)  # a live holder (a stale one is taken over)
         store.seed(other, name, value)
         _lookup_module().DbPropertyLookup().create(name, value, holder)
         assert _run("backfill", "--properties", name, "--segments", "1") == 1
@@ -581,6 +582,7 @@ class TestBackfillUnindexableValue:
         name = store.name()
         holder, other, long_actor = store.actor(), store.actor(), store.actor()
         held = f"held-{uuid.uuid4()}"
+        store.seed(holder, name, held)  # a live holder (a stale one is taken over)
         store.seed(other, name, held)
         _lookup_module().DbPropertyLookup().create(name, held, holder)
         store.seed(long_actor, name, _incompressible(4000))
@@ -757,3 +759,66 @@ class TestShim:
             "--properties",
             "email",
         ]
+
+
+class TestBackfillStaleOwner:
+    """A lookup row whose owner no longer holds the value is taken over
+    (3.16, owner-decided plan D14), not reported as a collision forever."""
+
+    def test_apply_takes_a_stale_row_over_and_marks_the_name(
+        self, store: Store, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        name = store.name()
+        value = f"stale-{uuid.uuid4()}"
+        gone, current = store.actor(), store.actor()
+        store.seed(current, name, value)
+        _lookup_module().DbPropertyLookup().create(name, value, gone)
+        assert _run("backfill", "--apply", "--properties", name, "--segments", "1") == 0
+        out = capsys.readouterr().out
+        assert "taken-over=1" in out and "collisions=0" in out
+        assert _lookup(name, value) == current
+        assert _marked(name)
+
+    def test_the_dry_run_predicts_the_takeover(
+        self, store: Store, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        name = store.name()
+        value = f"stale-{uuid.uuid4()}"
+        gone, current = store.actor(), store.actor()
+        store.seed(current, name, value)
+        _lookup_module().DbPropertyLookup().create(name, value, gone)
+        assert _run("backfill", "--properties", name, "--segments", "1") == 0
+        out = capsys.readouterr().out
+        assert "would-take-over=1" in out and "collisions=0" in out
+        assert _lookup(name, value) == gone
+
+    @pytest.mark.skipif(BACKEND != "postgresql", reason="PostgreSQL groups holders")
+    def test_two_current_holders_of_a_stale_row_are_collisions(
+        self, store: Store, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        name = store.name()
+        value = f"stale-{uuid.uuid4()}"
+        gone, first, second = store.actor(), store.actor(), store.actor()
+        store.seed(first, name, value)
+        store.seed(second, name, value)
+        _lookup_module().DbPropertyLookup().create(name, value, gone)
+        assert _run("backfill", "--apply", "--properties", name) == 1
+        assert "collisions=2" in capsys.readouterr().out
+        assert _lookup(name, value) == gone
+        assert not _marked(name)
+
+    @pytest.mark.skipif(BACKEND != "dynamodb", reason="DynamoDB scans holders")
+    def test_the_first_current_holder_takes_a_stale_row_on_dynamodb(
+        self, store: Store, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        name = store.name()
+        value = f"stale-{uuid.uuid4()}"
+        gone, first, second = store.actor(), store.actor(), store.actor()
+        store.seed(first, name, value)
+        store.seed(second, name, value)
+        _lookup_module().DbPropertyLookup().create(name, value, gone)
+        assert _run("backfill", "--apply", "--properties", name, "--segments", "1") == 1
+        out = capsys.readouterr().out
+        assert "taken-over=1" in out and "collisions=1" in out
+        assert _lookup(name, value) in (first, second)
+        assert not _marked(name)

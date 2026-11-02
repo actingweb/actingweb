@@ -7,6 +7,8 @@ This sets up the test environment BEFORE any modules are imported.
 import faulthandler
 import os
 
+import pytest
+
 
 def pytest_configure(config):
     """
@@ -83,3 +85,13 @@ from tests._lookup_probe import (  # noqa: E402, F401
     real_lookup_probe,  # pyright: ignore[reportUnusedImport]
     real_unique_probe,  # pyright: ignore[reportUnusedImport]
 )
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _postgresql_unit_schema() -> None:
+    """Migrate ``public`` once when the run uses PostgreSQL (tests/_pg_schema.py)."""
+    if os.environ.get("DATABASE_BACKEND", "dynamodb") != "postgresql":
+        return
+    from tests._pg_schema import ensure_postgresql_schema
+
+    ensure_postgresql_schema()

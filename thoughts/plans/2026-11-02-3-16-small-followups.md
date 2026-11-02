@@ -161,7 +161,13 @@ Every item that needs a choice stays in its todo, and "What We're NOT Doing" lis
 - [ ] `pytest tests/performance -m benchmark -p no:rerunfailures` on a fresh DynamoDB container: no `ResourceNotFoundException`
 - [ ] Full tier before commit
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+- **Fresh PostgreSQL database, serial unit command:** 3,862 passed, 0 failed (the todo recorded 44 failures).
+- **Fresh DynamoDB container, attribute benchmarks:** 2 passed. With `tests/performance/conftest.py` moved aside, both fail with the recorded `ResourceNotFoundException ... test_attributes`.
+- **Full tier:** DynamoDB 5,160 passed; PostgreSQL 4,971 passed. ruff, pyright, `verify_groups` and sphinx are clean.
+- **Deviation:** the helper lives in `tests/_pg_schema.py`, with only the fixture in `tests/conftest.py`, so its test can import it.
+
 
 ---
 

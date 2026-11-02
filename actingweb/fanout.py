@@ -524,8 +524,12 @@ class FanOutManager:
             ):
                 # A subscriber still handling another delivery of this
                 # sequence (3.16) is working, not failing: it does not count
-                # toward opening the breaker. Every other 503, the library's
-                # own fault answer included, still does.
+                # toward opening the breaker, and a half-open breaker's probe
+                # that gets it has its answer (the peer is up). Every other
+                # 503, the library's own fault answer included, still counts.
+                if cb.state == CircuitState.HALF_OPEN:
+                    cb.record_success()
+                    self._persist_circuit_breaker(cb)
                 retry_after = response.headers.get("Retry-After")
                 return DeliveryResult(
                     peer_id=peer_id,
@@ -540,12 +544,16 @@ class FanOutManager:
             elif status == 503:
                 cb.record_failure()
                 self._persist_circuit_breaker(cb)
+                retry_after = response.headers.get("Retry-After")
                 return DeliveryResult(
                     peer_id=peer_id,
                     subscription_id=subscription_id,
                     success=False,
                     status_code=status,
                     error="service_unavailable",
+                    retry_after=int(retry_after)
+                    if isinstance(retry_after, str) and retry_after.isdigit()
+                    else None,
                 )
             else:
                 cb.record_failure()

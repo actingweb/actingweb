@@ -570,3 +570,54 @@ Commits: `eca175e` Phase 1, `1022381` Phase 2, `d432a71` Phase 3, `6554c76` the 
 
 **What changed**: `resumable-actor-deletion.md` gains D12's mint-path window; `subscription-subscriber-fault-hardening.md` gains the `claimed + 1` stall and the lease note; `INDEX.md`'s adoption row no longer names J, K or the callback check.
 
+### 2026-11-02, after the re-verification review of `ef77625` (codex, a fresh-context Claude, the built-in code review)
+
+#### 12. A resync with an empty baseline was refused
+
+**Category**: Bug fix (introduced by entry 5)
+
+**What changed**: `_fetch_and_transform_baseline` (sync and async) answers an empty baseline as it is (`{}`/`[]`) and `None` only for a failed fetch (`None`, or `{"error": ...}` from the proxy); the callback applies the empty one.
+
+**Files affected**: `actingweb/interface/subscription_manager.py`; `tests/test_callback_in_progress_answer.py::test_a_resync_with_an_empty_baseline_is_applied`
+
+**Rationale**: both cases returned `None`, so entry 5's 503 refused every resync of a publisher holding nothing.
+
+#### 13. A poll stops at the first diff it did not apply
+
+**Category**: Verification fix (code review; older than 3.16 in part)
+
+**What changed**: besides IN_PROGRESS, a PENDING, REJECTED or RESYNC_TRIGGERED result stops the poll: it neither clears the publisher nor records past it, and skips the baseline fallback.
+
+**Files affected**: `actingweb/interface/subscription_manager.py`; `tests/test_subscription_sync.py::test_the_poll_stops_at_a_pending_diff`
+
+**Rationale**: the poll recorded and cleared past a gap (the processor then dropped the pending entries as processed leftovers) and past a resync reset.
+
+#### 14. The vouched rename moves the email first, only when there is one
+
+**Category**: Verification fix (re-verification of entry 8)
+
+**What changed**: the stored email moves before the rename and back if the rename is refused or raises; an actor without a stored email gets none (one would pin its creator); under the pin, a rename to a creator that is not an address is refused, since the load would undo it.
+
+**Files affected**: `actingweb/interface/actor_interface.py` (`_pinned_email`, `_restore_email`); `tests/test_rename_pending_vouch.py` (three tests); `CHANGELOG.rst`, `docs/migration/v3.16.rst`
+
+**Rationale**: moving after the rename left a renamed actor with the old email on a fault, and under uniqueness the load could not then undo it either.
+
+#### 15. The breaker, the reset and the sequence check
+
+**Category**: Verification fix
+
+**What changed**:
+- A half-open breaker that gets the in-progress answer closes (the peer is up); before, it stayed half-open and let every request through. A plain 503 keeps its `retry_after`.
+- `_reset_state` raises `DbError` when its write does not land.
+- A low-granularity callback whose `sequence` is not an integer answers 400 before the pre-fetch check (it raised a 500 outside the handler's `try`).
+- The callback handler's comment and the D13 entry say that only a high-granularity diff stays on the publisher, and state the pre-fetch check's window and the poll's read-then-write as what they are.
+
+**Files affected**: `actingweb/fanout.py`, `actingweb/callback_processor.py`, `actingweb/handlers/callbacks.py`, `CHANGELOG.rst`; `tests/test_fanout.py`, `tests/test_callback_in_progress_answer.py`
+
+#### Accepted, not changed
+
+- **The pre-fetch check is a read, not a claim:** two deliveries of one low-granularity sequence can both pass it; the second finds the diff gone and answers 503 (counted by the publisher's breaker), and a failed first delivery is recovered by a resync. Claiming before the fetch would move the claim into the handler; the changelog states the window.
+- **The poll's upward-only write reads, then writes:** a callback recording a higher sequence between the two is overwritten. Both writers are the same subscriber; a conditional backend write would need a protocol change to `DbSubscription.modify`, which the adoption plan's `UpdateItem` item touches anyway.
+- **A peer that always answers the in-progress code never trips the breaker:** the header is the subscriber's own answer, and a peer can already keep a breaker closed by answering 204.
+- **Extra reads:** the pre-fetch check reads the state row and the sequence once more per low-granularity callback, and the poll reads the sequence once more.
+

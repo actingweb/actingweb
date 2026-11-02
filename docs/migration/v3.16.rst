@@ -371,9 +371,10 @@ application vouches for the address it passes. It records the new address as
 ``vouched_creator`` after, so a sign-in during a rename finds the actor
 vouched under either creator. Two concurrent renames of one actor share that
 one pending value; serialise renames of one actor. With
-``force_email_prop_as_creator`` on, a rename to an address also moves the
-stored email to it; before 3.16 the next load rewrote the creator back to the
-old stored email. A route of your own that
+``force_email_prop_as_creator`` on and a stored email, a rename moves the
+stored email to the new address (before 3.16 the next load rewrote the
+creator back to the old stored email), and a rename to a creator that is not
+an address is refused. A route of your own that
 passes user input to it should ask for the endpoint's rules::
 
     actor.modify_creator(new_address, unvouch=True)

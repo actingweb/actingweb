@@ -114,7 +114,7 @@ def test_an_actor_vouched_before_3_16_renames_as_it_did() -> None:
 
 
 def test_a_rename_survives_the_next_load_under_the_email_pin() -> None:
-    """Under force_email_prop_as_creator (the default) the load rewrites the
+    """Under force_email_prop_as_creator (on in make_config) the load rewrites the
     creator to the stored email; a vouched rename moves the email with it."""
     config = make_config()
     assert config.force_email_prop_as_creator
@@ -125,3 +125,37 @@ def test_a_rename_survives_the_next_load_under_the_email_pin() -> None:
     reloaded = Actor(actor_id=aid(actor), config=config)
     assert reloaded.creator == new
     assert istore(reloaded).email == new
+
+
+def test_a_rename_of_an_actor_without_a_stored_email_writes_none() -> None:
+    """No stored email: the load rewrites nothing, so none is created (which
+    would pin the creator)."""
+    config = make_config()
+    old, new = _mail(), _mail()
+    actor = create_core_actor(config, old, auth_method="google_oauth2")
+    istore(actor).email = None
+    assert ActorInterface(actor).modify_creator(new)
+    reloaded = Actor(actor_id=aid(actor), config=config)
+    assert reloaded.creator == new
+    assert istore(reloaded).email is None
+
+
+def test_a_refused_rename_puts_the_stored_email_back() -> None:
+    config = make_config()
+    old, new = _mail(), _mail()
+    actor = create_core_actor(config, old, auth_method="google_oauth2")
+    istore(actor).email = old
+    with patch.object(Actor, "modify", return_value=False):
+        assert ActorInterface(actor).modify_creator(new) is False
+    reloaded = Actor(actor_id=aid(actor), config=config)
+    assert reloaded.creator == old
+    assert istore(reloaded).email == old
+
+
+def test_a_rename_to_a_provider_id_under_the_email_pin_is_refused() -> None:
+    config = make_config()
+    old = _mail()
+    actor = create_core_actor(config, old, auth_method="google_oauth2")
+    istore(actor).email = old
+    assert ActorInterface(actor).modify_creator(_pid()) is False
+    assert Actor(actor_id=aid(actor), config=config).creator == old

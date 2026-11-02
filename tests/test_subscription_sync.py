@@ -1099,3 +1099,49 @@ class TestSyncStopsAtAnInFlightClaim:
             )
 
         mock_sub_instance.handle.modify.assert_not_called()
+
+    def test_the_poll_stops_at_a_pending_diff(self) -> None:
+        """A diff the processor queued behind a gap was not applied: the poll
+        neither clears nor records past it."""
+        from actingweb.callback_processor import CallbackProcessor, ProcessResult
+
+        actor = FakeCoreActor()
+        actor._subscriptions[("peer_1", "sub_1", True)] = {
+            "peerid": "peer_1",
+            "subscriptionid": "sub_1",
+            "target": "properties",
+            "callback": True,
+            "sequence": 3,
+        }
+        config = SubscriptionProcessingConfig(
+            enabled=True, auto_storage=False, auto_sequence=True
+        )
+        manager = SubscriptionManager(actor)  # type: ignore[arg-type]
+
+        def process(self: Any, *, sequence: int, **_k: Any) -> ProcessResult:
+            return ProcessResult.PENDING
+
+        with (
+            patch.object(manager, "_get_peer_proxy") as mock_get_proxy,
+            patch("actingweb.subscription.Subscription") as mock_subscription,
+            patch.object(CallbackProcessor, "process_callback_sync", process),
+            patch("actingweb.interface.actor_interface.ActorInterface"),
+        ):
+            mock_proxy = MagicMock()
+            mock_proxy.trust = {"baseuri": "https://peer.example.com/", "secret": "s"}
+            mock_proxy.get_resource.return_value = {
+                "sequence": 6,
+                "data": [{"sequence": 5, "data": {}}, {"sequence": 6, "data": {}}],
+            }
+            mock_get_proxy.return_value = mock_proxy
+            mock_sub_instance = MagicMock()
+            mock_sub_instance.handle = MagicMock()
+            mock_sub_instance.get.return_value = {"sequence": 3}
+            mock_subscription.return_value = mock_sub_instance
+
+            manager.sync_subscription(
+                peer_id="peer_1", subscription_id="sub_1", config=config
+            )
+
+        mock_proxy.change_resource.assert_not_called()
+        mock_sub_instance.handle.modify.assert_not_called()

@@ -143,10 +143,12 @@ SECURITY
   it after the rename, so a sign-in during a rename finds the actor vouched
   under the old creator and the new one, for an email or a provider-id
   creator alike. A fault writing the pending address refuses the rename
-  (False). **Behavior change:** with ``force_email_prop_as_creator`` on (the
-  default), a vouched rename to an address also moves the stored email to
-  it; before, the next load rewrote the creator back to the old stored
-  email, undoing the rename. Two concurrent renames of one actor share the one pending value,
+  (False). **Behavior change:** with ``force_email_prop_as_creator`` on, a
+  vouched rename of an actor that has a stored email moves the email to the
+  new address first (and back if the rename does not land); before, the next
+  load rewrote the creator back to the old stored email, undoing the rename.
+  Such a rename to a creator that is not an address is refused (False),
+  since the load would undo it too. Two concurrent renames of one actor share the one pending value,
   so a sign-in between them can still find it unvouched; serialise renames
   of one actor.
   The emailed verification link proves only the address it was sent to: an
@@ -1156,31 +1158,32 @@ FIXED
   delivery of a claimed sequence is not handled
   (``ProcessResult.IN_PROGRESS``, new): a callback answers **503** with
   ``Retry-After: 5`` and ``X-ActingWeb-Error: callback_in_progress``
-  instead of 204, a poll
-  (``sync_subscription``) stops before that sequence and neither clears nor
-  records past it (``SubscriptionSyncResult.in_flight``, new), and the gap
-  timeout waits while the claim is live. The diff stays on this library's
-  publisher (it keeps diffs until a poll or an acknowledgement clears them,
-  and does not redeliver), so if the claiming delivery fails, the next poll
-  or gap resync applies it. A handler ``DbError`` releases the claim; a
-  delivery that crashes while holding one is taken over by the next
-  delivery of its sequences once 60 seconds have passed. A low-granularity
-  callback is answered before its diff is fetched when its sequence is
-  already handled (204) or claimed (503), since the publisher deletes the
-  diff on the fetch; one whose diff cannot be fetched now answers 503 and
-  processes nothing (it used to apply an empty diff and advance the
-  sequence), and so does a resync whose baseline cannot be fetched (it used
-  to reset to an empty baseline). A poll never writes a lower sequence than
-  the one stored.
-  ``FanOutManager`` no longer counts that in-progress answer (the 503 with
-  ``X-ActingWeb-Error: callback_in_progress``) toward opening a subscriber's
-  circuit breaker; every other 503, a subscriber's store-fault answer
-  included, and a 429 still count. **Check:**
-  the claim holds once every instance runs 3.16 (an older instance ignores
-  it), between processes with synchronised clocks, and for handlers that
-  finish within the 60 seconds (the lease is not renewed). A low-granularity
-  diff is deleted on the publisher by the subscriber's own fetch, so for it
-  a failed delivery is recovered only by a resync.
+  instead of 204, and the gap timeout waits while the claim is live. A
+  poll (``sync_subscription``) stops at the first diff it did not apply (in
+  progress, pending behind a gap, rejected, or a resync it triggered),
+  neither clearing nor recording past it
+  (``SubscriptionSyncResult.in_flight``, new, for the in-progress case),
+  and its final sequence write only raises the sequence it read. A
+  high-granularity diff stays on this library's publisher until a poll or an
+  acknowledgement clears it (the publisher does not redeliver), so if the
+  claiming delivery fails, the next poll or gap resync applies it. A handler
+  ``DbError`` releases the claim; a delivery that crashes while holding one,
+  or whose sequence write faults, is taken over by the next delivery of its
+  sequences once 60 seconds have passed. A low-granularity diff is deleted
+  on the publisher by the subscriber's own fetch, so a low-granularity
+  callback is answered before the fetch when its sequence is already
+  handled (204) or claimed (503); a delivery that claims it between that
+  check and the fetch can still find it gone, and a failed delivery of one
+  is recovered only by a resync. One whose diff cannot be fetched now
+  answers 503 and processes nothing (it used to apply an empty diff and
+  advance the sequence), and so does a resync whose baseline fetch fails
+  (an empty baseline is still applied). ``FanOutManager`` no longer counts
+  the in-progress answer toward opening a subscriber's circuit breaker, and
+  a half-open breaker that gets it closes; every other 503, a subscriber's
+  store-fault answer included, and a 429 still count. **Check:** the claim
+  holds once every instance runs 3.16 (an older instance ignores it),
+  between processes with synchronised clocks, and for handlers that finish
+  within the 60 seconds (the lease is not renewed).
 
 - **A GitHub sign-in with no public email asked GitHub's ``/user/emails``
   twice.** With an email required, the callback asked for the primary

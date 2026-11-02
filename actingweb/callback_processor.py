@@ -344,7 +344,10 @@ class CallbackProcessor:
         state["version"] = int((current or {}).get("version", 0) or 0) + 1
         state["claimed_seq"] = 0
         state["nonce"] = uuid.uuid4().hex
-        db.set_attr(name=self._get_state_key(peer_id, subscription_id), data=state)
+        if not db.set_attr(
+            name=self._get_state_key(peer_id, subscription_id), data=state
+        ):
+            raise DbError("callback state reset", self._actor.id)
 
     def _get_pending(self, peer_id: str, subscription_id: str) -> list[dict[str, Any]]:
         """Get pending callbacks from storage."""

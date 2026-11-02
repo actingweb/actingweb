@@ -519,6 +519,14 @@ class CallbacksHandler(base_handler.BaseHandler):
         fetched_from_url = bool(callback_url and not callback_data)
 
         if fetched_from_url and callback_type != "resync":
+            if not isinstance(params.get("sequence", 0), int) or isinstance(
+                params.get("sequence"), bool
+            ):
+                logger.warning(
+                    f"Callback from {peer_id} for {subscription_id}: "
+                    "the sequence is not an integer"
+                )
+                return False
             # Decide a duplicate or an in-progress sequence before the fetch:
             # the publisher deletes a low-granularity diff when it is fetched,
             # so a redelivery of an applied sequence would find it gone (and
@@ -770,10 +778,11 @@ class CallbacksHandler(base_handler.BaseHandler):
             )
             # Another delivery of this sequence is still running its handler:
             # answer 503, not 204. A publisher that deletes a diff on 204 (as
-            # the protocol allows) then keeps it in case that delivery fails;
-            # this library's publisher keeps diffs either way, and a poll
-            # (which stops at an in-progress sequence) or a gap resync brings
-            # it back.
+            # the protocol allows) then keeps it in case that delivery fails.
+            # This library's publisher keeps a high-granularity diff until a
+            # poll or an acknowledgement clears it, so a poll (which stops at
+            # an in-progress sequence) or a gap resync brings it back; a
+            # low-granularity diff is deleted by the subscriber's own fetch.
             self._callback_in_progress = result == ProcessResult.IN_PROGRESS
             self._callback_retry_later = self._callback_in_progress
 

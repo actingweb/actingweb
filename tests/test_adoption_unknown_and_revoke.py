@@ -181,13 +181,33 @@ class TestSeedMissingEmail:
         istore(owner).email = None
         from actingweb.attribute import InternalStore
 
-        real_setattr = InternalStore.__setattr__
-
-        def faulting(self: Any, k: str, v: Any) -> None:
-            if k == "email" and v is not None:
-                raise DbError("email write")
-            real_setattr(self, k, v)
-
-        with patch.object(InternalStore, "__setattr__", faulting):
+        with patch.object(
+            InternalStore, "set_if_absent", side_effect=DbError("email write")
+        ):
             result = auth.lookup_or_create_actor_by_identifier(creator)
         assert result is not None and result.id == owner.id
+
+    def test_a_value_stored_meanwhile_is_not_overwritten(
+        self, auth: OAuth2Authenticator
+    ) -> None:
+        config = auth.config
+        creator = uuid_email()
+        owner = create_core_actor(config, creator, auth_method="google_oauth2")
+        istore(owner).email = None
+        from actingweb.attribute import Attributes
+
+        real = Attributes.create_attr_if_absent
+
+        def raced(self: Any, name: str | None = None, **k: Any) -> bool:
+            if name == "email":
+                # Another writer stores an address between the read and the
+                # create.
+                Attributes.set_attr(self, name="email", data="raced@example.com")
+            return real(self, name=name, **k)
+
+        with patch.object(Attributes, "create_attr_if_absent", raced):
+            auth.lookup_or_create_actor_by_identifier(creator)
+        assert (
+            istore(Actor(actor_id=aid(owner), config=config)).email
+            == "raced@example.com"
+        )

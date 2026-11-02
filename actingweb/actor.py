@@ -361,7 +361,9 @@ class Actor:
             return False
         holder = get_actor(self.config).get_creator_holder(email)
         if holder and holder != self.id:
-            logger.debug(
+            # INFO: a record naming an actor that is gone (an orphan) blocks
+            # the rewrite too; ``actingweb-unique-creators report`` lists it.
+            logger.info(
                 f"Actor {self.id}: stored email is held by {holder}; creator "
                 "left unchanged"
             )

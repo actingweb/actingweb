@@ -996,3 +996,59 @@ class TestGetPeerProxy:
             assert call_kwargs["peer_target"]["peerid"] == "peer_123"
             assert call_kwargs["config"] == actor.config
             assert result == mock_proxy
+
+
+class TestSyncStopsAtAnInFlightClaim:
+    """A poll that meets a sequence another delivery is handling stops there
+    (3.16): it neither clears nor records past it, so a failed delivery's
+    diff is still on the publisher."""
+
+    def test_the_poll_stops_before_the_in_progress_sequence(self) -> None:
+        from actingweb.callback_processor import CallbackProcessor, ProcessResult
+
+        actor = FakeCoreActor()
+        actor._subscriptions[("peer_1", "sub_1", True)] = {
+            "peerid": "peer_1",
+            "subscriptionid": "sub_1",
+            "target": "properties",
+            "callback": True,
+            "sequence": 3,
+        }
+        config = SubscriptionProcessingConfig(
+            enabled=True, auto_storage=True, auto_sequence=True
+        )
+        manager = SubscriptionManager(actor)  # type: ignore[arg-type]
+        answers = {4: ProcessResult.PROCESSED, 5: ProcessResult.IN_PROGRESS}
+
+        def process(self: Any, *, sequence: int, **_k: Any) -> ProcessResult:
+            return answers.get(sequence, ProcessResult.PROCESSED)
+
+        with (
+            patch.object(manager, "_get_peer_proxy") as mock_get_proxy,
+            patch("actingweb.subscription.Subscription") as mock_subscription,
+            patch.object(CallbackProcessor, "process_callback_sync", process),
+            patch("actingweb.interface.actor_interface.ActorInterface"),
+        ):
+            mock_proxy = MagicMock()
+            mock_proxy.trust = {"baseuri": "https://peer.example.com/", "secret": "s"}
+            mock_proxy.get_resource.return_value = {
+                "sequence": 6,
+                "data": [
+                    {"sequence": 4, "data": {}},
+                    {"sequence": 5, "data": {}},
+                    {"sequence": 6, "data": {}},
+                ],
+            }
+            mock_get_proxy.return_value = mock_proxy
+            mock_sub_instance = MagicMock()
+            mock_sub_instance.handle = MagicMock()
+            mock_subscription.return_value = mock_sub_instance
+
+            result = manager.sync_subscription(
+                peer_id="peer_1", subscription_id="sub_1", config=config
+            )
+
+        assert result.success is True
+        mock_proxy.change_resource.assert_called_once()
+        assert mock_proxy.change_resource.call_args.kwargs["params"] == {"sequence": 4}
+        mock_sub_instance.handle.modify.assert_called_once_with(seqnr=4)

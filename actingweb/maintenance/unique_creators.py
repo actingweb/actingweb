@@ -50,11 +50,14 @@ Subcommands:
   (``creator``) that have a stored ``email``: under
   ``force_email_prop_as_creator`` each belongs at that address. Until 3.16
   every default-creator create moved them; now ``resolve
-  --default-creator-to-email [--apply]`` does, keeping the stored email. Once
+  --default-creator-to-email [--apply]`` does, keeping the stored email (an
+  actor whose stored email changed since the listing is skipped). Once
   uniqueness is enabled the move goes through the backend's uniqueness check
-  (the DynamoDB record, the PostgreSQL index); before, an address another
-  actor holds is checked by a consistent read. A held address is reported
-  and the actor left as it is. The group is informational: it does not make
+  (the DynamoDB record, the PostgreSQL index), and a held address is
+  reported and the actor left as it is. Before ``enable`` the check is a
+  consistent read followed by the rename, so a sign-in that takes the
+  address in between can still leave two actors sharing it; ``report``
+  lists them. The group is informational: it does not make
   ``report`` exit 1, since the command cannot tell whether the deployment
   pins the creator to the email.
 - ``enable [--apply]``: refuses while duplicates, orphaned records or
@@ -369,17 +372,21 @@ def collect(
     only: str | None = None,
     rate_limit: float | None = None,
     consistent: bool = False,
+    default_creator: bool = False,
 ) -> Report:
-    """Read the store and return what it holds. Raises ``StoreUnavailable``."""
+    """Read the store and return what it holds. Raises ``StoreUnavailable``.
+
+    ``default_creator`` also lists the actors left with the default creator
+    (``report`` and ``resolve --default-creator-to-email``; ``enable`` does
+    not need them)."""
     report = _collect_creators(
         config, only=only, rate_limit=rate_limit, consistent=consistent
     )
-    try:
-        _collect_default_creator(config, only, report)
-    except StoreUnavailable:
-        raise
-    except Exception as e:  # folds DbError: becomes StoreUnavailable (exit 2)
-        raise StoreUnavailable(f"the store could not be read: {e}") from e
+    if default_creator:
+        try:
+            _collect_default_creator(config, only, report)
+        except Exception as e:  # folds DbError: becomes StoreUnavailable (exit 2)
+            raise StoreUnavailable(f"the store could not be read: {e}") from e
     return report
 
 
@@ -455,9 +462,12 @@ def _collect_default_creator(config: Any, only: str | None, report: Report) -> N
             continue
         store = InternalStore(actor_id=actor_id, config=config)
         if not store.loaded:
-            raise StoreUnavailable(
-                f"the _internal bucket of {actor_id} could not be read"
+            # Informational: one unreadable bucket must not stop the run.
+            logger.error(
+                f"default creator id={actor_id}: its _internal bucket could not "
+                "be read; not listed"
             )
+            continue
         email = store.email
         if isinstance(email, str) and "@" in email:
             report.default_creator.append((actor_id, normalise_creator(email)))
@@ -869,11 +879,22 @@ def move_default_creator(config: Any, actor_id: str, email: str) -> str:
     actor = Actor(config=rename_config)
     if not actor.get(actor_id=actor_id) or actor.creator != DEFAULT_CREATOR:
         return "skipped"  # gone, or moved since the listing
+    stored = actor.store.email if actor.store is not None else None
+    if not isinstance(stored, str) or normalise_creator(stored) != target:
+        return "skipped"  # its stored email changed since the listing
     try:
         if not actor.modify(creator=target):
             return "skipped"
     except CreatorTaken:  # folds DbError: a held address is the reported outcome
-        holder = get_actor(rename_config).get_creator_holder(target)
+        # Also reachable before enforcement on PostgreSQL, while the index is
+        # being built: name the holder from a consistent read then.
+        if enforced:
+            holder = get_actor(rename_config).get_creator_holder(target)
+        else:
+            rows = get_actor(config).get_by_creator(creator=target, consistent=True)
+            holder = next(
+                (r.get("id") for r in rows or [] if r.get("id") != actor_id), None
+            )
         return f"held by {holder}"
     return "renamed"
 
@@ -1254,6 +1275,8 @@ def _run(args: argparse.Namespace, parser: argparse.ArgumentParser, config: Any)
             rate_limit=args.rate_limit,
             # enable writes from what it reads: never from a lagging scan.
             consistent=args.consistent or args.command == "enable",
+            default_creator=args.command == "report"
+            or bool(getattr(args, "default_creator_to_email", False)),
         )
 
         if args.command == "report":

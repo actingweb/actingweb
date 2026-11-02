@@ -4,7 +4,8 @@
 Each delivery runs in its own thread with its own event loop. A barrier holds
 both after they read the state row and the sequence, so both see the same
 version and the same next sequence before either writes; one claim wins, the
-other is retried, reads the claim and answers DUPLICATE.
+other is retried, reads the live claim and answers IN_PROGRESS (which the
+callback handler turns into a 503, so the publisher keeps the diff).
 """
 
 from __future__ import annotations
@@ -95,5 +96,5 @@ def test_two_concurrent_deliveries_run_the_handler_once() -> None:
     assert not errors, errors
     assert runs == [1]
     assert sorted(r.value for r in results) == sorted(
-        [ProcessResult.PROCESSED.value, ProcessResult.DUPLICATE.value]
+        [ProcessResult.PROCESSED.value, ProcessResult.IN_PROGRESS.value]
     )

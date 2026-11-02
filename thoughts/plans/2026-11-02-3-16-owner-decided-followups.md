@@ -223,6 +223,15 @@ Owner, 2026-11-02, unless marked otherwise. Evaluation changes are marked `[Eval
 - **Deviation, D5:** `collect` gains a `_collect_default_creator` pass (one `_internal` read per default-creator actor, listed with `get_by_creator(ids_only=True)`); `move_default_creator` checks the holder first and renames under a `unique_creator=True` config once enforcement is on (`_uniqueness_enforced`: the DynamoDB backfill item, or a valid PostgreSQL index), so the record is written in the same step. A held, skipped or failed move makes `resolve` exit 1. `docs/guides/database-maintenance.rst` does not cover this command, so the command's own docstring and the migration guide's step 2 carry it.
 - **Deviation, D8:** the clean in place also clears a leftover `vouched_creator_pending`, so a half-done application rename by the previous creator's application cannot keep vouching for its target.
 - **D3:** the seeding lives in `_seed_missing_email`, and the clean and the seeding share `_proven_email`.
+- **Second opinion on the phase diff** (codex and a fresh-context Claude, 12 findings). Fixed in the review-fix commit after Phase 3:
+  - `move_default_creator` skips an actor whose stored email changed since the listing; on PostgreSQL a `CreatorTaken` while the index is still being built names the holder from a consistent read instead of failing on `get_creator_holder`.
+  - Before `enable` the default-creator move is a read followed by a rename; the command docstring, the changelog and the migration guide say so, and the migration guide runs the step again after `enable`.
+  - The pending vouch holds for one rename at a time; two concurrent renames of one actor share it, and the docs say to serialise them.
+  - The seeding writes `email` with `InternalStore.set_if_absent` (one atomic create), so a value stored meanwhile is never overwritten. Its changelog cause is widened to every vouched actor without a stored email, with a **Behavior change:** sentence for the creator pin it brings under `force_email_prop_as_creator`. The non-enforced replace path's vouched successor is seeded too.
+  - The hooks reference's order claim (successor's `actor_created` before the squatter's `actor_deleted`) holds with `with_unique_creator()` on only; it says so.
+  - The default-creator group is collected for `report` and `resolve --default-creator-to-email` only, and an unreadable bucket is logged and skipped instead of stopping `enable`.
+  - A holder record that blocks the force-email rewrite is logged at INFO (an orphan record shows up).
+  - **Known limit, not fixed:** with the flag off, the D11 503 can fire on the owner's own unvouched actor after a replacement already removed its factory siblings; the retry cleans the actor, and those siblings are missing from its `actor_adopted` summary.
 
 
 ---
@@ -280,6 +289,14 @@ flowchart TD
 - **Deviation, `test_version_conflict_retries`:** it built its own mock with no compare-and-swap backing and would have passed against anything. It now uses the shared fixture, whose `conditional_update_attr`, `create_attr_if_absent` and `dbprop.get_attr_strict` are backed by the in-memory store, and loses two races to an interfering writer before it wins.
 - **Group:** `callback_processor_cas` (53 groups).
 - **Existing tests adjusted:** `tests/test_db_fault_partial_state.py::TestKCallbackDrain` faults `_cas_state` (the state write is the claim now, not `_set_state`); the claim release's `except DbError` carries the fault-guard marker on its own line.
+- **Second opinion on the phase diff** (codex and a fresh-context Claude). It found that the claim turned a double apply into a loss: a loser's `DUPLICATE` maps to 204, which clears a high-granularity diff on the publisher, so a winner that then raised `DbError` lost the update; a crash after claiming hid the claimed sequences with nothing to expire them; and a gap timeout could revoke a live claim. **Owner, 2026-11-02: extend the claim.** In the review-fix commit after this phase:
+  - `ProcessResult.IN_PROGRESS` (new) for a sequence inside a live claim; the callback handler answers it with 503 and `Retry-After: 5`, so the publisher keeps the diff (`tests/test_callback_in_progress_answer.py`).
+  - The claim carries `claimed_at` and a 60-second lease (`CLAIM_LEASE_SECONDS`); an expired claim is taken over.
+  - The gap timeout waits while a claim is live; its lost swap backs off like the claim's.
+  - Both poll loops stop at an `IN_PROGRESS` sequence and neither clear nor record past it, and skip the baseline fallback then (`tests/test_subscription_sync.py::TestSyncStopsAtAnInFlightClaim`).
+  - A sequence write that answers False releases the claim.
+  - The changelog entry states the lease, the 503 and the rolling-deploy limit; it no longer says a redelivery always comes back.
+  - Not changed: the resync reset stays a read and an unconditional write (it resets the state by design), and the winner's sequence write is not conditioned on its claim (the gap timeout no longer revokes a live claim, which was the way to reach it).
 
 
 ---

@@ -2270,10 +2270,13 @@ def _seed_missing_email(
     """Write the proven address into a vouched actor's store when it has none.
 
     The create path seeds ``email`` after ``actor_created`` fired, so a fault
-    there leaves an announced, vouched actor without it. Only a missing value
-    is written (never an existing one overwritten), from the store the vouch
-    check already loaded. Bookkeeping: a fault is logged and the sign-in goes
-    on; the next one retries.
+    there leaves an announced, vouched actor without it; an actor vouched
+    without the OAuth create (``mark_actors_vouched``, an application) may
+    never have had one. Only a missing value is written, with one atomic
+    create, so a value another writer stored meanwhile is never overwritten.
+    The store the vouch check already loaded decides whether to try.
+    Bookkeeping: a fault is logged and the sign-in goes on; the next one
+    retries.
     """
     current = store.email
     if isinstance(current, str) and current:
@@ -2282,7 +2285,7 @@ def _seed_missing_email(
     if not email:
         return
     try:
-        store.email = email
+        store.set_if_absent("email", email)
     except DbError as e:  # folds DbError: seeding bookkeeping on a vouched sign-in
         logger.error(f"Sign-in to {existing.id}: seeding its email faulted: {e}")
 
@@ -2496,6 +2499,7 @@ def _adopt_actor(
             result = successor
             if result.store is not None:
                 result.store.oauth_provider = provider.name
+                _seed_missing_email(result, result.store, user_info)
         elif marker_class == "unvouched":
             # The owner's own unvouched actor (from before 3.16, or the email
             # form's) sat beside the factory ones: clean it in place instead

@@ -368,8 +368,9 @@ rename through a handle loaded before a password rotation.
 ``ActorInterface.modify_creator()`` does not unvouch by default: the
 application vouches for the address it passes. It records the new address as
 ``vouched_creator_pending`` before the rename and moves it to
-``vouched_creator`` after, so a sign-in during the rename finds the actor
-vouched under either creator. A route of your own that
+``vouched_creator`` after, so a sign-in during a rename finds the actor
+vouched under either creator. Two concurrent renames of one actor share that
+one pending value; serialise renames of one actor. A route of your own that
 passes user input to it should ask for the endpoint's rules::
 
     actor.modify_creator(new_address, unvouch=True)
@@ -801,7 +802,9 @@ check cannot read the table and the application refuses to start.
    ``force_email_prop_as_creator`` on, add ``--default-creator-to-email``:
    it moves each actor left with the default creator (``creator``) to its
    stored email. A create no longer does that (3.15 swept them on every
-   default-creator create); the step can be re-run after ``enable``.
+   default-creator create). Run it again after step 3: only then does the
+   move go through the uniqueness check, and before it a concurrent sign-in
+   can still take an address.
 3. ``actingweb-unique-creators enable --apply`` creates and fills the
    DynamoDB table or builds the PostgreSQL index ``CONCURRENTLY`` (it
    refuses while duplicates remain).

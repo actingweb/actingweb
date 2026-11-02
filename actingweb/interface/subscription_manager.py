@@ -1043,6 +1043,7 @@ class SubscriptionManager:
 
         # Process each diff
         diffs_processed = 0
+        in_flight = False
         max_sequence = 0
 
         # Set up handler based on config
@@ -1085,6 +1086,12 @@ class SubscriptionManager:
                     handler=process_handler if config.auto_storage else None,
                 )
 
+                if result == ProcessResult.IN_PROGRESS:
+                    # A callback delivery is handling this sequence now: stop
+                    # here, so the poll neither clears nor records past it.
+                    in_flight = True
+                    break
+
                 if result == ProcessResult.PROCESSED:
                     diffs_processed += 1
 
@@ -1110,7 +1117,12 @@ class SubscriptionManager:
 
         # If we fetched diffs but processed none (all duplicates/rejected),
         # fetch baseline to ensure we're in sync
-        if diffs_fetched > 0 and diffs_processed == 0 and config.auto_storage:
+        if (
+            diffs_fetched > 0
+            and diffs_processed == 0
+            and config.auto_storage
+            and not in_flight
+        ):
             logger.warning(
                 f"Fetched {diffs_fetched} diffs but processed 0 (likely duplicates), "
                 f"fetching baseline for subscription {subscription_id}"
@@ -1912,6 +1924,7 @@ class SubscriptionManager:
         actor_interface = ActorInterface(self._core_actor)
 
         diffs_processed = 0
+        in_flight = False
         max_sequence = 0
 
         # Async handler for callback processing
@@ -1952,6 +1965,12 @@ class SubscriptionManager:
                     handler=process_handler_async if config.auto_storage else None,
                 )
 
+                if result == ProcessResult.IN_PROGRESS:
+                    # A callback delivery is handling this sequence now: stop
+                    # here, so the poll neither clears nor records past it.
+                    in_flight = True
+                    break
+
                 if result == ProcessResult.PROCESSED:
                     diffs_processed += 1
 
@@ -1976,7 +1995,12 @@ class SubscriptionManager:
 
         # If we fetched diffs but processed none (all duplicates/rejected),
         # fetch baseline to ensure we're in sync
-        if diffs_fetched > 0 and diffs_processed == 0 and config.auto_storage:
+        if (
+            diffs_fetched > 0
+            and diffs_processed == 0
+            and config.auto_storage
+            and not in_flight
+        ):
             logger.warning(
                 f"Fetched {diffs_fetched} diffs but processed 0 (likely duplicates), "
                 f"fetching baseline for subscription {subscription_id}"

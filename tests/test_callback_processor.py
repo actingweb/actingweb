@@ -692,8 +692,61 @@ class TestCallbackProcessorClaim:
             )
         )
         assert result == ProcessResult.PROCESSED
-        assert inner["result"] == ProcessResult.DUPLICATE
+        assert inner["result"] == ProcessResult.IN_PROGRESS
         assert runs == [1]
+
+    def test_a_claim_past_its_lease_is_taken_over(
+        self,
+        mock_actor: MagicMock,
+        mock_subscription: tuple[MagicMock, dict[str, int]],  # noqa: ARG002
+        mock_attributes: tuple[MagicMock, dict[str, Any]],  # noqa: ARG002
+    ) -> None:
+        # A delivery that crashed after claiming: its claim is old.
+        processor = CallbackProcessor(mock_actor, retry_backoff_base=0)
+        assert processor._claim("peer1", "sub1", None, 1)  # pyright: ignore[reportPrivateUsage]
+        runs: list[int] = []
+
+        async def handler(cb: ProcessedCallback) -> None:
+            runs.append(cb.sequence)
+
+        with patch(
+            "actingweb.callback_processor.time.time",
+            return_value=time.time() + CallbackProcessor.CLAIM_LEASE_SECONDS + 1,
+        ):
+            result = asyncio.run(
+                processor.process_callback(
+                    peer_id="peer1",
+                    subscription_id="sub1",
+                    sequence=1,
+                    data={},
+                    handler=handler,
+                )
+            )
+        assert result == ProcessResult.PROCESSED
+        assert runs == [1]
+
+    def test_a_live_claim_holds_off_the_gap_timeout(
+        self,
+        mock_actor: MagicMock,
+        mock_subscription: tuple[MagicMock, dict[str, int]],  # noqa: ARG002
+        mock_attributes: tuple[MagicMock, dict[str, Any]],  # noqa: ARG002
+    ) -> None:
+        processor = CallbackProcessor(
+            mock_actor, gap_timeout_seconds=0, retry_backoff_base=0
+        )
+        assert processor._claim("peer1", "sub1", None, 1)  # pyright: ignore[reportPrivateUsage]
+        # An old pending entry beyond the claim, past the gap timeout.
+        processor._set_pending(  # pyright: ignore[reportPrivateUsage]
+            "peer1",
+            "sub1",
+            [{"sequence": 3, "data": {}, "_received_at": time.time() - 100}],
+        )
+        result = asyncio.run(
+            processor.process_callback(
+                peer_id="peer1", subscription_id="sub1", sequence=4, data={}
+            )
+        )
+        assert result == ProcessResult.PENDING
 
     def test_two_identical_first_writes_have_one_winner(
         self,
@@ -859,7 +912,7 @@ class TestCallbackProcessorClaim:
             )
             == ProcessResult.PROCESSED
         )
-        assert inner["result"] == ProcessResult.DUPLICATE
+        assert inner["result"] == ProcessResult.IN_PROGRESS
         assert runs == [1]
 
 

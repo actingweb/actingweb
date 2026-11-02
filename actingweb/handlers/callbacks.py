@@ -413,6 +413,9 @@ class CallbacksHandler(base_handler.BaseHandler):
 
                 if result:
                     self.response.set_status(204, "Found")
+                elif getattr(self, "_callback_in_progress", False):
+                    self.response.headers["Retry-After"] = "5"
+                    self.response.set_status(503, "Callback in progress")
                 else:
                     self.response.set_status(400, "Processing error")
                 return
@@ -730,6 +733,10 @@ class CallbacksHandler(base_handler.BaseHandler):
                 ProcessResult.PENDING,
                 ProcessResult.RESYNC_TRIGGERED,
             )
+            # Another delivery of this sequence is still running its handler:
+            # answer 503, not 204, so the publisher keeps the diff in case
+            # that delivery fails.
+            self._callback_in_progress = result == ProcessResult.IN_PROGRESS
 
             if success:
                 logger.debug(

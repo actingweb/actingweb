@@ -29,6 +29,9 @@ class ProcessResult(Enum):
     PENDING = "pending"  # Callback stored in pending queue (gap detected)
     RESYNC_TRIGGERED = "resync_triggered"  # Gap timeout exceeded, resync needed
     REJECTED = "rejected"  # Callback rejected (back-pressure)
+    # Another delivery holds a live claim on this sequence and is running its
+    # handler: not handled yet, so the caller must not acknowledge (clear) it.
+    IN_PROGRESS = "in_progress"
 
 
 class CallbackType(Enum):
@@ -63,6 +66,11 @@ class CallbackProcessor:
 
     Storage: Uses actor's internal attributes (bucket: _callback_state).
     """
+
+    # How long a claim on a batch (see ``_claim``) keeps other deliveries of
+    # its sequences out. A delivery that crashed while holding one is taken
+    # over after this, so its sequences are not hidden for good.
+    CLAIM_LEASE_SECONDS = 60.0
 
     def __init__(
         self,
@@ -215,7 +223,22 @@ class CallbackProcessor:
         state["version"] = int(state.get("version", 0) or 0) + 1
         state["resync_pending"] = False
         state["claimed_seq"] = through_seq
+        state["claimed_at"] = time.time()
         return self._cas_state(peer_id, subscription_id, read_row, state)
+
+    def _live_claim(self, state: dict[str, Any], last_seq: int) -> int:
+        """The sequence another delivery has claimed beyond ``last_seq`` and
+        may still be handling, or 0 when there is none (or its lease ran
+        out: the delivery that took it is treated as gone)."""
+        claimed = int(state.get("claimed_seq", 0) or 0)
+        if claimed <= last_seq:
+            return 0
+        claimed_at = state.get("claimed_at")
+        if not isinstance(claimed_at, int | float):
+            return 0
+        if time.time() - claimed_at >= self.CLAIM_LEASE_SECONDS:
+            return 0
+        return claimed
 
     def _release_claim(
         self,
@@ -438,15 +461,21 @@ class CallbackProcessor:
             last_seq = self._get_last_seq(peer_id, subscription_id)
             # A delivery that won the claim and is still running its handler
             # has claimed sequences above last_seq.
-            claimed = int(state.get("claimed_seq", 0) or 0)
+            claimed = self._live_claim(state, last_seq)
 
             # Check for duplicate
-            if sequence <= max(last_seq, claimed):
+            if sequence <= last_seq:
                 logger.debug(
-                    f"Duplicate callback: seq={sequence} <= "
-                    f"max(last_seq={last_seq}, claimed={claimed})"
+                    f"Duplicate callback: seq={sequence} <= last_seq={last_seq}"
                 )
                 return ProcessResult.DUPLICATE
+            if sequence <= claimed:
+                # Not handled yet: the other delivery may still fail. The
+                # caller answers so that the publisher keeps the diff.
+                logger.debug(
+                    f"Callback in progress: seq={sequence} <= claimed={claimed}"
+                )
+                return ProcessResult.IN_PROGRESS
 
             # Check for gap
             if sequence > last_seq + 1:
@@ -458,8 +487,10 @@ class CallbackProcessor:
                     if (c.get("sequence") or 0) > last_seq
                 ]
 
-                # Check gap timeout on existing pending
-                if self._check_gap_timeout(pending):
+                # Check gap timeout on existing pending. Not while another
+                # delivery holds a live claim: its sequence write is the
+                # progress the gap is waiting for.
+                if not claimed and self._check_gap_timeout(pending):
                     logger.warning(
                         f"Gap timeout exceeded for {peer_id}:{subscription_id}, "
                         f"triggering resync"
@@ -471,6 +502,7 @@ class CallbackProcessor:
                     marked["resync_pending"] = True
                     marked["claimed_seq"] = 0
                     if self._cas_state(peer_id, subscription_id, row, marked) is None:
+                        time.sleep(self._retry_backoff * (2**attempt))
                         continue
                     # Reset sequence to 0 to accept any sequence after resync
                     self._update_last_seq(peer_id, subscription_id, 0)
@@ -606,7 +638,10 @@ class CallbackProcessor:
                         logger.error(f"Pruning processed callbacks faulted: {e}")
             else:
                 # Failed to update subscription - this is critical but we've already
-                # processed the callback, so log error but don't retry
+                # processed the callback, so log error but don't retry. The
+                # claim goes back, so a redelivery is not answered as in
+                # progress until the lease runs out.
+                self._release_claim(peer_id, subscription_id, claimed_row, last_seq)
                 logger.error(
                     f"Failed to update sequence to {new_last_seq} after processing - "
                     f"callback may be reprocessed on next invocation"
@@ -786,15 +821,21 @@ class CallbackProcessor:
             last_seq = self._get_last_seq(peer_id, subscription_id)
             # A delivery that won the claim and is still running its handler
             # has claimed sequences above last_seq.
-            claimed = int(state.get("claimed_seq", 0) or 0)
+            claimed = self._live_claim(state, last_seq)
 
             # Check for duplicate
-            if sequence <= max(last_seq, claimed):
+            if sequence <= last_seq:
                 logger.debug(
-                    f"Duplicate callback: seq={sequence} <= "
-                    f"max(last_seq={last_seq}, claimed={claimed})"
+                    f"Duplicate callback: seq={sequence} <= last_seq={last_seq}"
                 )
                 return ProcessResult.DUPLICATE
+            if sequence <= claimed:
+                # Not handled yet: the other delivery may still fail. The
+                # caller answers so that the publisher keeps the diff.
+                logger.debug(
+                    f"Callback in progress: seq={sequence} <= claimed={claimed}"
+                )
+                return ProcessResult.IN_PROGRESS
 
             # Check for gap
             if sequence > last_seq + 1:
@@ -806,8 +847,10 @@ class CallbackProcessor:
                     if (c.get("sequence") or 0) > last_seq
                 ]
 
-                # Check gap timeout on existing pending
-                if self._check_gap_timeout(pending):
+                # Check gap timeout on existing pending. Not while another
+                # delivery holds a live claim: its sequence write is the
+                # progress the gap is waiting for.
+                if not claimed and self._check_gap_timeout(pending):
                     logger.warning(
                         f"Gap timeout exceeded for {peer_id}:{subscription_id}, "
                         f"triggering resync"
@@ -819,6 +862,7 @@ class CallbackProcessor:
                     marked["resync_pending"] = True
                     marked["claimed_seq"] = 0
                     if self._cas_state(peer_id, subscription_id, row, marked) is None:
+                        time.sleep(self._retry_backoff * (2**attempt))
                         continue
                     # Reset sequence to 0 to accept any sequence after resync
                     self._update_last_seq(peer_id, subscription_id, 0)
@@ -954,7 +998,10 @@ class CallbackProcessor:
                         logger.error(f"Pruning processed callbacks faulted: {e}")
             else:
                 # Failed to update subscription - this is critical but we've already
-                # processed the callback, so log error but don't retry
+                # processed the callback, so log error but don't retry. The
+                # claim goes back, so a redelivery is not answered as in
+                # progress until the lease runs out.
+                self._release_claim(peer_id, subscription_id, claimed_row, last_seq)
                 logger.error(
                     f"Failed to update sequence to {new_last_seq} after processing - "
                     f"callback may be reprocessed on next invocation"

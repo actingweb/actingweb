@@ -104,8 +104,15 @@ SECURITY
   revokes the actor's tokens again after its client registrations are
   removed, so a token a client obtained during the clean does not outlive
   it. A vouched sign-in writes the proven address into ``store.email`` when
-  it is missing (a fault in the create's seeding left it out);
-  ``actor_created`` is not fired again.
+  it is missing (the creator when it is an address, else the provider's
+  email), with one atomic create that never overwrites a stored value:
+  a fault in the create's seeding left it out, and an actor vouched without
+  the OAuth create (``mark_actors_vouched``, an application) may never have
+  had one. ``actor_created`` is not fired again. **Behavior change:** with
+  ``force_email_prop_as_creator`` on, such an actor's creator is pinned to
+  that email from then on, so ``PUT /<id>/trust/trustee`` to any other
+  address than it or ``trustee`` answers 400, as it already did for actors
+  with a stored email.
 
 - **Renaming one's own actor to someone else's address handed it to them,
   vouched, at their first login.** ``PUT /<id>/trust/trustee`` lets the
@@ -132,10 +139,12 @@ SECURITY
   writes one. ``ActorInterface.modify_creator`` without ``unvouch`` moves
   the recorded address with the rename (the application vouches for it): it
   writes the new address as ``vouched_creator_pending`` first and promotes
-  it after the rename, so a sign-in during the rename finds the actor
-  vouched under the old creator and the new one, for an email or a
-  provider-id creator alike. A fault writing the pending address refuses
-  the rename (False).
+  it after the rename, so a sign-in during a rename finds the actor vouched
+  under the old creator and the new one, for an email or a provider-id
+  creator alike. A fault writing the pending address refuses the rename
+  (False). Two concurrent renames of one actor share the one pending value,
+  so a sign-in between them can still find it unvouched; serialise renames
+  of one actor.
   The emailed verification link proves only the address it was sent to: an
   actor whose creator changed since answers 409, and the link stays
   unused. A restore after a failed change replaces only that change's
@@ -277,8 +286,11 @@ CHANGED
   **Behavior change:** a create no longer does this. ``actingweb-unique-creators
   report`` lists those actors under "default creator", and ``resolve
   --default-creator-to-email --apply`` moves each one to its stored email,
-  keeping the email; an address another actor holds is reported and left.
-  Each actor is still moved when it is next loaded, as before. **Check:** if
+  keeping the email; once uniqueness is enabled, an address another actor
+  holds is reported and left (before ``enable`` the check is a read
+  followed by the rename, so a concurrent sign-in can still take the
+  address; ``report`` then lists the pair). Each actor is still moved when
+  it is next loaded, as before. **Check:** if
   you relied on the sweep, run the command once after the upgrade.
 
 - **``GET /?format=json`` allowed credentialed cross-origin reads of a public
@@ -1106,12 +1118,15 @@ FIXED
   could both pass; and a delivery that lost the check retried after the
   winner's state write but before its sequence write, so it ran the handler
   again. The state write is now a compare-and-swap that also claims the
-  batch's sequences: a concurrent delivery of a claimed sequence answers
-  ``duplicate`` while the winner's handler runs. A handler ``DbError``
-  releases the claim, so the redelivery the 503 asks for runs it again; a
-  delivery that crashes after claiming leaves its sequences handled until a
-  resync. A resync's reset keeps the state version growing, so a delivery
-  that read the state before the reset loses its swap.
+  batch's sequences for 60 seconds. A concurrent delivery of a claimed
+  sequence answers **503** with ``Retry-After: 5`` (``ProcessResult.IN_PROGRESS``,
+  new), not 204, so the publisher keeps the diff in case the claiming
+  delivery fails; a poll stops before such a sequence, and the gap timeout
+  waits while a claim is live. A handler ``DbError`` releases the claim, so a
+  later delivery runs it again; a delivery that crashes while holding a
+  claim is taken over once the 60 seconds pass. **Check:** the guarantee
+  holds once every instance runs 3.16; an older instance in a rolling
+  deploy ignores the claim.
 
 - **A GitHub sign-in with no public email asked GitHub's ``/user/emails``
   twice.** With an email required, the callback asked for the primary

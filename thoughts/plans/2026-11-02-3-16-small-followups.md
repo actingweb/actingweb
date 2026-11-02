@@ -211,7 +211,15 @@ Every item that needs a choice stays in its todo, and "What We're NOT Doing" lis
 - [ ] Fast tier
 - [ ] Full tier before commit
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+- **Regressions:** each was checked against the pre-change code, by stashing the fix.
+  - All four backfill tests and the async approval POST test fail.
+  - The `email_verification_address` assertion fails.
+- **Full tier:** DynamoDB 5,169 passed; PostgreSQL 4,984 passed. ruff, pyright, `verify_groups` and sphinx are clean.
+- **Deviation, the restore fault test:** it uses an unvouched marker. On the vouched branch, `set_confirmed` re-reads through the same `get_attr_strict` the test patches, so it answers False first and never reaches the update under test.
+- **Deviation, the backfill per-row insert:** it uses `conn.transaction()`, which is a savepoint inside the implicit transaction that the range `SELECT` opens.
+
 
 ---
 

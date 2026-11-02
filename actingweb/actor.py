@@ -301,9 +301,25 @@ class Actor:
         if not db.conditional_update_attr(
             name="auth_method", old_data="creator_changed", new_data=marker or None
         ):
-            logger.warning(
-                "auth_method changed since this creator change wrote it; not restored"
-            )
+            # Both backends also answer False on a fault: a strict re-read
+            # tells a marker that really changed from an outage, so the log
+            # does not blame a sign-in that never happened.
+            try:
+                row = db.dbprop.get_attr_strict(
+                    actor_id=db.actor_id, bucket=db.bucket, name="auth_method"
+                )
+            except DbError:  # folds DbError: the restore already failed; log only
+                row = {"data": "creator_changed"}
+            if row is not None and row.get("data") == "creator_changed":
+                logger.warning(
+                    "could not restore auth_method (store fault); the actor "
+                    "stays unvouched"
+                )
+            else:
+                logger.warning(
+                    "auth_method changed since this creator change wrote it; "
+                    "not restored"
+                )
             return False
         store.__dict__["auth_method"] = marker or None
         return True
@@ -1443,43 +1459,41 @@ class Actor:
 
     async def modify_trust_and_notify_async(
         self,
-        relationship=None,
-        peerid=None,
-        baseuri="",
-        secret="",
-        desc="",
-        approved=None,
-        verified=None,
-        verification_token=None,
-        peer_approved=None,
+        relationship: str | None = None,
+        peerid: str | None = None,
+        baseuri: str = "",
+        secret: str = "",
+        desc: str = "",
+        approved: bool | None = None,
+        verified: bool | None = None,
+        verification_token: str | None = None,
+        peer_approved: bool | None = None,
         # Client metadata for OAuth2 clients
-        client_name=None,
-        client_version=None,
-        client_platform=None,
-        oauth_client_id=None,
+        client_name: str | None = None,
+        client_version: str | None = None,
+        client_platform: str | None = None,
+        oauth_client_id: str | None = None,
         # Connection tracking
-        last_accessed=None,
-        last_connected_via=None,
-    ):
-        """Async version of modify_trust_and_notify - prevents blocking on peer notification.
+        last_accessed: Any = None,
+        last_connected_via: str | None = None,
+    ) -> Any:
+        """Async version of modify_trust_and_notify: the same change and the
+        same peer notification, run off the event loop.
 
-        Changes a trust relationship and notifies the peer if approval is changed.
-        Database operations remain synchronous, but peer HTTP notification is async.
+        Delegates to the sync method in a worker thread, so the two cannot
+        drift: the notification is the ``POST trust/<rel>/<id>`` the peer
+        handles as an approval, with the same error handling around the
+        trust write. (Until 3.16 this method built its own proxy with a peer
+        target ``AwProxy`` cannot read, so it never notified the peer.)
+        ``asyncio.to_thread`` copies context variables, so request
+        correlation carries over.
         """
-        if not relationship or not peerid:
-            return False
-        relationships = self.get_trust_relationships(
-            relationship=relationship, peerid=peerid
-        )
-        if not relationships:
-            return False
-        this_trust = relationships[0]
+        import asyncio
 
-        # IMPORTANT: Save approval to database BEFORE notifying peer
-        # This prevents race condition where peer tries to subscribe back
-        # before our approval is saved
-        dbtrust = trust.Trust(actor_id=self.id, peerid=peerid, config=self.config)
-        result = dbtrust.modify(
+        return await asyncio.to_thread(
+            self.modify_trust_and_notify,
+            relationship=relationship,
+            peerid=peerid,
             baseuri=baseuri,
             secret=secret,
             desc=desc,
@@ -1494,36 +1508,6 @@ class Actor:
             last_accessed=last_accessed,
             last_connected_via=last_connected_via,
         )
-
-        # Now that approval is saved, notify peer async so their auto-subscribe will succeed
-        if approved is True and this_trust["approved"] is False:
-            from .aw_proxy import AwProxy
-
-            logger.debug(
-                f"Trust relationship approved, notifying peer async at {this_trust['baseuri']}"
-            )
-            try:
-                proxy = AwProxy(
-                    peer_target={
-                        "baseuri": this_trust["baseuri"],
-                        "secret": this_trust.get("secret", ""),
-                    },
-                    config=self.config,
-                )
-                await proxy.change_resource_async(
-                    path=f"trust/{relationship}/{self.id}",
-                    params={"approved": True},
-                )
-                self.last_response_code = proxy.last_response_code
-                self.last_response_message = (
-                    proxy.last_response_message.decode("utf-8", "ignore")
-                    if isinstance(proxy.last_response_message, bytes)
-                    else str(proxy.last_response_message)
-                )
-            except Exception as e:  # folds DbError: peer HTTP only
-                logger.debug(f"Not able to notify peer async: {e}")
-                self.last_response_code = 500
-        return result
 
     def create_reciprocal_trust(
         self,

@@ -431,6 +431,9 @@ class DbAttribute:
                 return False
             except Exception as e:
                 raise DbError("attribute create read-back", actor_id) from e
+            # bucket_name is "<bucket>:<name>", so bucket "a:b" + name "c" and
+            # bucket "a" + name "b:c" share a key. The row then belongs to the
+            # other bucket: a loss, whatever its data.
             if stored.bucket != bucket:
                 return False
             return normalize_json(stored.data) == normalize_json(data)

@@ -98,6 +98,14 @@ SECURITY
   statements; with it on the database refuses the second, see CHANGED); and ``devtest`` must be
   off in production, since it lets a caller rewrite ``_internal``. Close the
   factory with ``with_open_factory(False)`` for an OAuth-only deployment.
+  An actor about to be cleaned in place (no marker, or an unvouched one)
+  whose deletion status cannot be read answers 503 too and is left as it
+  is, so a half-wiped actor is never cleaned and kept tombstoned. The clean
+  revokes the actor's tokens again after its client registrations are
+  removed, so a token a client obtained during the clean does not outlive
+  it. A vouched sign-in writes the proven address into ``store.email`` when
+  it is missing (a fault in the create's seeding left it out);
+  ``actor_created`` is not fired again.
 
 - **Renaming one's own actor to someone else's address handed it to them,
   vouched, at their first login.** ``PUT /<id>/trust/trustee`` lets the
@@ -122,7 +130,12 @@ SECURITY
   stored email). An actor vouched before 3.16 has no recorded address and
   is judged by its marker alone until a sign-in or ``mark_actors_vouched``
   writes one. ``ActorInterface.modify_creator`` without ``unvouch`` moves
-  the recorded address with the rename (the application vouches for it).
+  the recorded address with the rename (the application vouches for it): it
+  writes the new address as ``vouched_creator_pending`` first and promotes
+  it after the rename, so a sign-in during the rename finds the actor
+  vouched under the old creator and the new one, for an email or a
+  provider-id creator alike. A fault writing the pending address refuses
+  the rename (False).
   The emailed verification link proves only the address it was sent to: an
   actor whose creator changed since answers 409, and the link stays
   unused. A restore after a failed change replaces only that change's
@@ -256,6 +269,17 @@ REMOVED
 
 CHANGED
 ~~~~~~~
+
+- **A create with the default creator loaded every actor left with it.**
+  With ``force_email_prop_as_creator`` and ``with_unique_creator()`` on, each
+  create whose creator was empty or ``creator`` listed every actor with that
+  creator and loaded each one, so the load moved it to its stored email.
+  **Behavior change:** a create no longer does this. ``actingweb-unique-creators
+  report`` lists those actors under "default creator", and ``resolve
+  --default-creator-to-email --apply`` moves each one to its stored email,
+  keeping the email; an address another actor holds is reported and left.
+  Each actor is still moved when it is next loaded, as before. **Check:** if
+  you relied on the sweep, run the command once after the upgrade.
 
 - **``GET /?format=json`` allowed credentialed cross-origin reads of a public
   document.** The factory's JSON configuration reflected the request's
@@ -444,6 +468,9 @@ CHANGED
     the squatter. There is no ranking and no sibling sweep with the flag on.
     A squatter mid-deletion is finished by the replacement; when its
     deletion status cannot be read the sign-in answers 503.
+  - With ``force_email_prop_as_creator`` on, loading an actor whose stored
+    email another actor holds leaves the creator as it is after one read of
+    the record, instead of a refused rename and a WARNING on every load.
   - Two concurrent sign-ins for one identifier (a first sign-in, or two
     replacing the same squatter) both end on the actor the winner created,
     unless that actor carries no ``auth_method`` marker (a row an older
@@ -554,9 +581,11 @@ CHANGED
   constraint error) answers **500** without ``Retry-After``. An exception
   counts as the fault only when it is the ``DbError`` or was raised from one
   (``raise ... from e``); an error raised while a ``DbError`` was being
-  handled, without ``from``, is a bug and answers **500**. **Check:** a
-  wrapper of yours that turns a fault into its own exception needs ``from``
-  to keep the 503.
+  handled, without ``from``, is a bug and answers **500**. **Check:** in your
+  own routes and hooks let the ``DbError`` itself propagate: the app-level
+  handlers and the hook runners match the type, so a wrapping exception
+  answers 500 there (or, in a hook, is logged and dropped) whether or not it
+  uses ``from``.
   ``CreatorTaken``, a new ``DbError`` subclass for a creator another actor
   holds, answers **409** (``with_unique_creator()`` raises it, see above).
   ``get_by_creator`` gains
@@ -1070,15 +1099,17 @@ ADDED
 FIXED
 ~~~~~
 
-- **A GitHub sign-in with no public email could wait about 30 seconds on
-  GitHub.** With an email required, the callback asked ``/user/emails`` for
-  the primary address, and when that failed asked the same endpoint again for
-  the verified list, each with a ``(5, 10)`` second timeout; with the userinfo
-  call before them that came close to 45 seconds, past API Gateway's 30. The
-  GitHub provider now asks once per token and derives both answers from that
-  one response, a failure included: one timeout, then the existing 502 (or
-  the SPA ``identifier_failed`` redirect). The primary address is still the
-  verified one GitHub flags primary, else the first verified one.
+- **A GitHub sign-in with no public email asked GitHub's ``/user/emails``
+  twice.** With an email required, the callback asked for the primary
+  address, and when that failed asked the same endpoint again for the
+  verified list, each with a ``(5, 10)`` second timeout. The GitHub provider
+  now makes one request per token and derives both answers from it, a
+  failure included, so a failing GitHub costs one timeout before the existing
+  502 (or the SPA ``identifier_failed`` redirect), not two. The token and
+  userinfo requests keep their own timeouts. The primary address is the
+  verified entry GitHub flags primary, else the first verified entry; an
+  entry with no address is skipped. A response whose entries are not objects
+  counts as a failed request.
 
 - **DynamoDB's trust, subscription and subscription-diff list ``fetch``
   answered ``None`` for an empty actor id.** The protocol and PostgreSQL

@@ -747,3 +747,50 @@ class TestStaleHandleRename:
         assert stale.modify(creator=second) is False
         row = get_actor(enforced_store).get(actor_id=actor_id)
         assert row is not None and row["creator"] == first
+
+
+class TestForceEmailRewriteHeld:
+    """The force-email rewrite under the flag (3.16, owner-decided plan D4):
+    an email another actor holds is skipped before any write."""
+
+    def _forced(self, config: Any) -> Any:
+        import copy
+
+        forced = copy.copy(config)
+        forced.force_email_prop_as_creator = True
+        return forced
+
+    def test_a_held_email_is_skipped_quietly(
+        self, enforced_store: Any, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        email = _email()
+        _actor(enforced_store, email, auth_method="google_oauth2")
+        other = _actor(enforced_store, f"google:{_id()}", auth_method="google_oauth2")
+        assert other.store is not None and other.id
+        other.store.email = email
+        caplog.set_level(logging.WARNING)
+        with mock.patch.object(Actor, "modify", side_effect=AssertionError) as spy:
+            loaded = Actor(actor_id=other.id, config=self._forced(enforced_store))
+        spy.assert_not_called()
+        assert loaded.creator != email
+        assert "creator left unchanged" not in caplog.text
+
+    def test_a_free_email_is_still_rewritten(self, enforced_store: Any) -> None:
+        email = _email()
+        actor = _actor(enforced_store, f"google:{_id()}", auth_method="google_oauth2")
+        assert actor.store is not None and actor.id
+        actor.store.email = email
+        loaded = Actor(actor_id=actor.id, config=self._forced(enforced_store))
+        assert loaded.creator == email
+        assert _holder(enforced_store, email) == actor.id
+
+    def test_the_holder_read_faults_and_propagates(self, enforced_store: Any) -> None:
+        actor = _actor(enforced_store, f"google:{_id()}", auth_method="google_oauth2")
+        assert actor.store is not None and actor.id
+        actor.store.email = _email()
+        db_class = type(get_actor(enforced_store))
+        with mock.patch.object(
+            db_class, "get_creator_holder", side_effect=DbError("throttled")
+        ):
+            with pytest.raises(DbError):
+                Actor(actor_id=actor.id, config=self._forced(enforced_store))

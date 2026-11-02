@@ -948,8 +948,12 @@ class OAuth2Authenticator:
     def _get_github_primary_email(self, access_token: str) -> str | None:
         """Get primary email from GitHub's emails API.
 
-        Backward-compat shim delegating to the module-level helper.
+        Backward-compat shim. With the GitHub provider it reads the
+        provider's per-token answer, so calling it beside
+        ``get_github_verified_emails`` makes one request.
         """
+        if isinstance(self.provider, GitHubOAuth2Provider):
+            return self.provider.get_primary_email(access_token)
         return _get_github_primary_email(access_token)
 
     def get_github_verified_emails(self, access_token: str) -> list[str] | None:
@@ -1307,7 +1311,10 @@ def _fetch_github_emails(access_token: str) -> list[dict[str, Any]] | None:
         if not isinstance(emails, list):
             logger.warning("GitHub emails API answered a body that is not a list")
             return None
-        return [e for e in emails if isinstance(e, dict)]
+        if not all(isinstance(e, dict) for e in emails):
+            logger.warning("GitHub emails API answered entries that are not objects")
+            return None
+        return emails
     except Exception as e:  # folds DbError: provider HTTP only
         logger.warning(f"Failed to get GitHub emails: {e}")
         return None
@@ -1318,13 +1325,13 @@ def _github_primary_from(emails: list[dict[str, Any]]) -> str | None:
     verified one. An unverified primary is never used (it would allow
     account linking through an address GitHub has not verified)."""
     for email_info in emails:
-        if email_info.get("primary", False) and email_info.get("verified", False):
-            email = email_info.get("email")
-            return str(email) if email else None
+        email = email_info.get("email")
+        if email and email_info.get("primary", False) and email_info.get("verified"):
+            return str(email)
     for email_info in emails:
-        if email_info.get("verified", False):
-            email = email_info.get("email")
-            return str(email) if email else None
+        email = email_info.get("email")
+        if email and email_info.get("verified", False):
+            return str(email)
     return None
 
 
@@ -1697,6 +1704,11 @@ def is_vouched_actor(actor_instance: actor_module.Actor) -> bool:
 # the vouch stale when it is read, whatever order concurrent writes landed
 # in (a marker write cannot be conditioned on the actor row).
 VOUCHED_CREATOR = "vouched_creator"
+# The address an application rename (``ActorInterface.modify_creator``) is
+# moving the vouch to, written before the rename and promoted to
+# :data:`VOUCHED_CREATOR` after it, so a sign-in during the rename finds the
+# actor vouched under either creator. Only the application writes it.
+VOUCHED_CREATOR_PENDING = "vouched_creator_pending"
 
 
 def is_vouched_store(store: "InternalStore", creator: str | None = None) -> bool:
@@ -1723,6 +1735,9 @@ def is_vouched_store(store: "InternalStore", creator: str | None = None) -> bool
     current = normalise_creator(creator)
     if normalise_creator(bound) == current:
         return True
+    pending = getattr(store, VOUCHED_CREATOR_PENDING, None)
+    if isinstance(pending, str) and pending and normalise_creator(pending) == current:
+        return True  # an application rename to it is under way
     email = store.email
     return isinstance(email, str) and "@" in current and email.lower() == current
 
@@ -2238,6 +2253,40 @@ def adopt_actor(
         return None
 
 
+def _proven_email(creator: str | None, user_info: dict[str, Any] | None) -> str | None:
+    """The address a sign-in proves for ``creator``: the creator itself when
+    it is an address, else the provider's email when it gave one. A
+    provider-id creator ("apple:…") has no address of its own."""
+    if "@" in (creator or ""):
+        return (creator or "").lower()
+    return str((user_info or {}).get("email") or "").lower() or None
+
+
+def _seed_missing_email(
+    existing: actor_module.Actor,
+    store: "InternalStore",
+    user_info: dict[str, Any] | None,
+) -> None:
+    """Write the proven address into a vouched actor's store when it has none.
+
+    The create path seeds ``email`` after ``actor_created`` fired, so a fault
+    there leaves an announced, vouched actor without it. Only a missing value
+    is written (never an existing one overwritten), from the store the vouch
+    check already loaded. Bookkeeping: a fault is logged and the sign-in goes
+    on; the next one retries.
+    """
+    current = store.email
+    if isinstance(current, str) and current:
+        return
+    email = _proven_email(existing.creator, user_info)
+    if not email:
+        return
+    try:
+        store.email = email
+    except DbError as e:  # folds DbError: seeding bookkeeping on a vouched sign-in
+        logger.error(f"Sign-in to {existing.id}: seeding its email faulted: {e}")
+
+
 def _adopt_actor(
     existing: actor_module.Actor,
     *,
@@ -2273,6 +2322,8 @@ def _adopt_actor(
                 logger.error(
                     f"Sign-in to {existing.id}: recording the provider faulted: {e}"
                 )
+        if store is not None:
+            _seed_missing_email(existing, store, user_info)
         if existing.factory_sibling_ids and existing.creator:
             # The lookup found factory actors beside this one. No lookup
             # reaches them, but each one costs every later sign-in a read;
@@ -2308,8 +2359,9 @@ def _adopt_actor(
     # A tombstone on an unvouched actor that still resolves is a wipe that
     # stopped part-way: a replacement (or a DELETE) whose buckets, the marker
     # among them, are already gone. Finish it rather than clean what is left
-    # in place under a tombstone. UNKNOWN is not evidence of a wipe, so it
-    # falls through to the marker: cleaning in place keeps the data.
+    # in place under a tombstone. UNKNOWN cannot tell the two apart, so the
+    # clean in place below refuses it (503) rather than clean what may be a
+    # half-wiped actor and leave it tombstoned.
     deletion_status = get_deletion_status(actor_id, config)
     unfinished_wipe = deletion_status == DeletionStatus.DELETED
     if unfinished_wipe and provider is None:
@@ -2475,6 +2527,12 @@ def _adopt_actor(
                 result.store.auth_method_replaced_actor_id = actor_id
         mode = "replaced"
     else:
+        if deletion_status == DeletionStatus.UNKNOWN:
+            # Whether a wipe of this actor stopped part-way cannot be read:
+            # cleaning it in place could keep it tombstoned with its late
+            # writes suppressed. Nothing is changed; the sign-in answers 503
+            # and is retried.
+            raise DbError("actor deletion status", actor_id)
         new_passphrase = config.new_token()
         if not new_passphrase:
             logger.error(f"Adoption of actor {actor_id} aborted: empty passphrase")
@@ -2503,6 +2561,9 @@ def _adopt_actor(
         # After the purge: with the client trusts gone, the registry's trust
         # cleanup has nothing left to notify.
         _delete_actor_clients(config, actor_id, client_ids)
+        # Again: a client holding the old credentials could obtain a token
+        # between the first revoke and the purge. Raises if one cannot be.
+        tokens_revoked += _revoke_all_actor_tokens(config, actor_id)
         removed_trusts = purged["trusts"]
         subscription_peers = purged["subscription_peers"]
         if store:
@@ -2527,16 +2588,14 @@ def _adopt_actor(
             }
             # A provider-id creator ("apple:…") has no address of its own: the
             # provider's email when it gave one, else none.
-            proven_email = (
-                (existing.creator or "").lower()
-                if "@" in (existing.creator or "")
-                else str((user_info or {}).get("email") or "").lower() or None
-            )
-            resets["email"] = proven_email
+            resets["email"] = _proven_email(existing.creator, user_info)
             # The address this sign-in proves, written before the vouched
             # marker: a rename landing during the clean leaves the vouch
             # stale instead of vouching the new address.
             resets[VOUCHED_CREATOR] = normalise_creator(existing.creator)
+            # A rename the previous creator's application left half-done
+            # must not keep vouching for its target.
+            resets[VOUCHED_CREATOR_PENDING] = None
             for name, value in resets.items():
                 if value is None and getattr(store, name, None) is None:
                     continue  # not there (the bucket read answered)

@@ -153,3 +153,34 @@ class TestCallbackRequestsOnce:
         get = MagicMock(return_value=_response(200, ENTRIES))
         _run({"id": 42, "login": "someone", "email": "pub@example.com"}, get, spa=spa)
         assert get.call_count == 0
+
+
+class TestMalformedAndEmptyEntries:
+    def test_entries_that_are_not_objects_are_a_failure(self) -> None:
+        provider = GitHubOAuth2Provider(_config())
+        with patch(
+            "actingweb.oauth2.requests.get", return_value=_response(200, ["a@x.com"])
+        ):
+            assert provider.get_verified_emails("tok") is None
+            assert provider.get_primary_email("tok") is None
+
+    def test_an_entry_without_an_address_is_skipped(self) -> None:
+        provider = GitHubOAuth2Provider(_config())
+        entries = [
+            {"email": "", "primary": True, "verified": True},
+            {"email": "next@example.com", "primary": False, "verified": True},
+        ]
+        with patch(
+            "actingweb.oauth2.requests.get", return_value=_response(200, entries)
+        ):
+            assert provider.get_primary_email("tok") == "next@example.com"
+
+    def test_the_authenticator_shims_share_one_request(self) -> None:
+        config = _config()
+        auth = OAuth2Authenticator(config, GitHubOAuth2Provider(config))
+        with patch(
+            "actingweb.oauth2.requests.get", return_value=_response(200, ENTRIES)
+        ) as get:
+            assert auth._get_github_primary_email("tok") == "Main@example.com"  # pyright: ignore[reportPrivateUsage]
+            assert auth.get_github_verified_emails("tok")
+        assert get.call_count == 1

@@ -158,6 +158,12 @@ Owner, 2026-11-02, unless marked otherwise. Evaluation changes are marked `[Eval
 - **Guards, not regressions:** the two consumer-route 500 tests and the `is_permanent` test pass on the old code too. The app-level handler matches on the `DbError` type, and `is_permanent` starts at `__cause__`. Only library routes, through `map_db_error`, followed `__context__`.
 - **Deviation, D2:** the memo lives on the GitHub provider instance as a single slot (the token, a monotonic time and the answer), bounded to 30 seconds. Each authenticator builds its own provider (`create_oauth2_authenticator`), so it is per request in the callback, and the long-lived MCP server authenticator never reuses an answer past the bound. `test_github_delegates_to_module_level_helper` now patches `_fetch_github_emails`.
 - **Deviation, D10:** `docs/guides/spa-authentication.rst`'s "CORS error" section names `/?format=json` as the one endpoint fetched without credentials.
+- **Second opinion on the phase diff** (codex found nothing; a fresh-context Claude found five). Fixed in the Phase 2 commit:
+  - The "chain with `from` to keep the 503" advice holds only on library routes: the app-level handlers and the hook runners match the `DbError` type. The changelog and the migration guide now tell consumers to let the `DbError` itself propagate in their routes and hooks.
+  - The GitHub entry implied the 30-second API Gateway limit is met; the token and userinfo timeouts still add up past it. Reworded to "one request instead of two".
+  - A response whose entries are not objects counts as a failed request (it used to raise into the 502 path; the first cut read it as "no emails").
+  - An entry with no address is skipped instead of ending the primary search.
+  - `OAuth2Authenticator._get_github_primary_email` (the shim) reads the provider's memo.
 
 
 ---
@@ -210,7 +216,14 @@ Owner, 2026-11-02, unless marked otherwise. Evaluation changes are marked `[Eval
 - [ ] Each regression fails with its fix stashed
 - [ ] Full tier before commit
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+- **Regressions:** with the source stashed, 6 adoption tests (D11 x2, D12 x2, D3 x2), 5 rename tests (D8), 6 command tests (D5) and 2 rewrite tests (D4) fail.
+- **Deviation, D12's test:** it records the call order (revoke, delete clients, revoke) instead of minting a token inside `purge_relationships`; the order is the defect, and a fault test pins the second call's failure.
+- **Deviation, D5:** `collect` gains a `_collect_default_creator` pass (one `_internal` read per default-creator actor, listed with `get_by_creator(ids_only=True)`); `move_default_creator` checks the holder first and renames under a `unique_creator=True` config once enforcement is on (`_uniqueness_enforced`: the DynamoDB backfill item, or a valid PostgreSQL index), so the record is written in the same step. A held, skipped or failed move makes `resolve` exit 1. `docs/guides/database-maintenance.rst` does not cover this command, so the command's own docstring and the migration guide's step 2 carry it.
+- **Deviation, D8:** the clean in place also clears a leftover `vouched_creator_pending`, so a half-done application rename by the previous creator's application cannot keep vouching for its target.
+- **D3:** the seeding lives in `_seed_missing_email`, and the clean and the seeding share `_proven_email`.
+
 
 ---
 

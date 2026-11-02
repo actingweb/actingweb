@@ -4,6 +4,7 @@ Improved Actor interface that wraps the core Actor class.
 Provides a clean, intuitive interface for working with ActingWeb actors.
 """
 
+import logging
 from typing import TYPE_CHECKING, Any, Optional
 
 from ..actor import Actor as CoreActor
@@ -16,6 +17,8 @@ if TYPE_CHECKING:
     from ..config import Config
     from .authenticated_views import AuthenticatedActorView
     from .hooks import HookRegistry
+
+logger = logging.getLogger(__name__)
 
 
 class ActorInterface:
@@ -440,24 +443,57 @@ class ActorInterface:
             # The uniqueness bookkeeping's values; only
             # actingweb-unique-creators writes them, through Actor.modify.
             return False
-        if not self._core_actor.modify(creator=new_creator):
-            return False
-        return self._rebind_vouch(new_creator)
+        return self._rename_vouched(new_creator)
 
-    def _rebind_vouch(self, new_creator: str) -> bool:
-        """The application vouches for ``new_creator``: a vouched actor's
-        recorded address follows the rename, or the vouch would read as
-        stale and the next sign-in for it would clean the actor. False when
-        the address could not be confirmed (the actor then reads unvouched)."""
+    def _rename_vouched(self, new_creator: str) -> bool:
+        """Rename and move a vouched actor's recorded address with it.
+
+        The new address is written as :data:`~actingweb.oauth2.VOUCHED_CREATOR_PENDING`
+        first, the rename runs, and the pending value is then promoted to
+        :data:`~actingweb.oauth2.VOUCHED_CREATOR`. A sign-in in between finds the
+        actor vouched under the old creator (the recorded address) and under
+        the new one (the pending address), for email and provider-id creators
+        alike. A refused or raising rename leaves the pending value behind;
+        it names only an address this application chose, and the next
+        ``modify_creator`` overwrites it. A fault writing it refuses the
+        rename (False). An actor that is unvouched, or vouched before 3.16
+        (no recorded address), is renamed as it is.
+        """
         from ..db.creator_rules import normalise_creator
-        from ..oauth2 import VOUCHED_CREATOR, is_vouched_store
+        from ..oauth2 import VOUCHED_CREATOR, VOUCHED_CREATOR_PENDING, is_vouched_store
 
         store = self._core_actor.store
-        if store is None or not is_vouched_store(store):
-            return True  # unvouched, or unbound (pre-3.16): nothing to move
-        if getattr(store, VOUCHED_CREATOR, None) is None:
+        bound = (
+            store is not None
+            and is_vouched_store(store)
+            and getattr(store, VOUCHED_CREATOR, None) is not None
+        )
+        target = normalise_creator(new_creator)
+        if bound and store is not None:
+            if not store.set_confirmed(VOUCHED_CREATOR_PENDING, target):
+                logger.error(
+                    f"Actor {self.id}: the pending vouch for {target} did not "
+                    "land; rename refused"
+                )
+                return False
+        if not self._core_actor.modify(creator=new_creator):
+            return False
+        if not bound or store is None:
             return True
-        return store.set_confirmed(VOUCHED_CREATOR, normalise_creator(new_creator))
+        if not store.set_confirmed(VOUCHED_CREATOR, target):
+            # The pending value still vouches for the new creator; the next
+            # rename or the next clean replaces it.
+            logger.error(
+                f"Actor {self.id}: renamed to {target}, but the recorded vouch "
+                "could not be moved; the pending value still vouches for it"
+            )
+            return False
+        if not store.set_confirmed(VOUCHED_CREATOR_PENDING, None):
+            logger.warning(
+                f"Actor {self.id}: the pending vouch could not be removed after "
+                "the rename; it names the current creator"
+            )
+        return True
 
     def is_valid(self) -> bool:
         """Check if this actor is valid (has ID and exists)."""

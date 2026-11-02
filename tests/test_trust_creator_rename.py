@@ -15,7 +15,13 @@ import pytest
 
 from actingweb.actor import Actor
 from actingweb.handlers.trust import TrustRelationshipHandler
-from actingweb.oauth2 import VOUCHED_CREATOR, is_vouched_actor
+from actingweb.maintenance import mark_actors_vouched
+from actingweb.oauth2 import (
+    VOUCHED_CREATOR,
+    OAuth2Authenticator,
+    OAuth2Provider,
+    is_vouched_actor,
+)
 from tests._adoption_helpers import (
     aid,
     backend_fault,
@@ -112,6 +118,43 @@ class TestPinnedCreator:
         row = _reload(config, actor)
         assert row.creator == owner
         assert istore(row).auth_method == "google_oauth2"
+
+    def test_an_operator_vouched_actor_is_pinned_after_its_first_sign_in(
+        self,
+    ) -> None:
+        # PR 168 review: an actor vouched by ``mark_actors_vouched`` has no
+        # stored email until a vouched sign-in seeds one; from then on the
+        # pin refuses a rename to any other address.
+        config = make_config()
+        config.force_email_prop_as_creator = True
+        owner = uuid_email()
+        actor = create_core_actor(config, owner, auth_method=None)
+        istore(actor).email = None
+        mark_actors_vouched.mark_actors(config, creator=owner)
+        provider = OAuth2Provider(
+            "google",
+            {
+                "client_id": "cid",
+                "client_secret": "csec",
+                "auth_uri": "https://provider.test/auth",
+                "token_uri": "https://provider.test/token",
+                "userinfo_uri": "https://provider.test/userinfo",
+                "scope": "openid email",
+                "redirect_uri": "https://test.example.com/oauth/callback",
+            },
+        )
+        signed_in = OAuth2Authenticator(
+            config, provider
+        ).lookup_or_create_actor_by_identifier(owner)
+        assert signed_in is not None and signed_in.id == aid(actor)
+        assert istore(_reload(config, actor)).email == owner
+
+        response = _put(config, _reload(config, actor), {"creator": uuid_email()})
+
+        assert response.set_status.call_args[0][0] == 400
+        row = _reload(config, actor)
+        assert row.creator == owner
+        assert is_vouched_actor(row)
 
 
 class TestRenameFaults:

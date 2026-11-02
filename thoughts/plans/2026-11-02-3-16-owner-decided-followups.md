@@ -770,3 +770,15 @@ Without the pin (or with no stored email) E is skipped. A stop after P or a refu
 
 **Accepted**: under the pin with no stored email, a rename to a provider id (no address, so no E) can still be undone by a racing sign-in's seeding. Writing a provider id as the email would make it the creator's pin, so this stays the pre-plan behaviour, narrowed to that case.
 
+
+### 2026-11-02, after the Claude code review on PR #168
+
+#### 24. A test for the pin after an operator-vouched actor's first sign-in
+
+**Category**: Verification fix
+
+**What changed**: one end-to-end test for the D3 **Behavior change:** sentence. An actor vouched by `mark_actors_vouched` with no stored email signs in, gets `store.email` seeded, and is then refused (400) a `PUT /<id>/trust/trustee` to another address under `force_email_prop_as_creator`, keeping its creator and its vouch. The seeding and the pin each had tests; this one covers the two together. It fails with the seeding disabled.
+
+**Files affected**: `tests/test_trust_creator_rename.py` (`TestPinnedCreator::test_an_operator_vouched_actor_is_pinned_after_its_first_sign_in`).
+
+**The review's other points**: the PR's size is a choice already made (one PR per plan, plus the PR 167 fixes the owner asked to include). The clean's residual token window is tracked in `todo/resumable-actor-deletion.md` ("a token minted across the clean's second revoke"). CI is green on both backends. The 503 for an unreadable deletion status is decided in backend-neutral code (`get_deletion_status` answering `UNKNOWN`), and its tests run in both backend jobs.

@@ -34,12 +34,16 @@ def client(worker_info):  # noqa: ARG001 -- ensures docker_services/setup_databa
         os.environ["PG_DB_PREFIX"] = worker_info["db_prefix"]
         os.environ["PG_DB_SCHEMA"] = "public"
 
-    aw_app = ActingWebApp(
-        aw_type="urn:actingweb:test:flask_items_parity",
-        database=DATABASE_BACKEND,
-        fqdn="flask-parity-test.example.com",
-        proto="http://",
-    ).with_web_ui(enable=False)
+    aw_app = (
+        ActingWebApp(
+            aw_type="urn:actingweb:test:flask_items_parity",
+            database=DATABASE_BACKEND,
+            fqdn="flask-parity-test.example.com",
+            proto="http://",
+        )
+        .with_unique_creator(False)
+        .with_web_ui(enable=False)
+    )
 
     flask_app = Flask(__name__)
     flask_app.config["TESTING"] = True

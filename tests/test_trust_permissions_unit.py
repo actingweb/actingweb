@@ -23,7 +23,7 @@ class TestTrustPermissionsPatternMatching:
 
         Spec: actingweb/permission_evaluator.py:487-497 - Glob to regex conversion
         """
-        import fnmatch
+        from actingweb.permission_evaluator import glob_match
 
         # Test pattern matching logic
         pattern = "memory_*"
@@ -40,13 +40,11 @@ class TestTrustPermissionsPatternMatching:
 
         # All memory_ names should match
         for name in matching_names:
-            assert fnmatch.fnmatch(name, pattern), f"{name} should match {pattern}"
+            assert glob_match(name, pattern), f"{name} should match {pattern}"
 
         # Non-memory names should not match
         for name in non_matching_names:
-            assert not fnmatch.fnmatch(name, pattern), (
-                f"{name} should not match {pattern}"
-            )
+            assert not glob_match(name, pattern), f"{name} should not match {pattern}"
 
     def test_method_pattern_matching(self):
         """
@@ -56,7 +54,7 @@ class TestTrustPermissionsPatternMatching:
 
         Spec: actingweb_mcp uses method patterns for permission control
         """
-        import fnmatch
+        from actingweb.permission_evaluator import glob_match
 
         pattern = "get_*"
 
@@ -70,10 +68,10 @@ class TestTrustPermissionsPatternMatching:
         ]
 
         for method in matching_methods:
-            assert fnmatch.fnmatch(method, pattern)
+            assert glob_match(method, pattern)
 
         for method in non_matching_methods:
-            assert not fnmatch.fnmatch(method, pattern)
+            assert not glob_match(method, pattern)
 
     def test_multiple_wildcard_patterns(self):
         """
@@ -83,7 +81,7 @@ class TestTrustPermissionsPatternMatching:
 
         Spec: actingweb/permission_evaluator.py:442-454 - Matches any pattern
         """
-        import fnmatch
+        from actingweb.permission_evaluator import glob_match
 
         patterns = ["memory_*", "notes_*", "public_*"]
 
@@ -99,12 +97,12 @@ class TestTrustPermissionsPatternMatching:
 
         # Should match at least one pattern
         for name in matching_names:
-            matched = any(fnmatch.fnmatch(name, pattern) for pattern in patterns)
+            matched = any(glob_match(name, pattern) for pattern in patterns)
             assert matched, f"{name} should match at least one pattern"
 
         # Should not match any pattern
         for name in non_matching_names:
-            matched = any(fnmatch.fnmatch(name, pattern) for pattern in patterns)
+            matched = any(glob_match(name, pattern) for pattern in patterns)
             assert not matched, f"{name} should not match any pattern"
 
 

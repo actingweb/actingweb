@@ -136,6 +136,9 @@ def test_reuse_beyond_grace_window_revokes_only_the_chain():
     assert result.get("error") is True
     assert result.get("status_code") == 401
     assert handler.response is not None and handler.response.status_code == 401
+    # The stable code (3.16) names theft, not an expired token.
+    assert result.get("code") == "refresh_token_reused"
+    assert handler.response.headers["X-ActingWeb-Error"] == "refresh_token_reused"
 
     # Offending chain gone, sibling chain intact.
     key = f"{OAUTH2_SYSTEM_ACTOR}:{_REFRESH_TOKEN_BUCKET}"
@@ -172,6 +175,10 @@ def test_reuse_past_reuse_window_is_expired_not_theft():
     assert result.get("error") is True
     assert result.get("status_code") == 401
     assert "expired" in result.get("message", "").lower()
+    # Past the window it is a plain invalid grant, never "reused".
+    assert result.get("code") == "invalid_grant"
+    assert handler.response is not None
+    assert handler.response.headers["X-ActingWeb-Error"] == "invalid_grant"
     # The chain was NOT revoked: the live token still validates.
     assert mgr.validate_refresh_token(live) is not None
 

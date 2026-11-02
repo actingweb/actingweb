@@ -2,14 +2,17 @@ import base64
 import logging
 import math
 from datetime import datetime
+from typing import TYPE_CHECKING, Any
 
 from pynamodb.exceptions import DoesNotExist, PutError, UpdateError
 
 from actingweb import actor, request_context, trust
-from actingweb import config as config_class
 from actingweb.constants import TRUSTEE_CREATOR
 from actingweb.db.exceptions import DbError
 from actingweb.secret_compare import secret_equals
+
+if TYPE_CHECKING:
+    from actingweb.config import Config
 
 # This is where each path and subpath in actingweb is assigned an authentication type
 # Currently only basic auth is supported. OAuth2 peer auth is automatic if an Authorization Bearer <token> header is
@@ -80,11 +83,14 @@ class Auth:
 
     """
 
-    def __init__(self, actor_id, auth_type="basic", config=None):
-        if not config:
-            self.config = config_class.Config()
-        else:
-            self.config = config
+    def __init__(
+        self, actor_id: str | None, auth_type: str = "basic", *, config: "Config"
+    ) -> None:
+        # ``config`` is required: a default ``Config()`` would silently use
+        # the library defaults (``devtest=True``) instead of the application's.
+        if config is None:
+            raise TypeError("Auth requires config: pass the application's Config")
+        self.config = config
         self.token = None
         self.type = auth_type
         self.trust = None
@@ -807,7 +813,9 @@ class Auth:
         return False
 
 
-def check_and_verify_auth(appreq=None, actor_id=None, config=None):
+def check_and_verify_auth(
+    appreq: Any = None, actor_id: str | None = None, *, config: "Config"
+) -> dict[str, Any]:
     """Check and verify authentication for non-ActingWeb routes.
 
     This function provides authentication verification for custom routes that don't go through
@@ -817,7 +825,7 @@ def check_and_verify_auth(appreq=None, actor_id=None, config=None):
     Args:
         appreq: Request object in the format used by ActingWeb handlers.
         actor_id (str | None): Actor ID to verify authentication against.
-        config (Config | None): ActingWeb config object.
+        config (Config): ActingWeb config object (keyword-only, required).
 
     Returns:
         dict: A dictionary with the following keys:
@@ -831,7 +839,7 @@ def check_and_verify_auth(appreq=None, actor_id=None, config=None):
     Example:
         .. code-block:: python
 
-            auth_result = check_and_verify_auth(appreq, actor_id, config)
+            auth_result = check_and_verify_auth(appreq, actor_id, config=config)
             if not auth_result['authenticated']:
                 if auth_result['response']['code'] == 302:
                     # Redirect for OAuth
@@ -844,9 +852,6 @@ def check_and_verify_auth(appreq=None, actor_id=None, config=None):
             # Authentication successful, use auth_result['actor']
             actor = auth_result['actor']
     """
-
-    if not config:
-        config = config_class.Config()
 
     # Use basic auth type for custom routes (supports both basic and Bearer token auth)
     auth_obj = Auth(actor_id, auth_type="basic", config=config)
@@ -885,7 +890,9 @@ def check_and_verify_auth(appreq=None, actor_id=None, config=None):
     return result
 
 
-async def check_and_verify_auth_async(appreq=None, actor_id=None, config=None):
+async def check_and_verify_auth_async(
+    appreq: Any = None, actor_id: str | None = None, *, config: "Config"
+) -> dict[str, Any]:
     """Async version: Check and verify authentication for non-ActingWeb routes.
 
     This async function provides authentication verification for custom routes that don't
@@ -898,7 +905,7 @@ async def check_and_verify_auth_async(appreq=None, actor_id=None, config=None):
     Args:
         appreq: Request object in the format used by ActingWeb handlers.
         actor_id (str | None): Actor ID to verify authentication against.
-        config (Config | None): ActingWeb config object.
+        config (Config): ActingWeb config object (keyword-only, required).
 
     Returns:
         dict: A dictionary with the following keys:
@@ -912,7 +919,9 @@ async def check_and_verify_auth_async(appreq=None, actor_id=None, config=None):
     Example:
         .. code-block:: python
 
-            auth_result = await check_and_verify_auth_async(appreq, actor_id, config)
+            auth_result = await check_and_verify_auth_async(
+                appreq, actor_id, config=config
+            )
             if not auth_result['authenticated']:
                 if auth_result['response']['code'] == 302:
                     return RedirectResponse(auth_result['redirect'])
@@ -924,9 +933,6 @@ async def check_and_verify_auth_async(appreq=None, actor_id=None, config=None):
             # Authentication successful, use auth_result['actor']
             actor = auth_result['actor']
     """
-
-    if not config:
-        config = config_class.Config()
 
     # Use basic auth type for custom routes (supports both basic and Bearer token auth)
     auth_obj = Auth(actor_id, auth_type="basic", config=config)

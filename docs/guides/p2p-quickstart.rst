@@ -117,6 +117,12 @@ Run It
    # or with uvicorn against your own app module:
    uvicorn myapp:api --reload --port 5000
 
+.. note::
+   **First run.** Creator uniqueness is on by default, so on a fresh database the
+   first start creates the tables and stops with ``UniqueCreatorNotReady``. Run
+   ``actingweb-unique-creators enable --apply`` and start again. To opt out, add
+   ``.with_unique_creator(False)`` to the app.
+
 Verify
 ------
 

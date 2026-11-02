@@ -198,7 +198,7 @@ class TestPostgreSQLAcceptsAndIgnoresConsistentRead:
         from actingweb.db.postgresql.property import DbProperty
 
         actor_id = f"v2cost-consistent-{uuid.uuid4()}"
-        db = DbProperty()
+        db = DbProperty(indexed_properties=["oauthId", "email", "externalUserId"])
         for i in range(3):
             db.set(actor_id=actor_id, name=f"p{i}", value=f"v{i}")
 

@@ -17,6 +17,8 @@ agreed exit rule (fix only High, Medium and regressions).
 2. **The two rotation ladders are still two implementations.** The SPA
    (`handlers/oauth2_spa.py`) and MCP (`token_manager.refresh_access_token`)
    reuse ladders share `single_use.consume_once` but not the tiers or the
-   theft response. This is what
-   `thoughts/plans/2026-09-26-spa-refresh-reuse-after-dropped-rotation.md`
-   is for; recorded here only so the review's point is not re-filed.
+   theft response. The plan that was to unify them
+   (`thoughts/plans/2026-09-26-spa-refresh-reuse-after-dropped-rotation.md`)
+   is superseded by `2026-09-27-refresh-grace-setting.md`, which kept them
+   separate; nothing is scheduled to unify them. Recorded here only so the
+   review's point is not re-filed.

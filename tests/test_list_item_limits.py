@@ -49,6 +49,7 @@ def _fake_db(monkeypatch: pytest.MonkeyPatch, store: dict[Any, Any]) -> None:
 def _small_config(database: str = "dynamodb") -> Config:
     return Config(
         database=database,
+        unique_creator=False,  # fixed creators on the shared store
         list_item_span_threshold=2_000,
         list_item_max_bytes=20_000,
     )
@@ -86,12 +87,12 @@ def _v2_list(store: dict[Any, Any], config: Config, items: list[Any]) -> ListPro
 
 class TestBackendDefaults:
     def test_dynamodb_defaults(self) -> None:
-        config = Config(database="dynamodb")
+        config = Config(unique_creator=False, database="dynamodb")
         assert config.list_item_span_threshold == SPAN_THRESHOLD_DEFAULT == 390_000
         assert config.list_item_max_bytes == ITEM_MAX_BYTES_DEFAULT == 4 * 2**20
 
     def test_postgresql_defaults_are_off(self) -> None:
-        config = Config(database="postgresql")
+        config = Config(unique_creator=False, database="postgresql")
         assert config.list_item_span_threshold is None
         assert config.list_item_max_bytes is None
 
@@ -110,7 +111,7 @@ class TestBackendDefaults:
             return real_import(name, *args, **kwargs)
 
         monkeypatch.setattr("actingweb.config.importlib.import_module", fake_import)
-        config = Config(database="dynamodb")
+        config = Config(unique_creator=False, database="dynamodb")
         assert config.list_item_span_threshold is None
         assert config.list_item_max_bytes is None
 
@@ -119,28 +120,33 @@ class TestConfigValidation:
     @pytest.mark.parametrize("bad", [400_001, 390_001, 0, -1, True, "1000", 1.5])
     def test_span_threshold_out_of_range_refused_from_kwargs(self, bad: Any) -> None:
         with pytest.raises(ValueError):
-            Config(database="dynamodb", list_item_span_threshold=bad)
+            Config(
+                unique_creator=False, database="dynamodb", list_item_span_threshold=bad
+            )
 
     @pytest.mark.parametrize("bad", [400_001, 0, False])
     def test_span_threshold_out_of_range_refused_on_assignment(self, bad: Any) -> None:
-        config = Config(database="dynamodb")
+        config = Config(unique_creator=False, database="dynamodb")
         with pytest.raises(ValueError):
             config.list_item_span_threshold = bad
 
     @pytest.mark.parametrize("bad", [0, -5, True, "x"])
     def test_max_bytes_out_of_range_refused(self, bad: Any) -> None:
         with pytest.raises(ValueError):
-            Config(database="dynamodb", list_item_max_bytes=bad)
-        config = Config(database="dynamodb")
+            Config(unique_creator=False, database="dynamodb", list_item_max_bytes=bad)
+        config = Config(unique_creator=False, database="dynamodb")
         with pytest.raises(ValueError):
             config.list_item_max_bytes = bad
 
     def test_max_bytes_below_span_threshold_refused_from_kwargs(self) -> None:
         with pytest.raises(ValueError, match="at least"):
-            Config(database="dynamodb", list_item_max_bytes=100_000)
+            Config(
+                unique_creator=False, database="dynamodb", list_item_max_bytes=100_000
+            )
 
     def test_pair_given_in_either_order(self) -> None:
         config = Config(
+            unique_creator=False,
             database="dynamodb",
             list_item_max_bytes=100_000,
             list_item_span_threshold=50_000,
@@ -152,6 +158,7 @@ class TestConfigValidation:
 
     def test_none_accepted_for_either(self) -> None:
         config = Config(
+            unique_creator=False,
             database="dynamodb",
             list_item_span_threshold=None,
             list_item_max_bytes=None,
@@ -265,7 +272,9 @@ class TestV1RefusedBeforeAnyWrite:
     ) -> None:
         _seed_v1(store, "old", ["a"])
         before = dict(store)
-        lst = ListProperty(ACTOR, "old", Config(database="dynamodb"))
+        lst = ListProperty(
+            ACTOR, "old", Config(unique_creator=False, database="dynamodb")
+        )
         with pytest.raises(ListItemTooLargeError) as exc:
             lst.append(_item_of(390_001))
         assert exc.value.limit == 390_000
@@ -275,7 +284,9 @@ class TestV1RefusedBeforeAnyWrite:
         self, store: dict[Any, Any]
     ) -> None:
         _seed_v1(store, "old", ["a"])
-        lst = ListProperty(ACTOR, "old", Config(database="postgresql"))
+        lst = ListProperty(
+            ACTOR, "old", Config(unique_creator=False, database="postgresql")
+        )
         big = _item_of(390_001)
         lst.append(big)
         assert json.loads(store[(ACTOR, "list:old-1")]) == big
@@ -315,6 +326,7 @@ def live(monkeypatch: pytest.MonkeyPatch, _require_dynamodb: None) -> Any:
 
     monkeypatch.setattr("actingweb.property_list.get_property", get_property)
     config = Config(
+        unique_creator=False,
         database="dynamodb",
         list_item_span_threshold=2_000,
         list_item_max_bytes=20_000,
@@ -709,7 +721,9 @@ class TestRestPermissionFailsClosed:
     def test_evaluator_error_denies(self, handler_name: str) -> None:
         from actingweb.handlers import properties as module
 
-        handler = getattr(module, handler_name)(AWWebObj(), Config(database="dynamodb"))
+        handler = getattr(module, handler_name)(
+            AWWebObj(), Config(unique_creator=False, database="dynamodb")
+        )
         auth_obj = mock.Mock()
         auth_obj.acl = {"peerid": "peer-1"}
         with mock.patch.object(
@@ -725,7 +739,9 @@ class TestRestPermissionFailsClosed:
         from actingweb.db.exceptions import DbError
         from actingweb.handlers import properties as module
 
-        handler = module.PropertiesHandler(AWWebObj(), Config(database="dynamodb"))
+        handler = module.PropertiesHandler(
+            AWWebObj(), Config(unique_creator=False, database="dynamodb")
+        )
         auth_obj = mock.Mock()
         auth_obj.acl = {"peerid": "peer-1"}
         with mock.patch.object(
@@ -1190,7 +1206,7 @@ class TestWwwVerification4FollowUps:
 def test_trust_redirects_keep_the_base_path() -> None:
     from actingweb.handlers import trust
 
-    config = Config(database="dynamodb")
+    config = Config(unique_creator=False, database="dynamodb")
     config.root = "https://demo.actingweb.io/base/"
     webobj = AWWebObj(
         params={"_method": "DELETE"}, headers={"Sec-Fetch-Site": "same-origin"}

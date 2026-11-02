@@ -49,6 +49,7 @@ def aw_app(docker_services, setup_database, worker_info):  # noqa: ARG001
             fqdn="test.example.com",
             proto="http://",
         )
+        .with_unique_creator(False)
         .with_oauth(
             client_id="test-client-id",
             client_secret="test-client-secret",

@@ -26,7 +26,7 @@ class TestConfigInitialization:
         assert config.env == expected_env
         assert config.ui is True
         assert config.devtest is True
-        assert config.unique_creator is False
+        assert config.unique_creator is True
         assert config.force_email_prop_as_creator is True
         assert config.www_auth == "basic"
 

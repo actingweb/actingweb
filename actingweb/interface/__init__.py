@@ -12,7 +12,12 @@ from ..peer_capabilities import PeerCapabilities
 from ..remote_storage import RemotePeerStore, get_remote_bucket
 from ..subscription_config import SubscriptionProcessingConfig
 from .actor_interface import ActorInterface
-from .app import ActingWebApp, UniqueCreatorNotReady
+from .app import (
+    ActingWebApp,
+    PropertyLookupNotReady,
+    StoreNotReady,
+    UniqueCreatorNotReady,
+)
 from .authenticated_views import (
     AuthContext,
     AuthenticatedActorView,
@@ -43,6 +48,8 @@ from .trust_manager import TrustManager
 
 __all__ = [
     "ActingWebApp",
+    "PropertyLookupNotReady",
+    "StoreNotReady",
     "UniqueCreatorNotReady",
     "ActorInterface",
     "DeletionStatus",

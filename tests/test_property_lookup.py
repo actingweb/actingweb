@@ -5,7 +5,7 @@ Tests cover:
 - DbPropertyLookup basic operations (get, create, delete)
 - Property reverse lookup with lookup table
 - Configuration-based indexing
-- Dual-mode operation (lookup table vs legacy GSI/index)
+- One reverse-lookup mechanism (the lookup table)
 - Error handling and best-effort consistency
 - Cleanup on actor deletion
 
@@ -88,21 +88,7 @@ def skip_mismatched_backend(request):
 @pytest.fixture
 def config_with_lookup_table(monkeypatch):
     """Configure environment to use lookup table."""
-    monkeypatch.setenv("USE_PROPERTY_LOOKUP_TABLE", "true")
     monkeypatch.setenv("INDEXED_PROPERTIES", "oauthId,email,externalUserId")
-    # Clear config singleton to force reload
-    if hasattr(Config, "_instance"):
-        delattr(Config, "_instance")
-    yield
-    # Cleanup
-    if hasattr(Config, "_instance"):
-        delattr(Config, "_instance")
-
-
-@pytest.fixture
-def config_with_legacy_index(monkeypatch):
-    """Configure environment to use legacy GSI/index."""
-    monkeypatch.setenv("USE_PROPERTY_LOOKUP_TABLE", "false")
     # Clear config singleton to force reload
     if hasattr(Config, "_instance"):
         delattr(Config, "_instance")
@@ -221,58 +207,17 @@ class TestPropertyReverseLookuWithLookupTable:
         property_mod = get_db_module(backend, "property")
 
         # Set an indexed property
-        prop = property_mod.DbProperty()
+        prop = property_mod.DbProperty(
+            indexed_properties=["oauthId", "email", "externalUserId"]
+        )
         prop.set(actor_id=test_actor_id, name="oauthId", value="github:67890")
 
         # Reverse lookup should use lookup table
-        prop2 = property_mod.DbProperty()
+        prop2 = property_mod.DbProperty(
+            indexed_properties=["oauthId", "email", "externalUserId"]
+        )
         found_actor_id = prop2.get_actor_id_from_property(
             name="oauthId", value="github:67890"
-        )
-        assert found_actor_id == test_actor_id, (
-            f"Expected {test_actor_id}, got {found_actor_id}"
-        )
-
-        # Cleanup
-        prop2.delete()
-
-    def test_reverse_lookup_with_legacy_index_enabled(
-        self, backend: str, test_actor_id: str, config_with_legacy_index
-    ):
-        """Test reverse lookup when legacy index is enabled."""
-        property_mod = get_db_module(backend, "property")
-
-        if backend == "dynamodb":
-            # The shared test table's schema is fixed by whoever created it
-            # first (lookup mode creates it WITHOUT the legacy GSI). The
-            # legacy path needs the GSI — skip when absent; the GSI query
-            # mechanics are covered on a dedicated table in
-            # test_conditional_gsi_schema.py.
-            from actingweb.db.dynamodb.property import PropertyLegacy
-
-            try:
-                desc = PropertyLegacy._get_connection().describe_table()
-            except Exception:
-                desc = None
-            has_gsi = bool(desc and desc.get("GlobalSecondaryIndexes"))
-            if not has_gsi:
-                pytest.skip(
-                    "shared properties table was created without the legacy "
-                    "GSI (lookup-mode shape)"
-                )
-
-        # Unique value: the legacy GSI matches on value only, so residue
-        # from earlier runs could otherwise shadow this test's row.
-        legacy_value = f"github:{uuid.uuid4()}"
-
-        # Set a property
-        prop = property_mod.DbProperty()
-        prop.set(actor_id=test_actor_id, name="oauthId", value=legacy_value)
-
-        # Reverse lookup should use legacy index/GSI
-        prop2 = property_mod.DbProperty()
-        found_actor_id = prop2.get_actor_id_from_property(
-            name="oauthId", value=legacy_value
         )
         assert found_actor_id == test_actor_id, (
             f"Expected {test_actor_id}, got {found_actor_id}"
@@ -289,7 +234,9 @@ class TestPropertyReverseLookuWithLookupTable:
         lookup_mod = get_db_module(backend, "property_lookup")
 
         # Set an indexed property
-        prop = property_mod.DbProperty()
+        prop = property_mod.DbProperty(
+            indexed_properties=["oauthId", "email", "externalUserId"]
+        )
         prop.set(actor_id=test_actor_id, name="email", value="user@example.com")
 
         # Verify lookup entry was created
@@ -312,7 +259,9 @@ class TestPropertyReverseLookuWithLookupTable:
         lookup_mod = get_db_module(backend, "property_lookup")
 
         # Set a non-indexed property
-        prop = property_mod.DbProperty()
+        prop = property_mod.DbProperty(
+            indexed_properties=["oauthId", "email", "externalUserId"]
+        )
         prop.set(actor_id=test_actor_id, name="notIndexed", value="some_value")
 
         # Verify no lookup entry was created
@@ -333,7 +282,9 @@ class TestPropertyReverseLookuWithLookupTable:
         lookup_mod = get_db_module(backend, "property_lookup")
 
         # Set initial value
-        prop = property_mod.DbProperty()
+        prop = property_mod.DbProperty(
+            indexed_properties=["oauthId", "email", "externalUserId"]
+        )
         prop.set(actor_id=test_actor_id, name="email", value="old@example.com")
 
         # Verify initial lookup
@@ -378,18 +329,18 @@ class TestPropertyReverseLookuWithLookupTable:
         new_value = f"new-{test_actor_id}@example.com"
 
         # Set initial value with one instance...
-        property_mod.DbProperty().set(
-            actor_id=test_actor_id, name="email", value=old_value
-        )
+        property_mod.DbProperty(
+            indexed_properties=["oauthId", "email", "externalUserId"]
+        ).set(actor_id=test_actor_id, name="email", value=old_value)
         assert (
             lookup_mod.DbPropertyLookup().get(property_name="email", value=old_value)
             == test_actor_id
         )
 
         # ...and update it with a brand-new instance (cold handle).
-        property_mod.DbProperty().set(
-            actor_id=test_actor_id, name="email", value=new_value
-        )
+        property_mod.DbProperty(
+            indexed_properties=["oauthId", "email", "externalUserId"]
+        ).set(actor_id=test_actor_id, name="email", value=new_value)
 
         assert (
             lookup_mod.DbPropertyLookup().get(property_name="email", value=old_value)
@@ -401,7 +352,9 @@ class TestPropertyReverseLookuWithLookupTable:
         ), "New lookup entry should be created"
 
         # Cleanup
-        property_mod.DbProperty().set(actor_id=test_actor_id, name="email", value="")
+        property_mod.DbProperty(
+            indexed_properties=["oauthId", "email", "externalUserId"]
+        ).set(actor_id=test_actor_id, name="email", value="")
 
     def test_delete_indexed_property_deletes_lookup(
         self, backend: str, test_actor_id: str, config_with_lookup_table
@@ -411,7 +364,9 @@ class TestPropertyReverseLookuWithLookupTable:
         lookup_mod = get_db_module(backend, "property_lookup")
 
         # Set property
-        prop = property_mod.DbProperty()
+        prop = property_mod.DbProperty(
+            indexed_properties=["oauthId", "email", "externalUserId"]
+        )
         prop.set(actor_id=test_actor_id, name="externalUserId", value="ext123")
 
         # Verify lookup exists
@@ -440,13 +395,19 @@ class TestPropertyListCleanup:
         lookup_mod = get_db_module(backend, "property_lookup")
 
         # Set multiple indexed properties
-        prop1 = property_mod.DbProperty()
+        prop1 = property_mod.DbProperty(
+            indexed_properties=["oauthId", "email", "externalUserId"]
+        )
         prop1.set(actor_id=test_actor_id, name="oauthId", value="github:99999")
 
-        prop2 = property_mod.DbProperty()
+        prop2 = property_mod.DbProperty(
+            indexed_properties=["oauthId", "email", "externalUserId"]
+        )
         prop2.set(actor_id=test_actor_id, name="email", value="bulk@example.com")
 
-        prop3 = property_mod.DbProperty()
+        prop3 = property_mod.DbProperty(
+            indexed_properties=["oauthId", "email", "externalUserId"]
+        )
         prop3.set(actor_id=test_actor_id, name="externalUserId", value="ext999")
 
         # Verify lookup entries exist
@@ -465,7 +426,9 @@ class TestPropertyListCleanup:
         )
 
         # Delete all properties
-        prop_list = property_mod.DbPropertyList()
+        prop_list = property_mod.DbPropertyList(
+            indexed_properties=["oauthId", "email", "externalUserId"]
+        )
         prop_list.fetch(actor_id=test_actor_id)
         prop_list.delete()
 
@@ -497,7 +460,6 @@ class TestPropertyListCleanup:
 
         # The lookup table must NOT be enabled via the environment - only via
         # the Config object we pass in. This is what makes the old code fail.
-        monkeypatch.delenv("USE_PROPERTY_LOOKUP_TABLE", raising=False)
         monkeypatch.delenv("INDEXED_PROPERTIES", raising=False)
 
         lookup_mod = get_db_module(backend, "property_lookup")
@@ -505,7 +467,6 @@ class TestPropertyListCleanup:
         # Build a Config for the running backend and enable the lookup table the
         # same way ActingWebApp.get_config() does: by setting attributes, not env.
         config = Config()
-        config.use_lookup_table = True
         config.indexed_properties = ["oauthId", "email", "externalUserId"]
 
         # Set indexed properties through the config-injected accessor.
@@ -582,9 +543,13 @@ class TestPropertyListCleanup:
         shared_value = "shared@example.com"
         try:
             # Both actors write the same indexed value.
-            prop1 = property_mod.DbProperty()
+            prop1 = property_mod.DbProperty(
+                indexed_properties=["oauthId", "email", "externalUserId"]
+            )
             prop1.set(actor_id=test_actor_id, name="email", value=shared_value)
-            prop2 = property_mod.DbProperty()
+            prop2 = property_mod.DbProperty(
+                indexed_properties=["oauthId", "email", "externalUserId"]
+            )
             prop2.set(actor_id=actor2_id, name="email", value=shared_value)
 
             # Whichever actor currently owns the (name, value) lookup row.
@@ -596,7 +561,9 @@ class TestPropertyListCleanup:
 
             # Bulk-delete the actor that does NOT own the lookup row. Its cleanup
             # must not touch the owner's row.
-            prop_list = property_mod.DbPropertyList()
+            prop_list = property_mod.DbPropertyList(
+                indexed_properties=["oauthId", "email", "externalUserId"]
+            )
             prop_list.fetch(actor_id=non_owner)
             prop_list.delete()
 
@@ -610,7 +577,9 @@ class TestPropertyListCleanup:
             )
         finally:
             for aid in (test_actor_id, actor2_id):
-                prop_cleanup = property_mod.DbPropertyList()
+                prop_cleanup = property_mod.DbPropertyList(
+                    indexed_properties=["oauthId", "email", "externalUserId"]
+                )
                 prop_cleanup.fetch(actor_id=aid)
                 prop_cleanup.delete()
             if backend == "postgresql":
@@ -650,12 +619,16 @@ class TestLargeValueSupport:
         large_value = "x" * 50000  # Far exceeds GSI 2048-byte limit
 
         # Set property with large value
-        prop = property_mod.DbProperty()
+        prop = property_mod.DbProperty(
+            indexed_properties=["oauthId", "email", "externalUserId"]
+        )
         result = prop.set(actor_id=test_actor_id, name="oauthId", value=large_value)
         assert result is True, "Should be able to set value > 2048 bytes"
 
         # Verify reverse lookup works (this is the key test - GSI would fail here)
-        prop2 = property_mod.DbProperty()
+        prop2 = property_mod.DbProperty(
+            indexed_properties=["oauthId", "email", "externalUserId"]
+        )
         found_actor_id = prop2.get_actor_id_from_property(
             name="oauthId", value=large_value
         )
@@ -672,7 +645,6 @@ class TestConfigurationIntegration:
 
     def test_config_from_environment_variables(self, monkeypatch):
         """Test that configuration reads from environment variables."""
-        monkeypatch.setenv("USE_PROPERTY_LOOKUP_TABLE", "true")
         monkeypatch.setenv("INDEXED_PROPERTIES", "custom1,custom2,custom3")
 
         # Clear config singleton
@@ -680,7 +652,6 @@ class TestConfigurationIntegration:
             delattr(Config, "_instance")
 
         config = Config()
-        assert config.use_lookup_table is True
         assert "custom1" in config.indexed_properties
         assert "custom2" in config.indexed_properties
         assert "custom3" in config.indexed_properties
@@ -692,9 +663,8 @@ class TestConfigurationIntegration:
             delattr(Config, "_instance")
 
         config = Config()
-        # Lookup-table mode is the default since v3.13 (legacy GSI mode is
-        # deprecated; pin it via USE_PROPERTY_LOOKUP_TABLE=false)
-        assert config.use_lookup_table is True
+        # The lookup table is the only reverse-lookup mechanism (3.16)
+        assert not hasattr(config, "use_lookup_table")
         # Default indexed properties
         assert "oauthId" in config.indexed_properties
         assert "email" in config.indexed_properties
@@ -705,9 +675,8 @@ class TestBuilderConfigPrecedence:
     """Lookup-table settings precedence: explicit builder > env var > default.
 
     Regression tests for the bug where ActingWebApp stamped its own hardcoded
-    lookup-table defaults onto the config on every with_*() call, silently
-    clobbering the USE_PROPERTY_LOOKUP_TABLE / INDEXED_PROPERTIES env
-    overrides (the documented rollback path).
+    defaults onto the config on every with_*() call, silently clobbering the
+    INDEXED_PROPERTIES env override.
     """
 
     def _make_app(self):
@@ -719,28 +688,10 @@ class TestBuilderConfigPrecedence:
             fqdn="test.example.com",
         )
 
-    def test_env_true_survives_builder_calls(self, monkeypatch):
-        monkeypatch.setenv("USE_PROPERTY_LOOKUP_TABLE", "true")
-        app = self._make_app().with_web_ui(enable=True).with_devtest(enable=True)
-        assert app.get_config().use_lookup_table is True
-
-    def test_env_false_survives_builder_calls(self, monkeypatch):
-        monkeypatch.setenv("USE_PROPERTY_LOOKUP_TABLE", "false")
-        app = self._make_app().with_web_ui(enable=True).with_devtest(enable=True)
-        assert app.get_config().use_lookup_table is False
-
     def test_indexed_properties_env_survives_builder_calls(self, monkeypatch):
         monkeypatch.setenv("INDEXED_PROPERTIES", "custom1,custom2")
         app = self._make_app().with_web_ui(enable=True)
         assert app.get_config().indexed_properties == ["custom1", "custom2"]
-
-    def test_explicit_builder_beats_env(self, monkeypatch):
-        monkeypatch.setenv("USE_PROPERTY_LOOKUP_TABLE", "true")
-        app = self._make_app().with_legacy_property_index(enable=True)
-        assert app.get_config().use_lookup_table is False
-        # ... and stays pinned across later builder calls
-        app.with_web_ui(enable=True)
-        assert app.get_config().use_lookup_table is False
 
     def test_explicit_indexed_properties_beats_env(self, monkeypatch):
         monkeypatch.setenv("INDEXED_PROPERTIES", "fromenv")
@@ -748,7 +699,6 @@ class TestBuilderConfigPrecedence:
         assert app.get_config().indexed_properties == ["explicit1", "explicit2"]
 
     def test_no_env_no_builder_uses_config_default(self, monkeypatch):
-        monkeypatch.delenv("USE_PROPERTY_LOOKUP_TABLE", raising=False)
         monkeypatch.delenv("INDEXED_PROPERTIES", raising=False)
         app = self._make_app().with_web_ui(enable=True)
         config = app.get_config()
@@ -757,7 +707,6 @@ class TestBuilderConfigPrecedence:
         if hasattr(Config, "_instance"):
             delattr(Config, "_instance")
         reference = Config()
-        assert config.use_lookup_table == reference.use_lookup_table
         assert config.indexed_properties == reference.indexed_properties
 
     def test_with_indexed_properties_no_args_leaves_env_authoritative(
@@ -766,3 +715,57 @@ class TestBuilderConfigPrecedence:
         monkeypatch.setenv("INDEXED_PROPERTIES", "fromenv")
         app = self._make_app().with_indexed_properties()
         assert app.get_config().indexed_properties == ["fromenv"]
+
+
+class TestRemovedLegacySwitch:
+    """The legacy-lookup switch fails loudly at configure time (3.16)."""
+
+    def test_env_false_refuses_with_the_migration_pointer(self, monkeypatch):
+        monkeypatch.setenv("USE_PROPERTY_LOOKUP_TABLE", "false")
+        with pytest.raises(RuntimeError) as exc_info:
+            Config()
+        message = str(exc_info.value)
+        assert "docs/migration/v3.16.rst" in message
+        assert "actingweb-property-lookup" in message
+
+    def test_env_true_warns_and_is_ignored(self, monkeypatch):
+        monkeypatch.setenv("USE_PROPERTY_LOOKUP_TABLE", "true")
+        with pytest.warns(DeprecationWarning, match="USE_PROPERTY_LOOKUP_TABLE"):
+            config = Config()
+        assert not hasattr(config, "use_lookup_table")
+
+    def test_kwarg_false_refuses(self):
+        with pytest.raises(RuntimeError, match="use_lookup_table"):
+            Config(use_lookup_table=False)
+
+    def test_kwarg_true_warns_and_is_ignored(self):
+        with pytest.warns(DeprecationWarning, match="use_lookup_table"):
+            config = Config(use_lookup_table=True)
+        assert not hasattr(config, "use_lookup_table")
+
+    @pytest.mark.parametrize("enable", [True, False])
+    def test_builder_tombstone_raises(self, enable):
+        from actingweb.interface import ActingWebApp
+
+        app = ActingWebApp(
+            aw_type="urn:actingweb:test:tombstone",
+            database="dynamodb",
+            fqdn="test.example.com",
+        )
+        with pytest.raises(RuntimeError, match="actingweb-property-lookup"):
+            app.with_legacy_property_index(enable=enable)
+
+
+@pytest.mark.parametrize("backend", ["dynamodb", "postgresql"])
+class TestConstructorRequiresIndexedProperties:
+    def test_property_requires_the_argument(self, backend: str):
+        property_mod = get_db_module(backend, "property")
+        with pytest.raises(TypeError, match="indexed_properties"):
+            property_mod.DbProperty()
+        with pytest.raises(TypeError, match="indexed_properties"):
+            property_mod.DbPropertyList()
+
+    def test_the_argument_is_keyword_only(self, backend: str):
+        property_mod = get_db_module(backend, "property")
+        with pytest.raises(TypeError):
+            property_mod.DbProperty(["email"])

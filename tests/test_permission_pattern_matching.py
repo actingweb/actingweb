@@ -1,6 +1,6 @@
 """Whole-identifier glob matching in the permission evaluator (3.14.4).
 
-Before 3.14.4 ``_glob_to_regex()`` anchored with ``$`` and compiled without
+Before 3.14.4 the glob-to-regex step anchored with ``$`` and compiled without
 ``re.DOTALL``: ``$`` tolerates a trailing newline, and ``.*`` cannot cross
 one. A ``friend`` peer could therefore write ``private/\\nsecret`` past
 ``excluded_patterns: ["private/*"]``. The fix is three-fold and each part is
@@ -16,6 +16,8 @@ from actingweb.permission_evaluator import (
     _PATTERN_CACHE_MAX_ENTRIES,
     PermissionEvaluator,
     PermissionResult,
+    _compile_glob,
+    glob_to_regex,
 )
 
 
@@ -27,7 +29,7 @@ def _evaluator() -> PermissionEvaluator:
     store (a database), which these pure-function tests do not need.
     """
     ev = object.__new__(PermissionEvaluator)
-    ev._pattern_cache = {}
+    _compile_glob.cache_clear()
     return ev
 
 
@@ -50,20 +52,25 @@ class TestMatchesPattern(unittest.TestCase):
         self.assertTrue(self.ev._matches_pattern("notes\n", "notes?"))
 
     def test_glob_to_regex_uses_end_of_string_anchor(self) -> None:
-        self.assertEqual(self.ev._glob_to_regex("a*b?"), r"^a.*b.\Z")
+        self.assertEqual(glob_to_regex("a*b?"), r"^a.*b.\Z")
 
     def test_short_circuits_unchanged(self) -> None:
         self.assertTrue(self.ev._matches_pattern("anything\nat all", "*"))
         self.assertTrue(self.ev._matches_pattern("same\n", "same\n"))
         self.assertTrue(self.ev._matches_pattern("notes://work/x", "notes://"))
 
-    def test_pattern_cache_is_bounded(self) -> None:
+    def test_pattern_cache_is_a_bounded_lru(self) -> None:
         for i in range(_PATTERN_CACHE_MAX_ENTRIES):
             self.ev._matches_pattern("x", f"p{i}_*")
-        self.assertEqual(len(self.ev._pattern_cache), _PATTERN_CACHE_MAX_ENTRIES)
+        info = _compile_glob.cache_info()
+        self.assertEqual(info.currsize, _PATTERN_CACHE_MAX_ENTRIES)
+        # One more evicts the oldest, not everything.
         self.ev._matches_pattern("x", "one_more_*")
-        self.assertEqual(len(self.ev._pattern_cache), 1)
-        self.assertIn("one_more_*", self.ev._pattern_cache)
+        info = _compile_glob.cache_info()
+        self.assertEqual(info.currsize, _PATTERN_CACHE_MAX_ENTRIES)
+        before = info.hits
+        self.ev._matches_pattern("x", f"p{_PATTERN_CACHE_MAX_ENTRIES - 1}_*")
+        self.assertEqual(_compile_glob.cache_info().hits, before + 1)
 
 
 class TestUriPrefixFold(unittest.TestCase):
@@ -94,16 +101,17 @@ class TestUriPrefixFold(unittest.TestCase):
         self.assertEqual(result, PermissionResult.DENIED)
 
     def test_wildcard_pattern_is_left_alone(self) -> None:
-        self.assertEqual(self.ev._glob_to_regex("*://"), r"^.*://\Z")
+        self.assertEqual(glob_to_regex("*://"), r"^.*://\Z")
         self.assertTrue(self.ev._matches_pattern("a://", "*://"))
         self.assertFalse(self.ev._matches_pattern("a://x", "*://"))
-        self.assertIn("*://", self.ev._pattern_cache)
-        self.assertNotIn("*://*", self.ev._pattern_cache)
+        # Compiled as written (the "*" shortcut is not added to a pattern that
+        # already holds a wildcard).
+        self.assertEqual(_compile_glob.cache_info().currsize, 1)
 
-    def test_cache_holds_the_rewritten_key(self) -> None:
+    def test_the_prefix_form_is_compiled_with_the_added_star(self) -> None:
         self.ev._matches_pattern("notes://work/x", "notes://")
-        self.assertIn("notes://*", self.ev._pattern_cache)
-        self.assertNotIn("notes://", self.ev._pattern_cache)
+        self.assertEqual(glob_to_regex("notes://*"), r"^notes://.*\Z")
+        self.assertEqual(_compile_glob.cache_info().currsize, 1)
 
 
 class TestControlCharacterGuard(unittest.TestCase):

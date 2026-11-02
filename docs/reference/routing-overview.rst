@@ -247,7 +247,9 @@ ActingWeb is the OAuth2 authorization server for MCP clients (enabled with
   (including a token-store fault). Every refresh returns a new
   ``refresh_token``; the presented one is single-use.
 - ``/mcp`` answers 401 ``invalid_token`` without a valid bearer token and 503
-  with ``Retry-After`` when the token store cannot be read.
+  with ``Retry-After`` when the token store cannot be read. A ``POST`` whose body
+  is empty or not JSON answers 400 with JSON-RPC ``-32700`` before authentication
+  (a JSON body that is not an object answers 400 ``-32600``).
 
 Notes
 =====

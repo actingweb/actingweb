@@ -209,6 +209,10 @@ Example: 1 million requests/day
     - Storage: 10GB × $0.25/GB = $2.50/month
     Total: ~$12/month (62% savings with provisioned)
 
+With creator uniqueness on (the default since 3.16) an actor create, delete or
+creator change costs about 4-6 write units on DynamoDB instead of 1 (see
+:ref:`creator-uniqueness-backends`); the figures above assume the opt-out.
+
 **PostgreSQL Costs (AWS RDS):**
 
 .. code-block:: text
@@ -407,7 +411,7 @@ All names take the ``AWS_DB_PREFIX`` prefix (default ``demo_actingweb``).
    * - ``<prefix>_properties``
      - ``id``
      - ``name``
-     - Always (GSI ``property-index`` **only** in legacy mode)
+     - Always (no GSI; reverse lookup uses the table below)
    * - ``<prefix>_subscriptions``
      - ``id``
      - ``peer_sub_id``
@@ -427,7 +431,7 @@ All names take the ``AWS_DB_PREFIX`` prefix (default ``demo_actingweb``).
    * - ``<prefix>_property_lookup_v2``
      - ``lookup_key``
      - —
-     - Lookup-table mode (the default since 3.13)
+     - Always (reverse lookup; also holds the readiness markers)
 
 Notes:
 
@@ -435,14 +439,35 @@ Notes:
   accessor had no auto-create guard, so long-lived deployments may never have
   created it. A missing suspensions table does not crash — it makes every
   target read as un-suspended (an ERROR is now logged on each failed check).
-- ``<prefix>_property_lookup`` (v1, no ``_v2``) is a **deprecated read-only
-  fallback**. It is never auto-created and is not required; drop it once the
-  backfill is verified.
+- ``<prefix>_property_lookup`` (v1, no ``_v2``) and the ``property-index``
+  GSI on ``<prefix>_properties`` are no longer read (the legacy reverse
+  lookup was removed in 3.16). Neither is created or required; drop them once
+  the backfill is verified (:doc:`../migration/v3.16`, "One reverse-lookup
+  mechanism").
+- ``<prefix>_property_lookup_v2`` also holds reserved rows that record
+  backfill readiness: ``#meta#backfill#<name>`` (one per indexed name) and
+  ``#meta#configured`` (the indexed-name set the last passing start saw).
+  Real keys are 64-character hex digests, so the reserved keys cannot
+  collide. The startup check reads them with one consistent ``BatchGetItem``
+  and writes them with ``PutItem`` (no ``DescribeTable``, no scan, except
+  a paged ``Scan`` of the properties table, run only when a name is not
+  marked, that stops at the first row belonging to an actor; it needs
+  ``dynamodb:Scan`` on the properties table, and without it the check is
+  refused as "could not be checked").
+  With auto-create off the runtime role therefore needs ``PutItem`` and
+  ``BatchGetItem`` on the v2 table in addition to the actions listed in
+  :doc:`../quickstart/configuration`.
+- An indexed property write is one ``TransactWriteItems`` of up to three
+  items (the property, its lookup row, and the old value's lookup row when
+  the value changed), about twice the write units of a plain put. Writes of
+  non-indexed names are plain puts. The transaction needs
+  ``dynamodb:PutItem`` and ``dynamodb:DeleteItem`` on both the properties
+  and the lookup table.
 - All auto-created tables use ``PAY_PER_REQUEST`` billing.
 
 Verify the precondition instead of reading source — run this with operator
 credentials (the ones that *do* have ``DescribeTable``), using the same
-``AWS_DB_PREFIX``/region/``USE_PROPERTY_LOOKUP_TABLE`` as the app::
+``AWS_DB_PREFIX``/region as the app::
 
     poetry run python -m actingweb.db.verify_tables
 
@@ -451,16 +476,6 @@ credentials (the ones that *do* have ``DescribeTable``), using the same
 
 It only reads — nothing is created. Exit code ``0`` means all present, ``1``
 means one or more missing (each named), ``2`` means the check could not run.
-
-.. important::
-
-   The reverse-lookup mode decides whether ``<prefix>_property_lookup_v2`` is
-   required, and the CLI can only read it from the environment. If your app
-   selects the mode with the fluent builder
-   (``with_legacy_property_index(...)``) rather than
-   ``USE_PROPERTY_LOOKUP_TABLE``, pass ``--legacy`` or ``--lookup-table``
-   explicitly — otherwise a correctly-configured legacy deployment is told
-   the v2 table is missing.
 
 PostgreSQL needs no equivalent: its schema is created by Alembic migrations
 (``alembic upgrade head``).
@@ -474,14 +489,12 @@ Index Strategy
   ``actors`` has a GSI on the ``creator`` field, ``trusts`` on the
   ``secret`` field (token lookups).
 - ``properties`` reverse lookups use the dedicated digest-keyed
-  ``property_lookup_v2`` table (default). Only tables created in the
-  deprecated legacy mode carry a GSI on ``value`` (2048-byte limit).
+  ``property_lookup_v2`` table; the properties table has no value GSI.
 
 **PostgreSQL:**
 
 - B-tree indexes on frequently queried columns:
   - ``CREATE INDEX idx_actors_creator ON actors(creator)``
-  - ``CREATE INDEX idx_properties_value ON properties(value)``
   - ``CREATE INDEX idx_trusts_secret ON trusts(secret)``
   - ``CREATE INDEX idx_attributes_ttl ON attributes(ttl_timestamp)`` (for cleanup)
 
@@ -522,7 +535,13 @@ Since 3.16 both backends answer a database fault the same way, and
   after the call, including a row that was already absent; a fault raises.
 - **Conditional operations keep their meaning.** ``delete_attr_conditional``,
   ``conditional_update_attr`` and the ``*_if_*`` methods answer True only
-  when *this* call changed the row, which single-use consumption needs.
+  when *this* call changed the row, which single-use consumption needs; a
+  fault answers False for the two attribute methods (a caller tells the two
+  apart with ``get_attr_strict``). ``create_attr_if_absent`` is the one
+  conditional write that **raises** ``DbError`` on a fault, because a retried
+  create must tell a lost race from an outage. A custom ``DbAttribute`` backend
+  implements it (see :doc:`../migration/v3.16`); two callers writing identical
+  data both get True, so a caller that needs one winner stores a nonce.
 - **Writes raise.** A ``create``, ``modify`` or ``set`` that faults raises;
   False is kept for the documented refusals (missing arguments or handle, an
   id that is taken).
@@ -552,7 +571,7 @@ whenever the ``ux_actors_creator`` index exists (see
 Creator uniqueness
 ~~~~~~~~~~~~~~~~~~
 
-With ``with_unique_creator()`` each backend holds one actor per creator other
+By default (``with_unique_creator()``; ``with_unique_creator(False)`` opts out) each backend holds one actor per creator other
 than ``trustee``, ``creator`` and the empty string (the rules are in
 ``actingweb.db.creator_rules``):
 
@@ -580,8 +599,8 @@ Both implement ``replace_creator_holder`` (the sign-in's atomic swap from a
 consistent lookup of the one holder) and ``release_stale_creator`` (the
 sign-in's repair of a record whose actor is gone or renamed; PostgreSQL
 has no separate record and returns False). ``python -m
-actingweb.db.verify_tables --unique-creator`` includes the ``creators``
-table.
+actingweb.db.verify_tables`` includes the ``creators`` table by default
+(``--no-unique-creator`` for an application that opts out).
 
 Data Types
 ~~~~~~~~~~

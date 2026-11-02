@@ -143,10 +143,6 @@ than catch and fold it.
     `AwProxy(peer_target={"baseuri", "secret"})`, but `AwProxy.__init__`
     reads `peer_target["id"]`. The `KeyError` is caught, so the async peer
     notification looks like it always fails. Not reproduced.
-  - **The property handlers fall back to the legacy grant on a non-`DbError`
-    from the evaluator** (`handlers/properties.py`, "Fall back to legacy
-    authorization on errors"). Older than 3.16, and since entry 30 no
-    database fault reaches it; denying would be the fail-closed choice.
   - **DynamoDB `DbSubscription.modify` saves the whole item**, so a
     concurrent `modify` of another field writes back a stale `seqnr`. Only
     the subscriber's own rows still pass `seqnr` through `modify`; the

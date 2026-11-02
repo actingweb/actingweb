@@ -10,6 +10,7 @@ to validate against.
 import unittest
 from unittest.mock import Mock, patch
 
+from actingweb.config import Config
 from actingweb.handlers.mcp import MCPHandler
 from actingweb.interface.hooks import HookRegistry
 from actingweb.mcp.decorators import mcp_tool
@@ -59,7 +60,7 @@ def _list_tools(handler: MCPHandler, actor: FakeActor) -> list:
 class TestToolSchemaFieldSerialisation(unittest.TestCase):
     def setUp(self) -> None:
         self.actor = FakeActor()
-        self.handler = MCPHandler()
+        self.handler = MCPHandler(config=Config(mcp=True, unique_creator=False))
 
     def test_title_and_output_schema_are_serialised(self) -> None:
         hooks = HookRegistry()

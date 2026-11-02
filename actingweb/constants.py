@@ -276,3 +276,9 @@ def _validate_ttl_constants() -> None:
 
 
 _validate_ttl_constants()
+
+
+# Response header carrying the stable machine-readable error code of an SPA
+# token-endpoint or fault answer (the body's ``code`` key repeats it). A 401
+# that carries it is the library's and final; one without it is not.
+ERROR_CODE_HEADER = "X-ActingWeb-Error"

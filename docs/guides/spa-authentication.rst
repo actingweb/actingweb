@@ -843,12 +843,22 @@ little of either.
    grace. A timer does not run while the device sleeps, so a request parked
    across a sleep is already past the grace when the client wakes; the
    timeout helps only while the device is awake.
-7. **Treat a 401 on refresh as final**: clear the session and send the user
-   to sign in. Do not retry the same token. **A 503 is not final**: it means
-   the server could not reach its token store. Keep the token and retry
-   after the ``Retry-After`` seconds; the token is either untouched or, if
-   the server consumed it before the fault, rotates again on a retry inside
-   the grace period.
+7. **A 401 on refresh that carries ``X-ActingWeb-Error`` is the library's
+   and final**: clear the session and send the user to sign in; do not retry
+   the same token. A 401 **without** that header is not the library's (a
+   gateway or proxy produced it): keep the session and retry. Read the
+   header's value, or the body's ``code``, for the message to show. The codes
+   a refresh can answer: ``invalid_grant`` (the token expired, is unknown, or
+   came back after the reuse window: show "session expired") and
+   ``refresh_token_reused`` (a used token came back inside the detection
+   window and its family was revoked: show "signed out for security").
+   **A 503 is not final**: it means the server could not reach its token
+   store (``temporarily_unavailable``). Keep the token and retry after the
+   ``Retry-After`` seconds; the token is either untouched or, if the server
+   consumed it before the fault, rotates again on a retry inside the grace
+   period. A gateway that strips ``X-ActingWeb-Error`` makes the client read
+   a library 401 as a gateway's and keep the session; the body ``code`` still
+   arrives, and the gateway's exposed headers should list the header too.
 
 Mobile App Authentication
 -------------------------
@@ -1014,9 +1024,9 @@ A store fault answers **503** with ``Retry-After: 5`` and
 revoked, no cookie was cleared, and the presented token is still the handle for
 the retry. Retry promptly: if the access token expires before the retry, send
 the refresh token as well, which anchors on a 14-day row. A cross-origin SPA
-can read ``Retry-After`` because the endpoint lists it in
-``Access-Control-Expose-Headers``; a proxy that strips that header leaves the
-client to a fixed delay.
+can read ``Retry-After`` and ``X-ActingWeb-Error`` because the endpoint lists
+both in ``Access-Control-Expose-Headers``; a proxy that strips ``Retry-After``
+leaves the client to a fixed delay.
 
 .. note::
 
@@ -1539,7 +1549,8 @@ An unknown token also answers 200. A token store fault answers **503** with
    {
        "error": true,
        "status_code": 503,
-       "message": "Token store temporarily unavailable; retry"
+       "message": "Token store temporarily unavailable; retry",
+       "code": "temporarily_unavailable"
    }
 
 The stored provider token is cleared for the actor after a confirmed
@@ -1721,17 +1732,69 @@ cookie or access token is issued:
        "message": "Authentication rejected"
    }
 
-Every other error from this endpoint (and from ``GET /oauth/email``) carries
-the same shape without a ``code`` field, for any ``Accept: application/json``
-request:
+The email endpoints keep their own ``code`` values (the two above). Every
+other error the SPA token endpoints answer carries a ``code`` from the table
+below, repeated in the ``X-ActingWeb-Error`` response header:
 
 .. code-block:: json
 
    {
        "error": true,
        "status_code": 400,
-       "message": "..."
+       "message": "...",
+       "code": "invalid_request"
    }
+
+.. list-table:: SPA error codes
+   :header-rows: 1
+   :widths: 24 12 64
+
+   * - ``code`` (and header)
+     - Status
+     - Meaning
+   * - ``invalid_request``
+     - 400
+     - A body or parameter was rejected (invalid JSON, a missing field, an
+       unknown provider, a bad ``redirect_uri``, an unknown ``token_delivery``
+       or ``prompt``).
+   * - ``unsupported_grant_type``
+     - 400
+     - ``grant_type`` is not one the endpoint serves.
+   * - ``invalid_grant``
+     - 401 (400 for an expired ticket)
+     - The presented credential is rejected: an expired, unknown or
+       past-window-reused refresh token, a failed provider exchange, an
+       invalid ``id_token`` or mobile ticket, a wrong passphrase. A 401 with
+       this header is final.
+   * - ``refresh_token_reused``
+     - 401
+     - A used refresh token came back inside the detection window; its
+       rotation family was revoked. Final; sign the user out.
+   * - ``access_denied``
+     - 403
+     - Authentication was rejected by the application's ``oauth_success``
+       hook, or the passphrase grant is used outside ``devtest``.
+   * - ``not_found``
+     - 404
+     - An unknown SPA endpoint, session or (passphrase grant) actor. The
+       passphrase grant's 404 for an unknown actor and 401 for a wrong
+       passphrase pre-date the codes and are ``devtest``-only.
+   * - ``server_error``
+     - 500
+     - The server's configuration or an unexpected failure (OAuth
+       configuration, actor creation, authorization URL).
+   * - ``temporarily_unavailable``
+     - 503
+     - The token store faulted; retry after ``Retry-After``. The database
+       fault handler answers the same code (its 500 for a permanent storage
+       error is ``internal_error``, a storage fault, not ``server_error``).
+
+Answers that ``/oauth/logout`` and ``/oauth/revoke`` produce in the OAuth2
+endpoints handler (other than the token-store 503) keep their own shape and carry
+no code, so treat the header as the library's marker only on the endpoints listed
+here and on the fault handler's answers. The database fault handler's answers on
+the SPA and ``/oauth/*`` paths carry the header too (``temporarily_unavailable``, ``conflict``, ``internal_error``),
+and the same two headers are exposed through CORS.
 
 Troubleshooting
 ---------------
@@ -1809,7 +1872,8 @@ If you see this error AND the session is revoked (401 on subsequent requests), i
 - Only the affected rotation family is revoked; the user re-authenticates that
   session. Other devices/sessions continue working.
 - Treat the 401 as "session expired": route to the login screen. Do not leave the
-  app on a blank page.
+  app on a blank page. The 401 carries ``X-ActingWeb-Error: refresh_token_reused``
+  (show "signed out for security"); a reuse past the window is ``invalid_grant``.
 
 "CORS error"
 ~~~~~~~~~~~~

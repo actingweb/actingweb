@@ -12,17 +12,22 @@ Start here
 ==========
 
 3.16 closes a squat on the actor factory, makes a database fault an error
-instead of a guess, makes ``with_unique_creator()`` a guarantee the database
-enforces, and adds ``prompt`` to the SPA sign-in. Most applications need to
+instead of a guess, makes creator uniqueness (on by default) a guarantee the
+database enforces, and adds ``prompt`` to the SPA sign-in. Most applications need to
 check only the first three items and item 11.
 
 .. warning::
 
-   **An application that calls ``with_unique_creator()`` does not start on
-   3.16 until you have run ``actingweb-unique-creators``** (the demo
-   application and ``actingweb_mcp`` both do). Run `Step 0`_ against the
-   production database before the deploy; the application otherwise raises
-   ``UniqueCreatorNotReady`` from ``integrate_flask`` / ``integrate_fastapi``.
+   **An application does not start on 3.16 until you have run
+   ``actingweb-unique-creators``,** because creator uniqueness is on by
+   default (the demo application and ``actingweb_mcp`` already used it). Run
+   `Step 0`_ against the production database before the deploy; the
+   application otherwise raises ``UniqueCreatorNotReady`` from
+   ``integrate_flask`` / ``integrate_fastapi``. A **fresh** deployment starts
+   once (which creates the tables and stops), runs
+   ``actingweb-unique-creators enable --apply``, and starts again; with no
+   actors yet the refusal says so in one line. To keep the old behaviour, call
+   ``with_unique_creator(False)``.
 
 1. **An actor created before 3.16 with no marker is cleaned at its first
    sign-in after the upgrade.** That covers the factory, the email form,
@@ -107,6 +112,15 @@ check only the first three items and item 11.
     except that a v2 list's ``verify()`` report gains ``key_rows``,
     ``dangling_key_rows``, ``duplicate_keyed_items`` and
     ``unkeyed_keyed_items``. Deploy 3.16 everywhere before the first call.
+17. **One reverse-lookup mechanism, and a startup check for it** (see
+    `One reverse-lookup mechanism`_). The legacy ``property-index`` GSI path,
+    the v1 lookup table, the PostgreSQL value scan and
+    ``USE_PROPERTY_LOOKUP_TABLE`` are gone. A deployment whose properties hold
+    data but whose indexed names were never backfilled does not start:
+    ``check_ready()`` raises ``PropertyLookupNotReady`` naming
+    ``actingweb-property-lookup backfill --apply``. An indexed property write
+    whose lookup row cannot be written now fails with ``DbError`` (503).
+    ``DbProperty`` and ``DbPropertyList`` require ``indexed_properties``.
 
 
 What changed and why
@@ -454,6 +468,125 @@ the returned count against the number of subscribers.
 - A hook that must degrade instead of failing the request on a fault: catch
   ``DbError`` inside the hook.
 
+One reverse-lookup mechanism
+----------------------------
+
+3.13 made the lookup table the default and kept the older mechanisms as
+fallbacks. 3.16 removes them.
+
+**What was removed**
+
+- The ``property-index`` GSI path on DynamoDB and the ``PropertyLegacy`` and
+  ``PropertyIndex`` models; the v1 ``<prefix>_property_lookup`` table and its
+  read fallback; the unindexed ``properties`` value scan on PostgreSQL.
+- ``Config.use_lookup_table``, the ``USE_PROPERTY_LOOKUP_TABLE`` variable, the
+  ``use_lookup_table`` constructor arguments, ``--legacy`` and
+  ``--lookup-table`` on ``python -m actingweb.db.verify_tables``.
+- ``ActingWebApp.with_legacy_property_index()`` stays as a tombstone that
+  raises ``RuntimeError``, and ``Config`` refuses
+  ``USE_PROPERTY_LOOKUP_TABLE=false`` and ``use_lookup_table=False`` at
+  configure time. Both messages point here. A true value is ignored with a
+  ``DeprecationWarning``. Delete the setting.
+
+**The startup refusal**
+
+``check_ready()`` (called by ``integrate_flask`` and ``integrate_fastapi``)
+checks every configured indexed name. A name is ready when it carries a
+backfill-complete marker, or when the properties table holds no row of an
+actor's own (a fresh store marks itself on the first start; the library's
+own ``_actingweb_*`` system-actor rows do not count). A name with data and no marker is
+refused:
+
+.. code-block:: text
+
+    PropertyLookupNotReady: Reverse lookup is not ready for the indexed
+    properties email: the properties table holds data but no backfill-complete
+    marker covers them ... Run 'actingweb-property-lookup report', then
+    'actingweb-property-lookup backfill --apply' ...
+
+The check also records the indexed-name set on a passing start. A name that
+was marked, dropped from ``with_indexed_properties()`` for a deploy and put
+back is refused again, because values written while it was unindexed have no
+lookup row. A store that cannot be read (missing lookup table, missing
+permission, connection error) is refused with "could not be checked" naming
+the table. ``check_ready()`` pre-warms DynamoDB tables first and reports this
+and the creator-uniqueness refusal together in one ``StoreNotReady``; catch
+``StoreNotReady`` (the base class of ``UniqueCreatorNotReady`` and
+``PropertyLookupNotReady``) where you caught only ``UniqueCreatorNotReady``.
+An application that never uses reverse lookup calls
+``with_indexed_properties([])``. While the list is empty nothing is recorded,
+so a name dropped that way and restored later is not caught: run
+``actingweb-property-lookup backfill --apply`` for it first.
+
+The recorded set is the last passing start's, whichever process made it (or
+the union a ``backfill --apply`` or ``mark-complete --apply`` wrote), so
+every process that shares a store must configure the same names. A process
+with a non-empty indexed set that lacks a name (an old version during a rollout that adds one) writes that
+name unindexed and records the smaller set; the refusal then names the
+recorded set. Adding a name: deploy, run ``backfill --apply``, start the new
+version, and run ``backfill --apply`` once more after the old version is gone;
+until then an old-version start can make new starts refuse again
+(``docs/quickstart/configuration.rst``).
+
+**What to run**
+
+With the application's environment (``DATABASE_BACKEND``, ``AWS_DB_PREFIX``,
+``INDEXED_PROPERTIES``, credentials). The command reads the indexed names from
+``INDEXED_PROPERTIES`` or the library default; if the application sets them with
+``with_indexed_properties()``, pass the same names with ``--properties a,b`` to
+every subcommand. ``backfill`` skips property rows whose actor no longer exists
+and counts them, and its checkpoint file (``--checkpoint-file``, default
+relative to the working directory) is kept only after a fault:
+
+.. code-block:: bash
+
+    actingweb-property-lookup report                  # read only
+    actingweb-property-lookup backfill --apply        # rows, then markers
+    actingweb-property-lookup mark-complete --apply   # ran the 3.13 backfill
+    actingweb-property-lookup unmark --apply          # roll a name back
+
+``backfill`` marks a name only when its pass finished with no fault and no
+collision (two actors sharing an indexed value); the other names are still
+marked. ``mark-complete`` refuses a name that has property rows and no
+lookup rows unless ``--force``. The marker is an operator assertion that the
+backfill ran: after copying data into a store with a tool that bypasses the
+library, run ``backfill --apply`` again. ``scripts/backfill_property_lookup.py``
+remains as a shim that delegates (its ``--dry-run`` is the command's default;
+running without it means ``--apply``).
+
+**Storage changes**
+
+- *DynamoDB:* the markers are reserved rows in the existing
+  ``<prefix>_property_lookup_v2`` table (``#meta#backfill#<name>`` and
+  ``#meta#configured``); no new table. With auto-create off, the runtime role
+  also needs ``PutItem`` and ``BatchGetItem`` on that table. You can drop the
+  v1 ``<prefix>_property_lookup`` table and the ``property-index`` GSI on
+  ``<prefix>_properties`` once the backfill is verified; nothing reads them.
+- *PostgreSQL:* a new table ``property_lookup_backfill``. Run
+  ``alembic upgrade head`` (revision ``f6a7b8c9d0e1``) **before** the deploy,
+  or the startup check is refused as "could not be checked". The backfill
+  inserts in primary-key batches that commit alone; run it off-peak on a large
+  ``properties`` table.
+
+**An indexed write and its lookup row now commit together**
+
+Before 3.16 a DynamoDB indexed property write that could not write its
+lookup row logged ``LOOKUP_TABLE_SYNC_FAILED`` and succeeded, leaving a value
+that reverse lookup could never find (the legacy GSI had masked this for
+older deployments). Now the property and its lookup row are one
+``TransactWriteItems`` and a fault raises ``DbError`` (503), with nothing
+written. PostgreSQL already rolled the pair back together. A value another
+actor already holds is still a logged collision (``LOOKUP_COLLISION``), not a
+failure: the property is written and the first owner keeps the lookup row.
+An indexed write costs about twice the write units of a plain put on
+DynamoDB; writes of non-indexed names are unchanged.
+
+**Wrong prefix.** Markers written under a wrong ``AWS_DB_PREFIX`` land in
+that prefix's (empty) tables, and the real tables stay unmarked and are
+refused when the prefix is fixed. The maintenance command refuses to run
+when the actors or properties table does not exist, so a wrong prefix is
+never read as an empty store.
+
 Custom database backends
 ------------------------
 
@@ -469,7 +602,16 @@ module docstring of ``actingweb.db.protocols`` states:
 - answer ``True`` from a delete through a loaded handle when the row is gone,
   absent rows included;
 - keep ``delete_attr_conditional`` and ``conditional_update_attr`` answering
-  ``True`` only when that call changed the row;
+  ``True`` only when that call changed the row (and ``False`` on a fault: the
+  single-use consume step relies on it);
+- implement ``DbAttribute.create_attr_if_absent(actor_id, bucket, name, data,
+  timestamp=None, ttl_seconds=None) -> bool`` as one conditional write that
+  creates the row, or replaces one whose stored ``ttl_timestamp`` is in the
+  past, and answers ``True``; ``False`` when a live row (or another bucket's
+  row) holds the name; ``True`` when a lost condition leaves a JSON-equal
+  row (an SDK-retried create); ``ValueError`` for a missing
+  ``actor_id``, ``bucket`` or ``name``; ``DbError`` on a fault. This is
+  the one conditional write that raises on a fault;
 - implement ``DbSubscription.increment_seq(actor_id=None, peerid=None,
   subid=None)`` as one atomic update that returns the new sequence number
   (None when the row is gone). The library no longer writes ``previous + 1``
@@ -478,6 +620,20 @@ module docstring of ``actingweb.db.protocols`` states:
 
 A backend without ``strict`` fails with ``TypeError`` at its first call; one
 without ``increment_seq`` fails with ``AttributeError`` at its first diff.
+
+For reverse lookup (see `One reverse-lookup mechanism`_) a backend must also:
+
+- accept a keyword-only, required ``indexed_properties: list[str]`` in the
+  constructors of ``DbProperty`` and ``DbPropertyList`` and no
+  ``use_lookup_table`` (``actingweb.db.get_property`` and
+  ``get_property_list`` pass only ``indexed_properties``);
+- write an indexed property and its lookup row together or not at all, and
+  raise ``DbError`` from the property write when it cannot;
+- provide four module-level functions in its ``property_lookup`` module:
+  ``read_readiness(names)`` returning ``(marked names, recorded name set or
+  None)``, ``mark_backfilled(names)``, ``unmark(names)`` and
+  ``record_configured(names)``; a missing table or any other fault raises
+  ``DbError``.
 
 For creator uniqueness, ``DbActor`` must also:
 
@@ -496,6 +652,78 @@ For creator uniqueness, ``DbActor`` must also:
   actor_id)``, which removes a record naming an actor that is gone or holds
   another creator and returns whether it did (a backend whose uniqueness
   lives on the actor row, as PostgreSQL's does, returns False).
+
+Direct ``check_and_verify_auth()`` callers
+------------------------------------------
+
+``check_and_verify_auth()``, ``check_and_verify_auth_async()`` and ``Auth()``
+take ``config`` as a **required keyword-only** argument. Before, an omitted
+``config`` silently built a default ``Config()``, whose library defaults
+(``devtest=True``, the demo host) are not the application's. A call without it
+raises ``TypeError: ... missing 1 required keyword-only argument: 'config'``;
+one that passed it positionally (``Auth(actor_id, "basic", config)``) raises
+``TypeError`` too. The documented examples already pass ``config=``. Separately,
+``Config(fqdn=..., proto=...)`` without ``oauth=`` now derives
+``oauth["redirect_uri"]`` from that host instead of the default one.
+
+Advertised option tags
+----------------------
+
+``/meta/actingweb/supported`` (``Config.aw_supported``) advertises what the
+application serves. ``sessions`` and ``onewaytrust`` are gone (no route; trust
+is always reciprocal), ``listproperties`` is added, ``www`` is listed only when
+the web UI is on and ``oauth`` only when a provider is configured. The value is
+computed from the configuration on every read, so ``with_mcp()`` and the other
+builder calls cannot leave it stale, and ``Config.aw_supported`` is **read-only**
+(an assignment raises ``AttributeError``). A peer that keyed on ``sessions`` or
+``onewaytrust`` finds neither; none that we know of does.
+
+Permission pattern escapes
+--------------------------
+
+A permission pattern now treats a backslash as an escape: ``\*``, ``\?`` and
+``\\`` are a literal ``*``, ``?`` and backslash, so a pattern that contains one
+changes meaning. The peer-permission cache and the callbacks' property filters
+used ``fnmatch`` and now use the evaluator's matcher: no ``[seq]`` character
+classes (a ``[`` is literal), case-sensitive (``fnmatch`` folded case on some
+platforms), and a pattern ending in ``://`` with no wildcard (``files://``) also
+matches what follows it, as it already did in the evaluator (before, a stored peer
+pattern ``files://`` matched only that exact name, and the callbacks' revoke
+deleted only the list of that name). The matcher is linear-time, so a peer-supplied pattern with many
+``*`` cannot hang a request. Check any rule you wrote that holds a backslash or
+``[``; none shipped, in the demo or in the docs does. See
+:doc:`../guides/access-control` ("Pattern syntax").
+
+``POST /mcp`` parse errors
+--------------------------
+
+A ``POST /mcp`` whose body is empty or not JSON now answers **400 with JSON-RPC
+``-32700 Parse error``** (``id: null``), before authentication. It used to be
+treated as an empty request. A well-formed request without credentials still gets
+the 401 challenge, so discovery works; only a client that probes with an empty
+body now sees 400 where it saw 401.
+
+SPA error codes
+---------------
+
+Every error the SPA token endpoints answer (``/oauth/spa/*``, ``/oauth/revoke``
+and ``/oauth/logout``) now carries a stable code, in the response header
+``X-ActingWeb-Error`` and in the JSON body's ``code`` key beside ``error: true``.
+The codes are ``invalid_request``, ``unsupported_grant_type``, ``invalid_grant``,
+``refresh_token_reused``, ``access_denied``, ``not_found``, ``server_error`` and
+``temporarily_unavailable``; the table is in :doc:`../guides/spa-authentication`.
+The database fault handler's answers on the SPA and ``/oauth/*`` paths carry the
+header too (``temporarily_unavailable``, ``conflict``, ``internal_error``), and
+``Access-Control-Expose-Headers`` on those answers now lists ``Retry-After`` and
+``X-ActingWeb-Error``.
+
+This is the predicate rule 7 of the SPA guide now uses: **a 401 on refresh that
+carries the header is the library's and final** (sign the user out); one without
+it is not the library's (a gateway's, say) and keeps the session. A client that
+treated every 401 as final is unaffected. The gateway in front of the application
+must pass the header through and, for a cross-origin browser, list it in its
+exposed headers; the body ``code`` arrives either way. The email endpoints
+(``/oauth/email``) keep their own ``code`` values.
 
 Creator uniqueness
 ------------------
@@ -523,11 +751,18 @@ actor back. In 3.16 the database holds one actor per creator:
 with ``@``) are lowercased before they are stored; provider ids such as
 ``apple:…`` compare exactly.
 
-The flag stays **off by default** in 3.16 and turns on at the next major.
+The flag is **on by default**. An application that cannot take the step
+below yet opts out with ``with_unique_creator(False)``, which keeps the
+duplicate-tolerant path (the adoption rules for several actors sharing a
+creator). Code that builds ``Config()`` and creates actors without
+``integrate_*`` should call ``ActingWebApp.check_ready()`` as an
+application does; ``BaseHandler`` no longer defaults its ``config``, so a
+handler built without one raises ``ValueError`` instead of enforcing a store
+that was never checked.
 
 .. _Step 0:
 
-**Step 0, for a deployment that runs the flag on.** Neither the index nor
+**Step 0, for every deployment that keeps the default.** Neither the index nor
 the table can be switched on while actors share a creator, so in order,
 with the application's environment (``DATABASE_BACKEND``, the database
 settings, ``AWS_DB_PREFIX``, credentials).

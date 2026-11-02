@@ -61,6 +61,34 @@ Choose the appropriate section based on your database backend:
   automatically by the library; use pg_cron or scheduled cleanup scripts for
   the remaining temporary data (OAuth sessions, orphaned index entries)
 
+Reverse-Lookup Readiness and Backfill
+-------------------------------------
+
+Reverse lookup (find an actor by an indexed property value) needs one row in
+the lookup table per indexed value. A deployment that held data before the
+table existed, or before a name was indexed, has values with no lookup row.
+``actingweb-property-lookup`` backfills them and records that it did, per
+indexed name; the application's startup check refuses a store whose names are
+not all marked.
+
+.. code-block:: bash
+
+    # With the same environment as the application:
+    actingweb-property-lookup report              # rows and markers per name
+    actingweb-property-lookup backfill            # dry run
+    actingweb-property-lookup backfill --apply    # write rows, then mark
+    actingweb-property-lookup mark-complete --apply   # already backfilled (3.13)
+    actingweb-property-lookup unmark --apply      # roll a name back
+
+On DynamoDB the backfill scans the properties table (``--read-rcu`` and
+``--rps`` bound reads and writes, ``--segments`` sets parallelism, and a
+checkpoint file resumes an interrupted run). On PostgreSQL it inserts in
+primary-key batches that commit alone, so run it off-peak on a large table
+(``--batch-size``, ``--pause``). Both are idempotent. After a verified run on
+DynamoDB, the old ``<prefix>_property_lookup`` (v1) table and the
+``property-index`` GSI on the properties table are no longer read and can be
+dropped. See :doc:`../migration/v3.16` ("One reverse-lookup mechanism").
+
 DynamoDB Billing Mode for Auto-Created Tables
 ---------------------------------------------
 

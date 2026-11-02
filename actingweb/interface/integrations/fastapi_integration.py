@@ -24,6 +24,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from ... import request_context, runtime_context
 from ...aw_web_request import AWWebObj
+from ...constants import ERROR_CODE_HEADER
 from ...db.exceptions import DbError
 from ...handlers import bot, factory, mcp, services
 from ...log_summary import summarize_payload
@@ -2337,6 +2338,10 @@ class FastAPIIntegration(BaseActingWebIntegration):
         retry_after = getattr(webobj.response, "headers", {}).get("Retry-After")
         if retry_after:
             cors_headers["Retry-After"] = str(retry_after)
+        # The error code of an error answer (the body's ``code`` repeats it).
+        error_code = getattr(webobj.response, "headers", {}).get(ERROR_CODE_HEADER)
+        if error_code:
+            cors_headers[ERROR_CODE_HEADER] = str(error_code)
 
         response = JSONResponse(
             content=result, headers=cors_headers, status_code=status_code
@@ -2395,9 +2400,13 @@ class FastAPIIntegration(BaseActingWebIntegration):
 
             if not session_data:
                 return JSONResponse(
-                    content={"error": True, "message": "Session not found or expired"},
+                    content={
+                        "error": True,
+                        "message": "Session not found or expired",
+                        "code": "not_found",
+                    },
                     status_code=404,
-                    headers=cors_headers,
+                    headers={**cors_headers, ERROR_CODE_HEADER: "not_found"},
                 )
 
             # Extract the token data that was stored
@@ -2408,9 +2417,13 @@ class FastAPIIntegration(BaseActingWebIntegration):
                 # actor_id (and a success session always carries access_token
                 # alongside it), so this should be unreachable in practice.
                 return JSONResponse(
-                    content={"error": True, "message": "Invalid session data"},
+                    content={
+                        "error": True,
+                        "message": "Invalid session data",
+                        "code": "invalid_request",
+                    },
                     status_code=400,
-                    headers=cors_headers,
+                    headers={**cors_headers, ERROR_CODE_HEADER: "invalid_request"},
                 )
 
             # Return the session data
@@ -2434,9 +2447,13 @@ class FastAPIIntegration(BaseActingWebIntegration):
         except Exception as e:
             self.logger.error(f"Error retrieving SPA session: {e}")
             return JSONResponse(
-                content={"error": True, "message": "Failed to retrieve session"},
+                content={
+                    "error": True,
+                    "message": "Failed to retrieve session",
+                    "code": "server_error",
+                },
                 status_code=500,
-                headers=cors_headers,
+                headers={**cors_headers, ERROR_CODE_HEADER: "server_error"},
             )
 
     async def _handle_bot_request(self, request: Request) -> Response:
@@ -2486,9 +2503,9 @@ class FastAPIIntegration(BaseActingWebIntegration):
                 if webobj.request.body:
                     data = json.loads(webobj.request.body)
                 else:
-                    data = {}
+                    data = mcp.UNPARSEABLE_BODY
             except (json.JSONDecodeError, ValueError):
-                data = {}
+                data = mcp.UNPARSEABLE_BODY
 
             result = await handler.post_async(data)
         else:

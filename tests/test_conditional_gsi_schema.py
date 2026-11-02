@@ -1,12 +1,11 @@
 """
-Conditional GSI schema: the properties-table shape must match the
-configured reverse-lookup mode.
+Table-creation shape: ``ensure_table`` creates a table once and never alters
+a live one ("first creator wins").
 
-Lookup-table mode creates the table WITHOUT the legacy value-keyed
-``property-index`` GSI (no write/storage amplification, no 2048-byte
-GSI-key write rejection on real AWS); legacy mode creates it WITH the
-GSI so the legacy reverse-lookup path works. Existing tables are never
-altered.
+The properties table is created WITHOUT the legacy value-keyed
+``property-index`` GSI (the legacy reverse lookup was removed in 3.16; the
+clone models below keep a GSI'd variant only to exercise ``ensure_table``'s
+no-alter rule). Existing tables are never altered.
 
 These tests use throwaway clone models with unique table names — the
 shared unit-test properties table must never be deleted or recreated
@@ -36,7 +35,7 @@ def _require_dynamodb():
 
 def _make_clone_models(table_name: str):
     """Build GSI-less and GSI'd model clones bound to the same table name,
-    mirroring actingweb.db.dynamodb.property.Property / PropertyLegacy."""
+    mirroring the old Property / PropertyLegacy shapes."""
 
     clone_table = table_name
     clone_region = os.getenv("AWS_DEFAULT_REGION", "us-west-1")
@@ -138,15 +137,13 @@ def test_first_creator_wins_shape(clone_models):
 
 
 class TestAccessorWiring:
-    """DbProperty/DbPropertyList must ensure the mode-appropriate class."""
+    """DbProperty/DbPropertyList always ensure the GSI-less Property table."""
 
     @pytest.mark.parametrize("accessor_name", ["DbProperty", "DbPropertyList"])
-    @pytest.mark.parametrize("use_lookup", [True, False])
-    def test_mode_selects_schema_class(self, accessor_name, use_lookup):
+    def test_accessors_ensure_the_property_table(self, accessor_name):
         from actingweb.db.dynamodb import property as prop_mod
 
         with mock.patch.object(prop_mod, "ensure_table") as ensure_spy:
             accessor_cls = getattr(prop_mod, accessor_name)
-            accessor_cls(use_lookup_table=use_lookup, indexed_properties=["email"])
-        expected = prop_mod.Property if use_lookup else prop_mod.PropertyLegacy
-        ensure_spy.assert_called_once_with(expected)
+            accessor_cls(indexed_properties=["email"])
+        ensure_spy.assert_called_once_with(prop_mod.Property)

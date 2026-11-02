@@ -389,6 +389,53 @@ class Attributes:
 
         return success
 
+    def create_attr_if_absent(
+        self,
+        name: str | None = None,
+        data: Any | None = None,
+        timestamp: Any | None = None,
+        ttl_seconds: int | None = None,
+    ) -> bool:
+        """Create an attribute only if no live row holds ``name`` (atomic).
+
+        True means this call won: it created the row or replaced an expired
+        one (or the stored row already holds JSON-equal data, an SDK-retried
+        create that landed). False means a live row holds the name, or
+        another bucket owns the key; a later ``get_attr(name)`` on this
+        instance then reads the winner's row. Two callers writing identical
+        data both win, so a caller that needs exactly one winner puts a
+        per-call nonce in ``data``. Read the row back with the backend's
+        ``get_attr_strict`` to see the same expiry rule (``get_attr`` returns
+        expired rows). See ``DbAttributeProtocol.create_attr_if_absent``.
+
+        Raises:
+            ValueError: ``name`` is missing, or the store is not loaded.
+            DbError: on a backend fault (not False).
+        """
+        if not name:
+            raise ValueError("create_attr_if_absent needs a name")
+        if not self.actor_id or not self.bucket or not self.dbprop:
+            raise ValueError("create_attr_if_absent needs a loaded attribute store")
+
+        won = self.dbprop.create_attr_if_absent(
+            actor_id=self.actor_id,
+            bucket=self.bucket,
+            name=name,
+            data=data,
+            timestamp=timestamp,
+            ttl_seconds=ttl_seconds,
+        )
+        if self.data is None:
+            self.data = {}
+        if won:
+            self.data[name] = {"data": data, "timestamp": timestamp}
+        else:
+            # The cache must not keep a miss: the next get_attr(name) reads
+            # the winner's row through.
+            self.data.pop(name, None)
+            self._bucket_loaded = False
+        return won
+
     def delete_attr(self, name: str | None = None) -> bool:
         if not name:
             return False

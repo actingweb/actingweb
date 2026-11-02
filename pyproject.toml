@@ -38,6 +38,7 @@ actingweb-migrate-property-lists = "actingweb.maintenance.migrate_property_lists
 actingweb-verify-orphans = "actingweb.maintenance.verify_orphans:main"
 actingweb-mark-actors-vouched = "actingweb.maintenance.mark_actors_vouched:main"
 actingweb-unique-creators = "actingweb.maintenance.unique_creators:main"
+actingweb-property-lookup = "actingweb.maintenance.property_lookup:main"
 
 [tool.poetry.dependencies]
 python = "^3.11"

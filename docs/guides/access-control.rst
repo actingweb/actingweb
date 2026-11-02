@@ -292,6 +292,30 @@ A pattern must match the whole identifier, and ``*`` and ``?`` match a
 newline like any other character. An identifier that contains a control
 character is always denied, whatever the rules say.
 
+Pattern syntax
+~~~~~~~~~~~~~~
+
+One matcher serves the permission evaluator, the peer-permission cache and the
+callbacks' property filters, so a peer and the evaluator agree on what a
+pattern means:
+
+* ``*`` any characters (including none), ``?`` exactly one character.
+* ``\*``, ``\?`` and ``\\`` are a literal ``*``, ``?`` and backslash. A backslash
+  before any other character, or at the end of the pattern, is a literal
+  backslash. ``a\*b`` therefore matches ``a*b`` and nothing else.
+* Matching is **case-sensitive**.
+* There are **no character classes**: ``[abc]`` matches the five characters
+  ``[abc]``.
+* A pattern ending in ``://`` with no *unescaped* wildcard is matched as that
+  pattern plus ``*`` (``notes://`` matches ``notes://work``).
+* Matching is linear in the pattern and the target: a pattern of many ``*``
+  cannot make the evaluator hang.
+
+Before 3.16 a backslash in a permission pattern was a plain character, and the
+callbacks and peer-permission filters used ``fnmatch`` (character classes,
+platform case folding). See :doc:`../migration/v3.16` ("Permission pattern
+escapes").
+
 Path Patterns
 -------------
 
@@ -747,7 +771,7 @@ ActingWeb applications supporting the unified access control system automaticall
    GET /myapp/actor123/meta/actingweb/supported
    
    # Response includes:
-   www,oauth,callbacks,trust,onewaytrust,subscriptions,actions,resources,methods,sessions,nestedproperties,trustpermissions
+   actions,callbacks,listproperties,methods,nestedproperties,oauth,resources,subscriptionbatch,subscriptionresync,subscriptions,trust,trustpermissions,www
 
 The presence of ``trustpermissions`` indicates support for:
 

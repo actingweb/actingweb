@@ -166,6 +166,8 @@ class TestColdStartDescribeTableBudget:
         # a model is sometimes right; doing it without noticing is not.
         # If this fails because you added one, update the count AND
         # confirm the addition against that decision.
+        # (Nine: the v2 lookup table was already counted in lookup mode,
+        # which is now the only mode.)
         assert len(models) == 9, sorted(m.__name__ for m in models)
         with _spy_control_plane(models) as spies:
             _exercise_all_paths(config, actor_id)
@@ -209,7 +211,5 @@ class TestColdStartDescribeTableBudget:
             for _ in range(20):
                 get_property(config)
 
-        property_model = next(
-            m for m in models if m.__name__ in ("Property", "PropertyLegacy")
-        )
+        property_model = next(m for m in models if m.__name__ == "Property")
         assert spies[property_model][0].call_count <= 1

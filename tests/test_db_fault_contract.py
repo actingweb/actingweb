@@ -103,7 +103,7 @@ PG_READS: list[tuple[str, str, str, dict[str, Any], Any]] = [
 def _pg_instance(module: Any, cls_name: str) -> Any:
     cls = getattr(module, cls_name)
     if cls_name in ("DbProperty", "DbPropertyList"):
-        return cls(use_lookup_table=True, indexed_properties=["email"])
+        return cls(indexed_properties=["email"])
     return cls()
 
 
@@ -135,8 +135,12 @@ class TestPostgresReadFaults:
 class TestPostgresStrictOnlyReads:
     def test_reverse_lookup_fault_raises(self) -> None:
         module = _pg_module("property")
-        obj = module.DbProperty(use_lookup_table=False, indexed_properties=["email"])
-        with mock.patch.object(module, "get_connection", _pg_down):
+        lookup = _pg_module("property_lookup")  # the reverse lookup reads here
+        obj = module.DbProperty(indexed_properties=["email"])
+        with (
+            mock.patch.object(module, "get_connection", _pg_down),
+            mock.patch.object(lookup, "get_connection", _pg_down),
+        ):
             with pytest.raises(DbError):
                 obj.get_actor_id_from_property(name="email", value="x@example.com")
             assert (
@@ -265,7 +269,7 @@ class TestPostgresPropertyRollback:
     def test_set_with_a_failed_lookup_sync_raises_and_never_commits(self) -> None:
         module = _pg_module("property")
         conn = _FakeConnection(fail_on="INSERT INTO property_lookup")
-        obj = module.DbProperty(use_lookup_table=True, indexed_properties=["email"])
+        obj = module.DbProperty(indexed_properties=["email"])
         with (
             mock.patch.object(module, "get_connection", lambda: conn),
             mock.patch.object(obj, "get", return_value=None),
@@ -279,7 +283,7 @@ class TestPostgresPropertyRollback:
     ) -> None:
         module = _pg_module("property")
         conn = _FakeConnection(fail_on="DELETE FROM property_lookup")
-        obj = module.DbPropertyList(use_lookup_table=True, indexed_properties=["email"])
+        obj = module.DbPropertyList(indexed_properties=["email"])
         obj.actor_id = "a"
         with mock.patch.object(module, "get_connection", lambda: conn):
             with pytest.raises(DbError):
@@ -471,21 +475,10 @@ class TestDynamoReadFaults:
                 m.DbPropertyLookup().get(property_name="email", value="x", strict=False)
                 is None
             )
-        with mock.patch.object(m.PropertyLookup, "get", _raises):
-            with pytest.raises(DbError):
-                m.DbPropertyLookup().get_v1(property_name="email", value="x")
-
-    def test_v1_missing_table_is_still_none(self) -> None:
-        m = _ddb()["property_lookup"]
-        missing = Exception("Requested resource not found (ResourceNotFound)")
-        with mock.patch.object(m.PropertyLookup, "get", side_effect=missing):
-            assert m.DbPropertyLookup().get_v1(property_name="email", value="x") is None
 
     def test_reverse_lookup_fault_raises(self) -> None:
         m = _ddb()
-        db = m["property"].DbProperty(
-            use_lookup_table=True, indexed_properties=["email"]
-        )
+        db = m["property"].DbProperty(indexed_properties=["email"])
         with mock.patch.object(m["property_lookup"].PropertyLookupV2, "get", _raises):
             with pytest.raises(DbError):
                 db.get_actor_id_from_property(name="email", value="x")
@@ -496,7 +489,7 @@ class TestDynamoReadFaults:
 
     def test_property_list_fetch_fault(self) -> None:
         m = _ddb()["property"]
-        db = m.DbPropertyList(use_lookup_table=True, indexed_properties=["email"])
+        db = m.DbPropertyList(indexed_properties=["email"])
         with mock.patch.object(m.Property, "query", _faults_mid_page([])):
             with pytest.raises(DbError):
                 db.fetch(actor_id="a")

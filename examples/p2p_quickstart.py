@@ -15,6 +15,11 @@ exercise the same code.
 
 Run this file directly against a locally running server (see the guide's
 "Run it" step) to see the full flow end-to-end.
+
+First run on a fresh database: creator uniqueness is on by default, so the
+first start creates the tables and stops with ``UniqueCreatorNotReady``. Run
+``actingweb-unique-creators enable --apply`` and start again. (Add
+``.with_unique_creator(False)`` to the app to opt out.)
 """
 
 import os

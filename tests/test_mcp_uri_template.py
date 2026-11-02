@@ -8,6 +8,7 @@ and the handler's legacy ``uri_pattern`` metadata was applied with
 import unittest
 from unittest.mock import Mock, patch
 
+from actingweb.config import Config
 from actingweb.handlers.mcp import MCPHandler
 from actingweb.interface.hooks import HookRegistry
 from actingweb.mcp.decorators import mcp_resource
@@ -51,7 +52,7 @@ class TestLegacyUriPatternDispatch(unittest.TestCase):
         # no parameter for it.
         a_resource._mcp_metadata["uri_pattern"] = r"legacy://v"  # type: ignore[attr-defined]
         hooks.register_method_hook("a_resource", a_resource)
-        handler = MCPHandler()
+        handler = MCPHandler(config=Config(mcp=True, unique_creator=False))
         handler.hooks = hooks
         return handler
 

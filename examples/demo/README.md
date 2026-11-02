@@ -65,9 +65,9 @@ export AWS_DB_HOST=http://localhost:8001 AWS_DB_PREFIX=demoqa \
   AWS_ACCESS_KEY_ID=local AWS_SECRET_ACCESS_KEY=local AWS_DEFAULT_REGION=us-east-1
 export PORT=5055 APP_HOST_FQDN=localhost:5055 APP_HOST_PROTOCOL=http:// \
   DEMO_QA_BASIC_AUTH=true
-# Once per fresh database: the first start creates the tables and stops with
-# UniqueCreatorNotReady (the demo runs with_unique_creator()); enforce
-# uniqueness, then start again.
+# The sequence for every fresh deployment, not only the demo: creator
+# uniqueness is on by default, so the first start creates the tables and
+# stops with UniqueCreatorNotReady; enforce uniqueness, then start again.
 poetry run python examples/demo/application.py
 poetry run actingweb-unique-creators enable --apply
 poetry run python examples/demo/application.py

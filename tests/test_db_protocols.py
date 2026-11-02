@@ -59,13 +59,17 @@ class TestPhase2ProtocolCompliance:
     def test_property_protocol_compliance(self, backend: str) -> None:
         """Verify DbProperty implements DbPropertyProtocol."""
         mod = importlib.import_module(f"actingweb.db.{backend}.property")
-        instance = mod.DbProperty()
+        instance = mod.DbProperty(
+            indexed_properties=["oauthId", "email", "externalUserId"]
+        )
         assert isinstance(instance, DbPropertyProtocol)
 
     def test_property_list_protocol_compliance(self, backend: str) -> None:
         """Verify DbPropertyList implements DbPropertyListProtocol."""
         mod = importlib.import_module(f"actingweb.db.{backend}.property")
-        instance = mod.DbPropertyList()
+        instance = mod.DbPropertyList(
+            indexed_properties=["oauthId", "email", "externalUserId"]
+        )
         assert isinstance(instance, DbPropertyListProtocol)
 
 
@@ -133,6 +137,32 @@ class TestPhase4ProtocolCompliance:
         mod = importlib.import_module(f"actingweb.db.{backend}.attribute")
         instance = mod.DbAttribute()
         assert isinstance(instance, DbAttributeProtocol)
+
+    def test_create_attr_if_absent_is_in_the_protocol_with_one_signature(
+        self, backend: str
+    ) -> None:
+        """Both backends implement ``create_attr_if_absent`` with the
+        protocol's signature."""
+        import importlib
+        import inspect
+
+        mod = importlib.import_module(f"actingweb.db.{backend}.attribute")
+        wanted = list(
+            inspect.signature(DbAttributeProtocol.create_attr_if_absent).parameters
+        )
+        got = list(inspect.signature(mod.DbAttribute.create_attr_if_absent).parameters)
+        assert (
+            got
+            == wanted
+            == [
+                "actor_id",
+                "bucket",
+                "name",
+                "data",
+                "timestamp",
+                "ttl_seconds",
+            ]
+        )
 
     def test_attribute_bucket_list_protocol_compliance(self, backend: str) -> None:
         """Verify DbAttributeBucketList implements DbAttributeBucketListProtocol."""

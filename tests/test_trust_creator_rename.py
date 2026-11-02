@@ -30,8 +30,7 @@ from tests._adoption_helpers import (
 def _put(
     config: Any, actor: Actor, body: dict[str, Any], interface: Mock | None = None
 ) -> Mock:
-    handler = TrustRelationshipHandler()
-    handler.config = config
+    handler = TrustRelationshipHandler(config=config)
     handler.request = Mock()
     handler.request.body = json.dumps(body)
     handler.response = MagicMock()

@@ -23,7 +23,9 @@ PLANTED_SECRET = "squatter-chosen-trust-secret"
 
 def _oauth_authenticator(test_app: str) -> OAuth2Authenticator:
     """An in-process authenticator against the same backend the server uses."""
-    config = config_module.Config(database=DATABASE_BACKEND)
+    # The adoption suite tests the duplicate-tolerant path (the opt-out), and
+    # the shared worker store holds deliberate duplicate creators.
+    config = config_module.Config(database=DATABASE_BACKEND, unique_creator=False)
     config.fqdn = test_app.replace("http://", "").replace("https://", "")
     config.proto = "http://" if test_app.startswith("http://") else "https://"
     provider = OAuth2Provider(

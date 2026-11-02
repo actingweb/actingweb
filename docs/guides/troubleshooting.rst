@@ -157,8 +157,10 @@ SPA client signed out during a database throttle
   were unknown, and a client that treats a 401 as final signed out.
 - **Fix**: From 3.15 the grant answers **503** with ``Retry-After`` and the
   body "Token store temporarily unavailable; retry", as the MCP grant does.
-  The client keeps its token and retries after ``Retry-After`` seconds; see
-  rule 7 in :ref:`spa-refresh-reliably`.
+  The client keeps its token and retries after ``Retry-After`` seconds; since
+  3.16 the answer carries ``X-ActingWeb-Error: temporarily_unavailable``, and a
+  401 without that header is not the library's. See rule 7 in
+  :ref:`spa-refresh-reliably`.
 
 Public MCP client (such as Codex) fails every refresh with ``invalid_client``
 -----------------------------------------------------------------------------

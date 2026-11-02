@@ -522,7 +522,6 @@ class MCPClientRegistry:
         """
         try:
             from .. import actor as actor_module
-            from ..interface.actor_interface import ActorInterface
             from ..interface.trust_manager import TrustManager
 
             # Load the actor
@@ -533,11 +532,6 @@ class MCPClientRegistry:
                 )
                 return
 
-            # Create ActorInterface wrapper
-            registry = getattr(self.config, "service_registry", None)
-            actor_interface = ActorInterface(
-                core_actor=core_actor, service_registry=registry
-            )
             trust_manager = TrustManager(core_actor)
 
             # Create trust relationship using OAuth2 client credentials flow
@@ -558,23 +552,6 @@ class MCPClientRegistry:
 
             if trust_created:
                 logger.info(f"Created trust relationship for OAuth2 client {client_id}")
-
-                # Store client metadata in the trust relationship
-                # Find the newly created trust relationship and add client metadata
-                trust_relationship = None
-                for trust in actor_interface.trust.relationships:
-                    if hasattr(trust, "peerid") and client_id in trust.peerid:
-                        trust_relationship = trust
-                        break
-
-                if trust_relationship:
-                    # Store client metadata in trust relationship
-                    trust_desc = (
-                        f"OAuth2 Client: {client_data.get('client_name', client_id)}"
-                    )
-                    logger.debug(
-                        f"Enhanced trust relationship for OAuth2 client: {trust_desc}"
-                    )
             else:
                 logger.error(
                     f"Failed to create trust relationship for OAuth2 client {client_id}"

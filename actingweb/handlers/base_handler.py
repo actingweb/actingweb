@@ -13,9 +13,16 @@ class BaseHandler:
     def __init__(
         self,
         webobj: aw_web_request.AWWebObj = aw_web_request.AWWebObj(),
-        config: config_class.Config = config_class.Config(),
+        config: config_class.Config | None = None,
         hooks: Optional["HookRegistry"] = None,
     ) -> None:
+        if config is None:
+            # An import-time ``Config()`` default would build a handler that
+            # never ran ``check_ready()`` and, with creator uniqueness on by
+            # default, an enforced one on a store that may not enforce yet.
+            raise ValueError(
+                "BaseHandler requires a config: pass the application's Config"
+            )
         self.request = webobj.request
         self.response = webobj.response
         self.config = config

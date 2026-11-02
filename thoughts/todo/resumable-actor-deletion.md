@@ -4,8 +4,8 @@
 subscriptions, properties, attribute buckets and finally the actor row, each
 a separate write. A wipe that stalls or raises part-way leaves a
 half-deleted actor, and several adoption follow-ups are symptoms of that one
-cause (`thoughts/todo/adoption-fault-and-hygiene-followups.md`: H, I, J, K
-and AW, among them the UNKNOWN tombstone read and the vouched actor carrying
+cause (`thoughts/todo/adoption-fault-and-hygiene-followups.md`: J, K and
+AW, among them the UNKNOWN tombstone read and the vouched actor carrying
 a stalled tombstone).
 
 Recorded by thoughts/plans/2026-10-28-db-fault-semantics-and-creator-uniqueness.md

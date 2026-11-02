@@ -39,6 +39,7 @@ def _enforcement_in_place(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
+@pytest.mark.usefixtures("real_unique_probe")
 def test_demo_refuses_to_start_without_enforcement(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

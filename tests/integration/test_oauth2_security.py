@@ -70,7 +70,7 @@ class TestCrossActorAuthorizationPrevention:
         # Step 3: Create request object for OAuth2 callback
         from actingweb import config as config_module
 
-        config = config_module.Config(database=DATABASE_BACKEND)
+        config = config_module.Config(unique_creator=False, database=DATABASE_BACKEND)
 
         # Configure OAuth2
         config.oauth = {"client_id": "test_client", "client_secret": "test_secret"}
@@ -159,7 +159,7 @@ class TestCrossActorAuthorizationPrevention:
         # Step 3: Create request object
         from actingweb import config as config_module
 
-        config = config_module.Config(database=DATABASE_BACKEND)
+        config = config_module.Config(unique_creator=False, database=DATABASE_BACKEND)
         config.oauth = {"client_id": "test_client", "client_secret": "test_secret"}
         config.fqdn = test_app.replace("http://", "").replace("https://", "")
         config.proto = "http://" if "http://" in test_app else "https://"
@@ -232,7 +232,7 @@ class TestCrossActorAuthorizationPrevention:
         # Step 3: Create request object
         from actingweb import config as config_module
 
-        config = config_module.Config(database=DATABASE_BACKEND)
+        config = config_module.Config(unique_creator=False, database=DATABASE_BACKEND)
         config.oauth = {"client_id": "test_client", "client_secret": "test_secret"}
         config.fqdn = test_app.replace("http://", "").replace("https://", "")
         config.proto = "http://" if "http://" in test_app else "https://"
@@ -300,7 +300,7 @@ class TestCrossActorAuthorizationPrevention:
         # Step 2: Create request object
         from actingweb import config as config_module
 
-        config = config_module.Config(database=DATABASE_BACKEND)
+        config = config_module.Config(unique_creator=False, database=DATABASE_BACKEND)
         config.oauth = {"client_id": "test_client", "client_secret": "test_secret"}
         config.fqdn = test_app.replace("http://", "").replace("https://", "")
         config.proto = "http://" if "http://" in test_app else "https://"
@@ -389,7 +389,7 @@ class TestEmailValidationSecurity:
         # Create request object
         from actingweb import config as config_module
 
-        config = config_module.Config(database=DATABASE_BACKEND)
+        config = config_module.Config(unique_creator=False, database=DATABASE_BACKEND)
         config.oauth = {"client_id": "test_client", "client_secret": "test_secret"}
         config.fqdn = test_app.replace("http://", "").replace("https://", "")
         config.proto = "http://" if "http://" in test_app else "https://"

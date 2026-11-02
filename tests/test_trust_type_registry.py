@@ -85,7 +85,7 @@ class TestTrustTypeRegistry(unittest.TestCase):
 
     def setUp(self):
         """Set up test fixtures."""
-        self.config = config_class.Config()
+        self.config = config_class.Config(unique_creator=False)
         self.registry = TrustTypeRegistry(self.config)
 
         # Mock actor for testing with simple property store
@@ -242,7 +242,7 @@ class TestRegistrySingleton(unittest.TestCase):
 
     def test_singleton_behavior(self):
         """Test that get_registry returns the same instance."""
-        config = config_class.Config()
+        config = config_class.Config(unique_creator=False)
 
         registry1 = get_registry(config)
         registry2 = get_registry(config)

@@ -39,14 +39,11 @@ def assert_suffixes(names: list[str], expected: list[str]) -> None:
 
 
 class TestRequiredTables:
-    def test_lookup_mode_requires_nine_tables(self):
-        """The v2 lookup table is required only in lookup-table mode."""
-        names = verify_tables.required_table_names(use_lookup_table=True)
+    def test_requires_nine_tables(self):
+        """The v2 lookup table is always required (one reverse-lookup
+        mechanism). The count stays nine: lookup mode already counted it."""
+        names = verify_tables.required_table_names()
         assert_suffixes(names, LOOKUP_SUFFIXES)
-
-    def test_legacy_mode_omits_the_lookup_table(self):
-        names = verify_tables.required_table_names(use_lookup_table=False)
-        assert_suffixes(names, LOOKUP_SUFFIXES[:-1])
 
     def test_suspensions_table_is_required(self):
         """Regression: this table was the one missing in a real deployment.
@@ -54,12 +51,12 @@ class TestRequiredTables:
         Pre-3.13 the suspension accessor had no auto-create guard, so it was
         never created; with auto-creation off nothing reports it missing.
         """
-        names = verify_tables.required_table_names(use_lookup_table=True)
+        names = verify_tables.required_table_names()
         assert any(n.endswith("_subscription_suspensions") for n in names)
 
     def test_deprecated_v1_lookup_table_is_not_required(self):
         """v1 is a read-only fallback — operators must not pre-create it."""
-        names = verify_tables.required_table_names(use_lookup_table=True)
+        names = verify_tables.required_table_names()
         assert not any(n.endswith("_property_lookup") for n in names)
 
     def test_matches_what_prewarm_creates(self):
@@ -77,26 +74,9 @@ class TestRequiredTables:
         assert "required_models(" in source
 
 
-class TestLookupModeDetection:
-    @pytest.mark.parametrize("value", ["false", "FALSE", "0", "no", " No "])
-    def test_falsey_values_select_legacy(self, monkeypatch, value):
-        monkeypatch.setenv("USE_PROPERTY_LOOKUP_TABLE", value)
-        assert verify_tables.lookup_mode_enabled() is False
-
-    @pytest.mark.parametrize("value", ["true", "TRUE", "1", "anything"])
-    def test_other_values_select_lookup_mode(self, monkeypatch, value):
-        monkeypatch.setenv("USE_PROPERTY_LOOKUP_TABLE", value)
-        assert verify_tables.lookup_mode_enabled() is True
-
-    def test_defaults_to_lookup_mode(self, monkeypatch):
-        """Matches Config.use_lookup_table, which defaults to True in 3.13."""
-        monkeypatch.delenv("USE_PROPERTY_LOOKUP_TABLE", raising=False)
-        assert verify_tables.lookup_mode_enabled() is True
-
-
 class TestVerifyTables:
     def test_splits_present_from_missing(self):
-        names = verify_tables.required_table_names(use_lookup_table=True)
+        names = verify_tables.required_table_names()
         missing_name = names[-1]
 
         # Model.exists() is a classmethod — patch it as one, or pynamodb
@@ -106,7 +86,7 @@ class TestVerifyTables:
             return str(cls.Meta.table_name) != missing_name
 
         with mock.patch("pynamodb.models.Model.exists", new=classmethod(fake_exists)):
-            present, missing = verify_tables.verify_tables(use_lookup_table=True)
+            present, missing = verify_tables.verify_tables()
 
         assert missing == [missing_name]
         assert len(present) == 8
@@ -118,7 +98,7 @@ class TestVerifyTables:
             "pynamodb.models.Model.exists", side_effect=RuntimeError("AccessDenied")
         ):
             with pytest.raises(RuntimeError, match="AccessDenied"):
-                verify_tables.verify_tables(use_lookup_table=True)
+                verify_tables.verify_tables()
 
 
 class TestCli:
@@ -134,7 +114,7 @@ class TestCli:
 
     def test_list_does_not_query_aws(self, capsys):
         with mock.patch("pynamodb.models.Model.exists") as exists:
-            rc = verify_tables.main(["--list", "--lookup-table"])
+            rc = verify_tables.main(["--list"])
         assert rc == 0
         assert exists.call_count == 0
         assert "_property_lookup_v2" in capsys.readouterr().out
@@ -143,7 +123,7 @@ class TestCli:
         monkeypatch.setattr(
             verify_tables,
             "verify_tables",
-            lambda use_lookup_table=None, unique_creator=False: (["a"], []),
+            lambda unique_creator=False: (["a"], []),
         )
         assert verify_tables.main([]) == 0
         assert "All 1 required tables exist." in capsys.readouterr().out
@@ -152,7 +132,7 @@ class TestCli:
         monkeypatch.setattr(
             verify_tables,
             "verify_tables",
-            lambda use_lookup_table=None, unique_creator=False: (
+            lambda unique_creator=False: (
                 ["a"],
                 ["b_subscription_suspensions"],
             ),
@@ -163,7 +143,7 @@ class TestCli:
         assert "1 required table(s) missing" in captured.err
 
     def test_exit_two_when_check_fails(self, monkeypatch, capsys):
-        def boom(use_lookup_table=None, unique_creator=False):
+        def boom(unique_creator=False):
             raise RuntimeError("AccessDenied")
 
         monkeypatch.setattr(verify_tables, "verify_tables", boom)
@@ -185,6 +165,7 @@ class TestCli:
         assert verify_tables.main([]) == 2
         assert "Alembic" in capsys.readouterr().err
 
-    def test_legacy_and_lookup_flags_are_mutually_exclusive(self):
-        with pytest.raises(SystemExit):
-            verify_tables.main(["--legacy", "--lookup-table"])
+    def test_the_legacy_and_lookup_flags_are_gone(self):
+        for flag in ("--legacy", "--lookup-table"):
+            with pytest.raises(SystemExit):
+                verify_tables.main([flag])

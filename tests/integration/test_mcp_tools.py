@@ -301,7 +301,10 @@ class TestMCPErrorHandling:
             headers={"Content-Type": "application/json"},
         )
 
-        assert response.status_code in [200, 400]
+        assert response.status_code == 400
+        body = response.json()
+        assert body["error"]["code"] == -32700
+        assert body["id"] is None
 
     def test_method_not_found(self, oauth2_client):
         """

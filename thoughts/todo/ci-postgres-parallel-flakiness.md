@@ -9,7 +9,7 @@ The three causes below are untouched.
 
 This is **test-infrastructure reliability**, not correctness.
 
-1. **Stabilise `test_oauth2_client_manager.py::TestOAuth2ClientCreation` under
+1. **Stabilise `tests/integration/test_oauth2_client_manager.py::TestOAuth2ClientCreation` under
    parallel execution.** It combines a fixed `creator="user@example.com"` with
    two process-global singletons — the psycopg pool and
    `trust_type_registry._registry`.

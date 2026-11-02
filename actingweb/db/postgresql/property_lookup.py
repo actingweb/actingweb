@@ -1,3 +1,4 @@
+import json
 import logging
 from typing import Any
 
@@ -6,6 +7,97 @@ from actingweb.db.exceptions import DbError
 from .connection import get_connection
 
 logger = logging.getLogger(__name__)
+
+CONFIGURED_KIND = "configured"
+NAME_KIND = "name"
+
+
+def read_readiness(names: list[str]) -> tuple[set[str], set[str] | None]:
+    """The names with a backfill-complete marker, and the recorded name set.
+
+    ``names`` is accepted for parity with the DynamoDB backend (which reads
+    exactly those keys); PostgreSQL reads the whole small table. The second
+    element is ``None`` when no set has been recorded yet. A missing
+    relation (the Alembic migration has not run) and any other fault raise
+    ``DbError``.
+    """
+    marked: set[str] = set()
+    configured: set[str] | None = None
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT property_name, kind, value FROM property_lookup_backfill"
+                )
+                for property_name, kind, value in cur.fetchall():
+                    if kind == CONFIGURED_KIND:
+                        configured = set(json.loads(value or "[]"))
+                    elif kind == NAME_KIND:
+                        marked.add(property_name)
+    except Exception as e:
+        if getattr(e, "sqlstate", None) == "42P01" or "does not exist" in str(e):
+            raise DbError(
+                "lookup table missing: property_lookup_backfill "
+                "(run 'alembic upgrade head')"
+            ) from e
+        raise DbError("property lookup readiness read") from e
+    return marked, configured
+
+
+def mark_backfilled(names: list[str]) -> None:
+    """Write the backfill-complete marker of each name (idempotent)."""
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                for name in names:
+                    cur.execute(
+                        """
+                        INSERT INTO property_lookup_backfill (property_name, kind)
+                        VALUES (%s, %s)
+                        ON CONFLICT (property_name, kind) DO NOTHING
+                        """,
+                        (name, NAME_KIND),
+                    )
+            conn.commit()
+    except Exception as e:
+        raise DbError("property lookup mark") from e
+
+
+def unmark(names: list[str]) -> None:
+    """Remove the backfill-complete marker of each name (idempotent)."""
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                for name in names:
+                    cur.execute(
+                        "DELETE FROM property_lookup_backfill "
+                        "WHERE property_name = %s AND kind = %s",
+                        (name, NAME_KIND),
+                    )
+            conn.commit()
+    except Exception as e:
+        raise DbError("property lookup unmark") from e
+
+
+def record_configured(names: list[str]) -> None:
+    """Record the configured indexed-name set."""
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                # One row with a fixed key, replaced atomically, so concurrent
+                # first starts cannot leave two rows or fail on the key.
+                cur.execute(
+                    """
+                    INSERT INTO property_lookup_backfill (property_name, kind, value)
+                    VALUES ('*', %s, %s)
+                    ON CONFLICT (property_name, kind)
+                    DO UPDATE SET value = EXCLUDED.value, completed_at = now()
+                    """,
+                    (CONFIGURED_KIND, json.dumps(sorted(set(names)))),
+                )
+            conn.commit()
+    except Exception as e:
+        raise DbError("property lookup record") from e
 
 
 class DbPropertyLookup:

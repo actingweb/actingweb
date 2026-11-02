@@ -165,3 +165,15 @@ class TestBuilder:
         from actingweb.config import Config
 
         assert Config(database="dynamodb", open_factory=False).open_factory is False
+
+
+class TestOpenFactoryNormalisesTheCreator:
+    def test_a_padded_mixed_case_address_is_stripped_and_lowercased(self) -> None:
+        # The factory strips the form value before normalise_creator, which
+        # does not strip.
+        config = make_config()
+        address = uuid_email()
+        webobj = _post(config, f"  {address.upper()} ", as_json=True)
+
+        assert webobj.response.status_code == 201
+        assert Actor(config=config).get_from_creator(address)

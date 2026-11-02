@@ -183,10 +183,11 @@ class Actor:
                     "last_response_message": response.content,
                     "data": json.loads(response.content.decode("utf-8", "ignore")),
                 }
-                logger.debug(
-                    f"Got peer info from url({url}) with body("
-                    f"{summarize_payload(res['data'], encoded_len=len(response.content))})"
-                )
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(
+                        f"Got peer info from url({url}) with body("
+                        f"{summarize_payload(res['data'], encoded_len=len(response.content))})"
+                    )
                 return res
             except (TypeError, ValueError, KeyError) as e:
                 # JSON parsing errors - don't retry
@@ -236,10 +237,11 @@ class Actor:
                     "last_response_message": response.content,
                     "data": response.json(),
                 }
-                logger.debug(
-                    f"Got peer info async from url({url}) with body("
-                    f"{summarize_payload(res['data'], encoded_len=len(response.content))})"
-                )
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(
+                        f"Got peer info async from url({url}) with body("
+                        f"{summarize_payload(res['data'], encoded_len=len(response.content))})"
+                    )
                 return res
         except (TypeError, ValueError, KeyError) as e:
             # JSON parsing errors
@@ -451,7 +453,7 @@ class Actor:
         if not self.config or not creator:
             return False
 
-        lookup_creator = creator.lower() if "@" in creator else creator
+        lookup_creator = normalise_creator(creator)
         db = get_actor(self.config)
         if self.config.unique_creator and not is_exempt(lookup_creator):
             # Enforced: one holder, read consistently from the creators
@@ -867,7 +869,7 @@ class Actor:
         if not store or not store.loaded:
             return False
         own_email = store.email
-        target = creator.lower() if "@" in creator else creator
+        target = normalise_creator(creator)
         return (
             isinstance(own_email, str)
             and bool(own_email)
@@ -910,7 +912,7 @@ class Actor:
             logger.warning(f"Actor {self.id}: creator {creator!r} is reserved")
             return False
 
-        target = creator.lower() if "@" in creator else creator
+        target = normalise_creator(creator)
         own_email = store.email
         previous_marker = store.auth_method
         unvouch = (
@@ -973,8 +975,8 @@ class Actor:
         if not self.handle or not (creator or passphrase):
             logger.debug("Attempted modify of actor with no handle or no param changed")
             return False
-        if creator and "@" in creator:
-            creator = creator.lower()
+        if creator:  # None or "" stays "no change"; the helper maps None to ""
+            creator = normalise_creator(creator)
         ok = self.handle.modify(
             creator=creator or None,
             passphrase=passphrase.encode("utf-8") if passphrase else None,
@@ -1072,7 +1074,12 @@ class Actor:
         self.property_list = property.Properties(actor_id=self.id, config=self.config)
         return self.property_list.fetch()
 
-    def delete_peer_trustee(self, shorttype=None, peerid=None, notify_peers=True):
+    def delete_peer_trustee(
+        self,
+        shorttype: str | None = None,
+        peerid: str | None = None,
+        notify_peers: bool = True,
+    ) -> bool:
         if not peerid and not shorttype:
             return False
         if shorttype == "*":
@@ -1726,10 +1733,11 @@ class Actor:
         requrl = url + "/trust/" + relationship
         data = json.dumps(params)
         # The body carries the new trust secret and verification token.
-        logger.info(
-            f"Requesting trust relationship async from peer at ({requrl}) with "
-            f"data({summarize_payload(params, encoded_len=len(data))})"
-        )
+        if logger.isEnabledFor(logging.INFO):
+            logger.info(
+                f"Requesting trust relationship async from peer at ({requrl}) with "
+                f"data({summarize_payload(params, encoded_len=len(data))})"
+            )
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 response = await client.post(
@@ -1869,8 +1877,11 @@ class Actor:
             return new_trust.get()
 
     def delete_reciprocal_trust(
-        self, peerid=None, delete_peer=False, notify_peers=True
-    ):
+        self,
+        peerid: str | None = None,
+        delete_peer: bool = False,
+        notify_peers: bool = True,
+    ) -> bool:
         """Deletes a trust relationship and requests deletion of peer's relationship as well.
 
         ``notify_peers=False`` skips the remote DELETE (``delete_peer`` is then
@@ -2244,13 +2255,14 @@ class Actor:
             "Content-Type": "application/json",
         }
         try:
-            logger.debug(
-                "Creating remote subscription at url("
-                + requrl
-                + ") with body ("
-                + summarize_payload(params, encoded_len=len(data))
-                + ")"
-            )
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    "Creating remote subscription at url("
+                    + requrl
+                    + ") with body ("
+                    + summarize_payload(params, encoded_len=len(data))
+                    + ")"
+                )
             response = requests.post(
                 url=requrl, data=data, headers=headers, timeout=(5, 10)
             )
@@ -2263,13 +2275,14 @@ class Actor:
         except Exception:  # folds DbError: peer HTTP only
             return None
         try:
-            logger.debug(
-                "Created remote subscription at url("
-                + requrl
-                + ") and got JSON response ("
-                + summarize_payload(response.content)
-                + ")"
-            )
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    "Created remote subscription at url("
+                    + requrl
+                    + ") and got JSON response ("
+                    + summarize_payload(response.content)
+                    + ")"
+                )
             content_str = (
                 response.content.decode("utf-8", "ignore")
                 if isinstance(response.content, bytes)
@@ -2550,13 +2563,14 @@ class Actor:
         def _send_callback_sync():
             """Send subscription callback using requests (blocking)."""
             try:
-                logger.debug(
-                    "Doing sync callback on subscription at url("
-                    + requrl
-                    + ") with body("
-                    + summarize_payload(params, encoded_len=len(data))
-                    + ")"
-                )
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(
+                        "Doing sync callback on subscription at url("
+                        + requrl
+                        + ") with body("
+                        + summarize_payload(params, encoded_len=len(data))
+                        + ")"
+                    )
                 response = requests.post(
                     url=requrl,
                     data=data.encode("utf-8"),
@@ -2607,13 +2621,14 @@ class Actor:
             import httpx
 
             try:
-                logger.debug(
-                    "Doing async callback on subscription at url("
-                    + requrl
-                    + ") with body("
-                    + summarize_payload(params, encoded_len=len(data))
-                    + ")"
-                )
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(
+                        "Doing async callback on subscription at url("
+                        + requrl
+                        + ") with body("
+                        + summarize_payload(params, encoded_len=len(data))
+                        + ")"
+                    )
                 async with httpx.AsyncClient(
                     timeout=httpx.Timeout(10.0, connect=5.0)
                 ) as client:
@@ -2680,7 +2695,9 @@ class Actor:
             desc=desc,
         )
 
-    async def delete_reciprocal_trust_async(self, peerid=None, delete_peer=False):
+    async def delete_reciprocal_trust_async(
+        self, peerid: str | None = None, delete_peer: bool = False
+    ) -> bool:
         """Async version - wraps sync method in asyncio.to_thread to prevent blocking."""
         import asyncio
 

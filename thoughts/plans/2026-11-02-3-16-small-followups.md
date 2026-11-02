@@ -273,7 +273,14 @@ Every item that needs a choice stays in its todo, and "What We're NOT Doing" lis
 - [ ] pyright 0 errors with the new hints
 - [ ] Full tier before commit
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+- **Regression check:** with the guards removed (stash), the two debug-guard tests fail.
+- **Full tier:** DynamoDB 5,186 passed; PostgreSQL 5,001 passed. ruff, pyright, `verify_groups` and sphinx are clean.
+- **Deviation:** `tests/test_mcp_revocation_evicts_caches.py` assigned a plain `{}` to `TrustPermissionStore._cache`. It now assigns a `BoundedDict(16)`.
+- **Deviation:** `tests/test_scan_to_query.py:163` narrows with `isinstance(found, dict)` now that `DbPeerTrustee.get` is typed `dict | bool | None`.
+- **Learning, one backend difference left as it is:** the type hints exposed it. When `actor_id` is falsy, the DynamoDB `fetch` of trust, subscription and subscription-diff returns `None`, while the protocol and PostgreSQL return a list. The method is annotated `list[...] | None` rather than changed, because returning `[]` changes behaviour for any caller that checks `is None`. Recorded for the owner.
+
 
 ---
 

@@ -20,6 +20,7 @@ from typing import Any
 
 from . import attribute
 from . import config as config_class
+from ._bounded_cache import CACHE_MAX_ENTRIES, BoundedDict
 from .constants import TRUST_PERMISSIONS_BUCKET
 from .db.exceptions import DbError
 
@@ -95,7 +96,11 @@ class TrustPermissionStore:
         # Values may be None: a confirmed "no override stored" is cached too,
         # otherwise every permission evaluation for a peer without an
         # override re-reads the attribute bucket.
-        self._cache: dict[str, TrustPermissions | None] = {}
+        # Bounded LRU: one entry per actor:peer pair, not one per pair ever
+        # seen (actingweb/_bounded_cache.py).
+        self._cache: BoundedDict[str, TrustPermissions | None] = BoundedDict(
+            CACHE_MAX_ENTRIES
+        )
 
     def _get_permissions_bucket(self, actor_id: str) -> attribute.Attributes | None:
         """Get the trust permissions attribute bucket for an actor."""
@@ -485,9 +490,10 @@ class TrustPermissionStore:
         """Get trust relationship permissions."""
         cache_key = f"{actor_id}:{peer_id}"
 
-        # Check cache first
-        if cache_key in self._cache:
-            return self._cache[cache_key]
+        # Check cache first: one locked read (a cached None is a hit)
+        hit, cached = self._cache.lookup(cache_key)
+        if hit:
+            return cached
 
         bucket = self._get_permissions_bucket(actor_id)
         if not bucket:

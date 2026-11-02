@@ -21,6 +21,7 @@ import httpx
 
 from . import attribute
 from . import config as config_class
+from ._bounded_cache import CACHE_MAX_ENTRIES, BoundedDict
 from .constants import PEER_CAPABILITIES_BUCKET
 from .db.exceptions import DbError
 
@@ -482,7 +483,11 @@ class CachedCapabilitiesStore:
 
     def __init__(self, config: config_class.Config):
         self.config = config
-        self._cache: dict[str, CachedPeerCapabilities] = {}
+        # Bounded LRU: one entry per actor:peer pair, not one per pair ever
+        # seen (actingweb/_bounded_cache.py).
+        self._cache: BoundedDict[str, CachedPeerCapabilities] = BoundedDict(
+            CACHE_MAX_ENTRIES
+        )
 
     def _get_capabilities_bucket(self, actor_id: str) -> attribute.Attributes | None:
         """Get the peer capabilities attribute bucket for an actor."""
@@ -549,9 +554,10 @@ class CachedCapabilitiesStore:
         """Get cached peer capabilities."""
         cache_key = f"{actor_id}:{peer_id}"
 
-        # Check cache first
-        if cache_key in self._cache:
-            return self._cache[cache_key]
+        # Check cache first: one locked read (a cached None is a hit)
+        hit, cached = self._cache.lookup(cache_key)
+        if hit:
+            return cached
 
         bucket = self._get_capabilities_bucket(actor_id)
         if not bucket:

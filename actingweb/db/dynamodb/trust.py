@@ -124,7 +124,14 @@ class DbTrust:
     The  actor_id must always be set.
     """
 
-    def get(self, actor_id=None, peerid=None, token=None, *, strict=True):
+    def get(
+        self,
+        actor_id: str | None = None,
+        peerid: str | None = None,
+        token: str | None = None,
+        *,
+        strict: bool = True,
+    ) -> dict[str, Any] | None:
         """Retrieves the trust from the database
 
         Either peerid or token must be set.
@@ -461,7 +468,9 @@ class DbTrustList:
     The  actor_id must always be set.
     """
 
-    def fetch(self, actor_id, *, strict=True):
+    def fetch(
+        self, actor_id: str | None, *, strict: bool = True
+    ) -> list[dict[str, Any]] | None:
         """Retrieves the trusts of an actor_id from the database as an array
 
         ``[]`` when there are none. A read fault raises ``DbError``;

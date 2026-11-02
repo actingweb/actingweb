@@ -39,7 +39,14 @@ class DbPeerTrustee:
     The actor_id must always be set.
     """
 
-    def get(self, actor_id=None, peer_type=None, peerid=None, *, strict=True):
+    def get(
+        self,
+        actor_id: str | None = None,
+        peer_type: str | None = None,
+        peerid: str | None = None,
+        *,
+        strict: bool = True,
+    ) -> dict[str, Any] | bool | None:
         """Retrieves the peertrustee from the database.
 
         None when absent, False when several match ``peer_type``. A read

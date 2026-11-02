@@ -244,13 +244,14 @@ class AwProxy:
         data = json.dumps(params)
         headers = {**self._bearer_headers(), "Content-Type": "application/json"}
         url = self.trust["baseuri"].strip("/") + "/" + path.strip("/")
-        logger.debug(
-            "Creating trust peer resource at ("
-            + url
-            + ") with data("
-            + summarize_payload(params, encoded_len=len(data))
-            + ")"
-        )
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "Creating trust peer resource at ("
+                + url
+                + ") with data("
+                + summarize_payload(params, encoded_len=len(data))
+                + ")"
+            )
         try:
             response = requests.post(
                 url=url, data=data, headers=headers, timeout=self.timeout
@@ -307,13 +308,14 @@ class AwProxy:
         headers = self._bearer_headers()
         headers["Content-Type"] = "application/json"
         url = self.trust["baseuri"].strip("/") + "/" + path.strip("/")
-        logger.debug(
-            "Changing trust peer resource at ("
-            + url
-            + ") with data("
-            + summarize_payload(params, encoded_len=len(data))
-            + ")"
-        )
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "Changing trust peer resource at ("
+                + url
+                + ") with data("
+                + summarize_payload(params, encoded_len=len(data))
+                + ")"
+            )
         try:
             response = requests.put(
                 url=url, data=data, headers=headers, timeout=self.timeout
@@ -545,13 +547,14 @@ class AwProxy:
         data = json.dumps(params)
         headers = {**self._bearer_headers(), "Content-Type": "application/json"}
         url = self.trust["baseuri"].strip("/") + "/" + path.strip("/")
-        logger.debug(
-            "Creating trust peer resource async at ("
-            + url
-            + ") with data("
-            + summarize_payload(params, encoded_len=len(data))
-            + ")"
-        )
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "Creating trust peer resource async at ("
+                + url
+                + ") with data("
+                + summarize_payload(params, encoded_len=len(data))
+                + ")"
+            )
         try:
             async with httpx.AsyncClient(timeout=self._httpx_timeout) as client:
                 response = await client.post(url, content=data, headers=headers)
@@ -649,13 +652,14 @@ class AwProxy:
         headers = self._bearer_headers()
         headers["Content-Type"] = "application/json"
         url = self.trust["baseuri"].strip("/") + "/" + path.strip("/")
-        logger.debug(
-            "Changing trust peer resource async at ("
-            + url
-            + ") with data("
-            + summarize_payload(params, encoded_len=len(data))
-            + ")"
-        )
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "Changing trust peer resource async at ("
+                + url
+                + ") with data("
+                + summarize_payload(params, encoded_len=len(data))
+                + ")"
+            )
         try:
             async with httpx.AsyncClient(timeout=self._httpx_timeout) as client:
                 response = await client.put(url, content=data, headers=headers)

@@ -17,6 +17,7 @@ from typing import Any
 
 from . import attribute
 from . import config as config_class
+from ._bounded_cache import CACHE_MAX_ENTRIES, BoundedDict
 from .constants import PEER_PERMISSIONS_BUCKET
 from .db.exceptions import DbError
 
@@ -224,7 +225,9 @@ class PeerPermissionStore:
 
     def __init__(self, config: config_class.Config):
         self.config = config
-        self._cache: dict[str, PeerPermissions] = {}
+        # Bounded LRU: one entry per actor:peer pair, not one per pair ever
+        # seen (actingweb/_bounded_cache.py).
+        self._cache: BoundedDict[str, PeerPermissions] = BoundedDict(CACHE_MAX_ENTRIES)
 
     def _get_permissions_bucket(self, actor_id: str) -> attribute.Attributes | None:
         """Get the peer permissions attribute bucket for an actor."""
@@ -302,10 +305,11 @@ class PeerPermissionStore:
         """Get cached peer permissions."""
         cache_key = f"{actor_id}:{peer_id}"
 
-        # Check cache first
-        if cache_key in self._cache:
+        # Check cache first: one locked read
+        hit, cached = self._cache.lookup(cache_key)
+        if hit:
             logger.debug(f"Retrieved peer permissions from cache: {cache_key}")
-            return self._cache[cache_key]
+            return cached
 
         bucket = self._get_permissions_bucket(actor_id)
         if not bucket:

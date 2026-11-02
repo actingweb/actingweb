@@ -304,6 +304,29 @@ class TestConcurrentRestore:
         assert "store fault" not in caplog.text
         assert istore(_reload(config, actor)).auth_method == "email_verified"
 
+    def test_a_restore_whose_answer_was_lost_counts_as_restored(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # The update committed but answered False (a fault after the commit):
+        # the re-read finds the restored marker, so nothing is blamed.
+        config = self._config()
+        actor, owner = _vouched(config)
+        store = istore(actor)
+        assert store.set_confirmed("auth_method", "creator_changed")
+        db = store.__dict__["_db"]
+        with (
+            patch.object(db, "conditional_update_attr", return_value=False),
+            patch.object(
+                db.dbprop,
+                "get_attr_strict",
+                Mock(return_value={"data": "email_unverified"}),
+            ),
+            caplog.at_level("WARNING", logger="actingweb.actor"),
+        ):
+            assert Actor._restore_marker(store, "email_unverified", owner)
+        assert caplog.text == ""
+        assert store.__dict__["auth_method"] == "email_unverified"
+
     @pytest.mark.parametrize("reread", ["raises", "unchanged"])
     def test_a_fault_on_the_restore_is_logged_as_a_fault(
         self, caplog: pytest.LogCaptureFixture, reread: str

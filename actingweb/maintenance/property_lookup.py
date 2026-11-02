@@ -715,9 +715,8 @@ def backfill_postgresql(
                         "LEFT JOIN property_lookup l ON l.property_name = p.name "
                         "AND l.value = p.value "
                         "WHERE p.name = ANY(%s) AND l.property_name IS NULL "
-                        "AND octet_length(p.value) <= %s "
                         "GROUP BY p.name, p.value HAVING count(*) > 1",
-                        (names, _PG_MAYBE_UNINDEXABLE_BYTES),
+                        (names,),
                     )
                     for name, ids in cur.fetchall():
                         for actor_id in ids[1:]:
@@ -771,31 +770,37 @@ def backfill_postgresql(
 def _pg_insert_rows_one_by_one(
     conn: Any, names: list[str], after: str, upto: str, stats: BackfillStats
 ) -> None:
-    """Insert one batch's rows singly; count those the index refuses."""
+    """Insert one batch's rows singly; count those the index refuses.
+
+    Each insert re-reads its row's current value (``INSERT ... SELECT`` on
+    the row's key), as the batch statement does, so a ``DbProperty.set()``
+    that lands between the listing and the insert cannot leave a lookup row
+    for a value the actor no longer holds.
+    """
     import psycopg
 
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT p.name, p.value, p.id FROM properties p "
+            "SELECT p.name, p.id, octet_length(p.value) FROM properties p "
             "JOIN actors a ON a.id = p.id "
             "WHERE p.name = ANY(%s) AND p.id > %s AND p.id <= %s ORDER BY p.id",
             (names, after, upto),
         )
         rows = cur.fetchall()
-    for name, value, actor_id in rows:
+    for name, actor_id, value_bytes in rows:
         try:
             with conn.transaction(), conn.cursor() as cur:
                 cur.execute(
                     "INSERT INTO property_lookup (property_name, value, actor_id) "
-                    "VALUES (%s, %s, %s) ON CONFLICT DO NOTHING",
-                    (name, value, actor_id),
+                    "SELECT p.name, p.value, p.id FROM properties p "
+                    "JOIN actors a ON a.id = p.id "
+                    "WHERE p.id = %s AND p.name = %s ON CONFLICT DO NOTHING",
+                    (actor_id, name),
                 )
                 stats.written += max(cur.rowcount, 0)
         except psycopg.errors.ProgramLimitExceeded:
             stats.unindexable_row(
-                name,
-                f"property={name} actor={actor_id} "
-                f"value_bytes={len(str(value).encode('utf-8'))}",
+                name, f"property={name} actor={actor_id} value_bytes={value_bytes}"
             )
 
 
@@ -965,7 +970,7 @@ def cmd_backfill(args: argparse.Namespace) -> int:
             "checkpoint still reports collisions found before the checkpoint: "
             "after resolving them, delete the checkpoint file first."
         )
-    too_long = [n for n in names if n in stats.unindexable and n not in colliding]
+    too_long = [n for n in names if n in stats.unindexable]
     if too_long:
         print(
             f"Left unmarked (values too long to index): {', '.join(too_long)}. "

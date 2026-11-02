@@ -38,7 +38,7 @@ class BoundedDict(OrderedDict[K, V]):
     ``== {}``, ``pop`` and ``clear`` behave as before.
     """
 
-    def __init__(self, maxsize: int) -> None:
+    def __init__(self, maxsize: int = CACHE_MAX_ENTRIES) -> None:
         if maxsize < 1:
             raise ValueError("maxsize must be at least 1")
         super().__init__()
@@ -82,3 +82,35 @@ class BoundedDict(OrderedDict[K, V]):
     def __delitem__(self, key: K) -> None:
         with self._lock:
             super().__delitem__(key)
+
+    # Reads move entries, so iterating the live dict while indexing it (or
+    # while another thread reads) would raise "mutated during iteration":
+    # iterate a snapshot taken under the lock instead.
+    def __iter__(self) -> Any:
+        with self._lock:
+            return iter(list(super().__iter__()))
+
+    def items(self) -> Any:  # type: ignore[override]
+        with self._lock:
+            return list(super().items())
+
+    def values(self) -> Any:  # type: ignore[override]
+        with self._lock:
+            return list(super().values())
+
+    def keys(self) -> Any:  # type: ignore[override]
+        with self._lock:
+            return list(super().keys())
+
+    def copy(self) -> BoundedDict[K, V]:
+        new: BoundedDict[K, V] = BoundedDict(self.maxsize)
+        for key, value in self.items():
+            new[key] = value
+        return new
+
+    def __copy__(self) -> BoundedDict[K, V]:
+        return self.copy()
+
+    def __reduce__(self) -> Any:
+        # The lock is not picklable; rebuild it, keeping maxsize and entries.
+        return (type(self), (self.maxsize,), None, None, iter(self.items()))

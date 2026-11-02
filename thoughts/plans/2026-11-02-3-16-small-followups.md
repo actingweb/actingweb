@@ -413,3 +413,98 @@ Providers: codex (read-only, outside the sandbox) and a fresh-context Claude. Wh
 - **PostgreSQL index limits apply after compression.** Any test of a size limit needs incompressible data.
 - **`set_confirmed` re-reads through the backend's `get_attr_strict`.** A test that patches that method changes `set_confirmed`'s answer too.
 
+## Iterations
+
+### 2026-11-02, after the outside-voice review of the branch diff (codex and a fresh-context Claude)
+
+#### 1. The backfill's row fallback inserted a value read earlier
+
+**Category**: Bug fix
+
+**What changed**: Each single-row insert is now `INSERT ... SELECT` on the row's key `(id, name)`, so it writes the value as it is at insert time. The listing step reads only the key and `octet_length`.
+
+**Files affected**:
+- `actingweb/maintenance/property_lookup.py`: `_pg_insert_rows_one_by_one`.
+
+**Rationale**: A `DbProperty.set()` landing between the listing and the insert could leave a lookup row for a value the actor no longer holds. The final collision check joins on the value, so it would not see it.
+- That stretched the batch statement's own snapshot window from one statement to up to `batch_size` round trips.
+- A wider stale-row check belongs to reverse-lookup item 2, which `thoughts/plans/2026-11-02-3-16-owner-decided-followups.md` takes.
+
+#### 2. The dry run dropped collisions on large shared values
+
+**Category**: Bug fix
+
+**What changed**: The size filter is gone from the dry-run collision query.
+
+**Files affected**:
+- `actingweb/maintenance/property_lookup.py`
+- `tests/test_property_lookup_command.py`: a shared 3 KB compressible value still counts as a collision.
+
+**Rationale**: A compressible large value indexes, so `--apply` collides on it while the dry run answered `collisions=0` and exit 0.
+
+#### 3. A name with both causes printed only the collision advice
+
+**Category**: Bug fix
+
+**What changed**: The unindexable message prints whenever the name has a refused value, whether or not it also collides.
+
+**Files affected**:
+- `actingweb/maintenance/property_lookup.py`
+- `tests/test_property_lookup_command.py`
+
+**Rationale**: The operator would otherwise need an extra apply pass to learn about the long value.
+
+#### 4. `BoundedDict` broke copy, pickle and iterating while indexing
+
+**Category**: Bug fix
+
+**What changed**:
+- `maxsize` defaults to `CACHE_MAX_ENTRIES`.
+- `copy`, `__copy__` and `__reduce__` rebuild the lock.
+- `__iter__`, `keys`, `items` and `values` return snapshots taken under the lock.
+
+**Files affected**:
+- `actingweb/_bounded_cache.py`
+- `tests/test_bounded_cache.py`
+
+**Rationale**: Reads reorder the entries, so `[c[k] for k in c]` raised "mutated during iteration", and `copy()` and `deepcopy()` raised `TypeError`. No caller does either today.
+
+#### 5. `_restore_marker` treated a restore that landed as a change
+
+**Category**: Bug fix
+
+**What changed**: If the re-read finds the marker this restore wrote, the method counts it as restored. It updates the in-memory store and returns True.
+
+**Files affected**:
+- `actingweb/actor.py`
+- `tests/test_trust_creator_rename.py`
+
+**Rationale**: PostgreSQL's `conditional_update_attr` answers False on a fault raised after its commit.
+
+#### 6. The PostgreSQL schema helper hid alembic's error
+
+**Category**: Bug fix
+
+**What changed**: A failed upgrade raises `RuntimeError` with alembic's stderr, for example "Can't locate revision" when a sibling branch migrated `public` ahead.
+
+**Files affected**:
+- `tests/_pg_schema.py`
+- `tests/test_postgresql_unit_schema.py`
+
+**Rationale**: The error was hidden.
+
+#### 7. Changelog wording made exactly true
+
+**Category**: Verification fix
+
+**What changed**:
+- "Every other row in a batch that commits is written". A deferred foreign-key failure at commit is a reported fault.
+- The peer's hook runs "once both sides have approved".
+- Cancelling the async approval does not stop the worker thread. The same note is in its docstring.
+
+**Files affected**:
+- `CHANGELOG.rst`
+- `actingweb/actor.py`
+
+**Rationale**: The review found three claims the code did not make exactly true.
+

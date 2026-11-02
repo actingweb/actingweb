@@ -562,6 +562,33 @@ class TestBackfillUnindexableValue:
         assert "may be too long" in out and "collisions=0" in out
 
     @pytest.mark.skipif(BACKEND != "postgresql", reason="PostgreSQL index limit")
+    def test_the_dry_run_still_counts_a_shared_large_value_as_a_collision(
+        self, store: Store, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # Compressible, so it indexes; two actors share it, so --apply collides.
+        name = store.name()
+        value = "x" * 3000 + uuid.uuid4().hex
+        for actor_id in (store.actor(), store.actor()):
+            store.seed(actor_id, name, value)
+        assert _run("backfill", "--properties", name) == 1
+        out = capsys.readouterr().out
+        assert "collisions=1" in out and "may be too long" in out
+
+    @pytest.mark.skipif(BACKEND != "postgresql", reason="PostgreSQL index limit")
+    def test_a_name_with_both_causes_gets_both_messages(
+        self, store: Store, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        name = store.name()
+        holder, other, long_actor = store.actor(), store.actor(), store.actor()
+        held = f"held-{uuid.uuid4()}"
+        store.seed(other, name, held)
+        _lookup_module().DbPropertyLookup().create(name, held, holder)
+        store.seed(long_actor, name, _incompressible(4000))
+        assert _run("backfill", "--apply", "--properties", name) == 1
+        out = capsys.readouterr().out
+        assert "(collisions)" in out and "values too long to index" in out
+
+    @pytest.mark.skipif(BACKEND != "postgresql", reason="PostgreSQL index limit")
     def test_another_error_in_the_row_fallback_is_still_a_fault(
         self, store: Store
     ) -> None:

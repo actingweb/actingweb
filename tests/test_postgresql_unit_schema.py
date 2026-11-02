@@ -49,3 +49,16 @@ def test_the_upgrade_targets_public_whatever_the_shell_prefix() -> None:
     assert "PG_DB_PREFIX" not in env
     assert env["PG_DB_SCHEMA"] == "public"
     assert run.call_args.kwargs["check"] is True
+
+
+def test_a_failed_upgrade_shows_alembic_stderr() -> None:
+    import subprocess
+
+    failure = subprocess.CalledProcessError(
+        1, ["alembic"], stderr=b"Can't locate revision identified by 'zzz'"
+    )
+    with (
+        mock.patch.object(_pg_schema.subprocess, "run", side_effect=failure),
+        pytest.raises(RuntimeError, match="Can't locate revision"),
+    ):
+        _pg_schema.run_upgrade()

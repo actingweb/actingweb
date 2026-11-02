@@ -75,13 +75,22 @@ def current_revisions(cur: psycopg.Cursor[Any]) -> set[str]:
 
 
 def run_upgrade() -> None:
-    subprocess.run(
-        ["poetry", "run", "alembic", "upgrade", "head"],
-        cwd=str(MIGRATIONS_DIR),
-        env=migration_env(),
-        check=True,
-        capture_output=True,
-    )
+    try:
+        subprocess.run(
+            ["poetry", "run", "alembic", "upgrade", "head"],
+            cwd=str(MIGRATIONS_DIR),
+            env=migration_env(),
+            check=True,
+            capture_output=True,
+        )
+    except subprocess.CalledProcessError as e:
+        # A public schema migrated by another branch (ahead of this one) ends
+        # here with "Can't locate revision"; show alembic's own words.
+        stderr = e.stderr.decode("utf-8", "replace") if e.stderr else ""
+        raise RuntimeError(
+            "alembic upgrade head failed for the public schema of the test "
+            f"database:\n{stderr}"
+        ) from e
 
 
 def ensure_postgresql_schema() -> bool:

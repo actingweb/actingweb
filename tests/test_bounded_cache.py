@@ -79,3 +79,19 @@ def test_concurrent_reads_and_evicting_writes_never_raise() -> None:
         t.join()
     assert errors == []
     assert len(cache) <= 8
+
+
+def test_copy_pickle_and_iterating_while_indexing_work() -> None:
+    import copy
+    import pickle
+
+    cache: BoundedDict[str, int] = BoundedDict(3)
+    for key, value in (("a", 1), ("b", 2), ("c", 3)):
+        cache[key] = value
+    assert [cache[k] for k in cache] == [1, 2, 3]  # reads reorder; no error
+    for clone in (cache.copy(), copy.copy(cache), copy.deepcopy(cache)):
+        assert clone == cache and clone.maxsize == 3 and clone is not cache
+    restored = pickle.loads(pickle.dumps(cache))
+    assert restored == cache and restored.maxsize == 3
+    restored["d"] = 4
+    assert len(restored) == 3

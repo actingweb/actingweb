@@ -312,7 +312,13 @@ class Actor:
                 )
             except DbError:  # folds DbError: the restore already failed; log only
                 row = {"data": "creator_changed"}
-            if row is not None and row.get("data") == "creator_changed":
+            stored = row.get("data") if row is not None else None
+            if stored == (marker or None):
+                # The write landed and only its answer was lost (a fault after
+                # the commit): it is restored.
+                store.__dict__["auth_method"] = marker or None
+                return True
+            if stored == "creator_changed":
                 logger.warning(
                     "could not restore auth_method (store fault); the actor "
                     "stays unvouched"
@@ -1493,7 +1499,10 @@ class Actor:
         trust write. (Until 3.16 this method built its own proxy with a peer
         target ``AwProxy`` cannot read, so it never notified the peer.)
         ``asyncio.to_thread`` copies context variables, so request
-        correlation carries over.
+        correlation carries over. Cancelling the await does not stop the
+        worker thread: the trust write and the notification still complete,
+        so a caller that times out should re-read the trust rather than retry
+        the change.
         """
         import asyncio
 

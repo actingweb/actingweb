@@ -530,6 +530,15 @@ render the ``confirm`` state: a form that posts the ``verify_token`` value
 as ``verify`` to ``/oauth/email``. The confirm issues no session; the user
 signs in afterwards.
 
+A user whose provider has no verified address meets the email form again on
+that later sign-in, and the form answers 409 for an address that has an
+actor. Register ``email_sign_in_code_required`` (``func(actor, email, code,
+expires_in)``) and send the code from it, as you send the verification link:
+the form then asks for the code instead, and a correct one signs the page
+in. A template overriding ``aw-oauth-email.html`` must render a
+``code_challenge`` hidden field and a ``code`` input when
+``code_challenge`` is set.
+
 Stalled deletions
 -----------------
 

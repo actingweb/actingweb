@@ -2045,6 +2045,16 @@ class FastAPIIntegration(BaseActingWebIntegration):
                 except Exception as e:  # folds DbError: template render, no DB
                     # Template not found - provide basic HTML form as fallback
                     self.logger.warning(f"Template aw-oauth-email.html not found: {e}")
+                    challenge = webobj.response.template_values.get("code_challenge")
+                    if challenge:
+                        from ...handlers.oauth_email import code_page_html
+
+                        return HTMLResponse(
+                            content=code_page_html(
+                                str(challenge),
+                                str(webobj.response.template_values.get("message", "")),
+                            )
+                        )
                     session_id = webobj.response.template_values.get("session_id", "")
                     error = webobj.response.template_values.get("error", "")
                     provider = webobj.response.template_values.get(

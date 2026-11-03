@@ -125,7 +125,7 @@ Decorator: ``app.lifecycle_hook(event: str)``
 
 Signature: ``func(actor, **kwargs) -> Any``
 
-- Common events: ``actor_created``, ``actor_deleted``, ``actor_deleted_complete``, ``actor_adopted``, ``oauth_success``, ``trust_initiated``, ``trust_request_received``, ``trust_fully_approved_local``, ``trust_fully_approved_remote``, ``trust_deleted``, ``subscription_deleted``, ``email_verification_required``, ``email_verified``
+- Common events: ``actor_created``, ``actor_deleted``, ``actor_deleted_complete``, ``actor_adopted``, ``oauth_success``, ``trust_initiated``, ``trust_request_received``, ``trust_fully_approved_local``, ``trust_fully_approved_remote``, ``trust_deleted``, ``subscription_deleted``, ``email_verification_required``, ``email_sign_in_code_required``, ``email_verified``
 
 Event Details
 ~~~~~~~~~~~~~
@@ -446,6 +446,27 @@ and the next sign-in retries.
                 to=email,
                 subject="Verify your email",
                 body=f"Click here to verify: {verification_url}"
+            )
+
+``email_sign_in_code_required``
+    Triggered (3.16) when a user whose provider has no verified address types,
+    in the email form, an address that already has a verified actor. Without
+    this hook the form answers 409; with it the form asks for this code.
+
+    **Signature**: ``func(actor: ActorInterface, email: str, code: str, expires_in: int) -> None``
+
+    **Purpose**: Send ``code`` (six digits, valid for ``expires_in`` seconds,
+    five tries) to ``email``. The page that asked posts it back with its
+    ``code_challenge`` to ``POST /oauth/email`` and is signed in to ``actor``.
+
+    .. code-block:: python
+
+        @app.lifecycle_hook("email_sign_in_code_required")
+        def send_sign_in_code(actor, email, code, expires_in):
+            send_email(
+                to=email,
+                subject="Your sign-in code",
+                body=f"Your code is {code}. It expires in {expires_in // 60} minutes.",
             )
 
 ``email_verified``

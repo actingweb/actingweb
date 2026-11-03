@@ -1207,6 +1207,17 @@ class FlaskIntegration(BaseActingWebIntegration):
             except Exception as e:  # folds DbError: no DB access: template rendering
                 # Template not found - provide basic HTML form as fallback
                 logger.warning(f"Template aw-oauth-email.html not found: {e}")
+                challenge = webobj.response.template_values.get("code_challenge")
+                if challenge:
+                    from ...handlers.oauth_email import code_page_html
+
+                    return Response(
+                        code_page_html(
+                            str(challenge),
+                            str(webobj.response.template_values.get("message", "")),
+                        ),
+                        mimetype="text/html",
+                    )
                 session_id = webobj.response.template_values.get("session_id", "")
                 error = webobj.response.template_values.get("error", "")
                 provider = webobj.response.template_values.get(

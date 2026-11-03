@@ -10,6 +10,7 @@ Also handles email verification via GET /oauth/email?verify=<token>.
 
 import json
 import logging
+import secrets
 import time
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -24,6 +25,29 @@ if TYPE_CHECKING:
     from ..interface.hooks import HookRegistry
 
 logger = logging.getLogger(__name__)
+
+
+def code_page_html(challenge_id: str, message: str) -> str:
+    """The fallback page asking for an emailed sign-in code (no
+    ``aw-oauth-email.html`` template)."""
+    import html as html_module
+
+    value = html_module.escape(challenge_id, quote=True)
+    text = html_module.escape(message)
+    return f"""<!DOCTYPE html>
+<html>
+<head><title>Enter your sign-in code - ActingWeb</title></head>
+<body>
+    <h1>Enter your sign-in code</h1>
+    <p>{text}</p>
+    <form method="POST" action="/oauth/email">
+        <input type="hidden" name="code_challenge" value="{value}">
+        <input type="text" name="code" inputmode="numeric" autocomplete="one-time-code" required>
+        <button type="submit">Sign in</button>
+    </form>
+</body>
+</html>
+"""
 
 
 def confirm_page_html(token: str) -> str:
@@ -160,6 +184,150 @@ class OAuth2EmailHandler(BaseHandler):
             }
             return {}
         return self.error_response(409, message)
+
+    def _offer_sign_in_code(self, existing: Any, email: str) -> dict[str, Any] | None:
+        """The typed address already has a verified actor: with the
+        ``email_sign_in_code_required`` hook registered, email a one-time
+        code (the application sends it) and ask this page for it. None when
+        the hook is not registered or the actor is not verified, so the
+        caller keeps its 409. See :mod:`actingweb.email_sign_in`."""
+        from .. import email_sign_in
+        from ..oauth2 import is_vouched_actor
+
+        if not self.hooks or not email_sign_in.hook_registered(self.hooks):
+            return None
+        store = existing.store
+        if (
+            not existing.id
+            or store is None
+            or store.email_verified == "false"
+            or not is_vouched_actor(existing)
+        ):
+            return None
+        # A browser page is bound to this browser by a cookie: a cross-site
+        # form that posts someone else's challenge and code from another
+        # browser does not carry it (login CSRF). A JSON client gets no
+        # session cookie from the redemption, so it needs no binding.
+        binding = None if self._wants_json() else secrets.token_urlsafe(24)
+        try:
+            challenge_id, code = email_sign_in.start_challenge(
+                self.config, existing.id, email, binding
+            )
+        except email_sign_in.TooManyChallenges:
+            return self.error_response(
+                429, "Too many sign-in codes requested; try again later"
+            )
+        if binding:
+            self.response.set_cookie(
+                email_sign_in.BINDING_COOKIE,
+                binding,
+                max_age=email_sign_in.CODE_TTL,
+                path="/oauth/email",
+                secure=True,
+                httponly=True,
+                samesite="Strict",
+            )
+        try:
+            from ..interface.actor_interface import ActorInterface
+
+            registry = getattr(self.config, "service_registry", None)
+            self.hooks.execute_lifecycle_hooks(
+                email_sign_in.HOOK,
+                ActorInterface(core_actor=existing, service_registry=registry),
+                email=email,
+                code=code,
+                expires_in=email_sign_in.CODE_TTL,
+            )
+        except DbError:
+            raise
+        except Exception as e:  # folds DbError: handled by the clause above
+            logger.error(f"Error in {email_sign_in.HOOK} hook: {e}")
+            return None
+        message = f"We sent a sign-in code to {email}. Enter it to continue."
+        if self._wants_json():
+            self._set_cors_headers()
+            response_data: dict[str, Any] = {
+                "success": True,
+                "status": "code_required",
+                "message": message,
+                "code_challenge": challenge_id,
+                "expires_in": email_sign_in.CODE_TTL,
+            }
+            self.response.write(json.dumps(response_data))
+            self.response.headers["Content-Type"] = "application/json"
+            self.response.set_status(200)
+            return response_data
+        self.response.template_values = {
+            "action": "/oauth/email",
+            "method": "POST",
+            "code_challenge": challenge_id,
+            "message": message,
+            "email": email,
+        }
+        return {}
+
+    def _redeem_sign_in_code(self, challenge_id: str, code: str) -> dict[str, Any]:
+        """``POST /oauth/email`` with ``code_challenge`` and ``code``: a
+        correct code signs this page in to the actor (an ActingWeb session,
+        as the OAuth callback issues one)."""
+        from .. import actor as actor_module
+        from .. import email_sign_in
+        from ..oauth_session import get_oauth2_session_manager
+
+        binding = None
+        if not self._wants_json():
+            binding = (self.request.cookies or {}).get(email_sign_in.BINDING_COOKIE)
+        actor_id = email_sign_in.redeem(self.config, challenge_id, code, binding)
+        if not actor_id:
+            return self.error_response(401, "Invalid or expired sign-in code")
+        signed_in = actor_module.Actor(actor_id=actor_id, config=self.config)
+        if not signed_in.id:
+            return self.error_response(401, "Invalid or expired sign-in code")
+        identifier = signed_in.creator or ""
+        session_manager = get_oauth2_session_manager(self.config)
+        access_token = self.config.new_token()
+        redirect_url = self._www_path(actor_id)
+        if self._wants_json():
+            chain_id = session_manager.new_chain_id()
+            session_manager.store_access_token(
+                access_token, actor_id, identifier, chain_id=chain_id
+            )
+            refresh_token = session_manager.create_refresh_token(
+                actor_id, identifier, chain_id=chain_id
+            )
+            self._set_cors_headers()
+            response_data: dict[str, Any] = {
+                "success": True,
+                "status": "signed_in",
+                "actor_id": actor_id,
+                "email": identifier,
+                "access_token": access_token,
+                "refresh_token": refresh_token,
+                "token_type": "Bearer",
+                "expires_in": 3600,
+                "redirect_url": redirect_url,
+            }
+            self.response.write(json.dumps(response_data))
+            self.response.headers["Content-Type"] = "application/json"
+            self.response.set_status(200)
+            return response_data
+        session_manager.store_access_token(access_token, actor_id, identifier)
+        self.response.set_cookie(
+            "oauth_token",
+            access_token,
+            max_age=3600,
+            path="/",
+            secure=True,
+            httponly=True,
+            samesite="Lax",
+        )
+        self.response.set_status(302, "Found")
+        self.response.set_redirect(redirect_url)
+        return {
+            "status": "signed_in",
+            "actor_id": actor_id,
+            "redirect_url": redirect_url,
+        }
 
     def _verification_confirm_page(self, token: str) -> dict[str, Any]:
         """``GET /oauth/email?verify=<token>``: a page (or JSON) that asks for
@@ -449,13 +617,20 @@ class OAuth2EmailHandler(BaseHandler):
                 session_id = params.get("session", "")
                 email = params.get("email", "")
                 verify_token = params.get("verify", "")
+                code_challenge = params.get("code_challenge", "")
+                sign_in_code = params.get("code", "")
             except (json.JSONDecodeError, ValueError):
                 # Fall back to form parameters
                 session_id = self.request.get("session") or ""
                 email = self.request.get("email") or ""
                 verify_token = self.request.get("verify") or ""
+                code_challenge = self.request.get("code_challenge") or ""
+                sign_in_code = self.request.get("code") or ""
             if not verify_token and not body_str:
                 verify_token = self.request.get("verify") or ""
+            if not code_challenge and not body_str:
+                code_challenge = self.request.get("code_challenge") or ""
+                sign_in_code = self.request.get("code") or ""
 
         except Exception as e:  # folds DbError: no DB access
             logger.error(f"Failed to parse email form data: {e}")
@@ -463,6 +638,8 @@ class OAuth2EmailHandler(BaseHandler):
 
         if isinstance(verify_token, str) and verify_token:
             return self._handle_email_verification(verify_token)
+        if isinstance(code_challenge, str) and code_challenge:
+            return self._redeem_sign_in_code(code_challenge, str(sign_in_code or ""))
 
         # Validate inputs
         if not session_id:
@@ -548,6 +725,9 @@ class OAuth2EmailHandler(BaseHandler):
 
             existing_check = actor_module.Actor(config=self.config)
             if existing_check.get_from_creator(email):
+                code_answer = self._offer_sign_in_code(existing_check, email)
+                if code_answer is not None:
+                    return code_answer
                 logger.warning(
                     f"Free-text email {email} already has an actor; refusing"
                 )

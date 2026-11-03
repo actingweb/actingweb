@@ -1283,6 +1283,28 @@ ADDED
   with work), 2 (the tombstone store cannot be read). Pass
   ``--no-unique-creator`` when the application runs without uniqueness.
 
+- **Signing in again with an emailed code: the
+  ``email_sign_in_code_required`` lifecycle hook.** A user whose provider
+  has no verified address proves their address once through the email form
+  and its link; the next sign-in reached the form again, which answered 409
+  because the address had an actor. With this hook registered
+  (``func(actor, email, code, expires_in)``, the application sends the mail,
+  as it does for ``email_verification_required``), the form answers a
+  verified actor's address with a six-digit code instead: the browser page
+  shows a code field, a JSON client gets ``status: "code_required"`` and a
+  ``code_challenge``. ``POST /oauth/email`` with ``code_challenge`` and
+  ``code`` signs that page in (the ``oauth_token`` cookie and a redirect to
+  the actor, or a JSON ``access_token`` and ``refresh_token``). A code lasts
+  10 minutes and 5 tries, is single use and stored only as a digest; only
+  the page that asked holds the challenge, and only the mailbox the code. A
+  browser page is bound to its browser by an HttpOnly ``SameSite=Strict``
+  cookie (``aw_sign_in_binding``), so a cross-site post of someone else's
+  challenge and code signs nobody in. One challenge per actor is live, and
+  at most five are sent per actor per hour (then 429).
+  **Behavior change:** none without the hook, which keeps the 409.
+  **Check:** an application template overriding ``aw-oauth-email.html``
+  renders the code field when ``code_challenge`` is set.
+
 - **``DeletionInProgress``** (``actingweb.db.exceptions``, a ``DbError``):
   another request is finishing the actor's deletion; answered 503 with
   ``Retry-After`` from its ``retry_after``.

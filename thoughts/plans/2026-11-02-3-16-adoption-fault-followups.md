@@ -397,7 +397,7 @@ flowchart TD
 - `CHANGELOG.rst`: four SECURITY entries (E1, R3, the confirmed link, the bridge), six CHANGED (the Breaking `is_suspended`, stalled deletions, the revocation order, diff registration, the resync record, `DbSubscription.modify`), two ADDED (`actingweb-deletions`, `DeletionInProgress`), five FIXED; five existing `Unreleased` passages corrected where this block made them inexact (the vouched-tombstone limitation, the clean's straddle, the hooks firing twice, B8's `DELETE` order, the no-gap case).
 - The `email_verification_required` kwargs (BG3 point 5) were removed again before the docs: see the decision above.
 - Docs: `docs/migration/v3.16.rst` ("Verified provider addresses", "Stalled deletions", `is_suspended` and `DeletionInProgress` in the fault contract, the deliberate folds, the custom-backend line); `docs/reference/hooks-reference.rst` ("Faults and hooks" table, `unverified_email`, `None` summary counts); `docs/reference/actor-deletion.rst` (the order and "Resuming a stalled wipe"); `docs/guides/database-maintenance.rst` ("Stalled Deletions"); `docs/reference/database-backends.rst` (the deliberate folds).
-- Todos: `adoption-fault-and-hygiene-followups.md`, `resumable-actor-deletion.md` and `oauth-email-verified-claim-unchecked.md` deleted with their `INDEX.md` rows; `email-form-user-sign-in-after-verification.md` filed for what BG leaves open.
+- Todos: `adoption-fault-and-hygiene-followups.md`, `resumable-actor-deletion.md` and `oauth-email-verified-claim-unchecked.md` deleted with their `INDEX.md` rows. `email-form-user-sign-in-after-verification.md`, filed for what BG left open, was closed by Iterations entry 1.
 
 ---
 
@@ -481,3 +481,25 @@ Not taken: replacing the R3 generation with a re-read of the consumed refresh ro
 - A lease plus a reason-recording tombstone made the wipe resumable without a new store: the tombstone row was already the one place every path reads.
 - Every review round after Phase 1 found its issues in what the folded-in fixes added (the link, the hook kwargs, the lease release), not in the original decisions: a design added during review needs its own review.
 - The test doubles that build `user_info` or attribute backends by hand are where a contract change shows first; eleven of them needed `get_attr_strict`, and the id-token fixtures lacked the claims real providers send.
+
+## Iterations
+
+### 2026-11-03, after implementation (commit `922156b`)
+
+#### 1. Signing in again with an emailed code
+
+**Category**: New functionality (owner, 2026-11-03: "Let's not leave todos open that we need to do")
+
+**What changed**: a user whose provider has no verified address, and whose address the email form's link verified once, met the form's 409 at every later sign-in (the BG symptom BG3 left open). With the new opt-in lifecycle hook `email_sign_in_code_required(actor, email, code, expires_in)` registered (the application sends the mail, as for `email_verification_required`; the library sends none), the form answers a verified actor's address with a six-digit code: the page shows a code field (JSON: `status: "code_required"`, `code_challenge`), and `POST /oauth/email` with `code_challenge` and `code` signs that page in with an ActingWeb session (the `oauth_token` cookie and a redirect, or JSON `access_token`/`refresh_token`), as the OAuth callback issues one. The code lives in a system bucket as a digest bound to its challenge id, ten minutes, five tries; every attempt is counted with a conditional write before the comparison (an attempt that cannot be counted is refused, so parallel guesses cannot skip the count), and a correct code is consumed with a conditional delete. The owner chose the code over an emailed sign-in link (the code works the same for web and SPA, across devices, and cannot be used by a mail scanner or a forwarded mail). Without the hook nothing changes.
+
+**Files affected**:
+- `actingweb/email_sign_in.py` (new): the challenge, its redemption and the hook name.
+- `actingweb/handlers/oauth_email.py`: `_offer_sign_in_code` where the free-text branch answered 409, `_redeem_sign_in_code` on `POST` with `code_challenge`, `code_page_html` for the fallbacks.
+- `actingweb/templates/aw-oauth-email.html`, `actingweb/interface/integrations/flask_integration.py`, `actingweb/interface/integrations/fastapi_integration.py`: the code field and the fallback page.
+- `tests/test_email_sign_in_code.py` (new).
+- `CHANGELOG.rst` (ADDED), `docs/migration/v3.16.rst`, `docs/reference/hooks-reference.rst`.
+- `thoughts/todo/email-form-user-sign-in-after-verification.md` deleted with its `INDEX.md` row.
+
+**Codex review** (unsandboxed): three findings. Fixed: a web redemption is bound to the browser that asked by an HttpOnly `SameSite=Strict` cookie, so a cross-site post of an attacker's own challenge and code cannot plant the attacker's session (login CSRF); one challenge per actor is live and at most five are sent per actor per hour (429 after), so the five tries cannot be renewed through new provider sign-ins and the mailbox is not flooded. Accepted: the JSON answer carries the SPA CORS policy (`spa_cors_origins`, reflected by default) like the SPA token endpoints; a phishing origin that gets the victim to type the code has the generic one-time-code phishing exposure, not a new one.
+
+**Rationale**: the session at the click did not work (the form's credential is the provider's token) and linking the provider account was a takeover path; proving the mailbox again at sign-in, to the page that asked, is the one shape that signs the right person in. A new hook name rather than a kwarg on the existing hook, since the runner passes every kwarg to every hook.

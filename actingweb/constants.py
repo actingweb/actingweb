@@ -239,6 +239,14 @@ APPLE_TICKET_TTL = MOBILE_TICKET_TTL  # backward-compatible alias
 # others are comparable. 30 days costs a handful of bytes per deleted actor.
 DELETION_TOMBSTONE_TTL = 86400 * 30  # 30 days
 
+# How long one finisher holds an actor's deletion tombstone while it runs the
+# wipe (actingweb.deletion_finish). A second finisher that meets a live lease
+# answers 503 with Retry-After instead of starting the wipe again; a lease
+# that lapsed (a crashed finisher) is taken over. The tombstone itself carries
+# no TTL until the wipe is confirmed finished, so a stalled wipe stays visible
+# to ``actingweb-deletions report``. Deliberately not configurable.
+DELETION_LEASE = 120  # seconds
+
 # Clock skew buffer for TTL calculations
 # DynamoDB TTL can be delayed up to 48 hours, but items may appear
 # expired before TTL fires. This buffer prevents premature invalidation.

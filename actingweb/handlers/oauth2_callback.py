@@ -541,14 +541,17 @@ class OAuth2CallbackHandler(BaseHandler):
                     # established that the provider proved this actor's
                     # address, which is what the rule is for. It may hand back
                     # a different actor (a replacement) or None.
-                    from ..oauth2 import adopt_actor
-
-                    actor_instance = adopt_actor(
-                        actor_instance,
-                        provider=self.authenticator.provider,
-                        config=self.config,
-                        hooks=self.hooks,
-                        user_info=user_info,
+                    # One resolve path with the SPA completions (BQ): the
+                    # loaded actor goes through the same lookup, its
+                    # CreatorTaken reloads and the stalled-deletion finish.
+                    actor_instance = (
+                        self.authenticator.lookup_or_create_actor_by_identifier(
+                            identifier,
+                            user_info=user_info,
+                            hooks=self.hooks,
+                            finish_stalled_deletion=True,
+                            existing=actor_instance,
+                        )
                     )
                     if not actor_instance:
                         logger.error(f"Adoption of actor {actor_id} failed")
@@ -572,6 +575,7 @@ class OAuth2CallbackHandler(BaseHandler):
                 identifier,
                 user_info=user_info,  # Pass user_info for additional metadata
                 hooks=self.hooks,
+                finish_stalled_deletion=True,
             )
             if not actor_instance:
                 logger.error(
@@ -1181,7 +1185,10 @@ class OAuth2CallbackHandler(BaseHandler):
         # Config (no config._hooks to fall back on) fires actor_created zero
         # times on this path.
         actor_instance = self.authenticator.lookup_or_create_actor_by_identifier(
-            identifier, user_info=user_info, hooks=self.hooks
+            identifier,
+            user_info=user_info,
+            hooks=self.hooks,
+            finish_stalled_deletion=True,
         )
         if not actor_instance:
             logger.error("SPA OAuth: Failed to create actor")

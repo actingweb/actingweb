@@ -106,6 +106,13 @@ class MCPClientRegistry:
             "created_at": int(time.time()),
             "actor_id": actor_id,
         }
+        # R3: the client-credentials grant mints from this registration; one
+        # made before the actor was adopted in place mints nothing.
+        from .. import session_generation
+
+        client_data[session_generation.STAMP_FIELD] = session_generation.current(
+            actor_id, self.config
+        )
 
         # Store client in actor properties
         logger.debug(
@@ -285,9 +292,19 @@ class MCPClientRegistry:
             logger.error(f"Error listing clients for actor {actor_id}: {e}")
             return []
 
-    def delete_client(self, client_id: str, actor_id: str | None = None) -> bool:
+    def delete_client(
+        self,
+        client_id: str,
+        actor_id: str | None = None,
+        *,
+        actor_deleted: bool = False,
+    ) -> bool:
         """
         Delete an OAuth2 client and revoke all its tokens.
+
+        ``actor_deleted=True``: the owning actor is being wiped, and its
+        bucket (the client row), its tokens and its trusts go with the wipe,
+        so only the client's global index row is removed (confirmed).
 
         This method performs a complete cleanup:
         1. Revokes all access and refresh tokens for the client
@@ -305,6 +322,12 @@ class MCPClientRegistry:
         Returns:
             True if deletion was successful, False otherwise
         """
+        if actor_deleted:
+            from ..single_use import delete_confirmed
+
+            return delete_confirmed(
+                self.config, OAUTH2_SYSTEM_ACTOR, CLIENT_INDEX_BUCKET, client_id
+            )
         try:
             # First find the client to get metadata (and actor_id if not provided).
             client_data = self._load_client(client_id)

@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: active
 ---
 
 # Implementation Plan: 3.16 adoption, deletion and fault-contract follow-ups
@@ -225,7 +225,22 @@ flowchart TD
 - [ ] Full tier, both backends, before the phase commit
 - [ ] `poetry run actingweb-deletions report` against DynamoDB Local with one stalled, one in-progress and one legacy tombstone
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+**Deviations and notes (implementation, 2026-11-03):**
+
+- `finish_deletion` lives in `actingweb/deletion_finish.py` (the plan allowed it); it returns the tokens revoked, or None when the row removal was not confirmed, so the replacement keeps its `actor_adopted` count.
+- The first tombstone write is a conditional create (`deletion.create_leased_tombstone`) that carries the lease, so two first `DELETE`s cannot both run; a lease is released by its `lease_id` after a fresh read (the re-stamp changes the row under the lease).
+- `Actor.delete` returns False for an object with no id (loading an id whose row is gone leaves none), and confirms a backend `False` row delete with a strict read, so a repeated call on the same object answers True.
+- A legacy (reason-less) tombstone met by `finish_deletion` counts as `hook_fired` (the common case is that `actor_deleted` ran right after it).
+- AW3's gate (`finish_stalled_deletion`) applies to vouched actors only; the unvouched tombstoned path keeps finishing on any adoption, as before (a bearer-token lookup already adopts unvouched actors today).
+- `DELETE /<id>` now revokes the actor's MCP and SPA tokens (through `finish_deletion`) and answers 503 when the backend does not confirm the row removal (it answered 204 before); both go in the changelog as **Behavior change**.
+- `actingweb-deletions report` also lists `unfinished` tombstones (row gone, no `finished_at`), and `resume` removes their recorded client index rows; it builds its `Config` with `unique_creator` on unless `--no-unique-creator` (there is no environment variable for the setting).
+- Not done: the devtest-only `_handle_passphrase_exchange` (`oauth2_spa.py:1590`) is not checked against the generation. `with_devtest` must be off in production, and the passphrase the clean rotates is checked against the actor as loaded; recorded as accepted.
+- Tests the change broke and that were updated: the attribute test doubles gained `get_attr_strict` (eleven files); `tests/test_oauth2_adoption.py::TestBypassSites` now asserts the one resolve path; `tests/test_oauth2_clear_pending_verification.py` asserts the state-selected actor goes through it as `existing=`; `tests/test_oauth_session.py` asserts `finish_stalled_deletion=True`. The two "tombstoned vouched actor signs in untouched" tests still hold unchanged: they write a reason-less tombstone, which is R4's case.
+- Codex review of the phase diff (`codex exec -s read-only`, unsandboxed, it ran this time): five findings. Fixed: the lease is renewed after `actor_deleted` and the renewal fences a finisher whose lease was taken over (`DeletionInProgress`); `mark_finished` reads the row afresh and only the lease holder announces `actor_deleted_complete`; `report`/`clear` of one actor see a finished tombstone on a live row (as `legacy, review`). Accepted: an actor wrapper already cached in another worker's MCP cache is served until its TTL (the cross-process cache item under NOT doing); `restamp` ignoring a `False` from `mark_actor_deleted` (that answer means missing arguments only; a fault raises).
+- Two integration tests (`tests/integration/test_oauth2_security.py`) fed the callback a mocked authenticator whose lookup returned a mock actor with a mock `Config`; with BQ the state path goes through that lookup, and the system actor's bootstrap under a mock `Config` met AW1's strict clear. The mocks now hand back the real actor (`existing=`) and a real `Config`.
+- New tests: `tests/test_deletion_finish.py`, `tests/test_adoption_tombstoned_vouched.py`, `tests/test_session_generation.py`, `tests/test_deletions_command.py`, `tests/test_deletion_in_progress_answers.py`, `tests/integration/test_deletion_resume_http.py`, and the O2a case in `tests/test_db_fault_partial_state.py`. The bridge refusal and the strict `_race_winner` tests fail with the `handlers/mcp.py` change reverted.
 
 ---
 

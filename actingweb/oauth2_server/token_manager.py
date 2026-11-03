@@ -126,6 +126,13 @@ class ActingWebTokenManager:
             auth_data["user_email"] = user_email
         if trust_type:
             auth_data["trust_type"] = trust_type
+        # R3: the generation the code is issued under; an exchange after the
+        # actor was adopted in place mints nothing (session_generation).
+        from .. import session_generation
+
+        auth_data[session_generation.STAMP_FIELD] = session_generation.current(
+            actor_id, self.config
+        )
 
         self._store_auth_code(actor_id, auth_code, auth_data)
 
@@ -238,6 +245,9 @@ class ActingWebTokenManager:
         )
 
         # Create refresh token
+        from .. import session_generation
+
+        stamped = auth_data.get(session_generation.STAMP_FIELD)
         refresh_token = self._create_refresh_token(
             actor_id,
             client_id,
@@ -245,7 +255,14 @@ class ActingWebTokenManager:
             access_token_id=access_token["token_id"],
             chain_id=chain_id,
             google_token_key=access_token.get("google_token_key"),
+            session_generation=stamped,
         )
+        if not self._generation_still_matches(
+            actor_id, stamped, access_token, refresh_token
+        ):
+            self._remove_google_token_data(actor_id, auth_data["google_token_key"])
+            self._remove_auth_code(code)
+            return None
 
         # Clean up authorization code and Google token data
         self._remove_google_token_data(actor_id, auth_data["google_token_key"])
@@ -473,6 +490,9 @@ class ActingWebTokenManager:
                 return None
 
         # Create new access token without Google token data (refresh flow)
+        from .. import session_generation
+
+        stamped = refresh_data.get(session_generation.STAMP_FIELD)
         access_token = self._create_access_token_from_refresh(
             actor_id, client_id, chain_id=chain_id
         )
@@ -483,7 +503,12 @@ class ActingWebTokenManager:
             access_token_id=access_token["token_id"],
             chain_id=chain_id,
             google_token_key=None,
+            session_generation=stamped,
         )
+        if not self._generation_still_matches(
+            actor_id, stamped, access_token, new_refresh
+        ):
+            return None
 
         return {
             "access_token": access_token["token"],
@@ -863,6 +888,7 @@ class ActingWebTokenManager:
         access_token_id: str | None = None,
         chain_id: str | None = None,
         google_token_key: str | None = None,
+        session_generation: Any = None,
     ) -> dict[str, Any]:
         """Create an ActingWeb refresh token.
 
@@ -887,9 +913,41 @@ class ActingWebTokenManager:
             "created_at": int(time.time()),
             "expires_at": int(time.time()) + self.refresh_token_expires_in,
         }
+        if session_generation is not None:
+            # R3: the chain keeps the generation its first credential was
+            # issued under.
+            refresh_data["session_generation"] = session_generation
 
         self._store_refresh_token(actor_id, token, refresh_data)
         return refresh_data
+
+    def _generation_still_matches(
+        self,
+        actor_id: str,
+        stamped: Any,
+        access_token: dict[str, Any],
+        refresh_token: dict[str, Any] | None,
+    ) -> bool:
+        """R3, after a grant wrote its tokens: whether the credential it
+        minted from was issued under the actor's current session generation.
+        On a mismatch the tokens just written are revoked and the grant
+        fails (``invalid_grant``); when the generation cannot be read they are
+        revoked and ``TokenStoreUnavailable`` is raised (503)."""
+        from .. import session_generation
+
+        def revoke() -> None:
+            self._remove_access_token(
+                access_token["token"],
+                actor_id=actor_id,
+                google_token_key=access_token.get("google_token_key"),
+            )
+            if refresh_token is not None:
+                self._remove_refresh_token(refresh_token["token"])
+
+        try:
+            return session_generation.guard(actor_id, self.config, stamped, revoke)
+        except DbError as e:
+            raise TokenStoreUnavailable("session generation read") from e
 
     def _store_auth_code(
         self, actor_id: str, code: str, auth_data: dict[str, Any]
@@ -1434,9 +1492,15 @@ class ActingWebTokenManager:
         scope: str = "mcp",
         trust_type: str = "mcp_client",
         grant_type: str = "client_credentials",
+        *,
+        client_generation: Any = None,
     ) -> dict[str, Any] | None:
         """
         Create an access token for client credentials flow.
+
+        ``client_generation``: the session generation the client registration
+        was stamped with (R3); a client registered before the actor was
+        adopted in place mints nothing.
 
         Args:
             actor_id: The actor this token is for
@@ -1467,6 +1531,10 @@ class ActingWebTokenManager:
 
             # Store token in actor's private attributes
             self._store_access_token(actor_id, token, token_data)
+            if not self._generation_still_matches(
+                actor_id, client_generation, token_data, None
+            ):
+                return None
 
             # Return standard OAuth2 token response
             response = {
@@ -1481,7 +1549,7 @@ class ActingWebTokenManager:
             )
             return response
 
-        except DbError:
+        except (DbError, TokenStoreUnavailable):
             raise
         except Exception as e:
             logger.error(f"Error creating access token for client credentials: {e}")

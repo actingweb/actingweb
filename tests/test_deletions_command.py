@@ -1,0 +1,143 @@
+"""``actingweb-deletions``: report, resume and clear unfinished deletions.
+
+Plan: thoughts/plans/2026-11-02-3-16-adoption-fault-followups.md, Phase 1.
+"""
+
+from __future__ import annotations
+
+import datetime
+from typing import Any
+from unittest.mock import patch
+
+import pytest
+
+from actingweb import deletion
+from actingweb.actor import Actor
+from actingweb.db import get_attribute
+from actingweb.db.exceptions import DbError
+from actingweb.maintenance import deletions as command
+from tests._adoption_helpers import aid, create_core_actor, make_config, uuid_email
+
+_PAST = datetime.datetime.now(datetime.UTC) - datetime.timedelta(hours=1)
+
+
+@pytest.fixture
+def config() -> Any:
+    return make_config()
+
+
+@pytest.fixture(autouse=True)
+def _same_backend(config: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The command builds its own Config from the environment, as an operator
+    # would run it; point it at the suite's backend and keep the suite's
+    # uniqueness setting through --no-unique-creator.
+    monkeypatch.setenv("DATABASE_BACKEND", config.database)
+
+
+def _run(capsys: pytest.CaptureFixture[str], *argv: str) -> tuple[int, str]:
+    code = command.main([*argv[:1], *argv[1:], "--no-unique-creator"])
+    return code, capsys.readouterr().out
+
+
+def _stalled(config: Any, *, leased: bool = False) -> str:
+    actor_id = aid(create_core_actor(config, uuid_email()))
+    deletion.create_leased_tombstone(
+        actor_id,
+        config,
+        reason="deleted",
+        notify_peers=True,
+        hook_kwargs={},
+        client_ids=[],
+        now=None if leased else _PAST,
+    )
+    return actor_id
+
+
+class TestReport:
+    def test_classifies_one_actor(self, config: Any, capsys: Any) -> None:
+        stalled = _stalled(config)
+        code, out = _run(capsys, "report", stalled)
+        assert code == 1 and f"{stalled}\tstalled" in out
+
+    def test_an_in_progress_one_is_not_an_error(self, config: Any, capsys: Any) -> None:
+        leased = _stalled(config, leased=True)
+        code, out = _run(capsys, "report", leased)
+        assert code == 0 and "in progress" in out
+
+    def test_a_legacy_tombstone_needs_review(self, config: Any, capsys: Any) -> None:
+        actor_id = aid(create_core_actor(config, uuid_email()))
+        deletion.mark_actor_deleted(actor_id, config)
+        try:
+            code, out = _run(capsys, "report", actor_id)
+            assert code == 1 and "legacy, review" in out
+        finally:
+            deletion.clear_actor_tombstone(actor_id, config)
+
+    def test_a_finished_wipe_is_not_listed(self, config: Any, capsys: Any) -> None:
+        from actingweb.deletion_finish import finish_deletion
+
+        victim = create_core_actor(config, uuid_email())
+        finish_deletion(victim, config=config, hooks=None, origin="delete")
+        code, out = _run(capsys, "report", aid(victim))
+        assert code == 0 and "No unfinished deletions" in out
+
+    def test_an_unreadable_store_exits_2(self, config: Any, capsys: Any) -> None:
+        with patch.object(
+            type(get_attribute(config)), "get_bucket", side_effect=DbError("x")
+        ):
+            code = command.main(["report", "--no-unique-creator"])
+        assert code == 2
+
+
+class TestResume:
+    def test_a_dry_run_changes_nothing(self, config: Any, capsys: Any) -> None:
+        stalled = _stalled(config)
+        code, out = _run(capsys, "resume", stalled)
+        assert code == 1 and f"would finish {stalled}" in out
+        assert Actor(actor_id=stalled, config=config).id == stalled
+
+    def test_apply_finishes_and_prints_the_ids(self, config: Any, capsys: Any) -> None:
+        stalled = _stalled(config)
+        code, out = _run(capsys, "resume", stalled, "--apply")
+        assert code == 0, out
+        assert f"{stalled}: finished" in out and "actor_deleted_complete" in out
+        assert Actor(actor_id=stalled, config=config).id is None
+
+    def test_a_legacy_one_is_resumed_only_when_named(
+        self, config: Any, capsys: Any
+    ) -> None:
+        actor_id = aid(create_core_actor(config, uuid_email()))
+        deletion.mark_actor_deleted(actor_id, config)
+        try:
+            with patch.object(command, "scan", wraps=command.scan) as scanned:
+                command.main(["resume", "--apply", "--no-unique-creator"])
+            assert scanned.called
+            assert Actor(actor_id=actor_id, config=config).id == actor_id
+            code, _out = _run(capsys, "resume", actor_id, "--apply")
+            assert code == 0
+            assert Actor(actor_id=actor_id, config=config).id is None
+        finally:
+            deletion.clear_actor_tombstone(actor_id, config)
+
+
+class TestClear:
+    def test_dry_run_then_apply(self, config: Any, capsys: Any) -> None:
+        actor_id = aid(create_core_actor(config, uuid_email()))
+        deletion.mark_actor_deleted(actor_id, config)
+        code, out = _run(capsys, "clear", actor_id)
+        assert code == 1 and "would clear" in out
+        code, out = _run(capsys, "clear", actor_id, "--apply")
+        assert code == 0 and "cleared" in out
+        assert deletion.get_deletion_status(actor_id, config) == (
+            deletion.DeletionStatus.NOT_DELETED
+        )
+        assert Actor(actor_id=actor_id, config=config).id == actor_id
+
+    def test_clear_sees_a_finished_tombstone_on_a_live_actor(
+        self, config: Any, capsys: Any
+    ) -> None:
+        actor_id = aid(create_core_actor(config, uuid_email()))
+        deletion.mark_actor_deleted(actor_id, config, reason="deleted", hook_fired=True)
+        deletion.mark_finished(actor_id, config, None)
+        code, out = _run(capsys, "clear", actor_id, "--apply")
+        assert code == 0 and "cleared" in out

@@ -672,6 +672,7 @@ class ActingWebOAuth2Server:
             scope=scope,
             trust_type=trust_type,
             grant_type="client_credentials",
+            client_generation=client_data.get("session_generation"),
         )
 
         if not token_response:
@@ -845,7 +846,7 @@ class ActingWebOAuth2Server:
         try:
             return self._get_authenticator(
                 provider_name
-            ).lookup_or_create_actor_by_identifier(email)
+            ).lookup_or_create_actor_by_identifier(email, finish_stalled_deletion=True)
         except DbError:
             raise
         except Exception as e:

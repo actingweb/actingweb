@@ -162,20 +162,21 @@ class TestClearPendingOnStateSelectedActor:
         hooks = MagicMock()
         hooks.execute_lifecycle_hooks.return_value = True
 
+        auth.lookup_or_create_actor_by_identifier.return_value = state_actor
         with (
             patch(
                 "actingweb.handlers.oauth2_callback.create_oauth2_authenticator",
                 return_value=auth,
             ),
             patch("actingweb.actor.Actor", return_value=state_actor),
-            patch(
-                "actingweb.oauth2.adopt_actor", return_value=state_actor
-            ) as mock_adopt,
         ):
             OAuth2CallbackHandler(webobj, config, hooks=hooks).get()
 
-        # The state branch was taken (no lookup/create) and the adoption rule,
-        # which owns the pending-state cleanup, ran on the state-selected actor.
-        auth.lookup_or_create_actor_by_identifier.assert_not_called()
-        assert mock_adopt.call_args.args == (state_actor,)
-        assert mock_adopt.call_args.kwargs["config"] is config
+        # The state branch was taken: the state-selected actor goes through
+        # the one resolve path (BQ), which runs the adoption rule that owns
+        # the pending-state cleanup, as ``existing=`` rather than a fresh
+        # lookup by creator.
+        call = auth.lookup_or_create_actor_by_identifier.call_args
+        assert call.kwargs["existing"] is state_actor
+        assert call.kwargs["finish_stalled_deletion"] is True
+        assert call.args == ("user@example.com",)

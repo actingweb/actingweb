@@ -28,6 +28,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+#: Default of ``create_refresh_token(session_generation=)``: read the
+#: actor's current generation.
+_CURRENT_GENERATION: Any = object()
+
 # Session TTL - 10 minutes
 _SESSION_TTL = 600
 
@@ -353,6 +357,10 @@ class OAuth2SessionManager:
             # Passed only when set so authenticators that predate the keyword
             # (and tests asserting the call) see the call they always saw.
             extra: dict[str, Any] = {"auth_method": auth_method} if auth_method else {}
+            if not create_only:
+                # A sign-in completion: a vouched actor whose deletion
+                # stalled is finished and recreated (adopt_actor).
+                extra["finish_stalled_deletion"] = True
             actor_instance = authenticator.lookup_or_create_actor_by_email(
                 email, hooks=hooks, create_only=create_only, **extra
             )
@@ -593,6 +601,7 @@ class OAuth2SessionManager:
         identifier: str | None = None,
         ttl: int | None = None,
         chain_id: str | None = None,
+        session_generation: Any = _CURRENT_GENERATION,
     ) -> str:
         """
         Create a new refresh token for an actor.
@@ -608,6 +617,11 @@ class OAuth2SessionManager:
                 (initial login), a fresh chain is started so each device/session
                 gets its own independent lineage and a theft response on one
                 device never logs out the others.
+            session_generation: The session generation the token is stamped
+                with (R3, :mod:`actingweb.session_generation`). By default the
+                actor's current one (a login); a rotation passes the consumed
+                token's stamp, so the chain keeps the generation it began
+                under.
 
         Returns:
             The new refresh token
@@ -629,6 +643,19 @@ class OAuth2SessionManager:
             "used": False,
             "chain_id": chain_id or self.new_chain_id(),
         }
+        from . import session_generation as generation_module
+
+        if session_generation is _CURRENT_GENERATION:
+            try:
+                session_generation = generation_module.current(actor_id, self.config)
+            except DbError as e:
+                from .oauth2_server.token_manager import TokenStoreUnavailable
+
+                raise TokenStoreUnavailable(
+                    f"Could not read the session generation of actor {actor_id}"
+                ) from e
+        if session_generation is not None:
+            token_data[generation_module.STAMP_FIELD] = session_generation
 
         bucket = attribute.Attributes(
             actor_id=OAUTH2_SYSTEM_ACTOR,

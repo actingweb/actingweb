@@ -142,6 +142,30 @@ class TestLReplacementOrder:
         assert get_deletion_status(aid(victim), config) != DeletionStatus.DELETED
         assert Actor(actor_id=aid(victim), config=config).id == aid(victim)
 
+    def test_a_list_fault_leaves_the_victims_tokens(self, config: Any) -> None:
+        """O2a: the strict reads come before the token revoke."""
+        from actingweb import oauth2 as oauth2_module
+        from actingweb.oauth_session import get_oauth2_session_manager
+
+        victim = create_core_actor(config, uuid_email())
+        manager = get_oauth2_session_manager(config)
+        token = f"spa-{aid(victim)}"
+        manager.store_access_token(token, aid(victim), victim.creator or "")
+
+        with (
+            seam_fault(config, "trust", "Trust", "query"),
+            pytest.raises(DbError),
+        ):
+            oauth2_module._remove_for_replacement(
+                victim,
+                config=config,
+                hooks=None,
+                creator=victim.creator or "",
+                client_ids=[],
+            )
+
+        assert manager.validate_access_token(token) is not None
+
 
 class TestMTrusteeRootWrite:
     def test_a_faulted_trustee_root_write_leaves_no_actor(self, config: Any) -> None:

@@ -2468,14 +2468,18 @@ class MCPHandler(BaseHandler):
         row is a create whose marker write failed and whose rollback did too;
         a tombstoned one is mid-deletion."""
         from .. import actor as actor_module
-        from ..deletion import DeletionStatus, get_deletion_status
+        from ..deletion import DeletionStatus, read_tombstone
 
         winner = actor_module.Actor(actor_id, self.config)
         if not winner.id or winner.store is None or not winner.store.loaded:
             return False
         if not winner.store.auth_method:
             return False
-        return get_deletion_status(actor_id, self.config) != DeletionStatus.DELETED
+        # Strict (the K rule): an unreadable tombstone store raises DbError,
+        # answered 503, rather than counting a possibly mid-deletion row as
+        # the winner.
+        status, _ = read_tombstone(actor_id, self.config)
+        return status != DeletionStatus.DELETED
 
     def _get_or_create_actor_cached(
         self,
@@ -2513,6 +2517,21 @@ class MCPHandler(BaseHandler):
             logger.warning(
                 f"Actor {actor_id} not found in ActingWeb storage - creating actor to bridge OAuth2 authentication"
             )
+
+            # A deleted actor is never brought back: a token cached on another
+            # worker can outlive the actor by its cache TTL, and recreating
+            # the id here would also clear the deletion tombstone. Only an
+            # explicit Actor.create(actor_id=...) does that. An unreadable
+            # tombstone store raises DbError (503).
+            from ..deletion import DeletionStatus, read_tombstone
+
+            status, _ = read_tombstone(actor_id, self.config)
+            if status == DeletionStatus.DELETED:
+                logger.warning(
+                    f"Actor {actor_id} was deleted; not recreating it for a "
+                    "bearer token that outlived it"
+                )
+                return None
 
             # Try to create the actor if it doesn't exist
             try:

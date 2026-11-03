@@ -911,17 +911,41 @@ class OAuth2SPAHandler(BaseHandler):
         # detected anywhere in this lineage, only this family is revoked — and
         # the access token is tagged with the chain so it is revoked too.
         chain_id = token_data.get("chain_id")
+        from .. import session_generation
+
+        stamped = token_data.get(session_generation.STAMP_FIELD)
         try:
             new_access_token = self._generate_actingweb_token(
                 actor_id, identifier or "", chain_id=chain_id
             )
             new_refresh_token = session_manager.create_refresh_token(
-                actor_id, identifier, chain_id=chain_id
+                actor_id, identifier, chain_id=chain_id, session_generation=stamped
             )
         except TokenStoreUnavailable as e:
             # The presented token is already consumed; a retry inside the
             # grace period rotates again in the same chain.
             logger.error(f"Could not store the rotated refresh token: {e}")
+            return self._store_unavailable()
+
+        # R3: a token issued before the actor was adopted in place mints
+        # nothing, even when its refresh straddled the clean's revokes.
+        def revoke_minted() -> None:
+            session_manager.revoke_session(
+                new_access_token, token_type_hint="access_token"
+            )
+            session_manager.revoke_session(
+                new_refresh_token, token_type_hint="refresh_token"
+            )
+
+        try:
+            if not session_generation.guard(
+                actor_id, self.config, stamped, revoke_minted
+            ):
+                return self._json_error(
+                    401, "Invalid or expired refresh_token", "invalid_grant"
+                )
+        except DbError as e:  # folds DbError: answered 503 like a token-store fault
+            logger.error(f"Could not read the session generation: {e}")
             return self._store_unavailable()
 
         expires_in = 3600  # 1 hour for access token
@@ -1074,29 +1098,15 @@ class OAuth2SPAHandler(BaseHandler):
                 "invalid_grant",
             )
 
-        # Lookup or create actor
-        from .. import actor as actor_module
-
-        existing_check = actor_module.Actor(config=self.config)
-        actor_exists = existing_check.get_from_creator(identifier)
-
-        if actor_exists:
-            # Use the already-fetched actor instead of doing another DB lookup.
-            # An actor nobody vouched for is replaced or cleaned first; the
-            # result may be a different actor, and is None if that failed.
-            from ..oauth2 import adopt_actor
-
-            actor_instance = adopt_actor(
-                existing_check,
-                provider=authenticator.provider,
-                config=self.config,
-                hooks=self.hooks,
-                user_info=user_info,
-            )
-        else:
-            actor_instance = authenticator.lookup_or_create_actor_by_identifier(
-                identifier, user_info=user_info, hooks=self.hooks
-            )
+        # Lookup or create actor: the one resolve path the web callback uses
+        # too (adoption, its CreatorTaken reloads, a stalled deletion
+        # finished).
+        actor_instance = authenticator.lookup_or_create_actor_by_identifier(
+            identifier,
+            user_info=user_info,
+            hooks=self.hooks,
+            finish_stalled_deletion=True,
+        )
 
         if not actor_instance:
             logger.error(f"Failed to lookup or create actor for {identifier}")
@@ -1255,23 +1265,12 @@ class OAuth2SPAHandler(BaseHandler):
         Mirrors the authorization_code grant's completion but works without an
         upstream access token (the JWT-bearer grant only has an id_token).
         """
-        from .. import actor as actor_module
-
-        existing_check = actor_module.Actor(config=self.config)
-        if existing_check.get_from_creator(identifier):
-            from ..oauth2 import adopt_actor
-
-            actor_instance = adopt_actor(
-                existing_check,
-                provider=authenticator.provider,
-                config=self.config,
-                hooks=self.hooks,
-                user_info=user_info,
-            )
-        else:
-            actor_instance = authenticator.lookup_or_create_actor_by_identifier(
-                identifier, user_info=user_info, hooks=self.hooks
-            )
+        actor_instance = authenticator.lookup_or_create_actor_by_identifier(
+            identifier,
+            user_info=user_info,
+            hooks=self.hooks,
+            finish_stalled_deletion=True,
+        )
 
         if not actor_instance:
             logger.error(f"Failed to lookup or create actor for {identifier}")

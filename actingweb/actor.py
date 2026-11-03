@@ -748,7 +748,31 @@ class Actor:
         # there would strip the marker off a deletion still in progress,
         # reopening the very race it guards. A backend insert failure is the
         # same shape: nothing created, so nothing to un-tombstone.
-        if created:
+        if created and actor_id:
+            # A caller-supplied id is the only kind a tombstone can name, so
+            # its clear is confirmed: a live actor left tombstoned would have
+            # its writes suppressed and, at its next sign-in, be taken for a
+            # stalled deletion. A fault fails the create (503); the swap's row
+            # is kept, as the marker rollback below keeps it.
+            try:
+                deletion.clear_actor_tombstone(self.id, self.config, strict=True)
+            except DbError:
+                logger.error(
+                    f"Actor {self.id}: its deletion tombstone could not be "
+                    "confirmed cleared; failing the create"
+                )
+                if replace_holder is None:
+                    try:
+                        if self.handle:
+                            self.handle.delete()
+                    except Exception as e:  # folds DbError: rollback inside the DbError handler, which re-raises the original fault
+                        logger.error(f"Actor {self.id}: row removal raised: {e}")
+                self.id = None
+                self.passphrase = None
+                self.handle = None
+                self.store = None
+                raise
+        elif created:
             deletion.clear_actor_tombstone(self.id, self.config)
         if not created:
             # The id was taken (by a live actor, or one mid-deletion) or the
@@ -851,6 +875,12 @@ class Actor:
                     # the marker rollback above).
                     if self.handle and replace_holder is None:
                         self.handle.delete()
+                        if not actor_id:
+                            # A generated id's _internal bucket (its marker)
+                            # was written by this create alone.
+                            attribute.Attributes(
+                                actor_id=self.id, bucket="_internal", config=self.config
+                            ).delete_bucket()
                 except Exception as e:  # folds DbError: rollback inside the DbError handler, which re-raises the original fault
                     logger.error(f"Actor {self.id}: row removal raised: {e}")
                 self.id = None
@@ -1011,21 +1041,36 @@ class Actor:
                 self.actor["passphrase"] = passphrase
         return True
 
-    def delete(self, notify_peers: bool = True) -> bool:
+    def delete(
+        self,
+        notify_peers: bool = True,
+        *,
+        _pre_reads: tuple[Any, Any] | None = None,
+    ) -> bool:
         """Deletes an actor and cleans up all relevant stored data.
 
         ``notify_peers=False`` skips the remote DELETE calls to peers and
         trustees (``requests.delete``) and keeps every local cleanup. Use it
-        when the peer URLs are not trustworthy.
+        when the peer URLs are not trustworthy. When the actor's deletion
+        tombstone recorded ``notify_peers=False`` (a replacement at adoption,
+        whose peers a squatter chose), that wins over the argument.
 
-        Returns True when the actor row is gone. A backend fault raises
+        Returns True when the actor row is gone, including when a repeated
+        call on the same object finds it already gone. A backend fault raises
         ``DbError``.
+
+        **Resumable.** Every step tolerates rows that are already gone, and
+        the row goes last, so calling ``delete()`` again after it raised
+        part-way finishes the wipe. Applications deleting through HTTP or a
+        sign-in go through :func:`actingweb.deletion_finish.finish_deletion`,
+        which also runs the lifecycle hooks; this method runs none.
 
         The trust and subscription lists are read **first**, strictly: a read
         fault raises before anything is deleted and before the tombstone is
         written, so a throttle never deletes an actor without notifying its
-        peers (B8). Once the reads pass, the tombstone is written and the wipe
-        runs; a fault after that point is the tombstone path's to finish.
+        peers (B8). Once the reads pass, the tombstone is (re-)stamped and the
+        wipe runs. ``_pre_reads`` is for the finisher, which has already made
+        those reads (the fetched ``Trusts`` and ``Subscriptions`` wrappers).
 
         The actor row is removed **last**, so the actor keeps resolving for the
         duration of the wipe. Existence checks therefore fail open here, and
@@ -1033,14 +1078,30 @@ class Actor:
         step: it is readable throughout the wipe, whereas ``get()`` cannot
         distinguish mid-deletion from live. See :mod:`actingweb.deletion`.
         """
+        if not self.id:
+            # Loading an id whose row is gone leaves no id: nothing to wipe
+            # here (a stalled wipe whose row went is finished by
+            # actingweb-deletions).
+            logger.debug("Attempted delete of actor with no id")
+            return False
         if not self.handle:
+            if self.config:
+                # A repeated call after the row went: done. A strict read, so
+                # "no handle because the read failed" is not mistaken for it.
+                row = self._row_strict()
+                if row is None:
+                    return True
             logger.debug("Attempted delete of actor with no handle")
             return False
-        subs = subscription.Subscriptions(actor_id=self.id, config=self.config)
-        subs.fetch()  # strict: raises DbError before anything is removed
-        trusts = trust.Trusts(actor_id=self.id, config=self.config)
-        relationships = trusts.fetch()  # strict, same
-        deletion.mark_actor_deleted(self.id, self.config)
+        if _pre_reads is not None:
+            trusts, subs = _pre_reads
+            relationships = trusts.fetch()  # cached by the finisher's strict read
+        else:
+            subs = subscription.Subscriptions(actor_id=self.id, config=self.config)
+            subs.fetch()  # strict: raises DbError before anything is removed
+            trusts = trust.Trusts(actor_id=self.id, config=self.config)
+            relationships = trusts.fetch()  # strict, same
+        notify_peers = deletion.restamp(self.id, self.config, notify_peers)
         self.delete_peer_trustee(shorttype="*", notify_peers=notify_peers)
         if not self.property_list:
             self.property_list = property.Properties(
@@ -1059,7 +1120,22 @@ class Actor:
         trusts.delete()
         buckets = attribute.Buckets(actor_id=self.id, config=self.config)
         buckets.delete()
-        return bool(self.handle.delete())
+        if self.handle.delete():
+            return True
+        # A backend that answers False for a row that is already gone (a
+        # conditional delete, a repeated call) is told apart from one that
+        # did not confirm the removal by a strict read.
+        return self._row_strict() is None
+
+    def _row_strict(self) -> dict[str, Any] | None:
+        """This actor's row, read strictly (``DbError`` on a fault)."""
+        from .db import get_actor
+
+        if not self.config:
+            return None
+        db = get_actor(self.config)
+        row = db.get(actor_id=self.id)
+        return row if row else None
 
     ######################
     # Advanced operations

@@ -167,6 +167,10 @@ def _apple_config() -> MagicMock:
         def get_bucket(self, actor_id, bucket):  # type: ignore
             return self.storage.get(f"{actor_id}:{bucket}", {})
 
+        def get_attr_strict(self, actor_id, bucket, name):  # type: ignore
+
+            return self.get_attr(actor_id, bucket, name)
+
         def get_attr(self, actor_id, bucket, name):  # type: ignore
             return self.storage.get(f"{actor_id}:{bucket}", {}).get(name)
 

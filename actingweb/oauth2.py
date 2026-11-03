@@ -21,10 +21,9 @@ from oauthlib.oauth2 import WebApplicationClient  # type: ignore[import-untyped]
 
 from . import actor as actor_module
 from . import config as config_class
-from . import deletion
 from .constants import ESTABLISHED_VIA_OAUTH2_INTERACTIVE
 from .db.creator_rules import is_exempt, normalise_creator
-from .db.exceptions import CreatorTaken, DbError
+from .db.exceptions import CreatorTaken, DbError, DeletionInProgress
 from .interface.actor_interface import ActorInterface
 from .oauth2_id_token import JWKSIdTokenValidator
 
@@ -982,6 +981,7 @@ class OAuth2Authenticator:
         hooks: "HookRegistry | None" = None,
         create_only: bool = False,
         auth_method: str | None = None,
+        finish_stalled_deletion: bool = False,
     ) -> actor_module.Actor | None:
         """
         Look up actor by email or create new one if not found.
@@ -1005,6 +1005,7 @@ class OAuth2Authenticator:
             hooks=hooks,
             create_only=create_only,
             auth_method=auth_method,
+            finish_stalled_deletion=finish_stalled_deletion,
         )
 
     def lookup_or_create_actor_by_identifier(
@@ -1015,6 +1016,8 @@ class OAuth2Authenticator:
         hooks: "HookRegistry | None" = None,
         create_only: bool = False,
         auth_method: str | None = None,
+        finish_stalled_deletion: bool = False,
+        existing: actor_module.Actor | None = None,
     ) -> actor_module.Actor | None:
         """
         Look up actor by identifier (email or provider ID) or create new one if not found.
@@ -1043,6 +1046,13 @@ class OAuth2Authenticator:
             auth_method: Marker written on a newly created actor. Defaults to
                 ``"<provider>_oauth2"``; the self-asserted email form passes
                 ``"email_unverified"``.
+            finish_stalled_deletion: Set by the sign-in completions only: a
+                vouched actor whose deletion stalled is finished and a new
+                actor created (see :func:`adopt_actor`). Per-request lookups
+                leave it False.
+            existing: An actor the caller already loaded and checked (the
+                callback's state-selected path); used instead of the lookup
+                by ``identifier``.
 
         Returns:
             Actor instance, or None if failed or refused under ``create_only``
@@ -1056,8 +1066,13 @@ class OAuth2Authenticator:
 
         try:
             # Use get_from_creator() method to find existing actor by identifier
-            existing_actor = actor_module.Actor(config=self.config)
-            if existing_actor.get_from_creator(identifier):
+            if existing is not None:
+                existing_actor = existing
+                found = True
+            else:
+                existing_actor = actor_module.Actor(config=self.config)
+                found = bool(existing_actor.get_from_creator(identifier))
+            if found:
                 if create_only:
                     logger.warning(
                         f"Refusing to adopt existing actor for identifier "
@@ -1074,6 +1089,7 @@ class OAuth2Authenticator:
                         config=self.config,
                         hooks=effective_hooks,
                         user_info=user_info,
+                        finish_stalled_deletion=finish_stalled_deletion,
                     )
                 except CreatorTaken:  # folds DbError: loads the swap's winner
                     if not self.config.unique_creator:
@@ -1094,6 +1110,7 @@ class OAuth2Authenticator:
                         config=self.config,
                         hooks=effective_hooks,
                         user_info=user_info,
+                        finish_stalled_deletion=finish_stalled_deletion,
                     )
 
             # Create new actor with identifier as creator
@@ -1129,6 +1146,7 @@ class OAuth2Authenticator:
                     config=self.config,
                     hooks=effective_hooks,
                     user_info=user_info,
+                    finish_stalled_deletion=finish_stalled_deletion,
                 )
             except DbError:
                 raise
@@ -1862,17 +1880,25 @@ def _actor_client_ids(config: config_class.Config, actor_id: str) -> list[str]:
 
 
 def _delete_actor_clients(
-    config: config_class.Config, actor_id: str, client_ids: list[str]
+    config: config_class.Config,
+    actor_id: str,
+    client_ids: list[str],
+    *,
+    actor_deleted: bool = False,
 ) -> None:
     """Delete clients (row, index row, tokens). Call after the actor's trusts
     are gone: the registry's trust cleanup would otherwise notify the peer.
-    Raises if a client could not be disabled."""
+    ``actor_deleted=True`` (the actor is being wiped, its buckets, tokens and
+    trusts go with it) removes only each client's global index row. Raises
+    ``DbError`` if a client could not be disabled."""
     from .oauth2_server.client_registry import MCPClientRegistry
 
     registry = MCPClientRegistry(config)
     for client_id in client_ids:
-        if not registry.delete_client(client_id, actor_id=actor_id):
-            raise RuntimeError(f"OAuth2 client {client_id} could not be deleted")
+        if not registry.delete_client(
+            client_id, actor_id=actor_id, actor_deleted=actor_deleted
+        ):
+            raise DbError("OAuth2 client deletion", actor_id)
 
 
 def _fire_lifecycle(
@@ -1924,49 +1950,43 @@ def _remove_for_replacement(
 ) -> int | None:
     """Delete an actor a sign-in replaces; return the tokens revoked.
 
-    ``spa_revoked``: the caller already revoked its SPA tokens. Returns None
-    when the row removal was not confirmed: the tombstone is written, so the
-    next sign-in finishes it.
+    Through :func:`~actingweb.deletion_finish.finish_deletion`, with the
+    tombstone recording ``replaced_at_adoption``, ``notify_peers=False`` (the
+    victim's peers were chosen by whoever held the actor before) and the
+    ``actor_deleted`` kwargs, so a later resume (a ``DELETE``, a sign-in, the
+    operator command) does the same. ``spa_revoked``: the caller already
+    revoked its SPA tokens. Returns None when the row removal was not
+    confirmed: the tombstone stays, so the next sign-in finishes it. The
+    trust and subscription reads come first, strictly, before the token
+    revoke (O2a): a fault raises ``DbError`` with nothing changed.
+
+    Raises:
+        DeletionInProgress: another request is finishing this victim's wipe.
     """
+    from .deletion_finish import REASON_REPLACED, finish_deletion
+
     actor_id = victim.id or ""
-    tokens_revoked = _revoke_all_actor_tokens(config, actor_id, spa=not spa_revoked)
     reason = {
-        "reason": "replaced_at_adoption",
+        "reason": REASON_REPLACED,
         "replaced_by_identifier": creator,
     }
-    from . import subscription as subscription_module
-    from . import trust as trust_module
-
-    # Actor.delete reads these first, strictly; read them here too, before
-    # the tombstone and the hook, so a fault raises DbError with nothing
-    # written and actor_deleted not fired (the next sign-in retries). A fault
-    # in actor_deleted itself comes after the tombstone, which the next
-    # sign-in's replacement then finds and finishes.
-    trust_module.Trusts(actor_id=actor_id, config=config).fetch()
-    subscription_module.Subscriptions(actor_id=actor_id, config=config).fetch()
-    deletion.mark_actor_deleted(actor_id, config)
-    _fire_lifecycle(hooks, "actor_deleted", victim, config, **reason)
-    if not victim.delete(notify_peers=False):
+    revoked = finish_deletion(
+        victim,
+        config=config,
+        hooks=hooks,
+        origin="replacement",
+        reason=REASON_REPLACED,
+        notify_peers=False,
+        hook_kwargs=reason,
+        spa_revoked=spa_revoked,
+        client_ids=client_ids,
+    )
+    if revoked is None:
         logger.error(
             f"Adoption of actor {actor_id}: the backend did not confirm the "
             "row removed; the next sign-in finishes the replacement"
         )
-        return None
-    # The client rows went with the buckets, which already disables the
-    # clients; this removes their index rows. Not fatal: the actor row is
-    # gone, so failing here would skip the hooks below and leave nothing
-    # for the next sign-in to resume.
-    try:
-        _delete_actor_clients(config, actor_id, client_ids)
-    except Exception as e:  # folds DbError: client index cleanup after the actor row was removed; next sign-in cannot resume it
-        logger.error(
-            f"Adoption of actor {actor_id}: client index rows remain "
-            f"after the replacement: {e}"
-        )
-    _fire_lifecycle(
-        hooks, "actor_deleted_complete", None, config, actor_id=actor_id, **reason
-    )
-    return tokens_revoked
+    return revoked
 
 
 def _creator_rows(config: config_class.Config, creator: str) -> list[dict[str, Any]]:
@@ -2099,14 +2119,19 @@ def _sweep_factory_actors(
                 "sign-in retries"
             )
             return None
-        removed = _remove_for_replacement(
-            sibling,
-            config=config,
-            hooks=hooks,
-            creator=creator,
-            client_ids=_actor_client_ids(config, sibling_id),
-            spa_revoked=True,
-        )
+        try:
+            removed = _remove_for_replacement(
+                sibling,
+                config=config,
+                hooks=hooks,
+                creator=creator,
+                client_ids=_actor_client_ids(config, sibling_id),
+                spa_revoked=True,
+            )
+        except DeletionInProgress:
+            # BL: another sign-in is wiping this sibling right now; it fires
+            # the hooks, so this one does not.
+            continue
         if removed is None:
             return None
         tokens_revoked += removed
@@ -2213,6 +2238,7 @@ def adopt_actor(
     hooks: "HookRegistry | None",
     user_info: dict[str, Any] | None = None,
     verified_by_email: bool = False,
+    finish_stalled_deletion: bool = False,
 ) -> actor_module.Actor | None:
     """Apply the adoption rule to an actor a sign-in has just resolved.
 
@@ -2233,6 +2259,16 @@ def adopt_actor(
     ``DbError`` (``CreatorTaken`` included), which the integrations answer
     with 503 (409): the sign-in fails closed as "retry", not as a failed
     login.
+
+    ``finish_stalled_deletion`` (set only by the sign-in completions: the web
+    callback, the SPA completions, the MCP OAuth callback, the email form):
+    a vouched actor carrying a resumable deletion tombstone is a deletion that
+    stalled. Its wipe is finished and a new actor is created for the creator,
+    which is returned. Another request finishing it raises
+    ``DeletionInProgress`` (503 with ``Retry-After``); a tombstone without a
+    recorded reason (written before resumable deletion) leaves the actor
+    untouched, with a WARNING. Per-request lookups (bearer tokens, a cookie
+    GET) leave it False and never wipe.
     """
     try:
         return _adopt_actor(
@@ -2242,6 +2278,7 @@ def adopt_actor(
             hooks=hooks,
             user_info=user_info,
             verified_by_email=verified_by_email,
+            finish_stalled_deletion=finish_stalled_deletion,
         )
     except DbError:
         raise
@@ -2290,6 +2327,58 @@ def _seed_missing_email(
         logger.error(f"Sign-in to {existing.id}: seeding its email faulted: {e}")
 
 
+_NOT_STALLED: Any = object()
+
+
+def _finish_stalled_vouched(
+    existing: actor_module.Actor,
+    *,
+    provider: "OAuth2Provider | None",
+    config: config_class.Config,
+    hooks: "HookRegistry | None",
+    user_info: dict[str, Any] | None,
+) -> Any:
+    """AW3 and R2: a vouched actor whose deletion stalled behind its
+    tombstone. Returns :data:`_NOT_STALLED` when there is nothing to finish
+    (no tombstone, or one without a recorded reason, which keeps today's
+    sign-in), else the new actor created for the creator after the wipe, or
+    None when the wipe or the create could not complete (the sign-in fails
+    closed and the next one retries).
+
+    Raises:
+        DeletionInProgress: another request holds the wipe's lease.
+        DbError: the tombstone store cannot be read (the K rule: 503).
+    """
+    from .deletion import is_resumable, read_tombstone
+    from .deletion_finish import finish_deletion
+
+    actor_id = existing.id or ""
+    _, tombstone = read_tombstone(actor_id, config)
+    if tombstone is None:
+        return _NOT_STALLED
+    if not is_resumable(tombstone):
+        logger.warning(
+            f"Sign-in to {actor_id}: the actor carries a deletion tombstone with "
+            "no recorded reason (written before resumable deletion); signing in "
+            "to it untouched. Review it with `actingweb-deletions report`."
+        )
+        return _NOT_STALLED
+    creator = existing.creator or ""
+    if provider is None:
+        logger.error(
+            f"Sign-in to {actor_id}: its deletion is unfinished and there is no "
+            "provider to create a new actor; failing closed"
+        )
+        return None
+    if finish_deletion(existing, config=config, hooks=hooks, origin="sign_in") is None:
+        return None
+    logger.info(
+        f"Sign-in to {actor_id}: finished its stalled deletion; creating a new "
+        f"actor for {creator!r}"
+    )
+    return _create_actor_for_identifier(config, provider, creator, user_info, hooks)
+
+
 def _adopt_actor(
     existing: actor_module.Actor,
     *,
@@ -2299,10 +2388,12 @@ def _adopt_actor(
     user_info: dict[str, Any] | None,
     verified_by_email: bool,
     carried: dict[str, Any] | None = None,
+    finish_stalled_deletion: bool = False,
 ) -> actor_module.Actor | None:
     """``carried``: what a replacement already removed before handing the
     owner's own unvouched actor back here to be cleaned; reported with this
-    adoption so ``actor_adopted`` names everything the sign-in removed."""
+    adoption so ``actor_adopted`` names everything the sign-in removed.
+    ``finish_stalled_deletion``: see :func:`adopt_actor`."""
     store = existing.store
     if store is not None and not store.loaded:
         # A caught backend fault reads as "no marker", which would wipe a
@@ -2314,6 +2405,16 @@ def _adopt_actor(
         return None
 
     if is_vouched_actor(existing):
+        if finish_stalled_deletion:
+            finished = _finish_stalled_vouched(
+                existing,
+                provider=provider,
+                config=config,
+                hooks=hooks,
+                user_info=user_info,
+            )
+            if finished is not _NOT_STALLED:
+                return finished
         if provider is not None and store:
             # Record the most recent provider on every sign-in (not only on
             # create) so revocation logic can rely on it. Bookkeeping: a
@@ -2347,8 +2448,8 @@ def _adopt_actor(
                     f"Sign-in to {existing.id}: factory actors beside it remain: {e}"
                 )
         # Nothing is pending here: a pending verification unvouches. A
-        # tombstone is not read here: one left on a live actor (a DELETE
-        # that stalled, a clear on create that faulted) must not wipe it.
+        # tombstone is read only by a sign-in completion (above): a
+        # per-request lookup never wipes.
         return existing
 
     from . import property as property_module
@@ -2541,6 +2642,13 @@ def _adopt_actor(
         if not new_passphrase:
             logger.error(f"Adoption of actor {actor_id} aborted: empty passphrase")
             return None
+        # A new session generation before anything else (R3): every code,
+        # refresh token and client registration issued before it stops
+        # minting, including a grant that straddles the two revokes below.
+        # A fault raises here, with nothing changed.
+        from . import session_generation
+
+        session_generation.bump(actor_id, config)
         # Rotate first: even if everything after this fails, the creator's
         # passphrase no longer opens the actor. Then revoke the sessions, so
         # nothing the creator holds can add a relationship during the wipe.

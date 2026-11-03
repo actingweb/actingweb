@@ -2938,13 +2938,22 @@ class Actor:
 
         Returns:
             True if suspended, False otherwise
+
+        Raises:
+            DbError: the suspension could not be read (3.16). "Not suspended"
+                and "could not tell" are different answers; register_diffs()
+                lets it propagate after the write committed, so the caller
+                answers 503 rather than firing callbacks a suspension meant to
+                hold back.
         """
         if not self.config or not self.id:
             return False
         try:
             db = get_subscription_suspension(self.config, self.id)
             return db.is_suspended(target, subtarget)
-        except Exception as e:  # folds DbError: diff registration after the property write committed; logged as not suspended
+        except DbError:
+            raise
+        except Exception as e:  # folds DbError: handled by the clause above; this logs a non-DbError backend error as not suspended
             # "Not suspended" and "could not tell" must not look the same:
             # a missing suspensions table (TableDoesNotExist) or a denied
             # read makes every target look un-suspended, so a bulk import's
@@ -3034,6 +3043,21 @@ class Actor:
             subs = self.get_subscriptions(
                 target=target, subtarget=None, callback=False, strict=True
             )
+            # A previous resume whose resyncs did not all land left a record
+            # of the subscribers that missed theirs (D-e): this call re-sends
+            # to those only, read before the suspension check, since that
+            # resume already removed the suspension.
+            pending = self._resync_pending(target, subtarget)
+            if pending is not None:
+                existing = {_resync_id(s) for s in subs or [] if s}
+                wanted = [i for i in pending if i in existing]
+                retry_subs = [s for s in subs or [] if _resync_id(s) in wanted]
+                missed: list[str] = []
+                count = self._send_resync_callbacks(
+                    target, subtarget, retry_subs, None, missed=missed
+                )
+                self._write_resync_pending(target, subtarget, missed)
+                return count
             try:
                 resumed = db.resume(target, subtarget)
             except DbError:
@@ -3044,8 +3068,15 @@ class Actor:
             if not resumed:
                 return 0  # Wasn't suspended
 
-            # Find all affected subscriptions and send resync callbacks
-            return self._send_resync_callbacks(target, subtarget, subs, db)
+            # Find all affected subscriptions and send resync callbacks; the
+            # ones that missed theirs are recorded for the next call.
+            missed = []
+            count = self._send_resync_callbacks(
+                target, subtarget, subs, db, missed=missed
+            )
+            if missed:
+                self._write_resync_pending(target, subtarget, missed)
+            return count
         except DbError:
             raise
         except Exception as e:
@@ -3058,8 +3089,14 @@ class Actor:
         subtarget: str | None,
         subs: list[dict[str, Any]] | None = None,
         suspension: Any = None,
+        *,
+        missed: list[str] | None = None,
     ) -> int:
         """Send resync callbacks to all subscriptions on target/subtarget.
+
+        ``missed`` collects the subscription ids whose resync did not land
+        (an HTTP failure or a permanent store error), for the record a later
+        :meth:`resume_subscriptions` re-sends to.
 
         Every subscriber gets its attempt. If any hit a transient fault, the
         suspension is put back (when ``suspension`` is given) and the first
@@ -3108,6 +3145,8 @@ class Actor:
             try:
                 if self._callback_subscription_resync(sub, resync_subtarget):
                     count += 1
+                elif missed is not None:
+                    missed.append(_resync_id(sub))
             except DbError as e:  # folds DbError: transient ones raised after the loop
                 from .interface.integrations._errors import is_permanent
 
@@ -3116,6 +3155,8 @@ class Actor:
                         f"Resync of subscription {sub.get('subscriptionid')} hit a "
                         f"permanent store error; that subscriber missed it: {e}"
                     )
+                    if missed is not None:
+                        missed.append(_resync_id(sub))
                     continue
                 logger.error(
                     f"Resync of subscription {sub.get('subscriptionid')} faulted: {e}"
@@ -3128,6 +3169,56 @@ class Actor:
                 self._restore_suspension(suspension, target, subtarget)
             raise fault
         return count
+
+    _RESYNC_PENDING_BUCKET = "_resync_pending"
+
+    @staticmethod
+    def _resync_key(target: str, subtarget: str | None) -> str:
+        return f"{target}:{subtarget or ''}"
+
+    def _resync_pending(self, target: str, subtarget: str | None) -> list[str] | None:
+        """The subscription ids a previous resume's resync missed for this
+        target/subtarget, or None when there is no record. Strict."""
+        from .db import get_attribute
+
+        if not self.config or not self.id:
+            return None
+        row = get_attribute(self.config).get_attr_strict(
+            actor_id=self.id,
+            bucket=self._RESYNC_PENDING_BUCKET,
+            name=self._resync_key(target, subtarget),
+        )
+        data = row.get("data") if row else None
+        if not isinstance(data, dict) or not isinstance(data.get("ids"), list):
+            return None
+        return [str(i) for i in data["ids"]]
+
+    def _write_resync_pending(
+        self, target: str, subtarget: str | None, missed: list[str]
+    ) -> None:
+        """Record who missed the resync, or remove the record when nobody
+        did. Raises ``DbError``: a lost record would lose the retry."""
+        from .db import get_attribute
+
+        if not self.config or not self.id:
+            return
+        db = get_attribute(self.config)
+        name = self._resync_key(target, subtarget)
+        if missed:
+            db.set_attr(
+                actor_id=self.id,
+                bucket=self._RESYNC_PENDING_BUCKET,
+                name=name,
+                data={"ids": sorted(set(missed))},
+            )
+            logger.warning(
+                f"Resync for {target}/{subtarget}: {len(set(missed))} subscriber(s) "
+                "missed it; the next resume_subscriptions() re-sends to them"
+            )
+        else:
+            db.delete_attr(
+                actor_id=self.id, bucket=self._RESYNC_PENDING_BUCKET, name=name
+            )
 
     def _restore_suspension(
         self, suspension: Any, target: str, subtarget: str | None
@@ -3703,7 +3794,7 @@ class Actor:
         new_seq = sub_obj.increase_seq()
         return new_seq if new_seq else 0
 
-    def _leave_sequence_gap(self, sub: dict[str, Any]) -> None:
+    def _leave_sequence_gap(self, sub: dict[str, Any]) -> bool:
         """Move a subscription's sequence on without a diff, so the
         subscriber sees a gap at the next diff and recovers (the protocol's
         "MUST continue incrementing sequence numbers for each change").
@@ -3712,7 +3803,7 @@ class Actor:
         increment faults too, nothing can mark the change and it is lost.
         """
         if not self.config or not self.id:
-            return
+            return True
         from .db import get_subscription
 
         try:
@@ -3721,17 +3812,18 @@ class Actor:
                 peerid=sub.get("peerid"),
                 subid=sub.get("subscriptionid"),
             )
-        except DbError as e:  # folds DbError: change lost; the write stands
+        except DbError as e:  # folds DbError: reported to register_diffs, which raises after the loop
             logger.error(
                 f"Diff for subscription {sub.get('subscriptionid')} lost: no gap "
                 f"could be left either: {e}"
             )
-            return
+            return False
         if moved:
             logger.warning(
                 f"Left a gap at sequence {moved} of subscription "
                 f"{sub.get('subscriptionid')} for a diff that was not registered"
             )
+        return True
 
     # =========================================================================
     # Diff Registration
@@ -3757,12 +3849,11 @@ class Actor:
         # for an actor that is both subscribed and suspended; that fetch is
         # memoised per actor instance and is dwarfed by the callback fan-out
         # suspension exists to avoid.)
-        # strict=False: the write that produced the diff has committed, so a
-        # fault reading the subscriptions does not fail it. No sequence moves,
-        # so no subscriber can detect the lost diff; only a periodic poll or
-        # resync recovers it.
+        # Strict: the write that produced the diff has committed and stays,
+        # but a fault here raises DbError, so the caller answers 503 instead of
+        # a lost diff no subscriber could detect (no sequence moves).
         subs = self.get_subscriptions(
-            target=target, subtarget=None, resource=None, callback=False, strict=False
+            target=target, subtarget=None, resource=None, callback=False, strict=True
         )
         if not subs:
             return
@@ -3797,6 +3888,7 @@ class Actor:
                 target,
                 len(subs),
             )
+        lost: DbError | None = None
         for sub in subs:
             registered = False
             try:
@@ -3952,7 +4044,18 @@ class Actor:
                     # The read faulted before the resource checks below it,
                     # so a subscriber that would have got no diff can get a
                     # gap too; it resyncs needlessly, which is safe.
-                    self._leave_sequence_gap(sub)
+                    if not self._leave_sequence_gap(sub):
+                        lost = lost or e
+        if lost is not None:
+            # Neither a diff nor a gap for some subscriber: the change is
+            # undetectable for it. The write stands; the caller answers 503.
+            raise lost
+
+
+def _resync_id(sub: dict[str, Any]) -> str:
+    """A subscription's key in the resync record: subscription ids are
+    unique per peer, not per publisher."""
+    return f"{sub.get('peerid')}:{sub.get('subscriptionid')}"
 
 
 class Actors:

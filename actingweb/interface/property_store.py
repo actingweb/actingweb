@@ -98,7 +98,11 @@ class PropertyStore:
                 resource=resource or None,
                 blob=blob,
             )
-        except Exception as e:  # folds DbError: diff after the write committed
+        except DbError:
+            # The value is written; the caller answers 503 so the subscriber's
+            # gap is not silent (a retry writes the value again).
+            raise
+        except Exception as e:
             logger.warning(f"Error registering diff for {key}: {e}")
 
     def __getitem__(self, key: str) -> Any:
@@ -331,7 +335,11 @@ class NotifyingListProperty:
                 resource=None,
                 blob=json.dumps(diff_info),
             )
-        except Exception as e:  # folds DbError: diff after the write committed
+        except DbError:
+            # The list change is written; the caller answers 503 so the
+            # subscriber's gap is not silent.
+            raise
+        except Exception as e:
             logger.warning(f"Error registering diff for list {self._list_name}: {e}")
 
     # Read-only operations - delegate directly

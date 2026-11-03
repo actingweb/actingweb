@@ -112,7 +112,11 @@ class TestB4ListWrappersFold:
             with pytest.raises(DbError):
                 listing.fetch()
 
-    def test_register_diffs_does_not_fail_a_committed_write(self) -> None:
+    def test_register_diffs_raises_after_a_committed_write(self) -> None:
+        """3.16 (Phase 3 of the adoption and fault plan): the write that
+        produced the diff stays, but a fault reading the subscribers raises
+        DbError, so the caller answers 503 instead of a diff no subscriber
+        could detect was lost."""
         from actingweb.db import get_subscription
         from tests._adoption_helpers import (
             aid,
@@ -126,7 +130,10 @@ class TestB4ListWrappersFold:
         assert get_subscription(config).create(
             actor_id=aid(actor), peerid="p1", subid="s1", target="properties"
         )
-        with seam_fault(config, "subscription", "Subscription", "query"):
+        with (
+            seam_fault(config, "subscription", "Subscription", "query"),
+            pytest.raises(DbError),
+        ):
             actor.register_diffs(target="properties", blob='{"x": 1}')
 
     def test_delete_after_a_folded_construction_still_deletes(self) -> None:

@@ -3,7 +3,8 @@ Fan-out manager for subscription callback delivery.
 
 Provides scalable callback delivery with:
 - Parallel HTTP requests with bounded concurrency
-- Circuit breaker pattern for failing peers (with persistence for Kubernetes)
+- Circuit breaker pattern for failing peers, per process (persistence only
+  seeds a new manager; workers do not share breaker state)
 - Automatic granularity downgrade for large payloads
 - Connection pooling via shared HTTP client
 """
@@ -93,7 +94,9 @@ class CircuitState(Enum):
 class CircuitBreaker:
     """Circuit breaker for a single peer.
 
-    State can be persisted to survive pod restarts in Kubernetes deployments.
+    The breaker lives in this process. Persisted state seeds a new manager
+    (a pod restart), but each worker trips and closes its own breaker: with
+    several replicas a failing peer is retried by each until its own trips.
     """
 
     peer_id: str
@@ -200,7 +203,7 @@ class FanOutManager:
 
     Implements protocol v1.4 features:
     - Automatic granularity downgrade when payload > threshold
-    - Circuit breaker pattern for handling 429/503 responses (persisted for K8s)
+    - Circuit breaker pattern for handling 429/503 responses (per process)
     - Optional compression for large payloads
     - Connection pooling via shared HTTP client
     """
@@ -230,7 +233,8 @@ class FanOutManager:
             circuit_breaker_cooldown: Seconds before testing recovery
             request_timeout: HTTP request timeout in seconds
             enable_compression: Whether to use compression when supported
-            persist_circuit_breakers: Persist circuit breaker state (for Kubernetes)
+            persist_circuit_breakers: Persist breaker state so a new manager
+                (a restart) starts from it; not shared between running workers
         """
         self._actor = actor
         self._max_concurrent = max_concurrent

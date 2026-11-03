@@ -257,16 +257,10 @@ class CallbacksHandler(base_handler.BaseHandler):
                     old_permissions, peer_perms
                 )
 
-                # Store new permissions
-                success = store.store_permissions(peer_perms)
-
-                logger.debug(
-                    f"Stored permission callback from {granting_actor_id} "
-                    f"for actor {actor_id}: success={success}, "
-                    f"has_properties={peer_perms.properties is not None}"
-                )
-
-                # Auto-delete cached peer data if configured and access was revoked
+                # Delete the revoked peer data first, strictly, then store the
+                # new permissions: a fault answers 503 with the old
+                # permissions still stored, so the retried callback sees the
+                # revocation again and finishes the deletion.
                 if permission_changes.get("has_revocations") and getattr(
                     myself.config, "auto_delete_on_revocation", False
                 ):
@@ -275,6 +269,15 @@ class CallbacksHandler(base_handler.BaseHandler):
                         granting_actor_id,
                         permission_changes.get("revoked_patterns", []),
                     )
+
+                # Store new permissions
+                success = store.store_permissions(peer_perms)
+
+                logger.debug(
+                    f"Stored permission callback from {granting_actor_id} "
+                    f"for actor {actor_id}: success={success}, "
+                    f"has_properties={peer_perms.properties is not None}"
+                )
 
                 # Auto-sync when new permissions are granted
                 # This fetches the newly accessible data immediately using
@@ -1085,8 +1088,8 @@ class CallbacksHandler(base_handler.BaseHandler):
         try:
             store = RemotePeerStore(actor_interface, peer_id)
 
-            # Get all stored lists for this peer
-            all_lists = store.list_all_lists()
+            # Get all stored lists for this peer (strict: a fault raises)
+            all_lists = store.list_all_lists(strict=True)
 
             deleted_count = 0
             for list_name in all_lists:
@@ -1100,11 +1103,15 @@ class CallbacksHandler(base_handler.BaseHandler):
                                 f"Deleted revoked peer data: {list_name} "
                                 f"from peer {peer_id}"
                             )
-                        except Exception as e:  # folds DbError: cleanup after the permissions were stored; a retried callback sees no revocation
+                        except Exception as e:
+                            # Before the permissions are stored: any failure
+                            # stops the callback, so the retry still sees the
+                            # revocation and deletes again.
                             logger.error(
                                 f"Failed to delete revoked data {list_name} "
                                 f"from peer {peer_id}: {e}"
                             )
+                            raise
                         break  # Don't double-delete if multiple patterns match
 
             if deleted_count > 0:
@@ -1113,5 +1120,9 @@ class CallbacksHandler(base_handler.BaseHandler):
                     f"due to permission revocation"
                 )
 
-        except Exception as e:  # folds DbError: cleanup after the permissions were stored; a retried callback sees no revocation
+        except DbError:
+            # Before the permissions are stored: a 503 here makes the peer
+            # retry, and the retry sees the revocation again.
+            raise
+        except Exception as e:
             logger.error(f"Error during revoked peer data deletion: {e}")

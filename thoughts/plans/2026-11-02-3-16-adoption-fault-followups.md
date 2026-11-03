@@ -348,7 +348,18 @@ flowchart TD
 - [ ] Fast tier verbatim
 - [ ] Full tier, both backends, before the phase commit
 
-### Implementation Status: In Progress
+### Implementation Status: Complete
+
+**Deviations and notes (implementation, 2026-11-03):**
+
+- The revocation: `_delete_revoked_peer_data` runs before `store_permissions`; its listing is strict (`AttributeListStore.list_all(strict=)`, `RemotePeerStore.list_all_lists(strict=)`, both defaulting to the old fold for their other callers) and both folds became `except DbError: raise`.
+- `is_suspended()`: both backends now raise `DbError` on a read fault (DynamoDB let the raw PynamoDB error escape, PostgreSQL answered False); the actor method re-raises it and keeps the logged fold only for a non-`DbError` exception. `db/protocols.py`, `Actor` and `SubscriptionManager` docstrings say so.
+- Diff registration: `register_diffs` reads the subscribers strictly and `PropertyStore`/`ListProperty` wrappers re-raise `DbError`; `tests/test_db_fault_fifth_pass.py::test_register_diffs_raises_after_a_committed_write` replaces the test that pinned the fold.
+- DynamoDB `DbSubscription.modify` is a conditioned `UpdateItem` of the given fields; it answers False for a row that is gone (it recreated it before).
+- The resync record (D-e) is one `_resync_pending` attribute per `(target, subtarget)` holding the missed subscription ids, read before the suspension check, rewritten after a re-send and removed when nobody missed; written only when someone missed, so a clean resume costs one extra point read.
+- The breaker comments in `fanout.py` and a paragraph in `docs/quickstart/deployment.rst` say the breaker is per process.
+- Codex review of the phase diff (unsandboxed, it ran): five findings. Fixed: the resync record keys a subscriber by peer and subscription id (ids are unique per peer); a non-`DbError` failure deleting revoked data now propagates too (the permissions are not stored, so the retry still sees the revocation); `register_diffs` raises after its loop when a subscriber got neither a diff nor a gap (`_leave_sequence_gap` reports its own fault), so that change is not silently lost. Accepted: a retried list append after the 503 writes twice (the changelog names the non-idempotent routes, as planned); `modify` answering False for a deleted subscription is ignored by the callback's sequence update, which has nothing to persist once the subscription is gone (PostgreSQL's `modify` answers True for a missing row; both are recorded, neither changes an outcome).
+- New tests: `tests/test_fault_contract_followups.py`.
 
 ---
 
@@ -379,7 +390,7 @@ flowchart TD
 - [ ] Docs build (`sphinx-build -W`)
 - [ ] Full tier before the phase commit
 
-### Implementation Status: Not Started
+### Implementation Status: In Progress
 
 ---
 

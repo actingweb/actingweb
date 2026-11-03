@@ -1579,6 +1579,10 @@ class SubscriptionSuspensionProtocol(Protocol):
 
         Returns:
             True if suspended, False otherwise
+
+        Raises:
+            DbError: on a read fault (3.16). Do not answer False for
+                "could not tell".
         """
         ...
 

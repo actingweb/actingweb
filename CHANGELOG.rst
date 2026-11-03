@@ -976,11 +976,12 @@ CHANGED
   (``DeletionInProgress``, logged at INFO). ``DELETE /<id>`` now revokes the
   actor's MCP and SPA tokens and removes its client index rows, and answers
   503 when the backend does not confirm the row removed (it answered 204). A
-  sign-in completion (the callback, the SPA grants, the MCP OAuth callback,
-  the email form) on a vouched actor carrying such a tombstone finishes the
-  wipe and creates a new actor for the creator, so a user who deleted their
+  provider sign-in completion (the callback, the SPA grants, the MCP OAuth
+  callback) on a vouched actor carrying such a tombstone finishes the wipe
+  and creates a new actor for the creator, so a user who deleted their
   account and signs up again gets a new one under ``unique_creator`` too;
-  under a live lease it answers 503. A tombstone written before 3.16 leaves a
+  under a live lease it answers 503. The email form and the emailed link
+  have no provider to create the new actor with and fail closed there. A tombstone written before 3.16 leaves a
   vouched actor as it was (a WARNING names it), and a bearer-token request or
   a page load never wipes. A vouched sign-in now reads the tombstone, so an
   unreadable tombstone store answers 503 there. A replacement victim's peers

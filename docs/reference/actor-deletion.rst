@@ -42,8 +42,12 @@ the window it exists for, and closed on an unrelated infrastructure fault.
 What deletion does, in order
 ============================
 
-``DELETE /<actor_id>`` (and :meth:`actingweb.interface.ActorInterface.delete`)
-runs these steps in this order:
+``DELETE /<actor_id>`` (and every other path through the deletion finisher: a
+sign-in's replacement, a sign-in that finishes a stalled wipe,
+``actingweb-deletions resume``) runs these steps in this order. A programmatic
+:meth:`actingweb.interface.ActorInterface.delete` runs the reads, the
+tombstone write and the wipe (steps 1, 2 and 5-10) and no hooks, token revoke
+or client cleanup:
 
 #. Read the actor's trusts and subscriptions, strictly: a fault answers 503
    with nothing written.

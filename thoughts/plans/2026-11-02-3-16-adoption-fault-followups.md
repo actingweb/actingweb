@@ -474,6 +474,7 @@ Not taken: replacing the R3 generation with a re-read of the consumed refresh ro
 - The lost successor mapping lives in a creator-keyed system record, not the successor's `_internal`.
 - R3 does not cover the devtest-only passphrase exchange.
 - The HTTP-level integration tests planned for E1 and BG3 were not added; the handlers and authenticator are tested directly.
+- `tests/test_oauth2_adoption.py::TestBypassSites` pins the one resolve path by counting `adopt_actor(` and `lookup_or_create_actor_by_identifier(` in the handler sources; a comment naming either would trip it.
 
 ### Learnings
 

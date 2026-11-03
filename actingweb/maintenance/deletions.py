@@ -34,7 +34,8 @@ Run it with the same environment as the application (``DATABASE_BACKEND``,
 the database prefix, credentials, ``INDEXED_PROPERTIES``), and pass
 ``--no-unique-creator`` when the application runs without
 ``with_unique_creator()``: the creators record of a finished actor is released
-only under the setting the application uses.
+only under the setting the application uses. ``force_email_prop_as_creator``
+is always off here, so loading an actor to wipe it never renames its creator.
 
 Cost: one read of the tombstone bucket (every tombstone of the retention
 window; on PostgreSQL also expired ones until purged) and one actor-row read

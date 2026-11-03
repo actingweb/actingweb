@@ -691,3 +691,26 @@ Accepted, not changed:
 
 **Changelog and docs** for entries 2-14: `CHANGELOG.rst` (the sign-in code entry rewritten to what the code does now; the stalled-deletion, R3, revocation, resync and `DbSubscription.modify` entries extended), `docs/migration/v3.16.rst` and `docs/reference/hooks-reference.rst` (the cookie, HTTPS, the cap, the `error` template value).
 
+
+### Where this stands (2026-11-03, after commit `e5069ad`)
+
+For a session that picks this up:
+
+- **Branch:** `release/3.16.0-adoption-fault-followups`, 8 commits on `master` (`b7c5c94`): `186966a` plan, `d408f9d`, `7bf6148`, `0ac10fa`, `0dc2a19` the four phases, `922156b` doc exactness, `9e8b2a0` the sign-in code (entry 1), `e5069ad` the verification and entries 2-15. Nothing is pushed and no PR is open; pushing and opening the PR need the owner's go. 3.16.0 stays untagged with no version bump.
+- **Checks at `e5069ad`:** the Full tier from `CLAUDE.md`, run unsandboxed, one test run at a time. DynamoDB 5,497 passed, PostgreSQL 5,307 passed, ruff and pyright clean, all 53 groups documented, `sphinx-build -W` rc=0.
+- **Next:**
+  1. Run `/verify_implementation` on this plan again. It writes a new dated verification, reports what became of each of the 17 issues in `thoughts/verifications/2026-11-03-3-16-adoption-fault-followups.md`, and moves `verified:`. Run its adversarial pass and code review on `9e8b2a0..e5069ad`, the new code, as well as on the whole range.
+  2. Then push and open the one PR for this plan, with the owner's approval.
+- **Not yet exercised in a browser:** the sign-in code *offer* page. It needs a claimed provider session, and the demo's local QA mode (`DEMO_QA_BASIC_AUTH=true`) turns OAuth off. Either use the demo with a real OAuth client in `examples/demo/.env`, or rely on `tests/test_email_sign_in_code.py::TestThroughTheIntegrations`, which drives the real Flask and FastAPI routes with the form submission patched to its offer, and say so in the verification. The Confirm page and the code POST were walked in a browser on 2026-11-03.
+- **Open, found by the 2026-11-03 reviews and not acted on.** Each needs a fix or an owner acceptance at the re-verification; per the owner's rule they stay in this plan, not in `thoughts/todo/`:
+  - The `email_sign_in_code_required` hook can raise. `_offer_sign_in_code` then answers the 409, but the challenge is already stored and counted against the hourly cap, and the binding cookie is already set (outside voice, unverified note; `actingweb/handlers/oauth_email.py`, the `except Exception` after `execute_lifecycle_hooks`). A broken mail hook therefore uses up the user's five codes an hour while they see the 409.
+  - The invalid-link page (403 "Invalid or expired verification link") has no onward link, such as back to sign-in. It is a dead end; browser QA rated it low.
+  - The binding is a `Secure` cookie, so over plain `http://` only browsers that treat `localhost` as a secure origin keep it (Safari may not). Local QA of the code flow over HTTP can fail for that reason alone. The changelog says so.
+- **Accepted by the owner earlier in this plan** (see the Decisions and the per-phase notes; do not re-litigate):
+  - the cross-worker MCP actor-cache TTL;
+  - the devtest passphrase exchange is not generation-checked;
+  - a list append retried after a 503 writes twice;
+  - the K4 bound is not taken;
+  - BG3 points 2, 3 and 5 are not taken;
+  - the sign-in code's JSON answer follows `spa_cors_origins`;
+  - the five-requests-an-hour lock-out (entry 4).

@@ -180,6 +180,43 @@ class TestPendingAdoption:
             is None
         )
 
+    def test_a_hand_off_that_ends_cleaned_leaves_no_pending_record(
+        self, env: Any
+    ) -> None:
+        """Verification 2026-11-03, issue 12: the record was cleared only
+        for mode "replaced", so a replacement that handed off to the owner's
+        own unvouched actor left it for a later create to announce again."""
+        config, auth, adopted = env
+        creator = uuid_email()
+        squat = create_core_actor(config, creator, auth_method="factory")
+        real_sweep = oauth2_module._sweep_factory_actors
+
+        def sweep_then_owner_appears(*a: Any, **k: Any) -> Any:
+            # The owner's own unvouched actor shows up after the listing (the
+            # race the successor re-listing exists for): the replacement
+            # hands off to it and ends "cleaned".
+            out = real_sweep(*a, **k)
+            create_core_actor(config, creator, auth_method=None)
+            return out
+
+        with patch.object(
+            oauth2_module, "_sweep_factory_actors", sweep_then_owner_appears
+        ):
+            result = auth.lookup_or_create_actor_by_identifier(creator)
+        assert result is not None and result.id != aid(squat)
+        assert len(adopted) == 1
+        from actingweb.constants import ACTINGWEB_SYSTEM_ACTOR, PENDING_ADOPTION_BUCKET
+        from actingweb.db import get_attribute
+
+        assert (
+            get_attribute(config).get_attr_strict(
+                actor_id=ACTINGWEB_SYSTEM_ACTOR,
+                bucket=PENDING_ADOPTION_BUCKET,
+                name=creator,
+            )
+            is None
+        )
+
 
 class TestK4Folds:
     def test_the_vouched_successor_provider_write_does_not_fail_the_sign_in(

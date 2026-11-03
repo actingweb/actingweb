@@ -458,6 +458,11 @@ and the next sign-in retries.
     **Purpose**: Send ``code`` (six digits, valid for ``expires_in`` seconds,
     five tries) to ``email``. The page that asked posts it back with its
     ``code_challenge`` to ``POST /oauth/email`` and is signed in to ``actor``.
+    A browser page is bound to its browser by the
+    ``__Host-aw_sign_in_binding`` cookie (``Secure``, so served over HTTPS);
+    a JSON client's challenge is redeemed by a JSON request. At most five
+    codes are created per actor per hour; past that the form answers 429
+    until the hour ends.
 
     .. code-block:: python
 

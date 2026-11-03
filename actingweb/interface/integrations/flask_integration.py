@@ -30,6 +30,22 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _with_cookies(response: Response, webobj: AWWebObj) -> Response:
+    """``response`` with the handler's cookies set on it, every attribute
+    kept (see ``_create_flask_response``)."""
+    for cookie in webobj.response.cookies:
+        response.set_cookie(
+            cookie["name"],
+            cookie["value"],
+            max_age=cookie.get("max_age"),
+            path=cookie.get("path", "/"),
+            secure=cookie.get("secure", False),
+            httponly=cookie.get("httponly", False),
+            samesite=cookie.get("samesite", "Lax"),
+        )
+    return response
+
+
 class FlaskIntegration(BaseActingWebIntegration):
     """
     Flask integration for ActingWeb applications.
@@ -1199,10 +1215,16 @@ class FlaskIntegration(BaseActingWebIntegration):
                 )
             try:
                 # App provides aw-oauth-email.html template
-                return Response(
-                    render_template(
-                        "aw-oauth-email.html", **webobj.response.template_values
-                    )
+                # The handler's cookies (the sign-in code's browser binding)
+                # and status (401 for a refused code) go onto the page too.
+                return _with_cookies(
+                    Response(
+                        render_template(
+                            "aw-oauth-email.html", **webobj.response.template_values
+                        ),
+                        status=webobj.response.status_code,
+                    ),
+                    webobj,
                 )
             except Exception as e:  # folds DbError: no DB access: template rendering
                 # Template not found - provide basic HTML form as fallback
@@ -1211,12 +1233,17 @@ class FlaskIntegration(BaseActingWebIntegration):
                 if challenge:
                     from ...handlers.oauth_email import code_page_html
 
-                    return Response(
-                        code_page_html(
-                            str(challenge),
-                            str(webobj.response.template_values.get("message", "")),
+                    return _with_cookies(
+                        Response(
+                            code_page_html(
+                                str(challenge),
+                                str(webobj.response.template_values.get("message", "")),
+                                str(webobj.response.template_values.get("error", "")),
+                            ),
+                            mimetype="text/html",
+                            status=webobj.response.status_code,
                         ),
-                        mimetype="text/html",
+                        webobj,
                     )
                 session_id = webobj.response.template_values.get("session_id", "")
                 error = webobj.response.template_values.get("error", "")

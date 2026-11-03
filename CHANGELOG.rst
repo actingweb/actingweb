@@ -304,7 +304,10 @@ SECURITY
   after the second revoke kept a live token for whoever held the actor
   before. The clean now writes a new session generation first, and every
   MCP authorization code, MCP refresh token, SPA refresh token and MCP client
-  registration records the generation it was issued under. The code
+  registration records the generation it was issued under; the clean
+  writes another one before its second revoke (and removes the client
+  registrations made during it), so a code or client issued while it ran
+  mints nothing either. The code
   exchange, the refresh grants and the client-credentials grant compare the
   stamp after writing the new token and revoke it on a mismatch
   (``invalid_grant``); a read fault answers 503. A credential issued before
@@ -968,10 +971,14 @@ CHANGED
   finisher behind a tombstone that records why it was written, whether peers
   are notified, the ``actor_deleted`` kwargs and the actor's OAuth2 client
   ids, and that has no retention TTL until the row is gone. A finisher holds
-  the tombstone's two-minute lease. **Behavior change:** a repeated
+  the tombstone's two-minute lease, renewed between the wipe's peer
+  notifications, so a slow wipe keeps it and a lease another finisher took
+  over stops the first one. **Behavior change:** a repeated
   ``DELETE /<id>`` resumes the wipe without firing ``actor_deleted`` again
   (unless it raised ``DbError`` the first time) and fires
-  ``actor_deleted_complete``; one that arrives while another request holds
+  ``actor_deleted_complete``; a ``DELETE`` of a live actor carrying a
+  tombstone written before 3.16 fires ``actor_deleted`` (whether it ran then
+  is not knowable; handlers are idempotent); one that arrives while another request holds
   the lease answers 503 with ``Retry-After`` set to the lease's remainder
   (``DeletionInProgress``, logged at INFO). ``DELETE /<id>`` now revokes the
   actor's MCP and SPA tokens and removes its client index rows, and answers
@@ -987,7 +994,10 @@ CHANGED
   unreadable tombstone store answers 503 there. A replacement victim's peers
   are never notified, also when the wipe is resumed or ``Actor.delete()`` is
   called again. A fixed-id ``Actor.create`` whose tombstone clear cannot be
-  confirmed fails (503) and leaves no row. **Check:** run
+  confirmed fails (503) and leaves no row. A programmatic
+  ``Actor.delete()`` or ``ActorInterface.delete()`` marks its own tombstone
+  finished once the row is gone, so it gets the retention TTL and
+  ``report`` does not list it. **Check:** run
   ``actingweb-deletions report`` after upgrading.
 
 - **A permission callback that revoked access stored the new permissions
@@ -995,8 +1005,9 @@ CHANGED
   a fault in the deletion (its listing folded to "nothing to delete") left
   the cached peer data while the stored permissions no longer showed a
   revocation, so the retry deleted nothing. **Behavior change:** the revoked
-  data is deleted first, with strict reads, and a failure answers 503 with
-  the old permissions still stored, so the peer's retry finishes it.
+  data is deleted first, with strict reads, and a failure answers 503 (a
+  store fault) or 500 (anything else) with the old permissions still
+  stored, so the peer's retry finishes it.
   Removing a trust also fails with 503 when that peer's callback state
   cannot be listed.
 
@@ -1013,13 +1024,18 @@ CHANGED
 - **Behavior change: a resume whose resyncs did not all land re-sends to the
   ones that missed.** ``resume_subscriptions()`` records the subscribers
   whose resync failed (over HTTP, or a permanent store error); the next call
-  sends to those only, and drops the record once they all answered.
+  sends to those only, and drops the record once they all answered; a
+  suspension set after that partial resume is still lifted by the same
+  call, and its subscribers get their resync.
 
 - **Behavior change: DynamoDB ``DbSubscription.modify`` updates only the
   given fields.** It saved the whole item from the handle it loaded, so a
   concurrent sequence increment was written back to its old value. It is now
   one conditioned ``UpdateItem`` and answers ``False`` for a subscription
-  deleted since it was loaded (it recreated it).
+  deleted since it was loaded (it recreated it). PostgreSQL's ``modify``
+  always updated only the given columns; it now answers ``False`` for a
+  deleted subscription too (it answered ``True``). The library ignores the
+  answer in its sequence updates.
 
 ADDED
 ~~~~~
@@ -1297,13 +1313,26 @@ ADDED
   the actor, or a JSON ``access_token`` and ``refresh_token``). A code lasts
   10 minutes and 5 tries, is single use and stored only as a digest; only
   the page that asked holds the challenge, and only the mailbox the code. A
-  browser page is bound to its browser by an HttpOnly ``SameSite=Strict``
-  cookie (``aw_sign_in_binding``), so a cross-site post of someone else's
-  challenge and code signs nobody in. One challenge per actor is live, and
-  at most five are sent per actor per hour (then 429).
+  challenge a browser page asked for is bound to that browser by an
+  HttpOnly, ``Secure``, ``SameSite=Strict`` cookie
+  (``__Host-aw_sign_in_binding``, path ``/``), and only a bound challenge
+  with its cookie can be redeemed into a session cookie: a cross-site post
+  of a challenge and code from another browser, or of one a JSON client
+  asked for, answers 401 and signs nobody in. A JSON client's challenge is
+  redeemed by a JSON request, which gets its tokens in the body. At most
+  five challenges are created per actor per hour (then 429 for everyone
+  until the hour ends, the limit's cost: five requests for an address lock
+  its owner out of codes for that hour), counted with a conditional write
+  so concurrent requests cannot exceed it; a new challenge does not cancel
+  an earlier one. A wrong code answers 401 with the code page again (JSON:
+  the error body). The code is never offered for, or redeemed into, an
+  actor whose deletion is under way. Over HTTP the binding cookie needs
+  HTTPS (``Secure``), except on ``localhost`` in browsers that treat it as
+  a secure origin.
   **Behavior change:** none without the hook, which keeps the 409.
   **Check:** an application template overriding ``aw-oauth-email.html``
-  renders the code field when ``code_challenge`` is set.
+  renders the code field when ``code_challenge`` is set, and ``error``
+  beside it.
 
 - **``DeletionInProgress``** (``actingweb.db.exceptions``, a ``DbError``):
   another request is finishing the actor's deletion; answered 503 with

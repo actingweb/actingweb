@@ -27,9 +27,12 @@ makes it resumable:
 from __future__ import annotations
 
 import logging
+import time
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from . import deletion
+from .constants import DELETION_LEASE
 from .db.exceptions import DbError, DeletionInProgress
 
 if TYPE_CHECKING:
@@ -123,10 +126,28 @@ def finish_deletion(
                 client_ids_all.update(str(c) for c in recorded)
         effective_peers = notify_peers and data.get("notify_peers") is not False
         if not deletion.is_resumable(data):
-            # A tombstone from before resumable deletion: whatever ran
-            # actor_deleted then is not knowable, and the common case is that
-            # it ran (it fired right after the tombstone). Not fired again.
-            data = _update(actor_id, config, data, {"hook_fired": True})
+            # A tombstone from before resumable deletion: whether
+            # actor_deleted ran then is not knowable. A DELETE /<id> of the
+            # live actor is the user asking now, so it fires (at least once
+            # per hook, as documented: handlers are idempotent) and the
+            # tombstone records this deletion. Elsewhere (the operator
+            # command) the common case is that it ran right after the
+            # tombstone, and it is not fired again.
+            if origin == "delete":
+                data = _update(
+                    actor_id,
+                    config,
+                    data,
+                    {
+                        "reason": reason,
+                        "notify_peers": bool(notify_peers),
+                        "hook_kwargs": dict(hook_kwargs or {}),
+                        "client_ids": sorted(client_ids_all),
+                        "hook_fired": False,
+                    },
+                )
+            else:
+                data = _update(actor_id, config, data, {"hook_fired": True})
         if hooks is not None and not data.get("hook_fired"):
             kwargs = data.get("hook_kwargs")
             _fire(
@@ -147,7 +168,13 @@ def finish_deletion(
         _delete_actor_clients(
             config, actor_id, sorted(client_ids_all), actor_deleted=True
         )
-        gone = bool(actor.delete(notify_peers=effective_peers, _pre_reads=pre_reads))
+        gone = bool(
+            actor.delete(
+                notify_peers=effective_peers,
+                _pre_reads=pre_reads,
+                _between_steps=_lease_keeper(actor_id, config, data),
+            )
+        )
     except BaseException:
         if data is not None:
             deletion.release_lease(actor_id, config, data)
@@ -208,6 +235,26 @@ def _client_ids_if_readable(
             f"be read ({e}); using the client ids its tombstone recorded"
         )
         return []
+
+
+def _lease_keeper(
+    actor_id: str, config: Config, data: dict[str, Any] | None
+) -> Callable[[], None]:
+    """A callback ``Actor.delete`` runs before each peer-notifying step: it
+    renews this finisher's lease once a third of it has passed, so a wipe
+    whose peer DELETEs are slow (each up to the proxy timeout) does not
+    outlive the lease and get a second finisher beside it. A lease another
+    finisher took over raises ``DeletionInProgress``, which stops this one."""
+    lease_id = (data or {}).get("lease_id")
+    last = [time.monotonic()]
+
+    def keep() -> None:
+        if time.monotonic() - last[0] < DELETION_LEASE / 3:
+            return
+        deletion.renew_lease(actor_id, config, lease_id)
+        last[0] = time.monotonic()
+
+    return keep
 
 
 def _update(

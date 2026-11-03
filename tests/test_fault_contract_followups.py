@@ -7,7 +7,6 @@ Plan: thoughts/plans/2026-11-02-3-16-adoption-fault-followups.md, Phase 3.
 
 from __future__ import annotations
 
-import os
 from typing import Any
 from unittest.mock import Mock, patch
 
@@ -51,6 +50,20 @@ class TestRevocationOrder:
         store_cls.return_value = store
         handler = CallbacksHandler(config=Mock())
         with pytest.raises(DbError):
+            handler._delete_revoked_peer_data(Mock(id="a"), "peer", ["memory_*"])
+
+    @patch("actingweb.remote_storage.RemotePeerStore")
+    def test_a_non_db_error_delete_failure_raises(self, store_cls: Any) -> None:
+        """Verification 2026-11-03, issue 4: the outer fold swallowed it, so
+        the permissions were stored and the revocation was lost."""
+        from actingweb.handlers.callbacks import CallbacksHandler
+
+        store = Mock()
+        store.list_all_lists.return_value = ["memory_a"]
+        store.delete_list.side_effect = ValueError("corrupt list")
+        store_cls.return_value = store
+        handler = CallbacksHandler(config=Mock())
+        with pytest.raises(ValueError):
             handler._delete_revoked_peer_data(Mock(id="a"), "peer", ["memory_*"])
 
     def test_the_listing_reads_strictly(self, config: Any) -> None:
@@ -158,6 +171,30 @@ class TestResyncRecord:
         # Nothing left to re-send, and not suspended: nothing happens.
         assert actor.resume_subscriptions("properties") == 0
 
+    def test_a_later_suspension_is_still_lifted(self, config: Any) -> None:
+        """Verification 2026-11-03, issue 8: a pending record made the next
+        resume return before db.resume(), so a suspension written after the
+        partial resume stayed in place."""
+        actor = self._subscribed(config, 2)
+        assert actor.suspend_subscriptions("properties")
+        with patch.object(
+            type(actor),
+            "_callback_subscription_resync",
+            lambda _s, sub, *_a: sub.get("peerid") != "p1",
+        ):
+            actor.resume_subscriptions("properties")  # p1 missed: recorded
+        assert actor.suspend_subscriptions("properties")  # a second import
+        sent: list[str] = []
+        with patch.object(
+            type(actor),
+            "_callback_subscription_resync",
+            lambda _s, sub, *_a: sent.append(str(sub.get("peerid"))) or True,
+        ):
+            assert actor.resume_subscriptions("properties") == 2
+        assert sorted(sent) == ["p0", "p1"]
+        assert actor.is_subscription_suspended("properties") is False
+        assert actor._resync_pending("properties", None) is None
+
     def test_a_deleted_subscription_drops_out_of_the_record(self, config: Any) -> None:
 
         actor = self._subscribed(config, 2)
@@ -184,11 +221,12 @@ class TestResyncRecord:
         assert seen == ["p1"]
 
 
-@pytest.mark.skipif(
-    os.getenv("DATABASE_BACKEND", "dynamodb") != "dynamodb",
-    reason="the DynamoDB whole-item save is what this pins",
-)
-class TestDynamoDbModify:
+class TestSubscriptionModify:
+    """Both backends (the Full tier runs the suite on each): only the given
+    fields are written, and a deleted row is not recreated. DynamoDB's
+    whole-item save is what the stale-handle case pins; PostgreSQL always
+    updated the given columns, and now also answers False for a gone row."""
+
     def _sub(self, config: Any) -> tuple[str, Any]:
         from actingweb.db import get_subscription
 

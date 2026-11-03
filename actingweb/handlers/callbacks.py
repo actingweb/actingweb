@@ -1125,4 +1125,8 @@ class CallbacksHandler(base_handler.BaseHandler):
             # retry, and the retry sees the revocation again.
             raise
         except Exception as e:
+            # Any failure stops the callback before the permissions are
+            # stored (the caller answers 500), so the retry still sees the
+            # revocation and deletes again.
             logger.error(f"Error during revoked peer data deletion: {e}")
+            raise

@@ -524,6 +524,24 @@ def lease_fields(now: datetime.datetime | None = None) -> dict[str, Any]:
     }
 
 
+def renew_lease(actor_id: str, config: Config, lease_id: str | None) -> None:
+    """Renew the lease ``lease_id`` holds, on the row read afresh (the
+    re-stamp changes it under the finisher).
+
+    Raises:
+        DeletionInProgress: the lease is no longer this finisher's (it lapsed
+            and another took it over): stop, the other one carries on.
+        DbError: on a store fault.
+    """
+    for _ in range(3):
+        _, current = read_tombstone(actor_id, config)
+        if current is None or not lease_id or current.get("lease_id") != lease_id:
+            raise DeletionInProgress(actor_id, max(1, lease_remaining(current)))
+        if update_tombstone(actor_id, config, current, lease_fields()) is not None:
+            return
+    raise DeletionInProgress(actor_id, 1)
+
+
 def mark_finished(actor_id: str, config: Config, data: dict[str, Any] | None) -> bool:
     """Record a confirmed wipe and start the retention TTL; return whether
     this finisher announces it (``actor_deleted_complete``).
@@ -568,6 +586,26 @@ def mark_finished(actor_id: str, config: Config, data: dict[str, Any] | None) ->
             f"be marked finished: {e}"
         )
         return True
+
+
+def finish_unleased(actor_id: str, config: Config) -> None:
+    """``mark_finished`` for a wipe no finisher holds: a programmatic
+    ``Actor.delete()`` (``ActorInterface.delete()``, ``Actor.create``'s
+    ``delete=True``) whose row removal is confirmed. A tombstone under a live
+    lease belongs to a finisher, which marks it itself and announces once;
+    it is left alone. Faults are folded and logged, as in ``mark_finished``.
+    """
+    try:
+        _, current = read_tombstone(actor_id, config)
+    except Exception as e:  # folds DbError: bookkeeping after the actor row is gone
+        logger.error(
+            f"Deletion of actor {actor_id} finished, but its tombstone could not "
+            f"be read to mark it finished: {e}"
+        )
+        return
+    if current is None or current.get("finished_at") or lease_remaining(current):
+        return
+    mark_finished(actor_id, config, None)
 
 
 def _now() -> datetime.datetime:

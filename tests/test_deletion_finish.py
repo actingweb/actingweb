@@ -487,3 +487,112 @@ class TestClearOnCreate:
             create_core_actor(config, uuid_email())
         assert spy.call_args is not None
         assert spy.call_args.kwargs.get("strict", False) is False
+
+
+class TestLeaseKeeper:
+    """Verification 2026-11-03, issue 7: the lease was last renewed before
+    Actor.delete, whose peer DELETEs can outlast it."""
+
+    def _leased(self, config: Any) -> tuple[str, dict[str, Any]]:
+        actor_id = aid(create_core_actor(config, uuid_email()))
+        data = deletion.create_leased_tombstone(
+            actor_id,
+            config,
+            reason="deleted",
+            notify_peers=False,
+            hook_kwargs={},
+            client_ids=[],
+        )
+        assert data is not None
+        return actor_id, data
+
+    def test_the_keeper_renews_after_a_third_of_the_lease(self, env: Any) -> None:
+        from actingweb import deletion_finish
+
+        config, _hooks, _events = env
+        actor_id, data = self._leased(config)
+        before = _tombstone(config, actor_id)
+        assert before is not None
+        keep = deletion_finish._lease_keeper(actor_id, config, data)
+        keep()  # too early: nothing written
+        assert _tombstone(config, actor_id) == before
+        start = deletion_finish.time.monotonic()
+        with patch.object(deletion_finish.time, "monotonic", return_value=start + 60):
+            keep()
+        after = _tombstone(config, actor_id)
+        assert after is not None
+        assert after["claimed_until"] >= before["claimed_until"]
+        assert after["lease_id"] == before["lease_id"]
+
+    def test_a_lease_taken_over_stops_the_wipe(self, env: Any) -> None:
+        from actingweb import deletion_finish
+
+        config, _hooks, _events = env
+        actor_id, data = self._leased(config)
+        current = _tombstone(config, actor_id)
+        assert current is not None
+        assert deletion.update_tombstone(
+            actor_id, config, current, {"lease_id": "someone-else"}
+        )
+        keep = deletion_finish._lease_keeper(actor_id, config, data)
+        start = deletion_finish.time.monotonic()
+        with (
+            patch.object(deletion_finish.time, "monotonic", return_value=start + 60),
+            pytest.raises(DeletionInProgress),
+        ):
+            keep()
+
+    def test_actor_delete_runs_the_keeper_between_steps(self, env: Any) -> None:
+        config, _hooks, _events = env
+        actor = create_core_actor(config, uuid_email())
+        calls: list[int] = []
+        assert actor.delete(_between_steps=lambda: calls.append(1)) is True
+        assert len(calls) >= 2
+
+
+class TestLegacyTombstoneOnDelete:
+    def test_a_user_delete_fires_actor_deleted_despite_a_stray_legacy_tombstone(
+        self, env: Any
+    ) -> None:
+        """Verification 2026-11-03, issue 16: a reason-less tombstone counted
+        as hook_fired, so the application's actor_deleted cleanup never ran
+        for a genuine DELETE of a live actor carrying one."""
+        config, hooks, events = env
+        actor = create_core_actor(config, uuid_email())
+        deletion.mark_actor_deleted(aid(actor), config)  # legacy: no reason
+        assert finish_deletion(actor, config=config, hooks=hooks, origin="delete") == 0
+        assert _names(events) == ["actor_deleted", "actor_deleted_complete"]
+
+    def test_the_operator_command_does_not_fire_it(self, env: Any) -> None:
+        config, hooks, events = env
+        actor = create_core_actor(config, uuid_email())
+        deletion.mark_actor_deleted(aid(actor), config)
+        finish_deletion(actor, config=config, hooks=hooks, origin="operator")
+        assert "actor_deleted" not in _names(events)
+
+
+class TestDeleteClientForADeletedActor:
+    def test_only_the_index_row_goes(self, env: Any) -> None:
+        """Phase 1 (planned, added at the 2026-11-03 verification):
+        ``delete_client(actor_deleted=True)`` removes the global index row
+        and leaves the actor's own bucket and the client trust to the wipe."""
+        from actingweb.oauth2_server.client_registry import MCPClientRegistry
+
+        config, _hooks, _events = env
+        owner = create_core_actor(config, uuid_email())
+        registry = MCPClientRegistry(config)
+        client_id = registry.register_client(
+            aid(owner),
+            {"client_name": "c", "redirect_uris": ["https://c.example/cb"]},
+        )["client_id"]
+        trusts_before = trust_module.Trusts(actor_id=aid(owner), config=config).fetch()
+        assert registry.delete_client(client_id, actor_deleted=True) is True
+        db = get_attribute(config)
+        assert not db.get_attr_strict(
+            actor_id=OAUTH2_SYSTEM_ACTOR, bucket=CLIENT_INDEX_BUCKET, name=client_id
+        )
+        assert registry.list_clients_for_actor(aid(owner))  # the row stays
+        assert (
+            trust_module.Trusts(actor_id=aid(owner), config=config).fetch()
+            == trusts_before
+        )

@@ -123,8 +123,9 @@ is handled as the application would. Exit codes: 0 nothing left, 1 work left
 (or a dry run with work), 2 the tombstone store cannot be read.
 
 Cost: one read of the tombstone bucket (every tombstone in the retention
-window, and on PostgreSQL expired ones until purged) and one actor-row read
-per unfinished tombstone; ``resume`` adds one full wipe per stalled actor.
+window, and on PostgreSQL expired ones until purged) and, per unfinished
+tombstone, one point read of the tombstone (an expired one is skipped) and
+one actor-row read; ``resume`` adds one full wipe per stalled actor.
 
 DynamoDB Billing Mode for Auto-Created Tables
 ---------------------------------------------

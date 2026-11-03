@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import logging
 import secrets
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING, Any
 
 from .db import get_attribute
@@ -116,11 +116,13 @@ def guard(
     actor_id: str,
     config: Config,
     stamped: Any,
-    revoke: Callable[[], None],
+    revoke: Callable[[], object] | Sequence[Callable[[], object]],
 ) -> bool:
     """After a grant wrote its token: True when the credential's stamp still
     matches. On a mismatch, or when the generation cannot be read, the
     token just written is revoked first; a read fault then raises.
+    ``revoke`` may be several removals (the access and the refresh token):
+    each runs on its own, so one that fails does not skip the next.
 
     Raises:
         DbError: the generation could not be read (the token is revoked).
@@ -139,11 +141,15 @@ def guard(
     return ok
 
 
-def _revoke(revoke: Callable[[], None], actor_id: str) -> None:
-    try:
-        revoke()
-    except Exception as e:  # folds DbError: the caller fails the grant either way; logged so the token can be found
-        logger.error(
-            f"Could not revoke a token minted for actor {actor_id} after a "
-            f"session-generation check failed: {e}"
-        )
+def _revoke(
+    revoke: Callable[[], object] | Sequence[Callable[[], object]], actor_id: str
+) -> None:
+    removals = [revoke] if callable(revoke) else list(revoke)
+    for removal in removals:
+        try:
+            removal()
+        except Exception as e:  # folds DbError: the caller fails the grant either way; logged so the token can be found
+            logger.error(
+                f"Could not revoke a token minted for actor {actor_id} after a "
+                f"session-generation check failed: {e}"
+            )

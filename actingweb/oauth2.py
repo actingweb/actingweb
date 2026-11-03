@@ -2995,7 +2995,17 @@ def _adopt_actor(
             return None
         # After the purge: with the client trusts gone, the registry's trust
         # cleanup has nothing left to notify.
-        _delete_actor_clients(config, actor_id, client_ids)
+        # The clients listed before the clean, and any registered during it.
+        _delete_actor_clients(
+            config,
+            actor_id,
+            sorted({*client_ids, *_actor_client_ids(config, actor_id)}),
+        )
+        # A second generation: an authorization code or client registration
+        # issued during the clean was stamped with the first one, so it
+        # mints nothing either. Before the second revoke, so a grant that
+        # writes after that revoke fails its post-write check.
+        session_generation.bump(actor_id, config)
         # Again: a client holding the old credentials could obtain a token
         # between the first revoke and the purge. Raises if one cannot be.
         tokens_revoked += _revoke_all_actor_tokens(config, actor_id)
@@ -3101,7 +3111,11 @@ def _adopt_actor(
         f"peers={[t['peerid'] for t in (removed_trusts or [])][:10]}, "
         f"siblings={swept_ids}"
     )
-    if mode == "replaced" and result is not None:
+    if result is not None and (mode == "replaced" or carried):
+        # A replacement announced here, or handed off to the owner's own
+        # actor (``carried``): either way this actor_adopted reports it, so
+        # its pending record goes, or a later create for the creator would
+        # announce it again.
         _clear_pending_adoption(config, existing.creator or "")
     _fire_lifecycle(
         hooks,

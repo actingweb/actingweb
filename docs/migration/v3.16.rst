@@ -537,7 +537,9 @@ expires_in)``) and send the code from it, as you send the verification link:
 the form then asks for the code instead, and a correct one signs the page
 in. A template overriding ``aw-oauth-email.html`` must render a
 ``code_challenge`` hidden field and a ``code`` input when
-``code_challenge`` is set.
+``code_challenge`` is set, and ``error`` beside them (a wrong code renders
+the page again with it). The page must be served over HTTPS: the browser
+binding is a ``Secure`` ``__Host-`` cookie.
 
 Stalled deletions
 -----------------

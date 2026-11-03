@@ -27,19 +27,38 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def code_page_html(challenge_id: str, message: str) -> str:
+def _deletion_blocks_sign_in(actor_id: str, config: Any) -> bool:
+    """Whether a tombstone stands on ``actor_id``: the emailed code never
+    signs in to an actor whose wipe is under way or stalled (a provider
+    sign-in finishes that wipe instead). A store fault raises ``DbError``
+    (503), as the provider sign-in's read does."""
+    from .. import deletion
+
+    status, _ = deletion.read_tombstone(actor_id, config)
+    return status == deletion.DeletionStatus.DELETED
+
+
+#: Longest verification token accepted before the store is asked; the
+#: generated ones are 43 characters (``secrets.token_urlsafe(32)``).
+_MAX_VERIFY_TOKEN_LENGTH = 128
+
+
+def code_page_html(challenge_id: str, message: str, error: str = "") -> str:
     """The fallback page asking for an emailed sign-in code (no
     ``aw-oauth-email.html`` template)."""
     import html as html_module
 
     value = html_module.escape(challenge_id, quote=True)
     text = html_module.escape(message)
+    error_html = (
+        f'\n    <p class="error">{html_module.escape(error)}</p>' if error else ""
+    )
     return f"""<!DOCTYPE html>
 <html>
 <head><title>Enter your sign-in code - ActingWeb</title></head>
 <body>
     <h1>Enter your sign-in code</h1>
-    <p>{text}</p>
+    <p>{text}</p>{error_html}
     <form method="POST" action="/oauth/email">
         <input type="hidden" name="code_challenge" value="{value}">
         <input type="text" name="code" inputmode="numeric" autocomplete="one-time-code" required>
@@ -204,6 +223,8 @@ class OAuth2EmailHandler(BaseHandler):
             or not is_vouched_actor(existing)
         ):
             return None
+        if _deletion_blocks_sign_in(existing.id, self.config):
+            return None
         # A browser page is bound to this browser by a cookie: a cross-site
         # form that posts someone else's challenge and code from another
         # browser does not carry it (login CSRF). A JSON client gets no
@@ -222,7 +243,7 @@ class OAuth2EmailHandler(BaseHandler):
                 email_sign_in.BINDING_COOKIE,
                 binding,
                 max_age=email_sign_in.CODE_TTL,
-                path="/oauth/email",
+                path="/",
                 secure=True,
                 httponly=True,
                 samesite="Strict",
@@ -274,15 +295,18 @@ class OAuth2EmailHandler(BaseHandler):
         from .. import email_sign_in
         from ..oauth_session import get_oauth2_session_manager
 
+        browser = not self._wants_json()
         binding = None
-        if not self._wants_json():
+        if browser:
             binding = (self.request.cookies or {}).get(email_sign_in.BINDING_COOKIE)
-        actor_id = email_sign_in.redeem(self.config, challenge_id, code, binding)
+        actor_id = email_sign_in.redeem(
+            self.config, challenge_id, code, binding, browser=browser
+        )
         if not actor_id:
-            return self.error_response(401, "Invalid or expired sign-in code")
+            return self._sign_in_code_refused(challenge_id)
         signed_in = actor_module.Actor(actor_id=actor_id, config=self.config)
-        if not signed_in.id:
-            return self.error_response(401, "Invalid or expired sign-in code")
+        if not signed_in.id or _deletion_blocks_sign_in(signed_in.id, self.config):
+            return self._sign_in_code_refused(challenge_id)
         identifier = signed_in.creator or ""
         session_manager = get_oauth2_session_manager(self.config)
         access_token = self.config.new_token()
@@ -329,6 +353,25 @@ class OAuth2EmailHandler(BaseHandler):
             "redirect_url": redirect_url,
         }
 
+    def _sign_in_code_refused(self, challenge_id: str) -> dict[str, Any]:
+        """401 for a wrong, expired or spent code. A browser gets the code
+        page again with the error (an empty 401 renders as a blank page); a
+        JSON client gets the error body."""
+        from .. import email_sign_in
+
+        message = "Invalid or expired sign-in code"
+        if self._wants_json() or not email_sign_in.is_challenge_id(challenge_id):
+            return self.error_response(401, message)
+        self.response.set_status(401)
+        self.response.template_values = {
+            "action": "/oauth/email",
+            "method": "POST",
+            "code_challenge": challenge_id,
+            "message": "Enter the sign-in code we emailed you.",
+            "error": message,
+        }
+        return {}
+
     def _verification_confirm_page(self, token: str) -> dict[str, Any]:
         """``GET /oauth/email?verify=<token>``: a page (or JSON) that asks for
         a ``POST`` of the token. Reads and writes nothing."""
@@ -371,6 +414,10 @@ class OAuth2EmailHandler(BaseHandler):
             EMAIL_VERIFICATION_TOKEN_EXPIRY,
             EMAIL_VERIFY_TOKEN_INDEX_BUCKET,
         )
+
+        if len(token) > _MAX_VERIFY_TOKEN_LENGTH:
+            logger.warning("Email verification: over-long token refused")
+            return self._verification_error(403, "Invalid or expired verification link")
 
         # Look up actor_id from token index
         index = Attributes(
@@ -540,6 +587,10 @@ class OAuth2EmailHandler(BaseHandler):
         verify_token = self.request.get("verify") or ""
         if verify_token:
             return self._verification_confirm_page(verify_token)
+        if "verify" in (self.request.params or {}):
+            # A link whose token was cut off: say so, rather than showing the
+            # address form with an unrelated "Missing session" error.
+            return self._verification_error(403, "Invalid or expired verification link")
 
         session_id = self.request.get("session") or ""
 

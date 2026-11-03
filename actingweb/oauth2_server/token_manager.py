@@ -935,17 +935,20 @@ class ActingWebTokenManager:
         revoked and ``TokenStoreUnavailable`` is raised (503)."""
         from .. import session_generation
 
-        def revoke() -> None:
+        def revoke_access() -> None:
             self._remove_access_token(
                 access_token["token"],
                 actor_id=actor_id,
                 google_token_key=access_token.get("google_token_key"),
             )
-            if refresh_token is not None:
-                self._remove_refresh_token(refresh_token["token"])
+
+        removals: list[Callable[[], None]] = [revoke_access]
+        if refresh_token is not None:
+            refresh_value = refresh_token["token"]
+            removals.append(lambda: self._remove_refresh_token(refresh_value))
 
         try:
-            return session_generation.guard(actor_id, self.config, stamped, revoke)
+            return session_generation.guard(actor_id, self.config, stamped, removals)
         except DbError as e:
             raise TokenStoreUnavailable("session generation read") from e
 

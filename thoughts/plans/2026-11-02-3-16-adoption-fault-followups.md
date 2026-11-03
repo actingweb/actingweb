@@ -1,5 +1,6 @@
 ---
 status: done
+verified: thoughts/verifications/2026-11-03-3-16-adoption-fault-followups.md
 ---
 
 # Implementation Plan: 3.16 adoption, deletion and fault-contract follow-ups
@@ -141,7 +142,7 @@ flowchart TD
 ### Changes
 
 - `actingweb/deletion.py`:
-  - `mark_actor_deleted(..., reason: str, notify_peers: bool, hook_kwargs: dict, client_ids: list[str])` writes T1's fields with no TTL (T2); `mark_hook_fired(actor_id, config)` sets `hook_fired`.
+  - `mark_actor_deleted(..., reason: str, notify_peers: bool, hook_kwargs: dict, client_ids: list[str])` writes T1's fields with no TTL (T2); `mark_hook_fired(actor_id, config)` sets `hook_fired`. [As built: `hook_fired` is set through the finisher's `_update`, the lease renewal is `deletion.renew_lease` (Iterations entry 8), and `set_tombstone_ttl` is `mark_finished`.]
   - `claim_lease(actor_id, config, row) -> bool` and `renew_lease(...)` (T2): a conditional write of `claimed_until` on the row as read; a fault raises.
   - `read_tombstone(actor_id, config) -> tuple[DeletionStatus, dict | None]`, one strict `get_attr_strict`; `get_deletion_status` delegates to it. A tombstone with a TTL whose expiry has passed counts as absent on both backends (PostgreSQL works out expiry as `deleted_at + DELETION_TOMBSTONE_TTL`, or the row's own `ttl_seconds` when it recorded one).
   - `restamp(actor_id, config, notify_peers)`: `Actor.delete`'s own write (`actor.py:1043`, the deliberate second write the owner kept) becomes a conditional update of `deleted_at` only, on a row that exists; on none it writes a fresh tombstone with `reason="deleted"`, `hook_fired=True` and the call's `notify_peers` (a programmatic delete fires no hooks, `actor_interface.py:405-410`). It never replaces `reason`, `notify_peers`, `hook_kwargs`, `client_ids` or `hook_fired`, and returns the recorded `notify_peers` so `Actor.delete` uses `notify_peers and recorded`.
@@ -304,7 +305,7 @@ flowchart TD
 **Deviations and notes (implementation, 2026-11-03):**
 
 - E1: verified addresses are marked at the build sites (`drop_unverified_email`: `validate_token_and_get_user_info` and its async twin, the id-token paths in the callback, the SPA grants and the MCP server, the Apple form_post merge); the consumers (`get_email_from_user_info`, `_proven_email`, the create's `store.email` write) check the provider's rule or the mark (`verified_email_of`). Callers did not need to pass the token: a GitHub address verified at the build site carries the mark. The async validation's GitHub check is a sync `/user/emails` call (memoised per token for 30 s); accepted. The test doubles that fed unmarked id-token claims (`tests/test_oauth2_spa_jwt_bearer.py`, `test_oauth2_spa_apple_ticket.py`) and GitHub `/user` (`test_mobile_oauth2.py`) now carry what the real providers send; `tests/test_oauth2_github_emails_once.py::test_a_public_email_is_checked_once` replaces "asks GitHub nothing" (E1 asks once), and the per-process memo is cleared per test in `tests/conftest.py`.
-- BG3 (as implemented, after the owner dropped point 3): the link's GET answers a Confirm page (template `aw-verify-email.html` gains a `confirm` state; both integrations' fallbacks render a form); the POST verifies; no session or token is issued. `email_verification_required` gains `provider` and `provider_account` so the email can name the account that asked; no provider account is linked to the actor. The verification tests now POST the token.
+- BG3 (as implemented, after the owner dropped point 3): the link's GET answers a Confirm page (template `aw-verify-email.html` gains a `confirm` state; both integrations' fallbacks render a form); the POST verifies; no session or token is issued. `email_verification_required` gained `provider` and `provider_account` here and lost them again at Phase 4 (point 5 above); no provider account is linked to the actor. The verification tests now POST the token.
 - O2c: in both callback flows the provider tokens (and, on the web flow, the trust relationship) are written after `oauth_success` accepts; the email form calls `complete_claimed_session(write_tokens=False)` and `store_session_tokens` after its refusals and the hook. Adoption itself still precedes the hook, which needs the actor.
 - The read-and-classify helper is `row_holds_creator` (BK) used at the three listing sites, not one function returning pick and siblings: the three loops differ in what they rank and when they stop, and a merged function would have had three modes. The bound is not taken (owner, above).
 - The lost successor mapping lives in a system record keyed by the creator (`_pending_adoptions`, seven-day TTL), not in the successor's `_internal`: a create that raises persists nothing. The sign-in that creates the actor for that creator fires `actor_adopted` with the old id and the counts `None`.
@@ -358,7 +359,7 @@ flowchart TD
 - DynamoDB `DbSubscription.modify` is a conditioned `UpdateItem` of the given fields; it answers False for a row that is gone (it recreated it before).
 - The resync record (D-e) is one `_resync_pending` attribute per `(target, subtarget)` holding the missed subscription ids, read before the suspension check, rewritten after a re-send and removed when nobody missed; written only when someone missed, so a clean resume costs one extra point read.
 - The breaker comments in `fanout.py` and a paragraph in `docs/quickstart/deployment.rst` say the breaker is per process.
-- Codex review of the phase diff (unsandboxed, it ran): five findings. Fixed: the resync record keys a subscriber by peer and subscription id (ids are unique per peer); a non-`DbError` failure deleting revoked data now propagates too (the permissions are not stored, so the retry still sees the revocation); `register_diffs` raises after its loop when a subscriber got neither a diff nor a gap (`_leave_sequence_gap` reports its own fault), so that change is not silently lost. Accepted: a retried list append after the 503 writes twice (the changelog names the non-idempotent routes, as planned); `modify` answering False for a deleted subscription is ignored by the callback's sequence update, which has nothing to persist once the subscription is gone (PostgreSQL's `modify` answers True for a missing row; both are recorded, neither changes an outcome).
+- Codex review of the phase diff (unsandboxed, it ran): five findings. Fixed: the resync record keys a subscriber by peer and subscription id (ids are unique per peer); a non-`DbError` failure deleting revoked data now propagates too (the permissions are not stored, so the retry still sees the revocation) [Updated 2026-11-03 by the verification: it did not; the outer fold of `_delete_revoked_peer_data` still swallowed it; Iterations entry 5 fixed it]; `register_diffs` raises after its loop when a subscriber got neither a diff nor a gap (`_leave_sequence_gap` reports its own fault), so that change is not silently lost. Accepted: a retried list append after the 503 writes twice (the changelog names the non-idempotent routes, as planned); `modify` answering False for a deleted subscription is ignored by the callback's sequence update, which has nothing to persist once the subscription is gone (PostgreSQL's `modify` answers True for a missing row; both are recorded, neither changes an outcome).
 - New tests: `tests/test_fault_contract_followups.py`.
 
 ---
@@ -475,12 +476,15 @@ Not taken: replacing the R3 generation with a re-read of the consumed refresh ro
 - R3 does not cover the devtest-only passphrase exchange.
 - The HTTP-level integration tests planned for E1 and BG3 were not added; the handlers and authenticator are tested directly.
 - `tests/test_oauth2_adoption.py::TestBypassSites` pins the one resolve path by counting `adopt_actor(` and `lookup_or_create_actor_by_identifier(` in the handler sources; a comment naming either would trip it.
+- After the 2026-11-03 verification (Iterations 2-15): the sign-in code's binding is enforced for every cookie-issuing redemption and reaches the browser, its hourly cap is a conditional write and a new challenge no longer cancels an earlier one; a programmatic delete finishes its own tombstone; the lease is renewed between the wipe's peer notifications; the clean bumps the session generation twice; a legacy tombstone on a `DELETE` fires `actor_deleted`; PostgreSQL `DbSubscription.modify` answers False for a gone row.
 
 ### Learnings
 
 - A lease plus a reason-recording tombstone made the wipe resumable without a new store: the tombstone row was already the one place every path reads.
 - Every review round after Phase 1 found its issues in what the folded-in fixes added (the link, the hook kwargs, the lease release), not in the original decisions: a design added during review needs its own review.
 - The test doubles that build `user_info` or attribute backends by hand are where a contract change shows first; eleven of them needed `get_attr_strict`, and the id-token fixtures lacked the claims real providers send.
+- A protection tested only at the handler (`webobj.response.cookies`) can be missing at the wire: both integrations rebuilt the response for a template and dropped the cookie. Security properties need a test through the integration's test client.
+- `create_attr_if_absent` reports a win for JSON-equal stored data (the SDK-retry rule); a counter claimed with it needs a per-write nonce, or two concurrent first writers both win. The concurrency test found it.
 
 ## Iterations
 
@@ -503,3 +507,187 @@ Not taken: replacing the R3 generation with a re-read of the consumed refresh ro
 **Codex review** (unsandboxed): three findings. Fixed: a web redemption is bound to the browser that asked by an HttpOnly `SameSite=Strict` cookie, so a cross-site post of an attacker's own challenge and code cannot plant the attacker's session (login CSRF); one challenge per actor is live and at most five are sent per actor per hour (429 after), so the five tries cannot be renewed through new provider sign-ins and the mailbox is not flooded. Accepted: the JSON answer carries the SPA CORS policy (`spa_cors_origins`, reflected by default) like the SPA token endpoints; a phishing origin that gets the victim to type the code has the generic one-time-code phishing exposure, not a new one.
 
 **Rationale**: the session at the click did not work (the form's credential is the provider's token) and linking the provider account was a takeover path; proving the mailbox again at sign-in, to the page that asked, is the one shape that signs the right person in. A new hook name rather than a kwarg on the existing hook, since the runner passes every kwarg to every hook.
+
+### 2026-11-03, after verification thoughts/verifications/2026-11-03-3-16-adoption-fault-followups.md
+
+Owner: "fix all issues". Each fix has a regression test that fails on `9e8b2a0` (checked by stashing the library change) unless it says otherwise. Verification issue numbers in brackets.
+
+#### 2. A JSON-created sign-in challenge redeemed by a browser form (login CSRF) [1]
+
+**Category**: Verification fix (security)
+
+**What changed**: `email_sign_in.redeem(..., browser=True)`, used by every cookie-issuing (non-JSON) redemption, refuses a challenge that has no stored binding, so a challenge an attacker asked for over JSON cannot plant their session through a cross-site form. A bound challenge needs its binding on any path, as before. The cookie is `__Host-aw_sign_in_binding` with `path=/` (Secure, no Domain), so a sibling subdomain cannot plant it.
+
+**Files affected**:
+- `actingweb/email_sign_in.py`: `redeem(browser=)`, `BINDING_COOKIE`.
+- `actingweb/handlers/oauth_email.py`: `_redeem_sign_in_code` passes `browser`; the cookie's path.
+- `tests/test_email_sign_in_code.py`: `test_a_json_challenge_cannot_be_redeemed_by_a_browser`, `TestThroughTheIntegrations::test_a_json_challenge_posted_by_a_cross_site_form_is_refused` (401, no `oauth_token`).
+
+**Rationale**: the binding decided only from the creating request's channel, the redemption from its own; the gap between them was the attack.
+
+#### 3. The binding cookie never reached the browser [2]
+
+**Category**: Verification fix (bug)
+
+**What changed**: both integrations copy the handler's cookies (and its status) onto the rendered `/oauth/email` page and the `code_page_html` fallback. FastAPI's general cookie copy now keeps `path` and `samesite` too (it dropped both, so the session cookie got Starlette's defaults).
+
+**Files affected**:
+- `actingweb/interface/integrations/flask_integration.py`: `_with_cookies`.
+- `actingweb/interface/integrations/fastapi_integration.py`: `_apply_cookies`, used by `_create_fastapi_response` and the email page.
+- `tests/test_email_sign_in_code.py`: `TestThroughTheIntegrations::test_offer_then_redeem_in_one_browser_signs_in[flask|fastapi]`, `test_another_browser_gets_401_and_the_code_page_again`.
+
+**Rationale**: the handler-level test read `webobj.response.cookies`; the wire never carried it, so every real browser redemption answered 401.
+
+#### 4. The hourly cap and the live challenges under concurrency; the owner's code voided by anyone [3, 9]
+
+**Category**: Verification fix (security)
+
+**What changed**: the per-actor window row is claimed with `create_attr_if_absent` / `conditional_update_attr` on the row as read, retried on a lost race, and three lost races raise `DbError` (503), never a pass. Each write carries a nonce: `create_attr_if_absent` reports a win for JSON-equal data, so two first starts in the same second both won without it (the new test caught that). A new challenge no longer deletes the previous one, so whoever types an address cannot void the code its owner is typing; the cap bounds live challenges (at most five, each five tries). Reaching the cap answers everyone 429 until the hour ends; that remaining lock-out is the cost of any per-address limit and is stated in the changelog.
+
+**Files affected**:
+- `actingweb/email_sign_in.py`: `_claim_slot`, `start_challenge`.
+- `tests/test_email_sign_in_code.py`: `test_concurrent_starts_stay_within_the_cap` (12 concurrent starts, at most 5 succeed), `test_a_new_challenge_does_not_void_the_previous_one` (replaces `test_a_new_challenge_replaces_the_previous_one`).
+
+**Rationale**: a read-modify-write cap multiplied the guesses at a code nobody but the victim sees by the number of concurrent requests.
+
+#### 5. A non-`DbError` revocation failure was still swallowed [4]
+
+**Category**: Verification fix (bug)
+
+**What changed**: the outer `except Exception` of `_delete_revoked_peer_data` re-raises; the callback answers 500 with the old permissions stored, so the peer's retry still sees the revocation.
+
+**Files affected**:
+- `actingweb/handlers/callbacks.py`.
+- `tests/test_fault_contract_followups.py`: `test_a_non_db_error_delete_failure_raises`.
+
+**Rationale**: Phase 3's note claimed this; the inner handler re-raised and the outer one folded it.
+
+#### 6. A programmatic delete left a tombstone that never expired [5]
+
+**Category**: Verification fix (bug)
+
+**What changed**: `Actor.delete()` called outside the finisher (no `_pre_reads`) marks its tombstone finished once the row is gone (`deletion.finish_unleased`), which starts the retention TTL; a tombstone under a live lease is left to its finisher.
+
+**Files affected**:
+- `actingweb/deletion.py`: `finish_unleased`.
+- `actingweb/actor.py`: `Actor.delete`.
+- `tests/test_deletions_command.py`: `TestProgrammaticDelete`.
+
+**Rationale**: only `finish_deletion` and the command marked a tombstone finished, so every `ActorInterface.delete()` left a permanent row that `report` listed as unfinished.
+
+#### 7. A pending resync record kept a later suspension in place [8]
+
+**Category**: Verification fix (bug)
+
+**What changed**: `resume_subscriptions` re-sends to the recorded subscribers and then still calls `db.resume()`; when that lifts a newer suspension, every other subscriber gets its resync, and the record is rewritten once with whoever missed.
+
+**Files affected**:
+- `actingweb/actor.py`: `resume_subscriptions`.
+- `tests/test_fault_contract_followups.py`: `test_a_later_suspension_is_still_lifted`.
+
+**Rationale**: the early return skipped `db.resume()`.
+
+#### 8. The deletion lease is renewed during the wipe [7]
+
+**Category**: Verification fix (bug)
+
+**What changed**: `Actor.delete` gains a private `_between_steps` callback, run before the peer-trustee step, before each reciprocal-trust deletion (each can wait on a peer) and before the buckets. The finisher passes a keeper that renews its lease once a third of it has passed (`deletion.renew_lease`, on the row read afresh, by `lease_id`), and raises `DeletionInProgress` when another finisher took the lease over.
+
+**Files affected**:
+- `actingweb/actor.py`, `actingweb/deletion.py` (`renew_lease`), `actingweb/deletion_finish.py` (`_lease_keeper`).
+- `tests/test_deletion_finish.py`: `TestLeaseKeeper` (renews after a third, keeps the `lease_id`; a taken-over lease raises; `Actor.delete` runs it between steps). These pin the keeper; they do not fail on `9e8b2a0`, which had no keeper to call.
+
+**Rationale**: about six slow peers outlasted the 120 s lease, and a retried `DELETE` then ran a second wipe beside the first.
+
+#### 9. Credentials issued during the clean carried its generation [6]
+
+**Category**: Verification fix (security)
+
+**What changed**: the clean bumps the session generation a second time before its second revoke, and deletes the client registrations listed after the purge as well as before it, so a code or client issued while the clean ran mints nothing afterwards.
+
+**Files affected**:
+- `actingweb/oauth2.py`: the clean in place.
+- `tests/test_session_generation.py`: `test_a_stamp_taken_during_the_clean_mints_nothing_after_it`.
+
+**Rationale**: the single bump came before the window it was meant to close.
+
+#### 10. The command's finish check and expired rows [11, 17]
+
+**Category**: Verification fix (bug)
+
+**What changed**: `resume --apply` re-reads the tombstone after `mark_finished` (which folds a fault) and reports the actor as failed unless `finished_at` landed. `scan` point-reads each unfinished tombstone before classifying it, so an expired legacy row (bucket listings return expired rows on both backends) is not reported for ever; the cost line in the command's docstring and `docs/guides/database-maintenance.rst` says so.
+
+**Files affected**:
+- `actingweb/maintenance/deletions.py`, `docs/guides/database-maintenance.rst`.
+- `tests/test_deletions_command.py`: `TestCommandRobustness`.
+
+**Rationale**: "finished" was printed for a tombstone the next report listed again.
+
+#### 11. A hand-off that ended "cleaned" left the pending-adoption record [12]
+
+**Category**: Verification fix (bug)
+
+**What changed**: the record is cleared whenever the adoption that fires `actor_adopted` carries a replacement (`mode == "replaced"` or a non-empty `carried`).
+
+**Files affected**:
+- `actingweb/oauth2.py`.
+- `tests/test_adoption_summary_and_handoff.py`: `test_a_hand_off_that_ends_cleaned_leaves_no_pending_record` (the owner's actor appears after the listing, the race the successor re-listing is for).
+
+**Rationale**: a later create for the creator within seven days announced the long-gone squatter again.
+
+#### 12. A legacy tombstone suppressed `actor_deleted` on a user's `DELETE` [16]
+
+**Category**: Decision changed (deviation recorded at Phase 1)
+
+**What changed**: on `origin="delete"` a reason-less tombstone is rewritten with this deletion's reason, kwargs and client ids and `hook_fired=False`, so `actor_deleted` fires (at least once per hook, as documented). The operator command keeps counting it as fired.
+
+**Files affected**:
+- `actingweb/deletion_finish.py`.
+- `tests/test_deletion_finish.py`: `TestLegacyTombstoneOnDelete`.
+
+**Rationale**: a user asking to delete now must get the application's cleanup; a repeat is what idempotent handlers already allow.
+
+#### 13. The email pages' error answers [10]
+
+**Category**: UX refinement (browser QA)
+
+**What changed**: a wrong, expired or spent code renders the code page again with the error (401) instead of an empty 401; a challenge id that is not the generated shape and a verification token over 128 characters answer "invalid" before the store is asked (they answered 500 "could not be stored"); `?verify=` with an empty value answers the invalid-link page instead of the address form with "Missing session parameter". The code is neither offered for nor redeemed into an actor with a tombstone (verification issue 17).
+
+**Files affected**:
+- `actingweb/handlers/oauth_email.py`: `_sign_in_code_refused`, `_deletion_blocks_sign_in`, `_MAX_VERIFY_TOKEN_LENGTH`, `code_page_html(error=)`.
+- `actingweb/email_sign_in.py`: `is_challenge_id`.
+- `tests/test_email_verification_legacy_route.py`: `TestMalformedLinks`; `tests/test_email_sign_in_code.py`: `test_a_malformed_challenge_id_is_refused_before_the_store`, `test_a_tombstoned_actor_gets_no_code`.
+
+**Rationale**: browser QA found the blank page, the 500 and the unrelated error.
+
+#### 14. Smaller robustness items [17]
+
+**Category**: Verification fix
+
+**What changed**:
+- DynamoDB `delete_attr_conditional` and `conditional_update_attr` log a WARNING for anything but the expected miss (no row, failed condition); they answered False silently for a throttle.
+- `session_generation.guard` takes several removals and runs each on its own, so a failed access-token removal does not skip the refresh token (`TestRevokeEachRemoval`).
+- PostgreSQL `DbSubscription.modify` answers False for a gone row, as DynamoDB does; the `modify` tests run on both backends (`TestSubscriptionModify`, was DynamoDB-only).
+
+Accepted, not changed:
+- `get_from_creator`'s second row read on a single match: the consistent row check has to see the stored creator before `Actor.get`'s force-email rewrite, which lives inside `get`.
+- `finish_deletion`'s own client listing beside the caller's: it catches a client registered between the caller's read and the tombstone.
+
+**Files affected**:
+- `actingweb/db/dynamodb/attribute.py`, `actingweb/session_generation.py`, `actingweb/oauth2_server/token_manager.py`, `actingweb/handlers/oauth2_spa.py`, `actingweb/db/postgresql/subscription.py`.
+- `tests/test_session_generation.py`, `tests/test_fault_contract_followups.py`.
+
+#### 15. Missing planned tests, the K4 rollback item and stale notes [13, 14, 15]
+
+**Category**: Verification fix
+
+**What changed**:
+- Added: `DeletionInProgress` answering 503 with the lease's `Retry-After` on `/oauth/callback`, `/oauth/spa/token` and `/oauth/email`, in both integrations (`tests/test_deletion_in_progress_answers.py::TestSignInRoutes`); `delete_client(actor_deleted=True)` removing only the index row (`tests/test_deletion_finish.py::TestDeleteClientForADeletedActor`); the end-to-end binding tests (entry 3); the backend-agnostic `modify` tests (entry 14). The first two are coverage the plan asked for and pass on `9e8b2a0` too; the `modify` False-for-a-gone-row case fails there on PostgreSQL only.
+- Not added, with the reason: the remaining Phase 1–3 test items in the verification's lists are each covered at another level (the root `DELETE` paths by `tests/integration/test_deletion_resume_http.py` and the finisher's unit tests, BQ by `TestBypassSites` and the SPA/callback suites, the HTTP-level E1/BG3 flows by the handler and authenticator tests), or pin behaviour the owner dropped (the BG3 credential and provider-link cases).
+- K4 rollback [14]: no change needed. The marker rollback branch runs only for a fixed id (a generated id is marked before its row, and `_drop_pre_marker` covers its rollback), and a marker that did not land means this create wrote nothing to `_internal`.
+- Stale notes [15]: corrected in Phase 1 and Phase 2's notes and Phase 3's revocation note.
+
+**Rationale**: the verification listed them.
+
+**Changelog and docs** for entries 2-14: `CHANGELOG.rst` (the sign-in code entry rewritten to what the code does now; the stalled-deletion, R3, revocation, resync and `DbSubscription.modify` entries extended), `docs/migration/v3.16.rst` and `docs/reference/hooks-reference.rst` (the cookie, HTTPS, the cap, the `error` template value).
+

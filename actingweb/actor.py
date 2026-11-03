@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import time
+from collections.abc import Callable
 from typing import Any
 
 import requests
@@ -1057,6 +1058,7 @@ class Actor:
         notify_peers: bool = True,
         *,
         _pre_reads: tuple[Any, Any] | None = None,
+        _between_steps: Callable[[], None] | None = None,
     ) -> bool:
         """Deletes an actor and cleans up all relevant stored data.
 
@@ -1081,7 +1083,9 @@ class Actor:
         written, so a throttle never deletes an actor without notifying its
         peers (B8). Once the reads pass, the tombstone is (re-)stamped and the
         wipe runs. ``_pre_reads`` is for the finisher, which has already made
-        those reads (the fetched ``Trusts`` and ``Subscriptions`` wrappers).
+        those reads (the fetched ``Trusts`` and ``Subscriptions`` wrappers);
+        ``_between_steps`` is its lease keeper, run before each step that can
+        wait on a peer.
 
         The actor row is removed **last**, so the actor keeps resolving for the
         duration of the wipe. Existence checks therefore fail open here, and
@@ -1113,6 +1117,12 @@ class Actor:
             trusts = trust.Trusts(actor_id=self.id, config=self.config)
             relationships = trusts.fetch()  # strict, same
         notify_peers = deletion.restamp(self.id, self.config, notify_peers)
+
+        def step() -> None:
+            if _between_steps is not None:
+                _between_steps()
+
+        step()
         self.delete_peer_trustee(shorttype="*", notify_peers=notify_peers)
         if not self.property_list:
             self.property_list = property.Properties(
@@ -1123,20 +1133,26 @@ class Actor:
         if relationships:
             for rel in relationships:
                 if isinstance(rel, dict) and "peerid" in rel:
+                    step()
                     self.delete_reciprocal_trust(
                         peerid=rel.get("peerid", ""),
                         delete_peer=True,
                         notify_peers=notify_peers,
                     )
         trusts.delete()
+        step()
         buckets = attribute.Buckets(actor_id=self.id, config=self.config)
         buckets.delete()
-        if self.handle.delete():
-            return True
         # A backend that answers False for a row that is already gone (a
         # conditional delete, a repeated call) is told apart from one that
         # did not confirm the removal by a strict read.
-        return self._row_strict() is None
+        gone = bool(self.handle.delete()) or self._row_strict() is None
+        if gone and _pre_reads is None and self.config:
+            # Not called by the finisher (which marks its own tombstone):
+            # start the tombstone's retention TTL, or it would stay
+            # unfinished, with no TTL, for ever.
+            deletion.finish_unleased(self.id, self.config)
+        return gone
 
     def _row_strict(self) -> dict[str, Any] | None:
         """This actor's row, read strictly (``DbError`` on a fault)."""
@@ -3048,33 +3064,38 @@ class Actor:
             # to those only, read before the suspension check, since that
             # resume already removed the suspension.
             pending = self._resync_pending(target, subtarget)
+            missed: list[str] = []
+            count = 0
+            retried: set[str] = set()
             if pending is not None:
                 existing = {_resync_id(s) for s in subs or [] if s}
-                wanted = [i for i in pending if i in existing]
-                retry_subs = [s for s in subs or [] if _resync_id(s) in wanted]
-                missed: list[str] = []
+                retried = {i for i in pending if i in existing}
+                retry_subs = [s for s in subs or [] if _resync_id(s) in retried]
                 count = self._send_resync_callbacks(
                     target, subtarget, retry_subs, None, missed=missed
                 )
-                self._write_resync_pending(target, subtarget, missed)
-                return count
+            # A suspension set after that earlier resume (a second bulk
+            # import) is still lifted by this call: falling through, not
+            # returning, so its subscribers get their resync too.
             try:
                 resumed = db.resume(target, subtarget)
             except DbError:
                 # The delete may have landed with its answer lost; put the
                 # marker back so the retry finds something to resume.
                 self._restore_suspension(db, target, subtarget)
+                if pending is not None:
+                    self._write_resync_pending(target, subtarget, missed)
                 raise
-            if not resumed:
-                return 0  # Wasn't suspended
-
-            # Find all affected subscriptions and send resync callbacks; the
-            # ones that missed theirs are recorded for the next call.
-            missed = []
-            count = self._send_resync_callbacks(
-                target, subtarget, subs, db, missed=missed
-            )
-            if missed:
+            if resumed:
+                # Send resync callbacks to every affected subscriber not
+                # resynced just above (that resync already carries the
+                # current state); the ones that miss are recorded for the
+                # next call.
+                rest = [s for s in subs or [] if s and _resync_id(s) not in retried]
+                count += self._send_resync_callbacks(
+                    target, subtarget, rest, db, missed=missed
+                )
+            if pending is not None or missed:
                 self._write_resync_pending(target, subtarget, missed)
             return count
         except DbError:

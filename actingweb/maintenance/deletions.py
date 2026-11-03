@@ -38,8 +38,9 @@ only under the setting the application uses. ``force_email_prop_as_creator``
 is always off here, so loading an actor to wipe it never renames its creator.
 
 Cost: one read of the tombstone bucket (every tombstone of the retention
-window; on PostgreSQL also expired ones until purged) and one actor-row read
-per unfinished tombstone; ``resume`` adds a full wipe per stalled actor.
+window; on PostgreSQL also expired ones until purged) and, per unfinished
+tombstone, one point read of the tombstone (which skips an expired one) and
+one actor-row read; ``resume`` adds a full wipe per stalled actor.
 """
 
 from __future__ import annotations
@@ -116,11 +117,20 @@ def scan(config: Any, only: str | None = None) -> list[Finding]:
         finished = bool(data.get("finished_at"))
         if finished and not only:
             continue  # a finished wipe (reading its row would cost one per row)
-        resumable = deletion.is_resumable(data)
         try:
+            if not only:
+                # The bucket listing returns expired rows (both backends);
+                # the point read hides them as every other path does, so an
+                # expired legacy tombstone is not reported for ever.
+                _, fresh = deletion.read_tombstone(actor_id, config)
+                if fresh is None:
+                    continue
+                data = fresh
+                finished = bool(data.get("finished_at"))
             row = actors.get(actor_id=actor_id)
         except DbError as e:  # folds DbError: reported, exit 2
             raise StoreUnavailable(f"cannot read actor {actor_id}: {e}") from e
+        resumable = deletion.is_resumable(data)
         if not row:
             if resumable and not finished:
                 findings.append(
@@ -182,6 +192,7 @@ def _finish_one(config: Any, finding: Finding, notify_peers: bool) -> None:
             actor_deleted=True,
         )
         deletion.mark_finished(finding.actor_id, config, None)
+        _confirm_finished(config, finding.actor_id)
         return
     target = actor_module.Actor(actor_id=finding.actor_id, config=config)
     if not target.id:
@@ -197,6 +208,18 @@ def _finish_one(config: Any, finding: Finding, notify_peers: bool) -> None:
         is None
     ):
         raise DbError("actor row delete", finding.actor_id)
+    _confirm_finished(config, finding.actor_id)
+
+
+def _confirm_finished(config: Any, actor_id: str) -> None:
+    """Raise unless the tombstone now records the finish: ``mark_finished``
+    folds a fault (the row is gone either way), and "finished" must not be
+    printed for a tombstone the next report lists again."""
+    from actingweb import deletion
+
+    _, data = deletion.read_tombstone(actor_id, config)
+    if data is not None and not data.get("finished_at"):
+        raise DbError("tombstone not marked finished", actor_id)
 
 
 def cmd_resume(args: argparse.Namespace) -> int:

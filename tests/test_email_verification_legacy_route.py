@@ -180,3 +180,19 @@ class TestSurvivingRouteRendersAResultNotTheForm:
 
         assert "Enter your email" in body
         assert "<form" in body
+
+
+class TestMalformedLinks:
+    """Browser QA, 2026-11-03: a truncated or over-long link must answer the
+    invalid-link page, not the address form or a store error."""
+
+    def test_an_empty_token_is_an_invalid_link(self, flask_app: Flask) -> None:
+        resp = flask_app.test_client().get("/oauth/email?verify=")
+        body = resp.get_data(as_text=True)
+        assert resp.status_code == 403
+        assert "Missing session" not in body
+
+    def test_an_over_long_token_is_an_invalid_link(self, flask_app: Flask) -> None:
+        resp = flask_app.test_client().post("/oauth/email", data={"verify": "A" * 2000})
+        assert resp.status_code == 403
+        assert "could not be stored" not in resp.get_data(as_text=True)

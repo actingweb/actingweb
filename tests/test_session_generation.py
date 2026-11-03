@@ -237,3 +237,62 @@ class TestTheCleanBumps:
             ).lookup_or_create_actor_by_identifier(creator)
         assert adopted is not None and adopted.id == aid(squat)
         assert order[:2] == ["bump", "passphrase"]
+
+    def test_a_stamp_taken_during_the_clean_mints_nothing_after_it(
+        self, config: Any
+    ) -> None:
+        """Verification 2026-11-03, issue 6: a code or client registration
+        issued during the clean carried the clean's only generation and
+        passed its check afterwards; the clean now bumps again before its
+        second revoke."""
+        from actingweb.oauth2 import OAuth2Authenticator, OAuth2Provider
+
+        creator = uuid_email()
+        squat = create_core_actor(config, creator, auth_method=None)
+        during: list[str | None] = []
+        real_purge = type(squat).purge_relationships
+
+        def purge(self: Any, *a: Any, **k: Any) -> Any:
+            during.append(session_generation.current(aid(squat), config))
+            return real_purge(self, *a, **k)
+
+        provider = OAuth2Provider(
+            "google",
+            {
+                "client_id": "c",
+                "client_secret": "s",
+                "auth_uri": "https://p/a",
+                "token_uri": "https://p/t",
+                "userinfo_uri": "https://p/u",
+                "scope": "openid email",
+                "redirect_uri": "https://test.example.com/oauth/callback",
+            },
+        )
+        with patch.object(type(squat), "purge_relationships", purge):
+            adopted = OAuth2Authenticator(
+                config, provider
+            ).lookup_or_create_actor_by_identifier(creator)
+        assert adopted is not None and adopted.id == aid(squat)
+        assert during and during[0] is not None
+        assert not session_generation.matches(during[0], aid(squat), config)
+
+
+class TestRevokeEachRemoval:
+    def test_a_failed_removal_does_not_skip_the_next(self, config: Any) -> None:
+        """Verification 2026-11-03, issue 17: one revoke callback removed the
+        access then the refresh token, so a failure on the first left the
+        second."""
+        actor = create_core_actor(config, uuid_email())
+        session_generation.bump(aid(actor), config)
+        done: list[str] = []
+
+        def fail() -> None:
+            raise DbError("remove access")
+
+        assert (
+            session_generation.guard(
+                aid(actor), config, "stale", [fail, lambda: done.append("refresh")]
+            )
+            is False
+        )
+        assert done == ["refresh"]

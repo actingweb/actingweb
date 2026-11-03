@@ -929,13 +929,14 @@ class OAuth2SPAHandler(BaseHandler):
 
         # R3: a token issued before the actor was adopted in place mints
         # nothing, even when its refresh straddled the clean's revokes.
-        def revoke_minted() -> None:
-            session_manager.revoke_session(
+        revoke_minted = [
+            lambda: session_manager.revoke_session(
                 new_access_token, token_type_hint="access_token"
-            )
-            session_manager.revoke_session(
+            ),
+            lambda: session_manager.revoke_session(
                 new_refresh_token, token_type_hint="refresh_token"
-            )
+            ),
+        ]
 
         try:
             if not session_generation.guard(

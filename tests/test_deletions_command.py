@@ -141,3 +141,47 @@ class TestClear:
         deletion.mark_finished(actor_id, config, None)
         code, out = _run(capsys, "clear", actor_id, "--apply")
         assert code == 0 and "cleared" in out
+
+
+class TestProgrammaticDelete:
+    def test_a_programmatic_delete_leaves_a_finished_tombstone(
+        self, config: Any, capsys: Any
+    ) -> None:
+        """Verification 2026-11-03, issue 5: Actor.delete() wrote a resumable
+        tombstone that only the finisher ever marked finished, so it stayed
+        for ever (no TTL) and report listed it as unfinished."""
+        actor = create_core_actor(config, uuid_email())
+        actor_id = aid(actor)
+        assert actor.delete() is True
+        _, data = deletion.read_tombstone(actor_id, config)
+        assert data is not None and data.get("finished_at")
+        code, out = _run(capsys, "report", actor_id)
+        assert code == 0 and actor_id not in out
+
+    def test_a_tombstone_under_a_live_lease_is_left_to_its_finisher(
+        self, config: Any
+    ) -> None:
+        actor_id = _stalled(config, leased=True)
+        Actor(actor_id=actor_id, config=config).delete()
+        _, data = deletion.read_tombstone(actor_id, config)
+        assert data is not None and not data.get("finished_at")
+
+
+class TestCommandRobustness:
+    def test_resume_does_not_print_finished_when_the_mark_fails(
+        self, config: Any, capsys: Any
+    ) -> None:
+        """Verification 2026-11-03, issue 11: mark_finished folds a fault, and
+        resume printed "finished" for a tombstone the next report lists."""
+        stalled = _stalled(config)
+        with patch.object(deletion, "mark_finished", return_value=True):
+            code, out = _run(capsys, "resume", stalled, "--apply")
+        assert code == 1
+        assert f"{stalled}: failed" in out and f"{stalled}: finished" not in out
+
+    def test_report_skips_an_expired_tombstone(self, config: Any, capsys: Any) -> None:
+        actor_id = aid(create_core_actor(config, uuid_email()))
+        deletion.mark_actor_deleted(actor_id, config)  # legacy, with a TTL
+        with patch.object(deletion, "read_tombstone", return_value=(None, None)):
+            _code, out = _run(capsys, "report")
+        assert actor_id not in out

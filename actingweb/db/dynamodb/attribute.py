@@ -26,6 +26,18 @@ CHAIN_SCAN_WARN_ROWS = 1000
 logger = logging.getLogger(__name__)
 
 
+def _log_unexpected(op: str, bucket: str, name: str, e: Exception) -> None:
+    """Log a conditional operation's failure unless it is the expected miss
+    (no row, or the condition failed): the method answers False either way,
+    and a throttle or network fault must not be silent (it would read as "a
+    concurrent caller won")."""
+    if isinstance(e, DoesNotExist):
+        return
+    if getattr(e, "cause_response_code", None) == "ConditionalCheckFailedException":
+        return
+    logger.warning(f"{op} on {bucket}:{name} failed: {type(e).__name__}: {e}")
+
+
 def ttl_deadline(ttl_seconds: int) -> int:
     """The stored ``ttl_timestamp`` for a row that lives ``ttl_seconds``.
 
@@ -288,7 +300,8 @@ class DbAttribute:
             return False
         try:
             item = Attribute.get(actor_id, bucket + ":" + name, consistent_read=True)
-        except Exception:  # PynamoDB DoesNotExist exception
+        except Exception as e:  # PynamoDB DoesNotExist exception
+            _log_unexpected("delete_attr_conditional", bucket, name, e)
             return False
         if item.bucket != bucket:
             return False
@@ -296,7 +309,8 @@ class DbAttribute:
             # Condition fails (raises) if a concurrent caller already deleted it.
             item.delete(condition=Attribute.id.exists())
             return True
-        except Exception:
+        except Exception as e:
+            _log_unexpected("delete_attr_conditional", bucket, name, e)
             return False
 
     @staticmethod
@@ -376,8 +390,9 @@ class DbAttribute:
             )
             return True
 
-        except Exception:
+        except Exception as e:
             # Item doesn't exist or condition check failed (race condition)
+            _log_unexpected("conditional_update_attr", bucket, name, e)
             return False
 
     @staticmethod

@@ -88,3 +88,64 @@ class TestMcpBridge:
             pytest.raises(DbError),
         ):
             handler._get_or_create_actor_cached(actor_id, {"email": uuid_email()}, 0.0)
+
+
+class TestSignInRoutes:
+    """Phase 1 (planned, added at the 2026-11-03 verification): a sign-in
+    completion that meets a live deletion lease answers 503 with the lease's
+    Retry-After on every route, in both integrations."""
+
+    @pytest.mark.parametrize(
+        ("path", "method", "target", "attr"),
+        [
+            ("/oauth/callback", "get", "oauth2_callback.OAuth2CallbackHandler", "get"),
+            ("/oauth/spa/token", "post", "oauth2_spa.OAuth2SPAHandler", "post"),
+            ("/oauth/email", "post", "oauth_email.OAuth2EmailHandler", "post"),
+        ],
+    )
+    @pytest.mark.parametrize("framework", ["flask", "fastapi"])
+    def test_a_live_lease_answers_retry_after(
+        self, framework: str, path: str, method: str, target: str, attr: str
+    ) -> None:
+        import importlib
+
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from flask import Flask
+
+        from actingweb.interface import ActingWebApp
+        from actingweb.interface.integrations.fastapi_integration import (
+            FastAPIIntegration,
+        )
+        from actingweb.interface.integrations.flask_integration import (
+            FlaskIntegration,
+        )
+
+        aw_app = ActingWebApp(
+            aw_type="urn:actingweb:test:deletion-in-progress",
+            database="dynamodb",
+            fqdn="test.example.com",
+            proto="https://",
+        ).with_oauth(client_id="c", client_secret="s")
+        module_name, class_name = target.split(".")
+        handler_class = getattr(
+            importlib.import_module(f"actingweb.handlers.{module_name}"), class_name
+        )
+
+        def raise_lease(*_a: Any, **_k: Any) -> Any:
+            raise DeletionInProgress("a1", 7)
+
+        with patch.object(handler_class, attr, raise_lease):
+            if framework == "flask":
+                app = Flask(__name__)
+                FlaskIntegration(aw_app, app).setup_routes()
+                resp = getattr(app.test_client(), method)(path)
+                status, retry = resp.status_code, resp.headers.get("Retry-After")
+            else:
+                fapp = FastAPI()
+                FastAPIIntegration(aw_app, fapp).setup_routes()
+                client = TestClient(fapp, raise_server_exceptions=False)
+                resp = getattr(client, method)(path)
+                status, retry = resp.status_code, resp.headers.get("retry-after")
+        assert status == 503
+        assert retry == "7"

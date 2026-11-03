@@ -94,6 +94,23 @@ def _db_error_handler(aw_app: Any) -> Callable[..., Any]:
     return _db_error_response
 
 
+def _apply_cookies(response: Response, webobj: AWWebObj) -> None:
+    """Copy the handler's cookies onto ``response`` with every attribute the
+    handler set (path and SameSite included: a ``__Host-`` cookie needs
+    ``path=/``, the sign-in binding ``SameSite=Strict``)."""
+    for cookie in webobj.response.cookies:
+        samesite = str(cookie.get("samesite") or "lax").lower()
+        response.set_cookie(
+            key=cookie["name"],
+            value=cookie["value"],
+            max_age=cookie.get("max_age"),
+            path=cookie.get("path") or "/",
+            secure=cookie.get("secure", False),
+            httponly=cookie.get("httponly", False),
+            samesite=samesite if samesite in ("lax", "strict", "none") else "lax",  # pyright: ignore[reportArgumentType]
+        )
+
+
 class ActorCreateRequest(BaseModel):
     """Request model for creating a new actor."""
 
@@ -1501,16 +1518,7 @@ class FastAPIIntegration(BaseActingWebIntegration):
             if key.lower() not in ["content-type", "content-length"]:
                 response.headers[key] = value
 
-        # Set cookies
-        for cookie in webobj.response.cookies:
-            response.set_cookie(
-                key=cookie["name"],
-                value=cookie["value"],
-                max_age=cookie.get("max_age"),
-                secure=cookie.get("secure", False),
-                httponly=cookie.get("httponly", False),
-            )
-
+        _apply_cookies(response, webobj)
         return response
 
     async def _handle_factory_request(self, request: Request) -> Response:
@@ -2037,11 +2045,17 @@ class FastAPIIntegration(BaseActingWebIntegration):
             if self.templates:
                 try:
                     # App provides aw-oauth-email.html template
-                    return self.templates.TemplateResponse(
+                    # The handler's cookies (the sign-in code's browser
+                    # binding) and status (401 for a refused code) go onto
+                    # the rendered page too.
+                    page = self.templates.TemplateResponse(
                         request,
                         "aw-oauth-email.html",
                         context=webobj.response.template_values,
+                        status_code=webobj.response.status_code,
                     )
+                    _apply_cookies(page, webobj)
+                    return page
                 except Exception as e:  # folds DbError: template render, no DB
                     # Template not found - provide basic HTML form as fallback
                     self.logger.warning(f"Template aw-oauth-email.html not found: {e}")
@@ -2049,12 +2063,16 @@ class FastAPIIntegration(BaseActingWebIntegration):
                     if challenge:
                         from ...handlers.oauth_email import code_page_html
 
-                        return HTMLResponse(
+                        page = HTMLResponse(
                             content=code_page_html(
                                 str(challenge),
                                 str(webobj.response.template_values.get("message", "")),
-                            )
+                                str(webobj.response.template_values.get("error", "")),
+                            ),
+                            status_code=webobj.response.status_code,
                         )
+                        _apply_cookies(page, webobj)
+                        return page
                     session_id = webobj.response.template_values.get("session_id", "")
                     error = webobj.response.template_values.get("error", "")
                     provider = webobj.response.template_values.get(

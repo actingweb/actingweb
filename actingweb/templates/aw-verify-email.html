@@ -2,6 +2,15 @@
 {% block title %}Email verification - ActingWeb{% endblock %}
 {% block content %}
 <div class="aw-card">
+  {% if status == 'confirm' %}
+    <h1>Confirm your email address</h1>
+    <p>{{ message|default('Confirm that this is your email address.') }}</p>
+    <form method="POST" action="{{ action|default('/oauth/email') }}">
+      <input type="hidden" name="verify" value="{{ verify_token }}">
+      <button class="aw-btn" type="submit">Confirm</button>
+    </form>
+  </div>
+  {% else %}
   {% if status in ['success', 'verified', 'already_verified'] %}
     <h1>Email verified</h1>
   {% else %}
@@ -22,4 +31,5 @@
     <p><a class="aw-btn" href="/{{ actor_id }}/www">Continue</a></p>
   {% endif %}
 </div>
+  {% endif %}
 {% endblock %}

@@ -363,6 +363,12 @@ class ActingWebOAuth2Server:
             )
             if not user_info:
                 user_info = authenticator.validate_token_and_get_user_info(access_token)
+            # E1 (the id_token path; the userinfo fetch already decided).
+            from ..oauth2 import drop_unverified_email
+
+            user_info = drop_unverified_email(
+                authenticator.provider, user_info, access_token
+            )
             if not user_info:
                 return self._error_response(
                     "invalid_grant",

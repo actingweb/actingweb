@@ -131,6 +131,7 @@ def _apple_token(
         "iat": now,
         "exp": now + 600,
         "email": "apple-user@privaterelay.appleid.com",
+        "email_verified": "true",  # Apple sends a string
         "nonce": nonce,
     }
     claims.update(over)
@@ -148,6 +149,7 @@ def _google_token(
         "iat": now,
         "exp": now + 600,
         "email": "google-user@gmail.com",
+        "email_verified": True,
         "nonce": nonce,
     }
     claims.update(over)

@@ -130,6 +130,7 @@ def _apple_id_token(rsa_key, sub="apple-sub") -> str:
         "iat": now,
         "exp": now + 600,
         "email": "apple-user@privaterelay.appleid.com",
+        "email_verified": "true",  # Apple sends a string
     }
     return jwt.encode(claims, rsa_key, algorithm="RS256", headers={"kid": APPLE_KID})
 

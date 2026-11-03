@@ -366,6 +366,14 @@ class OAuth2CallbackHandler(BaseHandler):
             )
         # Merge Apple's first-sign-in `user` payload (name/email) if present.
         user_info = self._merge_apple_user_payload(user_info)
+        # E1: an address the provider does not vouch for is never the
+        # identity (the userinfo fetch already decided; the id_token path is
+        # decided here).
+        from ..oauth2 import drop_unverified_email
+
+        user_info = drop_unverified_email(
+            self.authenticator.provider, user_info, access_token
+        )
         if not user_info:
             logger.error("Failed to validate token or extract user info")
             return self.error_response(502, "Token validation failed")
@@ -583,6 +591,46 @@ class OAuth2CallbackHandler(BaseHandler):
                 )
                 return self.error_response(502, "Actor creation failed")
 
+        # actor_created fires exactly once, inside Actor.create() itself (via
+        # the hooks= kwarg passed to lookup_or_create_actor_by_identifier()
+        # above) — not here, which would double-fire it for a new actor.
+
+        # Execute OAuth success lifecycle hook
+        oauth_valid = True
+        if self.hooks:
+            try:
+                # Convert core Actor to ActorInterface for hook consistency
+                from actingweb.interface.actor_interface import ActorInterface
+
+                registry = getattr(self.config, "service_registry", None)
+                actor_interface = ActorInterface(
+                    core_actor=actor_instance, service_registry=registry
+                )
+
+                result = self.hooks.execute_lifecycle_hooks(
+                    "oauth_success",
+                    actor_interface,
+                    email=identifier,  # Pass identifier (may be email or provider ID)
+                    access_token=access_token,
+                    token_data=token_data,
+                    user_info=user_info,  # Pass full user info for displayname etc.
+                )
+                oauth_valid = bool(result) if result is not None else True
+            except DbError:
+                raise
+            except Exception as e:
+                logger.error(f"Error in lifecycle hook for oauth_success: {e}")
+                oauth_valid = False
+
+        if not oauth_valid:
+            logger.warning(
+                f"OAuth success hook rejected authentication for {identifier}"
+            )
+            return self.error_response(403, "Authentication rejected")
+
+        # O2c: the provider tokens and the trust relationship are written only
+        # once the oauth_success hook accepted the sign-in, so a rejection
+        # leaves neither behind.
         # Store OAuth tokens in actor properties
         # The auth system expects oauth_token (not oauth_access_token)
         if actor_instance.store:
@@ -654,43 +702,6 @@ class OAuth2CallbackHandler(BaseHandler):
             except Exception as e:
                 logger.error(f"Error creating OAuth2 trust relationship: {e}")
                 # Don't fail the OAuth flow - just log the error
-
-        # actor_created fires exactly once, inside Actor.create() itself (via
-        # the hooks= kwarg passed to lookup_or_create_actor_by_identifier()
-        # above) — not here, which would double-fire it for a new actor.
-
-        # Execute OAuth success lifecycle hook
-        oauth_valid = True
-        if self.hooks:
-            try:
-                # Convert core Actor to ActorInterface for hook consistency
-                from actingweb.interface.actor_interface import ActorInterface
-
-                registry = getattr(self.config, "service_registry", None)
-                actor_interface = ActorInterface(
-                    core_actor=actor_instance, service_registry=registry
-                )
-
-                result = self.hooks.execute_lifecycle_hooks(
-                    "oauth_success",
-                    actor_interface,
-                    email=identifier,  # Pass identifier (may be email or provider ID)
-                    access_token=access_token,
-                    token_data=token_data,
-                    user_info=user_info,  # Pass full user info for displayname etc.
-                )
-                oauth_valid = bool(result) if result is not None else True
-            except DbError:
-                raise
-            except Exception as e:
-                logger.error(f"Error in lifecycle hook for oauth_success: {e}")
-                oauth_valid = False
-
-        if not oauth_valid:
-            logger.warning(
-                f"OAuth success hook rejected authentication for {identifier}"
-            )
-            return self.error_response(403, "Authentication rejected")
 
         # Set up successful response
         # Use return_path from state for SPA mode (defaults to /app), /www or /app for traditional mode
@@ -892,7 +903,9 @@ class OAuth2CallbackHandler(BaseHandler):
             user_info["display_name"] = f"{first} {last}".strip()
         email = data.get("email")
         if email and not user_info.get("email"):
-            user_info["email"] = email
+            # The form_post payload is not signed: its address is never
+            # verified, so it is kept for the hooks, not as an identity (E1).
+            user_info["unverified_email"] = str(email).lower()
         return user_info
 
     def error_response(self, status_code: int, message: str) -> dict[str, Any]:
@@ -1050,6 +1063,14 @@ class OAuth2CallbackHandler(BaseHandler):
             )
         # Merge Apple's first-sign-in `user` payload (name/email) if present.
         user_info = self._merge_apple_user_payload(user_info)
+        # E1: an address the provider does not vouch for is never the
+        # identity (the userinfo fetch already decided; the id_token path is
+        # decided here).
+        from ..oauth2 import drop_unverified_email
+
+        user_info = drop_unverified_email(
+            self.authenticator.provider, user_info, access_token
+        )
         if not user_info:
             logger.error("SPA OAuth: Failed to validate token")
             parsed = urlparse(spa_redirect_url)
@@ -1211,16 +1232,6 @@ class OAuth2CallbackHandler(BaseHandler):
             self.response.set_redirect(spa_error_url)
             return {"redirect_required": True, "redirect_url": spa_error_url}
 
-        # Store OAuth tokens in actor properties
-        if actor_instance.store:
-            actor_instance.store.oauth_token = access_token
-            actor_instance.store.oauth_token_expiry = (
-                str(int(time.time()) + expires_in) if expires_in else None
-            )
-            if refresh_token:
-                actor_instance.store.oauth_refresh_token = refresh_token
-            actor_instance.store.oauth_token_timestamp = str(int(time.time()))
-
         # Execute oauth_success lifecycle hooks (same as non-SPA flow)
         if self.hooks:
             try:
@@ -1268,6 +1279,16 @@ class OAuth2CallbackHandler(BaseHandler):
                 self.response.set_status(302, "Found")
                 self.response.set_redirect(spa_error_url)
                 return {"redirect_required": True, "redirect_url": spa_error_url}
+
+        # O2c: written only once oauth_success accepted the sign-in.
+        if actor_instance.store:
+            actor_instance.store.oauth_token = access_token
+            actor_instance.store.oauth_token_expiry = (
+                str(int(time.time()) + expires_in) if expires_in else None
+            )
+            if refresh_token:
+                actor_instance.store.oauth_refresh_token = refresh_token
+            actor_instance.store.oauth_token_timestamp = str(int(time.time()))
 
         # Generate SPA session tokens (session_manager already initialized at start of method)
         spa_access_token = self.config.new_token()

@@ -180,3 +180,64 @@ class TestClearPendingOnStateSelectedActor:
         assert call.kwargs["existing"] is state_actor
         assert call.kwargs["finish_stalled_deletion"] is True
         assert call.args == ("user@example.com",)
+
+
+class TestValidateBeforeWrite:
+    """O2c: a rejecting oauth_success hook leaves no provider token behind."""
+
+    def test_a_rejected_sign_in_writes_no_token(self):
+        import json
+        from types import SimpleNamespace
+
+        from actingweb.aw_web_request import AWWebObj
+        from actingweb.handlers.oauth2_callback import OAuth2CallbackHandler
+
+        config = MagicMock()
+        config.proto = "https://"
+        config.fqdn = "test.example.com"
+        config.oauth2_provider = "google"
+        config.force_email_prop_as_creator = False
+        config.service_registry = None
+        config.ui = False
+
+        actor = MagicMock()
+        actor.id = "actor-1"
+        actor.creator = "user@example.com"
+        actor.store = SimpleNamespace(email_verified=None)
+
+        auth = MagicMock()
+        auth.is_enabled.return_value = True
+        auth.provider.name = "google"
+        auth.provider.mobile_deep_link = ""
+        auth.exchange_code_for_token.return_value = {
+            "access_token": "at",
+            "expires_in": 3600,
+        }
+        auth.provider.extract_user_info_from_token_response.return_value = None
+        auth.validate_token_and_get_user_info.return_value = {
+            "email": "user@example.com",
+            "verified_email": True,
+        }
+        auth.get_email_from_user_info.return_value = "user@example.com"
+        auth.lookup_or_create_actor_by_identifier.return_value = actor
+
+        webobj = AWWebObj(
+            url="https://test.example.com/oauth/callback",
+            params={"code": "c", "state": json.dumps({"provider": "google"})},
+            body="",
+            headers={},
+            cookies={},
+        )
+        hooks = MagicMock()
+        hooks.execute_lifecycle_hooks.side_effect = lambda event, *a, **k: (
+            False if event == "oauth_success" else True
+        )
+
+        with patch(
+            "actingweb.handlers.oauth2_callback.create_oauth2_authenticator",
+            return_value=auth,
+        ):
+            OAuth2CallbackHandler(webobj, config, hooks=hooks).get()
+
+        assert webobj.response.status_code == 403
+        assert not hasattr(actor.store, "oauth_token")

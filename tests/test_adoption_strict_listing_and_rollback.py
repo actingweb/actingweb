@@ -282,7 +282,7 @@ class TestProviderIdCreatorEmail:
             provider=auth.provider,
             config=config,
             hooks=None,
-            user_info={"email": proven.upper()},
+            user_info={"email": proven.upper(), "email_verified": True},
         )
 
         assert istore(Actor(actor_id=aid(legacy), config=config)).email == proven

@@ -170,7 +170,7 @@ class TestEmailedLink:
                 lambda a, b, n: a == actor.id and n == "email_verified",
                 lambda: False,
             ):
-                OAuth2EmailHandler(webobj, config, hooks=None).get()
+                OAuth2EmailHandler(webobj, config, hooks=None).post()
 
             assert webobj.response.status_code == 500
             row = istore(Actor(actor_id=aid(actor), config=config))

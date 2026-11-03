@@ -1112,18 +1112,6 @@ class OAuth2SPAHandler(BaseHandler):
             logger.error(f"Failed to lookup or create actor for {identifier}")
             return self._json_error(500, "Actor creation failed", "server_error")
 
-        # Store OAuth tokens in actor properties
-        if actor_instance.store:
-            actor_instance.store.oauth_token = provider_access_token
-            actor_instance.store.oauth_token_expiry = (
-                str(int(time.time()) + provider_expires_in)
-                if provider_expires_in
-                else None
-            )
-            if provider_refresh_token:
-                actor_instance.store.oauth_refresh_token = provider_refresh_token
-            actor_instance.store.oauth_token_timestamp = str(int(time.time()))
-
         # actor_created fires exactly once, inside Actor.create() itself (via
         # the hooks= kwarg above) — not here, which would double-fire it.
 
@@ -1157,6 +1145,18 @@ class OAuth2SPAHandler(BaseHandler):
                 f"OAuth success hook rejected authentication for {identifier}"
             )
             return self._json_error(403, "Authentication rejected", "access_denied")
+
+        # O2c: the provider tokens land only once oauth_success accepted.
+        if actor_instance.store:
+            actor_instance.store.oauth_token = provider_access_token
+            actor_instance.store.oauth_token_expiry = (
+                str(int(time.time()) + provider_expires_in)
+                if provider_expires_in
+                else None
+            )
+            if provider_refresh_token:
+                actor_instance.store.oauth_refresh_token = provider_refresh_token
+            actor_instance.store.oauth_token_timestamp = str(int(time.time()))
 
         # Generate ActingWeb SPA tokens
         actor_id = actor_instance.id or ""
@@ -1276,18 +1276,6 @@ class OAuth2SPAHandler(BaseHandler):
             logger.error(f"Failed to lookup or create actor for {identifier}")
             return self._json_error(500, "Actor creation failed", "server_error")
 
-        # Persist upstream provider tokens when we have them (apple_mobile_ticket).
-        if actor_instance.store and provider_access_token:
-            actor_instance.store.oauth_token = provider_access_token
-            actor_instance.store.oauth_token_expiry = (
-                str(int(time.time()) + provider_expires_in)
-                if provider_expires_in
-                else None
-            )
-            if provider_refresh_token:
-                actor_instance.store.oauth_refresh_token = provider_refresh_token
-            actor_instance.store.oauth_token_timestamp = str(int(time.time()))
-
         # actor_created fires exactly once, inside Actor.create() itself (via
         # the hooks= kwarg above) — not here, which would double-fire it.
 
@@ -1320,6 +1308,19 @@ class OAuth2SPAHandler(BaseHandler):
                 f"OAuth success hook rejected authentication for {identifier}"
             )
             return self._json_error(403, "Authentication rejected", "access_denied")
+
+        # O2c: the upstream provider tokens (apple_mobile_ticket) land only
+        # once oauth_success accepted the sign-in.
+        if actor_instance.store and provider_access_token:
+            actor_instance.store.oauth_token = provider_access_token
+            actor_instance.store.oauth_token_expiry = (
+                str(int(time.time()) + provider_expires_in)
+                if provider_expires_in
+                else None
+            )
+            if provider_refresh_token:
+                actor_instance.store.oauth_refresh_token = provider_refresh_token
+            actor_instance.store.oauth_token_timestamp = str(int(time.time()))
 
         actor_id = actor_instance.id or ""
         from ..oauth2_server.token_manager import TokenStoreUnavailable
@@ -1408,6 +1409,11 @@ class OAuth2SPAHandler(BaseHandler):
 
         if not IdTokenReplayCache(self.config).check_and_record(claims):
             return self._json_error(400, "id_token replay rejected", "invalid_request")
+
+        # E1: the id_token's address counts only with its email_verified.
+        from ..oauth2 import drop_unverified_email
+
+        claims = drop_unverified_email(authenticator.provider, claims) or claims
 
         # Honor email-as-creator mode: reject a provider-ID-only id_token when the
         # app requires email as the actor creator (parity with the web flow).
@@ -1498,6 +1504,15 @@ class OAuth2SPAHandler(BaseHandler):
             )
         if not claims:
             return self._json_error(401, "Failed to extract user info", "invalid_grant")
+        # E1 (the id_token path; the userinfo fetch already decided).
+        from ..oauth2 import drop_unverified_email
+
+        claims = (
+            drop_unverified_email(
+                authenticator.provider, claims, token_data.get("access_token", "")
+            )
+            or claims
+        )
 
         # Honor email-as-creator mode: in that configuration a provider-ID
         # identifier (apple:sub / github:id) must not be accepted.

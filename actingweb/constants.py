@@ -167,6 +167,10 @@ EMAIL_VERIFICATION_TOKEN_EXPIRY = 86400  # 24 hours in seconds
 EMAIL_VERIFY_TOKEN_INDEX_BUCKET = (
     "_email_verify_tokens"  # Reverse index: verification token → actor_id
 )
+# Normalised creator -> {actor_id, previous}: a replacement at adoption that
+# has not yet announced actor_adopted (its successor's create may raise). The
+# sign-in that creates the actor for that creator announces it. TTL seven days.
+PENDING_ADOPTION_BUCKET = "_pending_adoptions"
 
 # Actor deletion tombstones: actor_id -> {actor_id, deleted_at}. Lives under
 # DELETED_ACTORS_STORE, not under the deleted actor itself.

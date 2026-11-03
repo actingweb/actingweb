@@ -403,9 +403,15 @@ class Actor:
                 and self.config.force_email_prop_as_creator
             ):
                 em = self.store.email
+                from .oauth2 import is_vouched_store
+
+                # Only a vouched actor's stored email decides its creator: an
+                # unvouched actor's email may be a previous creator's, and
+                # adoption, not a load, decides who it belongs to.
                 if (
                     em
                     and em.lower() != self.creator
+                    and is_vouched_store(self.store)
                     and not self._email_held_elsewhere(em.lower())
                 ):
                     try:
@@ -470,7 +476,7 @@ class Actor:
         ``creator_classes`` (the class of every actor read) for the sign-in to
         reuse instead of listing again.
         """
-        from .oauth2 import SWEEP_LIMIT, classify_marker
+        from .oauth2 import SWEEP_LIMIT, classify_marker, row_holds_creator
 
         self.id = None
         self.creator = None
@@ -538,6 +544,11 @@ class Actor:
         if not ids:
             return False
         if len(ids) == 1:
+            if not row_holds_creator(db.get(actor_id=ids[0]), lookup_creator):
+                # Renamed away since the index listed it (BK): not this
+                # creator's actor.
+                self.creator_ids = []
+                return False
             self.get(actor_id=ids[0])
             return bool(self.id)
 
@@ -559,8 +570,8 @@ class Actor:
                     # A fallback if the pick vanishes before its load.
                     ranked.append((rank_of[tail_class], candidate_id))
                 continue
-            if not db.get(actor_id=candidate_id):
-                continue  # deleted since the index listed it
+            if not row_holds_creator(db.get(actor_id=candidate_id), lookup_creator):
+                continue  # deleted, or renamed away, since the index listed it
             marker = classify_marker(self.config, candidate_id, lookup_creator)
             if marker is None:
                 raise DbError("actor marker read", candidate_id)
@@ -2229,14 +2240,14 @@ class Actor:
         if not config:
             return unconfirmed
         try:
-            # Read the subscriptions first: removing a trust also removes
-            # that peer's subscriptions, which would empty the summary.
-            sub_rows = (
-                get_subscription_list(config).fetch(actor_id=self.id, strict=True) or []
-            )
-            relationships = (
-                get_trust_list(config).fetch(actor_id=self.id, strict=True) or []
-            )
+            # Read once each, through the wrappers the wipe then deletes with
+            # (they keep what they read). The subscriptions first: removing a
+            # trust also removes that peer's subscriptions, which would empty
+            # the summary.
+            subs = subscription.Subscriptions(actor_id=self.id, config=self.config)
+            sub_rows = subs.fetch() or []  # strict: raises DbError
+            trusts = trust.Trusts(actor_id=self.id, config=self.config)
+            relationships = trusts.fetch() or []  # strict, same
         except DbError:
             raise
         except Exception as e:
@@ -2245,8 +2256,6 @@ class Actor:
         removed_trusts, subscription_peers = relationship_summary(
             relationships, sub_rows
         )
-        subs = subscription.Subscriptions(actor_id=self.id, config=self.config)
-        trusts = trust.Trusts(actor_id=self.id, config=self.config)
         for rel in relationships:
             if isinstance(rel, dict) and rel.get("peerid"):
                 self.delete_reciprocal_trust(

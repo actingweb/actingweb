@@ -149,10 +149,12 @@ class TestCallbackRequestsOnce:
         else:
             assert webobj.response.status_code == 502
 
-    def test_a_public_email_asks_github_nothing(self, spa: bool) -> None:
+    def test_a_public_email_is_checked_once(self, spa: bool) -> None:
+        """E1 (3.16): GitHub's /user carries no verified claim, so a public
+        address is checked against /user/emails, once per token."""
         get = MagicMock(return_value=_response(200, ENTRIES))
         _run({"id": 42, "login": "someone", "email": "pub@example.com"}, get, spa=spa)
-        assert get.call_count == 0
+        assert get.call_count == 1
 
 
 class TestMalformedAndEmptyEntries:

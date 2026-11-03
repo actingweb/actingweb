@@ -114,7 +114,7 @@ class TestSurvivingRouteRendersAResultNotTheForm:
     ) -> None:
         body = (
             flask_app.test_client()
-            .get("/oauth/email?verify=no-such-token")
+            .post("/oauth/email", data={"verify": "no-such-token"})
             .get_data(as_text=True)
         )
 
@@ -124,21 +124,43 @@ class TestSurvivingRouteRendersAResultNotTheForm:
 
     def test_flask_bad_token_keeps_its_403(self, flask_app: Flask) -> None:
         """Rendering a result page must not downgrade the status to 200."""
-        resp = flask_app.test_client().get("/oauth/email?verify=no-such-token")
+        resp = flask_app.test_client().post(
+            "/oauth/email", data={"verify": "no-such-token"}
+        )
         assert resp.status_code == 403
 
     def test_fastapi_verify_link_renders_the_result_template(
         self, fastapi_client: TestClient
     ) -> None:
-        body = fastapi_client.get("/oauth/email?verify=no-such-token").text
+        body = fastapi_client.post(
+            "/oauth/email", data={"verify": "no-such-token"}
+        ).text
 
         assert "Email verification" in body
         assert "<form" not in body
         assert 'name="email"' not in body
 
     def test_fastapi_bad_token_keeps_its_403(self, fastapi_client: TestClient) -> None:
-        resp = fastapi_client.get("/oauth/email?verify=no-such-token")
+        resp = fastapi_client.post("/oauth/email", data={"verify": "no-such-token"})
         assert resp.status_code == 403
+
+    def test_flask_the_link_opens_a_confirm_page_and_changes_nothing(
+        self, flask_app: Flask
+    ) -> None:
+        """BG3: a GET of the link (a mail scanner's prefetch) shows a Confirm
+        form that POSTs the token, and verifies nothing."""
+        resp = flask_app.test_client().get("/oauth/email?verify=some-token")
+        body = resp.get_data(as_text=True)
+        assert resp.status_code == 200
+        assert 'name="verify"' in body and 'value="some-token"' in body
+        assert 'method="POST"' in body
+
+    def test_fastapi_the_link_opens_a_confirm_page(
+        self, fastapi_client: TestClient
+    ) -> None:
+        resp = fastapi_client.get("/oauth/email?verify=some-token")
+        assert resp.status_code == 200
+        assert 'value="some-token"' in resp.text
 
     def test_flask_form_path_still_renders_the_form(self, flask_app: Flask) -> None:
         """The other side of the branch: no verify token means the form."""

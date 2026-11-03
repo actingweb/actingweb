@@ -306,6 +306,33 @@ class OAuth2SessionManager:
 
         return self.complete_claimed_session(session, email, hooks=hooks)
 
+    def store_session_tokens(
+        self, actor_instance: "actor_module.Actor", session: dict[str, Any]
+    ) -> None:
+        """Write a claimed session's provider tokens and provider onto the
+        actor. The ``oauth_provider`` write is bookkeeping: a fault there is
+        logged and folded (K4), the token writes raise."""
+        token_data = session.get("token_data", {}) or {}
+        provider = session.get("provider", "google")
+        access_token = token_data.get("access_token", "")
+        refresh_token = token_data.get("refresh_token")
+        expires_in = token_data.get("expires_in", 3600)
+        if not actor_instance.store:
+            return
+        actor_instance.store.oauth_token = access_token
+        actor_instance.store.oauth_token_expiry = (
+            str(int(time.time()) + expires_in) if expires_in else None
+        )
+        if refresh_token:
+            actor_instance.store.oauth_refresh_token = refresh_token
+        actor_instance.store.oauth_token_timestamp = str(int(time.time()))
+        try:
+            actor_instance.store.oauth_provider = provider
+        except DbError as e:  # folds DbError: provider bookkeeping write (K4)
+            logger.error(
+                f"Sign-in to {actor_instance.id}: recording the provider faulted: {e}"
+            )
+
     def complete_claimed_session(
         self,
         session: dict[str, Any],
@@ -314,9 +341,15 @@ class OAuth2SessionManager:
         hooks: "HookRegistry | None" = None,
         create_only: bool = False,
         auth_method: str | None = None,
+        write_tokens: bool = True,
     ) -> Optional["actor_module.Actor"]:
         """
         Complete an already-claimed OAuth session.
+
+        ``write_tokens=False`` leaves the provider tokens and ``oauth_provider``
+        unwritten, for a caller that still has to decide (the email form runs
+        its refusals and ``oauth_success`` first, then
+        :meth:`store_session_tokens`).
 
         The session row is gone by the time this runs (``try_claim_session``
         consumed it), so callers that need to refuse the submission — the
@@ -339,7 +372,6 @@ class OAuth2SessionManager:
         """
         try:
             # Extract session data
-            token_data = session["token_data"]
             provider = session.get("provider", "google")
 
             # Validate email format
@@ -369,20 +401,8 @@ class OAuth2SessionManager:
                 logger.error(f"Failed to create actor for email {email}")
                 return None
 
-            # Store OAuth tokens in actor properties
-            access_token = token_data.get("access_token", "")
-            refresh_token = token_data.get("refresh_token")
-            expires_in = token_data.get("expires_in", 3600)
-
-            if actor_instance.store:
-                actor_instance.store.oauth_token = access_token
-                actor_instance.store.oauth_token_expiry = (
-                    str(int(time.time()) + expires_in) if expires_in else None
-                )
-                if refresh_token:
-                    actor_instance.store.oauth_refresh_token = refresh_token
-                actor_instance.store.oauth_token_timestamp = str(int(time.time()))
-                actor_instance.store.oauth_provider = provider
+            if write_tokens:
+                self.store_session_tokens(actor_instance, session)
 
             # The session row was already consumed by try_claim_session().
 

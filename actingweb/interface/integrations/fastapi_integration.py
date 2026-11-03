@@ -2131,6 +2131,13 @@ class FastAPIIntegration(BaseActingWebIntegration):
                 self.logger.warning(f"Template aw-verify-email.html not found: {e}")
 
         status = template_values.get("status", "")
+        if status == "confirm":
+            from ...handlers.oauth_email import confirm_page_html
+
+            return HTMLResponse(
+                content=confirm_page_html(str(template_values.get("verify_token", ""))),
+                status_code=status_code,
+            )
         message = html.escape(str(template_values.get("message", "")))
         email = html.escape(str(template_values.get("email", "")))
         actor_id = template_values.get("actor_id", "")

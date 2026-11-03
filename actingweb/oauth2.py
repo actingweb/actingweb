@@ -21,6 +21,7 @@ from oauthlib.oauth2 import WebApplicationClient  # type: ignore[import-untyped]
 
 from . import actor as actor_module
 from . import config as config_class
+from ._bounded_cache import BoundedDict
 from .constants import ESTABLISHED_VIA_OAUTH2_INTERACTIVE
 from .db.creator_rules import is_exempt, normalise_creator
 from .db.exceptions import CreatorTaken, DbError, DeletionInProgress
@@ -64,6 +65,67 @@ def _redact_token_response(text: str, *, limit: int = 500) -> str:
             redacted,
         )
     return redacted
+
+
+def _claim_true(value: Any) -> bool:
+    """An OpenID boolean claim that is true: ``True`` or ``"true"``. Never
+    ``bool(value)``: ``"false"`` and ``"yes"`` are not true."""
+    return value is True or (isinstance(value, str) and value.lower() == "true")
+
+
+#: digest of a GitHub token -> (monotonic time, its /user/emails answer).
+_GITHUB_EMAILS_MEMO: BoundedDict[str, tuple[float, list[dict[str, Any]] | None]] = (
+    BoundedDict(maxsize=64)
+)
+
+
+def drop_unverified_email(
+    provider: "OAuth2Provider",
+    user_info: dict[str, Any] | None,
+    access_token: str | None = None,
+) -> dict[str, Any] | None:
+    """E1, at the place a provider's user info is built: an ``email`` the
+    provider does not vouch for is moved to ``unverified_email`` (kept for
+    logging and for ``oauth_success``, never an identity or a stored
+    address); a verified one is marked ``email_verified: True`` so a later
+    check without the token (GitHub's list needs it) still sees it."""
+    if not user_info or not isinstance(user_info, dict):
+        return user_info
+    info = dict(user_info)
+    email = info.get("email")
+    if not email:
+        return info
+    if provider.email_is_verified(info, access_token):
+        info["email_verified"] = True
+        return info
+    info.pop("email", None)
+    info["unverified_email"] = str(email).lower()
+    logger.info(
+        f"{provider.name}: the provider's email is not verified; it is not used "
+        "as the sign-in identity"
+    )
+    return info
+
+
+def verified_email_of(user_info: dict[str, Any] | None) -> str | None:
+    """The address in ``user_info`` that its build site marked verified
+    (:func:`drop_unverified_email` sets ``email_verified``; Google's web
+    userinfo says ``verified_email``), lowercased; None otherwise."""
+    info = user_info or {}
+    email = info.get("email")
+    if not email:
+        return None
+    if _claim_true(info.get("email_verified")) or _claim_true(
+        info.get("verified_email")
+    ):
+        return str(email).lower()
+    return None
+
+
+def _redact_email(address: str) -> str:
+    """``a***@example.com``: enough to grep, not the address."""
+    local, _, domain = address.partition("@")
+    return f"{local[:1]}***@{domain}" if domain else "***"
 
 
 class OAuth2Provider:
@@ -187,6 +249,18 @@ class OAuth2Provider:
         """
         return []
 
+    def email_is_verified(
+        self, user_info: dict[str, Any], access_token: str | None = None
+    ) -> bool:
+        """Whether this provider vouches for ``user_info["email"]`` (E1).
+
+        An address is a sign-in identity, and is stored as the actor's
+        ``email``, only when the provider says it verified it. The default
+        reads the OpenID ``email_verified`` claim (``True`` or ``"true"``;
+        an absent claim counts as unverified). Providers override this.
+        """
+        return _claim_true(user_info.get("email_verified"))
+
     def store_provider_identity(self, store: Any, identifier: str) -> None:
         """Persist provider-specific identity fields on ``actor.store``."""
         return None
@@ -268,6 +342,15 @@ class GoogleOAuth2Provider(OAuth2Provider):
             return f"google:{sub}"
         return super().extract_identifier_from_user_info(user_info)
 
+    def email_is_verified(
+        self, user_info: dict[str, Any], access_token: str | None = None
+    ) -> bool:
+        # The web flow's userinfo (v2) says ``verified_email``; an id_token
+        # (native sign-in) says ``email_verified``. Either must be true.
+        return _claim_true(user_info.get("verified_email")) or _claim_true(
+            user_info.get("email_verified")
+        )
+
     def store_provider_identity(self, store: Any, identifier: str) -> None:
         if identifier.startswith("google:"):
             store.oauth_sub = identifier.split(":", 1)[1]
@@ -307,8 +390,6 @@ class GitHubOAuth2Provider(OAuth2Provider):
             else "",
         }
         super().__init__("github", github_config)
-        # (token, monotonic time, the /user/emails answer); see _emails_for.
-        self._emails_memo: tuple[str, float, list[dict[str, Any]] | None] | None = None
 
     def token_request_headers(self) -> dict[str, str]:
         headers = super().token_request_headers()
@@ -342,33 +423,45 @@ class GitHubOAuth2Provider(OAuth2Provider):
             return f"github:{login}".lower()
         return super().extract_identifier_from_user_info(user_info)
 
+    def email_is_verified(
+        self, user_info: dict[str, Any], access_token: str | None = None
+    ) -> bool:
+        # GitHub's /user carries no claim: the address must be one of the
+        # token's verified addresses (one /user/emails call, memoised per
+        # token). The build site marks a verified one, so a later check with
+        # no token at hand still sees it; a failed call counts as unverified.
+        if _claim_true(user_info.get("email_verified")):
+            return True
+        email = str(user_info.get("email") or "").lower()
+        if not email or not access_token:
+            return False
+        verified = self.get_verified_emails(access_token)
+        return bool(verified) and email in (verified or [])
+
     def store_provider_identity(self, store: Any, identifier: str) -> None:
         if identifier.startswith("github:"):
             store.oauth_github_id = identifier.split(":", 1)[1]
 
-    # How long one ``/user/emails`` answer is reused for its token. A
-    # provider is built per authenticator, and the callback builds one per
-    # request, so in practice the memo lives for one sign-in; the bound keeps
-    # a long-lived authenticator from reusing an answer past it.
+    # How long one ``/user/emails`` answer is reused for its token. The memo
+    # is per process and keyed by a digest of the token (a provider is built
+    # per request, and bearer-validated requests repeat the same token), so a
+    # token's requests within the window pay one call.
     _EMAILS_MEMO_SECONDS = 30.0
 
     def _emails_for(self, access_token: str) -> list[dict[str, Any]] | None:
-        """One ``/user/emails`` request per token per sign-in, success or not.
+        """One ``/user/emails`` request per token per window, success or not.
 
-        ``get_primary_email`` and ``get_verified_emails`` both read it, so a
-        sign-in that needs both pays one request (and at most one timeout).
-        Only the last token is kept.
+        ``get_primary_email``, ``get_verified_emails`` and
+        ``email_is_verified`` all read it, so a sign-in that needs them pays
+        one request (and at most one timeout).
         """
-        memo = self._emails_memo
+        key = hashlib.sha256(access_token.encode()).hexdigest()
         now = time.monotonic()
-        if (
-            memo is not None
-            and memo[0] == access_token
-            and now - memo[1] < self._EMAILS_MEMO_SECONDS
-        ):
-            return memo[2]
+        memo = _GITHUB_EMAILS_MEMO.get(key)
+        if memo is not None and now - memo[0] < self._EMAILS_MEMO_SECONDS:
+            return memo[1]
         emails = _fetch_github_emails(access_token)
-        self._emails_memo = (access_token, now, emails)
+        _GITHUB_EMAILS_MEMO[key] = (now, emails)
         return emails
 
     def get_primary_email(self, access_token: str) -> str | None:
@@ -493,6 +586,14 @@ class AppleOAuth2Provider(OAuth2Provider):
         if sub:
             return f"apple:{sub}"
         return super().extract_identifier_from_user_info(user_info)
+
+    def email_is_verified(
+        self, user_info: dict[str, Any], access_token: str | None = None
+    ) -> bool:
+        # Only the signed id_token's claim counts; the address Apple posts in
+        # the form_post ``user`` payload is never verified (it is merged as
+        # ``unverified_email``).
+        return _claim_true(user_info.get("email_verified"))
 
     def store_provider_identity(self, store: Any, identifier: str) -> None:
         if identifier.startswith("apple:"):
@@ -817,7 +918,7 @@ class OAuth2Authenticator:
                 return None
 
             userinfo = response.json()
-            return dict(userinfo)
+            return drop_unverified_email(self.provider, dict(userinfo), access_token)
 
         except Exception as e:  # folds DbError: provider HTTP only
             logger.error(f"Exception during token validation: {e}")
@@ -877,7 +978,7 @@ class OAuth2Authenticator:
                 return None
 
             userinfo = response.json()
-            return dict(userinfo)
+            return drop_unverified_email(self.provider, dict(userinfo), access_token)
 
         except ImportError:
             logger.warning("httpx not available, falling back to sync validation")
@@ -912,10 +1013,19 @@ class OAuth2Authenticator:
         if not user_info:
             return None
 
-        # Always try to get email first (preferred for both modes)
+        # Always try to get email first (preferred for both modes), but only
+        # an address the provider vouches for (E1): an unverified one falls
+        # through to the provider's verified-email fallback, the email form or
+        # the provider-id identifier.
         email = user_info.get("email")
-        if email:
+        if email and self.provider.email_is_verified(user_info, access_token):
             return str(email).lower()
+        if email or user_info.get("unverified_email"):
+            logger.warning(
+                f"{self.provider.name}: the sign-in's email is not verified by the "
+                f"provider ({_redact_email(str(email or user_info.get('unverified_email')))}"
+                "); not using it as the identity"
+            )
 
         # If email is required (force_email_prop_as_creator=True), try harder
         if require_email:
@@ -1117,7 +1227,7 @@ class OAuth2Authenticator:
             logger.info(f"Creating new actor for identifier: {identifier}")
 
             try:
-                return _create_actor_for_identifier(
+                created = _create_actor_for_identifier(
                     self.config,
                     self.provider,
                     identifier,
@@ -1125,6 +1235,10 @@ class OAuth2Authenticator:
                     effective_hooks,
                     auth_method=auth_method,
                 )
+                _announce_pending_adoption(
+                    self.config, effective_hooks, created, self.provider
+                )
+                return created
             except CreatorTaken:  # folds DbError: loads the race winner
                 if not self.config.unique_creator or create_only:
                     raise
@@ -1826,9 +1940,9 @@ def _create_actor_for_identifier(
 
         # If identifier is provider-specific ID, store actual email separately
         if ":" in identifier and user_info:
-            email = user_info.get("email")
+            email = verified_email_of(user_info)
             if email:
-                store.email = email.lower()
+                store.email = email
                 logger.debug(f"Stored display email for provider ID actor: {email}")
 
             # Store provider-specific ID for reference
@@ -1947,6 +2061,7 @@ def _remove_for_replacement(
     creator: str,
     client_ids: list[str],
     spa_revoked: bool = False,
+    pre_reads: tuple[Any, Any] | None = None,
 ) -> int | None:
     """Delete an actor a sign-in replaces; return the tokens revoked.
 
@@ -1980,6 +2095,7 @@ def _remove_for_replacement(
         hook_kwargs=reason,
         spa_revoked=spa_revoked,
         client_ids=client_ids,
+        pre_reads=pre_reads,
     )
     if revoked is None:
         logger.error(
@@ -2001,6 +2117,16 @@ def _creator_rows(config: config_class.Config, creator: str) -> list[dict[str, A
     if isinstance(rows, dict):
         rows = [rows]
     return [r for r in (rows or []) if r and r.get("id")]
+
+
+def row_holds_creator(row: dict[str, Any] | None, creator: str | None) -> bool:
+    """BK: whether an actor row read after a by-creator listing still holds
+    that creator. The DynamoDB creator index is eventually consistent, so a
+    renamed actor can still be listed under its old creator; its row is the
+    truth."""
+    if not row:
+        return False
+    return normalise_creator(row.get("creator")) == normalise_creator(creator)
 
 
 def _factory_siblings(
@@ -2045,12 +2171,14 @@ def _factory_siblings(
             continue
         if len(siblings) >= SWEEP_LIMIT:
             break
-        marker = known.get(sibling_id) or classify_marker(config, sibling_id)
+        marker = known.get(sibling_id) or classify_marker(config, sibling_id, creator)
         if marker != "replace":
             continue
         # Read before anything is removed: a fault raises DbError here, with
-        # every actor still in place; None is a row deleted since the listing.
-        if not db_actor.get(actor_id=sibling_id):
+        # every actor still in place. A row deleted since the listing, or one
+        # whose creator is no longer this one (the index lags a rename, BK),
+        # is not this creator's sibling.
+        if not row_holds_creator(db_actor.get(actor_id=sibling_id), creator):
             continue
         siblings.append(sibling_id)
     return siblings
@@ -2066,6 +2194,8 @@ def _sweep_factory_actors(
     hooks: "HookRegistry | None",
     creator: str,
     actor_ids: list[str],
+    *,
+    spa_revoked: bool = False,
 ) -> tuple[int, list[str]] | None:
     """Delete the ``factory`` actors a sign-in for ``creator`` found, at most
     :data:`SWEEP_LIMIT` (lowest ids first); return the tokens revoked and the
@@ -2096,7 +2226,7 @@ def _sweep_factory_actors(
             current.append(sibling_id)
     if not current:
         return 0, []
-    tokens_revoked = _revoke_spa_tokens(config, current)
+    tokens_revoked = 0 if spa_revoked else _revoke_spa_tokens(config, current)
     swept: list[str] = []
     for sibling_id in current:
         marker = classify_marker(config, sibling_id)
@@ -2147,7 +2277,9 @@ def _replace_enforced(
     hooks: "HookRegistry | None",
     user_info: dict[str, Any] | None,
     client_ids: list[str],
-) -> tuple[actor_module.Actor | None, list[dict[str, Any]], list[str], int]:
+) -> tuple[
+    actor_module.Actor | None, list[dict[str, Any]] | None, list[str] | None, int
+]:
     """Replace a ``factory`` actor under ``with_unique_creator()``.
 
     The successor is created first, taking the creator from the squatter in
@@ -2167,18 +2299,12 @@ def _replace_enforced(
     Returns the successor (None when the removal was not confirmed), and the
     trusts, subscription peers and tokens the squatter lost.
     """
-    from . import subscription as subscription_module
-    from . import trust as trust_module
 
     actor_id = existing.id or ""
     creator = existing.creator or ""
-    # The actor_adopted summary only: a fault leaves it empty.
-    removed_trusts, subscription_peers = actor_module.relationship_summary(
-        trust_module.Trusts(actor_id=actor_id, config=config).fetch(strict=False),
-        subscription_module.Subscriptions(actor_id=actor_id, config=config).fetch(
-            strict=False
-        ),
-    )
+    # The actor_adopted summary only: a fault reports it unknown (None).
+    removed_trusts, subscription_peers = _summary_or_unknown(config, actor_id)
+    _record_pending_adoption(config, creator, actor_id, existing)
     try:
         successor = _create_actor_for_identifier(
             config, provider, creator, user_info, hooks, replace_holder=actor_id
@@ -2296,7 +2422,10 @@ def _proven_email(creator: str | None, user_info: dict[str, Any] | None) -> str 
     provider-id creator ("apple:…") has no address of its own."""
     if "@" in (creator or ""):
         return (creator or "").lower()
-    return str((user_info or {}).get("email") or "").lower() or None
+    # Only an address the provider vouched for (E1): an unverified one would
+    # be seeded into store.email, which vouches and, under
+    # force_email_prop_as_creator, renames the creator at load.
+    return verified_email_of(user_info)
 
 
 def _seed_missing_email(
@@ -2377,6 +2506,169 @@ def _finish_stalled_vouched(
         f"actor for {creator!r}"
     )
     return _create_actor_for_identifier(config, provider, creator, user_info, hooks)
+
+
+def _merge_carried(
+    carried: dict[str, Any] | None, here: dict[str, Any]
+) -> dict[str, Any]:
+    """BN: what an outer replacement already removed, merged with this
+    level's, so a nested hand-off reports everything the sign-in removed. A
+    count that is unknown (None) on either side stays unknown."""
+    if not carried:
+        return dict(here)
+
+    def joined(key: str) -> list[Any] | None:
+        outer, inner = carried.get(key), here.get(key)
+        if outer is None or inner is None:
+            return None
+        return [*outer, *inner]
+
+    return {
+        "replaced_ids": [
+            *carried.get("replaced_ids", []),
+            *here.get("replaced_ids", []),
+        ],
+        "removed_trusts": joined("removed_trusts"),
+        "subscription_peers": joined("subscription_peers"),
+        "tokens_revoked": int(carried.get("tokens_revoked") or 0)
+        + int(here.get("tokens_revoked") or 0),
+        "client_ids": [*carried.get("client_ids", []), *here.get("client_ids", [])],
+    }
+
+
+def _summary_or_unknown(
+    config: config_class.Config, actor_id: str
+) -> tuple[list[dict[str, Any]] | None, list[str] | None]:
+    """The trusts and subscription peers an adoption removes, for the
+    ``actor_adopted`` summary; ``(None, None)`` (unknown, not zero) when they
+    cannot be read. The adoption proceeds either way."""
+    from . import subscription as subscription_module
+    from . import trust as trust_module
+
+    try:
+        return actor_module.relationship_summary(
+            trust_module.Trusts(actor_id=actor_id, config=config).fetch(),
+            subscription_module.Subscriptions(actor_id=actor_id, config=config).fetch(),
+        )
+    except DbError as e:  # folds DbError: summary only; reported as unknown
+        logger.warning(
+            f"Adoption of actor {actor_id}: its relationships could not be listed "
+            f"for the actor_adopted summary ({e}); reported as unknown"
+        )
+        return None, None
+
+
+def _record_pending_adoption(
+    config: config_class.Config,
+    creator: str,
+    actor_id: str,
+    existing: actor_module.Actor,
+) -> None:
+    """Before a replacement creates the successor: remember which actor it
+    replaces, keyed by the creator, so a sign-in that completes the adoption
+    after this one failed (the create raised) still fires ``actor_adopted``
+    with the old id. Best effort (logged)."""
+    from . import attribute
+    from .constants import ACTINGWEB_SYSTEM_ACTOR, PENDING_ADOPTION_BUCKET
+
+    marker = existing.store.auth_method if existing.store else None
+    try:
+        attribute.Attributes(
+            actor_id=ACTINGWEB_SYSTEM_ACTOR,
+            bucket=PENDING_ADOPTION_BUCKET,
+            config=config,
+        ).set_attr(
+            name=normalise_creator(creator),
+            data={
+                "actor_id": actor_id,
+                "previous": marker if isinstance(marker, str) and marker else "legacy",
+            },
+            ttl_seconds=PENDING_ADOPTION_TTL,
+        )
+    except Exception as e:  # folds DbError: bookkeeping before the create
+        logger.warning(f"Adoption of actor {actor_id}: pending record not written: {e}")
+
+
+def _clear_pending_adoption(config: config_class.Config, creator: str) -> None:
+    """The adoption was announced: drop its pending record (best effort)."""
+    from . import attribute
+    from .constants import ACTINGWEB_SYSTEM_ACTOR, PENDING_ADOPTION_BUCKET
+
+    try:
+        attribute.Attributes(
+            actor_id=ACTINGWEB_SYSTEM_ACTOR,
+            bucket=PENDING_ADOPTION_BUCKET,
+            config=config,
+        ).delete_attr(normalise_creator(creator))
+    except Exception as e:  # folds DbError: after actor_adopted fired
+        logger.debug(f"Pending adoption record for {creator!r} not removed: {e}")
+
+
+def _announce_pending_adoption(
+    config: config_class.Config,
+    hooks: "HookRegistry | None",
+    created: actor_module.Actor,
+    provider: "OAuth2Provider",
+) -> None:
+    """After a sign-in created the actor for a creator: when an earlier
+    sign-in replaced an actor for it and failed before announcing it (its
+    successor's create raised), fire ``actor_adopted`` now, with the old id
+    and the counts unknown. Best effort: the create has committed."""
+    from .constants import ACTINGWEB_SYSTEM_ACTOR, PENDING_ADOPTION_BUCKET
+    from .db import get_attribute
+
+    creator = normalise_creator(created.creator or "")
+    try:
+        db = get_attribute(config)
+        row = db.get_attr_strict(
+            actor_id=ACTINGWEB_SYSTEM_ACTOR,
+            bucket=PENDING_ADOPTION_BUCKET,
+            name=creator,
+        )
+        if not row or not isinstance(row.get("data"), dict):
+            return
+        pending = row["data"]
+        if pending.get("announced"):
+            return
+        # Claimed against the row as read: a newer replacement that rewrote
+        # the record since keeps it, and only one sign-in announces it.
+        if not db.conditional_update_attr(
+            actor_id=ACTINGWEB_SYSTEM_ACTOR,
+            bucket=PENDING_ADOPTION_BUCKET,
+            name=creator,
+            old_data=pending,
+            new_data={**pending, "announced": True},
+        ):
+            return  # another sign-in announces it, or a newer record replaced it
+        db.delete_attr(
+            actor_id=ACTINGWEB_SYSTEM_ACTOR,
+            bucket=PENDING_ADOPTION_BUCKET,
+            name=creator,
+        )
+    except Exception as e:  # folds DbError: post-commit notification
+        logger.warning(f"Pending adoption for {creator!r} not read: {e}")
+        return
+    _fire_lifecycle(
+        hooks,
+        "actor_adopted",
+        created,
+        config,
+        previous_auth_method=pending.get("previous"),
+        previous_actor_id=pending.get("actor_id"),
+        provider=provider.name,
+        mode="replaced",
+        removed_trusts=None,
+        removed_subscription_peers=None,
+        tokens_revoked=None,
+        removed_client_ids=None,
+        property_names=None,
+        removed_sibling_ids=[],
+    )
+
+
+PENDING_ADOPTION_TTL = 86400 * 7
+"""How long a replacement's pending ``actor_adopted`` waits for a sign-in that
+completes it (seven days)."""
 
 
 def _adopt_actor(
@@ -2523,22 +2815,38 @@ def _adopt_actor(
         )
         if siblings is None:
             return None
-        # The actor_adopted summary only: a fault leaves it empty, not the
-        # sign-in failed.
-        removed_trusts, subscription_peers = actor_module.relationship_summary(
-            trust_module.Trusts(actor_id=actor_id, config=config).fetch(strict=False),
-            subscription_module.Subscriptions(actor_id=actor_id, config=config).fetch(
-                strict=False
-            ),
+        # The victim's lists, read once and strictly (K4): the summary and the
+        # wipe's pre-reads are the same read, and a fault fails the sign-in
+        # with everything in place.
+        victim_trusts = trust_module.Trusts(actor_id=actor_id, config=config)
+        victim_subs = subscription_module.Subscriptions(
+            actor_id=actor_id, config=config
         )
-        property_names: list[str] = []
+        removed_trusts_l, subscription_peers_l = actor_module.relationship_summary(
+            victim_trusts.fetch(), victim_subs.fetch()
+        )
+        removed_trusts = removed_trusts_l
+        subscription_peers = subscription_peers_l
+        property_names: list[str] | None = []
+        # BP: the SPA tokens of the victim and its siblings in one pass over
+        # the shared token buckets.
+        tokens_revoked = _revoke_spa_tokens(config, [actor_id, *siblings])
+        _record_pending_adoption(config, creator, actor_id, existing)
         removed = _remove_for_replacement(
-            existing, config=config, hooks=hooks, creator=creator, client_ids=client_ids
+            existing,
+            config=config,
+            hooks=hooks,
+            creator=creator,
+            client_ids=client_ids,
+            spa_revoked=True,
+            pre_reads=(victim_trusts, victim_subs),
         )
         if removed is None:
             return None
-        tokens_revoked = removed
-        swept = _sweep_factory_actors(config, hooks, creator, siblings)
+        tokens_revoked += removed
+        swept = _sweep_factory_actors(
+            config, hooks, creator, siblings, spa_revoked=True
+        )
         if swept is None:
             return None
         tokens_revoked += swept[0]
@@ -2568,8 +2876,8 @@ def _adopt_actor(
             if rid in known:
                 remaining[rid] = known[rid]
                 continue
-            if not db_actor.get(actor_id=rid):
-                continue  # deleted since the index listed it
+            if not row_holds_creator(db_actor.get(actor_id=rid), creator):
+                continue  # deleted or renamed since the index listed it (BK)
             marker = classify_marker(config, rid, creator)
             if marker is None:
                 logger.error(
@@ -2599,7 +2907,12 @@ def _adopt_actor(
         if marker_class == "vouched":
             result = successor
             if result.store is not None:
-                result.store.oauth_provider = provider.name
+                try:
+                    result.store.oauth_provider = provider.name
+                except DbError as e:  # folds DbError: provider bookkeeping write (K4)
+                    logger.error(
+                        f"Sign-in to {result.id}: recording the provider faulted: {e}"
+                    )
                 _seed_missing_email(result, result.store, user_info)
         elif marker_class == "unvouched":
             # The owner's own unvouched actor (from before 3.16, or the email
@@ -2612,13 +2925,16 @@ def _adopt_actor(
                 hooks=hooks,
                 user_info=user_info,
                 verified_by_email=verified_by_email,
-                carried={
-                    "replaced_ids": [actor_id, *swept_ids],
-                    "removed_trusts": removed_trusts,
-                    "subscription_peers": subscription_peers,
-                    "tokens_revoked": tokens_revoked,
-                    "client_ids": client_ids,
-                },
+                carried=_merge_carried(
+                    carried,
+                    {
+                        "replaced_ids": [actor_id, *swept_ids],
+                        "removed_trusts": removed_trusts,
+                        "subscription_peers": subscription_peers,
+                        "tokens_revoked": tokens_revoked,
+                        "client_ids": client_ids,
+                    },
+                ),
             )
         else:
             # Nothing left, or only a factory actor created since the listing
@@ -2656,13 +2972,20 @@ def _adopt_actor(
             logger.error(f"Adoption of actor {actor_id}: passphrase rotation failed")
             return None
         tokens_revoked = _revoke_all_actor_tokens(config, actor_id)
-        # The actor_adopted summary only (strict=False).
-        fetched = property_module.Properties(actor_id=actor_id, config=config).fetch(
-            strict=False
-        )
-        property_names = (
-            sorted(str(k) for k in fetched) if isinstance(fetched, dict) else []
-        )
+        # The actor_adopted summary only: a fault reports it unknown (None).
+        try:
+            fetched = property_module.Properties(
+                actor_id=actor_id, config=config
+            ).fetch()
+            property_names = (
+                sorted(str(k) for k in fetched) if isinstance(fetched, dict) else []
+            )
+        except DbError as e:  # folds DbError: summary only; reported as unknown
+            logger.warning(
+                f"Adoption of actor {actor_id}: its properties could not be "
+                f"listed for the actor_adopted summary ({e}); reported as unknown"
+            )
+            property_names = None
         purged = existing.purge_relationships(notify_peers=False)
         if not purged["confirmed"]:
             logger.error(
@@ -2729,7 +3052,13 @@ def _adopt_actor(
             store.auth_method_adopted_from = previous
             store.auth_method_adopted_at = now
             if provider_name:
-                store.oauth_provider = provider_name
+                try:
+                    store.oauth_provider = provider_name
+                except DbError as e:  # folds DbError: provider bookkeeping write (K4)
+                    logger.error(
+                        f"Adoption of actor {actor_id}: recording the provider "
+                        f"faulted: {e}"
+                    )
         if not verified_by_email and not clear_pending_email_verification(
             existing, config
         ):
@@ -2744,20 +3073,36 @@ def _adopt_actor(
         mode = "cleaned"
 
     if carried:
-        removed_trusts = [*carried["removed_trusts"], *removed_trusts]
-        subscription_peers = [*carried["subscription_peers"], *subscription_peers]
-        tokens_revoked += carried["tokens_revoked"]
-        client_ids = [*carried["client_ids"], *client_ids]
-        swept_ids = [*carried["replaced_ids"], *swept_ids]
+        merged = _merge_carried(
+            carried,
+            {
+                "replaced_ids": swept_ids,
+                "removed_trusts": removed_trusts,
+                "subscription_peers": subscription_peers,
+                "tokens_revoked": tokens_revoked,
+                "client_ids": client_ids,
+            },
+        )
+        removed_trusts = merged["removed_trusts"]
+        subscription_peers = merged["subscription_peers"]
+        tokens_revoked = merged["tokens_revoked"]
+        client_ids = merged["client_ids"]
+        swept_ids = merged["replaced_ids"]
+
+    def _n(items: list[Any] | None) -> str:
+        return "unknown" if items is None else str(len(items))
+
     logger.warning(
         f"Adopted unvouched actor {actor_id} (was {previous!r}) via "
         f"{provider_name or 'email verification'}: mode={mode}, "
-        f"trusts={len(removed_trusts)}, subscriptions={len(subscription_peers)}, "
+        f"trusts={_n(removed_trusts)}, subscriptions={_n(subscription_peers)}, "
         f"tokens={tokens_revoked}, clients={len(client_ids)}, "
-        f"properties={len(property_names)}, "
-        f"peers={[t['peerid'] for t in removed_trusts][:10]}, "
+        f"properties={_n(property_names)}, "
+        f"peers={[t['peerid'] for t in (removed_trusts or [])][:10]}, "
         f"siblings={swept_ids}"
     )
+    if mode == "replaced" and result is not None:
+        _clear_pending_adoption(config, existing.creator or "")
     _fire_lifecycle(
         hooks,
         "actor_adopted",

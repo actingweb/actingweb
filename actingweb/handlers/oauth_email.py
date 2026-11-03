@@ -26,6 +26,45 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def confirm_page_html(token: str) -> str:
+    """The fallback Confirm page for an emailed verification link (no
+    ``aw-verify-email.html`` template): a form that POSTs the token."""
+    import html as html_module
+
+    value = html_module.escape(token, quote=True)
+    return f"""<!DOCTYPE html>
+<html>
+<head><title>Confirm your email address - ActingWeb</title></head>
+<body>
+    <h1>Confirm your email address</h1>
+    <form method="POST" action="/oauth/email">
+        <input type="hidden" name="verify" value="{value}">
+        <button type="submit">Confirm</button>
+    </form>
+</body>
+</html>
+"""
+
+
+def _provider_account(
+    config: Any, provider_name: str, user_info: dict[str, Any] | None
+) -> str | None:
+    """The stable provider identity of a claimed session (``github:123``),
+    or None when the provider or its user info cannot give one."""
+    if not provider_name or not user_info:
+        return None
+    try:
+        from ..oauth2 import create_oauth2_authenticator
+
+        provider = create_oauth2_authenticator(config, provider_name).provider
+        return provider.extract_identifier_from_user_info(user_info)
+    except Exception as e:  # folds DbError: no DB access, provider config only
+        logger.warning(
+            f"Could not derive the provider account for {provider_name}: {e}"
+        )
+        return None
+
+
 class OAuth2EmailHandler(BaseHandler):
     """
     Handler for /oauth/email endpoint.
@@ -141,9 +180,37 @@ class OAuth2EmailHandler(BaseHandler):
             return {}
         return self.error_response(409, message)
 
+    def _verification_confirm_page(self, token: str) -> dict[str, Any]:
+        """``GET /oauth/email?verify=<token>``: a page (or JSON) that asks for
+        a ``POST`` of the token. Reads and writes nothing."""
+        if self._wants_json():
+            self._set_cors_headers()
+            response_data: dict[str, Any] = {
+                "success": True,
+                "status": "confirm_required",
+                "message": "Confirm the verification with a POST of the token.",
+                "confirm": {
+                    "method": "POST",
+                    "url": "/oauth/email",
+                    "params": {"verify": token},
+                },
+            }
+            self.response.write(json.dumps(response_data))
+            self.response.headers["Content-Type"] = "application/json"
+            self.response.set_status(200)
+            return response_data
+        self.response.template_values = {
+            "status": "confirm",
+            "message": "Confirm that this is your email address.",
+            "verify_token": token,
+            "action": "/oauth/email",
+        }
+        return {}
+
     def _handle_email_verification(self, token: str) -> dict[str, Any]:
         """
-        Handle email verification via GET /oauth/email?verify=<token>.
+        Handle email verification via POST /oauth/email with ``verify=<token>``
+        (the Confirm button of the page the emailed link opens).
 
         Looks up the actor from the token index, validates the token,
         and marks the email as verified.
@@ -256,8 +323,13 @@ class OAuth2EmailHandler(BaseHandler):
         actor.store.email_verification_address = None
         actor.store.email_verified_at = str(int(time.time()))
 
-        # Clean up the token index entry
-        index.delete_attr(token)
+        # Clean up the token index entry: consumed only now, after the
+        # verification landed, so a fault above leaves the link usable.
+        from ..single_use import delete_confirmed
+
+        delete_confirmed(
+            self.config, ACTINGWEB_SYSTEM_ACTOR, EMAIL_VERIFY_TOKEN_INDEX_BUCKET, token
+        )
 
         logger.info(
             f"Email verified successfully for actor {actor_id}: {actor.creator}"
@@ -312,10 +384,13 @@ class OAuth2EmailHandler(BaseHandler):
         2. Email input form: GET /oauth/email?session=<session_id>
            Shows email input form (JSON for SPAs, template for browsers).
         """
-        # Check for verification token first
+        # Check for verification token first. The emailed link only shows a
+        # Confirm page: mail scanners and link previews fetch GET links, and a
+        # GET that verified would let them confirm an address nobody read
+        # (BG3). The Confirm button POSTs the token.
         verify_token = self.request.get("verify") or ""
         if verify_token:
-            return self._handle_email_verification(verify_token)
+            return self._verification_confirm_page(verify_token)
 
         session_id = self.request.get("session") or ""
 
@@ -392,14 +467,21 @@ class OAuth2EmailHandler(BaseHandler):
                 params = json.loads(body_str) if body_str else {}
                 session_id = params.get("session", "")
                 email = params.get("email", "")
+                verify_token = params.get("verify", "")
             except (json.JSONDecodeError, ValueError):
                 # Fall back to form parameters
                 session_id = self.request.get("session") or ""
                 email = self.request.get("email") or ""
+                verify_token = self.request.get("verify") or ""
+            if not verify_token and not body_str:
+                verify_token = self.request.get("verify") or ""
 
         except Exception as e:  # folds DbError: no DB access
             logger.error(f"Failed to parse email form data: {e}")
             return self.error_response(400, "Invalid form data")
+
+        if isinstance(verify_token, str) and verify_token:
+            return self._handle_email_verification(verify_token)
 
         # Validate inputs
         if not session_id:
@@ -520,6 +602,9 @@ class OAuth2EmailHandler(BaseHandler):
             # A typed, unverified address vouches for nothing: the marker lets
             # a later proof of the address clean the actor before adopting it.
             auth_method="email_unverified" if email_requires_verification else None,
+            # O2c: the provider tokens are written below, once the refusals
+            # and oauth_success accepted the submission.
+            write_tokens=False,
         )
 
         if not actor_instance and email_requires_verification:
@@ -617,6 +702,9 @@ class OAuth2EmailHandler(BaseHandler):
                 return {}
             return self.error_response(403, message)
 
+        # O2c: accepted; now the provider tokens and provider land.
+        session_manager.store_session_tokens(actor_instance, claimed_session)
+
         # If email requires verification, set up verification flow
         if email_requires_verification and actor_instance.store:
             import secrets
@@ -637,6 +725,15 @@ class OAuth2EmailHandler(BaseHandler):
             actor_instance.store.email_verification_token = verification_token
             actor_instance.store.email_verification_address = email.lower()
             actor_instance.store.email_verification_created_at = str(int(time.time()))
+            # The provider account that asked, named in the verification
+            # email so its recipient can tell a request they did not make
+            # (BG3). It is never linked to the actor: a victim confirming an
+            # attacker's request would otherwise hand the attacker's account
+            # the victim's verified actor.
+            provider_name = str(claimed_session.get("provider") or "")
+            provider_account = _provider_account(
+                self.config, provider_name, session_user_info
+            )
 
             # Store token → actor_id index for reverse lookup
             # This enables the clean /oauth/email?verify=<token> URL
@@ -674,6 +771,8 @@ class OAuth2EmailHandler(BaseHandler):
                         email=email,
                         verification_url=verification_url,
                         token=verification_token,
+                        provider=provider_name,
+                        provider_account=provider_account,
                     )
                 except Exception as e:  # folds DbError: notification after the verification token was committed
                     logger.error(f"Error in email_verification_required hook: {e}")

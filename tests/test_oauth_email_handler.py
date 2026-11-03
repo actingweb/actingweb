@@ -404,6 +404,25 @@ class TestFreeTextNewAddressFiresOauthSuccess:
         assert result["status_code"] == 403
         assert webobj.response.status_code == 403
         assert not any(c[0] == "email_verification_required" for c in hooks.calls)
+        # O2c: the session's provider tokens are written only after the hook
+        # accepted; a rejection writes none.
+        _args, kwargs = _session_mgr.complete_claimed_session.call_args
+        assert kwargs["write_tokens"] is False
+        _session_mgr.store_session_tokens.assert_not_called()
+
+    def test_accepted_oauth_success_writes_the_tokens_after_the_hook(self):
+        config = _config()
+        webobj = _webobj(email=EXISTING_EMAIL)
+        hooks = _hooks()
+        session = _session(verified_emails=[EXISTING_EMAIL])
+        actor = _new_actor()
+
+        _result, session_mgr = _run_post(
+            config, webobj, hooks, session=session, complete_actor=actor
+        )
+
+        session_mgr.store_session_tokens.assert_called_once()
+        assert any(c[0] == "oauth_success" for c in hooks.calls)
 
 
 class TestOauthTokenCookie:

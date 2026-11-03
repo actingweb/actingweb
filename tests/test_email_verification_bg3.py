@@ -9,7 +9,7 @@ from __future__ import annotations
 import time
 import uuid
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -134,14 +134,3 @@ class TestNoLink:
                 )
                 is None
             )
-
-
-class TestVerificationEmailNamesTheAccount:
-    def test_the_hook_gets_the_provider_and_account(self) -> None:
-        from actingweb.handlers.oauth_email import _provider_account
-
-        config = MagicMock()
-        with patch("actingweb.oauth2.create_oauth2_authenticator") as factory:
-            factory.return_value.provider.extract_identifier_from_user_info.return_value = "github:7"
-            assert _provider_account(config, "github", {"id": 7}) == "github:7"
-        assert _provider_account(config, "", {"id": 7}) is None

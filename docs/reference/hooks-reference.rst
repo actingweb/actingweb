@@ -183,9 +183,10 @@ Event Details
     factory-created actor (see ``actor_adopted``), with the keyword arguments
     ``reason="replaced_at_adoption"`` and ``replaced_by_identifier=<creator>``,
     so a hook that mails "your account was deleted" or cancels billing can tell
-    it apart from a user-initiated delete. A replacement that fails mid-wipe is
-    re-run by the next sign-in, so this hook (and ``actor_deleted_complete``)
-    may fire more than once for the same old actor.
+    it apart from a user-initiated delete. A deletion that stops part-way is
+    resumed (see `Faults and hooks`_): this hook runs at least once per
+    registered hook, and again only when one of them raised ``DbError``, so
+    write it to be idempotent.
 
 ``actor_adopted``
     Triggered once per adoption, on the **surviving** actor, after a sign-in
@@ -209,6 +210,9 @@ Event Details
     - ``mode``: ``"replaced"`` or ``"cleaned"``.
     - ``removed_trusts``: ``peerid``, ``relationship``, ``approved`` and
       ``established_via`` of each removed trust; **never** the ``secret``.
+      ``None`` (unknown, not "none") when the lists could not be read, as are
+      ``removed_subscription_peers``, ``tokens_revoked`` and
+      ``property_names`` then; the adoption itself went through.
     - ``removed_client_ids``: the OAuth2 clients registered under the actor,
       deleted with it.
     - ``property_names``: the properties that survive a clean-in-place, so the
@@ -232,6 +236,51 @@ Event Details
     ``replaced_by_identifier`` keyword arguments as ``actor_deleted``. See
     :doc:`actor-deletion` for the full contract.
 
+Faults and hooks
+~~~~~~~~~~~~~~~~
+
+An actor's wipe can stop part-way and is then resumed (3.16). Which hook
+runs on which path:
+
+.. list-table::
+   :header-rows: 1
+
+   * - Path
+     - ``actor_deleted``
+     - ``actor_deleted_complete``
+   * - First ``DELETE /<id>``
+     - before the wipe
+     - after it
+   * - ``DELETE /<id>`` repeated after a stall
+     - only if it raised ``DbError`` the first time
+     - once, by the request that finishes
+   * - Either, while another request holds the deletion's lease
+     - no (503 with ``Retry-After``)
+     - no
+   * - A sign-in that finishes a stalled deletion
+     - as for a repeated ``DELETE``
+     - once
+   * - A sign-in's replacement or factory sweep
+     - with ``reason="replaced_at_adoption"``
+     - once, same kwargs
+   * - ``Actor.delete()`` / ``ActorInterface.delete()``
+     - no
+     - no
+   * - ``actingweb-deletions resume``
+     - no
+     - no (the command prints the ids it finished)
+
+A resumed ``actor_deleted`` gets the kwargs the first attempt recorded. When
+one of several registered hooks raises ``DbError``, the retry runs all of
+them again; a hook that raised anything else counts as having run. Write
+deletion hooks to be idempotent.
+
+Two other folds are deliberate. A subscription callback's handlers run at
+most once: once they have run, a fault recording the sequence is logged and
+the callback answers as processed. The owner's sign-in removes the
+``factory`` actors beside it as a best-effort sweep; a fault there is logged
+and the next sign-in retries.
+
 ``oauth_success``
     Triggered after successful OAuth2 authentication.
 
@@ -245,8 +294,10 @@ Event Details
     - ``display_name`` — derived, or GitHub ``name``
     - ``given_name`` — Apple ``firstName`` / Google ``given_name``
     - ``family_name`` — Apple ``lastName`` / Google ``family_name``
-    - ``email`` — the email claim (for Apple, merged from the first-sign-in
-      ``user`` payload when present)
+    - ``email`` — the email claim, only when the provider verified it (3.16);
+      an unverified one is in ``unverified_email`` instead (Apple's
+      first-sign-in ``user`` payload address is always there, it is not
+      signed)
     - ``sub`` — provider subject claim (plus other provider fields passthrough)
 
     .. note::

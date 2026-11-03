@@ -45,12 +45,16 @@ What deletion does, in order
 ``DELETE /<actor_id>`` (and :meth:`actingweb.interface.ActorInterface.delete`)
 runs these steps in this order:
 
+#. Read the actor's trusts and subscriptions, strictly: a fault answers 503
+   with nothing written.
 #. **Write a deletion tombstone.** On the HTTP path, and when a sign-in
    replaces an unvouched actor, this happens *before the* ``actor_deleted``
    *hook runs* — so an external call made from that hook, and any provider
    callback racing it, already sees ``DELETED``.
 #. Run the ``actor_deleted`` lifecycle hook (HTTP path, and a sign-in that
    replaces an unvouched actor; see :doc:`hooks-reference`).
+#. Revoke the actor's MCP and SPA tokens and remove its OAuth2 clients'
+   index rows (3.16; the HTTP path, a sign-in and the operator command).
 #. Delete peer-trustee relationships.
 #. Delete properties and property lists, then the actor's property-list
    side partition (``{actor_id}$aux``: spanned items' body rows and key
@@ -70,6 +74,33 @@ Two consequences follow from the row going last, and both are contract:
 - Deletion is **retriable**. If a step fails, the actor row is still there and
   ``DELETE`` can be issued again. Removing the row first would strand the
   remaining rows with nothing pointing at them.
+
+Resuming a stalled wipe (3.16)
+------------------------------
+
+The tombstone written by 3.16 records why it was written (``deleted`` or
+``replaced_at_adoption``), whether peers are notified, the ``actor_deleted``
+keyword arguments, the actor's OAuth2 client ids and whether
+``actor_deleted`` has run. It carries no retention TTL until the actor row is
+gone, so a stalled wipe never ages out. One finisher at a time holds its
+two-minute lease, renewed after the hook; another one that meets a live lease
+answers 503 with ``Retry-After`` (``DeletionInProgress``), and a lapsed lease
+(a crashed finisher) is taken over.
+
+Who finishes a stalled wipe:
+
+- a repeated ``DELETE /<id>``;
+- a sign-in completion on that actor, which then creates a new actor for the
+  creator (a tombstone without a recorded reason, written before 3.16, leaves
+  a vouched actor as it is);
+- ``actingweb-deletions resume`` (see :doc:`../guides/database-maintenance`),
+  which runs no application hooks;
+- a re-call of ``Actor.delete()``, which runs no hooks either.
+
+``Actor.delete``'s own tombstone write only moves ``deleted_at`` to the start
+of the wipe; it never changes what the first write recorded, so a replacement
+victim's peers, whose URLs a squatter chose, are never notified, also when the
+wipe is resumed.
 
 The window is not narrow, and it is not hypothetical: it is seconds wide for an
 actor with a real property set, and the documented cleanup pattern *enters it

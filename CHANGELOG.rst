@@ -86,9 +86,11 @@ SECURITY
   limitations:** a provider access token or ``oauth_token`` cookie matched by
   email in ``auth.py`` does not adopt; unvouched siblings other than
   ``factory`` ones (``unique_creator`` off) are cleaned only when a sign-in
-  resolves to them; a vouched actor carrying a deletion tombstone (a
-  ``DELETE /<id>`` that stalled before its wipe) is returned as it is, as
-  before 3.16, since a stale tombstone must not wipe a live actor; one
+  resolves to them; a vouched actor carrying a deletion tombstone written
+  before 3.16 (one that records no reason: a ``DELETE /<id>`` that stalled,
+  or a create whose tombstone clear faulted) is returned as it is, since a
+  stale tombstone must not wipe a live actor (one written by 3.16 is
+  finished, see "A stalled deletion" under CHANGED); one
   sign-in deletes the actor it replaces, if any, and (``unique_creator``
   off) at most 10 ``factory`` actors beside it (each is a full wipe inside the request), so a squatter
   who created more is cleared over several sign-ins; with ``unique_creator``
@@ -103,8 +105,8 @@ SECURITY
   is, so a half-wiped actor is never cleaned and kept tombstoned. The clean
   revokes the actor's tokens again after its client registrations are
   removed, so a token issued before the client was removed does not outlive
-  the clean (a grant already past its client check when the client goes, and
-  writing after the second revoke, still can). A vouched sign-in writes the proven address into ``store.email`` when
+  the clean, and a grant that straddles the two revokes mints nothing (the
+  session generation, below). A vouched sign-in writes the proven address into ``store.email`` when
   it is missing (the creator when it is an address, else the provider's
   email), with one atomic create that never overwrites a stored value:
   a fault in the create's seeding left it out, and an actor vouched without
@@ -270,6 +272,62 @@ SECURITY
   makes for OAuth2 and MCP trusts are not affected. A custom template that
   interpolates a value inside ``onsubmit``/``onclick`` should move it to a
   ``data-`` attribute.
+
+- **A provider address the provider had not verified could be the sign-in
+  identity.** The sign-in took the provider's ``email`` whenever it was
+  present, so an account at the provider whose address was never verified
+  (Google can return such an address with ``verified_email: false``) signed
+  in to the actor of that address, and a provider-id actor (``google:…``)
+  had the address written into ``store.email``, which vouches for it and,
+  under ``force_email_prop_as_creator``, renamed the creator to it at load.
+  An address now counts only when the provider vouches for it: Google's
+  ``verified_email`` (web userinfo) or ``email_verified`` (id_token) is
+  true, Apple's signed id_token says ``email_verified`` true, or the GitHub
+  address is in the token's verified ``/user/emails`` list. An absent claim
+  counts as unverified, and the address Apple posts in its form_post
+  ``user`` payload is never verified. The rule is applied where the user
+  info is built, so bearer-token authentication, the stored ``email`` and
+  the email seeding follow it too. **Behavior change:** a user whose
+  provider address was never verified signs in to a new provider-id actor
+  (or is asked for an address, with ``force_email_prop_as_creator``)
+  instead of the address's actor, and a bearer token for such an account no
+  longer authenticates as that address; a WARNING naming the provider and a
+  redacted address is logged each time. An unverified address reaches
+  ``oauth_success`` as ``user_info["unverified_email"]``, not ``email``. A
+  GitHub sign-in whose ``/user`` carries an address now makes one
+  ``/user/emails`` request (memoised per token for 30 seconds). **Check:**
+  ``docs/migration/v3.16.rst`` says how to re-link an affected user.
+
+- **A token minted after the clean in place could outlive it.** The clean
+  revokes the actor's tokens before and after it wipes the relationships, so
+  a grant that loaded its credential before the clean and wrote its token
+  after the second revoke kept a live token for whoever held the actor
+  before. The clean now writes a new session generation first, and every
+  MCP authorization code, MCP refresh token, SPA refresh token and MCP client
+  registration records the generation it was issued under. The code
+  exchange, the refresh grants and the client-credentials grant compare the
+  stamp after writing the new token and revoke it on a mismatch
+  (``invalid_grant``); a read fault answers 503. A credential issued before
+  3.16 has no stamp and works only on an actor never cleaned since. The
+  window is closed within the issuing process: another worker can keep
+  serving an access token it cached for up to its cache lifetime (five
+  minutes).
+
+- **An emailed verification link could be confirmed by whatever fetched
+  it.** ``GET /oauth/email?verify=<token>`` verified the address on the
+  spot, so a mail scanner or link preview that fetched the link confirmed
+  an address nobody read. **Behavior change:** the link opens a page with a
+  Confirm button (JSON clients get ``status: "confirm_required"`` and the
+  ``POST`` to make); ``POST /oauth/email`` with ``verify=<token>`` verifies.
+  The confirm issues no session, and the token is consumed only once the
+  verification has landed, so a fault leaves the link usable. **Check:** an application template overriding ``aw-verify-email.html``
+  must render the ``confirm`` state (a form that posts ``verify``).
+
+- **A bearer token cached on another worker could bring a deleted actor
+  back.** The MCP bridge created an actor for a token whose actor was gone,
+  and with a caller-supplied id that cleared the deletion tombstone. It now
+  refuses an id whose tombstone says deleted (401, as an unknown actor), and
+  an unreadable tombstone answers 503.
 
 REMOVED
 ~~~~~~~
@@ -686,8 +744,11 @@ CHANGED
   skipped, so its cleanup never runs for a replaced actor. **Check:** give
   every ``actor_deleted`` and ``actor_deleted_complete`` hook ``**kwargs``
   (``actor_deleted_complete`` gets ``actor_id`` and the same two).
-  **Behavior change:** a replacement that fails mid-wipe is re-run by the
-  next sign-in, so the two hooks may fire more than once for one old actor.
+  **Behavior change:** a replacement that fails mid-wipe is resumed by the
+  next sign-in, a ``DELETE`` or ``actingweb-deletions``: ``actor_deleted``
+  runs again only when it raised ``DbError`` the first time (then every
+  registered hook runs again), and ``actor_deleted_complete`` is announced
+  by the one finisher that holds the deletion's lease.
 
 - **Breaking: the trust, subscription and peer-trustee list backends and
   ``DbActor.get_by_creator`` take ``strict``.** ``fetch(actor_id, *,
@@ -892,6 +953,72 @@ CHANGED
   actor exists whose id is the deleted actor's id plus ``$aux`` (possible
   only with pre-3.16 caller-supplied ids), and logs a WARNING when rows
   remain after its last pass.
+
+- **Breaking: ``SubscriptionManager.is_suspended()`` raises ``DbError`` on a
+  fault.** It answered ``False`` when the suspension could not be read, so a
+  throttle looked like "not suspended" and fired the callbacks a suspension
+  meant to hold back. Both bundled backends now raise ``DbError`` from
+  ``DbSubscriptionSuspension.is_suspended`` too (DynamoDB let the raw error
+  escape, PostgreSQL answered ``False``). **Check:** in a background job,
+  catch ``DbError`` and retry; a custom backend must raise it.
+
+- **A stalled deletion is finished by the next ``DELETE``, sign-in or
+  operator run.** An actor's wipe that stopped part-way (a fault, a crash)
+  left a live row under its tombstone. Every wipe now goes through one
+  finisher behind a tombstone that records why it was written, whether peers
+  are notified, the ``actor_deleted`` kwargs and the actor's OAuth2 client
+  ids, and that has no retention TTL until the row is gone. A finisher holds
+  the tombstone's two-minute lease. **Behavior change:** a repeated
+  ``DELETE /<id>`` resumes the wipe without firing ``actor_deleted`` again
+  (unless it raised ``DbError`` the first time) and fires
+  ``actor_deleted_complete``; one that arrives while another request holds
+  the lease answers 503 with ``Retry-After`` set to the lease's remainder
+  (``DeletionInProgress``, logged at INFO). ``DELETE /<id>`` now revokes the
+  actor's MCP and SPA tokens and removes its client index rows, and answers
+  503 when the backend does not confirm the row removed (it answered 204). A
+  sign-in completion (the callback, the SPA grants, the MCP OAuth callback,
+  the email form) on a vouched actor carrying such a tombstone finishes the
+  wipe and creates a new actor for the creator, so a user who deleted their
+  account and signs up again gets a new one under ``unique_creator`` too;
+  under a live lease it answers 503. A tombstone written before 3.16 leaves a
+  vouched actor as it was (a WARNING names it), and a bearer-token request or
+  a page load never wipes. A vouched sign-in now reads the tombstone, so an
+  unreadable tombstone store answers 503 there. A replacement victim's peers
+  are never notified, also when the wipe is resumed or ``Actor.delete()`` is
+  called again. A fixed-id ``Actor.create`` whose tombstone clear cannot be
+  confirmed fails (503) and leaves no row. **Check:** run
+  ``actingweb-deletions report`` after upgrading.
+
+- **A permission callback that revoked access stored the new permissions
+  before deleting the revoked data.** With ``auto_delete_on_revocation`` on,
+  a fault in the deletion (its listing folded to "nothing to delete") left
+  the cached peer data while the stored permissions no longer showed a
+  revocation, so the retry deleted nothing. **Behavior change:** the revoked
+  data is deleted first, with strict reads, and a failure answers 503 with
+  the old permissions still stored, so the peer's retry finishes it.
+  Removing a trust also fails with 503 when that peer's callback state
+  cannot be listed.
+
+- **Behavior change: a write whose subscription diff cannot be registered
+  answers 503.** The property write stays, but a fault reading the
+  subscribers (or a subscriber that gets neither its diff nor a sequence
+  gap) raises ``DbError`` instead of being logged, so the subscriber's gap
+  is not silent. ``PUT``, ``POST`` and ``DELETE`` on
+  ``/<id>/properties`` and the property-list operations of
+  ``ActorInterface`` all answer it. **Check:** a client that retries after
+  the 503 writes again; for a list ``append``, ``extend``, ``insert`` or a
+  ``POST /<id>/properties`` that adds, that is a second item.
+
+- **Behavior change: a resume whose resyncs did not all land re-sends to the
+  ones that missed.** ``resume_subscriptions()`` records the subscribers
+  whose resync failed (over HTTP, or a permanent store error); the next call
+  sends to those only, and drops the record once they all answered.
+
+- **Behavior change: DynamoDB ``DbSubscription.modify`` updates only the
+  given fields.** It saved the whole item from the handle it loaded, so a
+  concurrent sequence increment was written back to its old value. It is now
+  one conditioned ``UpdateItem`` and answers ``False`` for a subscription
+  deleted since it was loaded (it recreated it).
 
 ADDED
 ~~~~~
@@ -1143,6 +1270,22 @@ ADDED
   ``verify()`` on a v2 list makes one more small read (the key rows) and
   its report has the four new keys.
 
+- **``actingweb-deletions``** (``report``, ``resume``, ``clear``;
+  ``actingweb.maintenance.deletions``). ``report [ACTOR_ID]`` lists
+  deletions that stopped part-way (``stalled``, ``in progress`` while a
+  finisher holds the lease, ``legacy, review`` for a tombstone written
+  before 3.16, ``unfinished`` when the row is gone but client index rows may
+  remain); ``resume [ACTOR_ID] --apply`` finishes them without application
+  hooks and prints the finished ids, and purges expired tombstone and
+  verification-index rows on PostgreSQL; ``clear ACTOR_ID --apply`` removes
+  a stray tombstone from a live actor. Exit 0, 1 (work left, or a dry run
+  with work), 2 (the tombstone store cannot be read). Pass
+  ``--no-unique-creator`` when the application runs without uniqueness.
+
+- **``DeletionInProgress``** (``actingweb.db.exceptions``, a ``DbError``):
+  another request is finishing the actor's deletion; answered 503 with
+  ``Retry-After`` from its ``retry_after``.
+
 FIXED
 ~~~~~
 
@@ -1377,9 +1520,9 @@ FIXED
   a PostgreSQL fault answered "none", so the actor was deleted, its peers
   never told and their per-peer data orphaned. Both lists are read first now,
   strictly: a fault raises before ``Actor.delete`` writes its tombstone or
-  removes anything. The ``DELETE /<id>`` route still writes its own tombstone
-  and fires ``actor_deleted`` before it calls ``Actor.delete``, so there a
-  fault answers 503 with the tombstone already written. (B8)
+  removes anything. The ``DELETE /<id>`` route reads them before it writes its
+  own tombstone and fires ``actor_deleted``, so a fault there answers 503 with
+  nothing written either. (B8)
 
 - **Two concurrent changes to one subscription could share a sequence
   number, and a failed diff could hand its number out again.** The publisher
@@ -1394,7 +1537,8 @@ FIXED
   missed change at the next diff and polls or resyncs. **Behavior change:**
   after a failed diff store the next diff carries the following number, not
   the same one again. When the sequence row itself cannot be reached no gap
-  can be made, and only a periodic poll recovers that change. Both backends
+  can be made: the write stands and the request answers 503 (it used to
+  succeed with the change lost). Both backends
   now refuse a diff whose number already has one (DynamoDB overwrote it).
   Upgrade every worker before the 3.16 ones publish diffs: a 3.15 worker
   still writes the sequence as ``previous + 1`` and can move it back. A
@@ -1508,6 +1652,42 @@ FIXED
   wildcard (``*://``) is left as written. The access-control guide and the
   security reference now say that resource URIs are not normalised and a
   resource reader validates its own path.
+
+- **Adoption follow-ups.** A listing by creator dropped no row that the
+  DynamoDB index still listed after a rename (it now reads each row's
+  creator); a second sign-in meeting a ``factory`` sibling that another one
+  was wiping wiped it again (it is now left to that one); a nested
+  replacement reported only its own level in ``actor_adopted``; a
+  replacement scanned the shared SPA token buckets once per actor (now one
+  pass); a successor whose create raised was never announced (the next
+  sign-in that creates the actor for the creator fires ``actor_adopted``
+  with the old id, its counts ``None``); a summary read that faulted
+  reported nothing removed (the counts are now ``None``, unknown); the
+  provider bookkeeping writes on three sign-in paths failed the sign-in on a
+  fault (they are logged). **Behavior change:** ``actor_adopted``'s
+  ``removed_trusts``, ``removed_subscription_peers`` and ``property_names``
+  can be ``None``.
+
+- **``force_email_prop_as_creator`` renamed an unvouched actor's creator
+  at load.** ``Actor.get`` copied ``store.email`` into the creator of every
+  actor whose two differed, so an address a previous creator wrote was
+  restored before adoption could clean it. It now does so only for a vouched
+  actor.
+
+- **A rejected sign-in kept the provider's tokens.** The OAuth callback,
+  both SPA completions and the email form wrote the provider's access and
+  refresh tokens onto the actor before ``oauth_success`` ran, so an
+  application that rejected the sign-in still had them stored. They are now
+  written only once the hook accepts. A replacement reads the victim's
+  trusts and subscriptions before revoking its tokens, so a read fault
+  leaves the victim's sessions in place.
+
+- **The MCP bridge counted a concurrent create as the winner when the
+  tombstone could not be read.** It now answers 503.
+
+- **Two fan-out comments said the subscription circuit breaker was shared
+  through persistence.** It is per process; persisted state only seeds a new
+  process. ``docs/quickstart/deployment.rst`` says so.
 
 v3.15.1: September 29, 2026
 ---------------------------

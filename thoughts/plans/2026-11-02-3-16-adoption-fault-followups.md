@@ -1,5 +1,5 @@
 ---
-status: active
+status: done
 ---
 
 # Implementation Plan: 3.16 adoption, deletion and fault-contract follow-ups
@@ -16,7 +16,7 @@ status: active
 
 ## Overview
 
-The last planned block of 3.16. It makes the actor wipe resumable and safe to run twice, so a wipe that stalls behind its tombstone is finished by the next `DELETE`, the next sign-in or an operator command; it closes the token window the clean in place leaves within one process; it refuses a provider address the provider did not verify, on every path that stores one; and it finishes the adoption and fault-contract follow-ups the owner decided. One **Breaking** change: `SubscriptionManager.is_suspended()` raises `DbError` on a fault. 3.16 is already a minor; this block adds one operator command (`actingweb-deletions`), a `POST` on the existing `/oauth/email` verification route (BG3), two keyword-only kwargs on `email_verification_required`, and no new route, hook or config option.
+The last planned block of 3.16. It makes the actor wipe resumable and safe to run twice, so a wipe that stalls behind its tombstone is finished by the next `DELETE`, the next sign-in or an operator command; it closes the token window the clean in place leaves within one process; it refuses a provider address the provider did not verify, on every path that stores one; and it finishes the adoption and fault-contract follow-ups the owner decided. One **Breaking** change: `SubscriptionManager.is_suspended()` raises `DbError` on a fault. 3.16 is already a minor; this block adds one operator command (`actingweb-deletions`), a `POST` on the existing `/oauth/email` verification route (BG3), and no new route, hook, hook kwarg or config option.
 
 ## Decisions Made
 
@@ -70,7 +70,7 @@ The last planned block of 3.16. It makes the actor wipe resumable and safe to ru
   2. [Updated 2026-11-03 by the owner, after implementation traced it: not taken. The email form's credential is the provider's own token, which authenticates as the provider identity, not the typed address, so it never signed in as the actor; the owner chose no session at the click, the user signs in again and point 3 resolves them.] ~~**The submitter's session survives the click.**~~ The form submission already issues a credential to the browser or SPA that submitted it (`oauth_email.py:683-723`). Its digest is stored with the verification state, and the clean in place at the confirm keeps exactly that credential and its mapping; every other token of the actor is revoked as today. The submitter's next request sees `email_verified` true. Web and SPA behave alike, on any device the link is opened on.
   3. [Updated 2026-11-03 by the owner, after the Phase 2 codex review: not taken. Linking the provider account at the confirm let an attacker sign in with their own provider account, type a victim's address, and get the victim's verified actor once the victim clicked Confirm on the unsolicited mail. The confirm verifies only; nothing is linked.] ~~**Signing in again works.**~~ The confirm writes the provider identity of the claimed session (the provider name and its stable id, `oauth_sub` or `oauth_github_id`, `oauth2.py:272-348`) into a system index (`provider_identity_index`, provider id → actor id, no TTL). A later sign-in with that provider account and no verified address resolves to the verified actor through the index before the email form is shown, so the user neither sees the form nor gets the 409. The index row goes with the actor (`finish_deletion`) and on a clean or rename that changes the provider identity.
   4. **The token is consumed after the verification lands,** keeping the order the handler documents (`oauth_email.py:247-249`: confirmed first, so a fault leaves the link usable), with `delete_attr_conditional` on the index row (the single-use primitive the mobile tickets use), not `replace_if_equal` (which turns a fault into "already consumed").
-  5. **The verification email names who asked:** `email_verification_required` gains the keyword-only kwargs `provider` and `provider_account` (additive), and the docs tell applications to say "the GitHub account @x asked to link this address; confirm only if this was you", the one defence against a victim confirming an attacker's claim.
+  5. [Updated 2026-11-03, at Phase 4: not taken. The hook runner passes every kwarg to every hook, so a hook written with the documented fixed signature would raise `TypeError` and its email would never be sent; with the link dropped, naming the account guards nothing.] ~~**The verification email names who asked:**~~ `email_verification_required` gains the keyword-only kwargs `provider` and `provider_account` (additive), and the docs tell applications to say "the GitHub account @x asked to link this address; confirm only if this was you", the one defence against a victim confirming an attacker's claim.
 
 ### Folded from the evaluation (mechanical; not owner decisions)
 
@@ -390,7 +390,14 @@ flowchart TD
 - [ ] Docs build (`sphinx-build -W`)
 - [ ] Full tier before the phase commit
 
-### Implementation Status: In Progress
+### Implementation Status: Complete
+
+**Notes (implementation, 2026-11-03):**
+
+- `CHANGELOG.rst`: four SECURITY entries (E1, R3, the confirmed link, the bridge), six CHANGED (the Breaking `is_suspended`, stalled deletions, the revocation order, diff registration, the resync record, `DbSubscription.modify`), two ADDED (`actingweb-deletions`, `DeletionInProgress`), five FIXED; five existing `Unreleased` passages corrected where this block made them inexact (the vouched-tombstone limitation, the clean's straddle, the hooks firing twice, B8's `DELETE` order, the no-gap case).
+- The `email_verification_required` kwargs (BG3 point 5) were removed again before the docs: see the decision above.
+- Docs: `docs/migration/v3.16.rst` ("Verified provider addresses", "Stalled deletions", `is_suspended` and `DeletionInProgress` in the fault contract, the deliberate folds, the custom-backend line); `docs/reference/hooks-reference.rst` ("Faults and hooks" table, `unverified_email`, `None` summary counts); `docs/reference/actor-deletion.rst` (the order and "Resuming a stalled wipe"); `docs/guides/database-maintenance.rst` ("Stalled Deletions"); `docs/reference/database-backends.rst` (the deliberate folds).
+- Todos: `adoption-fault-and-hygiene-followups.md`, `resumable-actor-deletion.md` and `oauth-email-verified-claim-unchecked.md` deleted with their `INDEX.md` rows; `email-form-user-sign-in-after-verification.md` filed for what BG leaves open.
 
 ---
 
@@ -452,3 +459,24 @@ Not taken: replacing the R3 generation with a re-read of the consumed refresh ro
 - Whether `revoke_all_tokens_for_actors` also covers the web `oauth_token` session row (`oauth2_callback.py:809`); both use `store_access_token`, which suggests it does. Checked in Phase 1.
 - Whether `docs/reference/actor-deletion.rst` exists; Phase 4 edits the deletion page that does.
 - Whether a `DELETE` retry can still authenticate after the wipe removed token buckets (basic auth uses the row's passphrase, which stays until the row goes); checked in Phase 1's HTTP test.
+
+## Implementation Summary
+
+**Completed:** 2026-11-03
+**All phases:** Complete (commits `d408f9d`, `7bf6148`, `0ac10fa`, and the Phase 4 commit)
+**Test status:** Full tier green on both backends at every phase commit
+
+### Deviations from Plan
+
+- BG3 shrank twice on the owner's decisions: no session at the click (the form's credential never authenticated as the actor) and no provider link (a takeover path); the confirm page and the consume-after-verify stayed. The hook kwargs were dropped at Phase 4.
+- K4's bound on the ranked creator prefix was not taken (owner): both bounded behaviours fail (a lock-out or a stranded actor).
+- The read-and-classify helper is `row_holds_creator`, shared by the three listing sites, not one function.
+- The lost successor mapping lives in a creator-keyed system record, not the successor's `_internal`.
+- R3 does not cover the devtest-only passphrase exchange.
+- The HTTP-level integration tests planned for E1 and BG3 were not added; the handlers and authenticator are tested directly.
+
+### Learnings
+
+- A lease plus a reason-recording tombstone made the wipe resumable without a new store: the tombstone row was already the one place every path reads.
+- Every review round after Phase 1 found its issues in what the folded-in fixes added (the link, the hook kwargs, the lease release), not in the original decisions: a design added during review needs its own review.
+- The test doubles that build `user_info` or attribute backends by hand are where a contract change shows first; eleven of them needed `get_attr_strict`, and the id-token fixtures lacked the claims real providers send.

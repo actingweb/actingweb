@@ -46,25 +46,6 @@ def confirm_page_html(token: str) -> str:
 """
 
 
-def _provider_account(
-    config: Any, provider_name: str, user_info: dict[str, Any] | None
-) -> str | None:
-    """The stable provider identity of a claimed session (``github:123``),
-    or None when the provider or its user info cannot give one."""
-    if not provider_name or not user_info:
-        return None
-    try:
-        from ..oauth2 import create_oauth2_authenticator
-
-        provider = create_oauth2_authenticator(config, provider_name).provider
-        return provider.extract_identifier_from_user_info(user_info)
-    except Exception as e:  # folds DbError: no DB access, provider config only
-        logger.warning(
-            f"Could not derive the provider account for {provider_name}: {e}"
-        )
-        return None
-
-
 class OAuth2EmailHandler(BaseHandler):
     """
     Handler for /oauth/email endpoint.
@@ -725,15 +706,6 @@ class OAuth2EmailHandler(BaseHandler):
             actor_instance.store.email_verification_token = verification_token
             actor_instance.store.email_verification_address = email.lower()
             actor_instance.store.email_verification_created_at = str(int(time.time()))
-            # The provider account that asked, named in the verification
-            # email so its recipient can tell a request they did not make
-            # (BG3). It is never linked to the actor: a victim confirming an
-            # attacker's request would otherwise hand the attacker's account
-            # the victim's verified actor.
-            provider_name = str(claimed_session.get("provider") or "")
-            provider_account = _provider_account(
-                self.config, provider_name, session_user_info
-            )
 
             # Store token → actor_id index for reverse lookup
             # This enables the clean /oauth/email?verify=<token> URL
@@ -771,8 +743,6 @@ class OAuth2EmailHandler(BaseHandler):
                         email=email,
                         verification_url=verification_url,
                         token=verification_token,
-                        provider=provider_name,
-                        provider_account=provider_account,
                     )
                 except Exception as e:  # folds DbError: notification after the verification token was committed
                     logger.error(f"Error in email_verification_required hook: {e}")

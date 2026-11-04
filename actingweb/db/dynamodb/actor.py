@@ -47,13 +47,22 @@ def _require_creators_backfill(op: str) -> None:
     """
     from actingweb.db.dynamodb import _backfill_probe
 
-    try:
-        if _backfill_probe.creators_backfilled():
-            return
-        state = _backfill_probe.creators_backfill_state()
-    except Exception as e:
-        raise DbError(op) from e
     table = Creator.Meta.table_name
+    try:
+        state = _backfill_probe.cached_backfill_state()
+    except Exception as e:
+        # Without this line the refusal reads only "database error during
+        # actor create", and a role missing GetItem on the table would see
+        # 503s that no retry clears.
+        logger.error(
+            f"could not read the backfill-complete item of the DynamoDB table "
+            f"{table} ({type(e).__name__}: {e}); every enforced create, rename "
+            f"and holder replacement is refused until it can be read. Check "
+            f"that the runtime role has dynamodb:GetItem on {table}"
+        )
+        raise DbError(op) from e
+    if state == "complete":
+        return
     what = (
         f"the DynamoDB table {table} does not exist"
         if state == "table-missing"
@@ -605,22 +614,25 @@ class DbActor:
 
     @staticmethod
     def _log_missing_creators_table(e: BaseException) -> None:
-        """Name the remedy when a claim failed on a missing table, which is
-        ``creators``: the constructor does not create it, so a process that skipped
-        ``enable --apply`` (and ``check_ready()``) lands here on every
-        enforced write. The fault itself stays a ``DbError``."""
+        """Name the likely table when a claim failed on a missing one. The
+        fault itself stays a ``DbError``.
+
+        Every enforced transaction passes :func:`_require_creators_backfill`
+        first, which reports a missing creators table itself, so a missing
+        table here is most likely the actor table (prefix drift, a deleted
+        table). The creators table is the other candidate: deleted after
+        this process saw it backfilled."""
         from actingweb.db.dynamodb.property_lookup import is_resource_not_found
 
         if not is_resource_not_found(e):
             return
-        # Every transaction here writes the actor table, which the
-        # constructor ensured, and the creators table. No DescribeTable to
-        # disambiguate: the runtime role may not have it.
+        # No DescribeTable to disambiguate: the runtime role may not have it.
         logger.error(
             missing_enforcement_message(
                 f"a table this write needs does not exist (most likely "
-                f"{Creator.Meta.table_name}; else {Actor.Meta.table_name}, "
-                "check AWS_DB_PREFIX)"
+                f"{Actor.Meta.table_name}, check AWS_DB_PREFIX; else "
+                f"{Creator.Meta.table_name}, deleted since this process saw "
+                "it backfilled)"
             )
         )
 
@@ -632,9 +644,14 @@ class DbActor:
         ``check_ready()`` prewarm, never here: a table created empty would
         claim creators against no record of the existing actors. An enforced
         write (create, creator rename, holder replacement) reads the table's
-        backfill-complete item once per process and raises ``DbError`` while
-        the table is missing or not backfilled, logging the remedy. Reads
-        never probe.
+        backfill-complete item until it has seen it, and raises ``DbError``
+        while the table is missing or not backfilled, logging the remedy. A
+        positive answer is kept for the process's life: a worker that saw
+        the item keeps claiming after an operator runs ``disable --apply``
+        while it serves, and against the emptied table a claim succeeds for
+        an address an actor already holds, a silent duplicate, until it
+        restarts. Turn the application flag off and restart every worker
+        before ``disable``. Reads never probe.
         """
         self.handle = None
         self.unique_creator = unique_creator

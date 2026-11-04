@@ -32,61 +32,93 @@ def _oauth2_origin(trust: Any) -> bool:
     return via is None and peer_id.split(":", 1)[0] in OAUTH2_SOURCES
 
 
-def find_client_trust(
-    trusts: Iterable[Any], client_id: str, *, legacy_segment_match: bool = False
-) -> Any | None:
-    """The trust row that belongs to ``client_id``, or None.
+def _tagged(trust: Any, client_id: str) -> bool:
+    """Arm 1: ``oauth_client_id == client_id``."""
+    return getattr(trust, "oauth_client_id", None) == client_id
+
+
+def _untagged(trust: Any) -> bool:
+    return getattr(trust, "oauth_client_id", None) is None
+
+
+def _client_credentials_shape(trust: Any, normalized: str) -> bool:
+    """Arm 2: a legacy client-credentials row, ``{source}:{n}:{n}``."""
+    if not _untagged(trust):
+        return False
+    via = getattr(trust, "established_via", None)
+    peer_id = str(getattr(trust, "peerid", ""))
+    oauth2_family = via in ("oauth2", "oauth2_client")
+    legacy_prefixed = via is None and (
+        peer_id.startswith("oauth2:") or peer_id.startswith("oauth2_client:")
+    )
+    return (oauth2_family or legacy_prefixed) and peer_id in (
+        f"oauth2_client:{normalized}:{normalized}",
+        f"oauth2:{normalized}:{normalized}",
+    )
+
+
+def _real_email_shape(trust: Any, client_id: str, normalized: str) -> bool:
+    """Arm 3: a legacy per-client row, ``<source>:<email>:<client_id>``."""
+    if not _untagged(trust) or not _oauth2_origin(trust):
+        return False
+    parts = str(getattr(trust, "peerid", "")).split(":")
+    return (
+        len(parts) == 3
+        and parts[0] in OAUTH2_SOURCES
+        and parts[2] in (client_id, normalized)
+    )
+
+
+def find_client_trust(trusts: Iterable[Any], client_id: str) -> Any | None:
+    """The one trust row that authorises ``client_id``, or None (the MCP
+    authentication resolver).
 
     1. ``oauth_client_id == client_id``: every row created since the field
-       was introduced.
-    2. A legacy row (``oauth_client_id`` absent) with an OAuth2-family
-       ``established_via`` (or none and an ``oauth2:``/``oauth2_client:``
-       prefix) whose peer id equals ``{source}:{normalized}:{normalized}``,
-       the shape the client-credentials flow wrote with the client id as
-       its email.
-    3. Deletion only (``legacy_segment_match=True``): a legacy row of OAuth2
-       origin (as arm 2 judges it) whose peer id is
-       ``<source>:<…>:<client_id>`` for any source trust creation writes
-       (``oauth2``, ``oauth2_client``, ``oauth2_interactive``), three or more
-       segments with the **last one equal** to the client id (as given or
-       normalised). That keeps deleting the real-email legacy rows the
-       interactive flow wrote, which the resolver deliberately does not
-       authorise.
+       was introduced. Wins over any legacy row.
+    2. A legacy row (``oauth_client_id`` absent) with an ``oauth2`` or
+       ``oauth2_client`` ``established_via`` (or none and an ``oauth2:`` /
+       ``oauth2_client:`` prefix) whose peer id equals
+       ``{source}:{normalized}:{normalized}``, the shape the
+       client-credentials flow wrote with the client id as its email.
+
+    Arm 3 (:func:`client_trusts_for_deletion`) is never consulted here.
     """
     rows = list(trusts)
     for trust in rows:
-        if getattr(trust, "oauth_client_id", None) == client_id:
+        if _tagged(trust, client_id):
             return trust
-
     normalized = normalize_client_id(client_id)
-    candidates = {
-        f"oauth2_client:{normalized}:{normalized}",
-        f"oauth2:{normalized}:{normalized}",
-    }
     for trust in rows:
-        if getattr(trust, "oauth_client_id", None) is not None:
-            continue  # arm 1 already looked at it
-        via = getattr(trust, "established_via", None)
-        peer_id = str(getattr(trust, "peerid", ""))
-        oauth2_family = via in ("oauth2", "oauth2_client")
-        legacy_prefixed = via is None and (
-            peer_id.startswith("oauth2:") or peer_id.startswith("oauth2_client:")
-        )
-        if (oauth2_family or legacy_prefixed) and peer_id in candidates:
-            return trust
-
-    if not legacy_segment_match:
-        return None
-    for trust in rows:
-        if getattr(trust, "oauth_client_id", None) is not None:
-            continue
-        if not _oauth2_origin(trust):
-            continue
-        parts = str(getattr(trust, "peerid", "")).split(":")
-        if (
-            len(parts) >= 3
-            and parts[0] in OAUTH2_SOURCES
-            and parts[-1] in (client_id, normalized)
-        ):
+        if _client_credentials_shape(trust, normalized):
             return trust
     return None
+
+
+def client_trusts_for_deletion(trusts: Iterable[Any], client_id: str) -> list[Any]:
+    """Every trust row that belongs to ``client_id``, in row order (client
+    deletion).
+
+    An upgraded actor can hold a tagged row and a legacy row for the same
+    client under different peer ids; deleting only the first would leave
+    the other with its permissions. So this returns each row that arm 1 or
+    arm 2 of :func:`find_client_trust` matches, plus arm 3:
+
+    3. A legacy row of OAuth2 origin whose peer id is exactly
+       ``<source>:<email>:<client_id>`` (three segments, the last equal to
+       the client id as given or normalised) for any source trust creation
+       writes (``oauth2``, ``oauth2_client``, ``oauth2_interactive``). These
+       are the real-email rows the interactive flow wrote.
+
+    Arm 3's origin gate (:func:`_oauth2_origin`) is deliberately **wider**
+    than arm 2's: it admits ``oauth2_interactive``, because deletion must
+    remove those rows. The resolver must not authorise them, so never reuse
+    this gate (or this function) for authorisation.
+    """
+    normalized = normalize_client_id(client_id)
+    return [
+        trust
+        for trust in trusts
+        if _tagged(trust, client_id)
+        or _client_credentials_shape(trust, normalized)
+        or _real_email_shape(trust, client_id, normalized)
+    ]

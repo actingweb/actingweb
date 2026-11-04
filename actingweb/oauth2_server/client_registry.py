@@ -614,38 +614,39 @@ class MCPClientRegistry:
                 core_actor=core_actor, service_registry=registry
             )
 
-            # Exactly this client's row, found as the authentication resolver
-            # finds it, plus the real-email legacy rows whose last peer-id
-            # segment is the client id. Never a substring match: an
-            # unrelated row whose peer id contains this id must survive.
-            from .trust_lookup import find_client_trust
+            # Every row of this client: the row the authentication resolver
+            # finds, any legacy row beside it (an upgraded actor can hold a
+            # tagged and a legacy row under different peer ids), and the
+            # real-email legacy rows whose last peer-id segment is the
+            # client id. Never a substring match: an unrelated row whose
+            # peer id contains this id must survive.
+            from .trust_lookup import client_trusts_for_deletion
 
-            trust = find_client_trust(
-                actor_interface.trust.relationships,
-                client_id,
-                legacy_segment_match=True,
+            trusts = client_trusts_for_deletion(
+                actor_interface.trust.relationships, client_id
             )
-            if trust is None:
+            if not trusts:
                 logger.warning(
                     f"No trust relationship found to delete for OAuth2 client {client_id}"
                 )
                 return
-            peer_id = trust.peerid
-            try:
-                if actor_interface.trust.delete_relationship(peer_id):
-                    logger.info(
-                        f"Deleted trust relationship for OAuth2 client {client_id}: {peer_id}"
+            for trust in trusts:
+                peer_id = trust.peerid
+                try:
+                    if actor_interface.trust.delete_relationship(peer_id):
+                        logger.info(
+                            f"Deleted trust relationship for OAuth2 client {client_id}: {peer_id}"
+                        )
+                    else:
+                        logger.warning(
+                            f"Failed to delete trust relationship {peer_id} for client {client_id}"
+                        )
+                except DbError:
+                    raise
+                except Exception as e:
+                    logger.error(
+                        f"Error deleting trust relationship {peer_id} for client {client_id}: {e}"
                     )
-                else:
-                    logger.warning(
-                        f"Failed to delete trust relationship {peer_id} for client {client_id}"
-                    )
-            except DbError:
-                raise
-            except Exception as e:
-                logger.error(
-                    f"Error deleting trust relationship {peer_id} for client {client_id}: {e}"
-                )
 
         except DbError:
             raise

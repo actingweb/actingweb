@@ -296,7 +296,7 @@ def _group_in_memory(rows: dict[str, str], only: str | None, report: Report) -> 
 
 def _backfill_state() -> str:
     """``"table-missing"``, ``"not-backfilled"`` or ``"complete"`` (the db
-    layer's :func:`~actingweb.db.dynamodb.actor.creators_backfill_state`).
+    layer's :func:`~actingweb.db.dynamodb._backfill_probe.creators_backfill_state`).
     Raises on a read fault."""
     from actingweb.db.dynamodb._backfill_probe import creators_backfill_state
 

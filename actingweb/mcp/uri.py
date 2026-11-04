@@ -90,7 +90,9 @@ def resource_arguments(
     The request params, then the template's variables over them, then
     ``uri`` itself. Variables win over params because the permission check
     judged the URI the variables came from: a client param must not replace
-    one. ``uri`` is reserved, so a template variable named ``uri`` cannot
-    hide the requested URI from the hook.
+    one. A ``uri_pattern`` match has no variables, so that protection holds
+    for templates only: a pattern hook must take judged values from ``uri``.
+    ``uri`` is reserved, so a template variable named ``uri`` cannot hide
+    the requested URI from the hook (it is dropped, without a warning).
     """
     return {**params, **variables, "uri": uri}

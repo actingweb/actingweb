@@ -611,7 +611,10 @@ CHANGED
   including the OAuth2 system actor bootstrap, raises ``DbError``
   (``database error during actor create``, 503 through the integrations, and
   retrying does not clear it) on both backends, with an ERROR naming the
-  missing or unbackfilled table, or the missing index, and the command.
+  missing or unbackfilled table, or the missing index, and the command. On
+  DynamoDB a fault while reading the creators table's backfill item refuses
+  the write too, with an ERROR naming the table, the fault and the
+  ``dynamodb:GetItem`` permission it needs.
 
 - **Breaking: ``with_unique_creator()`` is enforced by the database.** Before
   3.16 the flag made ``Actor.create`` list the creator's actors and refuse
@@ -1526,11 +1529,14 @@ FIXED
   Client deletion matched trust rows by substring
   (``pattern in peer_id or peer_id.endswith(client_id)``) and deleted the
   first hit, so an unrelated row on the same actor whose peer id contained
-  the client id could go instead. It now finds the row exactly as the MCP
-  authentication resolver does (``oauth_client_id``, then the exact legacy
-  peer id), plus the real-email legacy rows whose last peer-id segment is
-  the client id. No behavior change for the rows that were meant to go:
-  legacy rows are still deleted.
+  the client id could go instead, and a second row of the same client (an
+  upgraded actor can hold a legacy ``oauth2:`` row beside the tagged
+  ``oauth2_client:`` one) kept its permissions. It now deletes every row of
+  the client, each found exactly: the rows the MCP authentication resolver
+  accepts (``oauth_client_id``, then the exact legacy peer id), plus the
+  real-email legacy rows ``<source>:<email>:<client_id>``. **Behavior
+  change:** a client with both a tagged and a legacy row loses both; an
+  unrelated row whose peer id merely contains the client id is kept.
 
 - **An MCP-token logout cleared the browser's SPA session cookies.**
   ``/oauth/logout`` with an MCP access token (``aw_…``) revoked the MCP

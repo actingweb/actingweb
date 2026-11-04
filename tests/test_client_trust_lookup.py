@@ -3,9 +3,9 @@
 ``_delete_client_trust_relationship`` matched ``pattern in peer_id or
 peer_id.endswith(client_id)`` and deleted the first hit, so deleting client
 ``A`` could take an unrelated row whose peer id merely contained ``A``. It
-now uses ``find_client_trust``, the authentication resolver's exact match,
-plus a deletion-only arm for the real-email legacy rows
-(``oauth2_client:<email>:<client_id>``).
+now uses ``client_trusts_for_deletion``: every row the authentication
+resolver's exact match (``find_client_trust``) accepts, plus a deletion-only
+arm for the real-email legacy rows (``oauth2_client:<email>:<client_id>``).
 """
 
 from __future__ import annotations
@@ -17,7 +17,10 @@ import pytest
 
 from actingweb.config import Config
 from actingweb.oauth2_server.client_registry import MCPClientRegistry
-from actingweb.oauth2_server.trust_lookup import find_client_trust
+from actingweb.oauth2_server.trust_lookup import (
+    client_trusts_for_deletion,
+    find_client_trust,
+)
 from tests.test_mcp_fail_closed_authorization import FakeTrust, FakeTrustManager
 
 
@@ -70,7 +73,7 @@ def test_decoy_and_exact_row_deletes_only_the_exact_row() -> None:
 def test_a_real_email_legacy_row_is_deleted_but_never_authorises() -> None:
     legacy = FakeTrust("oauth2_client:user@example.com:mcp_abc", "oauth2_client")
     assert find_client_trust([legacy], "mcp_abc") is None  # resolver default
-    assert find_client_trust([legacy], "mcp_abc", legacy_segment_match=True) is legacy
+    assert client_trusts_for_deletion([legacy], "mcp_abc") == [legacy]
     assert _delete("mcp_abc", [legacy]) == [legacy.peerid]
 
 
@@ -80,12 +83,38 @@ def test_the_segment_arm_compares_the_last_segment_exactly() -> None:
     tagged = FakeTrust(
         "oauth2_client:user@example.com:mcp_abc", oauth_client_id="mcp_other"
     )
-    assert (
-        find_client_trust(
-            [near, other_prefix, tagged], "mcp_abc", legacy_segment_match=True
-        )
-        is None
+    assert client_trusts_for_deletion([near, other_prefix, tagged], "mcp_abc") == []
+
+
+def test_a_tagged_row_and_a_legacy_row_of_one_client_are_both_deleted() -> None:
+    """An upgraded actor holds the legacy ``oauth2:`` row and the tagged
+    ``oauth2_client:`` row under different peer ids. Deletion stopped after
+    the first (tagged) one, and the legacy row kept its permissions
+    (re-verification 2026-11-04, Issue 1)."""
+    legacy = FakeTrust("oauth2:alice_at_x_dot_com:mcp_ab12", established_via=None)
+    tagged = FakeTrust(
+        "oauth2_client:alice_at_x_dot_com:mcp_ab12",
+        established_via="oauth2_client",
+        oauth_client_id="mcp_ab12",
     )
+    unrelated = FakeTrust(
+        "oauth2_client:alice_at_x_dot_com:mcp_cd34",
+        established_via="oauth2_client",
+        oauth_client_id="mcp_cd34",
+    )
+    assert find_client_trust([legacy, tagged, unrelated], "mcp_ab12") is tagged
+    assert _delete("mcp_ab12", [legacy, tagged, unrelated]) == [
+        legacy.peerid,
+        tagged.peerid,
+    ]
+
+
+def test_the_segment_arm_needs_exactly_three_segments() -> None:
+    """A client-less legacy peer id keeps ``:`` in its identifier
+    (``_standardize_peer_id`` does not escape it), so one ending in a client
+    id must not pass for that client's row (Issue 7)."""
+    clientless = FakeTrust("oauth2:odd:name:mcp_ab12", established_via="oauth2")
+    assert client_trusts_for_deletion([clientless], "mcp_ab12") == []
 
 
 @pytest.mark.parametrize(

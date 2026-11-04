@@ -157,6 +157,81 @@ class TestDynamoDBConstructorCreatesNoCreatorsTable:
             if row.get(actor_id=aid):
                 row.delete()
 
+    def test_a_probe_read_fault_is_refused_with_a_logged_reason(
+        self,
+        absent_creators_table: str,
+        real_dynamodb_backfill_probe: None,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A role that can write the table but lacks ``GetItem`` on it got
+        permanent 503s whose only trace was "database error during actor
+        create" (re-verification 2026-11-04, Issue 2)."""
+        from actingweb.db.dynamodb import actor as ddb
+        from actingweb.db.dynamodb.creator import Creator
+
+        db = ddb.DbActor(unique_creator=True)
+        actor_id = uuid.uuid4().hex
+        with (
+            mock.patch.object(
+                Creator, "get", side_effect=RuntimeError("AccessDeniedException")
+            ),
+            caplog.at_level(logging.ERROR, logger=ddb.__name__),
+        ):
+            with pytest.raises(DbError) as raised:
+                db.create(
+                    actor_id=actor_id,
+                    creator=f"f-{actor_id}@example.com",
+                    passphrase="x",
+                )
+        assert str(raised.value) == "database error during actor create"
+        errors = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
+        assert any(
+            absent_creators_table in m
+            and "AccessDeniedException" in m
+            and "dynamodb:GetItem" in m
+            for m in errors
+        ), errors
+
+    def test_a_refusal_reads_the_marker_once_and_check_ready_seeds_the_cache(
+        self, absent_creators_table: str, real_dynamodb_backfill_probe: None
+    ) -> None:
+        """A refused write read the marker twice (the two reads could
+        disagree), and the startup check's read never filled the cache
+        (re-verification 2026-11-04, Issue 3)."""
+        from types import SimpleNamespace
+
+        from actingweb.db.dynamodb import _backfill_probe
+        from actingweb.db.dynamodb import actor as ddb
+        from actingweb.db.dynamodb.creator import Creator
+        from actingweb.maintenance.unique_creators import missing_enforcement
+
+        Creator.create_table(wait=True)
+        db = ddb.DbActor(unique_creator=True)
+        actor_id = uuid.uuid4().hex
+        with mock.patch.object(
+            _backfill_probe,
+            "creators_backfill_state",
+            wraps=_backfill_probe.creators_backfill_state,
+        ) as state:
+            with pytest.raises(DbError):
+                db.create(
+                    actor_id=actor_id,
+                    creator=f"g-{actor_id}@example.com",
+                    passphrase="x",
+                )
+            assert state.call_count == 1
+
+            Creator(creator="#meta#backfill").save()
+            assert missing_enforcement(SimpleNamespace(database="dynamodb")) is None
+            state.reset_mock()
+            assert db.create(
+                actor_id=actor_id, creator=f"g-{actor_id}@example.com", passphrase="x"
+            )
+            assert state.call_count == 0
+        row = ddb.DbActor(unique_creator=True)
+        if row.get(actor_id=actor_id):
+            row.delete()
+
     def test_a_rename_against_an_unbackfilled_table_is_refused(
         self, absent_creators_table: str, real_dynamodb_backfill_probe: None
     ) -> None:

@@ -491,7 +491,11 @@ Everything that needs a design or a new cross-table primitive stays out, and
   and FastAPI answer identically."*
 - **D8 Exact-match client deletion.** **[Updated 2026-11-04]** Arm 3
   accepts every source trust creation writes (`oauth2`, `oauth2_client`,
-  `oauth2_interactive`), gated on OAuth2 origin; see Iteration 2. `_delete_client_trust_relationship`
+  `oauth2_interactive`), gated on OAuth2 origin; see Iteration 2.
+  **[Updated 2026-11-04, Iteration 6]** Deletion removes every row the three
+  arms match (`client_trusts_for_deletion`), not the first; arm 3 needs
+  exactly three segments; `find_client_trust` lost `legacy_segment_match`
+  and is the resolver's single-row answer only. `_delete_client_trust_relationship`
   (`actingweb/oauth2_server/client_registry.py:591-668`) matches with
   `pattern in peer_id or peer_id.endswith(client_id)` (`:631`) and deletes
   the first hit, so deleting client A can take an unrelated row of the same
@@ -1340,6 +1344,11 @@ docs build, `verify_groups`, ruff and pyright at 0 errors and 0 warnings.
   backfill item, not only the table; arm 3 covers every OAuth2 source; a
   resource hook's `uri` is reserved; a resumed finish with the row gone
   does not bump.
+- After the re-verification (Iterations 6-9): client deletion removes every
+  row of the client; the probe logs its fault and reads once per refusal;
+  pattern resources are documented as getting no variables (behaviour
+  unchanged); a registration warning for a variable named `uri` was not
+  added.
 
 ### Learnings
 - `make test-all-parallel` ends with `docker compose down -v`, so the next
@@ -1355,6 +1364,9 @@ docs build, `verify_groups`, ruff and pyright at 0 errors and 0 warnings.
   creates the creators table before it refuses to start.
 - Not done here, and not filed: nothing. The PR opens after the
   verification, per the one-PR-per-plan rule.
+- "First match" and "every match" are different contracts: authorisation
+  wants one row, deletion wants all of them. One function with a flag
+  served both and hid that the deletion stopped early.
 
 
 ## Iterations
@@ -1487,3 +1499,98 @@ pair is for an actor whose row is gone (every token validation loads the
 actor), and it works again only if the same id is re-created. Closing it
 needs a deletion check in every refresh guard, a read on the hot path for a
 deleted-actor edge.
+
+### 2026-11-04, after verification thoughts/verifications/2026-11-04-3-16-dependency-security-rollup-reverify.md
+
+#### 6. Client deletion removes every row of the client
+
+**Category**: Verification fix (Issues 1, 6 and 7)
+
+**What changed**: `trust_lookup.py` splits the arms into predicates.
+`find_client_trust(trusts, client_id)` (arms 1 and 2, the resolver) keeps
+its single-row answer and loses `legacy_segment_match`. The new
+`client_trusts_for_deletion(trusts, client_id)` returns every row arm 1,
+2 or 3 matches, in row order, and `_delete_client_trust_relationship`
+deletes each one (a `DbError` still propagates, any other fault is logged
+per row). Arm 3 now needs exactly three peer-id segments, and its docstring
+says its origin gate is wider than arm 2's on purpose and must not be
+reused for authorisation.
+
+**Files affected**:
+- `actingweb/oauth2_server/trust_lookup.py` — predicates, `client_trusts_for_deletion`, docstrings
+- `actingweb/oauth2_server/client_registry.py` — deletes every match
+- `tests/test_client_trust_lookup.py` — `test_a_tagged_row_and_a_legacy_row_of_one_client_are_both_deleted`, `test_the_segment_arm_needs_exactly_three_segments`; the arm-3 cases call the new function
+- `CHANGELOG.rst` — the client-deletion FIXED entry names the second row and the behaviour change
+
+**Rationale**: arm 1 always won, so an upgraded actor's legacy `oauth2:`
+row survived beside the deleted tagged `oauth2_client:` row with its
+permissions. A client-less legacy peer id keeps `:` unescaped, so "three or
+more segments" could match one whose identifier ended in a client id. The
+resolver's answer is unchanged: the same two arms in the same order, pinned
+by `test_the_default_matches_the_resolver` and the `find_client_trust(...)
+is tagged` assertion in the new two-row test.
+
+#### 7. The backfill probe logs its fault and reads once per refusal
+
+**Category**: Verification fix (Issues 2 and 3)
+
+**What changed**: `_backfill_probe.cached_backfill_state()` replaces
+`creators_backfilled()`. It answers "complete" from the cache, or reads
+once. `_require_creators_backfill` branches on that one state. A read fault
+logs an ERROR with the table, the fault and "check that the runtime role has
+dynamodb:GetItem on <table>" before it raises `DbError(op)`.
+`creators_backfill_state()` remembers a "complete" answer, so the
+`check_ready()` read also spares the first enforced write its read. The
+test stubs patch `cached_backfill_state`.
+
+**Files affected**:
+- `actingweb/db/dynamodb/_backfill_probe.py` — `cached_backfill_state`, cache seeding, module docstring corrected (Issue 8)
+- `actingweb/db/dynamodb/actor.py` — `_require_creators_backfill`
+- `tests/_lookup_probe.py` — the stub and the real-probe fixture
+- `tests/test_unique_creator_fail_closed.py` — `test_a_probe_read_fault_is_refused_with_a_logged_reason`, `test_a_refusal_reads_the_marker_once_and_check_ready_seeds_the_cache`
+- `CHANGELOG.rst` — the D2 entry names the read-fault refusal and its ERROR
+
+**Rationale**: a role without `GetItem` on the creators table got 503s
+that no retry clears, traced only as "database error during actor create".
+Two reads per refusal could disagree with each other and cost a second
+round-trip; the startup check's read was thrown away.
+
+#### 8. DynamoDB docstrings: the cache caveat and the likely missing table
+
+**Category**: Verification fix (Issues 4 and 5)
+
+**What changed**: the DynamoDB `DbActor.__init__` docstring states that a
+positive probe is kept for the process's life, so a worker that saw the
+item keeps claiming after `disable --apply` empties the table (a silent
+duplicate), and that every worker restarts with the flag off before
+`disable`. The transaction-time ERROR names the actor table first ("check
+AWS_DB_PREFIX") and the creators table second ("deleted since this process
+saw it backfilled"), since the probe now reports a missing creators table
+itself.
+
+**Files affected**:
+- `actingweb/db/dynamodb/actor.py` — the constructor docstring, `_log_missing_creators_table` docstring and message
+
+**Rationale**: PostgreSQL's docstring carried the caveat and DynamoDB's,
+where the consequence is worse, did not. The ERROR pointed at the less
+likely table.
+
+#### 9. Doc accuracy and test hints
+
+**Category**: Verification fix (Issues 8 and 9)
+
+**What changed**: the `unique_creators._backfill_state` cross-reference
+names `_backfill_probe.creators_backfill_state`. `mcp-applications.rst` and
+`resource_arguments` say that a `uri_pattern` match gets no variables, so
+its hook must read judged values from `uri`, and that a variable named
+`uri` is dropped without a warning. The `resources/read` test hooks and
+helpers are annotated.
+
+**Files affected**:
+- `actingweb/maintenance/unique_creators.py`, `actingweb/mcp/uri.py`, `docs/guides/mcp-applications.rst` — docs
+- `tests/test_mcp_resource_read_permissions.py` — annotations; `isinstance` narrows the async handler
+
+**Rationale**: returning a pattern's named groups would change what
+existing pattern hooks receive; narrowing the doc sentence keeps behaviour
+and makes it true. The verification marked the registration warning
+optional.

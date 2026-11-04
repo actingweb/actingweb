@@ -16,6 +16,7 @@ be written (the check never ran) can now be made.
 
 import asyncio
 import unittest
+from typing import Any
 from unittest.mock import Mock, patch
 
 from actingweb.config import Config
@@ -30,7 +31,7 @@ def make_hooks() -> HookRegistry:
     hooks = HookRegistry()
 
     @mcp_resource(uri_template="notes://{id}", mime_type="text/plain")
-    def get_note(actor, method_name, params):
+    def get_note(actor: Any, method_name: str, params: dict[str, Any]) -> Any:
         return {"note": "hello"}
 
     hooks.register_method_hook("get_note", get_note)
@@ -59,7 +60,7 @@ class TestSyncResourceReadPermissions(unittest.TestCase):
         self.handler = MCPHandler(config=Config(mcp=True, unique_creator=False))
         self.handler.hooks = make_hooks()
 
-    def _read(self, uri: str, peer_id: str | None):
+    def _read(self, uri: str, peer_id: str | None) -> dict[str, Any]:
         with (
             patch.object(
                 MCPHandler,
@@ -195,29 +196,29 @@ def _allow_all(*_a, **_k):
     return PermissionResult.ALLOWED
 
 
-def _contents_hooks(seen: list) -> HookRegistry:
+def _contents_hooks(seen: list[dict[str, Any]]) -> HookRegistry:
     """Resources whose results cover every formatting branch (3.16)."""
     hooks = HookRegistry()
 
     @mcp_resource(uri_template="typed://{id}", mime_type="application/x-test")
-    def typed(actor, method_name, params):
+    def typed(actor: Any, method_name: str, params: dict[str, Any]) -> Any:
         seen.append(dict(params))
         return {"id": params.get("id"), "n": 1}
 
     @mcp_resource(uri_template="plain://{id}")
-    def plain(actor, method_name, params):
+    def plain(actor: Any, method_name: str, params: dict[str, Any]) -> Any:
         return {"content": "ignored key", "x": [1, 2]}
 
     @mcp_resource(uri_template="text://doc", mime_type="text/markdown")
-    def text(actor, method_name, params):
+    def text(actor: Any, method_name: str, params: dict[str, Any]) -> Any:
         return "# heading"
 
     @mcp_resource(uri_template="raw://doc")
-    def raw(actor, method_name, params):
+    def raw(actor: Any, method_name: str, params: dict[str, Any]) -> Any:
         return {"contents": [{"uri": "raw://doc", "text": "as is"}]}
 
     @mcp_resource(uri_template="legacy://unused")
-    def legacy(actor, method_name, params):
+    def legacy(actor: Any, method_name: str, params: dict[str, Any]) -> Any:
         return "legacy body"
 
     # uri_pattern is legacy, hand-authored metadata; the decorator has no
@@ -225,7 +226,7 @@ def _contents_hooks(seen: list) -> HookRegistry:
     legacy._mcp_metadata["uri_pattern"] = r"legacy://v\w*"  # type: ignore[attr-defined]
 
     @mcp_resource(uri_template="shadow://{uri}/{id}")
-    def shadow(actor, method_name, params):
+    def shadow(actor: Any, method_name: str, params: dict[str, Any]) -> Any:
         seen.append(dict(params))
         return "shadow"
 
@@ -247,7 +248,13 @@ class TestSyncAsyncResourceReadContents(unittest.TestCase):
     (3.16: the async path used ``str()``, a key the decorator never writes,
     and no pattern fallback)."""
 
-    def _read(self, handler_cls, uri: str, seen: list, extra: dict | None = None):
+    def _read(
+        self,
+        handler_cls: type[MCPHandler] | type[AsyncMCPHandler],
+        uri: str,
+        seen: list[dict[str, Any]],
+        extra: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         handler = handler_cls(config=Config(mcp=True, unique_creator=False))
         handler.hooks = _contents_hooks(seen)
         request = {
@@ -273,13 +280,15 @@ class TestSyncAsyncResourceReadContents(unittest.TestCase):
             mock_get_eval.return_value = Mock(
                 evaluate_permission=Mock(side_effect=_allow_all)
             )
-            if handler_cls is AsyncMCPHandler:
+            if isinstance(handler, AsyncMCPHandler):
                 return asyncio.run(handler.post_async(request))
             return handler.post(request)
 
-    def _both(self, uri: str, extra: dict | None = None):
-        sync_seen: list = []
-        async_seen: list = []
+    def _both(
+        self, uri: str, extra: dict[str, Any] | None = None
+    ) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
+        sync_seen: list[dict[str, Any]] = []
+        async_seen: list[dict[str, Any]] = []
         sync = self._read(MCPHandler, uri, sync_seen, extra)
         async_ = self._read(AsyncMCPHandler, uri, async_seen, extra)
         self.assertIn("result", sync, sync)

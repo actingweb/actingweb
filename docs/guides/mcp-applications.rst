@@ -502,8 +502,10 @@ default); a ``str`` is sent as it is; a ``dict`` with a ``contents`` key is
 passed through unchanged. The hook receives the request params, then the
 template's variables over them (a client param never replaces a variable the
 permission check judged), then ``uri``, which is always the requested URI, so
-do not name a template variable ``uri``. Flask and FastAPI answer
-identically.
+do not name a template variable ``uri``. A resource matched by its
+``uri_pattern`` gets no variables: its hook receives the params and ``uri``
+only, so read any value the permission check must have judged from ``uri``,
+never from a param. Flask and FastAPI answer identically.
 
 Property Hooks for MCP Applications
 -----------------------------------

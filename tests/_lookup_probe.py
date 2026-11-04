@@ -29,7 +29,7 @@ import pytest
 _real_probe: Callable[[Any], None] | None = None
 _real_unique: Callable[[Any], None] | None = None
 _real_pg_index: Callable[[], bool] | None = None
-_real_ddb_backfill: Callable[[], bool] | None = None
+_real_ddb_backfill: Callable[[], str] | None = None
 
 
 def real_probe() -> Callable[[Any], None]:
@@ -138,13 +138,13 @@ def real_pg_index_probe(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     pg_actor.reset_index_probe()
 
 
-def real_dynamodb_backfill_probe_fn() -> Callable[[], bool]:
-    """The real ``actingweb.db.dynamodb._backfill_probe.creators_backfilled``."""
+def real_dynamodb_backfill_probe_fn() -> Callable[[], str]:
+    """The real ``actingweb.db.dynamodb._backfill_probe.cached_backfill_state``."""
     global _real_ddb_backfill
     if _real_ddb_backfill is None:
         from actingweb.db.dynamodb import _backfill_probe
 
-        _real_ddb_backfill = _backfill_probe.creators_backfilled
+        _real_ddb_backfill = _backfill_probe.cached_backfill_state
     return _real_ddb_backfill
 
 
@@ -165,7 +165,7 @@ def _stub_dynamodb_backfill_probe(monkeypatch: pytest.MonkeyPatch) -> None:
     from actingweb.db.dynamodb import _backfill_probe
 
     real_dynamodb_backfill_probe_fn()
-    monkeypatch.setattr(_backfill_probe, "creators_backfilled", lambda: True)
+    monkeypatch.setattr(_backfill_probe, "cached_backfill_state", lambda: "complete")
 
 
 @pytest.fixture
@@ -176,7 +176,7 @@ def real_dynamodb_backfill_probe(monkeypatch: pytest.MonkeyPatch) -> Iterator[No
 
     _backfill_probe.reset_backfill_probe()
     monkeypatch.setattr(
-        _backfill_probe, "creators_backfilled", real_dynamodb_backfill_probe_fn()
+        _backfill_probe, "cached_backfill_state", real_dynamodb_backfill_probe_fn()
     )
     yield
     _backfill_probe.reset_backfill_probe()

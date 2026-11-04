@@ -1,6 +1,6 @@
 ---
 status: done
-verified: thoughts/verifications/2026-11-04-3-16-dependency-security-rollup-reverify.md
+verified: thoughts/verifications/2026-11-04-3-16-dependency-security-rollup-reverify-2.md
 ---
 
 # Implementation Plan: 3.16 roll-up: dependency security upgrade and the small bounded follow-ups

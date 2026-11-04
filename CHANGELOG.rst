@@ -611,7 +611,7 @@ CHANGED
   including the OAuth2 system actor bootstrap, raises ``DbError``
   (``database error during actor create``, 503 through the integrations, and
   retrying does not clear it) on both backends, with an ERROR naming the
-  missing table or index and the command.
+  missing or unbackfilled table, or the missing index, and the command.
 
 - **Breaking: ``with_unique_creator()`` is enforced by the database.** Before
   3.16 the flag made ``Actor.create`` list the creator's actors and refuse
@@ -633,8 +633,10 @@ CHANGED
     starting unchecked on DynamoDB, against an empty auto-created
     ``creators`` table, would let existing users' sign-ins create second
     actors. A process that builds ``Config()`` directly no longer creates
-    that table, nor claims without the index on PostgreSQL: its creates
-    raise ``DbError`` until ``enable --apply`` has run. If your IAM policy
+    that table, nor claims against one that is not backfilled (the table a
+    refused first start leaves is empty), nor without the index on
+    PostgreSQL: its enforced creates and creator changes raise ``DbError``
+    until ``enable --apply`` has run. If your IAM policy
     lists tables by name, add ``<prefix>_creators`` first.
   - The factory no longer returns the existing actor to a caller who
     supplies its passphrase: a second ``POST /`` for a held creator answers
@@ -1499,18 +1501,26 @@ FIXED
   directly needs checking.
 
 - **FastAPI answered ``resources/read`` differently from Flask.** The async
-  handler sent a ``dict`` result as ``str()``, read ``mimeType`` from a key
-  the decorator never writes (so every answer was ``text/plain``), passed
-  the hook only the template's variables, and ignored a resource declared
-  only by ``uri_pattern``. Both handlers now share one resolver and one
-  formatter, and pass the hook the request params with the variables merged
-  in. **Behavior change for FastAPI deployments:** a ``dict`` body is
-  indented JSON with the declared ``mime_type`` (``application/json`` when
-  undeclared), a hook sees ``uri`` in its arguments again, a
-  ``uri_pattern`` resource resolves, and a ``dict`` holding a value JSON
-  cannot serialise (a ``datetime``) answers the generic error instead of a
-  Python repr. **Check:** a FastAPI client that parsed the old
-  ``text/plain`` body.
+  handler sent a ``dict`` result as ``str()`` (or, when it had a
+  ``content`` key, that value alone), read ``mimeType`` from a key the
+  decorator never writes (so every answer was ``text/plain``), passed the
+  hook only the template's variables, and ignored a resource declared only
+  by ``uri_pattern``; the Flask handler passed only the request params, not
+  the variables. Both handlers now share one resolver and one formatter,
+  and pass the hook the request params, then the template's variables over
+  them, then ``uri``, which is always the requested URI. **Behavior change
+  for FastAPI deployments:** a ``dict`` body is indented JSON with the
+  declared ``mime_type`` (``application/json`` when undeclared), including a
+  ``dict`` with a ``content`` key, which was unwrapped before; a hook
+  receives ``uri`` and the other request params; a ``uri_pattern`` resource
+  resolves; and a ``dict`` holding a value JSON cannot serialise (a
+  ``datetime``) answers the generic error instead of a Python repr.
+  **Behavior change for Flask deployments:** a hook also receives the
+  template's variables, which win over a request param of the same name.
+  **Check:** a FastAPI client that parsed the old ``text/plain`` body or a
+  hook that returned ``{"content": ...}``; a hook that splats its arguments
+  into a fixed signature (it now receives ``uri``); a template with a
+  variable named ``uri`` (the hook sees the requested URI under that name).
 
 - **Deleting an OAuth2 client could delete another client's trust row.**
   Client deletion matched trust rows by substring

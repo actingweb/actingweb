@@ -80,3 +80,17 @@ def resolve_resource(
             except re.error:
                 logger.warning(f"Invalid URI pattern in resource metadata: {pattern}")
     return None
+
+
+def resource_arguments(
+    params: Mapping[str, Any], variables: Mapping[str, str], uri: str
+) -> dict[str, Any]:
+    """The arguments a resource hook receives for ``uri``.
+
+    The request params, then the template's variables over them, then
+    ``uri`` itself. Variables win over params because the permission check
+    judged the URI the variables came from: a client param must not replace
+    one. ``uri`` is reserved, so a template variable named ``uri`` cannot
+    hide the requested URI from the hook.
+    """
+    return {**params, **variables, "uri": uri}

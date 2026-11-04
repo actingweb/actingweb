@@ -105,6 +105,80 @@ class TestDynamoDBConstructorCreatesNoCreatorsTable:
             for r in caplog.records
         )
 
+    def test_an_empty_unbackfilled_table_refuses_enforced_writes(
+        self,
+        absent_creators_table: str,
+        real_dynamodb_backfill_probe: None,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """The table the ``check_ready()`` prewarm leaves: it exists but holds
+        no record of the existing actors. Claiming against it would land a
+        second actor for an existing creator (verification 2026-11-04,
+        Issue 1)."""
+        from actingweb.db.dynamodb import _backfill_probe
+        from actingweb.db.dynamodb import actor as ddb
+        from actingweb.db.dynamodb.creator import Creator
+
+        Creator.create_table(wait=True)
+        db = ddb.DbActor(unique_creator=True)
+        actor_id = uuid.uuid4().hex
+        creator = f"e-{actor_id}@example.com"
+        with caplog.at_level(logging.ERROR, logger=ddb.__name__):
+            with pytest.raises(DbError) as raised:
+                db.create(actor_id=actor_id, creator=creator, passphrase="x")
+        assert not isinstance(raised.value, CreatorTaken)
+        assert str(raised.value) == "database error during actor create"
+        assert db.get(actor_id=actor_id) is None
+        assert list(Creator.scan()) == []
+        assert any(
+            "is not backfilled" in r.getMessage() and REMEDY in r.getMessage()
+            for r in caplog.records
+        )
+        with pytest.raises(DbError):
+            db.replace_creator_holder(
+                "old", actor_id=actor_id, creator=creator, passphrase="x"
+            )
+
+        # Backfilled: the create claims, and the probe is read once.
+        Creator(creator="#meta#backfill").save()
+        with mock.patch.object(
+            _backfill_probe,
+            "creators_backfill_state",
+            wraps=_backfill_probe.creators_backfill_state,
+        ) as state:
+            assert db.create(actor_id=actor_id, creator=creator, passphrase="x")
+            other = uuid.uuid4().hex
+            assert db.create(
+                actor_id=other, creator=f"o-{other}@example.com", passphrase="x"
+            )
+        assert state.call_count == 1
+        for aid in (actor_id, other):
+            row = ddb.DbActor(unique_creator=True)
+            if row.get(actor_id=aid):
+                row.delete()
+
+    def test_a_rename_against_an_unbackfilled_table_is_refused(
+        self, absent_creators_table: str, real_dynamodb_backfill_probe: None
+    ) -> None:
+        from actingweb.db.dynamodb import actor as ddb
+        from actingweb.db.dynamodb.creator import Creator
+
+        actor_id = uuid.uuid4().hex
+        ddb.Actor(
+            id=actor_id, creator=f"a-{actor_id}@example.com", passphrase="x"
+        ).save()
+        try:
+            Creator.create_table(wait=True)
+            db = ddb.DbActor(unique_creator=True)
+            assert db.get(actor_id=actor_id)
+            with pytest.raises(DbError):
+                db.modify(creator=f"b-{actor_id}@example.com")
+            assert ddb.Actor.get(actor_id).creator == f"a-{actor_id}@example.com"
+            # An exempt target needs no record and is not probed.
+            assert db.modify(creator="trustee")
+        finally:
+            ddb.Actor(id=actor_id).delete()
+
     def test_unenforced_constructor_creates_only_the_actor_table(
         self, absent_creators_table: str
     ) -> None:

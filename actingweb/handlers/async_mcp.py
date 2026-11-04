@@ -450,7 +450,7 @@ class AsyncMCPHandler(MCPHandler):
 
         # Find the corresponding resource hook (the sync handler's resolver
         # and formatter, so Flask and FastAPI answer the same).
-        from ..mcp.uri import resolve_resource
+        from ..mcp.uri import resolve_resource, resource_arguments
         from .mcp import format_resource_read_result
 
         try:
@@ -462,7 +462,7 @@ class AsyncMCPHandler(MCPHandler):
             found = None
         if found is not None:
             method_name, hook, metadata, variables = found
-            arguments = {**params, **variables}
+            arguments = resource_arguments(params, variables, str(uri))
             try:
                 if inspect.iscoroutinefunction(hook):
                     result = await hook(actor, method_name, arguments)

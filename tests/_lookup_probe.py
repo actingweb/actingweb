@@ -29,6 +29,7 @@ import pytest
 _real_probe: Callable[[Any], None] | None = None
 _real_unique: Callable[[Any], None] | None = None
 _real_pg_index: Callable[[], bool] | None = None
+_real_ddb_backfill: Callable[[], bool] | None = None
 
 
 def real_probe() -> Callable[[Any], None]:
@@ -135,3 +136,47 @@ def real_pg_index_probe(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     monkeypatch.setattr(pg_actor, "_creator_index_present", real_pg_index_probe_fn())
     yield
     pg_actor.reset_index_probe()
+
+
+def real_dynamodb_backfill_probe_fn() -> Callable[[], bool]:
+    """The real ``actingweb.db.dynamodb._backfill_probe.creators_backfilled``."""
+    global _real_ddb_backfill
+    if _real_ddb_backfill is None:
+        from actingweb.db.dynamodb import _backfill_probe
+
+        _real_ddb_backfill = _backfill_probe.creators_backfilled
+    return _real_ddb_backfill
+
+
+@pytest.fixture(autouse=True)
+def _stub_dynamodb_backfill_probe(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stub the DynamoDB creators backfill probe in every test.
+
+    An enforced create refuses while the creators table is not backfilled,
+    and the shared test stores cannot be (they hold deliberate duplicate
+    creators). Installed on every backend: several unit tests pin
+    ``database="dynamodb"`` whatever the run's backend. Function-scoped, not
+    session-scoped like the other stubs: importing anything under
+    ``actingweb.db.dynamodb`` imports every table model, whose names freeze
+    at import, and a session fixture can run before the integration
+    conftest has set the worker's ``AWS_DB_PREFIX``. Tests that are about
+    the probe request ``real_dynamodb_backfill_probe``.
+    """
+    from actingweb.db.dynamodb import _backfill_probe
+
+    real_dynamodb_backfill_probe_fn()
+    monkeypatch.setattr(_backfill_probe, "creators_backfilled", lambda: True)
+
+
+@pytest.fixture
+def real_dynamodb_backfill_probe(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Run the real DynamoDB backfill probe in this test, with a clean cache
+    before and after."""
+    from actingweb.db.dynamodb import _backfill_probe
+
+    _backfill_probe.reset_backfill_probe()
+    monkeypatch.setattr(
+        _backfill_probe, "creators_backfilled", real_dynamodb_backfill_probe_fn()
+    )
+    yield
+    _backfill_probe.reset_backfill_probe()

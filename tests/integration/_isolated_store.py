@@ -166,6 +166,9 @@ def wipe_store(backend: str) -> None:
         if model.exists():
             model.delete_table()
     reset_ensure_cache()
+    from actingweb.db.dynamodb._backfill_probe import reset_backfill_probe
+
+    reset_backfill_probe()  # a cached "backfilled" must not outlive the table
     # The command treats a missing actor table as a misconfiguration.
     Actor.create_table(wait=True)
 

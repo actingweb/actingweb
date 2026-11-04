@@ -105,8 +105,10 @@ class DbActor:
         builds; the startup check refuses to run with the flag on without it.
         An enforced write (create, creator rename, holder replacement) checks
         the index once per process and raises ``DbError`` while it is missing,
-        so a process that skipped the check cannot land a duplicate. Reads
-        never probe.
+        so a process that skipped the check cannot land a duplicate. A
+        positive answer is kept for the process's life: a worker that saw the
+        index keeps writing without it if an operator drops it (``disable``)
+        while the worker runs, until it restarts. Reads never probe.
         """
         self.handle = None
         self.unique_creator = unique_creator

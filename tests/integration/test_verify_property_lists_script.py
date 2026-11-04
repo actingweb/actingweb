@@ -16,6 +16,7 @@ import pytest
 from actingweb.db import get_property, get_property_list
 from actingweb.interface.actor_interface import ActorInterface
 from actingweb.interface.app import ActingWebApp
+from tests.integration._actor_list_stub import only_this_actor
 
 DATABASE_BACKEND = os.environ.get("DATABASE_BACKEND", "dynamodb")
 
@@ -358,31 +359,6 @@ class TestSweepActor:
         assert not cp2.is_done("actor-2")
 
 
-def _only_this_actor(monkeypatch, actor_id, *, fault_after=False):
-    """Restrict main()'s actor sweep to one actor.
-
-    main() sweeps every actor in the table, but the test database is shared
-    with whatever other tests are running (xdist workers included), so its
-    exit code and checkpoint contents would otherwise depend on unrelated
-    actors' lists. Patching the actor listing keeps argparse, the sweep
-    loop and the checkpoint lifecycle -- the things these tests exist to
-    exercise -- while making the outcome deterministic.
-    """
-
-    class _OneActor:
-        def fetch(self):
-            return [{"id": actor_id}]
-
-        def iter_rows(self, **_kwargs):
-            yield {"id": actor_id, "creator": "x@example.com"}
-            if fault_after:
-                from actingweb.db.exceptions import DbError
-
-                raise DbError("actor list scan")
-
-    monkeypatch.setattr("actingweb.db.get_actor_list", lambda config: _OneActor())
-
-
 class TestMainCommandLineWorkflow:
     """Exercises script.main() itself (argparse + checkpoint lifecycle), not
     just sweep_actor(). A dry-run that finds corruption must not leave a
@@ -394,7 +370,7 @@ class TestMainCommandLineWorkflow:
     ):
         import verify_property_lists as script  # type: ignore[import-not-found]
 
-        _only_this_actor(monkeypatch, test_actor.id)
+        only_this_actor(monkeypatch, test_actor.id)
 
         _seed_v1_list(
             test_actor.config, test_actor.id, "main_workflow_holed", ["a", "b", "c"]
@@ -451,7 +427,7 @@ class TestMainCommandLineWorkflow:
         """
         import verify_property_lists as script  # type: ignore[import-not-found]
 
-        _only_this_actor(monkeypatch, test_actor.id)
+        only_this_actor(monkeypatch, test_actor.id)
 
         # A healthy fleet, and a checkpoint left behind by an earlier,
         # interrupted --repair run.
@@ -485,7 +461,7 @@ class TestMainCommandLineWorkflow:
         """
         import verify_property_lists as script  # type: ignore[import-not-found]
 
-        _only_this_actor(monkeypatch, test_actor.id)
+        only_this_actor(monkeypatch, test_actor.id)
 
         # Adjacent duplicate residue: two neighbouring rows with identical
         # stored content. verify() reports it, compact() refuses to touch it.
@@ -589,7 +565,7 @@ class TestMidSweepFault:
     ):
         import verify_property_lists as script  # type: ignore[import-not-found]
 
-        _only_this_actor(monkeypatch, test_actor.id, fault_after=True)
+        only_this_actor(monkeypatch, test_actor.id, fault_after=True)
         checkpoint_file = str(tmp_path / "checkpoint.json")
         monkeypatch.setattr(
             sys,

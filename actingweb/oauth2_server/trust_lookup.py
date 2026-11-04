@@ -10,10 +10,26 @@ package, so neither caller gains an import cycle.
 from collections.abc import Iterable
 from typing import Any
 
+# Sources trust creation writes as a peer id's first segment
+# (``established_via or "oauth2"``, ``TrustManager.create_or_update_oauth_trust``).
+OAUTH2_SOURCES = ("oauth2", "oauth2_client", "oauth2_interactive")
 
-def _normalized(client_id: str) -> str:
-    """The client id as trust creation writes it into a peer id."""
+
+def normalize_client_id(client_id: str) -> str:
+    """The client id as trust creation writes it into a peer id. The one
+    copy: ``TrustManager.create_or_update_oauth_trust`` calls it too, so
+    creation and lookup cannot drift apart."""
     return client_id.replace("@", "_at_").replace(".", "_dot_").replace(":", "_colon_")
+
+
+def _oauth2_origin(trust: Any) -> bool:
+    """An OAuth2-family ``established_via``, or none with an OAuth2-family
+    peer-id prefix (rows from before the field): never a peer-protocol row."""
+    via = getattr(trust, "established_via", None)
+    if via in OAUTH2_SOURCES:
+        return True
+    peer_id = str(getattr(trust, "peerid", ""))
+    return via is None and peer_id.split(":", 1)[0] in OAUTH2_SOURCES
 
 
 def find_client_trust(
@@ -28,19 +44,21 @@ def find_client_trust(
        prefix) whose peer id equals ``{source}:{normalized}:{normalized}``,
        the shape the client-credentials flow wrote with the client id as
        its email.
-    3. Deletion only (``legacy_segment_match=True``): a legacy row whose
-       peer id is ``oauth2_client:<…>:<client_id>``, three or more segments
-       with the **last one equal** to ``client_id``, the shape
-       ``Trust._extract_client_id_from_peerid`` reads. That keeps deleting
-       the real-email legacy rows the interactive flow wrote, which the
-       resolver deliberately does not authorise.
+    3. Deletion only (``legacy_segment_match=True``): a legacy row of OAuth2
+       origin (as arm 2 judges it) whose peer id is
+       ``<source>:<…>:<client_id>`` for any source trust creation writes
+       (``oauth2``, ``oauth2_client``, ``oauth2_interactive``), three or more
+       segments with the **last one equal** to the client id (as given or
+       normalised). That keeps deleting the real-email legacy rows the
+       interactive flow wrote, which the resolver deliberately does not
+       authorise.
     """
     rows = list(trusts)
     for trust in rows:
         if getattr(trust, "oauth_client_id", None) == client_id:
             return trust
 
-    normalized = _normalized(client_id)
+    normalized = normalize_client_id(client_id)
     candidates = {
         f"oauth2_client:{normalized}:{normalized}",
         f"oauth2:{normalized}:{normalized}",
@@ -62,10 +80,13 @@ def find_client_trust(
     for trust in rows:
         if getattr(trust, "oauth_client_id", None) is not None:
             continue
-        peer_id = str(getattr(trust, "peerid", ""))
-        if not peer_id.startswith("oauth2_client:"):
+        if not _oauth2_origin(trust):
             continue
-        parts = peer_id.split(":")
-        if len(parts) >= 3 and parts[-1] == client_id:
+        parts = str(getattr(trust, "peerid", "")).split(":")
+        if (
+            len(parts) >= 3
+            and parts[0] in OAUTH2_SOURCES
+            and parts[-1] in (client_id, normalized)
+        ):
             return trust
     return None

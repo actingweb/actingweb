@@ -582,6 +582,39 @@ class TestLeaseKeeper:
             finish_deletion(actor, config=config, hooks=hooks, origin="delete")
         assert order == ["bump", "sweep"]
 
+    def test_a_resume_with_the_actor_row_gone_writes_no_generation(
+        self, env: Any
+    ) -> None:
+        """A wipe that stopped after the actor row went: the resume must not
+        bump, since the wipe would not reach the bucket it writes
+        (verification 2026-11-04, Issue 6)."""
+        from actingweb import session_generation
+        from actingweb.db import get_actor
+
+        config, hooks, _events = env
+        actor = create_core_actor(config, uuid_email())
+        actor_id = str(actor.id)
+        deletion.create_leased_tombstone(
+            actor_id,
+            config,
+            reason="deleted",
+            notify_peers=False,
+            hook_kwargs={},
+            client_ids=[],
+        )
+        db = get_actor(config)
+        assert db.get(actor_id=actor_id)
+        db.delete()  # the crash left the row gone, the tombstone unfinished
+        _, data = deletion.read_tombstone(actor_id, config)
+        assert data is not None
+        deletion.release_lease(actor_id, config, data)
+        with patch.object(
+            session_generation, "bump", wraps=session_generation.bump
+        ) as bump:
+            finish_deletion(actor, config=config, hooks=hooks, origin="delete")
+        bump.assert_not_called()
+        assert session_generation.current(actor_id, config) is None
+
     def test_a_bump_fault_releases_the_lease_and_raises(self, env: Any) -> None:
         from actingweb import session_generation
 

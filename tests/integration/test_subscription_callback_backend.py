@@ -3,6 +3,8 @@
 
 import os
 import uuid
+from collections.abc import Iterator
+from typing import Any
 
 import pytest
 
@@ -14,7 +16,9 @@ DATABASE_BACKEND = os.environ.get("DATABASE_BACKEND", "dynamodb")
 
 
 @pytest.fixture
-def aw_app(docker_services, setup_database, worker_info):  # noqa: ARG001
+def aw_app(
+    docker_services: Any, setup_database: Any, worker_info: dict[str, Any]
+) -> ActingWebApp:  # noqa: ARG001
     if DATABASE_BACKEND == "postgresql":
         os.environ["PG_DB_HOST"] = os.environ.get("PG_DB_HOST", "localhost")
         os.environ["PG_DB_PORT"] = os.environ.get("PG_DB_PORT", "5433")
@@ -33,7 +37,7 @@ def aw_app(docker_services, setup_database, worker_info):  # noqa: ARG001
 
 
 @pytest.fixture
-def test_actor(aw_app):
+def test_actor(aw_app: ActingWebApp) -> Iterator[ActorInterface]:
     config = aw_app.get_config()
     actor = ActorInterface.create(creator="test@example.com", config=config)
     yield actor
@@ -45,7 +49,9 @@ def test_actor(aw_app):
 
 class TestSubscriptionCallbackFlag:
     @pytest.mark.parametrize("flag", [True, False])
-    def test_create_stores_the_bool(self, test_actor, aw_app, flag):
+    def test_create_stores_the_bool(
+        self, test_actor: ActorInterface, aw_app: ActingWebApp, flag: bool
+    ) -> None:
         config = aw_app.get_config()
         peerid = f"peer-{uuid.uuid4().hex}"
         subid = uuid.uuid4().hex

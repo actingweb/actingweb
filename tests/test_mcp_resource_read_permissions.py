@@ -224,7 +224,13 @@ def _contents_hooks(seen: list) -> HookRegistry:
     # parameter for it.
     legacy._mcp_metadata["uri_pattern"] = r"legacy://v\w*"  # type: ignore[attr-defined]
 
+    @mcp_resource(uri_template="shadow://{uri}/{id}")
+    def shadow(actor, method_name, params):
+        seen.append(dict(params))
+        return "shadow"
+
     for name, hook in (
+        ("shadow", shadow),
         ("typed", typed),
         ("plain", plain),
         ("text", text),
@@ -241,14 +247,14 @@ class TestSyncAsyncResourceReadContents(unittest.TestCase):
     (3.16: the async path used ``str()``, a key the decorator never writes,
     and no pattern fallback)."""
 
-    def _read(self, handler_cls, uri: str, seen: list):
+    def _read(self, handler_cls, uri: str, seen: list, extra: dict | None = None):
         handler = handler_cls(config=Config(mcp=True, unique_creator=False))
         handler.hooks = _contents_hooks(seen)
         request = {
             "jsonrpc": "2.0",
             "id": "1",
             "method": "resources/read",
-            "params": {"uri": uri},
+            "params": {"uri": uri, **(extra or {})},
         }
         with (
             patch.object(
@@ -271,11 +277,11 @@ class TestSyncAsyncResourceReadContents(unittest.TestCase):
                 return asyncio.run(handler.post_async(request))
             return handler.post(request)
 
-    def _both(self, uri: str):
+    def _both(self, uri: str, extra: dict | None = None):
         sync_seen: list = []
         async_seen: list = []
-        sync = self._read(MCPHandler, uri, sync_seen)
-        async_ = self._read(AsyncMCPHandler, uri, async_seen)
+        sync = self._read(MCPHandler, uri, sync_seen, extra)
+        async_ = self._read(AsyncMCPHandler, uri, async_seen, extra)
         self.assertIn("result", sync, sync)
         self.assertEqual(sync["result"], async_["result"])
         return sync["result"]["contents"][0], sync_seen, async_seen
@@ -301,6 +307,14 @@ class TestSyncAsyncResourceReadContents(unittest.TestCase):
     def test_a_contents_result_passes_through(self) -> None:
         content, _, _ = self._both("raw://doc")
         self.assertEqual(content, {"uri": "raw://doc", "text": "as is"})
+
+    def test_uri_is_reserved_and_variables_win_over_params(self) -> None:
+        """A template variable named ``uri`` cannot hide the requested URI,
+        and a client param cannot replace a variable the permission check
+        judged (verification 2026-11-04, Issue 3)."""
+        _, sync_seen, async_seen = self._both("shadow://a/7", {"id": "999"})
+        self.assertEqual(sync_seen, [{"uri": "shadow://a/7", "id": "7"}])
+        self.assertEqual(async_seen, sync_seen)
 
     def test_a_resource_declared_only_by_pattern(self) -> None:
         content, _, _ = self._both("legacy://v2")

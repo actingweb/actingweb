@@ -1935,14 +1935,17 @@ class MCPHandler(BaseHandler):
                 )
 
             # Find the corresponding resource hook
-            from ..mcp.uri import resolve_resource
+            from ..mcp.uri import resolve_resource, resource_arguments
 
             found = resolve_resource(str(uri), self.hooks._method_hooks)
             if found is not None:
                 method_name, hook, metadata, variables = found
                 try:
-                    # The request params and the template's variables.
-                    result = hook(actor, method_name, {**params, **variables})
+                    result = hook(
+                        actor,
+                        method_name,
+                        resource_arguments(params, variables, str(uri)),
+                    )
                     return {
                         "jsonrpc": "2.0",
                         "id": request_id,

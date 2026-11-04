@@ -37,6 +37,32 @@ from actingweb.db.exceptions import CreatorTaken, DbError
 logger = logging.getLogger(__name__)
 
 
+def _require_creators_backfill(op: str) -> None:
+    """Refuse an enforced write the creators table would not enforce.
+
+    An empty table that was never backfilled (the ``check_ready()`` prewarm
+    creates one before it refuses) holds no record of the existing actors,
+    so a claim against it lands a second actor for an existing creator. The
+    write fails closed with ``DbError(op)`` and the remedy is logged.
+    """
+    from actingweb.db.dynamodb import _backfill_probe
+
+    try:
+        if _backfill_probe.creators_backfilled():
+            return
+        state = _backfill_probe.creators_backfill_state()
+    except Exception as e:
+        raise DbError(op) from e
+    table = Creator.Meta.table_name
+    what = (
+        f"the DynamoDB table {table} does not exist"
+        if state == "table-missing"
+        else f"the DynamoDB table {table} is not backfilled"
+    )
+    logger.error(missing_enforcement_message(what))
+    raise DbError(op)
+
+
 class CreatorIndex(GlobalSecondaryIndex[Any]):
     """
     Secondary index on actor
@@ -249,6 +275,7 @@ class DbActor:
             except Exception as e:
                 raise DbError("actor modify") from e
         else:
+            _require_creators_backfill("actor modify")
             record = Creator(creator=new_creator, actor_id=actor_id)
 
             def build(t: TransactWrite) -> None:
@@ -312,6 +339,7 @@ class DbActor:
             return False
         actor = Actor(id=actor_id, creator=creator, passphrase=passphrase)
         if self.unique_creator and not is_exempt(creator):
+            _require_creators_backfill("actor create")
             record = Creator(creator=creator, actor_id=actor_id)
 
             def build(t: TransactWrite) -> None:
@@ -365,6 +393,7 @@ class DbActor:
         creator = normalise_creator(creator)
         if is_exempt(creator):
             raise ValueError("an exempt creator has no holder to replace")
+        _require_creators_backfill("actor replace holder")
         actor = Actor(id=actor_id, creator=creator, passphrase=passphrase or "")
         record = Creator(creator=creator)
 
@@ -589,7 +618,9 @@ class DbActor:
         # disambiguate: the runtime role may not have it.
         logger.error(
             missing_enforcement_message(
-                f"the DynamoDB table {Creator.Meta.table_name} does not exist"
+                f"a table this write needs does not exist (most likely "
+                f"{Creator.Meta.table_name}; else {Actor.Meta.table_name}, "
+                "check AWS_DB_PREFIX)"
             )
         )
 
@@ -600,7 +631,10 @@ class DbActor:
         created by ``actingweb-unique-creators enable --apply`` and by the
         ``check_ready()`` prewarm, never here: a table created empty would
         claim creators against no record of the existing actors. An enforced
-        write without it raises ``DbError`` and logs the remedy.
+        write (create, creator rename, holder replacement) reads the table's
+        backfill-complete item once per process and raises ``DbError`` while
+        the table is missing or not backfilled, logging the remedy. Reads
+        never probe.
         """
         self.handle = None
         self.unique_creator = unique_creator

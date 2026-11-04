@@ -816,8 +816,25 @@ class TestFailClosedBeforeEnable:
 
     @pytest.fixture
     def real_probe(self, request: pytest.FixtureRequest) -> None:
-        if not DYNAMODB:
-            request.getfixturevalue("real_pg_index_probe")
+        request.getfixturevalue(
+            "real_dynamodb_backfill_probe" if DYNAMODB else "real_pg_index_probe"
+        )
+
+    @dynamodb_only
+    def test_the_prewarmed_empty_table_still_refuses(
+        self, fresh_store: Any, real_probe: None
+    ) -> None:
+        """What a refused first start leaves: ``check_ready()`` prewarms the
+        creators table, empty, before it raises ``UniqueCreatorNotReady``."""
+        from actingweb.db.dynamodb.creator import Creator
+
+        Creator.create_table(wait=True)
+        creator = _email()
+        _raw_row(_id(), creator)  # an existing user, no record
+        with pytest.raises(DbError) as raised:
+            get_actor(fresh_store).create(actor_id=_id(), creator=creator)
+        assert not isinstance(raised.value, CreatorTaken)
+        assert _record(creator) is None
 
     def test_create_raises_until_enable_then_records_the_creator(
         self, fresh_store: Any, real_probe: None, caplog: pytest.LogCaptureFixture

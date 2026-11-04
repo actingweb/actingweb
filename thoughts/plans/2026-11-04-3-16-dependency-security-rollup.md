@@ -1,5 +1,6 @@
 ---
 status: done
+verified: thoughts/verifications/2026-11-04-3-16-dependency-security-rollup.md
 ---
 
 # Implementation Plan: 3.16 roll-up: dependency security upgrade and the small bounded follow-ups
@@ -71,7 +72,10 @@ Everything that needs a design or a new cross-table primitive stays out, and
   (`actingweb/oauth2.py:19-20`), and the OAuth2 suites exercise both. That
   is what the fast tier proves; nothing more is claimed.
 - **D2 Creators uniqueness fails closed on both backends** (owner,
-  2026-11-04: option (a) on DynamoDB; the PostgreSQL probe for symmetry):
+  2026-11-04: option (a) on DynamoDB; the PostgreSQL probe for symmetry).
+  **[Updated 2026-11-04]** On DynamoDB an enforced write also requires the
+  backfill-complete item (read once per process, positive only), because the
+  `check_ready()` prewarm leaves an empty table behind; see Iteration 1:
   - **DynamoDB:** remove `if unique_creator: ensure_table(Creator)` from
     `actingweb/db/dynamodb/actor.py:575-576`; `ensure_table(Actor)` stays.
     The two remaining creators of the table are deliberate and unchanged: the
@@ -485,7 +489,9 @@ Everything that needs a design or a new cross-table primitive stays out, and
   decorator's `mime_type` (`application/json` by default); a `str` is sent
   as it is; a `dict` with a `contents` key is passed through unchanged. Flask
   and FastAPI answer identically."*
-- **D8 Exact-match client deletion.** `_delete_client_trust_relationship`
+- **D8 Exact-match client deletion.** **[Updated 2026-11-04]** Arm 3
+  accepts every source trust creation writes (`oauth2`, `oauth2_client`,
+  `oauth2_interactive`), gated on OAuth2 origin; see Iteration 2. `_delete_client_trust_relationship`
   (`actingweb/oauth2_server/client_registry.py:591-668`) matches with
   `pattern in peer_id or peer_id.endswith(client_id)` (`:631`) and deletes
   the first hit, so deleting client A can take an unrelated row of the same
@@ -1330,6 +1336,10 @@ docs build, `verify_groups`, ruff and pyright at 0 errors and 0 warnings.
   test; `iter_rows` has no folding form.
 - Todo sections were removed without renumbering, since they are cited by
   number.
+- After the 2026-11-04 verification (Iterations 1-5): DynamoDB checks the
+  backfill item, not only the table; arm 3 covers every OAuth2 source; a
+  resource hook's `uri` is reserved; a resumed finish with the row gone
+  does not bump.
 
 ### Learnings
 - `make test-all-parallel` ends with `docker compose down -v`, so the next
@@ -1337,6 +1347,143 @@ docs build, `verify_groups`, ruff and pyright at 0 errors and 0 warnings.
   wave after a `make` run is that, not a regression.
 - An unattended Full tier must leave the tree alone: the PostgreSQL run and
   the docs build read the working tree after the DynamoDB run.
+- Importing anything under `actingweb.db.dynamodb` imports every model and
+  freezes its table name under the `AWS_DB_PREFIX` of that moment, so a
+  session-scoped test fixture must not import it before the integration
+  conftest has set the worker prefix.
+- "Table exists" and "enforced" differ on DynamoDB: the startup prewarm
+  creates the creators table before it refuses to start.
 - Not done here, and not filed: nothing. The PR opens after the
   verification, per the one-PR-per-plan rule.
 
+
+## Iterations
+
+### 2026-11-04, after verification thoughts/verifications/2026-11-04-3-16-dependency-security-rollup.md
+
+#### 1. DynamoDB enforced writes require a backfilled creators table, not just an existing one
+
+**Category**: Verification fix (Issue 1, High)
+
+**What changed**: An enforced DynamoDB create, creator rename or holder
+replacement now reads the creators table's backfill-complete item once per
+process (cached positive only, keyed by table name) and raises `DbError(op)`
+with the remedy ERROR ("is not backfilled" or "does not exist") when it is
+absent. The read lives in a new module, `actingweb/db/dynamodb/_backfill_probe.py`
+(`creators_backfill_state`, `creators_backfilled`, `reset_backfill_probe`);
+`unique_creators._backfill_state` delegates to it, and `disable` resets it.
+The transaction-time ERROR no longer blames `creators` alone (Issue 8): it
+names both tables and `AWS_DB_PREFIX`.
+
+**Files affected**:
+- `actingweb/db/dynamodb/_backfill_probe.py` (new) — the state read and the positive cache
+- `actingweb/db/dynamodb/actor.py` — `_require_creators_backfill` before the create, rename and replace transactions; the constructor docstring; the ERROR wording
+- `actingweb/maintenance/unique_creators.py` — `_backfill_state` delegates; `disable` resets the probe; the no-op `reset_index_probe()` after an index build is gone (Issue 11)
+- `tests/_lookup_probe.py`, `tests/conftest.py`, `tests/integration/conftest.py` — `_stub_dynamodb_backfill_probe` (function-scoped, every backend) and `real_dynamodb_backfill_probe`
+- `tests/integration/_isolated_store.py` — `wipe_store` resets the probe
+- `tests/test_unique_creator_fail_closed.py` — an empty, unbackfilled table refuses create and replace (nothing written, ERROR names it), a backfilled one claims with one probe read; a rename against it is refused and an exempt rename is not probed
+- `tests/integration/test_unique_creator_states.py` — `TestFailClosedBeforeEnable` uses the real probe on both backends; `test_the_prewarmed_empty_table_still_refuses`
+
+**Rationale**: D2's DynamoDB check only noticed a missing table. The
+`check_ready()` prewarm (`interface/app.py:1580`) creates `creators` empty
+before it refuses to start, so after an existing fleet's documented first
+start a bare-`Config()` worker claimed creators against no records: the
+deleted todo's scenario, and the docs promised a `DbError`. Checking the
+backfill item makes DynamoDB mean "enforced", as PostgreSQL's index-validity
+probe already does. The stub is function-scoped because importing anything
+under `actingweb.db.dynamodb` imports every model, whose table names freeze
+at import, and a session fixture ran before the integration conftest set the
+worker prefix (the first attempt failed `isolated_store` with "unexpected
+table name").
+
+#### 2. Client deletion finds real-email legacy rows of every OAuth2 source
+
+**Category**: Verification fix (Issues 2 and 9; part of 11)
+
+**What changed**: Arm 3 of `find_client_trust` (deletion only) accepts a
+peer id whose first segment is any source trust creation writes (`oauth2`,
+`oauth2_client`, `oauth2_interactive`), not only `oauth2_client:`. It is
+gated on OAuth2 origin as arm 2 is (`established_via` in that family, or
+none with such a prefix), and the last segment must equal the client id as
+given or normalised. `normalize_client_id` is now the one copy of the
+normaliser; `TrustManager.create_or_update_oauth_trust` calls it.
+
+**Files affected**:
+- `actingweb/oauth2_server/trust_lookup.py` — `OAUTH2_SOURCES`, `normalize_client_id`, `_oauth2_origin`, the widened and gated arm 3
+- `actingweb/interface/trust_manager.py` — peer-id creation uses `normalize_client_id`
+- `tests/test_client_trust_lookup.py` — every source deleted (four cases), a peer-protocol lookalike skipped in favour of the real row, the shared normaliser; the old case that pinned `oauth2:` rows as kept now uses a non-OAuth2 prefix
+
+**Rationale**: creation writes `{established_via or "oauth2"}:<email>:<client>`
+(`interface/trust_manager.py:465,485`), and the old `endswith` deleted every
+such row. Accepting only `oauth2_client:` left `oauth2:` and
+`oauth2_interactive:` rows alive, with their permissions, after their
+client was deleted. The resolver's default call is unchanged.
+
+#### 3. Resource hook arguments: variables win over params, `uri` is reserved
+
+**Category**: Verification fix (Issues 3 and 4)
+
+**What changed**: `actingweb/mcp/uri.py` gains `resource_arguments(params,
+variables, uri)` = `{**params, **variables, "uri": uri}`, used by both
+handlers. The D7 changelog entry now names the FastAPI `content`-key
+unwrap that went away, the Flask-side change (hooks receive the variables),
+the splat risk and the reserved `uri`; `mcp-applications.rst` says the same.
+
+**Files affected**:
+- `actingweb/mcp/uri.py` — `resource_arguments`
+- `actingweb/handlers/mcp.py`, `actingweb/handlers/async_mcp.py` — call it
+- `tests/test_mcp_resource_read_permissions.py` — `test_uri_is_reserved_and_variables_win_over_params` (`shadow://{uri}/{id}` read with a client `id` param: both handlers pass `{"uri": request uri, "id": "7"}`)
+- `CHANGELOG.rst`, `docs/guides/mcp-applications.rst`
+
+**Rationale**: the verification suggested `{**variables, **params}`. That
+order would let a client param replace a template variable after the
+permission check judged the URI it came from (read `notes://1`, allowed,
+with `id=2`), so the variables keep precedence and only `uri` is pinned
+to the request.
+
+#### 4. A resumed finish with the actor row gone writes no generation; the PostgreSQL probe docstring says what it caches
+
+**Category**: Verification fix (Issues 6 and 7)
+
+**What changed**: `finish_deletion` bumps the session generation only when
+it is not a resume or the actor row still exists. The PostgreSQL
+`DbActor.__init__` docstring states that a positive probe is kept for the
+process's life, so a worker keeps writing without the index if an operator
+drops it while the worker runs.
+
+**Files affected**:
+- `actingweb/deletion_finish.py` — the guarded bump (one strict actor read, on a resume only)
+- `actingweb/db/postgresql/actor.py` — the docstring
+- `tests/test_deletion_finish.py` — `test_a_resume_with_the_actor_row_gone_writes_no_generation` (`bump.assert_not_called()`, `current(...) is None`)
+
+**Rationale**: a resume whose actor row is already gone returns from
+`actor.delete()` before `Buckets.delete()`, so the bump's row was an orphan
+nothing reaps. Nothing can mint for that actor anyway: its row is gone.
+
+#### 5. Test hygiene
+
+**Category**: Verification fix (Issues 10 and 11)
+
+**What changed**: type hints on the new integration test functions; the
+duplicated `_only_this_actor` stub is one helper,
+`tests/integration/_actor_list_stub.only_this_actor`, used by both
+property-list script tests.
+
+**Files affected**:
+- `tests/integration/_actor_list_stub.py` (new)
+- `tests/integration/test_migrate_property_lists_script.py`, `tests/integration/test_verify_property_lists_script.py` — import it
+- `tests/integration/test_subscription_callback_backend.py` — annotations
+
+**Rationale**: CLAUDE.md requires type hints on every function; two copies
+of a stub of the new `iter_rows` contract would drift.
+
+#### Accepted, not changed: the finisher fence and unstamped tokens (Issue 5)
+
+A never-adopted SPA refresh (no generation stamp) whose consume preceded the
+finisher's sweep and whose guard runs only after `actor.delete()` removed
+`_internal` compares `None == None` and keeps its pair. Accepted: the
+window needs the mint to straddle both the client sweep and the wipe, the
+pair is for an actor whose row is gone (every token validation loads the
+actor), and it works again only if the same id is re-created. Closing it
+needs a deletion check in every refresh guard, a read on the hot path for a
+deleted-actor edge.

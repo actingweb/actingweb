@@ -295,31 +295,12 @@ def _group_in_memory(rows: dict[str, str], only: str | None, report: Report) -> 
 
 
 def _backfill_state() -> str:
-    """``"table-missing"``, ``"not-backfilled"`` or ``"complete"``.
+    """``"table-missing"``, ``"not-backfilled"`` or ``"complete"`` (the db
+    layer's :func:`~actingweb.db.dynamodb.actor.creators_backfill_state`).
+    Raises on a read fault."""
+    from actingweb.db.dynamodb._backfill_probe import creators_backfill_state
 
-    One consistent ``GetItem`` of the backfill-complete item: a missing table
-    answers ``ResourceNotFound``, so no ``DescribeTable`` is needed (with
-    uniqueness on by default, two of them on every cold start would be the
-    cost class ``tests/test_cold_start_budget.py`` guards against, and would
-    make the IAM note "with auto-create off ``DescribeTable`` can be dropped"
-    false). Raises on any other read fault.
-    """
-    from pynamodb.exceptions import DoesNotExist
-
-    from actingweb.db.dynamodb.creator import Creator
-    from actingweb.db.dynamodb.property_lookup import is_resource_not_found
-
-    try:
-        Creator.get(BACKFILL_KEY, consistent_read=True)
-    except DoesNotExist:
-        return "not-backfilled"
-    except (
-        Exception
-    ) as e:  # folds DbError: a missing table is an answer, anything else re-raises
-        if is_resource_not_found(e):
-            return "table-missing"
-        raise
-    return "complete"
+    return creators_backfill_state()
 
 
 def backfill_complete() -> bool:
@@ -983,9 +964,6 @@ def _enable_postgresql(apply: bool, lock_timeout: str) -> str:
                 sql.Identifier(UNIQUE_INDEX_NAME), sql.Identifier(schema, "actors")
             )
         )
-    from actingweb.db.postgresql.actor import reset_index_probe
-
-    reset_index_probe()
     if postgresql_index_state() != "valid":
         raise StoreUnavailable(f"{UNIQUE_INDEX_NAME} was built but is not valid")
     logger.info(f"built {UNIQUE_INDEX_NAME}")
@@ -1127,6 +1105,9 @@ def disable(config: Any, *, apply: bool = False) -> str:
         # enable must start from the actors. Re-running finishes a partial
         # run: deleting a missing item is not an error.
         Creator(creator=BACKFILL_KEY).delete()
+        from actingweb.db.dynamodb._backfill_probe import reset_backfill_probe
+
+        reset_backfill_probe()
         removed = 0
         for record in Creator.scan(attributes_to_get=["creator"]):
             record.delete()

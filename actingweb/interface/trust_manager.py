@@ -477,11 +477,9 @@ class TrustManager:
             # For MCP clients, include client_id to ensure each client gets its own trust relationship
             # Format: "oauth2:email_at_example_dot_com:client_123abc"
             normalized_email = email.replace("@", "_at_").replace(".", "_dot_")
-            normalized_client = (
-                client_id.replace("@", "_at_")
-                .replace(".", "_dot_")
-                .replace(":", "_colon_")
-            )
+            from ..oauth2_server.trust_lookup import normalize_client_id
+
+            normalized_client = normalize_client_id(client_id)
             peer_id = f"{source}:{normalized_email}:{normalized_client}"
         else:
             # Legacy format for backward compatibility

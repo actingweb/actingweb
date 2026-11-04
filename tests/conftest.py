@@ -81,9 +81,11 @@ def pytest_collection_modifyitems(config, items):
 # The reverse-lookup readiness probe is stubbed for the whole session (see
 # tests/_lookup_probe.py for why); ``real_lookup_probe`` puts it back.
 from tests._lookup_probe import (  # noqa: E402, F401
+    _stub_dynamodb_backfill_probe,  # pyright: ignore[reportUnusedImport]
     _stub_pg_creator_index_probe,  # pyright: ignore[reportUnusedImport]
     _stub_property_lookup_probe,  # pyright: ignore[reportUnusedImport]
     _stub_unique_creator_probe,  # pyright: ignore[reportUnusedImport]
+    real_dynamodb_backfill_probe,  # pyright: ignore[reportUnusedImport]
     real_lookup_probe,  # pyright: ignore[reportUnusedImport]
     real_pg_index_probe,  # pyright: ignore[reportUnusedImport]
     real_unique_probe,  # pyright: ignore[reportUnusedImport]

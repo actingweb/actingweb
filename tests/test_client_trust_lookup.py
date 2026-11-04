@@ -76,7 +76,7 @@ def test_a_real_email_legacy_row_is_deleted_but_never_authorises() -> None:
 
 def test_the_segment_arm_compares_the_last_segment_exactly() -> None:
     near = FakeTrust("oauth2_client:user@example.com:mcp_abcd", "oauth2_client")
-    other_prefix = FakeTrust("oauth2:user@example.com:mcp_abc", "oauth2")
+    other_prefix = FakeTrust("actingweb:user@example.com:mcp_abc", None)
     tagged = FakeTrust(
         "oauth2_client:user@example.com:mcp_abc", oauth_client_id="mcp_other"
     )
@@ -130,3 +130,37 @@ def test_the_default_matches_the_resolver(
     trusts = [FakeTrust(p, established_via=v, oauth_client_id=c) for p, v, c in rows]
     found: Any = find_client_trust(trusts, client)
     assert found is (None if expected is None else trusts[expected])
+
+
+@pytest.mark.parametrize(
+    "source,via",
+    [
+        ("oauth2", None),
+        ("oauth2", "oauth2"),
+        ("oauth2_interactive", "oauth2_interactive"),
+        ("oauth2_client", "oauth2_client"),
+    ],
+)
+def test_real_email_legacy_rows_of_every_oauth2_source_are_deleted(
+    source: str, via: str | None
+) -> None:
+    """Trust creation writes ``{established_via or "oauth2"}:<email>:<client>``;
+    the old ``endswith`` deleted every such row (verification 2026-11-04,
+    Issue 2)."""
+    legacy = FakeTrust(f"{source}:alice_at_x_dot_com:mcp_ab12", established_via=via)
+    assert find_client_trust([legacy], "mcp_ab12") is None
+    assert _delete("mcp_ab12", [legacy]) == [legacy.peerid]
+
+
+def test_the_segment_arm_skips_a_peer_protocol_row_of_that_shape() -> None:
+    """Arm 3 is gated on OAuth2 origin like arm 2 (Issue 9): a peer-protocol
+    row shaped like a legacy client row is never the one deleted."""
+    peer = FakeTrust("oauth2_client:x:mcp_ab12", established_via="actingweb")
+    real = FakeTrust("oauth2_interactive:alice_at_x_dot_com:mcp_ab12")
+    assert _delete("mcp_ab12", [peer, real]) == [real.peerid]
+
+
+def test_trust_creation_and_lookup_share_the_normaliser() -> None:
+    from actingweb.oauth2_server.trust_lookup import normalize_client_id
+
+    assert normalize_client_id("a@b.c:d") == "a_at_b_dot_c_colon_d"

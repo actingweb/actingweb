@@ -113,9 +113,22 @@ Sessions are stored in the database using ActingWeb's attribute bucket system wi
 New handler ``actingweb.handlers.oauth_email.OAuth2EmailHandler``:
 
 - **GET /oauth/email?session=...**: Shows email input form (sets ``template_values`` for app to render, or returns JSON for SPAs)
-- **GET /oauth/email?verify=...**: Validates email verification token and marks email as verified
-- **POST /oauth/email**: Processes email input and completes actor creation, or
-  answers 409 ``actor_exists`` when a free-text address already has an actor
+- **GET /oauth/email?verify=...**: Shows a page with a Confirm button for the
+  emailed verification link (JSON: ``status: "confirm_required"``); it changes
+  nothing, so a mail scanner fetching the link verifies nothing
+- **POST /oauth/email** with ``verify=...``: Validates the token and marks the
+  email as verified (no session is issued)
+- **POST /oauth/email** with ``session`` and ``email``: Processes email input
+  and completes actor creation. An address that already has an actor answers
+  409 ``actor_exists``, unless the actor's address was verified before and the
+  application registered ``email_sign_in_code_required``: then a six-digit code
+  is mailed and the form asks for it
+- **POST /oauth/email** with ``code_challenge`` and ``code``: Redeems the code
+  and signs the page in (401 for a wrong, expired or spent code)
+
+A browser form ``POST`` that the browser reports as started by another site
+answers 403 "Cross-site request refused" before anything happens; send the
+form from the application's own pages, or as JSON.
 
 Both Flask and FastAPI integrations automatically route ``/oauth/email`` to this handler.
 
@@ -326,7 +339,9 @@ Flow 2.2: Web UI Login without Email (GitHub Private Email)
        Retrieve OAuth tokens from session
        ↓
        Free-text address already has an actor? → 409 actor_exists,
-       session consumed, nothing written
+       session consumed, nothing written (or, when that actor's address was
+       verified and email_sign_in_code_required is registered: a code is
+       mailed, and a POST of code_challenge + code signs in)
        ↓
        Create actor with provided email; fire oauth_success
        ↓
@@ -344,6 +359,8 @@ Flow 2.2: Web UI Login without Email (GitHub Private Email)
     6. Email verification (if required):
        ↓
        User clicks link in email: GET /oauth/email?verify=<token>
+       ↓
+       Page with a Confirm button; the user confirms: POST verify=<token>
        ↓
        Token validated
        ↓
@@ -511,7 +528,7 @@ Variables available in ``template_values``:
      - Session ID for completing OAuth flow
    * - ``action``
      - String
-     - Form action URL (always "/oauth/email")
+     - Form action URL (``/oauth/email`` under the app's root, ``config.root``)
    * - ``method``
      - String
      - Form method (always "POST")
@@ -526,7 +543,14 @@ Variables available in ``template_values``:
      - User-friendly message explaining why email is needed
    * - ``error``
      - String or None
-     - Error message if email validation failed
+     - Error message if email validation failed, or a refused sign-in code
+   * - ``code_challenge``
+     - String
+     - Set on the sign-in code page (``email_sign_in_code_required``); post it
+       back with the ``code`` the user enters
+   * - ``start_over_url``
+     - String
+     - The app's root, for a "Start over" link on the code page
 
 Example usage:
 
@@ -641,7 +665,7 @@ For testing email input flow with GitHub (HTML template):
 4. Verify redirect to ``/oauth/email``
 5. Enter email and verify actor creation
 6. Check that ``email_verification_required`` hook fires
-7. Click verification link (``/oauth/email?verify=<token>``) to complete
+7. Click verification link (``/oauth/email?verify=<token>``) and Confirm to complete
 
 For testing email input flow with GitHub (SPA):
 

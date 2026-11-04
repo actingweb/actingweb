@@ -454,8 +454,12 @@ class OAuth2CallbackHandler(BaseHandler):
                     verified_emails=verified_emails,  # NEW: Pass verified emails
                 )
 
-                # Redirect to email input form (app will provide template)
-                email_form_url = f"/oauth/email?session={session_id}"
+                # Redirect to email input form (app will provide template),
+                # under the app's base path (``fqdn`` carries it)
+                email_form_url = (
+                    f"{self.config.proto}{self.config.fqdn}"
+                    f"/oauth/email?session={session_id}"
+                )
                 self.response.set_status(302, "Found")
                 self.response.set_redirect(email_form_url)
 
@@ -765,14 +769,10 @@ class OAuth2CallbackHandler(BaseHandler):
             # Set HttpOnly cookie for refresh token (hybrid mode)
             token_delivery = state_extras.get("token_delivery", "json")
             if token_delivery == "hybrid" and self.response:
-                self.response.set_cookie(
-                    "refresh_token",
-                    spa_refresh_token,
-                    max_age=86400 * 14,  # 2 weeks
-                    path="/oauth/spa/token",
-                    secure=True,
-                    httponly=True,
-                    samesite="Strict",
+                from .oauth2_spa import set_refresh_cookie
+
+                set_refresh_cookie(
+                    self.response, spa_refresh_token, httponly=True, samesite="Strict"
                 )
                 # Don't include refresh token in JSON for hybrid mode
                 del response_data["refresh_token"]
@@ -1331,14 +1331,10 @@ class OAuth2CallbackHandler(BaseHandler):
         # Set HttpOnly cookie for refresh token (hybrid mode)
         token_delivery = state_extras.get("token_delivery", "json")
         if token_delivery == "hybrid" and self.response:
-            self.response.set_cookie(
-                "refresh_token",
-                spa_refresh_token,
-                max_age=86400 * 14,  # 2 weeks
-                path="/oauth/spa/token",
-                secure=True,
-                httponly=True,
-                samesite="Strict",
+            from .oauth2_spa import set_refresh_cookie
+
+            set_refresh_cookie(
+                self.response, spa_refresh_token, httponly=True, samesite="Strict"
             )
 
         # Redirect to SPA callback with session token

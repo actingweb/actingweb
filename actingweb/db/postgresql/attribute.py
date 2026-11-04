@@ -535,6 +535,8 @@ class DbAttribute:
         new_data: Any = None,
         timestamp: datetime | None = None,
         ttl_seconds: int | None = None,
+        *,
+        clear_ttl: bool = False,
     ) -> bool:
         """
         Conditionally update an attribute only if current data matches old_data.
@@ -550,6 +552,8 @@ class DbAttribute:
             timestamp: Optional timestamp
             ttl_seconds: When given, the same UPDATE sets ``ttl_timestamp``
                 (plus the clock-skew buffer, as ``set_attr`` does)
+            clear_ttl: the same UPDATE sets ``ttl_timestamp`` to NULL (the
+                row then never expires); ignored when ``ttl_seconds`` is given
 
         Returns:
             True if update succeeded (current matched old_data), False otherwise
@@ -570,6 +574,8 @@ class DbAttribute:
         if ttl_seconds is not None:
             ttl_sql = ", ttl_timestamp = %s"
             ttl_params = (ttl_deadline(ttl_seconds),)
+        elif clear_ttl:
+            ttl_sql = ", ttl_timestamp = NULL"
 
         try:
             with get_connection() as conn:

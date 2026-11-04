@@ -157,6 +157,25 @@ class TestMcpGrants:
         assert manager.create_access_token(actor_id, "client-1", client_generation=now)
 
 
+class TestClientManagerToken:
+    """``ActorInterface.oauth_clients.generate_access_token`` passes the
+    client's stamp: a client registered after the clean mints, one from
+    before it does not (re-verification N1)."""
+
+    def test_a_client_registered_after_the_clean_gets_a_token(
+        self, config: Any
+    ) -> None:
+        from actingweb.interface.oauth_client_manager import OAuth2ClientManager
+
+        actor_id = aid(create_core_actor(config, uuid_email()))
+        manager = OAuth2ClientManager(actor_id, config)
+        before = manager.create_client(client_name="Before", trust_type="mcp_client")
+        session_generation.bump(actor_id, config)
+        after = manager.create_client(client_name="After", trust_type="mcp_client")
+        assert manager.generate_access_token(after["client_id"]) is not None
+        assert manager.generate_access_token(before["client_id"]) is None
+
+
 class TestSpaRefresh:
     def test_a_refresh_token_from_before_the_clean_mints_nothing(
         self, config: Any

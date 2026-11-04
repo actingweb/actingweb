@@ -224,6 +224,20 @@ Event Details
       factory actor and then cleaned the owner's own actor instead: that
       factory actor is listed here.
 
+    A replacement whose successor's create raised is announced later, by
+    the next verified sign-in for the creator: the one that creates the
+    actor, one that cleans the actor the email form created meanwhile (an
+    unverified create announces nothing), or one that replaces a
+    ``factory`` actor created meanwhile, or any later sign-in to the
+    creator's vouched actor. That event has ``mode="replaced"``, the old id
+    and every count ``None``, and fires once per earlier replacement,
+    before the sign-in's own event. Like ``actor_deleted`` it is not
+    exactly once, so make the handler idempotent: a concurrent sign-in for
+    the same creator can announce a replacement twice, a crash between the
+    claim and the hook loses it, and a record nobody announces expires
+    after seven days. The siblings a failed replacement swept are not
+    carried into the later event.
+
 ``actor_deleted_complete``
     Triggered **after** the wipe completes. Receives ``actor=None`` and
     ``actor_id`` — there is deliberately no ``ActorInterface``, because the
@@ -253,7 +267,9 @@ runs on which path:
      - after it
    * - ``DELETE /<id>`` repeated after a stall
      - only if it raised ``DbError`` the first time
-     - once, by the request that finishes
+     - once, by the request that finishes (a crash between recording the
+       finish and the hook loses it; a later request finds the deletion
+       done and fires nothing)
    * - Either, while another request holds the deletion's lease
      - no (503 with ``Retry-After``)
      - no
@@ -463,6 +479,19 @@ and the next sign-in retries.
     a JSON client's challenge is redeemed by a JSON request. At most five
     codes are created per actor per hour; past that the form answers 429
     until the hour ends.
+
+    **Raise to report a failed send.** When every registered handler
+    raises, the library takes the code as not sent: the challenge is
+    withdrawn and the form answers 503 ("The sign-in code could not be
+    sent"). Its hourly slot stays used, so raise only for a send that
+    failed: a handler that raises after the mail left still costs the user
+    a code. Any exception before a handler has run without raising, a
+    ``DbError`` from a write after your own send included, counts as not
+    sent and withdraws the code (a ``DbError`` answers 503): send last, or
+    catch your own bookkeeping faults. Once one handler has run without
+    raising, a later handler's failure is logged and the code stays good. A handler that queues the
+    mail and returns counts as sent. Unlike most lifecycle hooks, an
+    exception here is not only logged.
 
     .. code-block:: python
 

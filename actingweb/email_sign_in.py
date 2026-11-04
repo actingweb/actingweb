@@ -34,6 +34,7 @@ import hmac
 import logging
 import secrets
 import time
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from .constants import ACTINGWEB_SYSTEM_ACTOR
@@ -53,7 +54,10 @@ __all__ = [
     "BINDING_COOKIE",
     "TooManyChallenges",
     "start_challenge",
+    "cancel_challenge",
     "is_challenge_id",
+    "is_binding",
+    "new_binding",
     "redeem",
     "hook_registered",
 ]
@@ -74,6 +78,7 @@ BINDING_COOKIE = "__Host-aw_sign_in_binding"
 
 _BUCKET = "_email_sign_in_codes"
 _CHALLENGE_ID_LENGTH = 32  # secrets.token_urlsafe(24)
+_BINDING_LENGTH = 32  # secrets.token_urlsafe(24), the browser binding cookie
 
 
 def _digest(challenge_id: str, code: str) -> str:
@@ -183,6 +188,26 @@ def start_challenge(
     return challenge_id, code
 
 
+def cancel_challenge(config: Config, actor_id: str, challenge_id: str) -> None:
+    """Withdraw a challenge whose code was not sent (every hook failed): the
+    challenge is deleted so no page waits for it. Its slot in the hourly
+    window stays used: a hook can fail after the mail left (a mailer whose
+    ``quit()`` raises), and giving the slot back would let anyone who types
+    an address mail its owner past the limit. Best effort: a fault is
+    logged, and the challenge then expires unused after :data:`CODE_TTL`.
+    ``actor_id`` names the actor in the log.
+    """
+    try:
+        get_attribute(config).delete_attr(
+            actor_id=ACTINGWEB_SYSTEM_ACTOR, bucket=_BUCKET, name=challenge_id
+        )
+    except Exception as e:  # folds DbError: best effort; the challenge expires unused
+        logger.warning(
+            f"Email sign-in code: could not withdraw the unsent challenge for "
+            f"actor {actor_id}: {e}"
+        )
+
+
 def redeem(
     config: Config,
     challenge_id: str,
@@ -190,6 +215,7 @@ def redeem(
     binding: str | None = None,
     *,
     browser: bool = False,
+    may_sign_in: Callable[[str, str], bool] | None = None,
 ) -> str | None:
     """The actor id a correct code signs in to, or None.
 
@@ -203,8 +229,13 @@ def redeem(
     challenge that was bound to a browser and the matching ``binding``: a
     challenge created by a JSON request cannot plant a session through a
     cross-site form (login CSRF). A bound challenge needs its binding on any
-    path. None for an unknown, expired or spent challenge, a wrong code or a
-    missing binding. Raises ``DbError`` on a store fault.
+    path. ``may_sign_in(actor_id, email)`` runs once the code matches and
+    before it is consumed (the caller's deletion and address checks): False
+    refuses without consuming the code (the attempt still counts as a try),
+    and a ``DbError`` it raises leaves the code for a retry. None for an unknown, expired or spent challenge, a
+    wrong code, a missing binding or a refused check. Raises ``DbError`` on a
+    store fault, including a try count or a consume that the store did not
+    confirm (a fault is never answered as a wrong code).
     """
     if not challenge_id or not code or not is_challenge_id(challenge_id):
         return None
@@ -233,6 +264,13 @@ def redeem(
             data = counted
             break
     if data is None:
+        # Three lost races, or a write the store did not confirm: a row that
+        # is still unchanged means no one else counted, so it was a fault.
+        row = db.get_attr_strict(
+            actor_id=ACTINGWEB_SYSTEM_ACTOR, bucket=_BUCKET, name=challenge_id
+        )
+        if row and row.get("data") == current:
+            raise DbError("email sign-in code attempt count", challenge_id)
         logger.warning("Email sign-in code: attempt not counted; refused")
         return None
     expected_binding = data.get("binding")
@@ -254,12 +292,32 @@ def redeem(
             )
             logger.warning("Email sign-in code: too many wrong codes; challenge spent")
         return None
+    actor_id = str(data.get("actor_id") or "")
+    if not actor_id:
+        return None
+    if may_sign_in is not None and not may_sign_in(
+        actor_id, str(data.get("email") or "")
+    ):
+        return None
     if not db.delete_attr_conditional(
         actor_id=ACTINGWEB_SYSTEM_ACTOR, bucket=_BUCKET, name=challenge_id
     ):
-        return None  # consumed by a concurrent redemption
-    actor_id = data.get("actor_id")
-    return str(actor_id) if actor_id else None
+        # Gone: a concurrent redemption consumed it. Still there: the
+        # delete faulted, which is not a wrong code.
+        if db.get_attr_strict(
+            actor_id=ACTINGWEB_SYSTEM_ACTOR, bucket=_BUCKET, name=challenge_id
+        ):
+            raise DbError("email sign-in code consume", challenge_id)
+        return None
+    return actor_id
+
+
+def _is_token(value: str, length: int) -> bool:
+    """Whether ``value`` is a ``secrets.token_urlsafe`` value of ``length``
+    characters (ASCII letters, digits, ``-`` and ``_`` only)."""
+    return len(value) == length and all(
+        (c.isascii() and c.isalnum()) or c in "-_" for c in value
+    )
 
 
 def is_challenge_id(value: str) -> bool:
@@ -267,12 +325,50 @@ def is_challenge_id(value: str) -> bool:
     32-character URL-safe token): anything else is refused before the store
     is asked, so an over-long value answers "invalid" rather than a store
     error."""
-    return len(value) == _CHALLENGE_ID_LENGTH and all(
-        c.isalnum() or c in "-_" for c in value
-    )
+    return _is_token(value, _CHALLENGE_ID_LENGTH)
+
+
+def new_binding() -> str:
+    """A fresh browser binding (:data:`BINDING_COOKIE`'s value); its length
+    is what :func:`is_binding` accepts."""
+    return secrets.token_urlsafe(24)
+
+
+def is_binding(value: str) -> bool:
+    """Whether ``value`` has the shape of a browser binding (the web form's
+    ``secrets.token_urlsafe(24)``), so one the browser already holds can be
+    reused for its next challenge."""
+    return _is_token(value, _BINDING_LENGTH)
 
 
 def hook_registered(hooks: Any) -> bool:
     """Whether the application registered :data:`HOOK`."""
     registered = getattr(hooks, "_lifecycle_hooks", None)
     return bool(isinstance(registered, dict) and registered.get(HOOK))
+
+
+def send_code(hooks: Any, actor: Any, email: str, code: str) -> bool:
+    """Run the :data:`HOOK` handlers; True when at least one ran without
+    raising. The registry's own runner logs and swallows a handler's
+    exception, which would show the user "we sent a code" for a mail that
+    never left; this one runs each handler itself so the caller can withdraw
+    the challenge. A ``DbError`` before any handler succeeded propagates
+    (503); once one has sent the code, a later handler's failure, a
+    ``DbError`` included, is logged and the code stays good.
+    """
+    registered = getattr(hooks, "_lifecycle_hooks", None)
+    handlers = registered.get(HOOK, []) if isinstance(registered, dict) else []
+    sent = False
+    for handler in handlers:
+        try:
+            hooks._execute_hook_in_sync_context(
+                handler, actor, email=email, code=code, expires_in=CODE_TTL
+            )
+            sent = True
+        except DbError as e:  # folds DbError: only once a handler sent the code
+            if not sent:
+                raise
+            logger.error(f"Error in {HOOK} hook after the code was sent: {e}")
+        except Exception as e:  # folds DbError: handled above; a mailer that failed
+            logger.error(f"Error in {HOOK} hook: {e}")
+    return sent

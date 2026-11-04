@@ -2564,44 +2564,151 @@ def _record_pending_adoption(
     actor_id: str,
     existing: actor_module.Actor,
 ) -> None:
-    """Before a replacement creates the successor: remember which actor it
+    """Before a replacement removes anything: remember which actor it
     replaces, keyed by the creator, so a sign-in that completes the adoption
-    after this one failed (the create raised) still fires ``actor_adopted``
-    with the old id. Best effort (logged)."""
-    from . import attribute
+    after this one failed still fires ``actor_adopted`` with the old id.
+
+    An unannounced record for another actor (an earlier replacement whose
+    create raised) is kept inside the new one (``earlier``), so this sign-in
+    failing after the write loses neither, and whichever sign-in announces
+    the record announces both. Written conditionally on the row as read;
+    a fault or a concurrent rewrite raises ``DbError`` (nothing has been
+    removed yet: the sign-in answers 503 and is retried).
+    """
     from .constants import ACTINGWEB_SYSTEM_ACTOR, PENDING_ADOPTION_BUCKET
+    from .db import get_attribute
 
     marker = existing.store.auth_method if existing.store else None
-    try:
-        attribute.Attributes(
+    entry = {
+        "actor_id": actor_id,
+        "previous": marker if isinstance(marker, str) and marker else "legacy",
+    }
+    name = normalise_creator(creator)
+    db = get_attribute(config)
+    row = db.get_attr_strict(
+        actor_id=ACTINGWEB_SYSTEM_ACTOR, bucket=PENDING_ADOPTION_BUCKET, name=name
+    )
+    current = row.get("data") if row else None
+    earlier: list[dict[str, Any]] = []
+    if isinstance(current, dict) and not current.get("announced"):
+        kept = current.get("earlier")
+        if isinstance(kept, list):
+            earlier = [e for e in kept if isinstance(e, dict)]
+        if current.get("actor_id") and current.get("actor_id") != actor_id:
+            earlier.append(
+                {
+                    "actor_id": current.get("actor_id"),
+                    "previous": current.get("previous"),
+                }
+            )
+    new = {**entry, "earlier": earlier}
+    if isinstance(current, dict):
+        if not db.conditional_update_attr(
             actor_id=ACTINGWEB_SYSTEM_ACTOR,
             bucket=PENDING_ADOPTION_BUCKET,
-            config=config,
-        ).set_attr(
-            name=normalise_creator(creator),
-            data={
-                "actor_id": actor_id,
-                "previous": marker if isinstance(marker, str) and marker else "legacy",
-            },
+            name=name,
+            old_data=current,
+            new_data=new,
             ttl_seconds=PENDING_ADOPTION_TTL,
-        )
-    except Exception as e:  # folds DbError: bookkeeping before the create
-        logger.warning(f"Adoption of actor {actor_id}: pending record not written: {e}")
+        ):
+            raise DbError("pending adoption record", actor_id)
+        return
+    if not db.create_attr_if_absent(
+        actor_id=ACTINGWEB_SYSTEM_ACTOR,
+        bucket=PENDING_ADOPTION_BUCKET,
+        name=name,
+        data=new,
+        ttl_seconds=PENDING_ADOPTION_TTL,
+    ):
+        # A concurrent replacement wrote one first: fail closed and retry.
+        raise DbError("pending adoption record", actor_id)
 
 
-def _clear_pending_adoption(config: config_class.Config, creator: str) -> None:
-    """The adoption was announced: drop its pending record (best effort)."""
-    from . import attribute
+def _announce_pending(
+    config: config_class.Config,
+    hooks: "HookRegistry | None",
+    actor: actor_module.Actor,
+    provider_name: str | None,
+    *,
+    skip: set[str],
+) -> None:
+    """Announce the creator's pending adoption record, if any: claim it as
+    read (``announced``), so one sign-in announces it, then fire
+    ``actor_adopted`` for each earlier replacement it carries and for its
+    own, except an id in ``skip`` (one this sign-in's own event reports).
+    Best effort: the sign-in has committed (a fault is logged). Like
+    ``actor_deleted`` it is not exactly once: a concurrent sign-in for the
+    creator can announce a victim twice, and a crash between the claim and
+    the hook loses it."""
     from .constants import ACTINGWEB_SYSTEM_ACTOR, PENDING_ADOPTION_BUCKET
+    from .db import get_attribute
 
+    if hooks is None:
+        # Nothing would hear it: leave the record for a sign-in that has
+        # hooks, rather than claim it and fire nothing.
+        return
+    creator = normalise_creator(actor.creator or "")
     try:
-        attribute.Attributes(
+        db = get_attribute(config)
+        row = db.get_attr_strict(
             actor_id=ACTINGWEB_SYSTEM_ACTOR,
             bucket=PENDING_ADOPTION_BUCKET,
-            config=config,
-        ).delete_attr(normalise_creator(creator))
-    except Exception as e:  # folds DbError: after actor_adopted fired
-        logger.debug(f"Pending adoption record for {creator!r} not removed: {e}")
+            name=creator,
+        )
+        pending = row.get("data") if row else None
+        if not isinstance(pending, dict) or pending.get("announced"):
+            return
+        # Claimed against the row as read: a newer replacement that rewrote
+        # the record since keeps it, and only one sign-in announces it. The
+        # announced row stays until its TTL (the next replacement replaces
+        # it, carrying nothing from it): deleting it here could remove a
+        # record a replacement wrote over it meanwhile.
+        if not db.conditional_update_attr(
+            actor_id=ACTINGWEB_SYSTEM_ACTOR,
+            bucket=PENDING_ADOPTION_BUCKET,
+            name=creator,
+            old_data=pending,
+            new_data={**pending, "announced": True},
+        ):
+            again = db.get_attr_strict(
+                actor_id=ACTINGWEB_SYSTEM_ACTOR,
+                bucket=PENDING_ADOPTION_BUCKET,
+                name=creator,
+            )
+            if again and again.get("data") == pending:
+                logger.error(
+                    f"Pending adoption for {creator!r}: the claim did not land; "
+                    "a later sign-in announces it"
+                )
+            return
+    except Exception as e:  # folds DbError: post-commit notification
+        logger.warning(f"Pending adoption for {creator!r} not announced: {e}")
+        return
+    kept = pending.get("earlier")
+    entries = [e for e in kept if isinstance(e, dict)] if isinstance(kept, list) else []
+    entries.append(pending)
+    for entry in entries:
+        old_id = str(entry.get("actor_id") or "")
+        # Never "replaced itself": a record a replacement wrote before it
+        # removed anything can name the actor that is announcing it.
+        if not old_id or old_id in skip or old_id == actor.id:
+            continue
+        _fire_lifecycle(
+            hooks,
+            "actor_adopted",
+            actor,
+            config,
+            previous_auth_method=entry.get("previous"),
+            previous_actor_id=old_id,
+            provider=provider_name,
+            mode="replaced",
+            removed_trusts=None,
+            removed_subscription_peers=None,
+            tokens_revoked=None,
+            removed_client_ids=None,
+            property_names=None,
+            removed_sibling_ids=[],
+        )
 
 
 def _announce_pending_adoption(
@@ -2614,56 +2721,12 @@ def _announce_pending_adoption(
     sign-in replaced an actor for it and failed before announcing it (its
     successor's create raised), fire ``actor_adopted`` now, with the old id
     and the counts unknown. Best effort: the create has committed."""
-    from .constants import ACTINGWEB_SYSTEM_ACTOR, PENDING_ADOPTION_BUCKET
-    from .db import get_attribute
-
-    creator = normalise_creator(created.creator or "")
-    try:
-        db = get_attribute(config)
-        row = db.get_attr_strict(
-            actor_id=ACTINGWEB_SYSTEM_ACTOR,
-            bucket=PENDING_ADOPTION_BUCKET,
-            name=creator,
-        )
-        if not row or not isinstance(row.get("data"), dict):
-            return
-        pending = row["data"]
-        if pending.get("announced"):
-            return
-        # Claimed against the row as read: a newer replacement that rewrote
-        # the record since keeps it, and only one sign-in announces it.
-        if not db.conditional_update_attr(
-            actor_id=ACTINGWEB_SYSTEM_ACTOR,
-            bucket=PENDING_ADOPTION_BUCKET,
-            name=creator,
-            old_data=pending,
-            new_data={**pending, "announced": True},
-        ):
-            return  # another sign-in announces it, or a newer record replaced it
-        db.delete_attr(
-            actor_id=ACTINGWEB_SYSTEM_ACTOR,
-            bucket=PENDING_ADOPTION_BUCKET,
-            name=creator,
-        )
-    except Exception as e:  # folds DbError: post-commit notification
-        logger.warning(f"Pending adoption for {creator!r} not read: {e}")
+    if not is_vouched_actor(created):
+        # The email form's unverified create proves nothing about the
+        # creator: the record waits for a sign-in that does (the one that
+        # later cleans this actor announces it, see _adopt_actor).
         return
-    _fire_lifecycle(
-        hooks,
-        "actor_adopted",
-        created,
-        config,
-        previous_auth_method=pending.get("previous"),
-        previous_actor_id=pending.get("actor_id"),
-        provider=provider.name,
-        mode="replaced",
-        removed_trusts=None,
-        removed_subscription_peers=None,
-        tokens_revoked=None,
-        removed_client_ids=None,
-        property_names=None,
-        removed_sibling_ids=[],
-    )
+    _announce_pending(config, hooks, created, provider.name, skip=set())
 
 
 PENDING_ADOPTION_TTL = 86400 * 7
@@ -2741,7 +2804,17 @@ def _adopt_actor(
                 )
         # Nothing is pending here: a pending verification unvouches. A
         # tombstone is read only by a sign-in completion (above): a
-        # per-request lookup never wipes.
+        # per-request lookup never wipes. A replacement that failed after its
+        # successor's create committed leaves that successor vouched, so
+        # every later sign-in comes here: announce what it left waiting (one
+        # keyed read; best effort).
+        _announce_pending(
+            config,
+            hooks,
+            existing,
+            provider.name if provider is not None else None,
+            skip=set(),
+        )
         return existing
 
     from . import property as property_module
@@ -2828,10 +2901,12 @@ def _adopt_actor(
         removed_trusts = removed_trusts_l
         subscription_peers = subscription_peers_l
         property_names: list[str] | None = []
+        # Before anything is removed: a fault writing it fails the sign-in
+        # with everything in place.
+        _record_pending_adoption(config, creator, actor_id, existing)
         # BP: the SPA tokens of the victim and its siblings in one pass over
         # the shared token buckets.
         tokens_revoked = _revoke_spa_tokens(config, [actor_id, *siblings])
-        _record_pending_adoption(config, creator, actor_id, existing)
         removed = _remove_for_replacement(
             existing,
             config=config,
@@ -3111,12 +3186,15 @@ def _adopt_actor(
         f"peers={[t['peerid'] for t in (removed_trusts or [])][:10]}, "
         f"siblings={swept_ids}"
     )
-    if result is not None and (mode == "replaced" or carried):
-        # A replacement announced here, or handed off to the owner's own
-        # actor (``carried``): either way this actor_adopted reports it, so
-        # its pending record goes, or a later create for the creator would
-        # announce it again.
-        _clear_pending_adoption(config, existing.creator or "")
+    if result is not None:
+        # The record names this sign-in's own victim after a replacement (or
+        # the outer level's, on a hand-off): this actor_adopted reports that
+        # one. Any other replacement it holds (an earlier sign-in's that was
+        # never announced, kept in the record however this one went) is
+        # announced here, once; a clean in place announces the record whole.
+        reported = {actor_id} if replace else set()
+        reported.update(str(i) for i in (carried or {}).get("replaced_ids", []))
+        _announce_pending(config, hooks, result, provider_name, skip=reported)
     _fire_lifecycle(
         hooks,
         "actor_adopted",

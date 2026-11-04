@@ -298,3 +298,8 @@ ERROR_CODE_HEADER = "X-ActingWeb-Error"
 # another delivery of its sequence is still being handled: a subscriber that
 # is working, not failing, so a publisher's breaker does not count it.
 CALLBACK_IN_PROGRESS_CODE = "callback_in_progress"
+
+#: The path an earlier release set the SPA hybrid refresh cookie on (the OAuth
+#: callback). Expired whenever the cookie is set, and cleared by logout, so a
+#: browser never holds two ``refresh_token`` cookies.
+LEGACY_REFRESH_COOKIE_PATH = "/oauth/spa/token"

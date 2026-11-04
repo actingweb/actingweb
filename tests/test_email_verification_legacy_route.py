@@ -12,6 +12,9 @@ than the email-entry form. The handler-level behaviour of that path is
 covered in ``tests/test_oauth_email_verify_link.py``.
 """
 
+from typing import Any
+from unittest.mock import MagicMock, patch
+
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -163,12 +166,14 @@ class TestSurvivingRouteRendersAResultNotTheForm:
         assert 'value="some-token"' in resp.text
 
     def test_flask_form_path_still_renders_the_form(self, flask_app: Flask) -> None:
-        """The other side of the branch: no verify token means the form."""
-        body = (
-            flask_app.test_client()
-            .get("/oauth/email?session=no-such-session")
-            .get_data(as_text=True)
-        )
+        """The other side of the branch: no verify token and a live session
+        means the form."""
+        with _live_session():
+            body = (
+                flask_app.test_client()
+                .get("/oauth/email?session=live-session")
+                .get_data(as_text=True)
+            )
 
         assert "Enter your email" in body
         assert "<form" in body
@@ -176,10 +181,34 @@ class TestSurvivingRouteRendersAResultNotTheForm:
     def test_fastapi_form_path_still_renders_the_form(
         self, fastapi_client: TestClient
     ) -> None:
-        body = fastapi_client.get("/oauth/email?session=no-such-session").text
+        with _live_session():
+            body = fastapi_client.get("/oauth/email?session=live-session").text
 
         assert "Enter your email" in body
         assert "<form" in body
+
+    def test_a_dead_session_gets_the_error_page_not_the_form(
+        self, flask_app: Flask
+    ) -> None:
+        """Re-verification 3, V7: the form drawn again with a dead session
+        looped; the browser gets the error page with a way on."""
+        resp = flask_app.test_client().get("/oauth/email?session=no-such-session")
+        body = resp.get_data(as_text=True)
+        assert resp.status_code == 400
+        assert 'name="session"' not in body
+        assert "start again" in body
+
+
+def _live_session() -> Any:
+    session_mgr = MagicMock()
+    session_mgr.get_session.return_value = {
+        "provider": "github",
+        "verified_emails": [],
+    }
+    return patch(
+        "actingweb.oauth_session.get_oauth2_session_manager",
+        return_value=session_mgr,
+    )
 
 
 class TestMalformedLinks:

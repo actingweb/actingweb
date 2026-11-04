@@ -527,8 +527,12 @@ into the new one).
 The emailed verification link now opens a page with a Confirm button; the
 ``POST`` verifies. A template that overrides ``aw-verify-email.html`` must
 render the ``confirm`` state: a form that posts the ``verify_token`` value
-as ``verify`` to ``/oauth/email``. The confirm issues no session; the user
-signs in afterwards.
+as ``verify`` to ``action`` (``/oauth/email`` under the app's root). The
+confirm issues no session; the user signs in afterwards. Its error states (an
+invalid link, an expired sign-in session, a code that could not be sent)
+carry ``redirect_url``, the app's root: render it as a way on, as the bundled
+template does. The sign-in errors also carry ``title`` ("Sign-in expired",
+"Sign in"), the page's heading in place of "Email verification".
 
 A user whose provider has no verified address meets the email form again on
 that later sign-in, and the form answers 409 for an address that has an
@@ -538,8 +542,11 @@ the form then asks for the code instead, and a correct one signs the page
 in. A template overriding ``aw-oauth-email.html`` must render a
 ``code_challenge`` hidden field and a ``code`` input when
 ``code_challenge`` is set, and ``error`` beside them (a wrong code renders
-the page again with it). The page must be served over HTTPS: the browser
-binding is a ``Secure`` ``__Host-`` cookie.
+the page again with it), plus a link to ``start_over_url`` (the app's root)
+for a user whose code did not arrive. Raise from the hook only for a send
+that failed: the form then answers 503, and the attempt still counts
+against the five codes an hour. The page must be served over HTTPS: the
+browser binding is a ``Secure`` ``__Host-`` cookie.
 
 Stalled deletions
 -----------------
@@ -1185,8 +1192,12 @@ that the browser reports as started by another site, a sibling subdomain
 included. The token endpoint keeps a ``Basic`` header (an OAuth2 client's
 ``client_secret_basic``). A browser page on another origin that calls
 actor routes with creator basic auth through ``fetch`` loses it: use an
-OAuth2 Bearer token there. This needs the browser's ``Sec-Fetch-Site``,
-``Origin`` and ``Referer`` to reach the application.
+OAuth2 Bearer token there. A browser form ``POST`` to ``/oauth/email`` that
+the browser reports as started by another site, a sibling subdomain
+included, answers 403 before anything is claimed, created or mailed, and no
+request another site started gets a session cookie from that endpoint; a
+JSON client still gets its token in the body. This needs the browser's
+``Sec-Fetch-Site``, ``Origin`` and ``Referer`` to reach the application.
 
 **Peer-supplied trust fields.** A peer's ``id`` must be letters, digits and
 ``_ . : @ + = -`` (at most 255 characters, starting with a letter or digit)
@@ -1204,7 +1215,8 @@ attribute).
 ``?_method=`` URL must be served from the application's origin (the shipped
 templates are); a proxy must not strip ``Sec-Fetch-Site``, ``Origin`` and
 ``Referer``, or set them to another origin; a script that relied on
-``?_method=`` with the session cookie must send the real method.
+``?_method=`` with the session cookie must send the real method; a page on
+another origin that posts the email form must send it as JSON.
 
 What stays the same
 ===================

@@ -322,8 +322,12 @@ def update_tombstone(
     changes: dict[str, Any],
     *,
     ttl_seconds: int | None = None,
+    clear_ttl: bool = False,
 ) -> dict[str, Any] | None:
     """Change fields of a tombstone, conditioned on it holding ``current``.
+
+    ``clear_ttl`` removes the row's TTL in the same write: a tombstone that
+    becomes resumable must not expire before its wipe is confirmed.
 
     Returns the new data, or None when another writer changed the row first
     (the caller re-reads). The conditional write answers False on a fault as
@@ -333,6 +337,9 @@ def update_tombstone(
     """
     new = {**current, **changes}
     db = get_attribute(config)
+    # Only when asked for, so a backend written before the keyword existed
+    # fails only the legacy rewrite that needs it, not every deletion.
+    extra: dict[str, Any] = {"clear_ttl": True} if clear_ttl else {}
     if db.conditional_update_attr(
         actor_id=DELETED_ACTORS_STORE,
         bucket=DELETED_ACTORS_BUCKET,
@@ -340,6 +347,7 @@ def update_tombstone(
         old_data=current,
         new_data=new,
         ttl_seconds=ttl_seconds,
+        **extra,
     ):
         return new
     _, now_data = read_tombstone(actor_id, config)
@@ -561,6 +569,11 @@ def mark_finished(actor_id: str, config: Config, data: dict[str, Any] | None) ->
             if current is None:
                 return True
             if lease_id and current.get("lease_id") not in (lease_id, None):
+                return False
+            if not lease_id and lease_remaining(current) > 0:
+                # No lease of our own (a programmatic delete, the operator
+                # command) and a finisher holds a live one: it marks the
+                # finish and announces it itself.
                 return False
             if current.get("finished_at"):
                 return False

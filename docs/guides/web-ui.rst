@@ -293,12 +293,14 @@ Available Templates
 
     Available variables:
     - ``session_id``: Session token for completing the OAuth flow
-    - ``action``: Form action URL (``/oauth/email``)
+    - ``action``: Form action URL (``/oauth/email`` under the app's root)
     - ``method``: Form method (``POST``)
     - ``provider``: OAuth provider name (``google``, ``github``, etc.)
     - ``provider_display``: Provider display name (``Google``, ``GitHub``)
     - ``message``: User-friendly explanation of why email is needed
     - ``error``: Error message if email validation failed (optional)
+    - ``code_challenge``: Set when the page asks for an emailed sign-in code (``email_sign_in_code_required``); render it as a hidden field beside a ``code`` input
+    - ``start_over_url``: The app's root, for a "Start over" link on the code page
 
     Example:
 

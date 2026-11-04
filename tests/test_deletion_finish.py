@@ -19,6 +19,7 @@ from actingweb.constants import (
     CLIENT_INDEX_BUCKET,
     DELETED_ACTORS_BUCKET,
     DELETED_ACTORS_STORE,
+    DELETION_TOMBSTONE_TTL,
     OAUTH2_SYSTEM_ACTOR,
 )
 from actingweb.db import get_attribute
@@ -524,6 +525,69 @@ class TestLeaseKeeper:
         assert after["claimed_until"] >= before["claimed_until"]
         assert after["lease_id"] == before["lease_id"]
 
+    def test_a_slow_token_sweep_counts_against_the_lease(self, env: Any) -> None:
+        """Re-verification N6: the keeper's clock started after the token and
+        client sweeps, so a slow sweep was not counted and the first renewal
+        came up to a third of a lease after the lease had run out."""
+        from actingweb import deletion_finish
+
+        config, hooks, _events = env
+        actor = create_core_actor(config, uuid_email())
+        clock = [deletion_finish.time.monotonic()]
+        renewals: list[float] = []
+
+        def slow_sweep(*args: Any, **kwargs: Any) -> int:
+            clock[0] += 90  # most of the 120 s lease
+            return 0
+
+        def renew(*args: Any, **kwargs: Any) -> None:
+            renewals.append(clock[0])
+
+        with (
+            patch.object(
+                deletion_finish.time, "monotonic", side_effect=lambda: clock[0]
+            ),
+            patch("actingweb.oauth2._revoke_all_actor_tokens", slow_sweep),
+            patch.object(deletion, "renew_lease", side_effect=renew),
+        ):
+            finish_deletion(actor, config=config, hooks=hooks, origin="delete")
+        assert renewals, "the lease was not renewed after a 90 s sweep"
+
+    def test_a_slow_client_sweep_is_renewed_before_the_wipe(self, env: Any) -> None:
+        """Re-verification 3, V10: the keeper ran between the token and the
+        client sweep only, so a slow client sweep went unrenewed into the
+        wipe's own steps."""
+        from actingweb import deletion_finish
+        from actingweb.actor import Actor
+
+        config, hooks, _events = env
+        actor = create_core_actor(config, uuid_email())
+        clock = [deletion_finish.time.monotonic()]
+        renewals: list[float] = []
+        at_wipe: list[int] = []
+        real_delete = Actor.delete
+
+        def slow_clients(*args: Any, **kwargs: Any) -> None:
+            clock[0] += 90
+
+        def renew(*args: Any, **kwargs: Any) -> None:
+            renewals.append(clock[0])
+
+        def delete(self: Actor, *args: Any, **kwargs: Any) -> Any:
+            at_wipe.append(len(renewals))
+            return real_delete(self, *args, **kwargs)
+
+        with (
+            patch.object(
+                deletion_finish.time, "monotonic", side_effect=lambda: clock[0]
+            ),
+            patch("actingweb.oauth2._delete_actor_clients", slow_clients),
+            patch.object(deletion, "renew_lease", side_effect=renew),
+            patch.object(Actor, "delete", delete),
+        ):
+            finish_deletion(actor, config=config, hooks=hooks, origin="delete")
+        assert at_wipe and at_wipe[0] >= 1, "no renewal before the wipe began"
+
     def test_a_lease_taken_over_stops_the_wipe(self, env: Any) -> None:
         from actingweb import deletion_finish
 
@@ -569,6 +633,201 @@ class TestLegacyTombstoneOnDelete:
         deletion.mark_actor_deleted(aid(actor), config)
         finish_deletion(actor, config=config, hooks=hooks, origin="operator")
         assert "actor_deleted" not in _names(events)
+
+    def test_an_operator_resume_records_the_deletion(self, env: Any) -> None:
+        """Re-verification N13: the operator path recorded only
+        ``hook_fired``, so a resume that stalled again left a tombstone that
+        was still "legacy, review", with no client ids and no peers choice."""
+        config, hooks, _events = env
+        actor = create_core_actor(config, uuid_email())
+        deletion.mark_actor_deleted(aid(actor), config)
+        with (
+            patch.object(Actor, "delete", side_effect=RuntimeError("stalled")),
+            pytest.raises(RuntimeError),
+        ):
+            finish_deletion(
+                actor,
+                config=config,
+                hooks=hooks,
+                origin="operator",
+                notify_peers=False,
+            )
+        _, data = deletion.read_tombstone(aid(actor), config)
+        assert data is not None and deletion.is_resumable(data)
+        assert data["notify_peers"] is False and data["hook_fired"] is True
+        assert isinstance(data.get("client_ids"), list)
+
+    def test_a_finished_tombstone_over_a_live_row_is_a_new_deletion(
+        self, env: Any
+    ) -> None:
+        """Re-verification 4, W3: a finished tombstone whose actor id was
+        re-created kept its old finish, so the resume wiped under the old
+        retention TTL, the mark was refused (already finished) and
+        ``actor_deleted_complete`` never fired."""
+        config, hooks, events = env
+        actor = create_core_actor(config, uuid_email())
+        data = deletion.create_leased_tombstone(
+            aid(actor),
+            config,
+            reason="deleted",
+            notify_peers=False,
+            hook_kwargs={},
+            client_ids=[],
+        )
+        assert deletion.mark_finished(aid(actor), config, data) is True
+        _, finished = deletion.read_tombstone(aid(actor), config)
+        assert finished is not None and finished.get("finished_at")
+        old_finish = finished["finished_at"]
+        # The id is live again: its row still exists here.
+        finish_deletion(
+            actor, config=config, hooks=hooks, origin="delete", notify_peers=False
+        )
+        _, after = deletion.read_tombstone(aid(actor), config)
+        assert after is not None and after.get("finished_at")
+        assert after["finished_at"] != old_finish
+        assert Actor(actor_id=aid(actor), config=config).id is None
+        assert any(e[0] == "actor_deleted_complete" for e in events)
+
+    def test_a_late_finisher_after_the_finish_changes_nothing(self, env: Any) -> None:
+        """Re-verification 5, X1: a second finisher that loaded the actor
+        before the first removed its row (a DELETE retry, a sibling two
+        sign-ins sweep) reset the finished tombstone and announced the
+        completion a second time."""
+        config, hooks, events = env
+        actor = create_core_actor(config, uuid_email())
+        stale = Actor(actor_id=aid(actor), config=config)  # loaded before the wipe
+        finish_deletion(
+            actor, config=config, hooks=hooks, origin="delete", notify_peers=False
+        )
+        _, first = deletion.read_tombstone(aid(actor), config)
+        assert first is not None and first.get("finished_at")
+        assert _names(events).count("actor_deleted_complete") == 1
+        assert (
+            finish_deletion(
+                stale, config=config, hooks=hooks, origin="sign_in", notify_peers=False
+            )
+            == 0
+        )
+        _, second = deletion.read_tombstone(aid(actor), config)
+        assert second is not None
+        assert second["finished_at"] == first["finished_at"]
+        assert second.get("reason") == first.get("reason")
+        assert _names(events).count("actor_deleted_complete") == 1
+        assert _names(events).count("actor_deleted") == 1
+
+    def test_a_finished_deletion_reads_nothing_else_first(self, env: Any) -> None:
+        """Re-verification 6, Y4: a retry of a finished deletion answered 503
+        when the trust pre-read faulted, for an actor already gone."""
+        from actingweb import deletion_finish
+
+        config, hooks, _events = env
+        actor = create_core_actor(config, uuid_email())
+        stale = Actor(actor_id=aid(actor), config=config)
+        finish_deletion(
+            actor, config=config, hooks=hooks, origin="delete", notify_peers=False
+        )
+        with patch.object(deletion_finish, "_pre_read", side_effect=DbError("trusts")):
+            assert (
+                finish_deletion(
+                    stale,
+                    config=config,
+                    hooks=hooks,
+                    origin="delete",
+                    notify_peers=False,
+                )
+                == 0
+            )
+
+    def test_a_stalled_rewrite_keeps_no_retention_ttl(self, env: Any) -> None:
+        """Re-verification N7: the legacy row carried the 30-day retention
+        TTL; once rewritten as resumable it must not expire before the wipe
+        it now records is confirmed."""
+        import time
+
+        config, hooks, _events = env
+        actor = create_core_actor(config, uuid_email())
+        deletion.mark_actor_deleted(aid(actor), config)  # legacy: no reason, TTL
+        with (
+            patch.object(Actor, "delete", side_effect=RuntimeError("stalled")),
+            pytest.raises(RuntimeError),
+        ):
+            finish_deletion(actor, config=config, hooks=hooks, origin="delete")
+        later = time.time() + DELETION_TOMBSTONE_TTL + 86400
+        with patch("time.time", return_value=later):
+            _, data = deletion.read_tombstone(aid(actor), config)
+        assert data is not None and deletion.is_resumable(data)
+        assert not data.get("finished_at")
+
+
+class TestClearTtl:
+    def test_a_conditional_update_can_remove_the_ttl(self, env: Any) -> None:
+        import time
+
+        config, _hooks, _events = env
+        db = get_attribute(config)
+        name = uuid_email()
+        db.set_attr(
+            actor_id="ttl-test", bucket="b", name=name, data={"v": 1}, ttl_seconds=60
+        )
+        assert db.conditional_update_attr(
+            actor_id="ttl-test",
+            bucket="b",
+            name=name,
+            old_data={"v": 1},
+            new_data={"v": 2},
+            clear_ttl=True,
+        )
+        with patch("time.time", return_value=time.time() + 7 * 86400):
+            row = db.get_attr_strict(actor_id="ttl-test", bucket="b", name=name)
+        assert row is not None and row["data"] == {"v": 2}
+
+    def test_a_backend_without_the_keyword_still_writes_tombstones(
+        self, env: Any
+    ) -> None:
+        """Re-verification 3, V4: only the legacy rewrite asks for
+        ``clear_ttl``; every other tombstone write leaves it out, so a
+        backend written before the keyword fails only that rewrite."""
+        from actingweb import deletion
+
+        config, _hooks, _events = env
+        actor = create_core_actor(config, uuid_email())
+        data = deletion.create_leased_tombstone(
+            aid(actor),
+            config,
+            reason="deleted",
+            notify_peers=False,
+            hook_kwargs={},
+            client_ids=[],
+        )
+        db = get_attribute(config)
+        real = db.conditional_update_attr
+
+        def old_backend(
+            *,
+            actor_id: str,
+            bucket: str,
+            name: str,
+            old_data: Any,
+            new_data: Any,
+            ttl_seconds: int | None = None,
+        ) -> bool:
+            return real(
+                actor_id=actor_id,
+                bucket=bucket,
+                name=name,
+                old_data=old_data,
+                new_data=new_data,
+                ttl_seconds=ttl_seconds,
+            )
+
+        with patch.object(
+            type(db), "conditional_update_attr", staticmethod(old_backend)
+        ):
+            with patch("actingweb.deletion.get_attribute", return_value=db):
+                changed = deletion.update_tombstone(
+                    aid(actor), config, data, {"hook_fired": True}
+                )
+        assert changed is not None and changed["hook_fired"] is True
 
 
 class TestDeleteClientForADeletedActor:

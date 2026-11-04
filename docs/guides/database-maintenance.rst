@@ -112,10 +112,20 @@ deletion tombstone. The next ``DELETE`` or sign-in to it finishes it;
 
 ``legacy, review`` is a tombstone written before 3.16, which records no
 reason: either a ``DELETE`` that stalled (``resume`` it) or a live actor whose
-create failed to clear it (``clear`` it). ``resume`` runs no application hooks
+create failed to clear it (``clear`` it). A finished tombstone whose actor id
+is live again (re-created without the tombstone cleared) reports the same
+way; ``resume`` treats it as a new deletion of that actor, with a fresh
+finish and retention. ``resume`` runs no application hooks
 and prints the ids it finished, so run your own ``actor_deleted_complete``
 cleanup for them; peers are notified as each tombstone recorded
-(``--no-notify-peers`` turns it off for all). On PostgreSQL ``resume --apply``
+(``--no-notify-peers`` turns it off for all). A legacy tombstone records no
+choice, so ``resume ACTOR_ID --apply`` notifies its peers unless you pass
+``--no-notify-peers``; review whose actor it was (a replaced squatter's
+peers were chosen by the squatter) before resuming one. The resume records
+the deletion on the tombstone, so if it stalls again it reports as
+``stalled``, not ``legacy, review``. A tombstone whose actor row is gone
+while a finisher holds its lease reports as ``in progress``: that finisher
+marks it finished. On PostgreSQL ``resume --apply``
 also purges expired tombstone and email-verification index rows; DynamoDB
 expires them with its TTL. Pass ``--no-unique-creator`` when the application
 runs without ``with_unique_creator()``, so a finished actor's creator record

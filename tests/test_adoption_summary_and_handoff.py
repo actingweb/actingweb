@@ -25,6 +25,18 @@ from tests._adoption_helpers import (
 )
 
 
+def _nothing_pending(config: Any, creator: str) -> bool:
+    """No unannounced pending adoption for ``creator``: the record is gone or
+    claimed (re-verification 5, X3: a claimed row stays until its TTL)."""
+    from actingweb.constants import ACTINGWEB_SYSTEM_ACTOR, PENDING_ADOPTION_BUCKET
+    from actingweb.db import get_attribute
+
+    row = get_attribute(config).get_attr_strict(
+        actor_id=ACTINGWEB_SYSTEM_ACTOR, bucket=PENDING_ADOPTION_BUCKET, name=creator
+    )
+    return row is None or bool(row["data"].get("announced"))
+
+
 @pytest.fixture
 def provider() -> OAuth2Provider:
     return OAuth2Provider(
@@ -161,6 +173,205 @@ class TestPendingAdoption:
         assert adopted[0]["previous_actor_id"] == aid(squat)
         assert adopted[0]["removed_trusts"] is None  # unknown, not zero
 
+    def test_an_unvouched_create_does_not_announce_it(self, env: Any) -> None:
+        """Re-verification N11: the email form's unverified create proves
+        nothing about the creator, so it must not be announced as the one
+        that adopted the squatter's account."""
+        config, auth, adopted = env
+        creator = uuid_email()
+        squat = create_core_actor(config, creator, auth_method="factory")
+        real_create = oauth2_module._create_actor_for_identifier
+        calls = {"n": 0}
+
+        def flaky(*a: Any, **k: Any) -> Any:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise DbError("create")
+            return real_create(*a, **k)
+
+        with patch.object(oauth2_module, "_create_actor_for_identifier", flaky):
+            with pytest.raises(DbError):
+                auth.lookup_or_create_actor_by_identifier(creator)
+            unvouched = auth.lookup_or_create_actor_by_identifier(
+                creator, create_only=True, auth_method="email_unverified"
+            )
+        assert unvouched is not None
+        assert adopted == []
+        from actingweb.constants import ACTINGWEB_SYSTEM_ACTOR, PENDING_ADOPTION_BUCKET
+        from actingweb.db import get_attribute
+
+        # The record stays for a sign-in that proves the address.
+        row = get_attribute(config).get_attr_strict(
+            actor_id=ACTINGWEB_SYSTEM_ACTOR,
+            bucket=PENDING_ADOPTION_BUCKET,
+            name=creator,
+        )
+        assert row is not None and row["data"]["actor_id"] == aid(squat)
+        assert not row["data"].get("announced")
+
+    def test_the_sign_in_that_adopts_the_unvouched_actor_announces_it(
+        self, env: Any
+    ) -> None:
+        """Re-verification 3, V2: the record N11 left waiting is announced by
+        the vouched sign-in that later adopts the email form's actor, once,
+        and does not linger."""
+        config, auth, adopted = env
+        creator = uuid_email()
+        squat = create_core_actor(config, creator, auth_method="factory")
+        real_create = oauth2_module._create_actor_for_identifier
+        calls = {"n": 0}
+
+        def flaky(*a: Any, **k: Any) -> Any:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise DbError("create")
+            return real_create(*a, **k)
+
+        with patch.object(oauth2_module, "_create_actor_for_identifier", flaky):
+            with pytest.raises(DbError):
+                auth.lookup_or_create_actor_by_identifier(creator)
+            unvouched = auth.lookup_or_create_actor_by_identifier(
+                creator, create_only=True, auth_method="email_unverified"
+            )
+        assert unvouched is not None and adopted == []
+        signed_in = auth.lookup_or_create_actor_by_identifier(creator)
+        assert signed_in is not None
+        previous = [kw["previous_actor_id"] for kw in adopted]
+        assert aid(squat) in previous
+        assert previous.count(aid(squat)) == 1
+
+        assert _nothing_pending(config, creator)
+        # A later sign-in does not announce it again.
+        auth.lookup_or_create_actor_by_identifier(creator)
+        assert [kw["previous_actor_id"] for kw in adopted].count(aid(squat)) == 1
+
+    def test_an_earlier_replacement_survives_a_failure_after_the_rewrite(
+        self, env: Any
+    ) -> None:
+        """Re-verification 4, W2: the earlier replacement is kept inside the
+        rewritten record, so this sign-in failing after the write loses
+        nothing, and the next one announces both, once each."""
+        from actingweb.constants import ACTINGWEB_SYSTEM_ACTOR, PENDING_ADOPTION_BUCKET
+        from actingweb.db import get_attribute
+
+        config, auth, adopted = env
+        creator = uuid_email()
+        squat = create_core_actor(config, creator, auth_method="factory")
+        # An earlier replacement that was never announced.
+        oauth2_module._record_pending_adoption(config, creator, "x-old", squat)
+        with patch.object(oauth2_module, "_remove_for_replacement", return_value=None):
+            try:
+                auth.lookup_or_create_actor_by_identifier(creator)
+            except DbError:
+                pass
+        row = get_attribute(config).get_attr_strict(
+            actor_id=ACTINGWEB_SYSTEM_ACTOR,
+            bucket=PENDING_ADOPTION_BUCKET,
+            name=creator,
+        )
+        assert row is not None
+        assert row["data"]["actor_id"] == aid(squat)
+        assert [e["actor_id"] for e in row["data"]["earlier"]] == ["x-old"]
+        assert adopted == []
+
+        signed_in = auth.lookup_or_create_actor_by_identifier(creator)
+        assert signed_in is not None
+        previous = [kw["previous_actor_id"] for kw in adopted]
+        assert previous.count("x-old") == 1
+        assert previous.count(aid(squat)) == 1
+        assert _nothing_pending(config, creator)
+
+    def test_a_fault_reading_the_record_fails_the_sign_in_with_nothing_removed(
+        self, env: Any
+    ) -> None:
+        """W2: the record is written strictly before anything is removed."""
+        from actingweb.constants import PENDING_ADOPTION_BUCKET
+        from actingweb.db import get_attribute
+
+        config, auth, _adopted = env
+        creator = uuid_email()
+        squat = create_core_actor(config, creator, auth_method="factory")
+        db_type = type(get_attribute(config))
+        real = db_type.get_attr_strict
+
+        def faulty(self: Any, *a: Any, **k: Any) -> Any:
+            if k.get("bucket") == PENDING_ADOPTION_BUCKET:
+                raise DbError("read")
+            return real(self, *a, **k)
+
+        with patch.object(db_type, "get_attr_strict", faulty):
+            with pytest.raises(DbError):
+                auth.lookup_or_create_actor_by_identifier(creator)
+        assert Actor(actor_id=aid(squat), config=config).id == aid(squat)
+
+    def test_a_vouched_sign_in_announces_what_a_failed_replacement_left(
+        self, env: Any
+    ) -> None:
+        """Re-verification 5, X4: a replacement that failed after its
+        successor's create committed leaves the successor vouched, and every
+        later sign-in took the vouched branch, which read no record."""
+        config, auth, adopted = env
+        creator = uuid_email()
+        successor = create_core_actor(config, creator, auth_method="email_verified")
+        oauth2_module._record_pending_adoption(config, creator, "x-old", successor)
+        assert auth.lookup_or_create_actor_by_identifier(creator) is not None
+        assert [kw["previous_actor_id"] for kw in adopted] == ["x-old"]
+        assert adopted[0]["mode"] == "replaced"
+        assert _nothing_pending(config, creator)
+        auth.lookup_or_create_actor_by_identifier(creator)
+        assert [kw["previous_actor_id"] for kw in adopted] == ["x-old"]
+
+    def test_without_hooks_the_record_is_left_for_a_sign_in_that_has_them(
+        self, env: Any
+    ) -> None:
+        """Re-verification 6, Y1: claiming with no hooks lost the event."""
+        config, _auth, adopted = env
+        creator = uuid_email()
+        successor = create_core_actor(config, creator, auth_method="email_verified")
+        oauth2_module._record_pending_adoption(config, creator, "x-old", successor)
+        oauth2_module._announce_pending(config, None, successor, None, skip=set())
+        assert not _nothing_pending(config, creator)  # still waiting
+        hooks = HookRegistry()
+        hooks.register_lifecycle_hook(
+            "actor_adopted", lambda actor, **kw: adopted.append(kw)
+        )
+        oauth2_module._announce_pending(config, hooks, successor, None, skip=set())
+        assert [kw["previous_actor_id"] for kw in adopted] == ["x-old"]
+
+    def test_an_actor_is_never_announced_as_having_replaced_itself(
+        self, env: Any
+    ) -> None:
+        """Y2: a replacement that recorded V and failed before removing it
+        leaves a record naming V; V is later vouched."""
+        config, auth, adopted = env
+        creator = uuid_email()
+        actor = create_core_actor(config, creator, auth_method="email_verified")
+        oauth2_module._record_pending_adoption(config, creator, aid(actor), actor)
+        assert auth.lookup_or_create_actor_by_identifier(creator) is not None
+        assert aid(actor) not in [kw["previous_actor_id"] for kw in adopted]
+
+    def test_a_first_write_that_loses_to_another_fails_closed(self, env: Any) -> None:
+        """X2: with no row read, the write is a create-if-absent, so a
+        concurrent replacement's record is never overwritten."""
+        from actingweb.constants import PENDING_ADOPTION_BUCKET
+        from actingweb.db import get_attribute
+
+        config, _auth, _adopted = env
+        creator = uuid_email()
+        first = create_core_actor(config, creator, auth_method="factory")
+        oauth2_module._record_pending_adoption(config, creator, aid(first), first)
+        db_type = type(get_attribute(config))
+        real = db_type.get_attr_strict
+
+        def unseen(self: Any, *a: Any, **k: Any) -> Any:
+            if k.get("bucket") == PENDING_ADOPTION_BUCKET:
+                return None  # read before the other replacement wrote
+            return real(self, *a, **k)
+
+        with patch.object(db_type, "get_attr_strict", unseen):
+            with pytest.raises(DbError):
+                oauth2_module._record_pending_adoption(config, creator, "other", first)
+
     def test_a_completed_adoption_leaves_no_pending_record(self, env: Any) -> None:
         config, auth, adopted = env
         creator = uuid_email()
@@ -168,17 +379,8 @@ class TestPendingAdoption:
         first = auth.lookup_or_create_actor_by_identifier(creator)
         assert first is not None and len(adopted) == 1
         assert adopted[0]["previous_actor_id"] == aid(squat)
-        from actingweb.constants import ACTINGWEB_SYSTEM_ACTOR, PENDING_ADOPTION_BUCKET
-        from actingweb.db import get_attribute
 
-        assert (
-            get_attribute(config).get_attr_strict(
-                actor_id=ACTINGWEB_SYSTEM_ACTOR,
-                bucket=PENDING_ADOPTION_BUCKET,
-                name=creator,
-            )
-            is None
-        )
+        assert _nothing_pending(config, creator)
 
     def test_a_hand_off_that_ends_cleaned_leaves_no_pending_record(
         self, env: Any
@@ -205,17 +407,8 @@ class TestPendingAdoption:
             result = auth.lookup_or_create_actor_by_identifier(creator)
         assert result is not None and result.id != aid(squat)
         assert len(adopted) == 1
-        from actingweb.constants import ACTINGWEB_SYSTEM_ACTOR, PENDING_ADOPTION_BUCKET
-        from actingweb.db import get_attribute
 
-        assert (
-            get_attribute(config).get_attr_strict(
-                actor_id=ACTINGWEB_SYSTEM_ACTOR,
-                bucket=PENDING_ADOPTION_BUCKET,
-                name=creator,
-            )
-            is None
-        )
+        assert _nothing_pending(config, creator)
 
 
 class TestK4Folds:

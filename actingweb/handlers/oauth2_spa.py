@@ -34,6 +34,9 @@ from ..constants import (
     REFRESH_TOKEN_GRACE_DEFAULT,
     SPA_REFRESH_TOKEN_REUSE_WINDOW,
 )
+from ..constants import (
+    LEGACY_REFRESH_COOKIE_PATH as _LEGACY_REFRESH_COOKIE_PATH,
+)
 from ..db.exceptions import DbError
 from ..secret_compare import secret_digest_equals, secret_equals
 from ..single_use import classify_reuse, refresh_token_grace
@@ -229,6 +232,32 @@ def spa_cors_headers(
         "Access-Control-Expose-Headers": f"Retry-After, {ERROR_CODE_HEADER}",
         "Access-Control-Max-Age": "86400",
     }
+
+
+#: Re-exported from :mod:`actingweb.constants` (the hybrid refresh cookie's
+#: path before 3.16).
+LEGACY_REFRESH_COOKIE_PATH = _LEGACY_REFRESH_COOKIE_PATH
+
+
+def set_refresh_cookie(
+    response: Any, refresh_token: str, *, httponly: bool = True, samesite: str = "Lax"
+) -> None:
+    """Set the SPA ``refresh_token`` cookie on ``path=/``, the one path every
+    setter uses (the OAuth callback's hybrid delivery and the refresh grant's
+    rotation), so ``/oauth/logout`` receives it and revokes the token; and
+    expire the cookie on the path the callback used before."""
+    response.set_cookie(
+        "refresh_token",
+        refresh_token,
+        max_age=86400 * 14,  # 2 weeks
+        path="/",
+        secure=True,
+        httponly=httponly,
+        samesite=samesite,
+    )
+    response.set_cookie(
+        "refresh_token", "", max_age=-1, path=LEGACY_REFRESH_COOKIE_PATH, secure=True
+    )
 
 
 class OAuth2SPAHandler(BaseHandler):
@@ -1894,12 +1923,9 @@ class OAuth2SPAHandler(BaseHandler):
     ) -> None:
         """Set refresh token cookie."""
         if self.response:
-            self.response.set_cookie(
-                "refresh_token",
+            set_refresh_cookie(
+                self.response,
                 refresh_token,
-                max_age=86400 * 14,  # 2 weeks
-                path="/",  # Use root path so browser stores it properly
-                secure=True,
                 httponly=httponly,
                 samesite="Lax",  # Lax allows the cookie on same-site navigations
             )
@@ -1922,7 +1948,7 @@ class OAuth2SPAHandler(BaseHandler):
                         cookie_name,
                         "",
                         max_age=-1,
-                        path="/oauth/spa/token",
+                        path=LEGACY_REFRESH_COOKIE_PATH,
                         secure=True,
                     )
 

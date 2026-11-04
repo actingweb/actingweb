@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Email verification - ActingWeb{% endblock %}
+{% block title %}{{ title|default('Email verification') }} - ActingWeb{% endblock %}
 {% block content %}
 <div class="aw-card">
   {% if status == 'confirm' %}
@@ -14,7 +14,7 @@
   {% if status in ['success', 'verified', 'already_verified'] %}
     <h1>Email verified</h1>
   {% else %}
-    <h1>Email verification</h1>
+    <h1>{{ title|default('Email verification') }}</h1>
   {% endif %}
 
   {% if status not in ['success', 'verified', 'already_verified'] and status %}

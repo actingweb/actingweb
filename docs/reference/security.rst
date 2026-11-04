@@ -32,7 +32,10 @@ Access Control
   (``Sec-Fetch-Site: same-origin``, or a same-origin ``Origin`` or
   ``Referer``); a request with none of these passes unless it carries the
   session cookie. Web UI ``POST`` forms are refused when the browser
-  reports a cross-site request, and the integrations do not let the
+  reports a cross-site request, as is a browser form ``POST`` to
+  ``/oauth/email`` (whose sign-up or code would otherwise sign the browser
+  in to the submitter's actor; that endpoint sets no session cookie for a
+  cross-site request at all), and the integrations do not let the
   session cookie, or a Basic header (except on ``/oauth/token``),
   authenticate a
   state-changing request another site (sibling subdomains included)

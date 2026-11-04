@@ -322,6 +322,8 @@ class DbAttribute:
         new_data=None,
         timestamp=None,
         ttl_seconds=None,
+        *,
+        clear_ttl=False,
     ):  # type: ignore[misc]
         """Conditionally update an attribute only if current data matches old_data.
 
@@ -341,6 +343,9 @@ class DbAttribute:
             ttl_seconds: When given, the same conditional update sets
                 ``ttl_timestamp`` (plus the clock-skew buffer, as ``set_attr``
                 does)
+            clear_ttl: the same conditional update removes the row's
+                ``ttl_timestamp`` (it then never expires); ignored when
+                ``ttl_seconds`` is given
 
         Returns:
             True if update succeeded (current matched old_data), False otherwise
@@ -381,6 +386,8 @@ class DbAttribute:
                 actions = list(actions) + [
                     Attribute.ttl_timestamp.set(ttl_deadline(ttl_seconds))
                 ]
+            elif clear_ttl:
+                actions = list(actions) + [Attribute.ttl_timestamp.remove()]
 
             item.update(
                 actions=actions,  # type: ignore[arg-type]

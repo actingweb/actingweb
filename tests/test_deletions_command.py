@@ -185,3 +185,84 @@ class TestCommandRobustness:
         with patch.object(deletion, "read_tombstone", return_value=(None, None)):
             _code, out = _run(capsys, "report")
         assert actor_id not in out
+
+
+class TestALiveLeaseIsInProgress:
+    """Re-verification N5 and N12: a wipe whose row is gone but whose
+    finisher has not yet marked it finished belongs to that finisher."""
+
+    def test_mark_finished_without_a_lease_leaves_a_leased_tombstone(
+        self, config: Any
+    ) -> None:
+        actor_id = _stalled(config, leased=True)
+        assert deletion.mark_finished(actor_id, config, None) is False
+        _, data = deletion.read_tombstone(actor_id, config)
+        assert data is not None and not data.get("finished_at")
+        assert data.get("lease_id")  # the finisher's lease is untouched
+
+    def test_report_lists_a_row_gone_under_a_lease_as_in_progress(
+        self, config: Any, capsys: Any
+    ) -> None:
+        from actingweb.db import get_actor
+
+        actor_id = _stalled(config, leased=True)
+        # The finisher has removed the actor row and not yet marked the end.
+        with patch.object(type(get_actor(config)), "get", return_value=None):
+            code, out = _run(capsys, "report", actor_id)
+        assert f"{actor_id}\tin progress" in out and code == 0
+
+    def test_resume_reports_a_lease_taken_meanwhile_as_in_progress(
+        self, config: Any, capsys: Any
+    ) -> None:
+        """The row is gone and the lease lapsed (unfinished); while the
+        command marks the end, a finisher takes the lease and finishes it."""
+        from actingweb.db import get_actor
+
+        unfinished = _stalled(config)
+
+        def another_finisher_took_it(actor_id: str, config: Any, data: Any) -> bool:
+            _, current = deletion.read_tombstone(actor_id, config)
+            assert current is not None
+            deletion.update_tombstone(
+                actor_id, config, current, {**deletion.lease_fields(), "lease_id": "x"}
+            )
+            return False
+
+        with (
+            patch.object(type(get_actor(config)), "get", return_value=None),
+            patch.object(deletion, "mark_finished", another_finisher_took_it),
+        ):
+            _code, out = _run(capsys, "resume", unfinished, "--apply")
+        assert f"{unfinished}: in progress" in out
+        assert f"{unfinished}: failed" not in out
+
+    def test_a_finish_whose_lease_was_taken_over_is_in_progress(
+        self, config: Any, capsys: Any
+    ) -> None:
+        """Re-verification 3, V8: the command's own finisher wipes a stalled
+        actor, its lease lapses meanwhile and another finisher takes it, so
+        the command's mark is refused. In progress, not failed."""
+        stalled = _stalled(config)
+
+        def another_finisher_took_it(actor_id: str, config: Any, data: Any) -> bool:
+            _, current = deletion.read_tombstone(actor_id, config)
+            assert current is not None
+            deletion.update_tombstone(
+                actor_id, config, current, {**deletion.lease_fields(), "lease_id": "x"}
+            )
+            return False
+
+        with patch.object(deletion, "mark_finished", another_finisher_took_it):
+            _code, out = _run(capsys, "resume", stalled, "--apply")
+        assert f"{stalled}: in progress" in out
+        assert f"{stalled}: failed" not in out
+
+    def test_a_finish_whose_own_mark_faulted_is_a_failure(
+        self, config: Any, capsys: Any
+    ) -> None:
+        """V8, the other side: the live lease is the command's own (its mark
+        folded a fault), so the run reports a failure, not in progress."""
+        stalled = _stalled(config)
+        with patch.object(deletion, "mark_finished", return_value=True):
+            code, out = _run(capsys, "resume", stalled, "--apply")
+        assert f"{stalled}: failed" in out and code != 0

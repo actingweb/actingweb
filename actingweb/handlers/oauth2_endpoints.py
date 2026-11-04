@@ -23,6 +23,7 @@ import json
 import logging
 from typing import TYPE_CHECKING, Any, Optional
 
+from ..constants import LEGACY_REFRESH_COOKIE_PATH
 from ..db.exceptions import DbError
 
 # MCP protocol version constants (single source of truth)
@@ -48,7 +49,7 @@ _LOGOUT_COOKIES: tuple[tuple[str, str], ...] = (
     ("access_token", "/"),
     ("oauth_token", "/"),
     ("refresh_token", "/"),
-    ("refresh_token", "/oauth/spa/token"),
+    ("refresh_token", LEGACY_REFRESH_COOKIE_PATH),
     ("session_id", "/"),
 )
 

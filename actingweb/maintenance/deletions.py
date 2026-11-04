@@ -136,7 +136,11 @@ def scan(config: Any, only: str | None = None) -> list[Finding]:
                 findings.append(
                     Finding(
                         actor_id,
-                        UNFINISHED,
+                        # Row gone under a live lease: a finisher is between
+                        # its row delete and its finish mark; leave it be.
+                        IN_PROGRESS
+                        if deletion.lease_remaining(data) > 0
+                        else UNFINISHED,
                         data.get("reason"),
                         data.get("deleted_at"),
                         data,
@@ -192,11 +196,12 @@ def _finish_one(config: Any, finding: Finding, notify_peers: bool) -> None:
             actor_deleted=True,
         )
         deletion.mark_finished(finding.actor_id, config, None)
-        _confirm_finished(config, finding.actor_id)
+        _confirm_finished(config, finding.actor_id, own_lease=None)
         return
     target = actor_module.Actor(actor_id=finding.actor_id, config=config)
     if not target.id:
         raise DbError("actor read", finding.actor_id)
+    leases: list[str] = []
     if (
         finish_deletion(
             target,
@@ -204,21 +209,33 @@ def _finish_one(config: Any, finding: Finding, notify_peers: bool) -> None:
             hooks=None,
             origin="operator",
             notify_peers=notify_peers,
+            on_lease=leases.append,
         )
         is None
     ):
         raise DbError("actor row delete", finding.actor_id)
-    _confirm_finished(config, finding.actor_id)
+    _confirm_finished(
+        config, finding.actor_id, own_lease=leases[-1] if leases else None
+    )
 
 
-def _confirm_finished(config: Any, actor_id: str) -> None:
-    """Raise unless the tombstone now records the finish: ``mark_finished``
+def _confirm_finished(config: Any, actor_id: str, *, own_lease: str | None) -> None:
+    """Raise unless the tombstone records the finish. ``mark_finished``
     folds a fault (the row is gone either way), and "finished" must not be
-    printed for a tombstone the next report lists again."""
+    printed for a tombstone the next report lists again. A live lease that
+    is not ``own_lease`` (this run's, after ``finish_deletion``; None in the
+    unfinished branch, which holds none) is another finisher's, which marks
+    the end itself: in progress, not a failure. A live lease of this run's
+    own means its mark faulted."""
     from actingweb import deletion
 
     _, data = deletion.read_tombstone(actor_id, config)
     if data is not None and not data.get("finished_at"):
+        remaining = deletion.lease_remaining(data)
+        if remaining > 0 and (own_lease is None or data.get("lease_id") != own_lease):
+            # Another finisher took the lease and finishes it: in progress,
+            # not a failure.
+            raise DeletionInProgress(actor_id, remaining)
         raise DbError("tombstone not marked finished", actor_id)
 
 

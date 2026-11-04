@@ -1,6 +1,6 @@
 ---
 status: done
-verified: thoughts/verifications/2026-11-03-3-16-adoption-fault-followups.md
+verified: thoughts/verifications/2026-11-04-3-16-adoption-fault-followups-reverify.md
 ---
 
 # Implementation Plan: 3.16 adoption, deletion and fault-contract follow-ups
@@ -31,7 +31,7 @@ The last planned block of 3.16. It makes the actor wipe resumable and safe to ru
   Sequenced with resumable deletion: both are Phase 1.
 - **BG (the session at the verification click):** the click issues the web session or the SPA token, as the OAuth callback would. The form-replaces-factory alternative (BV) is not taken. [Updated 2026-11-03 by the owner: superseded by BG3; the click issues no session, the submitter's session survives it instead.]
 - **The `force_email_prop_as_creator` rewrite at load:** `Actor.get` does not rewrite the creator of an unvouched actor; adoption decides.
-- **The lost successor mapping:** write the old-to-new mapping into the successor's `_internal` before creating it. The next sign-in that completes the adoption fires `actor_adopted` with the right old id.
+- **The lost successor mapping:** write the old-to-new mapping into the successor's `_internal` before creating it. The next sign-in that completes the adoption fires `actor_adopted` with the right old id. [Updated 2026-11-03 (Iterations entries 32, 40, 46): implemented as a pending record keyed by the creator, announced by the next verified sign-in for the creator, with the delivery contract `actor_deleted` carries. It is announced once in the common case, possibly twice under concurrent sign-ins, and lost by a crash between the claim and the hook; it is not exactly once. Each verification round that chased exactly-once found a new race.]
 - **The summary reads:** on a fault, the `actor_adopted` summary reports the counts as unknown (`None`), not 0, and the log says so. The adoption still proceeds.
 - **`purge_relationships`:** read trusts and subscriptions once each, and pass them down.
 - **The redundant replace-path cleanup:** when the actor is already deleted, `delete_client` removes only the global client index row.
@@ -485,6 +485,12 @@ Not taken: replacing the R3 generation with a re-read of the consumed refresh ro
 - The test doubles that build `user_info` or attribute backends by hand are where a contract change shows first; eleven of them needed `get_attr_strict`, and the id-token fixtures lacked the claims real providers send.
 - A protection tested only at the handler (`webobj.response.cookies`) can be missing at the wire: both integrations rebuilt the response for a template and dropped the cookie. Security properties need a test through the integration's test client.
 - `create_attr_if_absent` reports a win for JSON-equal stored data (the SDK-retry rule); a counter claimed with it needs a per-write nonce, or two concurrent first writers both win. The concurrency test found it.
+- `HookRegistry.execute_lifecycle_hooks` logs and swallows a handler's exception, so an `except` around it never runs. A caller that must know whether a hook did its job (the sign-in code's mail) runs the handlers itself. The recorded loose end described a 409 that could not happen; the real symptom was a page saying "we sent a code".
+- Fixing one cookie's transport (entry 3) changed every cookie's attributes on FastAPI and exposed a path split that Flask had always had. A change to shared response plumbing needs a pass over every caller, not only the one being fixed.
+- A stamp threaded through the grants (R3) must reach every caller of the minting function: the SDK path was missed in two review rounds, because the tests covered only the server's grant.
+- A guard added to one branch of a choice (entry 19's cross-site check on a fresh binding) has to hold on every branch that reaches the same effect. The reused-binding branch bound a challenge just as well, and a same-site sibling is exactly the request that carries the held cookie [added 2026-11-03, third verification].
+- Stopping a notification is half a fix. The record N11 left waiting needed the later path that announces it, or the event is lost instead of misdirected [added 2026-11-03, third verification].
+- A best-effort notification needs its delivery contract chosen and written down when it is designed. Chasing exactly-once on the pending `actor_adopted` turned up a new race in every verification round (entries 32, 40, 46), until it was closed at the contract `actor_deleted` already had [added 2026-11-04].
 
 ## Iterations
 
@@ -694,6 +700,8 @@ Accepted, not changed:
 
 ### Where this stands (2026-11-03, after commit `e5069ad`)
 
+[Superseded by the next batch: entries 16–28 act on the re-verification `thoughts/verifications/2026-11-03-3-16-adoption-fault-followups-reverify.md`, including the three open items listed below (entries 20, 21 and 28).]
+
 For a session that picks this up:
 
 - **Branch:** `release/3.16.0-adoption-fault-followups`, 8 commits on `master` (`b7c5c94`): `186966a` plan, `d408f9d`, `7bf6148`, `0ac10fa`, `0dc2a19` the four phases, `922156b` doc exactness, `9e8b2a0` the sign-in code (entry 1), `e5069ad` the verification and entries 2-15. Nothing is pushed and no PR is open; pushing and opening the PR need the owner's go. 3.16.0 stays untagged with no version bump.
@@ -714,3 +722,580 @@ For a session that picks this up:
   - BG3 points 2, 3 and 5 are not taken;
   - the sign-in code's JSON answer follows `spa_cors_origins`;
   - the five-requests-an-hour lock-out (entry 4).
+
+### 2026-11-03, after verification thoughts/verifications/2026-11-03-3-16-adoption-fault-followups-reverify.md
+
+Owner: "Fix all". Verification issue ids in brackets. Each fix has a regression test that fails before it unless the entry says otherwise.
+
+#### 16. `generate_access_token` minted nothing for a cleaned actor [N1]
+
+**Category**: Verification fix (bug, Phase 1 regression)
+
+**What changed**: `OAuth2ClientManager.generate_access_token` passes the registration's `session_generation` to `create_access_token`, as the OAuth2 server's client-credentials grant already did. Without it the R3 guard compared `None` with the generation the clean wrote, so every client of an actor ever cleaned in place, including clients registered after the clean, got `None`.
+
+**Files affected**:
+- `actingweb/interface/oauth_client_manager.py`.
+- `tests/test_session_generation.py`: `TestClientManagerToken`.
+
+**Rationale**: the SDK path was missed when the stamps were threaded through in Phase 1.
+
+#### 17. A correct code spent before its checks, and a token-store fault as a 500 [N2, N14]
+
+**Category**: Verification fix (bug)
+
+**What changed**: `email_sign_in.redeem` takes `may_sign_in(actor_id, email)`, run after the code matches and before it is consumed. The handler's check loads the actor and refuses when it is gone, carries a tombstone, or no longer holds the address the code was sent to (a creator renamed within the ten minutes). A refusal or a `DbError` there leaves the code for a retry. After the consume, a `TokenStoreUnavailable` while writing the session is raised as `DbError`, so the page answers 503 instead of 500. That code is spent, and the user asks for another one; this is accepted, because writing the session before the consume would let two concurrent redemptions each get one.
+
+**Files affected**:
+- `actingweb/email_sign_in.py`: `redeem(may_sign_in=)`.
+- `actingweb/handlers/oauth_email.py`: `_redeem_sign_in_code` and the new `_issue_code_session`.
+- `tests/test_email_sign_in_code.py`: `test_a_refused_check_does_not_spend_the_code`, `test_a_renamed_actor_is_not_signed_in_and_the_code_stays`, `test_a_token_store_fault_answers_503_not_500`.
+
+**Rationale**: the tombstone read and the token writes ran after the code was gone, and the token store's exception is not a `DbError`.
+
+#### 18. A store fault while counting or consuming a code read as a wrong code [N8]
+
+**Category**: Verification fix (bug)
+
+**What changed**: when the try count cannot land three times, `redeem` reads the row strictly. If the row is unchanged, nobody else counted, so it was a fault, and `redeem` raises `DbError` (503). A consume that answers False is followed by a strict read: a row that is still there is a fault, and `DbError` is raised; a row that is gone was taken by a concurrent redemption, which answers 401 as before. The code stays usable after a fault.
+
+**Files affected**:
+- `actingweb/email_sign_in.py`.
+- `tests/test_email_sign_in_code.py`: `test_an_attempt_that_cannot_be_counted_is_a_fault` (replaces `test_an_attempt_that_cannot_be_counted_is_refused`, which pinned the old answer), `test_a_consume_the_store_did_not_confirm_is_a_fault`.
+
+**Rationale**: the DynamoDB conditional writes fold a fault into False, so a throttle answered "Invalid or expired sign-in code" and burned a try.
+
+#### 19. One binding cookie per browser voided the first code [N4, N14]
+
+**Category**: Verification fix (bug)
+
+**What changed**: an offer to a browser that already holds a well-formed `__Host-aw_sign_in_binding` reuses that value for the new challenge, so a second tab or a double submit no longer voids the code the first page waits for. An offer that another site started (`cross_site`, the check the web UI uses) is bound to a fresh value that is never sent to the browser, so a cross-site form cannot replace the browser's binding; that challenge can then never be redeemed by a browser. `is_challenge_id` and the new `is_binding` accept only ASCII token characters.
+
+**Files affected**:
+- `actingweb/handlers/oauth_email.py`: `_offer_sign_in_code`.
+- `actingweb/email_sign_in.py`: `_is_token`, `is_binding`.
+- `tests/test_email_sign_in_code.py`: `TestOneBindingPerBrowser`.
+
+**Rationale**: entry 4 stopped challenges from deleting each other in the store, but every offer replaced the browser's one cookie, which voided the earlier challenge just the same.
+
+#### 20. A failing mailer showed "we sent a code" and used up the user's codes (loose end)
+
+**Category**: Verification fix (bug)
+
+**What changed**: the loose end recorded after `e5069ad` said a raising hook made the offer answer 409. Reading the code showed it was worse than that: `HookRegistry.execute_lifecycle_hooks` logs and swallows every non-`DbError` exception, so the handler's `except Exception` never ran. The page said "We sent a sign-in code" for a mail that never left, and the hourly slot was used. The handler now runs the hook through `email_sign_in.send_code`, which runs each registered handler itself and reports whether any ran without raising. When none did, `cancel_challenge` deletes the challenge and gives its slot back (a conditional decrement; best effort, logged), no binding cookie is set, and the page answers 503 "The sign-in code could not be sent; try again later" (JSON: the error body). A `DbError` from the hook withdraws the challenge and propagates (503). The binding cookie is now set only after the mail has gone.
+
+**Files affected**:
+- `actingweb/email_sign_in.py`: `send_code`, `cancel_challenge`.
+- `actingweb/handlers/oauth_email.py`: `_offer_sign_in_code`.
+- `tests/test_email_sign_in_code.py`: `TestAFailingMailer`.
+
+**Rationale**: a broken mailer turned into five codes an hour that were never sent, and then a 429.
+
+#### 21. The email pages' remaining dead ends [B1, B2, loose end]
+
+**Category**: UX refinement (browser QA)
+
+**What changed**:
+- A `code_challenge` that is not the generated shape answers 401 with the result page and its error, instead of an empty body.
+- Every result-page error (the invalid link, the refused challenge, the unsent code) carries a Continue link to the app's root, which sends a signed-out browser to sign-in; the invalid-link page was a dead end.
+- `aw-oauth-email.html` is headed and titled "Enter your sign-in code" when it shows the code field.
+- The code page (the template and the `code_page_html` fallback) links "No code, or it expired? Start over" to `/`. The browser re-test on 2026-11-03 found that a user with an expired code could only retry.
+
+**Files affected**:
+- `actingweb/handlers/oauth_email.py`: `_sign_in_code_refused`, `_verification_error` (`redirect_url`).
+- `actingweb/templates/aw-oauth-email.html`.
+- `tests/test_email_sign_in_code.py`: `TestErrorPagesInABrowser`, and the heading and start-over assertions in `test_another_browser_gets_401_and_the_code_page_again`.
+
+**Rationale**: browser QA on 2026-11-03 found the empty page and the wrong heading; the dead end was recorded as open after `e5069ad`.
+
+#### 22. The SPA refresh cookie on one path [N3]
+
+**Category**: Verification fix (bug)
+
+**What changed**: the OAuth callback's two hybrid-delivery sites and the refresh grant's rotation all set `refresh_token` through `oauth2_spa.set_refresh_cookie`: `path=/` (each keeps its SameSite: Strict at the callback, Lax at the rotation), and the cookie on `/oauth/spa/token`, the path the callback used before, is expired in the same response. `/oauth/logout` now receives and revokes the refresh token on both integrations, and a browser never holds two `refresh_token` cookies.
+
+**Files affected**:
+- `actingweb/handlers/oauth2_spa.py`: `set_refresh_cookie`, `LEGACY_REFRESH_COOKIE_PATH`, `_set_refresh_token_cookie`.
+- `actingweb/handlers/oauth2_callback.py`: the two hybrid sites.
+- `tests/test_refresh_cookie_path.py` (new). The callback sites are pinned by a source check: reaching them needs a full provider exchange, and the helper's behaviour is tested directly.
+
+**Rationale**: entry 3 made FastAPI keep cookie paths, which exposed the split Flask always had. Before entry 3, FastAPI stored the callback's cookie on `/` by accident. Once it kept the path, logout missed the cookie, and after a rotation the stale cookie on the longer path reached the refresh grant first.
+
+#### 23. A finish marked under another finisher's lease [N5, N12]
+
+**Category**: Verification fix (bug)
+
+**What changed**: `deletion.mark_finished` called without a lease of its own (`data` `None`: a programmatic delete through `finish_unleased`, or the operator command's unfinished branch) refuses when the row, read in the same loop as its conditional write, holds a live lease. The finisher that holds it marks the end and announces `actor_deleted_complete` once. `actingweb-deletions` reports a row that is gone under a live lease as `in progress`, not `unfinished`. When a finisher takes the lease while `resume --apply` marks an unfinished row, the command prints "in progress, skipped" instead of "failed". After its own `finish_deletion`, a live lease is the command's own, and an unmarked end is still a failure.
+
+**Files affected**:
+- `actingweb/deletion.py`: `mark_finished`.
+- `actingweb/maintenance/deletions.py`: `scan`, `_confirm_finished(holds_lease=)`.
+- `tests/test_deletions_command.py`: `TestALiveLeaseIsInProgress`.
+
+**Rationale**: `finish_unleased` checked the lease and then called `mark_finished(None)`, whose ownership check applies only when a `lease_id` is given. A finisher that took the lease between the two had its lease cleared and its announcement lost.
+
+#### 24. The lease keeper's clock started after the sweeps [N6]
+
+**Category**: Verification fix (bug)
+
+**What changed**: `finish_deletion` builds the lease keeper right after its renewal and runs it once between the token sweep and the client sweep, so time spent in the sweeps counts against the lease.
+
+**Files affected**:
+- `actingweb/deletion_finish.py`.
+- `tests/test_deletion_finish.py`: `TestLeaseKeeper::test_a_slow_token_sweep_counts_against_the_lease`.
+
+**Rationale**: entry 8's keeper measured from its own construction, after both sweeps.
+
+#### 25. A legacy tombstone made resumable kept its retention TTL [N7]
+
+**Category**: Verification fix (bug)
+
+**What changed**: `conditional_update_attr` gains a keyword-only `clear_ttl=False` on both backends and in `AttributeBackend`: the same conditional write removes the row's TTL (DynamoDB `REMOVE ttl_timestamp`, PostgreSQL `ttl_timestamp = NULL`). `deletion.update_tombstone` passes it through. Entry 12's rewrite of a legacy tombstone on `DELETE` uses it and clears `finished_at`, so the now-resumable record does not expire before its wipe is confirmed.
+
+**Files affected**:
+- `actingweb/db/dynamodb/attribute.py`, `actingweb/db/postgresql/attribute.py`, `actingweb/db/protocols.py`: `clear_ttl`.
+- `actingweb/deletion.py`: `update_tombstone(clear_ttl=)`.
+- `actingweb/deletion_finish.py`: `_update(clear_ttl=)` and the legacy rewrite.
+- `tests/mcp_token_double.py`: the double accepts the keyword.
+- `tests/test_deletion_finish.py`: `TestLegacyTombstoneOnDelete::test_a_stalled_rewrite_keeps_no_retention_ttl`, `TestClearTtl` (both backends).
+
+**Rationale**: a conditional update that is given no TTL keeps the one already on the row. That is right everywhere else, but a resumable tombstone must carry none.
+
+#### 26. A pending adoption announced on an unvouched create [N11]
+
+**Category**: Verification fix (bug)
+
+**What changed**: `_announce_pending_adoption` returns without touching the record when the created actor is not vouched (the email form's `email_unverified` create). The record stays for a sign-in that proves the address.
+
+**Files affected**:
+- `actingweb/oauth2.py`.
+- `tests/test_adoption_summary_and_handoff.py`: `test_an_unvouched_create_does_not_announce_it`.
+
+**Rationale**: `actor_adopted` tells the application that the creator took the account over, and a free-text address proves nothing.
+
+#### 27. A legacy tombstone resumed by the operator recorded nothing [N13]
+
+**Category**: Verification fix (bug)
+
+**What changed**: on every origin, the finisher records a legacy tombstone's deletion (reason, the `notify_peers` it runs with, the hook kwargs, the client ids), clears `finished_at` and the TTL (entry 25), and sets `hook_fired` to true for the operator and false for a `DELETE` (entry 12). A resume that stalls again then reports as `stalled`. The operator guide says that a legacy resume notifies peers unless `--no-notify-peers` is given, and that the actor should be reviewed first.
+
+**Files affected**:
+- `actingweb/deletion_finish.py`.
+- `docs/guides/database-maintenance.rst`.
+- `tests/test_deletion_finish.py`: `TestLegacyTombstoneOnDelete::test_an_operator_resume_records_the_deletion`.
+
+**Rationale**: the operator branch wrote only `hook_fired`, so the tombstone stayed "legacy, review", and a later resume could not see the client ids.
+
+#### 28. The changelog, the docs and the smaller items [N9, N14, loose ends]
+
+**Category**: Verification fix
+
+**What changed**:
+- `CHANGELOG.rst`, CHANGED:
+  - **Breaking:** `conditional_update_attr` takes `clear_ttl` (a custom backend must accept it).
+  - The SPA `refresh_token` cookie lives on `path=/` only, and FastAPI now keeps every cookie attribute a handler sets (entry 3's undocumented change).
+  - The email form's error pages answer their real status, with an onward link [N9].
+- `CHANGELOG.rst`, other entries:
+  - The sign-in code entry is rewritten to what the code now does (entries 17–21).
+  - The default-creator entry no longer says every actor is still moved at load. A **Behavior change:** sentence states the vouched-only load rewrite from Phase 2, which no entry stated [N14, code review].
+  - The R3 entry names the SDK token path, and says an authorization code is spent when the post-write generation read faults.
+- `docs/reference/hooks-reference.rst`: a raising `email_sign_in_code_required` handler means "not sent".
+- `test_concurrent_starts_stay_within_the_cap` asserts that at least one start succeeds.
+- `actingweb/attribute.py`: the TTL keyword dict is typed, so pyright accepts the new protocol keyword.
+
+**Accepted, not changed** (each fails closed or is the cost of a stronger property):
+- [N10] A permanent non-database failure while deleting revoked peer data answers 500 on every retry of that permission callback, and the new permissions are not stored. This is entry 5's fail-closed choice: storing permissions while a revocation's data deletion failed is the outcome entry 5 exists to prevent. The ERROR log names it.
+- [N14] `exchange_authorization_code`: a generation-read fault after the code is consumed answers 503, and the retry is refused because the code is spent. A pre-check before the consume would add a read to every exchange and still leave the post-write read; the client restarts the authorization. The R3 changelog entry says so.
+- [loose end] The binding cookie is `Secure` (`__Host-`), so the code flow needs HTTPS, or `localhost` in a browser that treats it as secure. Dropping `Secure` would give up the `__Host-` protection against a sibling subdomain planting the binding. The changelog and the migration guide say so.
+
+### 2026-11-03, after verification thoughts/verifications/2026-11-03-3-16-adoption-fault-followups-reverify-2.md
+
+The owner chose to fix V1–V10. For V1/V5, a cross-site browser offer is refused before mailing.
+
+#### 29. A held binding was reused for a cross-site offer [V1, V5]
+
+**Category**: Verification fix (security)
+
+**What changed**: `_offer_sign_in_code` answers 403 ("Cross-site request refused", `_refuse_cross_site`) for a browser offer that another site started, before `start_challenge`. No challenge is created, no code is mailed, no slot is used and no cookie is set. With that refusal in front, the held or fresh binding is always set, and `set_binding` is gone.
+
+**Files affected**:
+- `actingweb/handlers/oauth_email.py`: the refusal and the simplified binding choice.
+- `tests/test_email_sign_in_code.py`: `test_an_offer_another_site_started_is_refused_before_mailing[cross-site|same-site]`. After a first offer, a second one from another site answers 403, mails nothing, sets no binding, and leaves the window count at 1. It fails without the fix.
+- `CHANGELOG.rst`: the sign-in code entry says a cross-site offer, a sibling subdomain included, answers 403 before anything is created.
+
+**Rationale**: Entry 19 gated only the fresh binding. A sibling subdomain is same-site, so the browser sends it the `SameSite=Strict` binding cookie. Its offer reused the held binding, so the attacker's challenge was bound to the victim's browser, and the redemption, which has no cross-site check, signed that browser in to the attacker's actor (login CSRF). The fresh-binding branch also still mailed a code no browser could redeem (V5).
+
+#### 30. A hook failure gave the hourly slot back; a later handler's fault withdrew a sent code [V3]
+
+**Category**: Verification fix
+
+**What changed**:
+- `cancel_challenge` only deletes the challenge, and the slot stays used. The slot give-back loop, a copy of `_claim_slot`'s, is gone.
+- `send_code` re-raises a `DbError` only while no handler has succeeded. After one has sent, a later handler's failure is logged and the code stays good.
+
+**Files affected**:
+- `actingweb/email_sign_in.py`: `cancel_challenge` and `send_code`.
+- `actingweb/handlers/oauth_email.py`: comment.
+- `actingweb/email_sign_in.py`: the `except DbError` in `send_code` carries the `# folds DbError` marker `test_db_fault_guard` requires (it folds only after a handler sent).
+- `tests/test_email_sign_in_code.py`: `test_the_challenge_is_withdrawn_and_the_slot_kept` (five failing sends answer 503, the sixth 429) and `test_a_later_handler_fault_keeps_a_sent_code`. Both fail without the fix.
+- `CHANGELOG.rst` and `docs/reference/hooks-reference.rst`: the slot stays used. Raise only for a send that failed.
+
+**Rationale**: A hook can raise after the mail left, for example an SMTP `quit()` error or a bookkeeping write. Each such request mailed a real code and gave its slot back, so anyone who typed an address could mail its owner past the five-per-hour limit. A broken mailer now uses the hour's slots, and every one of those requests answered 503 anyway.
+
+#### 31. A refused sign-in check counts a try [V9]
+
+**Category**: Verification fix (wording)
+
+**What changed**: The `redeem` docstring and the changelog say a refusal leaves the code unconsumed, and that the attempt counts as one of its five tries. The behaviour is unchanged. The try is counted before the check, so a refusal is no oracle.
+
+**Files affected**:
+- `actingweb/email_sign_in.py`: docstring.
+- `CHANGELOG.rst`.
+
+**Rationale**: "Leaves the code unspent" was not exactly true by the changelog's own rule.
+
+#### 32. A pending adoption left waiting by an unvouched create was never announced [V2]
+
+**Category**: Verification fix
+
+**What changed**:
+- `_adopt_actor` reads the creator's unannounced pending record once, before anything is removed. The read skips a record that names this actor or one an outer level replaced, and a hand-off carries the outer level's read as `earlier_pending` through `_merge_carried`.
+- Once the sign-in completes:
+  - A replacement (or a hand-off) has rewritten the record with its own victim, so it fires `actor_adopted` for the earlier replacement from that read.
+  - A clean in place claims the record as read (`announced`, then delete) and fires it.
+- `_announce_pending_adoption` is split into `_read_pending_adoption`, `_claim_pending_adoption` and `_fire_pending_adoption`, which both paths share. Behaviour on the create path is unchanged.
+
+**Files affected**:
+- `actingweb/oauth2.py`: the three helpers, the read in `_adopt_actor`, the hand-off key, `_merge_carried` and the announcement before the clear.
+- `CHANGELOG.rst`: the adoption follow-ups entry names the later announcing sign-in, with a **Behavior change:** for the two `actor_adopted` events one sign-in can fire.
+- `docs/reference/hooks-reference.rst`: the `actor_adopted` section describes the delayed announcement.
+- `tests/test_adoption_summary_and_handoff.py`: `test_the_sign_in_that_adopts_the_unvouched_actor_announces_it`. A failed replacement, then the email form's create, then a vouched sign-in: `actor_adopted` names the squatter exactly once, no record is left, and a further sign-in announces nothing. It fails without the fix.
+
+**Rationale**: Entry 26 stopped the unverified create from announcing, but nothing announced the record later. If the email form's actor was cleaned, nobody read the record and it expired after seven days. If it was replaced, the record was overwritten with that actor's id and cleared. Either way the application never learned that the squatter was replaced. A replacement whose own successor create raises after it overwrote an earlier record still loses the earlier one; that needs two failed creates in a row and is accepted.
+
+#### 33. Every tombstone write passed `clear_ttl` [V4]
+
+**Category**: Verification fix
+
+**What changed**: `update_tombstone` passes `clear_ttl` only when it is true, matching the guard in `Attributes.conditional_update_attr`. A backend without the keyword fails only the legacy rewrite that needs it. The Breaking changelog entry says so.
+
+**Files affected**:
+- `actingweb/deletion.py`: `update_tombstone`.
+- `tests/test_deletion_finish.py`: `TestClearTtl::test_a_backend_without_the_keyword_still_writes_tombstones`. A `conditional_update_attr` without the keyword still records `hook_fired`. It fails without the fix.
+- `CHANGELOG.rst`: the `clear_ttl` entry.
+
+**Rationale**: A custom backend that predates the keyword got a `TypeError` on every lease claim, renewal and finish, so every deletion failed. Only the legacy rewrite needs the keyword.
+
+#### 34. The "Start over" link ignored the app's base path [V6]
+
+**Category**: Verification fix
+
+**What changed**:
+- The code page's template values carry `start_over_url`, from the new `_start_over_url()` (`config.root`, or `/`), which the verification pages' `redirect_url` now also uses.
+- The template uses `{{ start_over_url|default('/') }}`.
+- `code_page_html` takes `start_over_url`, escaped, and both integrations pass it to the fallback.
+- The JSON offer body is unchanged.
+
+**Files affected**:
+- `actingweb/handlers/oauth_email.py`: `_start_over_url`, the template values and `code_page_html`.
+- `actingweb/templates/aw-oauth-email.html`.
+- `actingweb/interface/integrations/flask_integration.py` and `fastapi_integration.py`: the fallback call.
+- `tests/test_email_sign_in_code.py`: `test_another_browser_gets_401_and_the_code_page_again` asserts the link is the app's root, and the new `test_the_fallback_code_page_links_to_the_given_root` checks the fallback.
+- `docs/migration/v3.16.rst`: an overriding template links to `start_over_url`, and the hook raises only for a send that failed (entry 30).
+
+**Rationale**: An app mounted under a base path sent the user out of the app, while the Continue link beside it already used the root.
+
+#### 35. An expired email-form session looped on the address form [V7, older than this plan]
+
+**Category**: Verification fix (UX)
+
+**What changed**: A missing or expired `session` on `GET` or `POST /oauth/email` goes through the new `_session_refused`. A browser gets the error page (400, "This sign-in has expired or was not started; start again") with its Continue link to the app's root. A JSON client keeps the `error_response` body. This also closes the bare `/oauth/email` dead end the second browser run noted.
+
+**Files affected**:
+- `actingweb/handlers/oauth_email.py`: `_session_refused` and its five call sites.
+- `tests/test_email_verification_legacy_route.py`: the two form-path tests now give the request a live session (a bogus one gets the error page now), and `test_a_dead_session_gets_the_error_page_not_the_form` is added.
+- `tests/test_email_sign_in_code.py`: `TestErrorPagesInABrowser::test_an_expired_session_gets_a_way_out_not_the_form`, four cases (POST with a bogus or missing session, GET with none or a bogus one): 400, no hidden `session`, a link to the root. They fail without the fix. `test_a_json_client_still_gets_the_error_body` covers JSON.
+- `CHANGELOG.rst`: the email pages' status entry.
+
+**Rationale**: The form's session lasts ten minutes (`_SESSION_TTL`). After that, `error_response` drew the address form again with the dead session in a hidden field, so the only button resubmitted it. That is a real path for anyone slow to type.
+
+#### 36. The operator command reported a lease taken over from its own finisher as a failure [V8]
+
+**Category**: Verification fix
+
+**What changed**:
+- `finish_deletion` takes a keyword-only `on_lease` callback, called with the finisher's lease id once it holds the lease. The change is additive.
+- `cmd_resume`'s stalled branch collects that id.
+- `_confirm_finished(config, actor_id, *, own_lease)` replaces `holds_lease`. A live lease that is not `own_lease` raises `DeletionInProgress`; with `None` (the unfinished branch) that is any live lease. A live lease of the run's own means its mark faulted, and raises `DbError`.
+
+**Files affected**:
+- `actingweb/deletion_finish.py`: `on_lease`.
+- `actingweb/maintenance/deletions.py`: `_confirm_finished` and its two callers.
+- `tests/test_deletions_command.py`: `TestALiveLeaseIsInProgress::test_a_finish_whose_lease_was_taken_over_is_in_progress` (fails without the fix) and `test_a_finish_whose_own_mark_faulted_is_a_failure`.
+
+**Rationale**: After `finish_deletion`, entry 23 treated every live lease as the command's own. When the command's lease lapsed during slow peer DELETEs and another finisher took it, the command printed a failure and exited 2 for a deletion that was in progress.
+
+#### 37. No lease renewal between the client sweep and the wipe [V10]
+
+**Category**: Verification fix
+
+**What changed**: `finish_deletion` calls the lease keeper after `_delete_actor_clients` as well, so each of the two sweeps is followed by a renewal check before `Actor.delete`'s own steps.
+
+**Files affected**:
+- `actingweb/deletion_finish.py`.
+- `tests/test_deletion_finish.py`: `TestLeaseKeeper::test_a_slow_client_sweep_is_renewed_before_the_wipe`. A 90 s client sweep is renewed before `Actor.delete` begins. It fails without the fix.
+
+**Rationale**: After entry 24 the keeper ran only between the token sweep and the client sweep. A client sweep near the lease length went unrenewed into the wipe, and a second finisher could take the lease beside it.
+
+**Accepted, not changed** (notes of the third verification):
+- The redemption issues the session right after `may_sign_in`'s tombstone read, without reading again. The window is milliseconds, and a deletion that starts in it revokes the actor's tokens anyway.
+- The code review's "deterministic CAS mismatch answers 503 for the whole TTL" needs a stored row that never compares equal to itself as read. No such path was found.
+- `send_code` and `hook_registered` use the registry's private `_lifecycle_hooks` and `_execute_hook_in_sync_context`. A public registry API for "did any handler succeed" is a separate change. `is_binding` and `is_challenge_id` stay separate names for separate values of the same shape. The duplicate CAS loop in `cancel_challenge` went with entry 30.
+
+#### 38. The code page's Start over link sat on the button; the code field took any length [browser QA, low]
+
+**Category**: UX refinement
+
+**What changed**:
+- The code page has a spacer paragraph (the template's own `<p></p>` pattern) between the form and the Start over link.
+- The code input carries `maxlength="6"`, in the template and in the fallback `code_page_html`.
+
+**Files affected**:
+- `actingweb/templates/aw-oauth-email.html`.
+- `actingweb/handlers/oauth_email.py` (`code_page_html`).
+
+**Rationale**: The browser walk of entries 29–37 (gstack, `localhost:5055`) passed every check. It noted the link cramped under the button at 375 px, and a 5,000-character code field that only the pattern check stopped. The served HTML was confirmed afterwards with curl. The server already refused such input without echoing it.
+
+### 2026-11-03, after verification thoughts/verifications/2026-11-03-3-16-adoption-fault-followups-reverify-3.md
+
+The owner asked to keep iterating and verifying until a run is clean, with the audit sized to each delta.
+
+#### 39. The email form signed a browser in for a cross-site submission [W1, W9; older than this branch]
+
+**Category**: Verification fix (security)
+
+**What changed**:
+- `OAuth2EmailHandler.post` refuses a cross-site browser request (not JSON) with 403 before any branch runs: verify, redeem, the session claim, the offer. The refusal inside `_offer_sign_in_code` (entry 29) moves up into this, and its comment is rewritten.
+- The completion sets `oauth_token` only when the request is not cross-site. A cross-site JSON request, for example a form that adds `format=json`, gets its token in the body and no cookie.
+
+**Files affected**:
+- `actingweb/handlers/oauth_email.py`.
+- `tests/test_oauth_email_handler.py`: `TestCrossSiteSubmissionSignsNobodyIn`. A foreign `Origin` and `Sec-Fetch-Site: same-site` each get 403 with no claim and no cookie; a cross-site JSON request gets the token in the body and no cookie; a same-origin form still gets its cookie. The first three fail without the fix.
+- `CHANGELOG.rst`: a SECURITY entry ("Another site could sign a browser in through the email form", with a **Behavior change:**), and the sign-in code entry points at it.
+- `docs/reference/security.rst`: `/oauth/email` is among the refused browser forms.
+
+**Rationale**: Entry 29 guarded only the code offer, after the OAuth session was claimed. The form's other branches still let another site auto-post the submitter's own session and an address, and the completion set the session cookie in the visitor's browser (login CSRF). That has been true since the form existed: `master` has no cross-site check in this handler. Refusing up front also stops a refused request from using up the session, and stops the 403 from telling a forged-`Origin` probe that an address has a vouched actor.
+
+#### 40. An earlier pending adoption lived only in memory [W2, W8]
+
+**Category**: Verification fix (redesign of entry 32)
+
+**What changed**:
+- `_record_pending_adoption` reads the record strictly and carries an unannounced entry for another actor inside the new one (`earlier: [...]`). It writes conditionally on the row as read, and a fault or a concurrent rewrite raises `DbError`. In the replace branch it now runs before the SPA token revoke, so that fault fails the sign-in with nothing removed.
+- One announcer, `_announce_pending`, claims the record as read (`announced`, then delete) and fires `actor_adopted` for each earlier entry and for the main one, except the ids the sign-in's own event reports:
+  - this level's victim on a replacement;
+  - the carried `replaced_ids` on a hand-off.
+- `_announce_pending_adoption` (the create path) and the end of `_adopt_actor` both use it.
+- Removed with that: the in-memory `earlier` read, the `earlier_pending` hand-off key, `_read_pending_adoption`, `_claim_pending_adoption`, `_fire_pending_adoption` and `_clear_pending_adoption`.
+
+**Files affected**:
+- `actingweb/oauth2.py`.
+- `tests/test_adoption_summary_and_handoff.py`:
+  - `test_an_earlier_replacement_survives_a_failure_after_the_rewrite`: the replaced branch with a removal that fails after the rewrite. The record keeps `x-old`, and the next sign-in announces it and the squatter once each.
+  - `test_a_fault_reading_the_record_fails_the_sign_in_with_nothing_removed`.
+  - Both fail on the entry-32 design.
+- `CHANGELOG.rst` and `docs/reference/hooks-reference.rst`:
+  - the email form's actor is cleaned, and a `factory` one created meanwhile is replaced (W8);
+  - the record keeps every unannounced replacement;
+  - the events come in order: earlier ones first, then the sign-in's own;
+  - an operator vouch announces nothing.
+
+**Rationale**: Entry 32 held the earlier replacement only in memory and then overwrote the record. Any fail-closed return after the rewrite lost it, a folded read fault lost it, and the unclaimed fire on the replace path could run twice beside a concurrent announcer. Entry 32's accepted residual ("two failed creates in a row") understated this.
+
+#### 41. A finished tombstone over a live row resumed with its stale finish [W3]
+
+**Category**: Verification fix
+
+**What changed**: `finish_deletion` treats a tombstone with `finished_at` set as it treats a legacy one. The deletion is recorded anew (reason, peers, kwargs, client ids, `hook_fired`, `finished_at: None`) and the old retention TTL is cleared. The wipe then ends with a fresh finish, a fresh TTL and `actor_deleted_complete`.
+
+**Files affected**:
+- `actingweb/deletion_finish.py`.
+- `tests/test_deletion_finish.py`: `test_a_finished_tombstone_over_a_live_row_is_a_new_deletion`. The new `finished_at` differs from the old one, the actor is gone and `actor_deleted_complete` fires. It fails without the fix.
+- `docs/guides/database-maintenance.rst`.
+
+**Rationale**: The scan reports a finished tombstone over a live row as legacy, so review it, and `resume ACTOR_ID --apply` runs it. The rewrite ran only for a non-resumable tombstone. The wipe ran under the earlier finish's TTL, `mark_finished` refused because the tombstone was already finished, the command reported success from the stale `finished_at`, and no completion fired.
+
+#### 42. The fallback result page dropped the Continue link on errors [W4]
+
+**Category**: Verification fix
+
+**What changed**: Both integrations' fallback `aw-verify-email.html` page (used when the template cannot be rendered) shows Continue whenever the handler set `redirect_url`, not only for a success with an `actor_id`. The unused `actor_id` local went with it. The migration guide tells an overriding template that its error states carry `redirect_url`.
+
+**Files affected**:
+- `actingweb/interface/integrations/flask_integration.py` and `fastapi_integration.py`.
+- `docs/migration/v3.16.rst`.
+- `tests/test_email_sign_in_code.py`: `test_the_fallback_result_page_has_a_way_on_flask` and `..._fastapi`. The template fails to render, `GET /oauth/email` answers 400, and the page links to the root. Both fail without the fix.
+
+**Rationale**: Entries 21 and 35 gave the error pages a way on through `redirect_url`, but the fallback rendered it only for a success. An app without the template was back to dead ends.
+
+#### 43. The email pages' forms posted outside a base path [W5]
+
+**Category**: Verification fix
+
+**What changed**:
+- Every template value's `action` comes from the new `_form_action()`: `/oauth/email` under the app's root, as `_start_over_url()` is.
+- `code_page_html` and `confirm_page_html` take an escaped `action`, and both integrations pass it to their fallbacks, the address-form fallback included.
+- The JSON `form_action` field is unchanged.
+
+**Files affected**:
+- `actingweb/handlers/oauth_email.py`.
+- `actingweb/interface/integrations/flask_integration.py` and `fastapi_integration.py`.
+- `tests/test_email_sign_in_code.py`:
+  - `test_the_forms_post_under_the_apps_root`, which fails with the bare action;
+  - `test_an_offer_another_site_started_is_refused_before_mailing` now sends its cross-site request through the unpatched `post`, where entry 39 put the refusal.
+
+**Rationale**: Entry 34 kept the Start over link inside an app mounted under a base path, but the Sign in, Continue and Confirm buttons beside it still posted to the host's `/oauth/email`.
+
+#### 44. Smaller items from the fourth verification [W6, W7, W10]
+
+**Category**: Verification fix (docs and hygiene)
+
+**What changed**:
+- [W6] The hooks reference says an exception before any handler succeeds, a `DbError` from the hook's own write after its send included, counts as not sent: send last, or catch your own bookkeeping faults. `send_code` logs the `DbError` a later handler raised.
+- [W7] `LEGACY_REFRESH_COOKIE_PATH` moves to `actingweb.constants` and is re-exported by `oauth2_spa`. `_clear_token_cookies` and the logout cookie list use it in place of two literals.
+- [W10] `email_sign_in` has its own `_BINDING_LENGTH` and a `new_binding()`, which the handler uses, so the binding's size and its check cannot drift apart from the challenge id's.
+
+**Files affected**:
+- `docs/reference/hooks-reference.rst`.
+- `actingweb/email_sign_in.py`.
+- `actingweb/constants.py`.
+- `actingweb/handlers/oauth2_spa.py` and `oauth2_endpoints.py`.
+- `actingweb/handlers/oauth_email.py`.
+
+**Rationale**: Low findings of the fourth run. W6 keeps the behaviour: telling a mail that left from one that did not, inside one handler, is the application's to report. No new tests; the existing binding, refresh-cookie and logout tests cover the moved names.
+
+**Accepted, not changed** (fourth run):
+- A browser sending none of `Sec-Fetch-Site`, `Origin` and `Referer` passes the cross-site check. Every current browser sends `Origin` on a cross-origin POST.
+- A correct code refused by `may_sign_in` reads as a wrong code and costs a try (entry 31). A separate message would be an oracle.
+- The code review's stale-refresh-cookie claim is refuted for the second time.
+
+### 2026-11-03, after verification thoughts/verifications/2026-11-03-3-16-adoption-fault-followups-reverify-4.md
+
+#### 45. A late finisher re-recorded a finished deletion and announced it twice [X1, regression from entry 41]
+
+**Category**: Verification fix
+
+**What changed**: For a finished resumable tombstone, `finish_deletion` first reads the actor row strictly. If the row is gone, the deletion is done: it releases its lease and returns 0, with no reset and no hooks. Only a live row (the re-created id, W3) is recorded as a new deletion.
+
+**Files affected**:
+- `actingweb/deletion_finish.py`.
+- `tests/test_deletion_finish.py`: `test_a_late_finisher_after_the_finish_changes_nothing`. An actor loaded before the first finish is finished again: the call returns 0, `finished_at` and `reason` are unchanged, and `actor_deleted` and `actor_deleted_complete` each fire once. It fails without the fix.
+
+**Rationale**: Entry 41's reset also ran for a finisher that loaded the actor before another removed its row: a DELETE retry, a sibling two sign-ins sweep, a sign-in racing a DELETE. It cleared `finished_at`, so `mark_finished` announced the completion a second time with the loser's `reason`.
+
+#### 46. The pending adoption: a documented contract instead of more machinery [X2–X5]
+
+**Category**: Verification fix (decision)
+
+**What changed**:
+- [X2] A first record write is `create_attr_if_absent`. Losing to a concurrent replacement raises `DbError` before anything is removed.
+- [X3] `_announce_pending` no longer deletes the claimed row. The next replacement replaces an announced row (carrying nothing from it) and the TTL reaps it, so an announcer cannot delete a record written over it meanwhile.
+- [X4] The vouched branch of `_adopt_actor` calls `_announce_pending(..., skip=set())`. Every failure after a successor's create committed leaves a vouched successor, and every later sign-in lands there. This is one keyed read per lookup that resolves a vouched actor: the sign-ins, and the provider-token requests that already make a provider HTTP call. It is a cost chosen over enumerating the failure paths.
+- [X5] A claim that did not land on an unchanged row is logged at error level. The contract is documented in the changelog and the hooks reference:
+  - announced once in the common case;
+  - possibly twice under concurrent sign-ins for one creator, as for `actor_deleted`, so handlers should be idempotent;
+  - lost by a crash between the claim and the hook;
+  - expired after seven days if nobody announces it;
+  - no swept siblings carried.
+
+**Files affected**:
+- `actingweb/oauth2.py`.
+- `tests/test_adoption_summary_and_handoff.py`:
+  - `test_a_vouched_sign_in_announces_what_a_failed_replacement_left` and `test_a_first_write_that_loses_to_another_fails_closed`, both failing without their fixes;
+  - `_nothing_pending` (gone or claimed) in four assertions that expected the row deleted.
+  - X3 has no test that reproduces the interleaving: the change removes a line, and the claimed row staying is asserted through `_nothing_pending`.
+- `CHANGELOG.rst` and `docs/reference/hooks-reference.rst`.
+
+**Rationale**: Each verification round since entry 32 found another race in the pending announcement. The owner's direction was to iterate until clean, sizing the audit to each delta, so this closes it at the contract the library's other lifecycle events already carry, not exactly once. An in-progress marker was considered and not built.
+
+#### 47. The callback's redirect to the email form left a base path; the `post()` comment [X6, X7]
+
+**Category**: Verification fix
+
+**What changed**:
+- The OAuth callback redirects to the email form under the app's base path (`proto` + `fqdn`, as the verification link already was).
+- The `post()` comment says what a cross-site JSON request still gets.
+- The verification-link half of X6 was refuted: `fqdn` carries the base path, so `proto + fqdn + "/oauth/email?verify="` already keeps it.
+
+**Files affected**:
+- `actingweb/handlers/oauth2_callback.py`.
+- `actingweb/handlers/oauth_email.py`.
+- `tests/test_oauth2_callback_email_required.py`: the redirect assertion is absolute, and `test_the_email_form_redirect_keeps_a_base_path` fails without the fix.
+
+**Rationale**: Without it, an app under a base path never reached the forms entry 43 fixed.
+
+### 2026-11-04, after verification thoughts/verifications/2026-11-04-3-16-adoption-fault-followups.md
+
+#### 48. Four small edges of entries 45–46 [Y1–Y4]
+
+**Category**: Verification fix
+
+**What changed**:
+- [Y1] `_announce_pending` returns before reading when `hooks is None`. A request without hooks, such as a provider-token lookup on a bare `Config`, no longer claims the record and fires nothing.
+- [Y2] It never announces an actor as having replaced itself (`old_id == actor.id`). A replacement that recorded V and failed before removing it can leave a record naming V.
+- [Y3] The deletion hooks table states the completion's crash window: a crash between recording the finish and the hook loses it, and a later request finds the deletion done.
+- [Y4] The finished-and-row-gone check runs before the trust and subscription pre-reads, so a retry of a finished deletion is not answered 503 by a fault in a read it does not need.
+
+**Files affected**:
+- `actingweb/oauth2.py`.
+- `actingweb/deletion_finish.py`.
+- `docs/reference/hooks-reference.rst`.
+- `tests/test_adoption_summary_and_handoff.py`: `test_without_hooks_the_record_is_left_for_a_sign_in_that_has_them` and `test_an_actor_is_never_announced_as_having_replaced_itself`.
+- `tests/test_deletion_finish.py`: `test_a_finished_deletion_reads_nothing_else_first`.
+- All three tests fail without the fix.
+
+**Rationale**: The sixth run's targeted read found these edges inside entries 45–46's own code. No new class of problem appeared.
+
+### 2026-11-04, after verification thoughts/verifications/2026-11-04-3-16-adoption-fault-followups-reverify.md
+
+#### 49. The sign-in error pages are titled for what happened
+
+**Category**: UX refinement
+
+**What changed**: The result page (`aw-verify-email.html`) took its heading and `<title>` from a fixed "Email verification", so a browser whose sign-in session had expired read "Email verification" above "This sign-in has expired". `_verification_error` takes an optional `title`, passed on as a template value. The expired or missing session page is titled "Sign-in expired", and the 503 "code could not be sent" page and the 401 page for a challenge of the wrong shape are titled "Sign in". The bundled template renders `title|default('Email verification')`, and both integrations' fallbacks use `title` before "Email Verified" or "Verification Failed". The verification link's own pages are unchanged.
+
+**Files affected**:
+- `actingweb/handlers/oauth_email.py`: the `title` keyword, its three callers, and the `get()` docstring (the link shows the Confirm page).
+- `actingweb/templates/aw-verify-email.html`.
+- `actingweb/interface/integrations/flask_integration.py`, `fastapi_integration.py`: the fallback heading.
+- `tests/test_email_sign_in_code.py`: title assertions in the expired-session test, both fallback tests, the 503 test and the 401 test, plus the invalid-link page still titled "Email verification".
+- `CHANGELOG.rst`: one sentence and a Check in "The email form's error pages answer their real status".
+
+**Rationale**: The owner asked for a clearer title after the seventh run.
+
+#### 50. Docs sweep for the branch's email-form and verification changes
+
+**Category**: Verification fix (docs)
+
+**What changed**: A sweep of `docs/` for passages this branch made stale, outside the files it had already updated:
+- `docs/guides/oauth-login-flow.rst`:
+  - The handler's endpoint list now names the Confirm page, the `POST` with `verify`, the code flow, and the cross-site refusal.
+  - The flow diagram has the code alternative and the Confirm step.
+  - The `action` variable is under the app's root.
+  - The template variables table gains `code_challenge` and `start_over_url`.
+  - The manual test step now says to confirm.
+- `docs/guides/spa-authentication.rst`:
+  - The example handles `status: "code_required"`.
+  - The verify-link paragraph and the `GET /oauth/email?verify` reference describe the Confirm step and its JSON.
+  - New paragraph: send these requests as JSON, because cross-site browser forms are refused.
+- `docs/guides/authentication.rst`:
+  - The email fallback gains the code flow and the same-origin requirement.
+  - Scenario 2 and the verification flow gain the Confirm step.
+  - The two template descriptions are corrected: the result page is no longer verification-only, and it carries `redirect_url` and `title`.
+- `docs/guides/web-ui.rst`: `action` is under the app's root; `code_challenge` and `start_over_url` are added.
+- `docs/guides/hooks.rst`: `email_sign_in_code_required` added to the event list.
+- `docs/migration/v3.16.rst`:
+  - The cross-site section covers `POST /oauth/email`.
+  - The Confirm form posts to `action`.
+  - The sign-in errors carry `title`.
+
+**Rationale**: The owner asked for a sweep of `docs/` after the seventh run. The branch had updated the reference pages, the migration guide and the changelog, but the guides still described the link as verifying on `GET`, the form as answering only 409, and the result page as verification-only.

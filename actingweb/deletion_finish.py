@@ -61,6 +61,7 @@ def finish_deletion(
     fire_complete: bool = True,
     pre_reads: tuple[Any, Any] | None = None,
     client_ids: list[str] | None = None,
+    on_lease: Callable[[str], None] | None = None,
 ) -> int | None:
     """Start or resume the wipe of ``actor``; the tokens revoked when its row is gone.
 
@@ -83,6 +84,9 @@ def finish_deletion(
             fetched strictly; read here otherwise.
         client_ids: Client ids the caller already read (merged with the
             ones read here and the ones a tombstone recorded).
+        on_lease: Called with this finisher's lease id once it holds the
+            lease, so a caller can tell its own lease from another
+            finisher's afterwards (the operator command).
 
     Returns:
         The number of tokens revoked when the actor row is gone (0 is a
@@ -105,6 +109,19 @@ def finish_deletion(
     else:
         resumed = False
     try:
+        if data is not None and data.get("finished_at") and deletion.is_resumable(data):
+            from .db import get_actor
+
+            # Finished already. A finisher that loaded the actor before
+            # another one removed its row (a DELETE retry, a sibling two
+            # sign-ins sweep) finds the row gone: done, nothing to reset or
+            # announce again, and nothing else read first (a fault there
+            # would answer 503 for an actor that is gone). A live row is the
+            # id re-created under the old tombstone, a new deletion (below).
+            # A fault reading the row raises (the lease is released).
+            if get_actor(config).get(actor_id=actor_id) is None:
+                deletion.release_lease(actor_id, config, data)
+                return 0
         if pre_reads is None:
             pre_reads = _pre_read(actor_id, config)
         client_ids_all = set(client_ids or [])
@@ -124,30 +141,38 @@ def finish_deletion(
             recorded = data.get("client_ids")
             if isinstance(recorded, list):
                 client_ids_all.update(str(c) for c in recorded)
+        if on_lease is not None and data.get("lease_id"):
+            on_lease(str(data["lease_id"]))
         effective_peers = notify_peers and data.get("notify_peers") is not False
-        if not deletion.is_resumable(data):
+        if not deletion.is_resumable(data) or data.get("finished_at"):
             # A tombstone from before resumable deletion: whether
             # actor_deleted ran then is not knowable. A DELETE /<id> of the
             # live actor is the user asking now, so it fires (at least once
-            # per hook, as documented: handlers are idempotent) and the
-            # tombstone records this deletion. Elsewhere (the operator
-            # command) the common case is that it ran right after the
-            # tombstone, and it is not fired again.
-            if origin == "delete":
-                data = _update(
-                    actor_id,
-                    config,
-                    data,
-                    {
-                        "reason": reason,
-                        "notify_peers": bool(notify_peers),
-                        "hook_kwargs": dict(hook_kwargs or {}),
-                        "client_ids": sorted(client_ids_all),
-                        "hook_fired": False,
-                    },
-                )
-            else:
-                data = _update(actor_id, config, data, {"hook_fired": True})
+            # per hook, as documented: handlers are idempotent). Elsewhere
+            # (the operator command) the common case is that it ran right
+            # after the tombstone, and it is not fired again. Either way the
+            # tombstone now records this deletion (reason, the peers choice,
+            # the client ids), so a wipe that stalls again resumes as a
+            # resumable one instead of coming back as "legacy, review". A
+            # finished tombstone whose actor id is live again (re-created
+            # without its tombstone cleared) is a new deletion too: its old
+            # finish, hook flag and retention TTL do not carry over.
+            data = _update(
+                actor_id,
+                config,
+                data,
+                {
+                    "reason": reason,
+                    "notify_peers": bool(notify_peers),
+                    "hook_kwargs": dict(hook_kwargs or {}),
+                    "client_ids": sorted(client_ids_all),
+                    "hook_fired": origin != "delete",
+                    "finished_at": None,
+                },
+                # Resumable now: it keeps no retention TTL until this wipe
+                # is confirmed (a legacy row carried one).
+                clear_ttl=True,
+            )
         if hooks is not None and not data.get("hook_fired"):
             kwargs = data.get("hook_kwargs")
             _fire(
@@ -162,17 +187,23 @@ def finish_deletion(
         # still ours: a finisher whose lease lapsed and was taken over stops
         # here (DeletionInProgress) instead of wiping beside the new one.
         data = _update(actor_id, config, data, deletion.lease_fields())
+        # The keeper's clock starts at this renewal, not after the sweeps
+        # below: a slow token or client sweep must count against the lease
+        # (re-verification N6).
+        keep_lease = _lease_keeper(actor_id, config, data)
         from .oauth2 import _delete_actor_clients, _revoke_all_actor_tokens
 
         revoked = _revoke_all_actor_tokens(config, actor_id, spa=not spa_revoked)
+        keep_lease()
         _delete_actor_clients(
             config, actor_id, sorted(client_ids_all), actor_deleted=True
         )
+        keep_lease()  # a slow client sweep counts too (re-verification 3, V10)
         gone = bool(
             actor.delete(
                 notify_peers=effective_peers,
                 _pre_reads=pre_reads,
-                _between_steps=_lease_keeper(actor_id, config, data),
+                _between_steps=keep_lease,
             )
         )
     except BaseException:
@@ -258,10 +289,17 @@ def _lease_keeper(
 
 
 def _update(
-    actor_id: str, config: Config, data: dict[str, Any], changes: dict[str, Any]
+    actor_id: str,
+    config: Config,
+    data: dict[str, Any],
+    changes: dict[str, Any],
+    *,
+    clear_ttl: bool = False,
 ) -> dict[str, Any]:
     """Change the tombstone under the lease this finisher holds."""
-    changed = deletion.update_tombstone(actor_id, config, data, changes)
+    changed = deletion.update_tombstone(
+        actor_id, config, data, changes, clear_ttl=clear_ttl
+    )
     if changed is None:
         # Someone took the lease from under us (ours lapsed): stop, the
         # other finisher carries on.

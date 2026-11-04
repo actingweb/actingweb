@@ -110,7 +110,26 @@ class TestWebCallbackVerifiedEmailsNone:
         assert result.get("status") == "email_required"
         assert webobj.response.status_code == 302
         assert webobj.response.redirect is not None
-        assert webobj.response.redirect.startswith("/oauth/email?session=")
+        # Under the app's root (re-verification 5, X6): a base path in
+        # ``fqdn`` is kept.
+        assert webobj.response.redirect.startswith(
+            "https://test.example.com/oauth/email?session="
+        )
+
+    def test_the_email_form_redirect_keeps_a_base_path(self):
+        real = _config
+
+        def based(provider: str = "github") -> MagicMock:
+            config = real(provider)
+            config.fqdn = "test.example.com/app"
+            return config
+
+        with patch(f"{__name__}._config", based):
+            _result, webobj = _run_web("github", [])
+        assert webobj.response.redirect is not None
+        assert webobj.response.redirect.startswith(
+            "https://test.example.com/app/oauth/email?session="
+        )
 
     def test_nonempty_list_is_offered_via_session(self):
         with patch("actingweb.oauth_session.get_oauth2_session_manager") as get_mgr:

@@ -195,6 +195,21 @@ SECURITY
   vouches for that address unless it passes ``unvouch=True`` (new), which
   applies the endpoint's rules.
 
+- **Another site could sign a browser in through the email form.**
+  ``POST /oauth/email`` checked no request's origin: a page on another site
+  (a sibling subdomain included) could auto-post the submitter's own OAuth
+  session id and an address from a visitor's browser, and the completed
+  sign-up set the ``oauth_token`` cookie there, signing the visitor in to an
+  actor of the submitter's choosing (login CSRF). A browser form ``POST``
+  that the browser reports as started by another site (``Sec-Fetch-Site``
+  other than ``same-origin`` or ``none``, else a foreign or ``null``
+  ``Origin``, else a foreign ``Referer``) now answers 403 before anything is
+  claimed, created, redeemed or mailed, and no request another site started
+  gets a session cookie from this endpoint; a JSON client still gets its
+  token in the body. **Behavior change:** a form on another origin that
+  posts to ``/oauth/email`` is refused. **Check:** an application page that
+  posts the email form from a different origin sends it as JSON instead.
+
 - **A link on another site could delete the actor, approve a trust, or
   change a property for a signed-in owner.** Every REST handler honours a
   ``_method`` override on ``GET`` (``GET /<id>?_method=DELETE`` deletes the
@@ -310,7 +325,10 @@ SECURITY
   mints nothing either. The code
   exchange, the refresh grants and the client-credentials grant compare the
   stamp after writing the new token and revoke it on a mismatch
-  (``invalid_grant``); a read fault answers 503. A credential issued before
+  (``invalid_grant``); a read fault answers 503 (an authorization code is
+  spent by then, so the client restarts the authorization). The SDK's
+  ``ActorInterface.oauth_clients.generate_access_token`` passes its
+  client's stamp the same way. A credential issued before
   3.16 has no stamp and works only on an actor never cleaned since. The
   window is closed within the issuing process: another worker can keep
   serving an access token it cached for up to its cache lifetime (five
@@ -374,9 +392,13 @@ CHANGED
   keeping the email; once uniqueness is enabled, an address another actor
   holds is reported and left (before ``enable`` the check is a read
   followed by the rename, so a concurrent sign-in can still take the
-  address; ``report`` then lists the pair). Each actor is still moved when
-  it is next loaded, as before. **Check:** if
-  you relied on the sweep, run the command once after the upgrade.
+  address; ``report`` then lists the pair). **Behavior change:** loading an
+  actor moves its creator to its stored email only when the actor is
+  vouched (a provider or the emailed link proved the address); an unvouched
+  one, such as a factory create left with the default creator, keeps its
+  creator until ``resolve`` or a sign-in's adoption moves it. **Check:** if
+  you relied on the sweep or on the load, run the command once after the
+  upgrade.
 
 - **``GET /?format=json`` allowed credentialed cross-origin reads of a public
   document.** The factory's JSON configuration reflected the request's
@@ -761,6 +783,47 @@ CHANGED
   ``get_by_creator`` leaves out an actor its index lists whose row is gone
   (DynamoDB's creator index is eventually consistent). Both bundled backends
   implement it. **Check:** a custom backend must accept the keyword.
+
+- **Breaking: ``conditional_update_attr`` takes ``clear_ttl``.** The
+  attribute backend protocol (``actingweb.db.protocols``) gains a
+  keyword-only ``clear_ttl=False``: with it, the same conditional write
+  removes the row's TTL, so the row never expires (ignored when
+  ``ttl_seconds`` is given). A deletion tombstone written before 3.16 that a
+  ``DELETE`` or ``actingweb-deletions resume`` now records as resumable uses
+  it, so the record does not expire before its wipe is confirmed; it is
+  passed only there, so a backend without it fails only that resume. Both
+  bundled backends implement it. **Check:** a custom backend must accept
+  the keyword.
+
+- **The SPA ``refresh_token`` cookie lives on ``path=/`` only.** The OAuth
+  callback's hybrid delivery set it on ``/oauth/spa/token`` and the refresh
+  grant's rotation on ``/``, so ``/oauth/logout`` did not receive the
+  callback's cookie (the refresh token stayed valid after a logout before
+  the first refresh), and after a rotation a browser held two and sent the
+  stale one to the refresh grant first. On FastAPI the split was hidden
+  until now: its cookie copy dropped ``path`` and ``samesite``, so every
+  handler cookie got ``/`` and ``Lax``. **Behavior change:** every setter
+  writes ``refresh_token`` on ``/`` (the callback keeps ``SameSite=Strict``,
+  the rotation ``Lax``) and expires the cookie on ``/oauth/spa/token`` in
+  the same response; FastAPI now keeps every attribute a handler sets on a
+  cookie (``path``, ``samesite``), as Flask always did. **Check:** an SPA
+  that reads cookies by path, or a proxy that rewrites ``Set-Cookie``,
+  sees the new attributes.
+
+- **The email form's error pages answer their real status.** The Flask and
+  FastAPI integrations rendered ``aw-oauth-email.html`` with status 200
+  whatever the handler set. **Behavior change:** the "address has an actor"
+  page answers 409, an invalid address 400 and a refused sign-in code 401;
+  the verification result page's errors carry a Continue link to the app's
+  root, so an invalid or expired link is not a dead end. A browser whose
+  sign-in session is missing or expired (the form waits ten minutes) gets
+  that error page with its Continue link (400) instead of the address form
+  drawn again with the dead session; a JSON client still gets the error
+  body. The sign-in errors on that page are titled for what happened
+  ("Sign-in expired", "Sign in", from a new ``title`` template value), not
+  "Email verification". **Check:** a front end that tests ``response.ok`` on
+  these pages; a template overriding ``aw-verify-email.html`` renders
+  ``title`` when it is set.
 
 - **``Actor.delete`` returns a bool.** It returned ``None``; it now returns
   ``True`` when the backend reported no fault removing the actor row
@@ -1324,15 +1387,32 @@ ADDED
   until the hour ends, the limit's cost: five requests for an address lock
   its owner out of codes for that hour), counted with a conditional write
   so concurrent requests cannot exceed it; a new challenge does not cancel
-  an earlier one. A wrong code answers 401 with the code page again (JSON:
-  the error body). The code is never offered for, or redeemed into, an
-  actor whose deletion is under way. Over HTTP the binding cookie needs
+  an earlier one, and a browser that already holds a binding keeps it for
+  its next challenge, so a second tab does not void the first page's code.
+  A browser form that another site started, a sibling subdomain included,
+  answers 403 before a challenge is created or a code mailed (see "Another
+  site could sign a browser in through the email form" under SECURITY), so
+  no other site can bind a challenge to a browser; a JSON challenge is
+  never redeemed into a browser session. A wrong code answers
+  401 with the code page again (JSON: the error body); a challenge id that
+  is not one the app issued answers 401 with the error page. The code
+  signs in only to the actor that still holds the address it was sent to,
+  and is never offered for, or redeemed into, an actor whose deletion is
+  under way; such a refusal leaves the code unconsumed, and the attempt
+  counts as one of its five tries. When every registered hook raises, the
+  code was not sent: the challenge is withdrawn (its hourly slot stays
+  used, since a hook can fail after the mail left) and the page answers
+  503 "The sign-in code could not be sent"; once one hook sent it, a later
+  hook's failure is logged and the code stays good. A store
+  fault while counting a try or consuming the code answers 503, never
+  "invalid code"; a token-store fault after a correct code answers 503 and
+  that code is spent (ask for another). Over HTTP the binding cookie needs
   HTTPS (``Secure``), except on ``localhost`` in browsers that treat it as
   a secure origin.
   **Behavior change:** none without the hook, which keeps the 409.
   **Check:** an application template overriding ``aw-oauth-email.html``
   renders the code field when ``code_challenge`` is set, and ``error``
-  beside it.
+  beside it; the bundled template is headed "Enter your sign-in code" then.
 
 - **``DeletionInProgress``** (``actingweb.db.exceptions``, a ``DbError``):
   another request is finishing the actor's deletion; answered 503 with
@@ -1712,13 +1792,25 @@ FIXED
   replacement reported only its own level in ``actor_adopted``; a
   replacement scanned the shared SPA token buckets once per actor (now one
   pass); a successor whose create raised was never announced (the next
-  sign-in that creates the actor for the creator fires ``actor_adopted``
-  with the old id, its counts ``None``); a summary read that faulted
+  verified sign-in for the creator fires ``actor_adopted`` with the old id,
+  its counts ``None``: one that creates the actor, one that cleans the
+  actor the email form created meanwhile, whose own unverified create
+  announces nothing, or one that replaces a ``factory`` actor created
+  meanwhile, or any later sign-in to the creator's vouched actor; the
+  record keeps every unannounced replacement, so a sign-in that fails after
+  recording its own loses none, and a fault writing it fails the sign-in
+  before anything is removed; like ``actor_deleted`` it is not exactly
+  once: a concurrent sign-in for the creator can announce a replacement
+  twice, a crash between the claim and the hook loses it, and an
+  unannounced record expires after seven days); a summary read that faulted
   reported nothing removed (the counts are now ``None``, unknown); the
   provider bookkeeping writes on three sign-in paths failed the sign-in on a
   fault (they are logged). **Behavior change:** ``actor_adopted``'s
   ``removed_trusts``, ``removed_subscription_peers`` and ``property_names``
-  can be ``None``.
+  can be ``None``, and a sign-in that completes an earlier failed
+  replacement while adopting another actor fires ``actor_adopted`` more
+  than once: one per earlier replacement (``mode="replaced"``), then its
+  own.
 
 - **``force_email_prop_as_creator`` renamed an unvouched actor's creator
   at load.** ``Actor.get`` copied ``store.email`` into the creator of every

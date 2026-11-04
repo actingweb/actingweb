@@ -1361,6 +1361,8 @@ class DbAttributeProtocol(Protocol):
         new_data: Any = None,
         timestamp: datetime | None = None,
         ttl_seconds: int | None = None,
+        *,
+        clear_ttl: bool = False,
     ) -> bool:
         """
         Conditionally update an attribute only if current data matches old_data.
@@ -1377,6 +1379,8 @@ class DbAttributeProtocol(Protocol):
             ttl_seconds: When given, the same write sets the row's storage
                 TTL (as ``set_attr`` does). Never an upsert: a row that is
                 gone stays gone.
+            clear_ttl: the same write removes the row's storage TTL, so it
+                never expires; ignored when ``ttl_seconds`` is given.
 
         Returns:
             True if update succeeded (current matched old_data), False otherwise

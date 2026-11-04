@@ -271,8 +271,9 @@ test harness that builds ``Config()`` directly) must also call
 ``ActingWebApp.check_ready()`` or run against a store where
 ``actingweb-unique-creators enable --apply`` has run. The ``DbActor``
 constructor no longer creates the DynamoDB ``<prefix>_creators`` table, and
-on PostgreSQL the first enforced create checks for ``ux_actors_creator``.
-Without it, with uniqueness on and ``enable --apply`` not yet run, every actor create, including the OAuth2 system actor bootstrap, raises ``DbError`` (``database error during actor create``, 503 through the integrations, and retrying does not clear it) on both backends. Run ``actingweb-unique-creators enable --apply`` first, or call ``check_ready()``, which names the command.
+on PostgreSQL the first enforced create or creator change checks for
+``ux_actors_creator``.
+Without it, with uniqueness on and ``enable --apply`` not yet run, every actor create and creator change (a rename, a holder replacement), including the OAuth2 system actor bootstrap, raises ``DbError`` (``database error during actor create``, or ``actor modify`` and ``actor replace holder`` for the changes; 503 through the integrations, and retrying does not clear it) on both backends. Run ``actingweb-unique-creators enable --apply`` first, or call ``check_ready()``, which names the command.
 
 .. code-block:: python
 
@@ -726,10 +727,23 @@ module docstring of ``actingweb.db.protocols`` states:
   subid=None)`` as one atomic update that returns the new sequence number
   (None when the row is gone). The library no longer writes ``previous + 1``
   through ``modify(seqnr=...)``, which let two concurrent changes share a
-  number.
+  number;
+- take ``callback`` on ``DbSubscription.create`` and ``modify`` as a bool
+  only (``None`` on ``modify`` leaves it), raising ``TypeError`` before any
+  I/O for anything else;
+- raise ``DbError`` from ``DbAttribute.delete_expired`` on a fault rather
+  than answer 0 (a backend with native TTL may still answer 0 without
+  doing anything);
+- implement ``DbActorList.iter_rows(*, consistent=False, rate_limit=None)``,
+  yielding each actor as ``{"id", "creator"}`` as it is read, without
+  holding the fleet in memory, and raising ``DbError`` on a fault.
+  ``actingweb-mark-actors-vouched``, ``actingweb-migrate-property-lists``,
+  ``actingweb-verify-property-lists`` and ``actingweb-verify-orphans`` call
+  it.
 
 A backend without ``strict`` fails with ``TypeError`` at its first call; one
-without ``increment_seq`` fails with ``AttributeError`` at its first diff.
+without ``increment_seq`` fails with ``AttributeError`` at its first diff;
+one without ``iter_rows`` stops those four commands before they scan.
 
 For reverse lookup (see `One reverse-lookup mechanism`_) a backend must also:
 
@@ -866,7 +880,7 @@ below yet opts out with ``with_unique_creator(False)``, which keeps the
 duplicate-tolerant path (the adoption rules for several actors sharing a
 creator). Code that builds ``Config()`` and creates actors without
 ``integrate_*`` must call ``ActingWebApp.check_ready()`` as an
-application does. Without it, with uniqueness on and ``enable --apply`` not yet run, every actor create, including the OAuth2 system actor bootstrap, raises ``DbError`` (``database error during actor create``, 503 through the integrations, and retrying does not clear it) on both backends. Run ``actingweb-unique-creators enable --apply`` first, or call ``check_ready()``, which names the command. ``BaseHandler`` no longer defaults its ``config``, so a
+application does. Without it, with uniqueness on and ``enable --apply`` not yet run, every actor create and creator change (a rename, a holder replacement), including the OAuth2 system actor bootstrap, raises ``DbError`` (``database error during actor create``, or ``actor modify`` and ``actor replace holder`` for the changes; 503 through the integrations, and retrying does not clear it) on both backends. Run ``actingweb-unique-creators enable --apply`` first, or call ``check_ready()``, which names the command. ``BaseHandler`` no longer defaults its ``config``, so a
 handler built without one raises ``ValueError`` instead of enforcing a store
 that was never checked.
 

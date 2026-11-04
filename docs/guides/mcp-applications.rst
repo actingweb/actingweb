@@ -498,14 +498,19 @@ You can expose resources via MCP using the resource decorator on a method hook:
 
 What the hook returns decides the ``resources/read`` body: a ``dict`` is sent
 as indented JSON with the decorator's ``mime_type`` (``application/json`` by
-default); a ``str`` is sent as it is; a ``dict`` with a ``contents`` key is
+default); a ``str`` is sent as it is, also labelled with the decorator's
+``mime_type`` (so declare ``mime_type="text/plain"`` for plain text); a
+``dict`` with a ``contents`` key is
 passed through unchanged. The hook receives the request params, then the
 template's variables over them (a client param never replaces a variable the
 permission check judged), then ``uri``, which is always the requested URI, so
 do not name a template variable ``uri``. A resource matched by its
 ``uri_pattern`` gets no variables: its hook receives the params and ``uri``
 only, so read any value the permission check must have judged from ``uri``,
-never from a param. Flask and FastAPI answer identically.
+never from a param. Flask and FastAPI answer a successful read
+identically; their error messages differ (a raising hook answers
+"Resource execution failed" on Flask, "Resource read failed" on FastAPI),
+and on Flask the hook must be synchronous.
 
 Property Hooks for MCP Applications
 -----------------------------------

@@ -569,7 +569,12 @@ Both integrations answer a ``DbError`` that reaches them with **503**,
 ``Retry-After: 5`` and a fixed body
 (``{"error": "temporarily_unavailable", ...}``); the exception text goes to
 the log only. A backend error a retry cannot fix (a validation, size or
-constraint error) answers **500** without ``Retry-After``. ``CreatorTaken``,
+constraint error) answers **500** without ``Retry-After``. One refusal a
+retry does not clear still answers 503: an actor create or creator change
+refused because creator uniqueness is on and the database does not enforce
+it yet (an ERROR names ``actingweb-unique-creators enable --apply``).
+``check_ready()`` stops an integrated application from starting in that
+state, so only code that builds ``Config()`` directly meets it. ``CreatorTaken``,
 a ``DbError`` subclass for a creator another actor holds, answers **409**: the
 actor backends raise it under ``with_unique_creator()``, and PostgreSQL also
 whenever the ``ux_actors_creator`` index exists (see

@@ -16,6 +16,7 @@ from unittest import mock
 import pytest
 
 from actingweb.config import Config
+from actingweb.db.exceptions import DbError
 from actingweb.oauth2_server.client_registry import MCPClientRegistry
 from actingweb.oauth2_server.trust_lookup import (
     client_trusts_for_deletion,
@@ -35,9 +36,45 @@ class _DeletingTrustManager(FakeTrustManager):
         return True
 
 
-def _delete(client_id: str, trusts: list[FakeTrust]) -> list[str]:
+class _CascadingTrustManager(_DeletingTrustManager):
+    """Models ``Trust.delete``: deleting the tagged row deletes the client
+    again, which takes every other row of that client with it."""
+
+    def __init__(self, trusts: list[FakeTrust], cascade_from: str) -> None:
+        super().__init__(trusts)
+        self.cascade_from = cascade_from
+
+    def delete_relationship(self, peer_id: str) -> bool:
+        if not any(t.peerid == peer_id for t in self._trusts):
+            return False
+        self.deleted.append(peer_id)
+        if peer_id == self.cascade_from:
+            client = peer_id.rsplit(":", 1)[1]
+            self._trusts = [t for t in self._trusts if not t.peerid.endswith(client)]
+        else:
+            self._trusts = [t for t in self._trusts if t.peerid != peer_id]
+        return True
+
+
+class _FaultingTrustManager(_DeletingTrustManager):
+    def __init__(self, trusts: list[FakeTrust], faulting: str) -> None:
+        super().__init__(trusts)
+        self.faulting = faulting
+
+    def delete_relationship(self, peer_id: str) -> bool:
+        if peer_id == self.faulting:
+            raise DbError("trust delete")
+        return super().delete_relationship(peer_id)
+
+
+def _delete(
+    client_id: str,
+    trusts: list[FakeTrust],
+    manager: _DeletingTrustManager | None = None,
+) -> list[str]:
     """Run the registry's deletion with the actor loading patched out."""
-    manager = _DeletingTrustManager(trusts)
+    if manager is None:
+        manager = _DeletingTrustManager(trusts)
     registry = MCPClientRegistry.__new__(MCPClientRegistry)
     registry.config = Config(mcp=True, unique_creator=False)
     core = mock.Mock()
@@ -88,9 +125,9 @@ def test_the_segment_arm_compares_the_last_segment_exactly() -> None:
 
 def test_a_tagged_row_and_a_legacy_row_of_one_client_are_both_deleted() -> None:
     """An upgraded actor holds the legacy ``oauth2:`` row and the tagged
-    ``oauth2_client:`` row under different peer ids. Deletion stopped after
-    the first (tagged) one, and the legacy row kept its permissions
-    (re-verification 2026-11-04, Issue 1)."""
+    ``oauth2_client:`` row under different peer ids. Both are deleted
+    directly, without relying on ``Trust.delete``'s cascade, which only
+    reaches the client again for ``mcp_``-prefixed ids."""
     legacy = FakeTrust("oauth2:alice_at_x_dot_com:mcp_ab12", established_via=None)
     tagged = FakeTrust(
         "oauth2_client:alice_at_x_dot_com:mcp_ab12",
@@ -107,6 +144,38 @@ def test_a_tagged_row_and_a_legacy_row_of_one_client_are_both_deleted() -> None:
         legacy.peerid,
         tagged.peerid,
     ]
+
+
+def _two_rows() -> tuple[FakeTrust, FakeTrust]:
+    tagged = FakeTrust(
+        "oauth2_client:alice_at_x_dot_com:mcp_ab12",
+        established_via="oauth2_client",
+        oauth_client_id="mcp_ab12",
+    )
+    legacy = FakeTrust("oauth2:alice_at_x_dot_com:mcp_ab12", established_via=None)
+    return tagged, legacy
+
+
+def test_a_row_the_cascade_already_deleted_logs_no_failure(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The tagged row's cascade deletes the legacy row first; the loop's own
+    delete of it then finds nothing, which is not a failure."""
+    tagged, legacy = _two_rows()
+    manager = _CascadingTrustManager([tagged, legacy], cascade_from=tagged.peerid)
+    with caplog.at_level("INFO", logger="actingweb.oauth2_server.client_registry"):
+        assert _delete("mcp_ab12", [], manager) == [tagged.peerid]
+    assert manager.relationships == []
+    assert not [r for r in caplog.records if r.levelname == "WARNING"]
+    assert any("already deleted" in r.getMessage() for r in caplog.records)
+
+
+def test_a_fault_on_one_row_still_deletes_the_others_then_raises() -> None:
+    tagged, legacy = _two_rows()
+    manager = _FaultingTrustManager([tagged, legacy], faulting=tagged.peerid)
+    with pytest.raises(DbError):
+        _delete("mcp_ab12", [], manager)
+    assert manager.deleted == [legacy.peerid]
 
 
 def test_the_segment_arm_needs_exactly_three_segments() -> None:

@@ -489,13 +489,20 @@ Everything that needs a design or a new cross-table primitive stays out, and
   decorator's `mime_type` (`application/json` by default); a `str` is sent
   as it is; a `dict` with a `contents` key is passed through unchanged. Flask
   and FastAPI answer identically."*
+  **[Updated 2026-11-04, Iteration 13]** The doc now says a `str` carries
+  the decorator's `mime_type`, and that the integrations answer a
+  successful read identically while their error messages differ and Flask
+  needs a synchronous hook.
 - **D8 Exact-match client deletion.** **[Updated 2026-11-04]** Arm 3
   accepts every source trust creation writes (`oauth2`, `oauth2_client`,
   `oauth2_interactive`), gated on OAuth2 origin; see Iteration 2.
   **[Updated 2026-11-04, Iteration 6]** Deletion removes every row the three
   arms match (`client_trusts_for_deletion`), not the first; arm 3 needs
   exactly three segments; `find_client_trust` lost `legacy_segment_match`
-  and is the resolver's single-row answer only. `_delete_client_trust_relationship`
+  and is the resolver's single-row answer only.
+  **[Updated 2026-11-04, Iteration 11]** Every row is tried before the
+  first `DbError` is raised, and a row an earlier row's `Trust.delete`
+  cascade already removed counts as deleted. `_delete_client_trust_relationship`
   (`actingweb/oauth2_server/client_registry.py:591-668`) matches with
   `pattern in peer_id or peer_id.endswith(client_id)` (`:631`) and deletes
   the first hit, so deleting client A can take an unrelated row of the same
@@ -1349,6 +1356,12 @@ docs build, `verify_groups`, ruff and pyright at 0 errors and 0 warnings.
   pattern resources are documented as getting no variables (behaviour
   unchanged); a registration warning for a variable named `uri` was not
   added.
+- After the third verification (Iterations 10-13): the client-deletion
+  entry is hardening, not a fix of lost permissions; the deletion loop
+  survives a cascade and a fault on one row; unguarded creator-record
+  repairs get their own missing-table ERROR; the 503 for a missing
+  enforcement and the Flask/FastAPI error differences are documented,
+  not changed.
 
 ### Learnings
 - `make test-all-parallel` ends with `docker compose down -v`, so the next
@@ -1367,6 +1380,11 @@ docs build, `verify_groups`, ruff and pyright at 0 errors and 0 warnings.
 - "First match" and "every match" are different contracts: authorisation
   wants one row, deletion wants all of them. One function with a flag
   served both and hid that the deletion stopped early.
+- A side-effecting delete can recurse: `Trust.delete` deletes the client
+  again, so a test fake that deletes only the named row misses both the
+  cascade's benefit (Issue 3 of the third verification) and its cost (a
+  later delete finds nothing). Model the cascade when testing a loop over
+  rows it can reach.
 
 
 ## Iterations
@@ -1524,7 +1542,11 @@ reused for authorisation.
 
 **Rationale**: arm 1 always won, so an upgraded actor's legacy `oauth2:`
 row survived beside the deleted tagged `oauth2_client:` row with its
-permissions. A client-less legacy peer id keeps `:` unescaped, so "three or
+permissions. **[Corrected 2026-11-04, Iteration 10]** Not for generated
+`mcp_` ids: deleting the tagged row ran `Trust.delete`, which deletes the
+client again (`trust.py:136,166`), and that nested call removed the legacy
+row. The change is hardening: deletion no longer depends on the cascade,
+which cannot extract a non-`mcp_` client id. A client-less legacy peer id keeps `:` unescaped, so "three or
 more segments" could match one whose identifier ended in a client id. The
 resolver's answer is unchanged: the same two arms in the same order, pinned
 by `test_the_default_matches_the_resolver` and the `find_client_trust(...)
@@ -1594,3 +1616,103 @@ helpers are annotated.
 existing pattern hooks receive; narrowing the doc sentence keeps behaviour
 and makes it true. The verification marked the registration warning
 optional.
+
+### 2026-11-04, after verification thoughts/verifications/2026-11-04-3-16-dependency-security-rollup-reverify-2.md
+
+#### 10. Changelog accuracy: marker-fault statuses and the client-deletion claim
+
+**Category**: Verification fix (Issues 1, 3 and 12a)
+
+**What changed**: the chain-revocation entry says logout, `/oauth/revoke`
+and the SPA endpoint answer a marker write or read fault with 503 and
+`Retry-After`, and `/oauth/token` with 500 `server_error`
+(`TokenStoreUnavailable`, the MCP endpoint's existing answer to a store
+fault, as `v3.15.rst` documents; its theft response writes a marker too).
+It also says that `delete_expired`'s
+callers fold the fault with a WARNING in the token purges and a printed
+line in `actingweb-deletions`. The client-deletion entry no longer says a
+second row "kept its permissions": the cascade removed it for generated
+`mcp_` ids, and the entry now describes direct deletion as hardening. It
+names the two-segment `oauth2_client:<client_id>` row as no longer deleted
+(Issue 12b, accepted: the resolver already ignored it). Iteration 6's
+rationale carries a correction note.
+
+**Files affected**:
+- `CHANGELOG.rst` — both entries
+- `actingweb/db/postgresql/attribute.py` — the comment on the caller fold
+
+**Rationale**: the code was right and the entries were not; a consumer
+reading "503" would have built retry logic for a status `/oauth/token`
+never sends.
+
+#### 11. The deletion loop survives a cascade and a fault on one row
+
+**Category**: Verification fix (Issues 5 and 6)
+
+**What changed**: when `delete_relationship` answers False, the loop reads
+the relationships again (`TrustManager.relationships` re-reads the store
+on every access, no cache); a row that is gone (an earlier row's cascade took
+it) logs INFO "already deleted" instead of the WARNING. A `DbError` on one
+row is logged and kept, the remaining rows are still deleted, and the first
+fault is raised after the loop.
+
+**Files affected**:
+- `actingweb/oauth2_server/client_registry.py` — the loop
+- `tests/test_client_trust_lookup.py` — `_CascadingTrustManager` models `Trust.delete`'s cascade; `test_a_row_the_cascade_already_deleted_logs_no_failure`, `test_a_fault_on_one_row_still_deletes_the_others_then_raises` (both fail without the change); the two-row test's docstring corrected
+
+**Rationale**: the client row and its index are gone before this loop
+runs, so a retry cannot find rows a stopped loop left; and a WARNING for a
+deletion that worked trains operators to ignore it.
+
+#### 12. Unguarded creator-record repairs get their own missing-table ERROR
+
+**Category**: Verification fix (Issue 4)
+
+**What changed**: `DbActor._run_transaction` takes `guarded: bool = True`;
+`release_stale_record`, `record_for_actor_as_read` and `move_stale_record`
+pass `guarded=False`. On an unguarded path a missing table logs "A creator
+record repair needs a table that does not exist: either <actors> or
+<creators>", naming the prefix check and `enable --apply`, without the
+"most likely" preference or the "actor write was refused" remedy text.
+
+**Files affected**:
+- `actingweb/db/dynamodb/actor.py` — the flag, the three callers, the log helper and its docstring
+- `tests/test_unique_creator_fail_closed.py` — `test_an_unguarded_record_repair_names_both_tables_neutrally`
+- `tests/integration/test_unique_creator_states.py` — the `_run_transaction` wrapper forwards keyword arguments
+
+**Rationale**: `resolve --apply` against a missing creators table was told
+the actor table was the likely one.
+
+#### 13. Docs: custom backends, creator changes, accepted differences
+
+**Category**: Verification fix (Issues 2, 7, 8, 9, 10, 11, 12e)
+
+**What changed**:
+- The v3.16 custom-backend list names `DbActorList.iter_rows` (and the
+  four commands that call it), the bool `callback` on subscription
+  `create`/`modify`, and `delete_expired` raising on a fault (Issue 2).
+- The fail-closed passages in `v3.16.rst` (two) and `configuration.rst`
+  say "every actor create and creator change (a rename, a holder
+  replacement)", and name each change's `DbError` message (Issue 7).
+- Issue 8 accepted, documented: `database-backends.rst` names the one
+  non-retryable refusal that still answers 503 (missing enforcement) and
+  why only direct `Config()` code meets it. A 500 would need a new
+  `DbError` subclass and an integration change for a state `check_ready()`
+  already prevents at startup.
+- Issue 9: `security.rst` names the resumed-deletion exception to the
+  generation bump.
+- Issues 10 and 11 accepted, documented: `mcp-applications.rst` says the
+  integrations answer a successful read identically and names the
+  differing error messages and Flask's synchronous hook; a `str` result is
+  labelled with the decorator's `mime_type`. Changing either is a
+  behaviour change outside a verification fix.
+- Issue 12e: `attributes-buckets.rst` says every trust row of the client.
+- Issues 12c (an email containing `:`) and 12d (the raw exception in the
+  probe log, consistent with existing logs) accepted as-is.
+
+**Files affected**:
+- `docs/migration/v3.16.rst`, `docs/quickstart/configuration.rst`, `docs/reference/database-backends.rst`, `docs/reference/security.rst`, `docs/guides/mcp-applications.rst`, `docs/sdk/attributes-buckets.rst`
+
+**Rationale**: every remaining finding was a statement the code did not
+match; where changing the code was the larger risk, the statement now
+matches the code.

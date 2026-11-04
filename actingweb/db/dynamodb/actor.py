@@ -573,7 +573,11 @@ class DbActor:
 
     @classmethod
     def _run_transaction(
-        cls, build: Callable[[TransactWrite], None], *, op: str
+        cls,
+        build: Callable[[TransactWrite], None],
+        *,
+        op: str,
+        guarded: bool = True,
     ) -> list[str | None] | None:
         """Commit one ``TransactWriteItems``: None when it committed, else the
         cancellation code of each item when a condition failed (callers
@@ -582,6 +586,10 @@ class DbActor:
         A ``TransactionConflict`` is retried at most twice, with jitter and
         the same client request token, so a retry of a commit whose answer
         was lost is not applied twice. Anything else raises ``DbError``.
+
+        ``guarded`` says whether the caller passed
+        :func:`_require_creators_backfill` first; it only chooses the wording
+        of the missing-table ERROR.
         """
         token = uuid.uuid4().hex
         for attempt in range(cls.TRANSACT_ATTEMPTS):
@@ -605,28 +613,40 @@ class DbActor:
                 # the caller's answer (taken, changed) is not an outage.
                 if "ConditionalCheckFailed" in codes:
                     return codes
-                cls._log_missing_creators_table(e)
+                cls._log_missing_creators_table(e, guarded=guarded)
                 raise DbError(op) from e
             except Exception as e:
-                cls._log_missing_creators_table(e)
+                cls._log_missing_creators_table(e, guarded=guarded)
                 raise DbError(op) from e
         raise DbError(op)
 
     @staticmethod
-    def _log_missing_creators_table(e: BaseException) -> None:
+    def _log_missing_creators_table(e: BaseException, *, guarded: bool) -> None:
         """Name the likely table when a claim failed on a missing one. The
         fault itself stays a ``DbError``.
 
-        Every enforced transaction passes :func:`_require_creators_backfill`
-        first, which reports a missing creators table itself, so a missing
-        table here is most likely the actor table (prefix drift, a deleted
-        table). The creators table is the other candidate: deleted after
-        this process saw it backfilled."""
+        A guarded transaction (create, creator rename, holder replacement)
+        passed :func:`_require_creators_backfill` first, which reports a
+        missing creators table itself, so a missing table there is most
+        likely the actor table (prefix drift, a deleted table), else the
+        creators table deleted after this process saw it backfilled. The
+        record repairs of ``actingweb-unique-creators resolve``
+        (:func:`release_stale_record`, :func:`record_for_actor_as_read`,
+        :func:`move_stale_record`) are not guarded, so either table is
+        equally likely there and both are named without a preference."""
         from actingweb.db.dynamodb.property_lookup import is_resource_not_found
 
         if not is_resource_not_found(e):
             return
         # No DescribeTable to disambiguate: the runtime role may not have it.
+        if not guarded:
+            logger.error(
+                f"A creator record repair needs a table that does not exist: "
+                f"either {Actor.Meta.table_name} or {Creator.Meta.table_name}. "
+                "Check AWS_DB_PREFIX; a missing creators table is created and "
+                "backfilled by `actingweb-unique-creators enable --apply`."
+            )
+            return
         logger.error(
             missing_enforcement_message(
                 f"a table this write needs does not exist (most likely "
@@ -734,7 +754,10 @@ def release_stale_record(creator: str, actor_id: str) -> bool:
         t.condition_check(Actor, actor_id, condition=actor_as_read(current))
 
     # A failed condition: the record moved or went, or the actor changed.
-    return DbActor._run_transaction(build, op="creator record delete") is None
+    return (
+        DbActor._run_transaction(build, op="creator record delete", guarded=False)
+        is None
+    )
 
 
 def record_for_actor_as_read(
@@ -759,7 +782,10 @@ def record_for_actor_as_read(
             )
         t.condition_check(Actor, actor.id, condition=actor_as_read(actor))
 
-    return DbActor._run_transaction(build, op="creator record write") is None
+    return (
+        DbActor._run_transaction(build, op="creator record write", guarded=False)
+        is None
+    )
 
 
 def move_stale_record(creator: str, stale_id: str, actor: "Actor") -> bool:
@@ -787,7 +813,9 @@ def move_stale_record(creator: str, stale_id: str, actor: "Actor") -> bool:
         t.condition_check(Actor, stale_id, condition=actor_as_read(stale))
         t.condition_check(Actor, actor.id, condition=actor_as_read(actor))
 
-    return DbActor._run_transaction(build, op="creator record move") is None
+    return (
+        DbActor._run_transaction(build, op="creator record move", guarded=False) is None
+    )
 
 
 def actor_as_read(row: "Actor | None") -> Any:

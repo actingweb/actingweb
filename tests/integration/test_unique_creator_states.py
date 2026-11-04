@@ -526,9 +526,9 @@ class TestResolveOutsideRecords:
         real = DbActor._run_transaction.__func__  # type: ignore[attr-defined]
         seen: list[str | None] = []
 
-        def observed(cls: Any, build: Any, *, op: str) -> Any:
+        def observed(cls: Any, build: Any, *, op: str, **kw: Any) -> Any:
             seen.append(_record(creator))
-            return real(cls, build, op=op)
+            return real(cls, build, op=op, **kw)
 
         with mock.patch.object(DbActor, "_run_transaction", classmethod(observed)):
             assert unique_creators.main(["resolve", "--apply", "--keep", kept]) == 0

@@ -254,6 +254,25 @@ class TestDynamoDBConstructorCreatesNoCreatorsTable:
         finally:
             ddb.Actor(id=actor_id).delete()
 
+    def test_an_unguarded_record_repair_names_both_tables_neutrally(
+        self, absent_creators_table: str, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """``resolve --apply``'s repairs skip the backfill check, so their
+        missing-table ERROR must not call the actor table the likely one."""
+        from actingweb.db.dynamodb.actor import Actor, release_stale_record
+
+        actor_id = uuid.uuid4().hex
+        with caplog.at_level(logging.ERROR, logger="actingweb.db.dynamodb.actor"):
+            with pytest.raises(DbError):
+                release_stale_record(f"gone-{actor_id}@example.com", actor_id)
+        errors = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
+        repair = [m for m in errors if "creator record repair" in m]
+        assert repair, errors
+        assert absent_creators_table in repair[0]
+        assert Actor.Meta.table_name in repair[0]
+        assert "most likely" not in repair[0]
+        assert not any("most likely" in m for m in errors), errors
+
     def test_unenforced_constructor_creates_only_the_actor_table(
         self, absent_creators_table: str
     ) -> None:

@@ -46,13 +46,17 @@ SECURITY
   pair it minted and answers ``invalid_grant`` (401 on the SPA endpoint, 400
   on ``/oauth/token``). Actor deletion bumps the session generation before
   its token sweep, so the rotation's generation guard does the same.
-  **Behavior change:** a marker that cannot be written answers 503 with
-  ``Retry-After`` and revokes nothing (the retry completes it); a marker
-  that cannot be read during a refresh deletes what was minted and answers
-  503. A refresh now reads one more row (DynamoDB 3 to 4 reads, PostgreSQL 2
-  to 3), and a refused rotation deletes its two rows instead of sweeping the
-  chain again. On PostgreSQL ``delete_expired`` raises ``DbError`` on a fault
-  instead of answering 0; the library's callers fold it with a WARNING.
+  **Behavior change:** a marker that cannot be written revokes nothing
+  (the retry completes it), and a marker that cannot be read during a
+  refresh deletes what was minted. Logout, ``/oauth/revoke`` and the SPA
+  endpoint answer either with 503 and ``Retry-After``; ``/oauth/token``
+  answers 500 ``server_error``, its existing answer to a token-store fault
+  (the theft response there writes a marker too). A refresh now
+  reads one more row (DynamoDB 3 to 4 reads, PostgreSQL 2 to 3), and a
+  refused rotation deletes its two rows instead of sweeping the chain
+  again. On PostgreSQL ``delete_expired`` raises ``DbError`` on a fault
+  instead of answering 0; the library's callers fold it, the token purges
+  with a WARNING and ``actingweb-deletions`` with a printed line.
   **Check:** on DynamoDB, native TTL on the attributes table reaps the
   marker rows as it reaps tokens; without it both marker buckets grow by one
   row per revocation.
@@ -1529,14 +1533,19 @@ FIXED
   Client deletion matched trust rows by substring
   (``pattern in peer_id or peer_id.endswith(client_id)``) and deleted the
   first hit, so an unrelated row on the same actor whose peer id contained
-  the client id could go instead, and a second row of the same client (an
-  upgraded actor can hold a legacy ``oauth2:`` row beside the tagged
-  ``oauth2_client:`` one) kept its permissions. It now deletes every row of
-  the client, each found exactly: the rows the MCP authentication resolver
-  accepts (``oauth_client_id``, then the exact legacy peer id), plus the
-  real-email legacy rows ``<source>:<email>:<client_id>``. **Behavior
-  change:** a client with both a tagged and a legacy row loses both; an
-  unrelated row whose peer id merely contains the client id is kept.
+  the client id could go instead. It now deletes every row of the client,
+  each found exactly: the rows the MCP authentication resolver accepts
+  (``oauth_client_id``, then the exact legacy peer id), plus the real-email
+  legacy rows ``<source>:<email>:<client_id>``. A second row of the same
+  client (an upgraded actor can hold a legacy ``oauth2:`` row beside the
+  tagged ``oauth2_client:`` one) was already removed for generated
+  ``mcp_`` client ids, by the cascade deleting the tagged row runs; it is
+  now deleted directly, whatever the client id, and a fault on one row no
+  longer stops the deletion of the others (the first fault is raised after
+  them). **Behavior change:**
+  an unrelated row whose peer id merely contains the client id is kept; a
+  two-segment ``oauth2_client:<client_id>`` row, which the resolver
+  already ignored, is no longer deleted with the client.
 
 - **An MCP-token logout cleared the browser's SPA session cookies.**
   ``/oauth/logout`` with an MCP access token (``aw_…``) revoked the MCP

@@ -630,6 +630,10 @@ class MCPClientRegistry:
                     f"No trust relationship found to delete for OAuth2 client {client_id}"
                 )
                 return
+            # Every row is tried before a fault is raised: the client row and
+            # its index are already gone, so a retry could not find the rows
+            # a stop here would leave.
+            first_fault: DbError | None = None
             for trust in trusts:
                 peer_id = trust.peerid
                 try:
@@ -637,16 +641,31 @@ class MCPClientRegistry:
                         logger.info(
                             f"Deleted trust relationship for OAuth2 client {client_id}: {peer_id}"
                         )
+                    elif not any(
+                        t.peerid == peer_id for t in actor_interface.trust.relationships
+                    ):
+                        # Deleting an earlier row of this client cascaded
+                        # (``Trust.delete`` deletes the client again), and
+                        # this row went with it.
+                        logger.info(
+                            f"Trust relationship {peer_id} for OAuth2 client {client_id} was already deleted"
+                        )
                     else:
                         logger.warning(
                             f"Failed to delete trust relationship {peer_id} for client {client_id}"
                         )
-                except DbError:
-                    raise
+                except DbError as e:  # folds DbError: raised after the other rows
+                    if first_fault is None:
+                        first_fault = e
+                    logger.error(
+                        f"Database error deleting trust relationship {peer_id} for client {client_id}: {e}"
+                    )
                 except Exception as e:
                     logger.error(
                         f"Error deleting trust relationship {peer_id} for client {client_id}: {e}"
                     )
+            if first_fault is not None:
+                raise first_fault
 
         except DbError:
             raise

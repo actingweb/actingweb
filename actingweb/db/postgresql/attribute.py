@@ -773,7 +773,8 @@ class DbAttribute:
             return deleted if deleted and deleted > 0 else 0
         except Exception as e:
             # Not 0: a fault must not read as "nothing expired" to the only
-            # reaper of these rows. Every caller folds it with a WARNING.
+            # reaper of these rows. Every library caller folds it (a WARNING
+            # in the token purges, a printed line in actingweb-deletions).
             raise DbError("expired attribute purge") from e
 
     @staticmethod

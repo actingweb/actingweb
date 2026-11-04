@@ -363,7 +363,7 @@ When an MCP client is deleted via ``client_registry.delete_client()``:
 1. **Token Revocation** - All access and refresh tokens for the client revoked
 2. **Client Data** - Removed from actor's ``mcp_clients`` bucket
 3. **Global Index** - Removed from system actor's ``client_index``
-4. **Trust Relationship** - OAuth2 client trust deleted
+4. **Trust Relationships** - every trust row of the client deleted
 5. **Google Token Data** - Associated Google tokens cleaned up
 
 Token Expiration Handling

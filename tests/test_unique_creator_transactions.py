@@ -64,7 +64,10 @@ def db() -> Any:
 def test_a_conflict_is_retried_with_the_same_token(db: Any) -> None:
     recorder = _Recorder([_conflict(), None])
     with mock.patch.object(dynamodb_actor, "TransactWrite", recorder):
-        assert db._run_transaction(lambda t: None, op="actor create") is None
+        assert (
+            db._run_transaction(lambda t: None, op="actor create", creators="guarded")
+            is None
+        )
     assert len(recorder.tokens) == 2
     assert recorder.tokens[0] and recorder.tokens[0] == recorder.tokens[1]
 
@@ -73,7 +76,7 @@ def test_conflicts_past_two_retries_raise_db_error(db: Any) -> None:
     recorder = _Recorder([_conflict(), _conflict(), _conflict()])
     with mock.patch.object(dynamodb_actor, "TransactWrite", recorder):
         with pytest.raises(DbError):
-            db._run_transaction(lambda t: None, op="actor create")
+            db._run_transaction(lambda t: None, op="actor create", creators="guarded")
     assert len(recorder.tokens) == 3
     assert len(set(recorder.tokens)) == 1
 
@@ -85,7 +88,9 @@ def test_a_condition_failure_on_the_last_attempt_wins_over_a_conflict(
     both = ["TransactionConflict", "ConditionalCheckFailed"]
     recorder = _Recorder([_cancelled(*both), _cancelled(*both), _cancelled(*both)])
     with mock.patch.object(dynamodb_actor, "TransactWrite", recorder):
-        codes = db._run_transaction(lambda t: None, op="actor create")
+        codes = db._run_transaction(
+            lambda t: None, op="actor create", creators="guarded"
+        )
     assert codes == both
     assert len(recorder.tokens) == 3
 
@@ -93,6 +98,8 @@ def test_a_condition_failure_on_the_last_attempt_wins_over_a_conflict(
 def test_a_condition_failure_answers_the_codes_without_a_retry(db: Any) -> None:
     recorder = _Recorder([_cancelled(None, "ConditionalCheckFailed")])
     with mock.patch.object(dynamodb_actor, "TransactWrite", recorder):
-        codes = db._run_transaction(lambda t: None, op="actor create")
+        codes = db._run_transaction(
+            lambda t: None, op="actor create", creators="guarded"
+        )
     assert codes == [None, "ConditionalCheckFailed"]
     assert len(recorder.tokens) == 1

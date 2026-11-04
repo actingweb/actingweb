@@ -273,6 +273,50 @@ class TestDynamoDBConstructorCreatesNoCreatorsTable:
         assert "most likely" not in repair[0]
         assert not any("most likely" in m for m in errors), errors
 
+    def test_a_property_transaction_on_a_missing_table_names_no_creator_remedy(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Property writes share ``_run_transaction``; a missing properties
+        or lookup table must not be reported as missing creator enforcement,
+        least of all under ``with_unique_creator(False)``."""
+        if _backend() != "dynamodb":
+            pytest.skip("DynamoDB-only test")
+        from actingweb.db.dynamodb.actor import DbActor
+
+        fault = RuntimeError("ResourceNotFoundException: Requested resource not found")
+        with caplog.at_level(logging.ERROR, logger="actingweb.db.dynamodb.actor"):
+            DbActor._log_missing_table(  # pyright: ignore[reportPrivateUsage]
+                fault, op="property set", creators="none"
+            )
+        messages = [r.getMessage() for r in caplog.records]
+        assert len(messages) == 1, messages
+        assert "'property set'" in messages[0]
+        assert "Creator uniqueness" not in messages[0]
+        assert REMEDY not in messages[0]
+
+    def test_a_guarded_write_gives_each_candidate_table_its_own_remedy(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The likely missing table on a guarded write is the actor table,
+        which ``enable --apply`` does not create: the creator remedy must be
+        tied to the creators table only."""
+        if _backend() != "dynamodb":
+            pytest.skip("DynamoDB-only test")
+        from actingweb.db.dynamodb.actor import Actor, DbActor
+        from actingweb.db.dynamodb.creator import Creator
+
+        fault = RuntimeError("ResourceNotFoundException: Requested resource not found")
+        with caplog.at_level(logging.ERROR, logger="actingweb.db.dynamodb.actor"):
+            DbActor._log_missing_table(  # pyright: ignore[reportPrivateUsage]
+                fault, op="actor modify", creators="guarded"
+            )
+        (message,) = [r.getMessage() for r in caplog.records]
+        actors_part, creators_part = message.split(" Else ", 1)
+        assert Actor.Meta.table_name in actors_part
+        assert REMEDY not in actors_part
+        assert Creator.Meta.table_name in creators_part
+        assert REMEDY in creators_part
+
     def test_unenforced_constructor_creates_only_the_actor_table(
         self, absent_creators_table: str
     ) -> None:

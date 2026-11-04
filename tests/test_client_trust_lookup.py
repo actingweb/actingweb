@@ -262,3 +262,21 @@ def test_trust_creation_and_lookup_share_the_normaliser() -> None:
     from actingweb.oauth2_server.trust_lookup import normalize_client_id
 
     assert normalize_client_id("a@b.c:d") == "a_at_b_dot_c_colon_d"
+
+
+def test_a_retry_after_a_trust_fault_finishes_the_leftover_rows() -> None:
+    """A deletion that faulted on a trust row answered 503 after the client
+    row went. The retry through the actor's client manager finds no client
+    and still deletes that actor's leftover rows of the client id."""
+    from actingweb.interface.oauth_client_manager import OAuth2ClientManager
+
+    manager = OAuth2ClientManager.__new__(OAuth2ClientManager)
+    manager.actor_id = "actor-1"
+    registry = mock.Mock()
+    registry._load_client.return_value = None
+    manager._registry = registry
+    assert manager.delete_client("mcp_ab12") is False
+    registry._delete_client_trust_relationship.assert_called_once_with(
+        "actor-1", "mcp_ab12"
+    )
+    registry.delete_client.assert_not_called()

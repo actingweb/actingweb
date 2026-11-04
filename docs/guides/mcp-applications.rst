@@ -510,7 +510,9 @@ only, so read any value the permission check must have judged from ``uri``,
 never from a param. Flask and FastAPI answer a successful read
 identically; their error messages differ (a raising hook answers
 "Resource execution failed" on Flask, "Resource read failed" on FastAPI),
-and on Flask the hook must be synchronous.
+and on Flask the hook must be synchronous: an ``async def`` hook is not
+awaited there, and the read answers with the coroutine's ``repr`` as its
+text.
 
 Property Hooks for MCP Applications
 -----------------------------------

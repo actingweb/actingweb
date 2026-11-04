@@ -1539,10 +1539,14 @@ FIXED
   legacy rows ``<source>:<email>:<client_id>``. A second row of the same
   client (an upgraded actor can hold a legacy ``oauth2:`` row beside the
   tagged ``oauth2_client:`` one) was already removed for generated
-  ``mcp_`` client ids, by the cascade deleting the tagged row runs; it is
+  ``mcp_`` client ids, by the cascade that deleting the tagged row runs; it is
   now deleted directly, whatever the client id, and a fault on one row no
-  longer stops the deletion of the others (the first fault is raised after
-  them). **Behavior change:**
+  longer stops the deletion of the others (the first fault is raised to
+  the client-deletion caller after them; when the deletion started from a
+  trust-row delete, that cascade logs it). A retry through
+  ``OAuth2ClientManager.delete_client`` after such a fault deletes the
+  actor's leftover rows of that client id even though the client itself is
+  already gone. **Behavior change:**
   an unrelated row whose peer id merely contains the client id is kept; a
   two-segment ``oauth2_client:<client_id>`` row, which the resolver
   already ignored, is no longer deleted with the client.

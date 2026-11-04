@@ -167,6 +167,12 @@ class OAuth2ClientManager:
             # Verify client belongs to this actor before deletion
             client_data = self._registry._load_client(client_id)
             if not client_data:
+                # A deletion that faulted on a trust row after the client row
+                # went answered 503; its retry lands here. Finish it: this
+                # actor's own rows of that client id, nobody else's.
+                self._registry._delete_client_trust_relationship(
+                    self.actor_id, client_id
+                )
                 logger.warning(f"OAuth2 client {client_id} not found for deletion")
                 return False
 

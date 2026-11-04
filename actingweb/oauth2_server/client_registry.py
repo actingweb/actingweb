@@ -631,8 +631,9 @@ class MCPClientRegistry:
                 )
                 return
             # Every row is tried before a fault is raised: the client row and
-            # its index are already gone, so a retry could not find the rows
-            # a stop here would leave.
+            # its index are already gone, so a retry finds no client to start
+            # from (``OAuth2ClientManager.delete_client`` sweeps the actor's
+            # leftover rows on that "not found" path).
             first_fault: DbError | None = None
             for trust in trusts:
                 peer_id = trust.peerid

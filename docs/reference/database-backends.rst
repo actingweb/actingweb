@@ -574,7 +574,8 @@ retry does not clear still answers 503: an actor create or creator change
 refused because creator uniqueness is on and the database does not enforce
 it yet (an ERROR names ``actingweb-unique-creators enable --apply``).
 ``check_ready()`` stops an integrated application from starting in that
-state, so only code that builds ``Config()`` directly meets it. ``CreatorTaken``,
+state; a creators table or ``ux_actors_creator`` index removed after
+startup answers the same 503 until it is restored. ``CreatorTaken``,
 a ``DbError`` subclass for a creator another actor holds, answers **409**: the
 actor backends raise it under ``with_unique_creator()``, and PostgreSQL also
 whenever the ``ux_actors_creator`` index exists (see

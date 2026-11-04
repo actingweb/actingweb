@@ -4,7 +4,7 @@ import random
 import time
 import uuid
 from collections.abc import Callable, Iterator
-from typing import Any
+from typing import Any, Literal
 
 from pynamodb.attributes import UnicodeAttribute
 from pynamodb.connection import Connection
@@ -297,7 +297,7 @@ class DbActor:
                     ),
                 )
 
-            codes = self._run_transaction(build, op="actor modify")
+            codes = self._run_transaction(build, op="actor modify", creators="guarded")
             if codes is not None:
                 if self._record_names_other(new_creator, actor_id):
                     raise CreatorTaken(new_creator)
@@ -355,7 +355,7 @@ class DbActor:
                 t.save(actor, condition=Actor.id.does_not_exist())
                 t.save(record, condition=Creator.creator.does_not_exist())
 
-            codes = self._run_transaction(build, op="actor create")
+            codes = self._run_transaction(build, op="actor create", creators="guarded")
             if codes is not None:
                 if self._actor_exists(actor_id):
                     logger.warning(
@@ -414,7 +414,9 @@ class DbActor:
                 condition=Creator.actor_id == old_id,
             )
 
-        codes = self._run_transaction(build, op="actor replace holder")
+        codes = self._run_transaction(
+            build, op="actor replace holder", creators="guarded"
+        )
         if codes is not None:
             if self._actor_exists(actor_id):
                 logger.warning("Trying to create actor that exists(" + actor_id + ")")
@@ -577,7 +579,7 @@ class DbActor:
         build: Callable[[TransactWrite], None],
         *,
         op: str,
-        guarded: bool = True,
+        creators: Literal["guarded", "unguarded", "none"],
     ) -> list[str | None] | None:
         """Commit one ``TransactWriteItems``: None when it committed, else the
         cancellation code of each item when a condition failed (callers
@@ -587,9 +589,12 @@ class DbActor:
         the same client request token, so a retry of a commit whose answer
         was lost is not applied twice. Anything else raises ``DbError``.
 
-        ``guarded`` says whether the caller passed
-        :func:`_require_creators_backfill` first; it only chooses the wording
-        of the missing-table ERROR.
+        ``creators`` says how the transaction relates to the creators table,
+        and only chooses the wording of the missing-table ERROR: "guarded"
+        (an enforced actor write that passed :func:`_require_creators_backfill`
+        first), "unguarded" (a creator-record repair that did not) or "none"
+        (a transaction that never touches it, such as a property write).
+        Required, so a new caller has to choose.
         """
         token = uuid.uuid4().hex
         for attempt in range(cls.TRANSACT_ATTEMPTS):
@@ -613,15 +618,20 @@ class DbActor:
                 # the caller's answer (taken, changed) is not an outage.
                 if "ConditionalCheckFailed" in codes:
                     return codes
-                cls._log_missing_creators_table(e, guarded=guarded)
+                cls._log_missing_table(e, op=op, creators=creators)
                 raise DbError(op) from e
             except Exception as e:
-                cls._log_missing_creators_table(e, guarded=guarded)
+                cls._log_missing_table(e, op=op, creators=creators)
                 raise DbError(op) from e
         raise DbError(op)
 
     @staticmethod
-    def _log_missing_creators_table(e: BaseException, *, guarded: bool) -> None:
+    def _log_missing_table(
+        e: BaseException,
+        *,
+        op: str,
+        creators: Literal["guarded", "unguarded", "none"],
+    ) -> None:
         """Name the likely table when a claim failed on a missing one. The
         fault itself stays a ``DbError``.
 
@@ -633,13 +643,22 @@ class DbActor:
         record repairs of ``actingweb-unique-creators resolve``
         (:func:`release_stale_record`, :func:`record_for_actor_as_read`,
         :func:`move_stale_record`) are not guarded, so either table is
-        equally likely there and both are named without a preference."""
+        equally likely there and both are named without a preference. A
+        transaction that never touches the creators table (``"none"``) names
+        neither the creators table nor its remedy."""
         from actingweb.db.dynamodb.property_lookup import is_resource_not_found
 
         if not is_resource_not_found(e):
             return
         # No DescribeTable to disambiguate: the runtime role may not have it.
-        if not guarded:
+        if creators == "none":
+            logger.error(
+                f"The DynamoDB transaction {op!r} needs a table that does not "
+                "exist. Check AWS_DB_PREFIX and that the application's tables "
+                "were created."
+            )
+            return
+        if creators == "unguarded":
             logger.error(
                 f"A creator record repair needs a table that does not exist: "
                 f"either {Actor.Meta.table_name} or {Creator.Meta.table_name}. "
@@ -647,13 +666,14 @@ class DbActor:
                 "backfilled by `actingweb-unique-creators enable --apply`."
             )
             return
+        # Each candidate gets its own remedy: `enable --apply` creates the
+        # creators table, never the actor table.
         logger.error(
-            missing_enforcement_message(
-                f"a table this write needs does not exist (most likely "
-                f"{Actor.Meta.table_name}, check AWS_DB_PREFIX; else "
-                f"{Creator.Meta.table_name}, deleted since this process saw "
-                "it backfilled)"
-            )
+            f"An enforced actor write needs a table that does not exist, so it "
+            f"was refused. Most likely {Actor.Meta.table_name}: check "
+            f"AWS_DB_PREFIX and that the table exists. Else "
+            f"{Creator.Meta.table_name}, deleted since this process saw it "
+            "backfilled: run `actingweb-unique-creators enable --apply`."
         )
 
     def __init__(self, *, unique_creator: bool = False) -> None:
@@ -755,7 +775,9 @@ def release_stale_record(creator: str, actor_id: str) -> bool:
 
     # A failed condition: the record moved or went, or the actor changed.
     return (
-        DbActor._run_transaction(build, op="creator record delete", guarded=False)
+        DbActor._run_transaction(
+            build, op="creator record delete", creators="unguarded"
+        )
         is None
     )
 
@@ -783,7 +805,7 @@ def record_for_actor_as_read(
         t.condition_check(Actor, actor.id, condition=actor_as_read(actor))
 
     return (
-        DbActor._run_transaction(build, op="creator record write", guarded=False)
+        DbActor._run_transaction(build, op="creator record write", creators="unguarded")
         is None
     )
 
@@ -814,7 +836,8 @@ def move_stale_record(creator: str, stale_id: str, actor: "Actor") -> bool:
         t.condition_check(Actor, actor.id, condition=actor_as_read(actor))
 
     return (
-        DbActor._run_transaction(build, op="creator record move", guarded=False) is None
+        DbActor._run_transaction(build, op="creator record move", creators="unguarded")
+        is None
     )
 
 

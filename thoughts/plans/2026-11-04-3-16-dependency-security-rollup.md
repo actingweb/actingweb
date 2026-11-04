@@ -1362,6 +1362,12 @@ docs build, `verify_groups`, ruff and pyright at 0 errors and 0 warnings.
   repairs get their own missing-table ERROR; the 503 for a missing
   enforcement and the Flask/FastAPI error differences are documented,
   not changed.
+- After the fourth verification (Iterations 14-16): `_run_transaction`
+  takes a required `creators` context, so property transactions no longer
+  report missing creator enforcement; a client-manager retry after a
+  trust-row fault sweeps the leftover rows. The wider client-deletion
+  lifecycle is audited separately, not iterated here (owner's call,
+  2026-11-04).
 
 ### Learnings
 - `make test-all-parallel` ends with `docker compose down -v`, so the next
@@ -1716,3 +1722,82 @@ the actor table was the likely one.
 **Rationale**: every remaining finding was a statement the code did not
 match; where changing the code was the larger risk, the statement now
 matches the code.
+
+### 2026-11-04, after verification thoughts/verifications/2026-11-04-3-16-dependency-security-rollup-reverify-3.md
+
+The last iteration on this plan. The owner chose to close the
+verify-iterate loop here and audit the client-deletion lifecycle as
+separate work, since the loop's findings had moved into code older than
+the branch.
+
+#### 14. A required creator context for `_run_transaction`
+
+**Category**: Verification fix (Issue 1)
+
+**What changed**: `guarded: bool = True` became a required
+`creators: Literal["guarded", "unguarded", "none"]`. The three enforced
+actor writes pass "guarded", the three record repairs pass "unguarded",
+and the five property transactions (`property.py:387,455,494,552`,
+`property_lookup.py:261`) pass "none". For "none", the missing-table ERROR
+names the transaction and the prefix check, not the creators table or
+`enable --apply`. `_log_missing_creators_table` was renamed
+`_log_missing_table`. The DynamoDB fault-reporting audit found that the
+"guarded" branch did the same thing: it named the actor table as most
+likely missing and then gave only the creator remedy. It now gives each
+candidate its own remedy (check the prefix for the actor table, `enable
+--apply` for the creators table), and no longer goes through
+`missing_enforcement_message`.
+
+**Files affected**:
+- `actingweb/db/dynamodb/actor.py`, `property.py`, `property_lookup.py`: the argument and every caller
+- `tests/test_unique_creator_transactions.py`: direct calls pass "guarded"
+- `tests/test_unique_creator_fail_closed.py`: `test_a_property_transaction_on_a_missing_table_names_no_creator_remedy`, `test_a_guarded_write_gives_each_candidate_table_its_own_remedy`
+
+**Rationale**: a missing properties table logged "Creator uniqueness is on
+… Run `actingweb-unique-creators enable --apply`", even with uniqueness
+off. That bug predates the branch, but Iteration 12's docstring claimed
+otherwise. Making the argument required means a new caller has to choose.
+
+#### 15. A client-manager retry finishes a faulted deletion
+
+**Category**: Verification fix (Issues 3 and 4)
+
+**What changed**: when `OAuth2ClientManager.delete_client` finds no client,
+it now runs `_delete_client_trust_relationship(self.actor_id, client_id)`
+before answering False. A deletion that faulted on a trust row after the
+client row was gone (503) is therefore finished by its retry. The sweep
+only touches this actor's rows for that client id. The changelog says
+where the first fault goes: to the client-deletion caller, or into the
+cascade's log when the deletion began with a trust-row delete. The loop's
+comment is corrected to match.
+
+**Files affected**:
+- `actingweb/interface/oauth_client_manager.py`: the not-found path
+- `actingweb/oauth2_server/client_registry.py`: the comment
+- `tests/test_client_trust_lookup.py`: `test_a_retry_after_a_trust_fault_finishes_the_leftover_rows`
+- `CHANGELOG.rst`: the client-deletion entry
+
+**Rationale**: the integrations answer the fault as retryable, and the
+retry used to answer "not found", leaving the trust row and its
+permissions in place. Reordering the deletion so trust rows go before the
+client row would leave a faulted client able to authenticate. That is a
+design question for the audit.
+
+#### 16. Doc accuracy
+
+**Category**: Verification fix (Issues 2, 5, 6, 7, 8)
+
+**What changed**:
+- The custom-backend list names the three commands that call `iter_rows`,
+  and says verify-orphans supports only DynamoDB and PostgreSQL (Issue 2).
+- The fail-closed passages say "for a non-exempt creator" (Issue 5).
+- `database-backends.rst` says a table or index removed after startup
+  answers the same 503 (Issue 6).
+- `mcp-applications.rst` says an `async def` hook on Flask is not awaited
+  and returns its repr (Issue 7).
+- The garbled changelog clause is fixed (Issue 8).
+
+**Files affected**:
+- `docs/migration/v3.16.rst`, `docs/quickstart/configuration.rst`, `docs/reference/database-backends.rst`, `docs/guides/mcp-applications.rst`, `CHANGELOG.rst`
+
+**Rationale**: each sentence now matches the code.

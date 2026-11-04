@@ -707,3 +707,108 @@ class TestRealisticOAuthTrustScenarios:
             assert len(cursor_stored.properties["excluded_patterns"]) == 3  # type: ignore
         finally:
             actor.delete()
+
+
+class TestClientConnectionDeletion:
+    """Deleting a connection to a client ends that actor's connection only
+    (verification audit 2026-11-04, D1, D6, D7)."""
+
+    @staticmethod
+    def _rows_for(actor: ActorInterface, client_id: str) -> list:
+        return [
+            t
+            for t in actor.trust.relationships
+            if getattr(t, "oauth_client_id", None) == client_id
+            or t.peerid.endswith(f":{client_id}")
+        ]
+
+    def test_deleting_a_connection_keeps_another_actors_client(self, aw_app):
+        """Actor Y authorized a client registered under actor X, then deleted
+        its row. X's client (row and global index row) survives; Y's token,
+        rows and stored provider tokens are gone."""
+        from actingweb import actor as actor_module
+        from actingweb.constants import OAUTH_TOKENS_PREFIX
+        from actingweb.oauth2_server.client_registry import MCPClientRegistry
+        from actingweb.oauth2_server.token_manager import get_actingweb_token_manager
+
+        config = aw_app.get_config()
+        owner = ActorInterface.create(creator="owner@example.com", config=config)
+        other = ActorInterface.create(creator="other@example.com", config=config)
+        try:
+            client_id = OAuth2ClientManager(owner.id, config).create_client(  # type: ignore[arg-type]
+                client_name="Shared Client", trust_type="mcp_client"
+            )["client_id"]
+            assert other.trust.create_or_update_oauth_trust(
+                email="other@example.com",
+                trust_type="mcp_client",
+                oauth_tokens={"access_token": "g-at", "refresh_token": "g-rt"},
+                established_via="oauth2_client",
+                client_id=client_id,
+            )
+            (row,) = self._rows_for(other, client_id)
+            token_manager = get_actingweb_token_manager(config)
+            token = token_manager.create_access_token(
+                actor_id=other.id,  # type: ignore[arg-type]
+                client_id=client_id,
+                scope="mcp",
+                trust_type="mcp_client",
+                grant_type="client_credentials",
+            )
+            assert token is not None
+            other_core = actor_module.Actor(other.id, config=config)
+            assert other_core.store is not None
+            assert other_core.store[f"{OAUTH_TOKENS_PREFIX}{row.peerid}"]
+
+            assert other.trust.delete_relationship(row.peerid)
+
+            registry = MCPClientRegistry(config)
+            loaded = registry._load_client(client_id)
+            assert loaded is not None and loaded["actor_id"] == owner.id
+            assert len(OAuth2ClientManager(owner.id, config).list_clients()) == 1  # type: ignore[arg-type]
+            assert self._rows_for(owner, client_id), "the owner's row must stay"
+            assert token_manager.validate_access_token(token["access_token"]) is None
+            assert self._rows_for(other, client_id) == []
+            fresh = actor_module.Actor(other.id, config=config)
+            assert fresh.store is not None
+            assert fresh.store[f"{OAUTH_TOKENS_PREFIX}{row.peerid}"] is None
+        finally:
+            other.delete()
+            owner.delete()
+
+    def test_a_fault_before_the_row_delete_keeps_its_permissions(self, aw_app):
+        """Custom permissions go after the trust row: a fault between the
+        cleanup steps leaves the row with the permissions that narrowed it,
+        never a live row on its trust type's defaults."""
+        from unittest import mock
+
+        from actingweb import actor as actor_module
+        from actingweb.db.exceptions import DbError
+
+        config = aw_app.get_config()
+        actor = ActorInterface.create(creator="perm@example.com", config=config)
+        try:
+            client_id = OAuth2ClientManager(actor.id, config).create_client(  # type: ignore[arg-type]
+                client_name="Narrowed", trust_type="mcp_client"
+            )["client_id"]
+            (row,) = self._rows_for(actor, client_id)
+            assert TrustPermissionStore(config).store_permissions(
+                TrustPermissions(
+                    actor_id=actor.id,  # type: ignore[arg-type]
+                    peer_id=row.peerid,
+                    trust_type="mcp_client",
+                    properties={"patterns": ["memory_*"], "operations": ["read"]},
+                    created_by="test",
+                )
+            )
+            core = actor_module.Actor(actor.id, config=config)
+            with mock.patch(
+                "actingweb.peer_profile.get_peer_profile_store",
+                side_effect=DbError("peer profile delete"),
+            ):
+                with pytest.raises(DbError):
+                    core.delete_reciprocal_trust(peerid=row.peerid, delete_peer=True)
+            assert self._rows_for(actor, client_id), "the row must survive the fault"
+            kept = TrustPermissionStore(config).get_permissions(actor.id, row.peerid)  # type: ignore[arg-type]
+            assert kept is not None and kept.properties["patterns"] == ["memory_*"]  # type: ignore[index]
+        finally:
+            actor.delete()

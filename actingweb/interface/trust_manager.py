@@ -605,6 +605,23 @@ class TrustManager:
 
                 now_iso = datetime.utcnow().isoformat()
 
+                # A new row starts from its trust type's permissions. The peer
+                # id is deterministic, so custom permissions a faulted delete
+                # of an earlier connection left behind would otherwise come
+                # back with a reconnect (Trust.delete deletes them right after
+                # the row, and a fault there raises with the row gone).
+                if self._core_actor.config and self._core_actor.id:
+                    from ..trust_permissions import TrustPermissionStore
+
+                    permission_store = TrustPermissionStore(self._core_actor.config)
+                    if (
+                        permission_store.get_permissions(self._core_actor.id, peer_id)
+                        is not None
+                    ):
+                        permission_store.delete_permissions(
+                            self._core_actor.id, peer_id
+                        )
+
                 created = db.create(
                     actor_id=self._core_actor.id,
                     peerid=peer_id,

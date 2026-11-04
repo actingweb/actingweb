@@ -1368,6 +1368,14 @@ docs build, `verify_groups`, ruff and pyright at 0 errors and 0 warnings.
   trust-row fault sweeps the leftover rows. The wider client-deletion
   lifecycle is audited separately, not iterated here (owner's call,
   2026-11-04).
+- After the client-deletion audit (Iterations 17-19, owner's request
+  2026-11-04): deleting a trust row ends one actor's connection and
+  deletes the client only for its owner (D1); the audit's Medium findings
+  D3-D8 are fixed or shown inert; D2 was investigated against the
+  protocol and left as documented follow-up work. An outside-voice review
+  of that change (Iteration 20) found that a remote peer could reach the
+  same cascade through `POST /trust` with an OAuth2-shaped peer id;
+  peer-supplied ids now refuse the OAuth2 prefixes.
 
 ### Learnings
 - `make test-all-parallel` ends with `docker compose down -v`, so the next
@@ -1391,6 +1399,10 @@ docs build, `verify_groups`, ruff and pyright at 0 errors and 0 warnings.
   cascade's benefit (Issue 3 of the third verification) and its cost (a
   later delete finds nothing). Model the cascade when testing a loop over
   rows it can reach.
+- A row that *connects* an actor to a client is not ownership of the
+  client. Ownership is "the client's row is in my own `mcp_clients`
+  bucket", which needs no global index read, so a missing index row cannot
+  promote a connection to an owner.
 
 
 ## Iterations
@@ -1801,3 +1813,181 @@ design question for the audit.
 - `docs/migration/v3.16.rst`, `docs/quickstart/configuration.rst`, `docs/reference/database-backends.rst`, `docs/guides/mcp-applications.rst`, `CHANGELOG.rst`
 
 **Rationale**: each sentence now matches the code.
+
+### 2026-11-04, after the client-deletion audit thoughts/research/2026-11-04-client-deletion-lifecycle-audit.md
+
+The owner asked for D1 to be fixed, D2 to be investigated against the
+distributed protocol, and the Medium findings to be fixed here. This is
+more than a typical iteration, but it stays on the branch at the owner's
+request.
+
+#### 17. Deleting a connection never deletes another actor's client (D1, D3, D4, D5, D7, D8)
+
+**Category**: Bug fix (security)
+
+**What changed**:
+- `Trust.delete` reads the row's client from `oauth_client_id`, else from
+  a peer id `<source>:…:mcp_…` with any `OAUTH2_SOURCES` prefix (D5).
+- It asks `registry.client_owned_by(actor, client)`, a strict read of the
+  actor's own `mcp_clients` row. The owner deletes the client as before.
+  Any other actor calls `revoke_connection_tokens` *before* the row delete
+  (a fault raises `DbError` and leaves the row), then deletes its other
+  rows of the client.
+- A failed `delete_client` or sibling sweep raises instead of being folded
+  (D4).
+- `delete_client` refuses an `actor_id` that differs from the registration's
+  owner.
+- `delete_client_connection(actor, client)` revokes and sweeps one
+  connection; `OAuth2ClientManager`'s retry path uses it (D3).
+- `_revoke_matching_tokens` snapshots once to mark every chain it reaches
+  revoked, then snapshots again and deletes (D8). A chain whose marker
+  cannot be written keeps its tokens and counts as unconfirmed.
+- `delete_reciprocal_trust` deletes `oauth_tokens:<peer_id>` after the row,
+  for any OAuth2-sourced row (D7).
+
+**Files affected**:
+- `actingweb/trust.py`: routing, `_oauth2_client_id`, the wider peer-id parse
+- `actingweb/oauth2_server/client_registry.py`: owner guard, `client_owned_by`, `revoke_connection_tokens`, `delete_client_connection`
+- `actingweb/oauth2_server/token_manager.py`: the marking pre-pass
+- `actingweb/interface/oauth_client_manager.py`: retry path
+- `actingweb/actor.py`: provider-token delete; `is_oauth2_trust` covers every OAuth2 source
+- `tests/test_client_connection_deletion.py` (new):
+  - routing tests: owner vs connection, revoke before the row, fault keeps the row, a failed client deletion raises
+  - client-id resolution, including the legacy `oauth2:` row
+  - the owner guard
+  - chain markers before removal, and an unmarkable chain keeps its tokens
+- `tests/integration/test_trust_oauth_integration.py`: `test_deleting_a_connection_keeps_another_actors_client`, which asserts that X's client loads with owner X, Y's token no longer validates, Y's rows and provider tokens are gone, and X's row stays. It fails on the old code.
+- `tests/test_trust_core.py`, `tests/test_client_trust_lookup.py`: assertions moved to the new internals
+- `CHANGELOG.rst` (SECURITY entry); `docs/sdk/attributes-buckets.rst`, `docs/guides/oauth2-setup.rst` (the old "pass the user's actor" advice inverted), `docs/reference/security.rst`
+- `thoughts/todo/dcr-registrations-and-client-trust-rows-never-expire.md`: disconnect no longer removes a registration
+
+**Rationale**: a client's index row is global, and any row deletion
+removed it, so one user's disconnect (or a deliberate one) disabled the
+client for everyone. Before this change, D8's minted pair was not inert:
+the shape-B peer id is deterministic, so a re-authorization would revive a
+chain the sweep missed.
+
+The audit's D3 window (two faults leaving an hour of access) is now
+bounded by the row staying in place: the revocation runs before the row
+delete, and its fault answers 503 with the row as the retry handle.
+
+#### 18. Permissions after the trust row (D6)
+
+**Category**: Bug fix (security)
+
+**What changed**: `delete_reciprocal_trust` deletes the row, then its
+custom permissions, then provider tokens. A row that `Trust.delete`
+reports as not deleted is skipped and counted, and the call answers False
+instead of ignoring the result.
+
+**Files affected**:
+- `actingweb/actor.py`
+- `tests/integration/test_trust_oauth_integration.py`: `test_a_fault_before_the_row_delete_keeps_its_permissions` injects a `DbError` in the peer-profile cleanup and asserts the row and its `patterns` survive. It fails on the old code.
+
+**Rationale**: deleting permissions first meant a fault in between left a
+live row on its trust type's defaults, which can be wider. The residual
+risk is now a stale permission row, left when a fault lands after the row
+delete, which a later row with the same peer id inherits. That row would
+carry the same user's own earlier settings for the same client, which is
+the lesser risk.
+
+#### 19. D2 investigated: a client's connections are local to its server
+
+**Category**: Investigation (no code change)
+
+**Finding**: the actingweb protocol has no remote counterpart for an OAuth2
+client connection.
+- A DELETE on a trust URI "will terminate the relationship"
+  (`docs/protocol/actingweb-spec.rst:652`), and that relationship belongs
+  to one actor.
+- MCP authentication is implementation-defined (`:1360`).
+- `delete_reciprocal_trust` sends no remote DELETE for an OAuth2-sourced
+  row (`is_oauth2_trust`).
+- The authorize callback resolves the user by email in this server's own
+  store (`oauth2_server/oauth2_server.py:390`), so every connection row is
+  on a local actor.
+- A user on another ActingWeb server would register and authorize against
+  that server's own registry, with a different client id.
+
+So D2 is intra-server only: a client registered under actor X and
+authorized by local actor Y keeps Y's row and tokens when X deletes it.
+After D1, dynamically registered clients have no deleter at all, so D2
+concerns SDK-created clients (`OAuth2ClientManager.create_client`).
+
+**Exposure today**:
+- Y's access tokens stay valid for up to an hour: validation does not check
+  that the client exists (`token_manager.py:296-332`).
+- Y's refresh and code grants stop at once, because `load_client_strict`
+  fails.
+- After that, Y's row is inert, though it is still listed and still
+  deletable by Y.
+
+**Options, not taken here**:
+1. Have token validation check that the client still exists. This is one
+   extra load per uncached validation (the token cache is 300 s), and the
+   load can fault.
+2. Write a (client → actors) index at authorize time, so that deleting a
+   client can reach every connection.
+
+Option 1 closes the hour without new state. Option 2 also removes the
+inert rows. Either is a design change for its own plan.
+
+#### 20. Review fixes: peer-supplied OAuth2 ids, ownership, side stores
+
+**Category**: Bug fix (security)
+
+**What changed**: an outside-voice review (codex and a fresh Claude
+context) of Iterations 17-18, before they were committed, found these:
+- **High.** `POST /<actor>/trust/<rel>` is unauthenticated, and its peer id
+  allows `:`. A peer could create `oauth2_client:x:mcp_<id>`, then DELETE
+  it, and so drive the client cascade on any actor. Iteration 17 had also
+  widened the accepted prefixes. The old code had the same hole, worse:
+  it deleted the client globally. Because a trust create overwrites a row,
+  a peer that knew a user's email and client id could also replace that
+  user's real row. Fixes:
+  - `is_valid_peer_id` refuses the three OAuth2 prefixes.
+  - `Trust._oauth2_client_id` reads a client only from a row with an
+    OAuth2 `established_via` (or none, with an OAuth2 prefix: the legacy
+    rows), the resolver's `_oauth2_origin` gate. Peer rows record
+    `"trust"`.
+- **Medium.** `client_owned_by` now compares the row's `actor_id`.
+  `delete_client` uses it when `_load_client` finds no index row. On actor
+  deletion, an index row is deleted only when it names the deleted actor.
+- **Medium.** The permission and provider-token deletes moved from
+  `delete_reciprocal_trust` into `Trust.delete`, right after the row and
+  before the client cleanup that can raise. A new OAuth2 row with a reused
+  peer id starts without stale permissions
+  (`create_or_update_oauth_trust`). Each delete runs only when a row exists,
+  so no "failed to delete" ERROR is logged on every connect.
+- **Medium.** A local trust row that `Trust.delete` reports as not deleted
+  raises `DbError` instead of returning False, which `Actor.delete` and
+  `purge_relationships` ignored before their bulk delete.
+- **Low.** The `deletion_finish.py` comment now says the MCP sweep marks
+  chains. The changelog says the manager keeps its owner check, and no
+  longer claims that every legacy `oauth2:` row authorises.
+
+Accepted as-is:
+- The marker pre-pass costs two more bucket snapshots per revocation.
+- Legacy tokens without a `chain_id`, and a chain that starts from a code
+  exchange during the sweep, are not fenced. A code exchange reads no
+  marker; that window is the remaining part of D8.
+
+**Files affected**:
+- `actingweb/trust.py`: `is_valid_peer_id`, the origin gate, side-store deletes
+- `actingweb/actor.py`: raise on a failed local delete; side-store deletes removed
+- `actingweb/oauth2_server/client_registry.py`: ownership compares `actor_id`; the guard without an index row; actor-deletion index check
+- `actingweb/interface/trust_manager.py`: clears stale permissions on a new row
+- `actingweb/deletion_finish.py`: comment
+- `tests/test_client_connection_deletion.py`:
+  - peer-created rows name no client
+  - `test_a_peer_cannot_take_an_oauth2_peer_id`
+  - ownership compares `actor_id`
+  - the guard without an index row
+  - actor deletion keeps a foreign index row
+  - a fixture for the side stores
+- `tests/test_trust_core.py`: the same side-store fixture
+- `tests/test_cross_site_and_peer_inputs.py`: an OAuth2 id is no longer a valid peer id
+- `CHANGELOG.rst`
+
+**Rationale**: the D1 fix had to hold against the protocol's
+unauthenticated trust request as well as against signed-in users.

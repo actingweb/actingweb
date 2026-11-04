@@ -276,7 +276,5 @@ def test_a_retry_after_a_trust_fault_finishes_the_leftover_rows() -> None:
     registry._load_client.return_value = None
     manager._registry = registry
     assert manager.delete_client("mcp_ab12") is False
-    registry._delete_client_trust_relationship.assert_called_once_with(
-        "actor-1", "mcp_ab12"
-    )
+    registry.delete_client_connection.assert_called_once_with("actor-1", "mcp_ab12")
     registry.delete_client.assert_not_called()

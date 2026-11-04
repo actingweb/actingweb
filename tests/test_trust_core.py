@@ -2,7 +2,22 @@
 
 from unittest.mock import Mock, patch
 
+import pytest
+
 from actingweb.trust import Trust, Trusts, canonical_connection_method
+
+
+@pytest.fixture(autouse=True)
+def _row_side_stores():
+    """``Trust.delete`` clears the row's permissions and provider tokens
+    right after the row; these tests use a mock ``Config``."""
+    with (
+        patch("actingweb.trust_permissions.TrustPermissionStore") as permissions,
+        patch("actingweb.attribute.InternalStore") as store,
+    ):
+        permissions.return_value.get_permissions.return_value = None
+        store.return_value.set_confirmed.return_value = True
+        yield
 
 
 class TestCanonicalConnectionMethod:
@@ -353,8 +368,9 @@ class TestTrustCRUD:
 
         assert result is False
         # Cleanup must be skipped — otherwise the cascade re-enters Trust.delete().
-        mock_get_registry.assert_not_called()
+        # (The registry is consulted before the delete, for ownership.)
         mock_registry.delete_client.assert_not_called()
+        mock_registry._delete_client_trust_relationship.assert_not_called()
 
 
 class TestTrustsCollection:

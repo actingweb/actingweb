@@ -61,6 +61,46 @@ SECURITY
   marker rows as it reaps tokens; without it both marker buckets grow by one
   row per revocation.
 
+- **Disconnecting an OAuth2 client disabled it for every user.** Deleting a
+  trust row of an MCP client (the trust page, ``TrustManager.delete_relationship``,
+  an actor's deletion or adoption) deleted the client itself, with the
+  actor passed as its owner. ``delete_client`` kept that actor without
+  comparing it with the client's registration and deleted the client's
+  global index row, so the client stopped authenticating for every user
+  connected to it. A user who knew a client id could do this on purpose:
+  authorize the client as themselves, then delete their own row. Now a row
+  deletes the client only when the client is registered under that row's
+  actor. Otherwise it revokes that actor's tokens for the client before the
+  row goes, then deletes that actor's other rows of it, and the registration
+  and every other connection stay. ``delete_client(client_id, actor_id=...)``
+  refuses an ``actor_id`` the client is not registered under, and the new
+  ``delete_client_connection(actor_id, client_id)`` ends one connection.
+  The same change closes these gaps on the deletion path:
+
+  - a fault in that cleanup is raised (503 through the integrations)
+    instead of logged under a 204 while the client stayed live, and a
+    revocation fault leaves the row in place for the retry;
+  - a legacy ``oauth2:<email>:<client_id>`` row, which authorises, ends its
+    connection too (it cascaded nothing), and a tagged row is routed by its
+    ``oauth_client_id``;
+  - every token chain the revocation reaches is marked revoked before its
+    tokens go, so a refresh that raced the deletion deletes what it minted;
+  - a trust row's custom permissions are deleted after the row, not before
+    (a fault in between left a live row on its trust type's defaults, which
+    can be wider);
+  - the provider tokens an OAuth2 login stored for the row
+    (``oauth_tokens:<peer_id>``, Google's refresh token among them) are
+    deleted with it.
+
+  **Behavior change:** disconnecting a dynamically registered client (from
+  ``/oauth/register``, registered under the system actor) no longer deletes
+  its registration; the client must authorize again to reach that user.
+  ``delete_client`` with the user's actor id for such a client answers
+  ``False``. **Check:** code that called the registry's ``delete_client``
+  with a user's actor id to remove a client it did not register uses
+  ``delete_client_connection`` instead; ``OAuth2ClientManager.delete_client``
+  is unchanged.
+
 - **An unauthenticated ``POST /`` could squat an address, and the address
   owner's first OAuth login adopted the squatter's actor with the squatter's
   credentials still live.** The actor factory creates an actor for any

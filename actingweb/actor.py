@@ -2013,6 +2013,8 @@ class Actor:
         """
         failed_once = False  # For multiple relationships, this will be True if at least one deletion at peer failed
         success_once = False  # True if at least one relationship was deleted at peer
+        from .oauth2_server.trust_lookup import OAUTH2_SOURCES
+
         if not peerid:
             rels = self.get_trust_relationships()
         else:
@@ -2021,12 +2023,10 @@ class Actor:
             # For OAuth2-established trusts, there is no remote actor endpoint to call.
             # Skip remote deletion and delete locally only.
             is_oauth2_trust = (
-                (rel.get("established_via") == "oauth2")
-                or (rel.get("established_via") == "oauth2_client")
+                (rel.get("established_via") in OAUTH2_SOURCES)
                 or (rel.get("type") == "oauth2")
                 or (rel.get("type") == "oauth2_client")
-                or (str(rel.get("peerid", "")).startswith("oauth2:"))
-                or (str(rel.get("peerid", "")).startswith("oauth2_client:"))
+                or (str(rel.get("peerid", "")).split(":", 1)[0] in OAUTH2_SOURCES)
             )
             # Additional safety check: prevent self-deletion if baseuri points to this actor
             is_self_deletion = (
@@ -2099,20 +2099,6 @@ class Actor:
                         )
                         if sub_obj:
                             sub_obj.delete()
-            # Delete associated trust permissions before deleting the trust
-            try:
-                from .trust_permissions import TrustPermissionStore
-
-                if self.config is not None and self.id is not None:
-                    permission_store = TrustPermissionStore(self.config)
-                    permission_store.delete_permissions(self.id, rel["peerid"])
-            except DbError:
-                raise
-            except Exception as e:
-                logger.warning(
-                    f"Failed to delete trust permissions for {rel['peerid']}: {e}"
-                )
-
             # Clean up remote peer data (RemotePeerStore)
             # No config check needed - delete_all() is a no-op if no data exists
             try:
@@ -2213,11 +2199,15 @@ class Actor:
                         f"Failed to cleanup peer permissions cache for {rel['peerid']}: {e}"
                     )
 
-            # Finally, delete the trust record itself
+            # Finally the trust record itself. Trust.delete removes its custom
+            # permissions and stored provider tokens right after the row.
             dbtrust = trust.Trust(
                 actor_id=self.id, peerid=rel["peerid"], config=self.config
             )
-            dbtrust.delete()
+            if not dbtrust.delete():
+                # Not a peer's refusal: callers (Actor.delete, purge) bulk-
+                # delete what is left, which would skip this row's cleanup.
+                raise DbError("trust delete", self.id)
         if notify_peers and delete_peer and (not success_once or failed_once):
             return False
         return True

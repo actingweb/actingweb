@@ -196,8 +196,9 @@ def finish_deletion(
         from .oauth2 import _delete_actor_clients, _revoke_all_actor_tokens
 
         # Fence the sweep: a refresh whose consume preceded it mints after
-        # it, and its generation guard then deletes what it minted. The
-        # sweep has no chain to mark, so the generation is the fence. A
+        # it, and its generation guard then deletes what it minted. The SPA
+        # sweep has no chain to mark (the MCP sweep marks each chain it
+        # reaches), so the generation is the fence. A
         # resume whose actor row is already gone skips it: the wipe below
         # would not reach the buckets, and the new row would be an orphan.
         if not resumed or get_actor(config).get(actor_id=actor_id) is not None:

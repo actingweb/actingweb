@@ -339,9 +339,12 @@ When ``actor.delete()`` is called, the following cleanup occurs:
 4. **Trust Relationships** - For each trust:
 
    - Subscriptions for that peer deleted
-   - Trust permissions deleted
-   - If OAuth2 client trust: triggers client cleanup (tokens revoked, indexes cleaned)
-   - Trust record deleted
+   - If OAuth2 client trust: the actor's tokens for that client revoked
+     first; after the record, a client registered under this actor is
+     deleted (see below), while a client registered elsewhere keeps its
+     registration and only this actor's other rows of it go
+   - Trust record deleted, then its trust permissions and any provider
+     tokens stored for it (``oauth_tokens:<peer_id>`` in ``_internal``)
 
 5. **Attribute Buckets** - ``attribute.Buckets(actor_id).delete()`` removes ALL buckets:
 
@@ -358,13 +361,23 @@ When ``actor.delete()`` is called, the following cleanup occurs:
 MCP Client Deletion
 ~~~~~~~~~~~~~~~~~~~
 
-When an MCP client is deleted via ``client_registry.delete_client()``:
+When an MCP client is deleted via ``client_registry.delete_client()``,
+which only the actor the client is registered under may do (another
+caller is refused, since the index row is global):
 
-1. **Token Revocation** - All access and refresh tokens for the client revoked
+1. **Token Revocation** - All access and refresh tokens for the client revoked,
+   each token chain marked revoked first so a refresh in flight cannot
+   outlive it
 2. **Client Data** - Removed from actor's ``mcp_clients`` bucket
 3. **Global Index** - Removed from system actor's ``client_index``
-4. **Trust Relationships** - every trust row of the client deleted
+4. **Trust Relationships** - every trust row of the client on that actor deleted
 5. **Google Token Data** - Associated Google tokens cleaned up
+
+Deleting one actor's trust row of a client registered under another actor
+(a dynamically registered client lives under the system actor) ends only
+that connection: ``client_registry.delete_client_connection(actor_id,
+client_id)`` revokes that actor's tokens and deletes that actor's rows of
+the client. The registration and every other actor's connection stay.
 
 Token Expiration Handling
 ~~~~~~~~~~~~~~~~~~~~~~~~~

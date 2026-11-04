@@ -1703,6 +1703,47 @@ class ActingWebTokenManager:
         def remove_refresh(name: str, _data: dict[str, Any]) -> bool:
             return self._remove_refresh_token_row(actor_id, name)
 
+        # A refresh whose consume landed before this sweep mints after it.
+        # Each chain the sweep reaches is marked revoked before its first
+        # token goes, so that rotation reads the marker and deletes what it
+        # minted (as _revoke_chain does). A chain whose marker cannot be
+        # written keeps its tokens, counted unconfirmed, for the retry.
+        marked: set[str] = set()
+        unmarkable: set[str] = set()
+
+        def chain_marked(token_data: dict[str, Any]) -> bool:
+            chain_id = token_data.get("chain_id")
+            if not chain_id or chain_id in marked:
+                return True
+            if chain_id in unmarkable:
+                return False
+            try:
+                mark_chain_revoked(
+                    self.config, actor_id, self.revoked_chains_bucket, chain_id
+                )
+            except StoreFault as e:
+                logger.error(
+                    f"Could not mark a token chain revoked for actor {actor_id} "
+                    f"{scope}: {e}"
+                )
+                unmarkable.add(chain_id)
+                return False
+            marked.add(chain_id)
+            return True
+
+        # First pass: mark every chain the client has rows in, before the
+        # snapshot the deletes below act on (a used refresh row is kept for
+        # the reuse window, so a rotation in flight shows its chain here).
+        # A rotation that read no marker minted before it was written, so
+        # the second snapshot sees what it minted.
+        for bucket in (self.tokens_bucket, self.refresh_tokens_bucket):
+            for token_attr in (self._snapshot_bucket(actor_id, bucket) or {}).values():
+                token_data = (token_attr or {}).get("data")
+                if isinstance(token_data, dict) and (
+                    client_id is None or token_data.get("client_id") == client_id
+                ):
+                    chain_marked(token_data)
+
         for bucket, kind, remove in (
             (self.tokens_bucket, "access", remove_access),
             (self.refresh_tokens_bucket, "refresh", remove_refresh),
@@ -1716,6 +1757,9 @@ class ActingWebTokenManager:
                 if not isinstance(token_data, dict):
                     continue
                 if client_id is not None and token_data.get("client_id") != client_id:
+                    continue
+                if not chain_marked(token_data):
+                    unconfirmed += 1
                     continue
                 # One token's failure is counted, never allowed to stop the
                 # rest or to be swallowed.

@@ -273,10 +273,13 @@ This split exists because:
 
 **Important for Contributors:**
 
-When calling ``delete_client()``, the ``actor_id`` parameter should be the user's actor (where
-tokens are stored), not the system actor (where the client is registered). The client registry
-handles this by accepting an optional ``actor_id`` parameter that takes precedence over the
-``actor_id`` stored in client_data.
+``delete_client(client_id, actor_id=...)`` deletes the client itself, and only for the actor it
+is registered under: since 3.16 a different ``actor_id`` is refused (``False``), because the
+client's index row is global and deleting it would disable the client for every user. To end one
+user's connection to a client registered elsewhere (for example a dynamically registered client,
+which lives under the system actor), call ``delete_client_connection(actor_id, client_id)``, or
+delete that user's trust row: it revokes that user's tokens for the client and deletes that user's
+rows of it.
 
 Error Handling
 --------------

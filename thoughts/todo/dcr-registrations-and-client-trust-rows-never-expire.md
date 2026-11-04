@@ -35,6 +35,14 @@ it; `thoughts/research/2026-11-01-single-mode-and-consumer-primitives.md`):
 creates two registrations, each with a trust row, and only the second is
 used; the Connections page shows both.
 
+**Since 2026-11-04** (the client-deletion audit,
+`thoughts/research/2026-11-04-client-deletion-lifecycle-audit.md`, D1):
+a user disconnecting a dynamically registered client no longer deletes the
+registration, because the registration lives under the system actor and
+deleting it disabled the client for every user. Disconnect ends that user's
+tokens and rows only, so registrations now accumulate after a disconnect as
+well, and an expiry is the only thing that removes them.
+
 **What a fix needs.** A retention decision first: registrations that never
 completed an authorization (no code ever issued) can carry a short TTL from
 the start; registrations with live tokens cannot expire while the tokens do.

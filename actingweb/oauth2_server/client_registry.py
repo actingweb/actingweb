@@ -325,6 +325,21 @@ class MCPClientRegistry:
         if actor_deleted:
             from ..single_use import delete_confirmed
 
+            # Only an index row that names this actor: a client row copied
+            # into the deleted actor's bucket must not disable a client
+            # registered elsewhere.
+            index_row = attribute.Attributes(
+                actor_id=OAUTH2_SYSTEM_ACTOR,
+                bucket=CLIENT_INDEX_BUCKET,
+                config=self.config,
+            ).get_attr(name=client_id)
+            indexed_owner = index_row.get("data") if index_row else None
+            if indexed_owner and actor_id and indexed_owner != actor_id:
+                logger.error(
+                    f"Not deleting the index row of OAuth2 client {client_id}: "
+                    f"it names actor {indexed_owner}, not the deleted {actor_id}"
+                )
+                return True
             return delete_confirmed(
                 self.config, OAUTH2_SYSTEM_ACTOR, CLIENT_INDEX_BUCKET, client_id
             )
@@ -337,6 +352,30 @@ class MCPClientRegistry:
             # which is the authoritative source for token/client storage.
             if not actor_id and client_data:
                 actor_id = client_data.get("actor_id")
+            # Only the owner deletes a client: its index row is global, so a
+            # caller that merely holds a connection (a user who authorized
+            # another actor's or the system actor's client) would disable it
+            # for everyone. Such a caller removes its own connection with
+            # delete_client_connection().
+            owner = client_data.get("actor_id") if client_data else None
+            if owner and actor_id and owner != actor_id:
+                logger.error(
+                    f"Refusing to delete OAuth2 client {client_id} for actor "
+                    f"{actor_id}: it is registered under actor {owner}"
+                )
+                return False
+            if (
+                not client_data
+                and actor_id
+                and not self.client_owned_by(actor_id, client_id)
+            ):
+                # No index row to say who owns it: only the caller's own
+                # client bucket can, and it does not hold this client.
+                logger.error(
+                    f"Refusing to delete OAuth2 client {client_id} for actor "
+                    f"{actor_id}: it is not registered under that actor"
+                )
+                return False
 
             # The global client index is only a best-effort lookup optimization
             # (see _search_client_in_actors). Under heavy concurrent access to the
@@ -414,6 +453,43 @@ class MCPClientRegistry:
         except Exception as e:
             logger.error(f"Error deleting client {client_id}: {e}")
             return False
+
+    def client_owned_by(self, actor_id: str, client_id: str) -> bool:
+        """Whether ``client_id`` is registered under ``actor_id``: its row is
+        in that actor's own client bucket. Needs no global index read, so a
+        missing index row never turns an owner into a mere connection.
+        Raises ``DbError`` on a fault."""
+        bucket = attribute.Attributes(
+            actor_id=actor_id, bucket=self.clients_bucket, config=self.config
+        )
+        row = bucket.get_attr(name=client_id)
+        data = row.get("data") if row else None
+        # The row names its owner; a row in this bucket naming another
+        # actor (copied, restored, malformed) is not ownership.
+        return isinstance(data, dict) and data.get("actor_id") == actor_id
+
+    def revoke_connection_tokens(self, actor_id: str, client_id: str) -> int:
+        """Revoke ``actor_id``'s tokens for ``client_id``, and only those.
+
+        Raises ``DbError`` when a token could not be confirmed revoked, so
+        the caller can stop before it removes what a retry would need.
+        """
+        from .token_manager import TokenStoreUnavailable, get_actingweb_token_manager
+
+        try:
+            return get_actingweb_token_manager(self.config).revoke_client_tokens(
+                actor_id, client_id
+            )
+        except TokenStoreUnavailable as e:
+            raise DbError("OAuth2 client token revocation", actor_id) from e
+
+    def delete_client_connection(self, actor_id: str, client_id: str) -> None:
+        """End one actor's connection to a client: revoke that actor's
+        tokens for it, then delete that actor's trust rows of it. The client,
+        its index row and every other actor's connection stay. Raises
+        ``DbError`` on a fault; a retry finishes what is left."""
+        self.revoke_connection_tokens(actor_id, client_id)
+        self._delete_client_trust_relationship(actor_id, client_id)
 
     def _store_client(
         self, actor_id: str, client_id: str, client_data: dict[str, Any]

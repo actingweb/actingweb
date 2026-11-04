@@ -496,6 +496,13 @@ You can expose resources via MCP using the resource decorator on a method hook:
             path = data.get("path", "")
             return {"path": path, "value": actor.properties.get(path, None)}
 
+What the hook returns decides the ``resources/read`` body: a ``dict`` is sent
+as indented JSON with the decorator's ``mime_type`` (``application/json`` by
+default); a ``str`` is sent as it is; a ``dict`` with a ``contents`` key is
+passed through unchanged. The hook receives the request params (``uri``
+included) with the template's variables merged in. Flask and FastAPI answer
+identically.
+
 Property Hooks for MCP Applications
 -----------------------------------
 

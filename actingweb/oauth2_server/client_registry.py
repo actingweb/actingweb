@@ -614,49 +614,37 @@ class MCPClientRegistry:
                 core_actor=core_actor, service_registry=registry
             )
 
-            # Find and delete the trust relationship for this client
-            # The peer ID should be in format "oauth2_client:client_id"
-            expected_peer_patterns = [
-                f"oauth2_client:{client_id}",  # New format
-                f"oauth2:{client_id}",  # Alternative format
-                client_id,  # Direct client_id match
-            ]
+            # Exactly this client's row, found as the authentication resolver
+            # finds it, plus the real-email legacy rows whose last peer-id
+            # segment is the client id. Never a substring match: an
+            # unrelated row whose peer id contains this id must survive.
+            from .trust_lookup import find_client_trust
 
-            deleted = False
-            for trust in actor_interface.trust.relationships:
-                if hasattr(trust, "peerid"):
-                    peer_id = trust.peerid
-                    # Check if this trust relationship belongs to our client
-                    for pattern in expected_peer_patterns:
-                        if pattern in peer_id or peer_id.endswith(client_id):
-                            try:
-                                # Delete the trust relationship
-                                success = actor_interface.trust.delete_relationship(
-                                    peer_id
-                                )
-                                if success:
-                                    logger.info(
-                                        f"Deleted trust relationship for OAuth2 client {client_id}: {peer_id}"
-                                    )
-                                    deleted = True
-                                    break
-                                else:
-                                    logger.warning(
-                                        f"Failed to delete trust relationship {peer_id} for client {client_id}"
-                                    )
-                            except DbError:
-                                raise
-                            except Exception as e:
-                                logger.error(
-                                    f"Error deleting trust relationship {peer_id} for client {client_id}: {e}"
-                                )
-
-                if deleted:
-                    break
-
-            if not deleted:
+            trust = find_client_trust(
+                actor_interface.trust.relationships,
+                client_id,
+                legacy_segment_match=True,
+            )
+            if trust is None:
                 logger.warning(
                     f"No trust relationship found to delete for OAuth2 client {client_id}"
+                )
+                return
+            peer_id = trust.peerid
+            try:
+                if actor_interface.trust.delete_relationship(peer_id):
+                    logger.info(
+                        f"Deleted trust relationship for OAuth2 client {client_id}: {peer_id}"
+                    )
+                else:
+                    logger.warning(
+                        f"Failed to delete trust relationship {peer_id} for client {client_id}"
+                    )
+            except DbError:
+                raise
+            except Exception as e:
+                logger.error(
+                    f"Error deleting trust relationship {peer_id} for client {client_id}: {e}"
                 )
 
         except DbError:

@@ -1306,8 +1306,12 @@ ADDED
   writes ``auth_method`` (default ``operator``; an unvouched value is
   refused) on actors with no marker, with ``--creator``, ``--start-after`` to
   resume, ``--dry-run`` and ``--include-factory`` to also re-mark ``factory``
-  actors. It needs the 3.16 library, scans the whole actor table, and prints
-  ``scanned``, ``marked``, ``skipped``, ``pending`` (marked, but still waiting
+  actors. It needs the 3.16 library and scans the whole actor table, streamed
+  (only each matching actor's id and creator is kept, about 220 MB per
+  million actors) and strongly consistent on DynamoDB, since it writes back
+  the creator it read (twice the read units of an eventual scan;
+  ``--rate-limit`` caps it in read capacity units per second, ignored on
+  PostgreSQL). It prints ``scanned``, ``marked``, ``skipped``, ``pending`` (marked, but still waiting
   for email verification, so still unvouched) and ``errors``. Exit 0 when
   every actor was handled, 1 when one could not be marked (re-run it without
   ``--start-after``; the summary says so), 2 when the actor list could not be
@@ -1481,6 +1485,42 @@ ADDED
 
 FIXED
 ~~~~~
+
+- **A subscription ``callback`` that was not a bool was stored as ``True``
+  on DynamoDB and failed as a store fault on PostgreSQL.** The column is a
+  boolean on both backends, but nothing checked the argument: PynamoDB
+  coerced any truthy value (a URL, on the path that found it) to ``True``,
+  and PostgreSQL answered the failed cast as a ``DbError``, which read as an
+  outage. ``DbSubscription.create`` and ``modify`` now refuse a non-bool
+  before any I/O on both backends. **Behavior change:** a non-bool
+  ``callback`` raises ``TypeError`` naming the type (never the value);
+  ``modify`` still accepts ``None`` to leave it. No request can reach it
+  (the handlers pass literals), so only code that calls the backend
+  directly needs checking.
+
+- **FastAPI answered ``resources/read`` differently from Flask.** The async
+  handler sent a ``dict`` result as ``str()``, read ``mimeType`` from a key
+  the decorator never writes (so every answer was ``text/plain``), passed
+  the hook only the template's variables, and ignored a resource declared
+  only by ``uri_pattern``. Both handlers now share one resolver and one
+  formatter, and pass the hook the request params with the variables merged
+  in. **Behavior change for FastAPI deployments:** a ``dict`` body is
+  indented JSON with the declared ``mime_type`` (``application/json`` when
+  undeclared), a hook sees ``uri`` in its arguments again, a
+  ``uri_pattern`` resource resolves, and a ``dict`` holding a value JSON
+  cannot serialise (a ``datetime``) answers the generic error instead of a
+  Python repr. **Check:** a FastAPI client that parsed the old
+  ``text/plain`` body.
+
+- **Deleting an OAuth2 client could delete another client's trust row.**
+  Client deletion matched trust rows by substring
+  (``pattern in peer_id or peer_id.endswith(client_id)``) and deleted the
+  first hit, so an unrelated row on the same actor whose peer id contained
+  the client id could go instead. It now finds the row exactly as the MCP
+  authentication resolver does (``oauth_client_id``, then the exact legacy
+  peer id), plus the real-email legacy rows whose last peer-id segment is
+  the client id. No behavior change for the rows that were meant to go:
+  legacy rows are still deleted.
 
 - **An MCP-token logout cleared the browser's SPA session cookies.**
   ``/oauth/logout`` with an MCP access token (``aw_…``) revoked the MCP

@@ -42,7 +42,12 @@ Rules:
   for a ``"factory"`` actor. A write is counted only once it reads back.
 
 The actor list is a full scan on both backends: this is maintenance, not a
-serving path.
+serving path. It is read as it is scanned, keeping only each matching
+actor's id and creator (about 220 MB per million actors), then processed in
+sorted id order. On DynamoDB the scan is strongly consistent, since the
+command writes back the creator it read, so it costs twice the read units of
+an eventual scan; ``--rate-limit`` caps it in read capacity units per second
+(ignored on PostgreSQL).
 
 Output: one summary line, ``scanned`` (actors considered), ``marked``
 (written, or would be with ``--dry-run``), ``skipped`` (already carry a
@@ -131,42 +136,47 @@ def mark_actors(
     creator: str | None = None,
     start_after: str | None = None,
     dry_run: bool = False,
+    rate_limit: float | None = None,
 ) -> dict[str, int]:
     """Write ``marker`` on the actors that qualify; return the counts.
 
     Raises:
         ValueError: ``marker`` does not vouch.
-        ActorListUnavailable: the actor list could not be read (PostgreSQL
-            answers a fault with ``False``, DynamoDB raises while scanning;
-            neither must read as "no actors").
+        ActorListUnavailable: the actor list could not be read (a fault while
+            scanning must not read as "no actors").
     """
     from actingweb.db import get_actor_list
     from actingweb.oauth2 import UNVOUCHED_AUTH_METHODS
 
     if not marker or marker in UNVOUCHED_AUTH_METHODS:
         raise ValueError(f"{marker!r} does not vouch for an actor")
-    try:
-        rows = get_actor_list(config).fetch()
-    except Exception as e:  # folds DbError: becomes ActorListUnavailable (exit 2)
-        # DynamoDB's scan is lazy: a fault raises while it is iterated.
-        raise ActorListUnavailable(f"the actor list could not be read: {e}") from e
-    if not isinstance(rows, list):
-        raise ActorListUnavailable("the actor list could not be read")
     wanted = creator.lower() if creator and "@" in creator else creator
+    selected: list[tuple[str, str]] = []
+    try:
+        # Filters at collection time, so memory holds only what is processed;
+        # the whole list before the first write, so a fault means nothing
+        # was scanned. Consistent: the creator read is written back.
+        for row in get_actor_list(config).iter_rows(
+            consistent=True, rate_limit=rate_limit
+        ):
+            actor_id = row.get("id")
+            if not actor_id:
+                continue
+            if start_after and actor_id <= start_after:
+                continue
+            row_creator = row.get("creator") or ""
+            if (
+                wanted
+                and (row_creator.lower() if "@" in row_creator else row_creator)
+                != wanted
+            ):
+                continue
+            selected.append((actor_id, row_creator))
+    except Exception as e:  # folds DbError: becomes ActorListUnavailable (exit 2)
+        raise ActorListUnavailable(f"the actor list could not be read: {e}") from e
     counts = {"scanned": 0, "marked": 0, "skipped": 0, "pending": 0, "errors": 0}
     last: str | None = None
-    for row in sorted(rows, key=lambda r: r.get("id", "")):
-        actor_id = row.get("id")
-        if not actor_id:
-            continue
-        if start_after and actor_id <= start_after:
-            continue
-        row_creator = row.get("creator") or ""
-        if (
-            wanted
-            and (row_creator.lower() if "@" in row_creator else row_creator) != wanted
-        ):
-            continue
+    for actor_id, row_creator in sorted(selected):
         counts["scanned"] += 1
         last = actor_id
         _mark_one(
@@ -214,6 +224,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--creator", default=None)
     parser.add_argument("--start-after", default=None)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--rate-limit",
+        type=float,
+        default=None,
+        help=(
+            "DynamoDB read capacity units per second for the actor scan, "
+            "which is strongly consistent (twice the read units of an "
+            "eventual scan); ignored on PostgreSQL"
+        ),
+    )
     args = parser.parse_args(argv)
 
     from actingweb.config import Config
@@ -227,6 +247,7 @@ def main(argv: list[str] | None = None) -> int:
             creator=args.creator,
             start_after=args.start_after,
             dry_run=args.dry_run,
+            rate_limit=args.rate_limit,
         )
     except ValueError as e:
         parser.error(str(e))

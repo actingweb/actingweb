@@ -1,5 +1,5 @@
 ---
-status: active
+status: done
 ---
 
 # Implementation Plan: 3.16 roll-up: dependency security upgrade and the small bounded follow-ups
@@ -938,6 +938,9 @@ None.
 - **The finisher's `bump`** sits after `_lease_keeper` and before the sweep,
   inside the existing `try`, so a `DbError` releases the lease and nothing
   is swept (test added beside the order spy).
+- **Minor-release items** (the addendum's rule; 3.16.0 is already a minor):
+  the logout response field `cleared_cookies` changes value on an MCP
+  logout, and `delete_expired` on PostgreSQL now raises.
 - Two existing tests changed for the new bucket: the MCP purge list count
   (7 to 8) and a store double in `test_mcp_revocation_evicts_caches.py`
   that lacked `set_attr`.
@@ -1051,13 +1054,60 @@ None.
 
 ### Verification
 
-- [ ] Fast tier
-- [ ] `poetry run actingweb-mark-actors-vouched --dry-run --rate-limit 50`
+- [x] Fast tier
+- [x] `poetry run actingweb-mark-actors-vouched --dry-run --rate-limit 50`
   against the test store: progress lines and the summary as before
-- [ ] Full tier on both backends before the commit
-- [ ] `thoughts/todo/INDEX.md` rows match the files in `thoughts/todo/`
+- [x] Full tier on both backends before the commit
+- [x] `thoughts/todo/INDEX.md` rows match the files in `thoughts/todo/`
 
-### Implementation Status: In Progress
+### Implementation Status: Complete
+
+### Implementation notes (Phase 3)
+
+- **The property-list sweeps pull rows with `next()`** inside a loop, so a
+  fault on the first pull still says "nothing scanned" and a fault later
+  names how many actors were read and that a `--repair`/`--migrate` re-run
+  resumes from the checkpoint. The checkpoint is now built before the first
+  row (it only reads an existing file), and "No actors found" is decided
+  after the loop.
+- **`verify_orphans`** routes its DynamoDB id set through
+  `dynamodb.actor.DbActorList().iter_rows(consistent=True)` directly (the
+  function takes no config); the PostgreSQL branch is unchanged.
+- **The `callback` guard is one helper**, `actingweb/db/_validation.py`
+  `check_subscription_callback`, called first in both backends' `create`
+  and `modify`. The integration case is a new file,
+  `tests/integration/test_subscription_callback_backend.py` (both flags,
+  both backends), in the shape of `test_trust_create_defaults.py`.
+- **`resolve_resource` returns `(method_name, hook, metadata, variables)`**;
+  the method name is what the hook is called with. The async handler keeps
+  its own fault answers (`_db_fault_response`, "Resource read failed"), the
+  sync one re-raises `DbError`, as recorded in D7. `uri_pattern` is set on
+  the metadata by hand in the parity test, as in
+  `TestLegacyUriPatternDispatch`: the decorator has no parameter for it.
+- **`find_client_trust`** keeps the resolver's debug line through the
+  caller (which arm matched). The deletion path deletes the one row it
+  returns; the cascade in `Trust.delete()` back into client cleanup is the
+  existing path and was not changed.
+- **Minor-release items** (3.16.0 is already a minor): the protocol method
+  `DbActorListProtocol.iter_rows`, the CLI flag `--rate-limit` on
+  `actingweb-mark-actors-vouched`, the `TypeError` contract on
+  `DbSubscription.create`/`modify`, and the FastAPI `resources/read`
+  response shape.
+- **Existing tests moved to the `iter_rows` seam**: the two
+  `TestBundledMaintenanceExitCodes` cases in
+  `test_db_fault_fourth_pass.py` (the "folded `False`" case became a
+  part-way fault test, since `iter_rows` has no folding form) and the two in
+  `test_adoption_write_faults.py`.
+- **Todos (D9):** sections 4 and 7 of `mcp-cache-lifecycle-and-revocation.md`
+  and item 4 of `dynamodb-known-next.md` were removed without renumbering
+  the rest, because code and other todos cite them by section number; the
+  `INDEX.md` rows name the sections left.
+- **Verification:** fast tier green; `actingweb-mark-actors-vouched
+  --dry-run --rate-limit 50` against the DynamoDB test store prints its
+  progress and summary lines as before (`scanned=455 ... errors=0`), and
+  `--help` shows the consistent-scan note; Full tier green (DynamoDB 5616
+  passed, PostgreSQL 5421 passed), docs build and `verify_groups` green;
+  every `thoughts/todo/` file has an `INDEX.md` row and no row dangles.
 
 ---
 
@@ -1254,3 +1304,39 @@ once with stdin closed) and a fresh-context Claude. What changed:
   for re-entrancy on that path during implementation.
 - Whether `token_manager.py:1878` already folds a `delete_expired` exception
   was not read; Phase 2 checks and wraps if not.
+
+## Implementation Summary
+
+**Completed:** 2026-11-04
+**All phases:** Complete (three commits on `release/3.16.0-dependency-security`)
+**Test status:** All passing. Full tier on both backends after each phase;
+the last run had DynamoDB 5616 passed and PostgreSQL 5421 passed, with the
+docs build, `verify_groups`, ruff and pyright at 0 errors and 0 warnings.
+
+### Deviations from Plan
+- PostgreSQL's missing-index refusal raises `DbError(op)` (the plan said
+  `DbError("creator uniqueness index missing")`), so the documented
+  `database error during actor create` is exactly true. An INVALID index is
+  refused too.
+- The DynamoDB remedy ERROR does not confirm the missing table with
+  `DescribeTable`, which the runtime role may lack.
+- `_creators_table` runs on every backend (best-effort on PostgreSQL),
+  because several unit tests pin `database="dynamodb"`.
+- The MCP race test revokes through the consumed refresh token; the old
+  access row is gone by the time the mint runs.
+- The theft and `/oauth/revoke` marker tests live in
+  `test_oauth2_spa_logout_revokes_chain.py`.
+- The property-list sweeps' "folded `False`" test became a part-way-fault
+  test; `iter_rows` has no folding form.
+- Todo sections were removed without renumbering, since they are cited by
+  number.
+
+### Learnings
+- `make test-all-parallel` ends with `docker compose down -v`, so the next
+  direct unit run needs the containers started again; a "Could not connect"
+  wave after a `make` run is that, not a regression.
+- An unattended Full tier must leave the tree alone: the PostgreSQL run and
+  the docs build read the working tree after the DynamoDB run.
+- Not done here, and not filed: nothing. The PR opens after the
+  verification, per the one-PR-per-plan rule.
+

@@ -218,7 +218,12 @@ checkout, ``scripts/mark_actors_vouched.py`` run the same code.)
 The tool writes ``auth_method`` on actors that have none and leaves every
 actor that already carries a marker alone. It resumes with
 ``--start-after <actor id>`` and scans the whole actor table (maintenance, not
-a serving path). ``--include-factory`` also re-marks ``factory`` actors, for a
+a serving path). The scan is streamed and keeps only each matching actor's id
+and creator, about 220 MB per million actors, before it processes them in
+sorted id order. On DynamoDB it is strongly consistent, because the tool
+writes back the creator it read, so it costs twice the read units of an
+eventual scan; ``--rate-limit <units per second>`` caps it (ignored on
+PostgreSQL). ``--include-factory`` also re-marks ``factory`` actors, for a
 deployment that kept the factory open after upgrading and wants to vouch for
 what it created; run that while no sign-in is served, since a sign-in replacing
 one of those actors (or a sibling of it) deletes it whichever is first. A value that does not vouch (``factory``,

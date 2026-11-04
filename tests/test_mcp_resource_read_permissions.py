@@ -191,5 +191,121 @@ class TestSyncAsyncResourceReadParity(unittest.TestCase):
         self.assertFalse(self._async_decision(peer_id))
 
 
+def _allow_all(*_a, **_k):
+    return PermissionResult.ALLOWED
+
+
+def _contents_hooks(seen: list) -> HookRegistry:
+    """Resources whose results cover every formatting branch (3.16)."""
+    hooks = HookRegistry()
+
+    @mcp_resource(uri_template="typed://{id}", mime_type="application/x-test")
+    def typed(actor, method_name, params):
+        seen.append(dict(params))
+        return {"id": params.get("id"), "n": 1}
+
+    @mcp_resource(uri_template="plain://{id}")
+    def plain(actor, method_name, params):
+        return {"content": "ignored key", "x": [1, 2]}
+
+    @mcp_resource(uri_template="text://doc", mime_type="text/markdown")
+    def text(actor, method_name, params):
+        return "# heading"
+
+    @mcp_resource(uri_template="raw://doc")
+    def raw(actor, method_name, params):
+        return {"contents": [{"uri": "raw://doc", "text": "as is"}]}
+
+    @mcp_resource(uri_template="legacy://unused")
+    def legacy(actor, method_name, params):
+        return "legacy body"
+
+    # uri_pattern is legacy, hand-authored metadata; the decorator has no
+    # parameter for it.
+    legacy._mcp_metadata["uri_pattern"] = r"legacy://v\w*"  # type: ignore[attr-defined]
+
+    for name, hook in (
+        ("typed", typed),
+        ("plain", plain),
+        ("text", text),
+        ("raw", raw),
+        ("legacy", legacy),
+    ):
+        hooks.register_method_hook(name, hook)
+    return hooks
+
+
+class TestSyncAsyncResourceReadContents(unittest.TestCase):
+    """Flask and FastAPI answer ``resources/read`` with the same body,
+    ``mimeType`` and hook arguments, and match ``uri_pattern`` the same
+    (3.16: the async path used ``str()``, a key the decorator never writes,
+    and no pattern fallback)."""
+
+    def _read(self, handler_cls, uri: str, seen: list):
+        handler = handler_cls(config=Config(mcp=True, unique_creator=False))
+        handler.hooks = _contents_hooks(seen)
+        request = {
+            "jsonrpc": "2.0",
+            "id": "1",
+            "method": "resources/read",
+            "params": {"uri": uri},
+        }
+        with (
+            patch.object(
+                handler_cls,
+                "authenticate_and_get_actor_cached",
+                return_value=FakeActor(),
+            ),
+            patch("actingweb.handlers.mcp.RuntimeContext") as mock_rc,
+            patch(
+                "actingweb.permission_evaluator.get_permission_evaluator"
+            ) as mock_get_eval,
+        ):
+            mock_rc.return_value.get_mcp_context.return_value = Mock(
+                peer_id="oauth2_client:allowed:allowed"
+            )
+            mock_get_eval.return_value = Mock(
+                evaluate_permission=Mock(side_effect=_allow_all)
+            )
+            if handler_cls is AsyncMCPHandler:
+                return asyncio.run(handler.post_async(request))
+            return handler.post(request)
+
+    def _both(self, uri: str):
+        sync_seen: list = []
+        async_seen: list = []
+        sync = self._read(MCPHandler, uri, sync_seen)
+        async_ = self._read(AsyncMCPHandler, uri, async_seen)
+        self.assertIn("result", sync, sync)
+        self.assertEqual(sync["result"], async_["result"])
+        return sync["result"]["contents"][0], sync_seen, async_seen
+
+    def test_a_dict_with_a_declared_mime_type(self) -> None:
+        content, sync_seen, async_seen = self._both("typed://7")
+        self.assertEqual(content["mimeType"], "application/x-test")
+        self.assertEqual(content["text"], '{\n  "id": "7",\n  "n": 1\n}')
+        # The hook sees the request params and the template's variables.
+        self.assertEqual(sync_seen, [{"uri": "typed://7", "id": "7"}])
+        self.assertEqual(async_seen, sync_seen)
+
+    def test_a_dict_without_a_mime_type_is_json(self) -> None:
+        content, _, _ = self._both("plain://1")
+        self.assertEqual(content["mimeType"], "application/json")
+        self.assertIn('"content": "ignored key"', content["text"])
+
+    def test_a_str_is_sent_as_it_is(self) -> None:
+        content, _, _ = self._both("text://doc")
+        self.assertEqual(content["text"], "# heading")
+        self.assertEqual(content["mimeType"], "text/markdown")
+
+    def test_a_contents_result_passes_through(self) -> None:
+        content, _, _ = self._both("raw://doc")
+        self.assertEqual(content, {"uri": "raw://doc", "text": "as is"})
+
+    def test_a_resource_declared_only_by_pattern(self) -> None:
+        content, _, _ = self._both("legacy://v2")
+        self.assertEqual(content["text"], "legacy body")
+
+
 if __name__ == "__main__":
     unittest.main()

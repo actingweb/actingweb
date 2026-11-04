@@ -7,6 +7,7 @@ from pynamodb.constants import PAY_PER_REQUEST_BILLING_MODE
 from pynamodb.exceptions import UpdateError
 from pynamodb.models import Model
 
+from actingweb.db._validation import check_subscription_callback
 from actingweb.db.dynamodb._ensure import ensure_table
 from actingweb.db.exceptions import DbError
 
@@ -98,11 +99,15 @@ class DbSubscription:
         subtarget=None,
         resource=None,
         seqnr=None,
-        callback=None,
+        callback: bool | None = None,
     ):
         """Modify a subscription
         If bools are none, they will not be changed.
+
+        Raises:
+            TypeError: ``callback`` is neither a bool nor None.
         """
+        check_subscription_callback(callback, modifying=True)
         if not self.handle:
             logger.debug("Attempted modification of DbSubscription without db handle")
             return False
@@ -187,9 +192,14 @@ class DbSubscription:
         subtarget=None,
         resource=None,
         seqnr=0,
-        callback=False,
+        callback: bool = False,
     ):
-        """Create a new subscription"""
+        """Create a new subscription
+
+        Raises:
+            TypeError: ``callback`` is not a bool.
+        """
+        check_subscription_callback(callback, modifying=False)
         if not actor_id or not peerid or not subid:
             return False
         if self.get(actor_id=actor_id, peerid=peerid, subid=subid):

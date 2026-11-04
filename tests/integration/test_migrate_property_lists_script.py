@@ -291,7 +291,7 @@ class TestMigrateActor:
         assert refused == []
 
 
-def _only_this_actor(monkeypatch, actor_id):
+def _only_this_actor(monkeypatch, actor_id, *, fault_after=False):
     """Restrict main()'s actor sweep to one actor.
 
     main() sweeps every actor in the table, but the test database is shared
@@ -305,6 +305,13 @@ def _only_this_actor(monkeypatch, actor_id):
     class _OneActor:
         def fetch(self):
             return [{"id": actor_id}]
+
+        def iter_rows(self, **_kwargs):
+            yield {"id": actor_id, "creator": "x@example.com"}
+            if fault_after:
+                from actingweb.db.exceptions import DbError
+
+                raise DbError("actor list scan")
 
     monkeypatch.setattr("actingweb.db.get_actor_list", lambda config: _OneActor())
 
@@ -605,3 +612,30 @@ class TestEnvelopeRefusals:
         fresh = ListProperty(test_actor.id, "envelope_shaped", test_actor.config)
         assert fresh.storage_format() == 1
         assert fresh.to_list() == ["a", {"__aw_env": 1, "v": "b"}]
+
+
+class TestMidSweepFault:
+    """A scan fault part-way stops the sweep where it is: the checkpoint
+    keeps what was done and the exit code is 2 (3.16)."""
+
+    def test_a_fault_after_one_actor_keeps_the_checkpoint_and_exits_2(
+        self, test_actor, monkeypatch, tmp_path
+    ):
+        import migrate_property_lists as script  # type: ignore[import-not-found]
+
+        _only_this_actor(monkeypatch, test_actor.id, fault_after=True)
+        checkpoint_file = str(tmp_path / "checkpoint.json")
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "migrate_property_lists.py",
+                "--migrate",
+                "--checkpoint-file",
+                checkpoint_file,
+            ],
+        )
+        assert script.main() == 2
+        assert os.path.exists(checkpoint_file)
+        with open(checkpoint_file) as f:
+            assert test_actor.id in f.read()

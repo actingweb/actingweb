@@ -63,37 +63,6 @@ mismatched entry. Needs someone to characterize whether `Mcp-Session-Id` is
 attacker-controllable in a way that matters, and if so whether the cache should
 be scoped by something server-verified (e.g. bound to the resolved `peer_id`).
 
-## 4. Substring/`endswith` peer-id matching survives on the deletion path
-
-The exact-match resolver fix touched only the *authentication* trust lookup
-(`_lookup_mcp_trust_relationship` in `mcp.py`). A structurally identical
-substring match still exists on the **client deletion** path,
-`actingweb/oauth2_server/client_registry.py:521`:
-
-```python
-for pattern in expected_peer_patterns:
-    if pattern in peer_id or peer_id.endswith(client_id):
-```
-
-**Why this is lower severity than the authentication-path bug was — worth
-recording rather than re-deriving.** `_delete_client_trust_relationship` has one
-caller, `ClientRegistry.delete_client()`, which has two: `OAuth2ClientManager.delete_client()`
-(actor-owner-initiated) and `Trust.delete()`, which triggers it only when the
-trust row being deleted already carries a server-issued `oauth_client_id`. That
-field is written exclusively by the two OAuth2 client-creation paths; a trust row
-created through the ordinary `/trust` peer protocol never has one, so it can
-never be the *trigger*. And `client_id` values are server-generated
-(`f"mcp_{secrets.token_hex(16)}"`), high enough entropy that no client can choose
-or predict another's, so the substring check can only ever match a *coincidental*
-collision between legitimate ids, not an attacker-steered one.
-
-That makes it a data-integrity/availability problem — deleting client A can
-collaterally delete an unrelated trust row whose peer id happens to contain A's
-client id — rather than a reachable privilege escalation. Still worth the same
-exact-match treatment for defense in depth: `oauth_client_id == client_id`
-first, falling back to the gated full-string peer-id reconstruction the resolver
-now uses.
-
 ## 5. Registration doesn't hard-fail when trust creation fails
 
 `client_registry.py` swallows trust-creation failure during client registration
@@ -123,23 +92,6 @@ both `single_use.PurgeThrottle`). Two apps in one process share one
 `last_attempt`, so one app's token-endpoint traffic can starve the other's
 purge. Harmless on DynamoDB (native TTL reaps anyway); on PostgreSQL the
 purge is the only reaper. Same trigger, same fix: scope by config.
-
-## 7. Sync/async `resources/read` result-formatting divergence
-
-Not a permission-decision bug. For a **successful** `resources/read` on a
-dict-shaped result, the sync handler (`mcp.py`) serializes with
-`json.dumps(result, indent=2)` while the async handler (`async_mcp.py`) uses
-`str(result)` — so an MCP client gets differently-formatted (and for `str()`,
-malformed-for-JSON-consumers: single quotes, `None`/`True`/`False`) resource
-content depending on whether Flask or FastAPI served it. Both paths return
-`-32003` identically on authorization decisions; this is purely content
-formatting on the success path.
-
-**Proposed fix:** make the async path use the same `json.dumps(result, indent=2)`
-for dict results, and add a sync/async parity test asserting byte-identical
-`resources/read` response bodies for a successful read — not just identical
-authorization decisions, which `tests/test_mcp_resource_read_permissions.py`
-already covers.
 
 ## Related
 

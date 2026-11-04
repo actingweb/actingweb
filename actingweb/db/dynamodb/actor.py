@@ -3,7 +3,7 @@ import os
 import random
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from typing import Any
 
 from pynamodb.attributes import UnicodeAttribute
@@ -622,7 +622,9 @@ class DbActorList:
         """
         ret = []
         try:
-            for t in Actor.scan():
+            # Projected: no passphrase in memory, fewer wire bytes (Scan is
+            # still charged on the bytes scanned).
+            for t in Actor.scan(attributes_to_get=["id", "creator"]):
                 ret.append(
                     {
                         "id": t.id,
@@ -635,6 +637,22 @@ class DbActorList:
             logger.error(f"Error fetching actor list: {e}")
             return False
         return ret
+
+    def iter_rows(
+        self, *, consistent: bool = False, rate_limit: float | None = None
+    ) -> Iterator[dict[str, Any]]:
+        """Yield every actor as ``{"id", "creator"}`` as PynamoDB pages the
+        projected Scan. ``consistent`` doubles the read units. A fault raises
+        ``DbError("actor list scan")`` from wherever the iteration is."""
+        try:
+            for t in Actor.scan(
+                attributes_to_get=["id", "creator"],
+                consistent_read=consistent,
+                rate_limit=rate_limit,
+            ):
+                yield {"id": t.id, "creator": t.creator}
+        except Exception as e:
+            raise DbError("actor list scan") from e
 
     def __init__(self):
         self.handle = None

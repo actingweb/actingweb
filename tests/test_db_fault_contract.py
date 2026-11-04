@@ -151,6 +151,48 @@ class TestPostgresStrictOnlyReads:
                 is None
             )
 
+    def test_actor_iter_rows_fault_raises_on_first_pull(self) -> None:
+        """A generator, so not a PG_READS row: it raises when iterated."""
+        module = _pg_module("actor")
+        with mock.patch.object(module, "get_connection", _pg_down):
+            rows = module.DbActorList().iter_rows()
+            with pytest.raises(DbError) as raised:
+                next(rows)
+        assert isinstance(raised.value.__cause__, RuntimeError)
+
+    def test_actor_iter_rows_fault_on_the_second_page_after_the_first(
+        self,
+    ) -> None:
+        module = _pg_module("actor")
+        pages = [[("a1", "x"), ("a2", "y")]]
+
+        class _PagedCursor(_FakeCursor):
+            def fetchall(self) -> list[Any]:
+                return pages.pop(0)
+
+        class _PagedConnection(_FakeConnection):
+            def __init__(self) -> None:
+                super().__init__(fail_on="never")
+                self.cursor_obj = _PagedCursor("never")
+
+        calls = {"n": 0}
+
+        def connect() -> Any:
+            calls["n"] += 1
+            if calls["n"] > 1:
+                raise RuntimeError("connection refused (simulated)")
+            return _PagedConnection()
+
+        with (
+            mock.patch.object(module, "_ITER_PAGE", 2),
+            mock.patch.object(module, "get_connection", connect),
+        ):
+            rows = module.DbActorList().iter_rows()
+            assert next(rows)["id"] == "a1"
+            assert next(rows)["id"] == "a2"
+            with pytest.raises(DbError):
+                next(rows)
+
     def test_delete_expired_fault_raises_instead_of_answering_zero(self) -> None:
         """The only reaper of the token and chain-marker buckets must not
         report a fault as "nothing expired" (3.16)."""
@@ -400,6 +442,15 @@ class TestDynamoReadFaults:
             with pytest.raises(DbError):
                 m.DbActorList().fetch()
             assert m.DbActorList().fetch(strict=False) is False
+
+    def test_actor_iter_rows_faults_where_the_scan_is(self) -> None:
+        m = _ddb()["actor"]
+        row = type("Row", (), {"id": "a1", "creator": "x"})()
+        with mock.patch.object(m.Actor, "scan", _faults_mid_page([row])):
+            rows = m.DbActorList().iter_rows()
+            assert next(rows) == {"id": "a1", "creator": "x"}
+            with pytest.raises(DbError):
+                next(rows)
 
     def test_trust_get_and_list(self) -> None:
         m = _ddb()["trust"]

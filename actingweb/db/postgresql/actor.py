@@ -1,6 +1,7 @@
 """PostgreSQL implementation of actor database operations."""
 
 import logging
+from collections.abc import Iterator
 from typing import Any
 
 import psycopg
@@ -16,6 +17,9 @@ from actingweb.db.exceptions import CreatorTaken, DbError
 from actingweb.db.postgresql.connection import get_connection, get_schema_name
 
 logger = logging.getLogger(__name__)
+
+# Rows per keyset page of DbActorList.iter_rows.
+_ITER_PAGE = 1000
 
 # Schemas whose ``ux_actors_creator`` was seen valid. Positive only: an
 # absent index or a fault is probed again on the next enforced write.
@@ -539,3 +543,33 @@ class DbActorList:
                 raise DbError("actor list fetch") from e
             logger.error(f"Error fetching actor list: {e}")
             return False
+
+    def iter_rows(
+        self, *, consistent: bool = False, rate_limit: float | None = None
+    ) -> Iterator[dict[str, Any]]:
+        """Yield every actor as ``{"id", "creator"}`` in id order, in keyset
+        pages of ``_ITER_PAGE``.
+
+        Each page takes its own pooled connection and releases it before
+        yielding, so a sweep abandoned part-way holds none. Reads are
+        read-committed per page, not a fleet snapshot. ``consistent`` and
+        ``rate_limit`` are accepted for parity with DynamoDB and ignored.
+        """
+        last = ""
+        while True:
+            try:
+                with get_connection() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            "SELECT id, creator FROM actors WHERE id > %s "
+                            "ORDER BY id LIMIT %s",
+                            (last, _ITER_PAGE),
+                        )
+                        page = cur.fetchall()
+            except Exception as e:
+                raise DbError("actor list scan") from e
+            for row in page:
+                yield {"id": row[0], "creator": row[1]}
+            if len(page) < _ITER_PAGE:
+                return
+            last = page[-1][0]

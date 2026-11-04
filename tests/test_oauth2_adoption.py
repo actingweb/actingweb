@@ -425,9 +425,18 @@ class TestBypassSites:
         "module", ["handlers/oauth2_spa.py", "handlers/oauth2_callback.py"]
     )
     def test_handlers_holding_an_existing_actor_call_adopt_actor(self, module) -> None:
+        """Every sign-in completion resolves through the one helper that runs
+        the adoption rule (BQ): ``lookup_or_create_actor_by_identifier``,
+        which calls ``adopt_actor``; none calls ``adopt_actor`` around it."""
         root = Path(__file__).resolve().parent.parent / "actingweb"
         text = (root / module).read_text()
-        assert text.count("adopt_actor(") >= (2 if "spa" in module else 1)
+        assert text.count("adopt_actor(") == 0
+        assert text.count("lookup_or_create_actor_by_identifier(") >= (
+            2 if "spa" in module else 3
+        )
+        assert text.count("finish_stalled_deletion=True") >= (
+            2 if "spa" in module else 3
+        )
 
 
 class TestEmailUnverifiedMarker:

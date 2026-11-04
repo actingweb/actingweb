@@ -259,7 +259,10 @@ class TestOAuth2SessionManager:
             assert actor_result is not None
             assert actor_result.id == "actor123"
             mock_authenticator.lookup_or_create_actor_by_email.assert_called_once_with(
-                "user@example.com", hooks=None, create_only=False
+                "user@example.com",
+                hooks=None,
+                create_only=False,
+                finish_stalled_deletion=True,
             )
 
             # Verify OAuth tokens were stored
@@ -613,7 +616,10 @@ class TestOAuth2SessionManager:
             )
 
             mock_authenticator.lookup_or_create_actor_by_email.assert_called_once_with(
-                "user@example.com", hooks=sentinel_hooks, create_only=False
+                "user@example.com",
+                hooks=sentinel_hooks,
+                create_only=False,
+                finish_stalled_deletion=True,
             )
 
     def test_delete_session_removes_row(self):

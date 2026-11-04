@@ -92,6 +92,51 @@ DynamoDB, the old ``<prefix>_property_lookup`` (v1) table and the
 ``property-index`` GSI on the properties table are no longer read and can be
 dropped. See :doc:`../migration/v3.16` ("One reverse-lookup mechanism").
 
+Stalled Deletions
+-----------------
+
+An actor's wipe that stopped part-way leaves a live actor row under its
+deletion tombstone. The next ``DELETE`` or sign-in to it finishes it;
+``actingweb-deletions`` finds the ones nobody comes back for (see
+:doc:`../reference/actor-deletion`).
+
+.. code-block:: bash
+
+    # With the same environment as the application:
+    actingweb-deletions report                  # stalled, in progress, legacy
+    actingweb-deletions report ACTOR_ID
+    actingweb-deletions resume                  # dry run
+    actingweb-deletions resume --apply          # finish the stalled ones
+    actingweb-deletions resume ACTOR_ID --apply # one, also a legacy one
+    actingweb-deletions clear ACTOR_ID --apply  # a stray tombstone on a live actor
+
+``legacy, review`` is a tombstone written before 3.16, which records no
+reason: either a ``DELETE`` that stalled (``resume`` it) or a live actor whose
+create failed to clear it (``clear`` it). A finished tombstone whose actor id
+is live again (re-created without the tombstone cleared) reports the same
+way; ``resume`` treats it as a new deletion of that actor, with a fresh
+finish and retention. ``resume`` runs no application hooks
+and prints the ids it finished, so run your own ``actor_deleted_complete``
+cleanup for them; peers are notified as each tombstone recorded
+(``--no-notify-peers`` turns it off for all). A legacy tombstone records no
+choice, so ``resume ACTOR_ID --apply`` notifies its peers unless you pass
+``--no-notify-peers``; review whose actor it was (a replaced squatter's
+peers were chosen by the squatter) before resuming one. The resume records
+the deletion on the tombstone, so if it stalls again it reports as
+``stalled``, not ``legacy, review``. A tombstone whose actor row is gone
+while a finisher holds its lease reports as ``in progress``: that finisher
+marks it finished. On PostgreSQL ``resume --apply``
+also purges expired tombstone and email-verification index rows; DynamoDB
+expires them with its TTL. Pass ``--no-unique-creator`` when the application
+runs without ``with_unique_creator()``, so a finished actor's creator record
+is handled as the application would. Exit codes: 0 nothing left, 1 work left
+(or a dry run with work), 2 the tombstone store cannot be read.
+
+Cost: one read of the tombstone bucket (every tombstone in the retention
+window, and on PostgreSQL expired ones until purged) and, per unfinished
+tombstone, one point read of the tombstone (an expired one is skipped) and
+one actor-row read; ``resume`` adds one full wipe per stalled actor.
+
 DynamoDB Billing Mode for Auto-Created Tables
 ---------------------------------------------
 

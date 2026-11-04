@@ -214,6 +214,11 @@ class TestActorCreatorLookup:
             {"id": "actorB", "creator": "user@example.com", "passphrase": "bar"},
             {"id": "actorA", "creator": "user@example.com", "passphrase": "foo"},
         ]
+        # Each listed row is read back and must still hold the creator (BK).
+        mock_db_actor.get.side_effect = lambda actor_id=None, **_kw: {
+            "id": actor_id,
+            "creator": "user@example.com",
+        }
         mock_config.DbActor.DbActor.return_value = mock_db_actor
 
         with patch.object(Actor, "get", autospec=True) as mock_get:

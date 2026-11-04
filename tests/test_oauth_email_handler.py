@@ -404,6 +404,25 @@ class TestFreeTextNewAddressFiresOauthSuccess:
         assert result["status_code"] == 403
         assert webobj.response.status_code == 403
         assert not any(c[0] == "email_verification_required" for c in hooks.calls)
+        # O2c: the session's provider tokens are written only after the hook
+        # accepted; a rejection writes none.
+        _args, kwargs = _session_mgr.complete_claimed_session.call_args
+        assert kwargs["write_tokens"] is False
+        _session_mgr.store_session_tokens.assert_not_called()
+
+    def test_accepted_oauth_success_writes_the_tokens_after_the_hook(self):
+        config = _config()
+        webobj = _webobj(email=EXISTING_EMAIL)
+        hooks = _hooks()
+        session = _session(verified_emails=[EXISTING_EMAIL])
+        actor = _new_actor()
+
+        _result, session_mgr = _run_post(
+            config, webobj, hooks, session=session, complete_actor=actor
+        )
+
+        session_mgr.store_session_tokens.assert_called_once()
+        assert any(c[0] == "oauth_success" for c in hooks.calls)
 
 
 class TestOauthTokenCookie:
@@ -468,3 +487,58 @@ class TestCorsAllowlist:
             webobj.response.headers["Access-Control-Allow-Origin"]
             == "https://allowed.example.com"
         )
+
+
+class TestCrossSiteSubmissionSignsNobodyIn:
+    """Re-verification 4, W1: a page on another site auto-posts the
+    submitter's own OAuth session and an address from the victim's browser;
+    completing it set ``oauth_token`` there (login CSRF)."""
+
+    def test_a_browser_form_from_another_site_is_refused_before_the_claim(self):
+        config = _config()
+        webobj = _webobj(
+            email=NEW_EMAIL, json_client=False, origin="https://evil.example"
+        )
+        hooks = _hooks()
+        result, session_mgr = _run_post(
+            config, webobj, hooks, session=_session(), complete_actor=_new_actor()
+        )
+        assert webobj.response.status_code == 403
+        assert result == {}
+        session_mgr.try_claim_session.assert_not_called()
+        session_mgr.complete_claimed_session.assert_not_called()
+        assert not [c for c in webobj.response.cookies if c["name"] == "oauth_token"]
+
+    def test_a_sibling_subdomain_is_another_site(self):
+        config = _config()
+        webobj = _webobj(email=NEW_EMAIL, json_client=False)
+        assert webobj.request.headers is not None
+        webobj.request.headers["Sec-Fetch-Site"] = "same-site"
+        _result, session_mgr = _run_post(
+            config, webobj, _hooks(), session=_session(), complete_actor=_new_actor()
+        )
+        assert webobj.response.status_code == 403
+        session_mgr.try_claim_session.assert_not_called()
+
+    def test_a_cross_site_json_request_gets_no_session_cookie(self):
+        """``format=json`` (or an Accept header) skips the refusal, so the
+        cookie itself is never set for a request another site started; the
+        token is in the body."""
+        config = _config()
+        webobj = _webobj(email=NEW_EMAIL, origin="https://evil.example")
+        result, _session_mgr = _run_post(
+            config, webobj, _hooks(), session=_session(), complete_actor=_new_actor()
+        )
+        assert result.get("status") == "success"
+        assert result.get("access_token") == "aw-oauth-token"
+        assert not [c for c in webobj.response.cookies if c["name"] == "oauth_token"]
+
+    def test_a_same_origin_form_still_gets_its_cookie(self):
+        config = _config()
+        webobj = _webobj(
+            email=NEW_EMAIL, json_client=False, origin="https://test.example.com"
+        )
+        _run_post(
+            config, webobj, _hooks(), session=_session(), complete_actor=_new_actor()
+        )
+        assert [c for c in webobj.response.cookies if c["name"] == "oauth_token"]

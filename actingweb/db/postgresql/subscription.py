@@ -291,8 +291,11 @@ class DbSubscription:
                         """,
                         tuple(params),
                     )
+                    # A row that is gone answers False, as on DynamoDB: the
+                    # UPDATE never recreates it.
+                    updated = cur.rowcount > 0
                 conn.commit()
-            return True
+            return updated
 
         except Exception as e:
             raise DbError("subscription modify") from e

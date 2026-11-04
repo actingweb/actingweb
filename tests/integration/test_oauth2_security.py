@@ -263,6 +263,12 @@ class TestCrossActorAuthorizationPrevention:
             # Use actual actor email (may be uniquified for parallel execution)
             mock_authenticator.get_email_from_user_info.return_value = alice_email
             mock_authenticator.provider.name = "google"
+            # The state-selected actor goes through the one resolve path
+            # (lookup_or_create_actor_by_identifier with existing=); hand it
+            # back, as the real resolver does for a vouched actor.
+            mock_authenticator.lookup_or_create_actor_by_identifier.side_effect = (
+                lambda *_a, **kw: kw.get("existing")
+            )
 
             # Step 5: Call handler
             from actingweb.handlers.oauth2_callback import OAuth2CallbackHandler
@@ -326,6 +332,9 @@ class TestCrossActorAuthorizationPrevention:
             mock_bob_actor.id = "bob_actor_123"
             mock_bob_actor.creator = "bob@example.com"
             mock_bob_actor.store = MagicMock()
+            # The trust relationship is created against the actor's config,
+            # which must be a real one (it bootstraps the system actor).
+            mock_bob_actor.config = config
 
             mock_authenticator.exchange_code_for_token.return_value = {
                 "access_token": "bob_access_token",

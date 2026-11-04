@@ -824,6 +824,11 @@ class SubscriptionManager:
 
         Returns:
             True if suspended, False otherwise
+
+        Raises:
+            DbError: the suspension could not be read (3.16; it answered
+                False before). In a background job, catch it and retry; do
+                not treat it as "not suspended".
         """
         return self._core_actor.is_subscription_suspended(target, subtarget)
 

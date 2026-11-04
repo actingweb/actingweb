@@ -34,6 +34,9 @@ from ..constants import (
     REFRESH_TOKEN_GRACE_DEFAULT,
     SPA_REFRESH_TOKEN_REUSE_WINDOW,
 )
+from ..constants import (
+    LEGACY_REFRESH_COOKIE_PATH as _LEGACY_REFRESH_COOKIE_PATH,
+)
 from ..db.exceptions import DbError
 from ..secret_compare import secret_digest_equals, secret_equals
 from ..single_use import classify_reuse, refresh_token_grace
@@ -229,6 +232,32 @@ def spa_cors_headers(
         "Access-Control-Expose-Headers": f"Retry-After, {ERROR_CODE_HEADER}",
         "Access-Control-Max-Age": "86400",
     }
+
+
+#: Re-exported from :mod:`actingweb.constants` (the hybrid refresh cookie's
+#: path before 3.16).
+LEGACY_REFRESH_COOKIE_PATH = _LEGACY_REFRESH_COOKIE_PATH
+
+
+def set_refresh_cookie(
+    response: Any, refresh_token: str, *, httponly: bool = True, samesite: str = "Lax"
+) -> None:
+    """Set the SPA ``refresh_token`` cookie on ``path=/``, the one path every
+    setter uses (the OAuth callback's hybrid delivery and the refresh grant's
+    rotation), so ``/oauth/logout`` receives it and revokes the token; and
+    expire the cookie on the path the callback used before."""
+    response.set_cookie(
+        "refresh_token",
+        refresh_token,
+        max_age=86400 * 14,  # 2 weeks
+        path="/",
+        secure=True,
+        httponly=httponly,
+        samesite=samesite,
+    )
+    response.set_cookie(
+        "refresh_token", "", max_age=-1, path=LEGACY_REFRESH_COOKIE_PATH, secure=True
+    )
 
 
 class OAuth2SPAHandler(BaseHandler):
@@ -911,17 +940,42 @@ class OAuth2SPAHandler(BaseHandler):
         # detected anywhere in this lineage, only this family is revoked — and
         # the access token is tagged with the chain so it is revoked too.
         chain_id = token_data.get("chain_id")
+        from .. import session_generation
+
+        stamped = token_data.get(session_generation.STAMP_FIELD)
         try:
             new_access_token = self._generate_actingweb_token(
                 actor_id, identifier or "", chain_id=chain_id
             )
             new_refresh_token = session_manager.create_refresh_token(
-                actor_id, identifier, chain_id=chain_id
+                actor_id, identifier, chain_id=chain_id, session_generation=stamped
             )
         except TokenStoreUnavailable as e:
             # The presented token is already consumed; a retry inside the
             # grace period rotates again in the same chain.
             logger.error(f"Could not store the rotated refresh token: {e}")
+            return self._store_unavailable()
+
+        # R3: a token issued before the actor was adopted in place mints
+        # nothing, even when its refresh straddled the clean's revokes.
+        revoke_minted = [
+            lambda: session_manager.revoke_session(
+                new_access_token, token_type_hint="access_token"
+            ),
+            lambda: session_manager.revoke_session(
+                new_refresh_token, token_type_hint="refresh_token"
+            ),
+        ]
+
+        try:
+            if not session_generation.guard(
+                actor_id, self.config, stamped, revoke_minted
+            ):
+                return self._json_error(
+                    401, "Invalid or expired refresh_token", "invalid_grant"
+                )
+        except DbError as e:  # folds DbError: answered 503 like a token-store fault
+            logger.error(f"Could not read the session generation: {e}")
             return self._store_unavailable()
 
         expires_in = 3600  # 1 hour for access token
@@ -1074,45 +1128,19 @@ class OAuth2SPAHandler(BaseHandler):
                 "invalid_grant",
             )
 
-        # Lookup or create actor
-        from .. import actor as actor_module
-
-        existing_check = actor_module.Actor(config=self.config)
-        actor_exists = existing_check.get_from_creator(identifier)
-
-        if actor_exists:
-            # Use the already-fetched actor instead of doing another DB lookup.
-            # An actor nobody vouched for is replaced or cleaned first; the
-            # result may be a different actor, and is None if that failed.
-            from ..oauth2 import adopt_actor
-
-            actor_instance = adopt_actor(
-                existing_check,
-                provider=authenticator.provider,
-                config=self.config,
-                hooks=self.hooks,
-                user_info=user_info,
-            )
-        else:
-            actor_instance = authenticator.lookup_or_create_actor_by_identifier(
-                identifier, user_info=user_info, hooks=self.hooks
-            )
+        # Lookup or create actor: the one resolve path the web callback uses
+        # too (adoption, its CreatorTaken reloads, a stalled deletion
+        # finished).
+        actor_instance = authenticator.lookup_or_create_actor_by_identifier(
+            identifier,
+            user_info=user_info,
+            hooks=self.hooks,
+            finish_stalled_deletion=True,
+        )
 
         if not actor_instance:
             logger.error(f"Failed to lookup or create actor for {identifier}")
             return self._json_error(500, "Actor creation failed", "server_error")
-
-        # Store OAuth tokens in actor properties
-        if actor_instance.store:
-            actor_instance.store.oauth_token = provider_access_token
-            actor_instance.store.oauth_token_expiry = (
-                str(int(time.time()) + provider_expires_in)
-                if provider_expires_in
-                else None
-            )
-            if provider_refresh_token:
-                actor_instance.store.oauth_refresh_token = provider_refresh_token
-            actor_instance.store.oauth_token_timestamp = str(int(time.time()))
 
         # actor_created fires exactly once, inside Actor.create() itself (via
         # the hooks= kwarg above) — not here, which would double-fire it.
@@ -1147,6 +1175,18 @@ class OAuth2SPAHandler(BaseHandler):
                 f"OAuth success hook rejected authentication for {identifier}"
             )
             return self._json_error(403, "Authentication rejected", "access_denied")
+
+        # O2c: the provider tokens land only once oauth_success accepted.
+        if actor_instance.store:
+            actor_instance.store.oauth_token = provider_access_token
+            actor_instance.store.oauth_token_expiry = (
+                str(int(time.time()) + provider_expires_in)
+                if provider_expires_in
+                else None
+            )
+            if provider_refresh_token:
+                actor_instance.store.oauth_refresh_token = provider_refresh_token
+            actor_instance.store.oauth_token_timestamp = str(int(time.time()))
 
         # Generate ActingWeb SPA tokens
         actor_id = actor_instance.id or ""
@@ -1255,39 +1295,16 @@ class OAuth2SPAHandler(BaseHandler):
         Mirrors the authorization_code grant's completion but works without an
         upstream access token (the JWT-bearer grant only has an id_token).
         """
-        from .. import actor as actor_module
-
-        existing_check = actor_module.Actor(config=self.config)
-        if existing_check.get_from_creator(identifier):
-            from ..oauth2 import adopt_actor
-
-            actor_instance = adopt_actor(
-                existing_check,
-                provider=authenticator.provider,
-                config=self.config,
-                hooks=self.hooks,
-                user_info=user_info,
-            )
-        else:
-            actor_instance = authenticator.lookup_or_create_actor_by_identifier(
-                identifier, user_info=user_info, hooks=self.hooks
-            )
+        actor_instance = authenticator.lookup_or_create_actor_by_identifier(
+            identifier,
+            user_info=user_info,
+            hooks=self.hooks,
+            finish_stalled_deletion=True,
+        )
 
         if not actor_instance:
             logger.error(f"Failed to lookup or create actor for {identifier}")
             return self._json_error(500, "Actor creation failed", "server_error")
-
-        # Persist upstream provider tokens when we have them (apple_mobile_ticket).
-        if actor_instance.store and provider_access_token:
-            actor_instance.store.oauth_token = provider_access_token
-            actor_instance.store.oauth_token_expiry = (
-                str(int(time.time()) + provider_expires_in)
-                if provider_expires_in
-                else None
-            )
-            if provider_refresh_token:
-                actor_instance.store.oauth_refresh_token = provider_refresh_token
-            actor_instance.store.oauth_token_timestamp = str(int(time.time()))
 
         # actor_created fires exactly once, inside Actor.create() itself (via
         # the hooks= kwarg above) — not here, which would double-fire it.
@@ -1321,6 +1338,19 @@ class OAuth2SPAHandler(BaseHandler):
                 f"OAuth success hook rejected authentication for {identifier}"
             )
             return self._json_error(403, "Authentication rejected", "access_denied")
+
+        # O2c: the upstream provider tokens (apple_mobile_ticket) land only
+        # once oauth_success accepted the sign-in.
+        if actor_instance.store and provider_access_token:
+            actor_instance.store.oauth_token = provider_access_token
+            actor_instance.store.oauth_token_expiry = (
+                str(int(time.time()) + provider_expires_in)
+                if provider_expires_in
+                else None
+            )
+            if provider_refresh_token:
+                actor_instance.store.oauth_refresh_token = provider_refresh_token
+            actor_instance.store.oauth_token_timestamp = str(int(time.time()))
 
         actor_id = actor_instance.id or ""
         from ..oauth2_server.token_manager import TokenStoreUnavailable
@@ -1409,6 +1439,11 @@ class OAuth2SPAHandler(BaseHandler):
 
         if not IdTokenReplayCache(self.config).check_and_record(claims):
             return self._json_error(400, "id_token replay rejected", "invalid_request")
+
+        # E1: the id_token's address counts only with its email_verified.
+        from ..oauth2 import drop_unverified_email
+
+        claims = drop_unverified_email(authenticator.provider, claims) or claims
 
         # Honor email-as-creator mode: reject a provider-ID-only id_token when the
         # app requires email as the actor creator (parity with the web flow).
@@ -1499,6 +1534,15 @@ class OAuth2SPAHandler(BaseHandler):
             )
         if not claims:
             return self._json_error(401, "Failed to extract user info", "invalid_grant")
+        # E1 (the id_token path; the userinfo fetch already decided).
+        from ..oauth2 import drop_unverified_email
+
+        claims = (
+            drop_unverified_email(
+                authenticator.provider, claims, token_data.get("access_token", "")
+            )
+            or claims
+        )
 
         # Honor email-as-creator mode: in that configuration a provider-ID
         # identifier (apple:sub / github:id) must not be accepted.
@@ -1879,12 +1923,9 @@ class OAuth2SPAHandler(BaseHandler):
     ) -> None:
         """Set refresh token cookie."""
         if self.response:
-            self.response.set_cookie(
-                "refresh_token",
+            set_refresh_cookie(
+                self.response,
                 refresh_token,
-                max_age=86400 * 14,  # 2 weeks
-                path="/",  # Use root path so browser stores it properly
-                secure=True,
                 httponly=httponly,
                 samesite="Lax",  # Lax allows the cookie on same-site navigations
             )
@@ -1907,7 +1948,7 @@ class OAuth2SPAHandler(BaseHandler):
                         cookie_name,
                         "",
                         max_age=-1,
-                        path="/oauth/spa/token",
+                        path=LEGACY_REFRESH_COOKIE_PATH,
                         secure=True,
                     )
 

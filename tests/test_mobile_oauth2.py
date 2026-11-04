@@ -258,7 +258,15 @@ class TestAuthorizationCodeGrant:
             "login": "testuser",
             "email": "test@example.com",
         }
-        mock_get.return_value = userinfo_response
+        # GitHub's /user carries no verified claim; E1 checks /user/emails.
+        emails_response = MagicMock()
+        emails_response.status_code = 200
+        emails_response.json.return_value = [
+            {"email": "test@example.com", "verified": True, "primary": True}
+        ]
+        mock_get.side_effect = lambda url=None, **_kw: (
+            emails_response if str(url).endswith("/user/emails") else userinfo_response
+        )
 
         # Mock actor lookup/creation
         with (

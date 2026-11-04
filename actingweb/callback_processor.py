@@ -781,8 +781,10 @@ class CallbackProcessor:
             config=self._actor.config,
         )
 
-        # Get all attributes in bucket and delete those for this peer
-        all_attrs = db.get_bucket(strict=False) or {}
+        # Get all attributes in bucket and delete those for this peer. Strict:
+        # a fault raises DbError, so the trust deletion answers 503 and is
+        # retried, instead of leaving this peer's state behind.
+        all_attrs = db.get_bucket() or {}
         for attr_name in list(all_attrs.keys()):
             if f":{peer_id}:" in attr_name:
                 db.delete_attr(name=attr_name)

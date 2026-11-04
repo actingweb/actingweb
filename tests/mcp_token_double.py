@@ -186,6 +186,8 @@ def make_config() -> tuple[Config, MemoryStore]:
             new_data: Any,
             timestamp: Any = None,
             ttl_seconds: int | None = None,
+            *,
+            clear_ttl: bool = False,
         ) -> bool:
             if store.cas_fault:
                 return False

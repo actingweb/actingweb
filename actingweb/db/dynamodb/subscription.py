@@ -106,24 +106,38 @@ class DbSubscription:
         if not self.handle:
             logger.debug("Attempted modification of DbSubscription without db handle")
             return False
+        # One UpdateItem of only the given fields: a whole-item save from a
+        # handle loaded earlier would write back a stale seqnr over a
+        # concurrent increment_seq. Conditioned on the row existing, so a
+        # deleted subscription is never recreated.
+        changes: list[tuple[Any, Any]] = []
         if peerid and len(peerid) > 0:
-            self.handle.peerid = peerid
+            changes.append((Subscription.peerid, peerid))
         if subid and len(subid) > 0:
-            self.handle.subid = subid
+            changes.append((Subscription.subid, subid))
         if granularity and len(granularity) > 0:
-            self.handle.granularity = granularity
+            changes.append((Subscription.granularity, granularity))
         if callback is not None:
-            self.handle.callback = callback
+            changes.append((Subscription.callback, callback))
         if target and len(target) > 0:
-            self.handle.target = target
+            changes.append((Subscription.target, target))
         if subtarget and len(subtarget) > 0:
-            self.handle.subtarget = subtarget
+            changes.append((Subscription.subtarget, subtarget))
         if resource and len(resource) > 0:
-            self.handle.resource = resource
+            changes.append((Subscription.resource, resource))
         if seqnr is not None:
-            self.handle.seqnr = seqnr
+            changes.append((Subscription.seqnr, seqnr))
+        if not changes:
+            return True
         try:
-            self.handle.save()
+            self.handle.update(
+                actions=[attr.set(value) for attr, value in changes],
+                condition=Subscription.id.exists(),
+            )
+        except UpdateError as e:
+            if e.cause_response_code == "ConditionalCheckFailedException":
+                return False
+            raise DbError("subscription modify") from e
         except Exception as e:
             raise DbError("subscription modify") from e
         return True

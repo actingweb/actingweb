@@ -446,7 +446,14 @@ When OAuth providers don't provide email addresses (e.g., GitHub with private em
 2. Redirects to ``/oauth/email`` with a session token
 3. Presents email input form to the user
 4. Completes actor creation after email is provided, or answers 409
-   ``actor_exists`` for a free-text address that already has an actor
+   ``actor_exists`` for a free-text address that already has an actor. With
+   the ``email_sign_in_code_required`` hook registered, an actor whose
+   address was verified before gets a six-digit code mailed instead, and the
+   code posted back signs the page in (see
+   :doc:`../reference/hooks-reference`)
+
+The form refuses a browser ``POST`` that another site started (403), so it
+must be served from the application's own origin.
 
 Applications should provide an ``aw-oauth-email.html`` template for email input. If not provided, a basic fallback form is used.
 
@@ -1021,7 +1028,7 @@ How It Works
     address, so there is nothing to mark as pending or link-verified)
 
 **Scenario 2: No Verified Emails Available**
-    No verified emails → User enters email → Verification email sent → User clicks link → Email marked verified
+    No verified emails → User enters email → Verification email sent → User clicks link and confirms → Email marked verified
 
 **Scenario 3: MCP Flows** (Cannot use web forms)
     No email from provider → Return error 502 → User must configure OAuth provider to make email public
@@ -1064,8 +1071,10 @@ Verification Flow
 1. **Token Generation**: 32-byte URL-safe random token, 24-hour expiry
 2. **Storage**: Token stored in ``actor.store.email_verification_token``; reverse index stored for token lookup
 3. **Email Sent**: Lifecycle hook ``email_verification_required`` triggered with ``verification_url``
-4. **User Clicks Link**: ``GET /oauth/email?verify=<token>``
-5. **Validation**: Token looked up via reverse index, checked against stored value and expiry
+4. **User Clicks Link**: ``GET /oauth/email?verify=<token>`` shows a page
+   with a Confirm button and changes nothing; the Confirm posts
+   ``verify=<token>`` to ``/oauth/email`` (3.16)
+5. **Validation** (on the ``POST``): Token looked up via reverse index, checked against stored value and expiry
 6. **Adoption** (3.16): the link proves the address, so an unvouched actor (every
    actor the free-text email form created) is cleaned in place first: passphrase
    rotated, trusts, subscriptions, SPA sessions, MCP tokens and registered
@@ -1173,13 +1182,19 @@ ActingWeb provides default templates for the email flow:
 **aw-oauth-email.html**
     Email input form with dropdown support for verified emails, rendered by
     ``GET /oauth/email?session=<id>`` and by a ``POST /oauth/email`` that has
-    to be re-shown with an error.
+    to be re-shown with an error. When ``code_challenge`` is set it is the
+    sign-in code page: a hidden ``code_challenge`` field, a ``code`` input,
+    ``error`` beside them, and a link to ``start_over_url`` (the app's root).
 
 **aw-verify-email.html**
-    Verification result page (success, already verified, error, expired),
-    rendered by ``GET /oauth/email?verify=<token>``. The integrations pick
-    this template whenever the handler sets a ``status`` value, which only
-    the verification path does.
+    Result page, rendered whenever the handler sets a ``status`` value: the
+    verification link's Confirm page (``status`` ``confirm``, a form posting
+    ``verify_token`` as ``verify`` to ``action``) and its results (success,
+    already verified, error, expired), and the email form's error pages that
+    have no form to show again (an expired sign-in session, a code that could
+    not be sent). An error carries ``redirect_url`` (the app's root) to render
+    as a way on, and a sign-in error a ``title`` ("Sign-in expired", "Sign
+    in") to use as the page heading instead of "Email verification".
 
 Applications can override these templates by placing them in their ``templates/`` directory.
 
@@ -1195,7 +1210,7 @@ Security Considerations
 **Email Validation:**
     - Verified emails from OAuth providers are validated via API
     - User input restricted to verified emails when available (dropdown)
-    - Manual email input requires clicking verification link
+    - Manual email input requires clicking the verification link and confirming
     - No way to bypass verification requirement
 
 **Attack Prevention:**

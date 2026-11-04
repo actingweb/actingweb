@@ -432,6 +432,11 @@ class Attributes:
         if not self.dbprop:
             return False
 
+        # Only when asked for, so a backend (or test double) written before
+        # the keyword existed keeps working for every other caller.
+        ttl_kwargs: dict[str, Any] = (
+            {"ttl_seconds": ttl_seconds} if ttl_seconds is not None else {}
+        )
         # Use the database backend's atomic conditional update
         success = self.dbprop.conditional_update_attr(
             actor_id=self.actor_id,
@@ -440,9 +445,7 @@ class Attributes:
             old_data=old_data,
             new_data=new_data,
             timestamp=timestamp,
-            # Only when asked for, so a backend (or test double) written
-            # before the keyword existed keeps working for every other caller.
-            **({"ttl_seconds": ttl_seconds} if ttl_seconds is not None else {}),
+            **ttl_kwargs,
         )
 
         # Update local cache only if successful

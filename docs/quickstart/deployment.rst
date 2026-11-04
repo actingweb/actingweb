@@ -115,6 +115,12 @@ Kubernetes
             ports:
             - containerPort: 5000
 
+With several replicas, each worker process keeps its own subscription
+fan-out circuit breaker (``actingweb.fanout``): a peer that answers 429 or
+503 is backed off by each worker once that worker's own breaker trips, not
+by all of them at once. Persisted breaker state only seeds a new process (a
+pod restart). Size a peer's retry tolerance for the replica count.
+
 Notes
 =====
 

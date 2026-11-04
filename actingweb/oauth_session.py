@@ -28,6 +28,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+#: Default of ``create_refresh_token(session_generation=)``: read the
+#: actor's current generation.
+_CURRENT_GENERATION: Any = object()
+
 # Session TTL - 10 minutes
 _SESSION_TTL = 600
 
@@ -302,6 +306,33 @@ class OAuth2SessionManager:
 
         return self.complete_claimed_session(session, email, hooks=hooks)
 
+    def store_session_tokens(
+        self, actor_instance: "actor_module.Actor", session: dict[str, Any]
+    ) -> None:
+        """Write a claimed session's provider tokens and provider onto the
+        actor. The ``oauth_provider`` write is bookkeeping: a fault there is
+        logged and folded (K4), the token writes raise."""
+        token_data = session.get("token_data", {}) or {}
+        provider = session.get("provider", "google")
+        access_token = token_data.get("access_token", "")
+        refresh_token = token_data.get("refresh_token")
+        expires_in = token_data.get("expires_in", 3600)
+        if not actor_instance.store:
+            return
+        actor_instance.store.oauth_token = access_token
+        actor_instance.store.oauth_token_expiry = (
+            str(int(time.time()) + expires_in) if expires_in else None
+        )
+        if refresh_token:
+            actor_instance.store.oauth_refresh_token = refresh_token
+        actor_instance.store.oauth_token_timestamp = str(int(time.time()))
+        try:
+            actor_instance.store.oauth_provider = provider
+        except DbError as e:  # folds DbError: provider bookkeeping write (K4)
+            logger.error(
+                f"Sign-in to {actor_instance.id}: recording the provider faulted: {e}"
+            )
+
     def complete_claimed_session(
         self,
         session: dict[str, Any],
@@ -310,9 +341,15 @@ class OAuth2SessionManager:
         hooks: "HookRegistry | None" = None,
         create_only: bool = False,
         auth_method: str | None = None,
+        write_tokens: bool = True,
     ) -> Optional["actor_module.Actor"]:
         """
         Complete an already-claimed OAuth session.
+
+        ``write_tokens=False`` leaves the provider tokens and ``oauth_provider``
+        unwritten, for a caller that still has to decide (the email form runs
+        its refusals and ``oauth_success`` first, then
+        :meth:`store_session_tokens`).
 
         The session row is gone by the time this runs (``try_claim_session``
         consumed it), so callers that need to refuse the submission — the
@@ -335,7 +372,6 @@ class OAuth2SessionManager:
         """
         try:
             # Extract session data
-            token_data = session["token_data"]
             provider = session.get("provider", "google")
 
             # Validate email format
@@ -353,6 +389,10 @@ class OAuth2SessionManager:
             # Passed only when set so authenticators that predate the keyword
             # (and tests asserting the call) see the call they always saw.
             extra: dict[str, Any] = {"auth_method": auth_method} if auth_method else {}
+            if not create_only:
+                # A sign-in completion: a vouched actor whose deletion
+                # stalled is finished and recreated (adopt_actor).
+                extra["finish_stalled_deletion"] = True
             actor_instance = authenticator.lookup_or_create_actor_by_email(
                 email, hooks=hooks, create_only=create_only, **extra
             )
@@ -361,20 +401,8 @@ class OAuth2SessionManager:
                 logger.error(f"Failed to create actor for email {email}")
                 return None
 
-            # Store OAuth tokens in actor properties
-            access_token = token_data.get("access_token", "")
-            refresh_token = token_data.get("refresh_token")
-            expires_in = token_data.get("expires_in", 3600)
-
-            if actor_instance.store:
-                actor_instance.store.oauth_token = access_token
-                actor_instance.store.oauth_token_expiry = (
-                    str(int(time.time()) + expires_in) if expires_in else None
-                )
-                if refresh_token:
-                    actor_instance.store.oauth_refresh_token = refresh_token
-                actor_instance.store.oauth_token_timestamp = str(int(time.time()))
-                actor_instance.store.oauth_provider = provider
+            if write_tokens:
+                self.store_session_tokens(actor_instance, session)
 
             # The session row was already consumed by try_claim_session().
 
@@ -593,6 +621,7 @@ class OAuth2SessionManager:
         identifier: str | None = None,
         ttl: int | None = None,
         chain_id: str | None = None,
+        session_generation: Any = _CURRENT_GENERATION,
     ) -> str:
         """
         Create a new refresh token for an actor.
@@ -608,6 +637,11 @@ class OAuth2SessionManager:
                 (initial login), a fresh chain is started so each device/session
                 gets its own independent lineage and a theft response on one
                 device never logs out the others.
+            session_generation: The session generation the token is stamped
+                with (R3, :mod:`actingweb.session_generation`). By default the
+                actor's current one (a login); a rotation passes the consumed
+                token's stamp, so the chain keeps the generation it began
+                under.
 
         Returns:
             The new refresh token
@@ -629,6 +663,19 @@ class OAuth2SessionManager:
             "used": False,
             "chain_id": chain_id or self.new_chain_id(),
         }
+        from . import session_generation as generation_module
+
+        if session_generation is _CURRENT_GENERATION:
+            try:
+                session_generation = generation_module.current(actor_id, self.config)
+            except DbError as e:
+                from .oauth2_server.token_manager import TokenStoreUnavailable
+
+                raise TokenStoreUnavailable(
+                    f"Could not read the session generation of actor {actor_id}"
+                ) from e
+        if session_generation is not None:
+            token_data[generation_module.STAMP_FIELD] = session_generation
 
         bucket = attribute.Attributes(
             actor_id=OAUTH2_SYSTEM_ACTOR,

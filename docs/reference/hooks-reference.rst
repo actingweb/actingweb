@@ -125,7 +125,7 @@ Decorator: ``app.lifecycle_hook(event: str)``
 
 Signature: ``func(actor, **kwargs) -> Any``
 
-- Common events: ``actor_created``, ``actor_deleted``, ``actor_deleted_complete``, ``actor_adopted``, ``oauth_success``, ``trust_initiated``, ``trust_request_received``, ``trust_fully_approved_local``, ``trust_fully_approved_remote``, ``trust_deleted``, ``subscription_deleted``, ``email_verification_required``, ``email_verified``
+- Common events: ``actor_created``, ``actor_deleted``, ``actor_deleted_complete``, ``actor_adopted``, ``oauth_success``, ``trust_initiated``, ``trust_request_received``, ``trust_fully_approved_local``, ``trust_fully_approved_remote``, ``trust_deleted``, ``subscription_deleted``, ``email_verification_required``, ``email_sign_in_code_required``, ``email_verified``
 
 Event Details
 ~~~~~~~~~~~~~
@@ -183,9 +183,10 @@ Event Details
     factory-created actor (see ``actor_adopted``), with the keyword arguments
     ``reason="replaced_at_adoption"`` and ``replaced_by_identifier=<creator>``,
     so a hook that mails "your account was deleted" or cancels billing can tell
-    it apart from a user-initiated delete. A replacement that fails mid-wipe is
-    re-run by the next sign-in, so this hook (and ``actor_deleted_complete``)
-    may fire more than once for the same old actor.
+    it apart from a user-initiated delete. A deletion that stops part-way is
+    resumed (see `Faults and hooks`_): this hook runs at least once per
+    registered hook, and again only when one of them raised ``DbError``, so
+    write it to be idempotent.
 
 ``actor_adopted``
     Triggered once per adoption, on the **surviving** actor, after a sign-in
@@ -209,6 +210,9 @@ Event Details
     - ``mode``: ``"replaced"`` or ``"cleaned"``.
     - ``removed_trusts``: ``peerid``, ``relationship``, ``approved`` and
       ``established_via`` of each removed trust; **never** the ``secret``.
+      ``None`` (unknown, not "none") when the lists could not be read, as are
+      ``removed_subscription_peers``, ``tokens_revoked`` and
+      ``property_names`` then; the adoption itself went through.
     - ``removed_client_ids``: the OAuth2 clients registered under the actor,
       deleted with it.
     - ``property_names``: the properties that survive a clean-in-place, so the
@@ -219,6 +223,20 @@ Event Details
       clean-in-place it is empty, unless the sign-in first resolved to a
       factory actor and then cleaned the owner's own actor instead: that
       factory actor is listed here.
+
+    A replacement whose successor's create raised is announced later, by
+    the next verified sign-in for the creator: the one that creates the
+    actor, one that cleans the actor the email form created meanwhile (an
+    unverified create announces nothing), or one that replaces a
+    ``factory`` actor created meanwhile, or any later sign-in to the
+    creator's vouched actor. That event has ``mode="replaced"``, the old id
+    and every count ``None``, and fires once per earlier replacement,
+    before the sign-in's own event. Like ``actor_deleted`` it is not
+    exactly once, so make the handler idempotent: a concurrent sign-in for
+    the same creator can announce a replacement twice, a crash between the
+    claim and the hook loses it, and a record nobody announces expires
+    after seven days. The siblings a failed replacement swept are not
+    carried into the later event.
 
 ``actor_deleted_complete``
     Triggered **after** the wipe completes. Receives ``actor=None`` and
@@ -231,6 +249,53 @@ Event Details
     replaces an unvouched actor, with the same ``reason`` and
     ``replaced_by_identifier`` keyword arguments as ``actor_deleted``. See
     :doc:`actor-deletion` for the full contract.
+
+Faults and hooks
+~~~~~~~~~~~~~~~~
+
+An actor's wipe can stop part-way and is then resumed (3.16). Which hook
+runs on which path:
+
+.. list-table::
+   :header-rows: 1
+
+   * - Path
+     - ``actor_deleted``
+     - ``actor_deleted_complete``
+   * - First ``DELETE /<id>``
+     - before the wipe
+     - after it
+   * - ``DELETE /<id>`` repeated after a stall
+     - only if it raised ``DbError`` the first time
+     - once, by the request that finishes (a crash between recording the
+       finish and the hook loses it; a later request finds the deletion
+       done and fires nothing)
+   * - Either, while another request holds the deletion's lease
+     - no (503 with ``Retry-After``)
+     - no
+   * - A sign-in that finishes a stalled deletion
+     - as for a repeated ``DELETE``
+     - once
+   * - A sign-in's replacement or factory sweep
+     - with ``reason="replaced_at_adoption"``
+     - once, same kwargs
+   * - ``Actor.delete()`` / ``ActorInterface.delete()``
+     - no
+     - no
+   * - ``actingweb-deletions resume``
+     - no
+     - no (the command prints the ids it finished)
+
+A resumed ``actor_deleted`` gets the kwargs the first attempt recorded. When
+one of several registered hooks raises ``DbError``, the retry runs all of
+them again; a hook that raised anything else counts as having run. Write
+deletion hooks to be idempotent.
+
+Two other folds are deliberate. A subscription callback's handlers run at
+most once: once they have run, a fault recording the sequence is logged and
+the callback answers as processed. The owner's sign-in removes the
+``factory`` actors beside it as a best-effort sweep; a fault there is logged
+and the next sign-in retries.
 
 ``oauth_success``
     Triggered after successful OAuth2 authentication.
@@ -245,8 +310,10 @@ Event Details
     - ``display_name`` — derived, or GitHub ``name``
     - ``given_name`` — Apple ``firstName`` / Google ``given_name``
     - ``family_name`` — Apple ``lastName`` / Google ``family_name``
-    - ``email`` — the email claim (for Apple, merged from the first-sign-in
-      ``user`` payload when present)
+    - ``email`` — the email claim, only when the provider verified it (3.16);
+      an unverified one is in ``unverified_email`` instead (Apple's
+      first-sign-in ``user`` payload address is always there, it is not
+      signed)
     - ``sub`` — provider subject claim (plus other provider fields passthrough)
 
     .. note::
@@ -395,6 +462,45 @@ Event Details
                 to=email,
                 subject="Verify your email",
                 body=f"Click here to verify: {verification_url}"
+            )
+
+``email_sign_in_code_required``
+    Triggered (3.16) when a user whose provider has no verified address types,
+    in the email form, an address that already has a verified actor. Without
+    this hook the form answers 409; with it the form asks for this code.
+
+    **Signature**: ``func(actor: ActorInterface, email: str, code: str, expires_in: int) -> None``
+
+    **Purpose**: Send ``code`` (six digits, valid for ``expires_in`` seconds,
+    five tries) to ``email``. The page that asked posts it back with its
+    ``code_challenge`` to ``POST /oauth/email`` and is signed in to ``actor``.
+    A browser page is bound to its browser by the
+    ``__Host-aw_sign_in_binding`` cookie (``Secure``, so served over HTTPS);
+    a JSON client's challenge is redeemed by a JSON request. At most five
+    codes are created per actor per hour; past that the form answers 429
+    until the hour ends.
+
+    **Raise to report a failed send.** When every registered handler
+    raises, the library takes the code as not sent: the challenge is
+    withdrawn and the form answers 503 ("The sign-in code could not be
+    sent"). Its hourly slot stays used, so raise only for a send that
+    failed: a handler that raises after the mail left still costs the user
+    a code. Any exception before a handler has run without raising, a
+    ``DbError`` from a write after your own send included, counts as not
+    sent and withdraws the code (a ``DbError`` answers 503): send last, or
+    catch your own bookkeeping faults. Once one handler has run without
+    raising, a later handler's failure is logged and the code stays good. A handler that queues the
+    mail and returns counts as sent. Unlike most lifecycle hooks, an
+    exception here is not only logged.
+
+    .. code-block:: python
+
+        @app.lifecycle_hook("email_sign_in_code_required")
+        def send_sign_in_code(actor, email, code, expires_in):
+            send_email(
+                to=email,
+                subject="Your sign-in code",
+                body=f"Your code is {code}. It expires in {expires_in // 60} minutes.",
             )
 
 ``email_verified``

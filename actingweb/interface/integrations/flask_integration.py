@@ -30,6 +30,22 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _with_cookies(response: Response, webobj: AWWebObj) -> Response:
+    """``response`` with the handler's cookies set on it, every attribute
+    kept (see ``_create_flask_response``)."""
+    for cookie in webobj.response.cookies:
+        response.set_cookie(
+            cookie["name"],
+            cookie["value"],
+            max_age=cookie.get("max_age"),
+            path=cookie.get("path", "/"),
+            secure=cookie.get("secure", False),
+            httponly=cookie.get("httponly", False),
+            samesite=cookie.get("samesite", "Lax"),
+        )
+    return response
+
+
 class FlaskIntegration(BaseActingWebIntegration):
     """
     Flask integration for ActingWeb applications.
@@ -1199,15 +1215,55 @@ class FlaskIntegration(BaseActingWebIntegration):
                 )
             try:
                 # App provides aw-oauth-email.html template
-                return Response(
-                    render_template(
-                        "aw-oauth-email.html", **webobj.response.template_values
-                    )
+                # The handler's cookies (the sign-in code's browser binding)
+                # and status (401 for a refused code) go onto the page too.
+                return _with_cookies(
+                    Response(
+                        render_template(
+                            "aw-oauth-email.html", **webobj.response.template_values
+                        ),
+                        status=webobj.response.status_code,
+                    ),
+                    webobj,
                 )
             except Exception as e:  # folds DbError: no DB access: template rendering
                 # Template not found - provide basic HTML form as fallback
                 logger.warning(f"Template aw-oauth-email.html not found: {e}")
+                challenge = webobj.response.template_values.get("code_challenge")
+                if challenge:
+                    from ...handlers.oauth_email import code_page_html
+
+                    return _with_cookies(
+                        Response(
+                            code_page_html(
+                                str(challenge),
+                                str(webobj.response.template_values.get("message", "")),
+                                str(webobj.response.template_values.get("error", "")),
+                                str(
+                                    webobj.response.template_values.get(
+                                        "start_over_url"
+                                    )
+                                    or "/"
+                                ),
+                                str(
+                                    webobj.response.template_values.get("action")
+                                    or "/oauth/email"
+                                ),
+                            ),
+                            mimetype="text/html",
+                            status=webobj.response.status_code,
+                        ),
+                        webobj,
+                    )
                 session_id = webobj.response.template_values.get("session_id", "")
+                from html import escape as _escape
+
+                form_action = _escape(
+                    str(
+                        webobj.response.template_values.get("action") or "/oauth/email"
+                    ),
+                    quote=True,
+                )
                 error = webobj.response.template_values.get("error", "")
                 provider = webobj.response.template_values.get(
                     "provider_display", "OAuth provider"
@@ -1235,7 +1291,7 @@ class FlaskIntegration(BaseActingWebIntegration):
                     <h1>Email Required</h1>
                     <p class="message">{message}</p>
                     {f'<p class="error">{error}</p>' if error else ""}
-                    <form action="/oauth/email" method="POST">
+                    <form action="{form_action}" method="POST">
                         <input type="hidden" name="session" value="{session_id}" />
                         <label>Email Address:
                             <input type="email" name="email" required placeholder="your@email.com" />
@@ -1286,14 +1342,32 @@ class FlaskIntegration(BaseActingWebIntegration):
             # Template not found - provide basic HTML as fallback
             logger.warning(f"Template aw-verify-email.html not found: {e}")
             status = template_values.get("status", "")
+            if status == "confirm":
+                from ...handlers.oauth_email import confirm_page_html
+
+                return Response(
+                    confirm_page_html(
+                        str(template_values.get("verify_token", "")),
+                        str(template_values.get("action") or "/oauth/email"),
+                    ),
+                    mimetype="text/html",
+                    status=status_code,
+                )
             message = html.escape(str(template_values.get("message", "")))
             email = html.escape(str(template_values.get("email", "")))
-            actor_id = template_values.get("actor_id", "")
             ok = status in ("success", "verified", "already_verified")
-            heading = "Email Verified" if ok else "Verification Failed"
+            # A sign-in error names its own page (``title``); the rest are
+            # about verifying an address.
+            heading = html.escape(
+                str(template_values.get("title") or "")
+                or ("Email Verified" if ok else "Verification Failed")
+            )
+            # A way on from every result, errors included (an expired sign-in, a
+            # code that could not be sent): the handler sets ``redirect_url``.
+            redirect_url = str(template_values.get("redirect_url") or "")
             cont = (
-                f'<p><a href="{html.escape(template_values["redirect_url"])}">Continue</a></p>'
-                if ok and actor_id
+                f'<p><a href="{html.escape(redirect_url)}">Continue</a></p>'
+                if redirect_url
                 else ""
             )
             fallback_html = f"""

@@ -32,3 +32,27 @@ class CreatorTaken(DbError):
     def __init__(self, creator: str | None = None) -> None:
         Exception.__init__(self, "creator is held by another actor")
         self.creator = creator
+
+
+class DeletionInProgress(DbError):
+    """Another request is finishing this actor's deletion right now.
+
+    Raised when a sign-in, a repeated ``DELETE /<id>`` or the operator
+    command meets an actor whose deletion tombstone is held by a live lease
+    (another finisher is running the wipe). It subclasses ``DbError`` so code
+    that fails closed on a fault also stops here, and the HTTP layer answers
+    it with 503, but with ``Retry-After`` set to ``retry_after`` (the lease's
+    remainder in whole seconds, at least 1) rather than the fixed fault
+    value, and it is logged at INFO: it is a wait, not a fault. Test for it
+    before ``DbError``.
+    """
+
+    def __init__(self, actor_id: str | None = None, retry_after: int = 1) -> None:
+        Exception.__init__(
+            self,
+            f"deletion of actor {actor_id} is in progress"
+            if actor_id
+            else "an actor deletion is in progress",
+        )
+        self.actor_id = actor_id
+        self.retry_after = max(1, int(retry_after))

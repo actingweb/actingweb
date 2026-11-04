@@ -552,6 +552,12 @@ Since 3.16 both backends answer a database fault the same way, and
   diff and polls or resyncs, as the protocol's "Callback Delivery Semantics"
   section describes.
 
+Two library folds are deliberate: a subscription callback's handlers run at
+most once (a fault recording the sequence after they ran is logged), and the
+owner's sign-in sweeps the ``factory`` actors beside it on a best-effort basis
+(a fault is logged and the next sign-in retries). ``DbSubscriptionSuspension
+.is_suspended`` raises on a fault like every other read.
+
 ``Attributes.get_bucket()`` and ``get_attr()`` follow the same rule;
 ``InternalStore`` (``actor.store``) is the one wrapper that folds, and its
 ``loaded`` property tells an empty bucket from one that could not be read.

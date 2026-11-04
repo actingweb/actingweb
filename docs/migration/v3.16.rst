@@ -412,7 +412,11 @@ reads should.
   them, and the property list container (``len()``, ``[]`` and iteration on
   ``actor.property_lists``), which no longer reads a fault as an empty list;
 - the OAuth2 sign-in lookup and adoption, the SPA token check and the
-  permission stores.
+  permission stores;
+- ``SubscriptionManager.is_suspended()`` (and a custom backend's
+  ``DbSubscriptionSuspension.is_suspended``), which answered ``False`` when
+  the suspension could not be read. **Check:** in a background job, catch
+  ``DbError`` and retry; do not treat it as "not suspended".
 
 **What the HTTP layer does.** Both integrations register an app-level
 handler: a ``DbError`` that reaches Flask or FastAPI, from a library route or
@@ -422,7 +426,17 @@ unavailable"}``. The exception text is logged, never sent. A sign-in that
 hits a fault answers 503 too, not a failed login, and a token-store fault no
 longer signs a SPA user out. ``CreatorTaken`` (a ``DbError`` subclass,
 raised under ``with_unique_creator()``, see `Creator uniqueness`_) answers
-``409``.
+``409``. ``DeletionInProgress`` (a ``DbError`` subclass: another request is
+finishing the actor's deletion) answers ``503`` with ``Retry-After`` set to
+the remaining seconds of that request's lease, not the fixed ``5``.
+
+Two folds stay deliberately. A subscription callback's handlers run at most
+once: once they have run, a fault recording the sequence is logged and the
+callback answers as processed. The owner's sign-in removes the ``factory``
+actors beside it as a best-effort sweep: a fault there is logged and the next
+sign-in retries. A property write whose subscription diff cannot be
+registered keeps the write and answers ``503`` (it used to succeed with the
+diff lost); a client retrying a list ``append`` then writes a second item.
 
 A backend error a retry cannot fix (a validation, size or constraint error,
 such as an item over DynamoDB's 400 KB limit) answers ``500`` with
@@ -490,6 +504,64 @@ the returned count against the number of subscribers.
   read raises now; pass ``strict=False`` to keep checking ``loaded``.
 - A hook that must degrade instead of failing the request on a fault: catch
   ``DbError`` inside the hook.
+
+Verified provider addresses
+---------------------------
+
+From 3.16 a provider's ``email`` is the sign-in identity, and is stored as
+the actor's ``email``, only when the provider vouches for it: Google's
+``verified_email`` or ``email_verified``, Apple's signed ``email_verified``,
+or the GitHub address being in the token's verified list. Before, any
+address the provider returned counted.
+
+A user whose provider address was never verified therefore signs in to a new
+provider-id actor (``google:<sub>``), or is asked for an address under
+``force_email_prop_as_creator``, instead of the actor of that address. These
+users cannot be found from stored data (the verified flag was never stored);
+the sign-in logs a WARNING naming the provider and a redacted address.
+**Check:** grep for ``not verified by the provider`` after the upgrade; to
+re-link such a user to their old actor, verify their address yourself and
+call ``ActorInterface.modify_creator()`` on the old actor (or merge the data
+into the new one).
+
+The emailed verification link now opens a page with a Confirm button; the
+``POST`` verifies. A template that overrides ``aw-verify-email.html`` must
+render the ``confirm`` state: a form that posts the ``verify_token`` value
+as ``verify`` to ``action`` (``/oauth/email`` under the app's root). The
+confirm issues no session; the user signs in afterwards. Its error states (an
+invalid link, an expired sign-in session, a code that could not be sent)
+carry ``redirect_url``, the app's root: render it as a way on, as the bundled
+template does. The sign-in errors also carry ``title`` ("Sign-in expired",
+"Sign in"), the page's heading in place of "Email verification".
+
+A user whose provider has no verified address meets the email form again on
+that later sign-in, and the form answers 409 for an address that has an
+actor. Register ``email_sign_in_code_required`` (``func(actor, email, code,
+expires_in)``) and send the code from it, as you send the verification link:
+the form then asks for the code instead, and a correct one signs the page
+in. A template overriding ``aw-oauth-email.html`` must render a
+``code_challenge`` hidden field and a ``code`` input when
+``code_challenge`` is set, and ``error`` beside them (a wrong code renders
+the page again with it), plus a link to ``start_over_url`` (the app's root)
+for a user whose code did not arrive. Raise from the hook only for a send
+that failed: the form then answers 503, and the attempt still counts
+against the five codes an hour. The page must be served over HTTPS: the
+browser binding is a ``Secure`` ``__Host-`` cookie.
+
+Stalled deletions
+-----------------
+
+A deletion that stopped part-way is finished by the next ``DELETE /<id>``,
+by a sign-in to that actor, or by ``actingweb-deletions resume``. A
+tombstone written before 3.16 records no reason, and a sign-in leaves a
+vouched actor carrying one as it is. Every tombstone in a deployment
+upgrading from 3.15 is of that kind. **Check:** after the upgrade run
+``actingweb-deletions report`` with the application's environment; review
+each ``legacy, review`` row, then ``resume ACTOR_ID --apply`` (the user wanted
+the deletion) or ``clear ACTOR_ID --apply`` (a live actor whose create failed
+to clear its tombstone). The command runs no application hooks and prints
+the ids it finished, so run your own ``actor_deleted_complete`` cleanup for
+them.
 
 One reverse-lookup mechanism
 ----------------------------
@@ -612,6 +684,9 @@ never read as an empty store.
 
 Custom database backends
 ------------------------
+
+``DbSubscriptionSuspension.is_suspended`` must raise ``DbError`` on a read
+fault (3.16), not answer ``False``.
 
 A backend must live inside ``actingweb.db`` and follow the contract the
 module docstring of ``actingweb.db.protocols`` states:
@@ -1117,8 +1192,12 @@ that the browser reports as started by another site, a sibling subdomain
 included. The token endpoint keeps a ``Basic`` header (an OAuth2 client's
 ``client_secret_basic``). A browser page on another origin that calls
 actor routes with creator basic auth through ``fetch`` loses it: use an
-OAuth2 Bearer token there. This needs the browser's ``Sec-Fetch-Site``,
-``Origin`` and ``Referer`` to reach the application.
+OAuth2 Bearer token there. A browser form ``POST`` to ``/oauth/email`` that
+the browser reports as started by another site, a sibling subdomain
+included, answers 403 before anything is claimed, created or mailed, and no
+request another site started gets a session cookie from that endpoint; a
+JSON client still gets its token in the body. This needs the browser's
+``Sec-Fetch-Site``, ``Origin`` and ``Referer`` to reach the application.
 
 **Peer-supplied trust fields.** A peer's ``id`` must be letters, digits and
 ``_ . : @ + = -`` (at most 255 characters, starting with a letter or digit)
@@ -1136,7 +1215,8 @@ attribute).
 ``?_method=`` URL must be served from the application's origin (the shipped
 templates are); a proxy must not strip ``Sec-Fetch-Site``, ``Origin`` and
 ``Referer``, or set them to another origin; a script that relied on
-``?_method=`` with the session cookie must send the real method.
+``?_method=`` with the session cookie must send the real method; a page on
+another origin that posts the email form must send it as JSON.
 
 What stays the same
 ===================

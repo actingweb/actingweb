@@ -26,6 +26,18 @@ CHAIN_SCAN_WARN_ROWS = 1000
 logger = logging.getLogger(__name__)
 
 
+def _log_unexpected(op: str, bucket: str, name: str, e: Exception) -> None:
+    """Log a conditional operation's failure unless it is the expected miss
+    (no row, or the condition failed): the method answers False either way,
+    and a throttle or network fault must not be silent (it would read as "a
+    concurrent caller won")."""
+    if isinstance(e, DoesNotExist):
+        return
+    if getattr(e, "cause_response_code", None) == "ConditionalCheckFailedException":
+        return
+    logger.warning(f"{op} on {bucket}:{name} failed: {type(e).__name__}: {e}")
+
+
 def ttl_deadline(ttl_seconds: int) -> int:
     """The stored ``ttl_timestamp`` for a row that lives ``ttl_seconds``.
 
@@ -288,7 +300,8 @@ class DbAttribute:
             return False
         try:
             item = Attribute.get(actor_id, bucket + ":" + name, consistent_read=True)
-        except Exception:  # PynamoDB DoesNotExist exception
+        except Exception as e:  # PynamoDB DoesNotExist exception
+            _log_unexpected("delete_attr_conditional", bucket, name, e)
             return False
         if item.bucket != bucket:
             return False
@@ -296,7 +309,8 @@ class DbAttribute:
             # Condition fails (raises) if a concurrent caller already deleted it.
             item.delete(condition=Attribute.id.exists())
             return True
-        except Exception:
+        except Exception as e:
+            _log_unexpected("delete_attr_conditional", bucket, name, e)
             return False
 
     @staticmethod
@@ -308,6 +322,8 @@ class DbAttribute:
         new_data=None,
         timestamp=None,
         ttl_seconds=None,
+        *,
+        clear_ttl=False,
     ):  # type: ignore[misc]
         """Conditionally update an attribute only if current data matches old_data.
 
@@ -327,6 +343,9 @@ class DbAttribute:
             ttl_seconds: When given, the same conditional update sets
                 ``ttl_timestamp`` (plus the clock-skew buffer, as ``set_attr``
                 does)
+            clear_ttl: the same conditional update removes the row's
+                ``ttl_timestamp`` (it then never expires); ignored when
+                ``ttl_seconds`` is given
 
         Returns:
             True if update succeeded (current matched old_data), False otherwise
@@ -367,6 +386,8 @@ class DbAttribute:
                 actions = list(actions) + [
                     Attribute.ttl_timestamp.set(ttl_deadline(ttl_seconds))
                 ]
+            elif clear_ttl:
+                actions = list(actions) + [Attribute.ttl_timestamp.remove()]
 
             item.update(
                 actions=actions,  # type: ignore[arg-type]
@@ -376,8 +397,9 @@ class DbAttribute:
             )
             return True
 
-        except Exception:
+        except Exception as e:
             # Item doesn't exist or condition check failed (race condition)
+            _log_unexpected("conditional_update_attr", bucket, name, e)
             return False
 
     @staticmethod

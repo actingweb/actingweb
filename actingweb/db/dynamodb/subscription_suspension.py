@@ -16,6 +16,8 @@ from pynamodb.models import Model
 
 from actingweb.db.dynamodb._ensure import ensure_table
 
+from ..exceptions import DbError
+
 logger = logging.getLogger(__name__)
 
 
@@ -61,6 +63,15 @@ class DbSubscriptionSuspension:
         match the stored "properties" key — the documented bulk-import usage
         would silently do nothing.
         """
+        try:
+            return self._is_suspended_read(target, subtarget)
+        except DbError:
+            raise
+        except Exception as e:
+            # "Could not tell" is not "not suspended" (3.16).
+            raise DbError("subscription suspension read", self._actor_id) from e
+
+    def _is_suspended_read(self, target: str, subtarget: str | None) -> bool:
         if subtarget is None:
             try:
                 SubscriptionSuspension.get(self._actor_id, target)

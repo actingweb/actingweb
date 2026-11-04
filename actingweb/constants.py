@@ -167,6 +167,10 @@ EMAIL_VERIFICATION_TOKEN_EXPIRY = 86400  # 24 hours in seconds
 EMAIL_VERIFY_TOKEN_INDEX_BUCKET = (
     "_email_verify_tokens"  # Reverse index: verification token → actor_id
 )
+# Normalised creator -> {actor_id, previous}: a replacement at adoption that
+# has not yet announced actor_adopted (its successor's create may raise). The
+# sign-in that creates the actor for that creator announces it. TTL seven days.
+PENDING_ADOPTION_BUCKET = "_pending_adoptions"
 
 # Actor deletion tombstones: actor_id -> {actor_id, deleted_at}. Lives under
 # DELETED_ACTORS_STORE, not under the deleted actor itself.
@@ -239,6 +243,14 @@ APPLE_TICKET_TTL = MOBILE_TICKET_TTL  # backward-compatible alias
 # others are comparable. 30 days costs a handful of bytes per deleted actor.
 DELETION_TOMBSTONE_TTL = 86400 * 30  # 30 days
 
+# How long one finisher holds an actor's deletion tombstone while it runs the
+# wipe (actingweb.deletion_finish). A second finisher that meets a live lease
+# answers 503 with Retry-After instead of starting the wipe again; a lease
+# that lapsed (a crashed finisher) is taken over. The tombstone itself carries
+# no TTL until the wipe is confirmed finished, so a stalled wipe stays visible
+# to ``actingweb-deletions report``. Deliberately not configurable.
+DELETION_LEASE = 120  # seconds
+
 # Clock skew buffer for TTL calculations
 # DynamoDB TTL can be delayed up to 48 hours, but items may appear
 # expired before TTL fires. This buffer prevents premature invalidation.
@@ -286,3 +298,8 @@ ERROR_CODE_HEADER = "X-ActingWeb-Error"
 # another delivery of its sequence is still being handled: a subscriber that
 # is working, not failing, so a publisher's breaker does not count it.
 CALLBACK_IN_PROGRESS_CODE = "callback_in_progress"
+
+#: The path an earlier release set the SPA hybrid refresh cookie on (the OAuth
+#: callback). Expired whenever the cookie is set, and cleared by logout, so a
+#: browser never holds two ``refresh_token`` cookies.
+LEGACY_REFRESH_COOKIE_PATH = "/oauth/spa/token"

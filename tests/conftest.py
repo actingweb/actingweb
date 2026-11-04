@@ -6,6 +6,7 @@ This sets up the test environment BEFORE any modules are imported.
 
 import faulthandler
 import os
+from collections.abc import Iterator
 
 import pytest
 
@@ -95,3 +96,14 @@ def _postgresql_unit_schema() -> None:
     from tests._pg_schema import ensure_postgresql_schema
 
     ensure_postgresql_schema()
+
+
+@pytest.fixture(autouse=True)
+def _fresh_github_emails_memo() -> Iterator[None]:
+    """The GitHub /user/emails memo is per process (keyed by a token
+    digest); tests reuse fake tokens, so each starts with it empty."""
+    from actingweb import oauth2
+
+    oauth2._GITHUB_EMAILS_MEMO.clear()
+    yield
+    oauth2._GITHUB_EMAILS_MEMO.clear()

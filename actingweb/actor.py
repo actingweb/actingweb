@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import time
+from collections.abc import Callable
 from typing import Any
 
 import requests
@@ -403,9 +404,15 @@ class Actor:
                 and self.config.force_email_prop_as_creator
             ):
                 em = self.store.email
+                from .oauth2 import is_vouched_store
+
+                # Only a vouched actor's stored email decides its creator: an
+                # unvouched actor's email may be a previous creator's, and
+                # adoption, not a load, decides who it belongs to.
                 if (
                     em
                     and em.lower() != self.creator
+                    and is_vouched_store(self.store)
                     and not self._email_held_elsewhere(em.lower())
                 ):
                     try:
@@ -470,7 +477,7 @@ class Actor:
         ``creator_classes`` (the class of every actor read) for the sign-in to
         reuse instead of listing again.
         """
-        from .oauth2 import SWEEP_LIMIT, classify_marker
+        from .oauth2 import SWEEP_LIMIT, classify_marker, row_holds_creator
 
         self.id = None
         self.creator = None
@@ -538,6 +545,11 @@ class Actor:
         if not ids:
             return False
         if len(ids) == 1:
+            if not row_holds_creator(db.get(actor_id=ids[0]), lookup_creator):
+                # Renamed away since the index listed it (BK): not this
+                # creator's actor.
+                self.creator_ids = []
+                return False
             self.get(actor_id=ids[0])
             return bool(self.id)
 
@@ -559,8 +571,8 @@ class Actor:
                     # A fallback if the pick vanishes before its load.
                     ranked.append((rank_of[tail_class], candidate_id))
                 continue
-            if not db.get(actor_id=candidate_id):
-                continue  # deleted since the index listed it
+            if not row_holds_creator(db.get(actor_id=candidate_id), lookup_creator):
+                continue  # deleted, or renamed away, since the index listed it
             marker = classify_marker(self.config, candidate_id, lookup_creator)
             if marker is None:
                 raise DbError("actor marker read", candidate_id)
@@ -748,7 +760,31 @@ class Actor:
         # there would strip the marker off a deletion still in progress,
         # reopening the very race it guards. A backend insert failure is the
         # same shape: nothing created, so nothing to un-tombstone.
-        if created:
+        if created and actor_id:
+            # A caller-supplied id is the only kind a tombstone can name, so
+            # its clear is confirmed: a live actor left tombstoned would have
+            # its writes suppressed and, at its next sign-in, be taken for a
+            # stalled deletion. A fault fails the create (503); the swap's row
+            # is kept, as the marker rollback below keeps it.
+            try:
+                deletion.clear_actor_tombstone(self.id, self.config, strict=True)
+            except DbError:
+                logger.error(
+                    f"Actor {self.id}: its deletion tombstone could not be "
+                    "confirmed cleared; failing the create"
+                )
+                if replace_holder is None:
+                    try:
+                        if self.handle:
+                            self.handle.delete()
+                    except Exception as e:  # folds DbError: rollback inside the DbError handler, which re-raises the original fault
+                        logger.error(f"Actor {self.id}: row removal raised: {e}")
+                self.id = None
+                self.passphrase = None
+                self.handle = None
+                self.store = None
+                raise
+        elif created:
             deletion.clear_actor_tombstone(self.id, self.config)
         if not created:
             # The id was taken (by a live actor, or one mid-deletion) or the
@@ -851,6 +887,12 @@ class Actor:
                     # the marker rollback above).
                     if self.handle and replace_holder is None:
                         self.handle.delete()
+                        if not actor_id:
+                            # A generated id's _internal bucket (its marker)
+                            # was written by this create alone.
+                            attribute.Attributes(
+                                actor_id=self.id, bucket="_internal", config=self.config
+                            ).delete_bucket()
                 except Exception as e:  # folds DbError: rollback inside the DbError handler, which re-raises the original fault
                     logger.error(f"Actor {self.id}: row removal raised: {e}")
                 self.id = None
@@ -1011,21 +1053,39 @@ class Actor:
                 self.actor["passphrase"] = passphrase
         return True
 
-    def delete(self, notify_peers: bool = True) -> bool:
+    def delete(
+        self,
+        notify_peers: bool = True,
+        *,
+        _pre_reads: tuple[Any, Any] | None = None,
+        _between_steps: Callable[[], None] | None = None,
+    ) -> bool:
         """Deletes an actor and cleans up all relevant stored data.
 
         ``notify_peers=False`` skips the remote DELETE calls to peers and
         trustees (``requests.delete``) and keeps every local cleanup. Use it
-        when the peer URLs are not trustworthy.
+        when the peer URLs are not trustworthy. When the actor's deletion
+        tombstone recorded ``notify_peers=False`` (a replacement at adoption,
+        whose peers a squatter chose), that wins over the argument.
 
-        Returns True when the actor row is gone. A backend fault raises
+        Returns True when the actor row is gone, including when a repeated
+        call on the same object finds it already gone. A backend fault raises
         ``DbError``.
+
+        **Resumable.** Every step tolerates rows that are already gone, and
+        the row goes last, so calling ``delete()`` again after it raised
+        part-way finishes the wipe. Applications deleting through HTTP or a
+        sign-in go through :func:`actingweb.deletion_finish.finish_deletion`,
+        which also runs the lifecycle hooks; this method runs none.
 
         The trust and subscription lists are read **first**, strictly: a read
         fault raises before anything is deleted and before the tombstone is
         written, so a throttle never deletes an actor without notifying its
-        peers (B8). Once the reads pass, the tombstone is written and the wipe
-        runs; a fault after that point is the tombstone path's to finish.
+        peers (B8). Once the reads pass, the tombstone is (re-)stamped and the
+        wipe runs. ``_pre_reads`` is for the finisher, which has already made
+        those reads (the fetched ``Trusts`` and ``Subscriptions`` wrappers);
+        ``_between_steps`` is its lease keeper, run before each step that can
+        wait on a peer.
 
         The actor row is removed **last**, so the actor keeps resolving for the
         duration of the wipe. Existence checks therefore fail open here, and
@@ -1033,14 +1093,36 @@ class Actor:
         step: it is readable throughout the wipe, whereas ``get()`` cannot
         distinguish mid-deletion from live. See :mod:`actingweb.deletion`.
         """
+        if not self.id:
+            # Loading an id whose row is gone leaves no id: nothing to wipe
+            # here (a stalled wipe whose row went is finished by
+            # actingweb-deletions).
+            logger.debug("Attempted delete of actor with no id")
+            return False
         if not self.handle:
+            if self.config:
+                # A repeated call after the row went: done. A strict read, so
+                # "no handle because the read failed" is not mistaken for it.
+                row = self._row_strict()
+                if row is None:
+                    return True
             logger.debug("Attempted delete of actor with no handle")
             return False
-        subs = subscription.Subscriptions(actor_id=self.id, config=self.config)
-        subs.fetch()  # strict: raises DbError before anything is removed
-        trusts = trust.Trusts(actor_id=self.id, config=self.config)
-        relationships = trusts.fetch()  # strict, same
-        deletion.mark_actor_deleted(self.id, self.config)
+        if _pre_reads is not None:
+            trusts, subs = _pre_reads
+            relationships = trusts.fetch()  # cached by the finisher's strict read
+        else:
+            subs = subscription.Subscriptions(actor_id=self.id, config=self.config)
+            subs.fetch()  # strict: raises DbError before anything is removed
+            trusts = trust.Trusts(actor_id=self.id, config=self.config)
+            relationships = trusts.fetch()  # strict, same
+        notify_peers = deletion.restamp(self.id, self.config, notify_peers)
+
+        def step() -> None:
+            if _between_steps is not None:
+                _between_steps()
+
+        step()
         self.delete_peer_trustee(shorttype="*", notify_peers=notify_peers)
         if not self.property_list:
             self.property_list = property.Properties(
@@ -1051,15 +1133,36 @@ class Actor:
         if relationships:
             for rel in relationships:
                 if isinstance(rel, dict) and "peerid" in rel:
+                    step()
                     self.delete_reciprocal_trust(
                         peerid=rel.get("peerid", ""),
                         delete_peer=True,
                         notify_peers=notify_peers,
                     )
         trusts.delete()
+        step()
         buckets = attribute.Buckets(actor_id=self.id, config=self.config)
         buckets.delete()
-        return bool(self.handle.delete())
+        # A backend that answers False for a row that is already gone (a
+        # conditional delete, a repeated call) is told apart from one that
+        # did not confirm the removal by a strict read.
+        gone = bool(self.handle.delete()) or self._row_strict() is None
+        if gone and _pre_reads is None and self.config:
+            # Not called by the finisher (which marks its own tombstone):
+            # start the tombstone's retention TTL, or it would stay
+            # unfinished, with no TTL, for ever.
+            deletion.finish_unleased(self.id, self.config)
+        return gone
+
+    def _row_strict(self) -> dict[str, Any] | None:
+        """This actor's row, read strictly (``DbError`` on a fault)."""
+        from .db import get_actor
+
+        if not self.config:
+            return None
+        db = get_actor(self.config)
+        row = db.get(actor_id=self.id)
+        return row if row else None
 
     ######################
     # Advanced operations
@@ -2153,14 +2256,14 @@ class Actor:
         if not config:
             return unconfirmed
         try:
-            # Read the subscriptions first: removing a trust also removes
-            # that peer's subscriptions, which would empty the summary.
-            sub_rows = (
-                get_subscription_list(config).fetch(actor_id=self.id, strict=True) or []
-            )
-            relationships = (
-                get_trust_list(config).fetch(actor_id=self.id, strict=True) or []
-            )
+            # Read once each, through the wrappers the wipe then deletes with
+            # (they keep what they read). The subscriptions first: removing a
+            # trust also removes that peer's subscriptions, which would empty
+            # the summary.
+            subs = subscription.Subscriptions(actor_id=self.id, config=self.config)
+            sub_rows = subs.fetch() or []  # strict: raises DbError
+            trusts = trust.Trusts(actor_id=self.id, config=self.config)
+            relationships = trusts.fetch() or []  # strict, same
         except DbError:
             raise
         except Exception as e:
@@ -2169,8 +2272,6 @@ class Actor:
         removed_trusts, subscription_peers = relationship_summary(
             relationships, sub_rows
         )
-        subs = subscription.Subscriptions(actor_id=self.id, config=self.config)
-        trusts = trust.Trusts(actor_id=self.id, config=self.config)
         for rel in relationships:
             if isinstance(rel, dict) and rel.get("peerid"):
                 self.delete_reciprocal_trust(
@@ -2853,13 +2954,22 @@ class Actor:
 
         Returns:
             True if suspended, False otherwise
+
+        Raises:
+            DbError: the suspension could not be read (3.16). "Not suspended"
+                and "could not tell" are different answers; register_diffs()
+                lets it propagate after the write committed, so the caller
+                answers 503 rather than firing callbacks a suspension meant to
+                hold back.
         """
         if not self.config or not self.id:
             return False
         try:
             db = get_subscription_suspension(self.config, self.id)
             return db.is_suspended(target, subtarget)
-        except Exception as e:  # folds DbError: diff registration after the property write committed; logged as not suspended
+        except DbError:
+            raise
+        except Exception as e:  # folds DbError: handled by the clause above; this logs a non-DbError backend error as not suspended
             # "Not suspended" and "could not tell" must not look the same:
             # a missing suspensions table (TableDoesNotExist) or a denied
             # read makes every target look un-suspended, so a bulk import's
@@ -2949,18 +3059,45 @@ class Actor:
             subs = self.get_subscriptions(
                 target=target, subtarget=None, callback=False, strict=True
             )
+            # A previous resume whose resyncs did not all land left a record
+            # of the subscribers that missed theirs (D-e): this call re-sends
+            # to those only, read before the suspension check, since that
+            # resume already removed the suspension.
+            pending = self._resync_pending(target, subtarget)
+            missed: list[str] = []
+            count = 0
+            retried: set[str] = set()
+            if pending is not None:
+                existing = {_resync_id(s) for s in subs or [] if s}
+                retried = {i for i in pending if i in existing}
+                retry_subs = [s for s in subs or [] if _resync_id(s) in retried]
+                count = self._send_resync_callbacks(
+                    target, subtarget, retry_subs, None, missed=missed
+                )
+            # A suspension set after that earlier resume (a second bulk
+            # import) is still lifted by this call: falling through, not
+            # returning, so its subscribers get their resync too.
             try:
                 resumed = db.resume(target, subtarget)
             except DbError:
                 # The delete may have landed with its answer lost; put the
                 # marker back so the retry finds something to resume.
                 self._restore_suspension(db, target, subtarget)
+                if pending is not None:
+                    self._write_resync_pending(target, subtarget, missed)
                 raise
-            if not resumed:
-                return 0  # Wasn't suspended
-
-            # Find all affected subscriptions and send resync callbacks
-            return self._send_resync_callbacks(target, subtarget, subs, db)
+            if resumed:
+                # Send resync callbacks to every affected subscriber not
+                # resynced just above (that resync already carries the
+                # current state); the ones that miss are recorded for the
+                # next call.
+                rest = [s for s in subs or [] if s and _resync_id(s) not in retried]
+                count += self._send_resync_callbacks(
+                    target, subtarget, rest, db, missed=missed
+                )
+            if pending is not None or missed:
+                self._write_resync_pending(target, subtarget, missed)
+            return count
         except DbError:
             raise
         except Exception as e:
@@ -2973,8 +3110,14 @@ class Actor:
         subtarget: str | None,
         subs: list[dict[str, Any]] | None = None,
         suspension: Any = None,
+        *,
+        missed: list[str] | None = None,
     ) -> int:
         """Send resync callbacks to all subscriptions on target/subtarget.
+
+        ``missed`` collects the subscription ids whose resync did not land
+        (an HTTP failure or a permanent store error), for the record a later
+        :meth:`resume_subscriptions` re-sends to.
 
         Every subscriber gets its attempt. If any hit a transient fault, the
         suspension is put back (when ``suspension`` is given) and the first
@@ -3023,6 +3166,8 @@ class Actor:
             try:
                 if self._callback_subscription_resync(sub, resync_subtarget):
                     count += 1
+                elif missed is not None:
+                    missed.append(_resync_id(sub))
             except DbError as e:  # folds DbError: transient ones raised after the loop
                 from .interface.integrations._errors import is_permanent
 
@@ -3031,6 +3176,8 @@ class Actor:
                         f"Resync of subscription {sub.get('subscriptionid')} hit a "
                         f"permanent store error; that subscriber missed it: {e}"
                     )
+                    if missed is not None:
+                        missed.append(_resync_id(sub))
                     continue
                 logger.error(
                     f"Resync of subscription {sub.get('subscriptionid')} faulted: {e}"
@@ -3043,6 +3190,56 @@ class Actor:
                 self._restore_suspension(suspension, target, subtarget)
             raise fault
         return count
+
+    _RESYNC_PENDING_BUCKET = "_resync_pending"
+
+    @staticmethod
+    def _resync_key(target: str, subtarget: str | None) -> str:
+        return f"{target}:{subtarget or ''}"
+
+    def _resync_pending(self, target: str, subtarget: str | None) -> list[str] | None:
+        """The subscription ids a previous resume's resync missed for this
+        target/subtarget, or None when there is no record. Strict."""
+        from .db import get_attribute
+
+        if not self.config or not self.id:
+            return None
+        row = get_attribute(self.config).get_attr_strict(
+            actor_id=self.id,
+            bucket=self._RESYNC_PENDING_BUCKET,
+            name=self._resync_key(target, subtarget),
+        )
+        data = row.get("data") if row else None
+        if not isinstance(data, dict) or not isinstance(data.get("ids"), list):
+            return None
+        return [str(i) for i in data["ids"]]
+
+    def _write_resync_pending(
+        self, target: str, subtarget: str | None, missed: list[str]
+    ) -> None:
+        """Record who missed the resync, or remove the record when nobody
+        did. Raises ``DbError``: a lost record would lose the retry."""
+        from .db import get_attribute
+
+        if not self.config or not self.id:
+            return
+        db = get_attribute(self.config)
+        name = self._resync_key(target, subtarget)
+        if missed:
+            db.set_attr(
+                actor_id=self.id,
+                bucket=self._RESYNC_PENDING_BUCKET,
+                name=name,
+                data={"ids": sorted(set(missed))},
+            )
+            logger.warning(
+                f"Resync for {target}/{subtarget}: {len(set(missed))} subscriber(s) "
+                "missed it; the next resume_subscriptions() re-sends to them"
+            )
+        else:
+            db.delete_attr(
+                actor_id=self.id, bucket=self._RESYNC_PENDING_BUCKET, name=name
+            )
 
     def _restore_suspension(
         self, suspension: Any, target: str, subtarget: str | None
@@ -3618,7 +3815,7 @@ class Actor:
         new_seq = sub_obj.increase_seq()
         return new_seq if new_seq else 0
 
-    def _leave_sequence_gap(self, sub: dict[str, Any]) -> None:
+    def _leave_sequence_gap(self, sub: dict[str, Any]) -> bool:
         """Move a subscription's sequence on without a diff, so the
         subscriber sees a gap at the next diff and recovers (the protocol's
         "MUST continue incrementing sequence numbers for each change").
@@ -3627,7 +3824,7 @@ class Actor:
         increment faults too, nothing can mark the change and it is lost.
         """
         if not self.config or not self.id:
-            return
+            return True
         from .db import get_subscription
 
         try:
@@ -3636,17 +3833,18 @@ class Actor:
                 peerid=sub.get("peerid"),
                 subid=sub.get("subscriptionid"),
             )
-        except DbError as e:  # folds DbError: change lost; the write stands
+        except DbError as e:  # folds DbError: reported to register_diffs, which raises after the loop
             logger.error(
                 f"Diff for subscription {sub.get('subscriptionid')} lost: no gap "
                 f"could be left either: {e}"
             )
-            return
+            return False
         if moved:
             logger.warning(
                 f"Left a gap at sequence {moved} of subscription "
                 f"{sub.get('subscriptionid')} for a diff that was not registered"
             )
+        return True
 
     # =========================================================================
     # Diff Registration
@@ -3672,12 +3870,11 @@ class Actor:
         # for an actor that is both subscribed and suspended; that fetch is
         # memoised per actor instance and is dwarfed by the callback fan-out
         # suspension exists to avoid.)
-        # strict=False: the write that produced the diff has committed, so a
-        # fault reading the subscriptions does not fail it. No sequence moves,
-        # so no subscriber can detect the lost diff; only a periodic poll or
-        # resync recovers it.
+        # Strict: the write that produced the diff has committed and stays,
+        # but a fault here raises DbError, so the caller answers 503 instead of
+        # a lost diff no subscriber could detect (no sequence moves).
         subs = self.get_subscriptions(
-            target=target, subtarget=None, resource=None, callback=False, strict=False
+            target=target, subtarget=None, resource=None, callback=False, strict=True
         )
         if not subs:
             return
@@ -3712,6 +3909,7 @@ class Actor:
                 target,
                 len(subs),
             )
+        lost: DbError | None = None
         for sub in subs:
             registered = False
             try:
@@ -3867,7 +4065,18 @@ class Actor:
                     # The read faulted before the resource checks below it,
                     # so a subscriber that would have got no diff can get a
                     # gap too; it resyncs needlessly, which is safe.
-                    self._leave_sequence_gap(sub)
+                    if not self._leave_sequence_gap(sub):
+                        lost = lost or e
+        if lost is not None:
+            # Neither a diff nor a gap for some subscriber: the change is
+            # undetectable for it. The write stands; the caller answers 503.
+            raise lost
+
+
+def _resync_id(sub: dict[str, Any]) -> str:
+    """A subscription's key in the resync record: subscription ids are
+    unique per peer, not per publisher."""
+    return f"{sub.get('peerid')}:{sub.get('subscriptionid')}"
 
 
 class Actors:

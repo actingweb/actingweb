@@ -77,6 +77,10 @@ def _make_config(ec_pem: str) -> Config:
         def get_bucket(self, actor_id, bucket):  # type: ignore
             return self.storage.get(f"{actor_id}:{bucket}", {})
 
+        def get_attr_strict(self, actor_id, bucket, name):  # type: ignore
+
+            return self.get_attr(actor_id, bucket, name)
+
         def get_attr(self, actor_id, bucket, name):  # type: ignore
             return self.storage.get(f"{actor_id}:{bucket}", {}).get(name)
 
@@ -126,6 +130,7 @@ def _apple_id_token(rsa_key, sub="apple-sub") -> str:
         "iat": now,
         "exp": now + 600,
         "email": "apple-user@privaterelay.appleid.com",
+        "email_verified": "true",  # Apple sends a string
     }
     return jwt.encode(claims, rsa_key, algorithm="RS256", headers={"kid": APPLE_KID})
 

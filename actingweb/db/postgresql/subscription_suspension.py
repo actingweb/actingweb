@@ -8,6 +8,7 @@ targets/subtargets during bulk operations (imports, migrations).
 import logging
 from datetime import UTC, datetime
 
+from ..exceptions import DbError
 from .connection import get_connection
 
 logger = logging.getLogger(__name__)
@@ -40,8 +41,8 @@ class DbSubscriptionSuspension:
                     )
                     return cur.fetchone() is not None
         except Exception as e:
-            logger.error(f"Error checking suspension for {self._actor_id}: {e}")
-            return False
+            # "Could not tell" is not "not suspended" (3.16).
+            raise DbError("subscription suspension read", self._actor_id) from e
 
     def _is_suspended_exact(self, target: str, subtarget: str | None) -> bool:
         """Exact-key check, ignoring target-level cascade."""

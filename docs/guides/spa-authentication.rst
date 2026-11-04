@@ -409,10 +409,17 @@ When the user submits their email, POST it to ``/oauth/email``:
            setAccessToken(response.access_token);
            window.location.href = response.redirect_url;
        }
+   } else if (response.status === 'code_required') {
+       // The address belongs to an actor whose address was verified once,
+       // and the app registered email_sign_in_code_required: a six-digit
+       // code was mailed. POST {code_challenge, code} to /oauth/email; a
+       // correct code answers status "signed_in" with the tokens, a wrong
+       // one 401 (five tries, ten minutes).
+       showCodeForm(response.code_challenge, response.expires_in);
    } else if (response.code === 'actor_exists') {
-       // 409 — a free-text address already has an actor. The pending
-       // session was consumed; the user must sign in again to try a
-       // different address.
+       // 409 — a free-text address already has an actor (and no code can
+       // be sent for it). The pending session was consumed; the user must
+       // sign in again to try a different address.
        showError('An account already exists for that address. Please sign in again.');
    } else if (response.code === 'authentication_rejected') {
        // 403 — the oauth_success lifecycle hook rejected this login.
@@ -437,12 +444,21 @@ lifecycle hook — the same hook used for HTML template applications:
        )
 
 When the user clicks the verification link, the browser navigates to
-``GET /oauth/email?verify=<token>``, which validates the token and marks the email
-as verified. Since 3.16 the click also cleans the actor in place first (the
+``GET /oauth/email?verify=<token>``, which since 3.16 shows a page with a
+Confirm button (a JSON client gets ``status: "confirm_required"`` and the
+``POST`` to make); the ``POST`` of ``verify=<token>`` validates the token and
+marks the email as verified, so a mail scanner fetching the link verifies
+nothing. The confirm issues no session. Since 3.16 the confirm also cleans the actor in place first (the
 link proves the address, and the free-text form's actor is unvouched): its
 passphrase is rotated and every SPA session and MCP token is revoked, so the SPA
-must sign the user in again after the click; an access token it still holds
-answers ``401``. See :doc:`authentication` for the full verification flow
+must sign the user in again after the confirm; an access token it still holds
+answers ``401``.
+
+Send these requests as JSON (``Accept: application/json``). A browser form
+``POST`` to ``/oauth/email`` that the browser reports as started on another
+origin, a sibling subdomain included, answers 403 "Cross-site request
+refused", and no request another site started gets a session cookie from
+this endpoint (see :doc:`../reference/security`). See :doc:`authentication` for the full verification flow
 details.
 
 Token Delivery Modes
@@ -1669,8 +1685,12 @@ Email collection form (when OAuth provider doesn't provide email) or email verif
 
    GET /oauth/email?verify=<token>
 
-Validates the token and marks the email as verified. Returns HTML success page
-or JSON response based on ``Accept`` header.
+Changes nothing: a browser gets a page with a Confirm button, a JSON client
+``{"success": true, "status": "confirm_required", "confirm": {"method":
+"POST", "url": "/oauth/email", "params": {"verify": "<token>"}}}``. The
+``POST`` of ``verify=<token>`` validates the token and marks the email as
+verified (``status: "verified"``, or ``"already_verified"``); it issues no
+session.
 
 POST /oauth/email
 ~~~~~~~~~~~~~~~~~~

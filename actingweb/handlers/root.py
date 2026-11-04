@@ -1,7 +1,6 @@
 import json
 import logging
 
-from actingweb import deletion
 from actingweb.handlers import base_handler
 
 from ..db.exceptions import DbError
@@ -94,54 +93,47 @@ class RootHandler(base_handler.BaseHandler):
         myself = auth_result.actor
         deleted_actor_id = myself.id
 
-        # Tombstone BEFORE the pre-delete hook, not just before the wipe.
-        # actor_deleted is where an application calls an external API to cancel
-        # a subscription, and that provider's callback can arrive while the
-        # call is still in flight — i.e. before Actor.delete() has run its own
-        # mark_actor_deleted(). That is not a corner case: it is the exact
-        # sequence that produced the orphan rows this feature exists to stop.
-        # Actor.delete() still writes its own tombstone, which covers
-        # programmatic deletion; the two are idempotent (a plain overwrite).
-        #
-        # AuthResult.success guarantees a non-None actor but not a non-None id,
-        # and mark_actor_deleted() treats a falsy id as "nothing to do" — which
-        # would put us back to the un-tombstoned behaviour with no signal. This
-        # release is about not having silent no-ops in this area, so say so.
-        if deleted_actor_id:
-            deletion.mark_actor_deleted(deleted_actor_id, self.config)
-        else:
+        if not deleted_actor_id:
+            # AuthResult.success guarantees a non-None actor but not a
+            # non-None id, and no tombstone can name an actor with none. This
+            # release is about not having silent no-ops in this area, so say
+            # so, and wipe it the old way.
             logger.error(
                 "Authorized DELETE for an actor with no id; no deletion "
                 "tombstone written. Late writes for it cannot be suppressed."
             )
+            if self.hooks:
+                actor_interface = self._get_actor_interface(myself)
+                if actor_interface:
+                    self.hooks.execute_lifecycle_hooks("actor_deleted", actor_interface)
+            myself.delete()
+            self.response.set_status(204)
+            return
 
-        # actor_deleted runs BEFORE any data is removed — it is the only place
-        # the actor's own data is still readable, so it is where an application
-        # reads what it needs (e.g. a stored external subscription id).
-        if self.hooks:
-            actor_interface = self._get_actor_interface(myself)
-            if actor_interface:
-                self.hooks.execute_lifecycle_hooks("actor_deleted", actor_interface)
+        # One finisher for every wipe (actingweb.deletion_finish): it reads
+        # the trusts and subscriptions strictly first (a fault answers 503
+        # with nothing written), writes the tombstone BEFORE actor_deleted
+        # (that hook is where an application cancels an external
+        # subscription, and the provider's callback can arrive while the
+        # call is still in flight), fires actor_deleted while the actor's
+        # data is still readable, revokes its tokens, wipes it with the row
+        # last, and fires actor_deleted_complete after. A repeated DELETE
+        # after a wipe that stopped part-way resumes it without firing
+        # actor_deleted again; one that arrives while another request is
+        # still wiping answers 503 with Retry-After (DeletionInProgress). An
+        # unreadable tombstone store answers 503 too.
+        from ..deletion_finish import finish_deletion
 
-        myself.delete()
-
-        # actor_deleted_complete runs AFTER the wipe. External side effects
-        # belong here, not in actor_deleted: an API call made there triggers a
-        # provider callback that races the wipe and lands while the actor still
-        # resolves, writing rows that outlive the actor. There is deliberately
-        # no ActorInterface to hand over — the actor is gone.
-        if self.hooks and deleted_actor_id:
-            try:
-                self.hooks.execute_lifecycle_hooks(
-                    "actor_deleted_complete", None, actor_id=deleted_actor_id
-                )
-            except DbError as e:  # folds DbError: notification after delete committed
-                # The actor is gone: a 503 would have the client retry a
-                # delete that completed (and get a 404).
-                logger.error(
-                    f"actor_deleted_complete for {deleted_actor_id} hit a store "
-                    f"fault: {e}"
-                )
+        if (
+            finish_deletion(
+                myself,
+                config=self.config,
+                hooks=self.hooks,
+                origin="delete",
+            )
+            is None
+        ):
+            raise DbError("actor row delete", deleted_actor_id)
 
         self.response.set_status(204)
         return

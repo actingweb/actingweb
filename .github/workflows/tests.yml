@@ -147,7 +147,8 @@ jobs:
       fail-fast: false
       matrix:
         backend: [dynamodb, postgresql]
-        python-version: ['3.11']
+        # The oldest and the newest Python that pyproject.toml claims.
+        python-version: ['3.11', '3.14']
 
     name: Tests (Python ${{ matrix.python-version }}, ${{ matrix.backend }})
 
@@ -196,7 +197,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: .venv
-          key: venv-${{ runner.os }}-${{ matrix.backend }}-${{ hashFiles('**/poetry.lock') }}
+          key: venv-${{ runner.os }}-py${{ matrix.python-version }}-${{ matrix.backend }}-${{ hashFiles('**/poetry.lock') }}
 
       - name: Install dependencies
         if: steps.cached-poetry-dependencies.outputs.cache-hit != 'true' && needs.changes.outputs.code == 'true'

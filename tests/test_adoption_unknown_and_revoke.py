@@ -163,7 +163,7 @@ class TestSeedMissingEmail:
         owner = create_core_actor(config, creator, auth_method="google_oauth2")
         istore(owner).email = None
         auth.lookup_or_create_actor_by_identifier(
-            creator, user_info={"email": "Shown@Example.com"}
+            creator, user_info={"email": "Shown@Example.com", "email_verified": True}
         )
         assert (
             istore(Actor(actor_id=aid(owner), config=config)).email

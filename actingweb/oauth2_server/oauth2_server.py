@@ -363,6 +363,12 @@ class ActingWebOAuth2Server:
             )
             if not user_info:
                 user_info = authenticator.validate_token_and_get_user_info(access_token)
+            # E1 (the id_token path; the userinfo fetch already decided).
+            from ..oauth2 import drop_unverified_email
+
+            user_info = drop_unverified_email(
+                authenticator.provider, user_info, access_token
+            )
             if not user_info:
                 return self._error_response(
                     "invalid_grant",
@@ -672,6 +678,7 @@ class ActingWebOAuth2Server:
             scope=scope,
             trust_type=trust_type,
             grant_type="client_credentials",
+            client_generation=client_data.get("session_generation"),
         )
 
         if not token_response:
@@ -845,7 +852,7 @@ class ActingWebOAuth2Server:
         try:
             return self._get_authenticator(
                 provider_name
-            ).lookup_or_create_actor_by_identifier(email)
+            ).lookup_or_create_actor_by_identifier(email, finish_stalled_deletion=True)
         except DbError:
             raise
         except Exception as e:

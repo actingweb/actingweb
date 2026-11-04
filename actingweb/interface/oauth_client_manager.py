@@ -387,6 +387,9 @@ class OAuth2ClientManager:
                 scope=scope,
                 trust_type=client_data.get("trust_type", "mcp_client"),
                 grant_type="client_credentials",
+                # R3: the registration's stamp; without it every actor that
+                # was ever cleaned in place would mint nothing.
+                client_generation=client_data.get("session_generation"),
             )
 
             if token_response:

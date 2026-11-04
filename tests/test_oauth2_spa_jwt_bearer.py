@@ -83,6 +83,10 @@ def _make_config(ec_pem: str) -> Config:
         def get_bucket(self, actor_id, bucket):  # type: ignore
             return self.storage.get(f"{actor_id}:{bucket}", {})
 
+        def get_attr_strict(self, actor_id, bucket, name):  # type: ignore
+
+            return self.get_attr(actor_id, bucket, name)
+
         def get_attr(self, actor_id, bucket, name):  # type: ignore
             return self.storage.get(f"{actor_id}:{bucket}", {}).get(name)
 
@@ -127,6 +131,7 @@ def _apple_token(
         "iat": now,
         "exp": now + 600,
         "email": "apple-user@privaterelay.appleid.com",
+        "email_verified": "true",  # Apple sends a string
         "nonce": nonce,
     }
     claims.update(over)
@@ -144,6 +149,7 @@ def _google_token(
         "iat": now,
         "exp": now + 600,
         "email": "google-user@gmail.com",
+        "email_verified": True,
         "nonce": nonce,
     }
     claims.update(over)

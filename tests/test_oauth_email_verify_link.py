@@ -95,7 +95,9 @@ def _get(
         headers={"Accept": "application/json"} if json_client else {},
         cookies={},
     )
-    result = OAuth2EmailHandler(webobj, config, hooks=hooks).get()
+    # The link opens a Confirm page (GET); the Confirm button POSTs the
+    # token, which is what verifies (BG3).
+    result = OAuth2EmailHandler(webobj, config, hooks=hooks).post()
     return result, webobj
 
 

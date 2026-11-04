@@ -18,7 +18,7 @@ import logging
 from typing import Any
 
 from actingweb.constants import ERROR_CODE_HEADER
-from actingweb.db.exceptions import CreatorTaken, DbError
+from actingweb.db.exceptions import CreatorTaken, DbError, DeletionInProgress
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +88,17 @@ def db_error_answer(exc: BaseException) -> tuple[int, dict[str, str], dict[str, 
             409,
             {ERROR_CODE_HEADER: CONFLICT_BODY["error"]},
             {**CONFLICT_BODY, "code": CONFLICT_BODY["error"]},
+        )
+    if isinstance(exc, DeletionInProgress):
+        # A wait, not a fault: another request is finishing the actor's
+        # deletion and holds its lease; retry after the lease's remainder.
+        return (
+            503,
+            {
+                "Retry-After": str(exc.retry_after),
+                ERROR_CODE_HEADER: UNAVAILABLE_BODY["error"],
+            },
+            {**UNAVAILABLE_BODY, "code": UNAVAILABLE_BODY["error"]},
         )
     if isinstance(exc, DbError):
         if is_permanent(exc):
@@ -227,6 +238,9 @@ def log_db_error(exc: DbError) -> None:
     """One log line per mapped fault, with the chained backend cause."""
     if isinstance(exc, CreatorTaken):
         logger.info(f"Request refused: {exc}")
+        return
+    if isinstance(exc, DeletionInProgress):
+        logger.info(f"Request deferred (503, Retry-After {exc.retry_after}): {exc}")
         return
     cause = exc.__cause__
     detail = f"{type(cause).__name__}: {cause}" if cause else "no cause"

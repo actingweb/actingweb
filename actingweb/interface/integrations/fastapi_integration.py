@@ -94,6 +94,23 @@ def _db_error_handler(aw_app: Any) -> Callable[..., Any]:
     return _db_error_response
 
 
+def _apply_cookies(response: Response, webobj: AWWebObj) -> None:
+    """Copy the handler's cookies onto ``response`` with every attribute the
+    handler set (path and SameSite included: a ``__Host-`` cookie needs
+    ``path=/``, the sign-in binding ``SameSite=Strict``)."""
+    for cookie in webobj.response.cookies:
+        samesite = str(cookie.get("samesite") or "lax").lower()
+        response.set_cookie(
+            key=cookie["name"],
+            value=cookie["value"],
+            max_age=cookie.get("max_age"),
+            path=cookie.get("path") or "/",
+            secure=cookie.get("secure", False),
+            httponly=cookie.get("httponly", False),
+            samesite=samesite if samesite in ("lax", "strict", "none") else "lax",  # pyright: ignore[reportArgumentType]
+        )
+
+
 class ActorCreateRequest(BaseModel):
     """Request model for creating a new actor."""
 
@@ -1501,16 +1518,7 @@ class FastAPIIntegration(BaseActingWebIntegration):
             if key.lower() not in ["content-type", "content-length"]:
                 response.headers[key] = value
 
-        # Set cookies
-        for cookie in webobj.response.cookies:
-            response.set_cookie(
-                key=cookie["name"],
-                value=cookie["value"],
-                max_age=cookie.get("max_age"),
-                secure=cookie.get("secure", False),
-                httponly=cookie.get("httponly", False),
-            )
-
+        _apply_cookies(response, webobj)
         return response
 
     async def _handle_factory_request(self, request: Request) -> Response:
@@ -2037,15 +2045,54 @@ class FastAPIIntegration(BaseActingWebIntegration):
             if self.templates:
                 try:
                     # App provides aw-oauth-email.html template
-                    return self.templates.TemplateResponse(
+                    # The handler's cookies (the sign-in code's browser
+                    # binding) and status (401 for a refused code) go onto
+                    # the rendered page too.
+                    page = self.templates.TemplateResponse(
                         request,
                         "aw-oauth-email.html",
                         context=webobj.response.template_values,
+                        status_code=webobj.response.status_code,
                     )
+                    _apply_cookies(page, webobj)
+                    return page
                 except Exception as e:  # folds DbError: template render, no DB
                     # Template not found - provide basic HTML form as fallback
                     self.logger.warning(f"Template aw-oauth-email.html not found: {e}")
+                    challenge = webobj.response.template_values.get("code_challenge")
+                    if challenge:
+                        from ...handlers.oauth_email import code_page_html
+
+                        page = HTMLResponse(
+                            content=code_page_html(
+                                str(challenge),
+                                str(webobj.response.template_values.get("message", "")),
+                                str(webobj.response.template_values.get("error", "")),
+                                str(
+                                    webobj.response.template_values.get(
+                                        "start_over_url"
+                                    )
+                                    or "/"
+                                ),
+                                str(
+                                    webobj.response.template_values.get("action")
+                                    or "/oauth/email"
+                                ),
+                            ),
+                            status_code=webobj.response.status_code,
+                        )
+                        _apply_cookies(page, webobj)
+                        return page
                     session_id = webobj.response.template_values.get("session_id", "")
+                    from html import escape as _escape
+
+                    form_action = _escape(
+                        str(
+                            webobj.response.template_values.get("action")
+                            or "/oauth/email"
+                        ),
+                        quote=True,
+                    )
                     error = webobj.response.template_values.get("error", "")
                     provider = webobj.response.template_values.get(
                         "provider_display", "OAuth provider"
@@ -2073,7 +2120,7 @@ class FastAPIIntegration(BaseActingWebIntegration):
                         <h1>Email Required</h1>
                         <p class="message">{message}</p>
                         {f'<p class="error">{error}</p>' if error else ""}
-                        <form action="/oauth/email" method="POST">
+                        <form action="{form_action}" method="POST">
                             <input type="hidden" name="session" value="{session_id}" />
                             <label>Email Address:
                                 <input type="email" name="email" required placeholder="your@email.com" />
@@ -2131,14 +2178,31 @@ class FastAPIIntegration(BaseActingWebIntegration):
                 self.logger.warning(f"Template aw-verify-email.html not found: {e}")
 
         status = template_values.get("status", "")
+        if status == "confirm":
+            from ...handlers.oauth_email import confirm_page_html
+
+            return HTMLResponse(
+                content=confirm_page_html(
+                    str(template_values.get("verify_token", "")),
+                    str(template_values.get("action") or "/oauth/email"),
+                ),
+                status_code=status_code,
+            )
         message = html.escape(str(template_values.get("message", "")))
         email = html.escape(str(template_values.get("email", "")))
-        actor_id = template_values.get("actor_id", "")
         ok = status in ("success", "verified", "already_verified")
-        heading = "Email Verified" if ok else "Verification Failed"
+        # A sign-in error names its own page (``title``); the rest are
+        # about verifying an address.
+        heading = html.escape(
+            str(template_values.get("title") or "")
+            or ("Email Verified" if ok else "Verification Failed")
+        )
+        # A way on from every result, errors included (an expired sign-in, a
+        # code that could not be sent): the handler sets ``redirect_url``.
+        redirect_url = str(template_values.get("redirect_url") or "")
         cont = (
-            f'<p><a href="{html.escape(template_values["redirect_url"])}">Continue</a></p>'
-            if ok and actor_id
+            f'<p><a href="{html.escape(redirect_url)}">Continue</a></p>'
+            if redirect_url
             else ""
         )
         fallback_html = f"""

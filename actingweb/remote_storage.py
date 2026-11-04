@@ -187,10 +187,11 @@ class RemotePeerStore:
         list_attr = getattr(store, name)
         list_attr.delete()
 
-    def list_all_lists(self) -> list[str]:
-        """List all stored lists for this peer."""
+    def list_all_lists(self, *, strict: bool = False) -> list[str]:
+        """List all stored lists for this peer (``strict``: a read fault
+        raises ``DbError`` instead of answering ``[]``)."""
         store = self._get_list_store()
-        return store.list_all()
+        return store.list_all(strict=True) if strict else store.list_all()
 
     def list_all_scalars(self) -> list[str]:
         """List all scalar property names for this peer.

@@ -2468,14 +2468,18 @@ class MCPHandler(BaseHandler):
         row is a create whose marker write failed and whose rollback did too;
         a tombstoned one is mid-deletion."""
         from .. import actor as actor_module
-        from ..deletion import DeletionStatus, get_deletion_status
+        from ..deletion import DeletionStatus, read_tombstone
 
         winner = actor_module.Actor(actor_id, self.config)
         if not winner.id or winner.store is None or not winner.store.loaded:
             return False
         if not winner.store.auth_method:
             return False
-        return get_deletion_status(actor_id, self.config) != DeletionStatus.DELETED
+        # Strict (the K rule): an unreadable tombstone store raises DbError,
+        # answered 503, rather than counting a possibly mid-deletion row as
+        # the winner.
+        status, _ = read_tombstone(actor_id, self.config)
+        return status != DeletionStatus.DELETED
 
     def _get_or_create_actor_cached(
         self,
@@ -2513,6 +2517,21 @@ class MCPHandler(BaseHandler):
             logger.warning(
                 f"Actor {actor_id} not found in ActingWeb storage - creating actor to bridge OAuth2 authentication"
             )
+
+            # A deleted actor is never brought back: a token cached on another
+            # worker can outlive the actor by its cache TTL, and recreating
+            # the id here would also clear the deletion tombstone. Only an
+            # explicit Actor.create(actor_id=...) does that. An unreadable
+            # tombstone store raises DbError (503).
+            from ..deletion import DeletionStatus, read_tombstone
+
+            status, _ = read_tombstone(actor_id, self.config)
+            if status == DeletionStatus.DELETED:
+                logger.warning(
+                    f"Actor {actor_id} was deleted; not recreating it for a "
+                    "bearer token that outlived it"
+                )
+                return None
 
             # Try to create the actor if it doesn't exist
             try:
@@ -2737,110 +2756,6 @@ class MCPHandler(BaseHandler):
             "auth_url": auth_url,
             "message": "Please authenticate with Google to access MCP",
         }
-
-    def validate_google_token_and_check_actor_email(
-        self, bearer_token: str, expected_actor_id: str
-    ) -> bool:
-        """
-        Validate Google OAuth2 token and verify it matches the expected actor's email.
-
-        This prevents identity confusion attacks where a Google token for one email
-        is used to authenticate as an actor created with a different email.
-
-        Args:
-            bearer_token: OAuth2 access token from Google
-            expected_actor_id: Actor ID to check email against
-
-        Returns:
-            True if token is valid and matches actor's email, False otherwise
-        """
-        if not bearer_token or not expected_actor_id:
-            return False
-
-        try:
-            import requests
-
-            # Use Google TokenInfo API to validate token and get email
-            tokeninfo_url = f"https://www.googleapis.com/oauth2/v1/tokeninfo?access_token={bearer_token}"
-
-            response = requests.get(url=tokeninfo_url, timeout=(5, 10))
-
-            if response.status_code != 200:
-                logger.debug(
-                    f"Google tokeninfo validation failed: {response.status_code}"
-                )
-                return False
-
-            token_info = response.json()
-
-            # Check if token is valid (has required fields)
-            if "email" not in token_info:
-                logger.debug("Google token does not contain email scope")
-                return False
-
-            # Verify token is not expired (tokeninfo returns this)
-            if "expires_in" in token_info:
-                expires_in = int(token_info.get("expires_in", 0))
-                if expires_in <= 0:
-                    logger.debug("Google token has expired")
-                    return False
-
-            authenticated_email = token_info.get("email", "").lower()
-            verified_email = token_info.get("verified_email")
-
-            # Ensure email is verified
-            if verified_email == "false" or verified_email is False:
-                logger.warning(f"Google email {authenticated_email} is not verified")
-                return False
-
-            # Load the actor and check if the email matches
-            from .. import actor as actor_module
-
-            actor_instance = actor_module.Actor(expected_actor_id, config=self.config)
-            if not actor_instance.actor:
-                logger.error(
-                    f"Actor {expected_actor_id} not found for email validation"
-                )
-                return False
-
-            # Get the actor's creator (usually email) or check email property
-            actor_email = actor_instance.creator
-            try:
-                # Prefer the email property if set
-                if actor_instance.property:
-                    email_prop = actor_instance.property.get("email")
-                    if email_prop:
-                        actor_email = email_prop
-            except (AttributeError, KeyError):
-                # Property access failed, use creator as fallback
-                pass
-
-            if not actor_email:
-                logger.warning(
-                    f"Actor {expected_actor_id} has no email to validate against"
-                )
-                return False
-
-            actor_email = actor_email.lower()
-
-            # Check if authenticated email matches actor's email
-            if authenticated_email != actor_email:
-                logger.error(
-                    f"Email mismatch: Google token for {authenticated_email} "
-                    f"but actor {expected_actor_id} has email {actor_email}"
-                )
-                return False
-
-            logger.debug(
-                f"Successfully validated Google token for {authenticated_email} matches actor {expected_actor_id}"
-            )
-            return True
-
-        except DbError:
-            raise
-        except Exception as e:
-            logger.error(f"Error validating Google token against actor email: {e}")
-            return False
 
     def _update_actor_client_info(self, actor, request_data: dict[str, Any]) -> None:
         """

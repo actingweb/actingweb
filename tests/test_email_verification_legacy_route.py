@@ -12,6 +12,9 @@ than the email-entry form. The handler-level behaviour of that path is
 covered in ``tests/test_oauth_email_verify_link.py``.
 """
 
+from typing import Any
+from unittest.mock import MagicMock, patch
+
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -114,7 +117,7 @@ class TestSurvivingRouteRendersAResultNotTheForm:
     ) -> None:
         body = (
             flask_app.test_client()
-            .get("/oauth/email?verify=no-such-token")
+            .post("/oauth/email", data={"verify": "no-such-token"})
             .get_data(as_text=True)
         )
 
@@ -124,29 +127,53 @@ class TestSurvivingRouteRendersAResultNotTheForm:
 
     def test_flask_bad_token_keeps_its_403(self, flask_app: Flask) -> None:
         """Rendering a result page must not downgrade the status to 200."""
-        resp = flask_app.test_client().get("/oauth/email?verify=no-such-token")
+        resp = flask_app.test_client().post(
+            "/oauth/email", data={"verify": "no-such-token"}
+        )
         assert resp.status_code == 403
 
     def test_fastapi_verify_link_renders_the_result_template(
         self, fastapi_client: TestClient
     ) -> None:
-        body = fastapi_client.get("/oauth/email?verify=no-such-token").text
+        body = fastapi_client.post(
+            "/oauth/email", data={"verify": "no-such-token"}
+        ).text
 
         assert "Email verification" in body
         assert "<form" not in body
         assert 'name="email"' not in body
 
     def test_fastapi_bad_token_keeps_its_403(self, fastapi_client: TestClient) -> None:
-        resp = fastapi_client.get("/oauth/email?verify=no-such-token")
+        resp = fastapi_client.post("/oauth/email", data={"verify": "no-such-token"})
         assert resp.status_code == 403
 
+    def test_flask_the_link_opens_a_confirm_page_and_changes_nothing(
+        self, flask_app: Flask
+    ) -> None:
+        """BG3: a GET of the link (a mail scanner's prefetch) shows a Confirm
+        form that POSTs the token, and verifies nothing."""
+        resp = flask_app.test_client().get("/oauth/email?verify=some-token")
+        body = resp.get_data(as_text=True)
+        assert resp.status_code == 200
+        assert 'name="verify"' in body and 'value="some-token"' in body
+        assert 'method="POST"' in body
+
+    def test_fastapi_the_link_opens_a_confirm_page(
+        self, fastapi_client: TestClient
+    ) -> None:
+        resp = fastapi_client.get("/oauth/email?verify=some-token")
+        assert resp.status_code == 200
+        assert 'value="some-token"' in resp.text
+
     def test_flask_form_path_still_renders_the_form(self, flask_app: Flask) -> None:
-        """The other side of the branch: no verify token means the form."""
-        body = (
-            flask_app.test_client()
-            .get("/oauth/email?session=no-such-session")
-            .get_data(as_text=True)
-        )
+        """The other side of the branch: no verify token and a live session
+        means the form."""
+        with _live_session():
+            body = (
+                flask_app.test_client()
+                .get("/oauth/email?session=live-session")
+                .get_data(as_text=True)
+            )
 
         assert "Enter your email" in body
         assert "<form" in body
@@ -154,7 +181,47 @@ class TestSurvivingRouteRendersAResultNotTheForm:
     def test_fastapi_form_path_still_renders_the_form(
         self, fastapi_client: TestClient
     ) -> None:
-        body = fastapi_client.get("/oauth/email?session=no-such-session").text
+        with _live_session():
+            body = fastapi_client.get("/oauth/email?session=live-session").text
 
         assert "Enter your email" in body
         assert "<form" in body
+
+    def test_a_dead_session_gets_the_error_page_not_the_form(
+        self, flask_app: Flask
+    ) -> None:
+        """Re-verification 3, V7: the form drawn again with a dead session
+        looped; the browser gets the error page with a way on."""
+        resp = flask_app.test_client().get("/oauth/email?session=no-such-session")
+        body = resp.get_data(as_text=True)
+        assert resp.status_code == 400
+        assert 'name="session"' not in body
+        assert "start again" in body
+
+
+def _live_session() -> Any:
+    session_mgr = MagicMock()
+    session_mgr.get_session.return_value = {
+        "provider": "github",
+        "verified_emails": [],
+    }
+    return patch(
+        "actingweb.oauth_session.get_oauth2_session_manager",
+        return_value=session_mgr,
+    )
+
+
+class TestMalformedLinks:
+    """Browser QA, 2026-11-03: a truncated or over-long link must answer the
+    invalid-link page, not the address form or a store error."""
+
+    def test_an_empty_token_is_an_invalid_link(self, flask_app: Flask) -> None:
+        resp = flask_app.test_client().get("/oauth/email?verify=")
+        body = resp.get_data(as_text=True)
+        assert resp.status_code == 403
+        assert "Missing session" not in body
+
+    def test_an_over_long_token_is_an_invalid_link(self, flask_app: Flask) -> None:
+        resp = flask_app.test_client().post("/oauth/email", data={"verify": "A" * 2000})
+        assert resp.status_code == 403
+        assert "could not be stored" not in resp.get_data(as_text=True)

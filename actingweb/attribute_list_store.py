@@ -50,8 +50,12 @@ class AttributeListStore:
             pass
         return False
 
-    def list_all(self) -> list[str]:
-        """List all existing attribute list names in this bucket."""
+    def list_all(self, *, strict: bool = False) -> list[str]:
+        """List all existing attribute list names in this bucket.
+
+        ``strict=True`` raises ``DbError`` when the bucket cannot be read,
+        instead of answering ``[]`` (a caller deleting what it lists must not
+        read a fault as "nothing to delete")."""
         list_names = []
         try:
             if self._config and self._actor_id and self._bucket:
@@ -60,7 +64,7 @@ class AttributeListStore:
                 db = Attributes(
                     actor_id=self._actor_id, bucket=self._bucket, config=self._config
                 )
-                all_attrs = db.get_bucket(strict=False) or {}
+                all_attrs = db.get_bucket(strict=strict) or {}
                 for attr_name in all_attrs.keys():
                     if attr_name.startswith("list:") and attr_name.endswith(":meta"):
                         # Extract list name: "list:name:meta" -> "name"

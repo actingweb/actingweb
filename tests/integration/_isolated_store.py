@@ -152,6 +152,9 @@ def wipe_store(backend: str) -> None:
                     cur.execute("TRUNCATE " + ", ".join(tables))
                 cur.execute(f"DROP INDEX IF EXISTS {UNIQUE_INDEX_NAME}")
             conn.commit()
+        from actingweb.db.postgresql.actor import reset_index_probe
+
+        reset_index_probe()  # a cached "valid" must not outlive the index
         return
     from actingweb.db.dynamodb._ensure import reset_ensure_cache
     from actingweb.db.dynamodb.actor import Actor
@@ -175,3 +178,7 @@ def enable_enforcement(config: Any) -> None:
         config, unique_creators.collect(config), apply=True
     )
     assert outcome in ("built", "present", "backfilled"), outcome
+    if config.database == "postgresql":
+        from actingweb.db.postgresql.actor import reset_index_probe
+
+        reset_index_probe()

@@ -20,7 +20,11 @@ from pynamodb.indexes import AllProjection, GlobalSecondaryIndex
 from pynamodb.models import Model
 from pynamodb.transactions import TransactWrite
 
-from actingweb.db.creator_rules import is_exempt, normalise_creator
+from actingweb.db.creator_rules import (
+    is_exempt,
+    missing_enforcement_message,
+    normalise_creator,
+)
 from actingweb.db.dynamodb._ensure import ensure_table
 from actingweb.db.dynamodb.creator import Creator
 from actingweb.db.exceptions import CreatorTaken, DbError
@@ -563,17 +567,44 @@ class DbActor:
                 # the caller's answer (taken, changed) is not an outage.
                 if "ConditionalCheckFailed" in codes:
                     return codes
+                cls._log_missing_creators_table(e)
                 raise DbError(op) from e
             except Exception as e:
+                cls._log_missing_creators_table(e)
                 raise DbError(op) from e
         raise DbError(op)
 
+    @staticmethod
+    def _log_missing_creators_table(e: BaseException) -> None:
+        """Name the remedy when a claim failed on a missing table, which is
+        ``creators``: the constructor does not create it, so a process that skipped
+        ``enable --apply`` (and ``check_ready()``) lands here on every
+        enforced write. The fault itself stays a ``DbError``."""
+        from actingweb.db.dynamodb.property_lookup import is_resource_not_found
+
+        if not is_resource_not_found(e):
+            return
+        # Every transaction here writes the actor table, which the
+        # constructor ensured, and the creators table. No DescribeTable to
+        # disambiguate: the runtime role may not have it.
+        logger.error(
+            missing_enforcement_message(
+                f"the DynamoDB table {Creator.Meta.table_name} does not exist"
+            )
+        )
+
     def __init__(self, *, unique_creator: bool = False) -> None:
+        """Ensure the actor table only.
+
+        The ``creators`` table that ``unique_creator`` claims against is
+        created by ``actingweb-unique-creators enable --apply`` and by the
+        ``check_ready()`` prewarm, never here: a table created empty would
+        claim creators against no record of the existing actors. An enforced
+        write without it raises ``DbError`` and logs the remedy.
+        """
         self.handle = None
         self.unique_creator = unique_creator
         ensure_table(Actor)
-        if unique_creator:
-            ensure_table(Creator)
 
 
 class DbActorList:

@@ -81,9 +81,11 @@ def pytest_collection_modifyitems(config, items):
 # The reverse-lookup readiness probe is stubbed for the whole session (see
 # tests/_lookup_probe.py for why); ``real_lookup_probe`` puts it back.
 from tests._lookup_probe import (  # noqa: E402, F401
+    _stub_pg_creator_index_probe,  # pyright: ignore[reportUnusedImport]
     _stub_property_lookup_probe,  # pyright: ignore[reportUnusedImport]
     _stub_unique_creator_probe,  # pyright: ignore[reportUnusedImport]
     real_lookup_probe,  # pyright: ignore[reportUnusedImport]
+    real_pg_index_probe,  # pyright: ignore[reportUnusedImport]
     real_unique_probe,  # pyright: ignore[reportUnusedImport]
 )
 
@@ -96,6 +98,34 @@ def _postgresql_unit_schema() -> None:
     from tests._pg_schema import ensure_postgresql_schema
 
     ensure_postgresql_schema()
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _creators_table() -> None:
+    """Create the DynamoDB ``creators`` table once per run.
+
+    Creator uniqueness is on by default and ``DbActor`` no longer creates the
+    table, so without it every enforced create raises ``DbError``. In a
+    deployment ``check_ready()`` or ``actingweb-unique-creators enable``
+    creates it; unit tests build ``Config()`` directly. Session scope: a
+    function-scoped fixture would run after ``unique_creator_store`` renamed
+    the table and create a ``uc_`` one that ``wipe_store`` then deletes.
+
+    A PostgreSQL run needs it too: several unit tests pin
+    ``database="dynamodb"`` whatever the run's backend. There it is
+    best-effort, so a PostgreSQL run without DynamoDB Local fails only the
+    tests that use it.
+    """
+    from actingweb.db.dynamodb._ensure import ensure_table
+    from actingweb.db.dynamodb.creator import Creator
+
+    if os.environ.get("DATABASE_BACKEND", "dynamodb") == "dynamodb":
+        ensure_table(Creator)
+        return
+    try:
+        ensure_table(Creator)
+    except Exception:  # DynamoDB Local is not up for this PostgreSQL run
+        pass
 
 
 @pytest.fixture(autouse=True)

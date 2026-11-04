@@ -29,6 +29,20 @@ UNIQUE_INDEX_NAME = "ux_actors_creator"
 UNIQUE_INDEX_PREDICATE = "lower(creator) NOT IN ('trustee', 'creator', '')"
 
 
+def missing_enforcement_message(what: str) -> str:
+    """The ERROR an enforced actor write logs when enforcement is absent.
+
+    ``what`` names the missing piece (the DynamoDB table or the PostgreSQL
+    index) as a sentence fragment.
+    """
+    return (
+        f"Creator uniqueness is on but {what}, so the actor write was "
+        "refused. Run `actingweb-unique-creators enable --apply`, or call "
+        "`ActingWebApp.check_ready()` before creating actors; see "
+        "docs/migration/v3.16.rst, 'Creator uniqueness'."
+    )
+
+
 def normalise_creator(creator: str | None) -> str:
     """The value as stored: ``@`` values lowercased, others unchanged."""
     value = creator or ""

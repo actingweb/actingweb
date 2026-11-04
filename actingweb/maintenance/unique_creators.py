@@ -334,6 +334,12 @@ def _dynamodb_records(
     from actingweb.db.dynamodb.creator import Creator
 
     if not Creator.exists():
+        # Nothing to list, but say why: on this store every enforced
+        # create fails until the table is backfilled.
+        logger.warning(
+            f"the DynamoDB table {Creator.Meta.table_name} does not exist; "
+            "run `actingweb-unique-creators enable --apply`"
+        )
         return
     for record in Creator.scan(rate_limit=rate_limit, consistent_read=consistent):
         if record.creator == BACKFILL_KEY:
@@ -941,21 +947,9 @@ def _pg_admin_connection() -> Any:
 
 def postgresql_index_state() -> str:
     """``"valid"``, ``"invalid"`` or ``"missing"``. Raises on a fault."""
-    from actingweb.db.postgresql.connection import get_connection, get_schema_name
+    from actingweb.db.postgresql.actor import creator_index_state
 
-    with get_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT i.indisvalid FROM pg_index i "
-                "JOIN pg_class c ON c.oid = i.indexrelid "
-                "JOIN pg_namespace n ON n.oid = c.relnamespace "
-                "WHERE c.relname = %s AND n.nspname = %s",
-                (UNIQUE_INDEX_NAME, get_schema_name()),
-            )
-            row = cur.fetchone()
-    if not row:
-        return "missing"
-    return "valid" if row[0] else "invalid"
+    return creator_index_state()
 
 
 def _enable_postgresql(apply: bool, lock_timeout: str) -> str:
@@ -989,6 +983,9 @@ def _enable_postgresql(apply: bool, lock_timeout: str) -> str:
                 sql.Identifier(UNIQUE_INDEX_NAME), sql.Identifier(schema, "actors")
             )
         )
+    from actingweb.db.postgresql.actor import reset_index_probe
+
+    reset_index_probe()
     if postgresql_index_state() != "valid":
         raise StoreUnavailable(f"{UNIQUE_INDEX_NAME} was built but is not valid")
     logger.info(f"built {UNIQUE_INDEX_NAME}")
@@ -1107,6 +1104,9 @@ def disable(config: Any, *, apply: bool = False) -> str:
                         sql.Identifier(get_schema_name(), UNIQUE_INDEX_NAME)
                     )
                 )
+            from actingweb.db.postgresql.actor import reset_index_probe
+
+            reset_index_probe()
             logger.info(f"dropped {UNIQUE_INDEX_NAME}")
             return "dropped"
         from actingweb.db.dynamodb.creator import Creator

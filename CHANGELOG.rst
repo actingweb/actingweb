@@ -8,6 +8,31 @@ Unreleased
 SECURITY
 ~~~~~~~~
 
+- **PyJWT 2.15 is the minimum, and the lock moves past every open advisory.**
+  The SPA ``jwt_bearer`` grant decodes the unverified assertion
+  (``verify_signature=False``) to check its issuer before validating it.
+  Below 2.15, PyJWT can be driven into a ``RecursionError`` while parsing
+  that payload, and it accepts OKP keys whose public and private halves
+  disagree. **Behavior change:** ``pyjwt`` must be ``>=2.15,<3``; an
+  application that pins an older version fails to resolve. The lock (CI,
+  docs and the demo) moves to these versions:
+
+  - ``certifi`` 2026.10.23, which drops the emSign roots with compromised
+    intermediate CAs;
+  - ``urllib3`` 2.8.0;
+  - ``oauthlib`` 4.0.1 (its breaking changes and fixed advisories are on
+    the provider side, which the library does not use);
+  - ``werkzeug`` 3.1.9, ``mako`` 1.4.3 and ``setuptools`` 84.2.1;
+  - ``filelock``, ``virtualenv`` and ``python-discovery`` (1.6.0 to
+    1.9.4, a ``virtualenv`` dependency), used only in development.
+
+  **Check:** a deployment that resolves its own dependencies upgrades
+  ``certifi`` and ``urllib3`` as well, since the library's constraints
+  already allow the fixed versions. A deployment still on v3.15.1 runs the
+  same unverified decode with a ``^2.14`` floor, which already allows the
+  fixed release: ``pip install -U "pyjwt>=2.15"`` closes the advisory there
+  today, with no library upgrade.
+
 - **An unauthenticated ``POST /`` could squat an address, and the address
   owner's first OAuth login adopted the squatter's actor with the squatter's
   credentials still live.** The actor factory creates an actor for any
@@ -540,8 +565,8 @@ CHANGED
   adoption code stays for it). A deployment with duplicate creators refuses to
   start with ``UniqueCreatorNotReady`` until ``actingweb-unique-creators``
   ``report``, ``resolve --apply`` and ``enable --apply`` have run, or it opts
-  out. A fresh deployment starts once (which creates the tables and stops),
-  runs ``enable --apply``, and starts again; with no actors yet the refusal
+  out. A fresh deployment under ``integrate_*`` starts once (which creates
+  the tables and stops), runs ``enable --apply``, and starts again; with no actors yet the refusal
   says exactly that. The consumer-visible shifts the flag brought, now the
   default: a held creator at ``POST /`` answers 403, ``PUT /trust/trustee``
   409, a store whose enforcement cannot be read 503, and DynamoDB actor
@@ -557,7 +582,12 @@ CHANGED
   ``TypeError`` instead of being read as ``unique_creator``. The readiness check now reads one consistent
   item instead of calling ``DescribeTable``, so ``DescribeTable`` can still be
   dropped from the runtime role. Code that builds ``Config()`` and creates
-  actors without ``integrate_*`` should call ``check_ready()``.
+  actors without ``integrate_*`` must call ``check_ready()``: without it,
+  with uniqueness on and ``enable --apply`` not yet run, every actor create,
+  including the OAuth2 system actor bootstrap, raises ``DbError``
+  (``database error during actor create``, 503 through the integrations, and
+  retrying does not clear it) on both backends, with an ERROR naming the
+  missing table or index and the command.
 
 - **Breaking: ``with_unique_creator()`` is enforced by the database.** Before
   3.16 the flag made ``Actor.create`` list the creator's actors and refuse
@@ -578,8 +608,10 @@ CHANGED
     ``enable --apply`` first. A fault while checking refuses to start too:
     starting unchecked on DynamoDB, against an empty auto-created
     ``creators`` table, would let existing users' sign-ins create second
-    actors. If your IAM policy lists tables by name, add
-    ``<prefix>_creators`` first.
+    actors. A process that builds ``Config()`` directly no longer creates
+    that table, nor claims without the index on PostgreSQL: its creates
+    raise ``DbError`` until ``enable --apply`` has run. If your IAM policy
+    lists tables by name, add ``<prefix>_creators`` first.
   - The factory no longer returns the existing actor to a caller who
     supplies its passphrase: a second ``POST /`` for a held creator answers
     403 "Creator already exists" whatever the passphrase (this also removes

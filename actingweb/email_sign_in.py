@@ -241,6 +241,7 @@ def redeem(
         return None
     db = get_attribute(config)
     data: dict[str, Any] | None = None
+    current: Any = None
     for _ in range(3):
         row = db.get_attr_strict(
             actor_id=ACTINGWEB_SYSTEM_ACTOR, bucket=_BUCKET, name=challenge_id

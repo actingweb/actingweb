@@ -125,10 +125,12 @@ Preconditions and warnings (the commands follow these as instructions):
 
 ### CI policy
 
-- Opening a PR: triggers Tests (Python 3.11 × dynamodb, postgresql),
+- Opening a PR: triggers Tests (Python 3.11 and 3.14, the oldest and newest
+  claimed, × dynamodb, postgresql; type-check runs on 3.11),
   type-check (pyright, ruff check, ruff format) and Documentation Build, plus
-  a Claude code review on open only. All four check contexts are required on
-  `master`.
+  a Claude code review on open only. The two 3.11 test contexts, type-check
+  and Documentation Build are required on `master`; the 3.14 contexts are
+  not until branch protection lists them.
 - Pushing to an open PR: re-runs the test workflows (`pull_request`
   synchronize); the Claude review does not re-run.
 - Re-triggering CI: push a commit. Never `gh workflow run` the test workflow;

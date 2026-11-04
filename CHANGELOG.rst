@@ -1103,6 +1103,11 @@ CHANGED
 ADDED
 ~~~~~
 
+- **Python 3.14 is tested and listed as supported.** CI runs the test suite on
+  both backends with Python 3.11, the oldest version ``python = "^3.11"``
+  allows, and with 3.14, the newest. The package lists the 3.14 classifier.
+  The minimum stays 3.11.
+
 - **``create_attr_if_absent``** (the attribute protocol, both backends and
   ``Attributes``) creates an attribute only if no live row holds its name, in
   one conditional write. An expired row (its stored ``ttl_timestamp`` in the

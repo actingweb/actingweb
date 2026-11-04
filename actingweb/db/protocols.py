@@ -1475,6 +1475,7 @@ class DbAttributeProtocol(Protocol):
 
         Returns:
             Number of rows deleted (0 when the backend relies on native TTL).
+            A fault raises ``DbError``.
         """
         ...
 

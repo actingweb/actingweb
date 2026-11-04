@@ -910,12 +910,42 @@ None.
 
 ### Verification
 
-- [ ] Fast tier
-- [ ] `tests/integration/test_spa_chain_revocation_backend.py` and
+- [x] Fast tier
+- [x] `tests/integration/test_spa_chain_revocation_backend.py` and
   `tests/integration/test_mcp_refresh_rotation_backend.py` on both backends
-- [ ] Full tier on both backends before the commit
+- [x] Full tier on both backends before the commit
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+### Implementation notes (Phase 2)
+
+- **The MCP race seam revokes through the consumed refresh token**, not the
+  old access token. On the MCP ladder the old access row is removed at
+  consume time, before the mint, so `revoke_token(old access)` cannot reach
+  the chain; the consumed refresh row still names it. Both race tests fail
+  with `chain_revoked` stubbed to `False` (checked) and pass with it.
+- **The theft-branch and `/oauth/revoke` marker tests live in
+  `tests/test_oauth2_spa_logout_revokes_chain.py`**, not
+  `test_oauth2_spa_refresh_rotation.py`: its `Env` already has `revoke()`
+  and `refresh()`.
+- **`_minted_removals` and `_remove_minted`** were extracted in
+  `token_manager.py` so the marker branch and the generation guard share
+  the same point removals (rows and their index entries). On the SPA side
+  `revoke_minted` is two `delete_confirmed` calls; a failure logs at ERROR.
+- **`maintenance/deletions.py` is a fourth `delete_expired` caller** the
+  plan did not list; it already folds. `token_manager.py:1878` folds too, so
+  nothing was wrapped.
+- **The finisher's `bump`** sits after `_lease_keeper` and before the sweep,
+  inside the existing `try`, so a `DbError` releases the lease and nothing
+  is swept (test added beside the order spy).
+- Two existing tests changed for the new bucket: the MCP purge list count
+  (7 to 8) and a store double in `test_mcp_revocation_evicts_caches.py`
+  that lacked `set_attr`.
+- The docs grep for other MCP-logout cookie claims found only
+  `docs/migration/v3.15.rst:100`, which is historical and still true.
+- **Verification:** fast tier green; the two backend integration files
+  green on both backends; Full tier green (DynamoDB 5583 passed, PostgreSQL
+  5388 passed), docs build and `verify_groups` green.
 
 ---
 
@@ -1027,7 +1057,7 @@ None.
 - [ ] Full tier on both backends before the commit
 - [ ] `thoughts/todo/INDEX.md` rows match the files in `thoughts/todo/`
 
-### Implementation Status: Not Started
+### Implementation Status: In Progress
 
 ---
 

@@ -258,7 +258,9 @@ a deterministic cadence.
 DynamoDB deletes expired items automatically, but **TTL must be enabled on the
 attributes table**, pointed at the ``ttl_timestamp`` attribute. The library does
 not (and cannot reliably) enable this for you, and a full-table ``Scan`` to purge
-is deliberately avoided, so without this step expired tokens are never removed.
+is deliberately avoided, so without this step expired tokens are never removed,
+and the chain-revoked marker buckets grow by one row per logout or revocation
+with nothing warning about it.
 
 .. important::
 
@@ -267,8 +269,9 @@ is deliberately avoided, so without this step expired tokens are never removed.
    attributes). DynamoDB TTL deletes an item *only* when its ``ttl_timestamp``
    attribute is present and in the past. ActingWeb writes ``ttl_timestamp`` only
    for temporary data that is *meant* to expire — SPA access/refresh tokens,
-   OAuth login sessions, mobile exchange tickets, state nonces, and index
-   entries. Every permanent write goes through ``set_attr`` with no ``ttl``, so
+   OAuth login sessions, mobile exchange tickets, state nonces, index
+   entries, and the chain-revoked markers a logout or revocation writes
+   (``spa_revoked_chains``, ``mcp_revoked_chains``, 5 minutes). Every permanent write goes through ``set_attr`` with no ``ttl``, so
    those items have **no** ``ttl_timestamp`` and are never eligible for TTL
    deletion. (If your own code calls ``set_attr(..., ttl_seconds=...)`` it is
    likewise opting that item into expiry — don't pass a TTL for data you want to

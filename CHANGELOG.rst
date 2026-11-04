@@ -33,6 +33,30 @@ SECURITY
   fixed release: ``pip install -U "pyjwt>=2.15"`` closes the advisory there
   today, with no library upgrade.
 
+- **A logout that raced a refresh of the same session could leave the
+  session live.** ``/oauth/logout``, ``/oauth/revoke`` and the theft response
+  sweep a refresh-token chain once. A refresh whose consume of the old token
+  landed before that sweep minted its new pair after it, so the client got a
+  working access and refresh token for a chain the user had just ended. The
+  MCP ladder had the same window, and actor deletion swept SPA tokens with no
+  fence at all. Now every chain revocation writes a chain-revoked marker
+  (``spa_revoked_chains`` under the system actor, ``mcp_revoked_chains``
+  under the user's actor, 300 s TTL) before its first read, and every
+  rotation reads it after minting: when it is there the rotation deletes the
+  pair it minted and answers ``invalid_grant`` (401 on the SPA endpoint, 400
+  on ``/oauth/token``). Actor deletion bumps the session generation before
+  its token sweep, so the rotation's generation guard does the same.
+  **Behavior change:** a marker that cannot be written answers 503 with
+  ``Retry-After`` and revokes nothing (the retry completes it); a marker
+  that cannot be read during a refresh deletes what was minted and answers
+  503. A refresh now reads one more row (DynamoDB 3 to 4 reads, PostgreSQL 2
+  to 3), and a refused rotation deletes its two rows instead of sweeping the
+  chain again. On PostgreSQL ``delete_expired`` raises ``DbError`` on a fault
+  instead of answering 0; the library's callers fold it with a WARNING.
+  **Check:** on DynamoDB, native TTL on the attributes table reaps the
+  marker rows as it reaps tokens; without it both marker buckets grow by one
+  row per revocation.
+
 - **An unauthenticated ``POST /`` could squat an address, and the address
   owner's first OAuth login adopted the squatter's actor with the squatter's
   credentials still live.** The actor factory creates an actor for any
@@ -1457,6 +1481,17 @@ ADDED
 
 FIXED
 ~~~~~
+
+- **An MCP-token logout cleared the browser's SPA session cookies.**
+  ``/oauth/logout`` with an MCP access token (``aw_…``) revoked the MCP
+  chain and then cleared every session cookie, while any SPA refresh token
+  sent beside it stayed live: half a logout of a session it did not own. An
+  MCP login is an AI agent's on behalf of the user, not the user's browser
+  session, so now that logout ends only the MCP chain; SPA refresh tokens
+  presented with it are ignored and logged at DEBUG. **Behavior change:**
+  the response keeps its shape (``"Successfully logged out"``,
+  ``redirect_url``), but ``cleared_cookies`` is ``[]`` and no ``Set-Cookie``
+  is sent. A browser ends its own session by logging out of the SPA.
 
 - **A reverse-lookup row stayed with an actor that no longer held the
   value.** Releasing an indexed value's lookup row is best effort, so a

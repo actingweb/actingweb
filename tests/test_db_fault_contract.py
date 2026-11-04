@@ -151,6 +151,34 @@ class TestPostgresStrictOnlyReads:
                 is None
             )
 
+    def test_delete_expired_fault_raises_instead_of_answering_zero(self) -> None:
+        """The only reaper of the token and chain-marker buckets must not
+        report a fault as "nothing expired" (3.16)."""
+        module = _pg_module("attribute")
+        with mock.patch.object(module, "get_connection", _pg_down):
+            with pytest.raises(DbError) as raised:
+                module.DbAttribute.delete_expired(buckets=["b"])
+        assert isinstance(raised.value.__cause__, RuntimeError)
+
+    def test_purge_expired_tokens_folds_the_fault_with_a_warning(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        import logging
+
+        from actingweb.config import Config
+        from actingweb.oauth_session import OAuth2SessionManager
+
+        module = _pg_module("attribute")
+        config = Config(database="postgresql", fqdn="t.example.com", proto="https://")
+        with (
+            mock.patch.object(module, "get_connection", _pg_down),
+            caplog.at_level(logging.WARNING, logger="actingweb.oauth_session"),
+        ):
+            assert OAuth2SessionManager(config).purge_expired_tokens() == 0
+        assert any(
+            "purge_expired_tokens failed" in r.getMessage() for r in caplog.records
+        )
+
     def test_get_attr_strict_fault_raises_db_error(self) -> None:
         module = _pg_module("attribute")
         with mock.patch.object(module, "get_connection", _pg_down):

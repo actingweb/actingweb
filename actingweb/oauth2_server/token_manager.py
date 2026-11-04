@@ -22,7 +22,13 @@ from ..constants import (
 )
 from ..db.exceptions import DbError
 from ..secret_compare import secret_digest_equals, secret_equals
-from ..single_use import PurgeThrottle, StoreFault, revoke_chain_confirmed
+from ..single_use import (
+    PurgeThrottle,
+    StoreFault,
+    chain_revoked,
+    mark_chain_revoked,
+    revoke_chain_confirmed,
+)
 from ..single_use import _mask as _mask_token
 
 logger = logging.getLogger(__name__)
@@ -67,6 +73,9 @@ class ActingWebTokenManager:
         self.google_tokens_bucket = (
             "mcp_google_tokens"  # Private attribute bucket for Google tokens
         )
+        # Chain-revoked markers (single_use.mark_chain_revoked), under the
+        # user's actor like the chains themselves.
+        self.revoked_chains_bucket = "mcp_revoked_chains"
         self.token_prefix = "aw_"  # Prefix to distinguish from Google tokens
         self.default_expires_in = 3600  # 1 hour
         self.refresh_token_expires_in = 2592000  # 30 days
@@ -349,6 +358,11 @@ class ActingWebTokenManager:
         still holds a consumed token, and a retry within the grace period
         rotates; a retry after it reads as theft.
 
+        A revocation of the chain that sweeps between the consume and the
+        mints (a logout racing the refresh) leaves a marker the rotation
+        reads after minting: it deletes the new pair and returns None, so
+        the chain stays revoked.
+
         Every rotation stamps a fresh 30-day expiry on the new refresh token,
         so the lifetime is sliding: 30 days of inactivity ends a chain.
 
@@ -363,8 +377,10 @@ class ActingWebTokenManager:
 
         Raises:
             TokenStoreUnavailable: the token could not be read, the consume
-                could not be confirmed either way, or a theft revocation
-                could not be completed. The token is left for a retry.
+                could not be confirmed either way, a theft revocation could
+                not be completed, or the chain-revoked marker could not be
+                read after minting (what was minted is deleted). The token is
+                left for a retry.
         """
         from ..constants import INDEX_TTL_BUFFER, MCP_REFRESH_TOKEN_REUSE_WINDOW
         from ..single_use import classify_reuse, refresh_token_grace
@@ -505,6 +521,22 @@ class ActingWebTokenManager:
             google_token_key=None,
             session_generation=stamped,
         )
+        # A revocation of this chain that swept after the consume above left
+        # a marker: delete the pair just minted and fail as a revoked token.
+        try:
+            revoked_meanwhile = chain_revoked(
+                self.config, actor_id, self.revoked_chains_bucket, chain_id
+            )
+        except StoreFault as e:
+            self._remove_minted(actor_id, access_token, new_refresh)
+            raise TokenStoreUnavailable("chain-revoked marker read") from e
+        if revoked_meanwhile:
+            self._remove_minted(actor_id, access_token, new_refresh)
+            logger.info(
+                f"Refresh for actor {actor_id} raced a revocation of its chain; "
+                f"deleted the tokens it minted"
+            )
+            return None
         if not self._generation_still_matches(
             actor_id, stamped, access_token, new_refresh
         ):
@@ -739,6 +771,12 @@ class ActingWebTokenManager:
         always a fault. A snapshot that could not be read only skips the
         index and provider-row cleanup.
 
+        Before the first read a chain-revoked marker is written
+        (``mcp_revoked_chains``, 300 s TTL); a rotation of the chain whose
+        consume preceded the sweep reads it after minting and deletes what
+        it minted. A marker that cannot be written raises
+        :class:`TokenStoreUnavailable` and nothing is swept.
+
         This process's cached tokens and wrapper for the actor are evicted
         whatever the outcome, fault included. Eviction is **per-process**:
         another worker or container keeps serving a deleted access token from
@@ -752,6 +790,18 @@ class ActingWebTokenManager:
         from ..mcp.invalidation import evict_caches_for_actor
 
         try:
+            # Before the sweep's first read: a rotation of this chain whose
+            # consume already landed mints after the sweep, and reads this
+            # marker to delete what it minted. No marker, no sweep.
+            try:
+                mark_chain_revoked(
+                    self.config, actor_id, self.revoked_chains_bucket, chain_id
+                )
+            except StoreFault as e:
+                logger.error(f"Revoking token chain for actor {actor_id} failed: {e}")
+                raise TokenStoreUnavailable(
+                    f"Could not revoke token chain for actor {actor_id}"
+                ) from e
             # A bucket that cannot be read (either backend's fault shape)
             # yields no names: the chain's actor rows are still deleted below,
             # and the index rows it could not enumerate are cleaned by the
@@ -935,6 +985,21 @@ class ActingWebTokenManager:
         revoked and ``TokenStoreUnavailable`` is raised (503)."""
         from .. import session_generation
 
+        removals = self._minted_removals(actor_id, access_token, refresh_token)
+        try:
+            return session_generation.guard(actor_id, self.config, stamped, removals)
+        except DbError as e:
+            raise TokenStoreUnavailable("session generation read") from e
+
+    def _minted_removals(
+        self,
+        actor_id: str,
+        access_token: dict[str, Any],
+        refresh_token: dict[str, Any] | None,
+    ) -> list[Callable[[], None]]:
+        """Point removals of the tokens a grant just wrote (rows and their
+        index entries); never a chain sweep."""
+
         def revoke_access() -> None:
             self._remove_access_token(
                 access_token["token"],
@@ -946,11 +1011,24 @@ class ActingWebTokenManager:
         if refresh_token is not None:
             refresh_value = refresh_token["token"]
             removals.append(lambda: self._remove_refresh_token(refresh_value))
+        return removals
 
-        try:
-            return session_generation.guard(actor_id, self.config, stamped, removals)
-        except DbError as e:
-            raise TokenStoreUnavailable("session generation read") from e
+    def _remove_minted(
+        self,
+        actor_id: str,
+        access_token: dict[str, Any],
+        refresh_token: dict[str, Any] | None,
+    ) -> None:
+        """Run :meth:`_minted_removals`, each on its own; a failure is logged
+        (the row is undelivered and its storage TTL reaps it)."""
+        for removal in self._minted_removals(actor_id, access_token, refresh_token):
+            try:
+                removal()
+            except Exception as e:  # folds DbError: undelivered row, TTL-reaped
+                logger.error(
+                    f"Could not delete a token minted for actor {actor_id} by a "
+                    f"refused refresh: {e}"
+                )
 
     def _store_auth_code(
         self, actor_id: str, code: str, auth_data: dict[str, Any]
@@ -1892,7 +1970,8 @@ class ActingWebTokenManager:
         """Delete TTL-expired rows from every MCP token bucket.
 
         Covers the actor buckets (access tokens, refresh tokens, provider
-        tokens, auth codes) and the three global indexes. One set-based delete
+        tokens, auth codes, chain-revoked markers) and the three global
+        indexes. One set-based delete
         on PostgreSQL; on DynamoDB it returns 0 and native TTL on the
         attributes table does the work.
 
@@ -1908,6 +1987,7 @@ class ActingWebTokenManager:
                     self.refresh_tokens_bucket,
                     self.google_tokens_bucket,
                     self.auth_codes_bucket,
+                    self.revoked_chains_bucket,
                     ACCESS_TOKEN_INDEX_BUCKET,
                     REFRESH_TOKEN_INDEX_BUCKET,
                     AUTH_CODE_INDEX_BUCKET,

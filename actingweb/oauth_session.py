@@ -38,6 +38,9 @@ _SESSION_TTL = 600
 # Bucket names for token storage
 _ACCESS_TOKEN_BUCKET = "spa_access_tokens"
 _REFRESH_TOKEN_BUCKET = "spa_refresh_tokens"
+# One marker row per chain whose revocation has started (single_use.
+# mark_chain_revoked); a refresh in flight reads it after it minted.
+_CHAIN_REVOKED_BUCKET = "spa_revoked_chains"
 
 # Process-local throttle for the opportunistic expired-token purge. A fresh
 # process (e.g. a serverless cold start) starts at 0.0 and purges on its first
@@ -1060,6 +1063,13 @@ class OAuth2SessionManager:
         This process's MCP caches for the actor are evicted whatever the
         outcome, fault included.
 
+        Before the sweep a chain-revoked marker is written (``spa_revoked_
+        chains``, 300 s TTL). A refresh of the chain whose consume landed
+        before the sweep reads it after minting and deletes the pair it
+        minted, so a chain revoked during a rotation stays revoked. A marker
+        that cannot be written raises ``TokenStoreUnavailable`` and nothing
+        is swept.
+
         **Cost.** The delete is scoped by ``chain_id`` under the shared
         ``OAUTH2_SYSTEM_ACTOR`` partition. PostgreSQL uses the
         ``idx_attributes_chain_id`` expression index (O(chain)). DynamoDB scans
@@ -1086,12 +1096,18 @@ class OAuth2SessionManager:
         from .constants import OAUTH2_SYSTEM_ACTOR
         from .mcp.invalidation import evict_caches_for_actor
         from .oauth2_server.token_manager import TokenStoreUnavailable
-        from .single_use import StoreFault, revoke_chain_confirmed
+        from .single_use import StoreFault, mark_chain_revoked, revoke_chain_confirmed
 
         if not chain_id:
             return 0
 
         try:
+            # Before the sweep reads anything: a refresh of this chain whose
+            # consume already landed mints after the sweep, and this marker
+            # is what makes it delete what it minted. No marker, no sweep.
+            mark_chain_revoked(
+                self.config, OAUTH2_SYSTEM_ACTOR, _CHAIN_REVOKED_BUCKET, chain_id
+            )
             revoked = revoke_chain_confirmed(
                 self.config,
                 OAUTH2_SYSTEM_ACTOR,
@@ -1297,7 +1313,11 @@ class OAuth2SessionManager:
         db = get_attribute(self.config)
         try:
             return db.delete_expired(
-                buckets=[_ACCESS_TOKEN_BUCKET, _REFRESH_TOKEN_BUCKET]
+                buckets=[
+                    _ACCESS_TOKEN_BUCKET,
+                    _REFRESH_TOKEN_BUCKET,
+                    _CHAIN_REVOKED_BUCKET,
+                ]
             )
         except Exception as e:  # folds DbError: purge, retried next interval
             logger.warning(f"purge_expired_tokens failed: {e}")

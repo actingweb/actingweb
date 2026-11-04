@@ -238,7 +238,12 @@ class TestEveryWiredCallSiteActuallyFires:
         monkeypatch.setattr(
             "actingweb.db.get_attribute",
             lambda config: type(
-                "D", (), {"delete_by_chain": lambda self, *a, **kw: 2}
+                "D",
+                (),
+                {
+                    "delete_by_chain": lambda self, *a, **kw: 2,
+                    "set_attr": lambda self, *a, **kw: True,
+                },
             )(),
         )
 

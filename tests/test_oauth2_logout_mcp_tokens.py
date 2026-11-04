@@ -470,3 +470,62 @@ def test_fastapi_form_field_refresh_token_ends_the_chain() -> None:
 
 def test_flask_form_field_refresh_token_ends_the_chain() -> None:
     _form_field_logout_ends_chain(_flask_client())
+
+
+def test_an_mcp_logout_leaves_the_spa_session_alone(
+    caplog: Any,
+) -> None:
+    """An MCP login is an AI agent's, an SPA session the user's: an MCP
+    logout ends only the MCP chain, ignores SPA refresh tokens sent beside
+    it, and clears no cookie (3.16)."""
+    import json
+    import logging
+
+    from actingweb.constants import OAUTH2_SYSTEM_ACTOR
+    from actingweb.oauth_session import (
+        _ACCESS_TOKEN_BUCKET,
+        _REFRESH_TOKEN_BUCKET,
+        OAuth2SessionManager,
+    )
+
+    server, store, _first, second = _rotated()
+    mgr = OAuth2SessionManager(server.config)
+    chain = mgr.new_chain_id()
+    spa_access = f"acc-{chain}"
+    mgr.store_access_token(spa_access, ACTOR, "u@example.com", chain_id=chain)
+    spa_refresh = mgr.create_refresh_token(ACTOR, "u@example.com", chain_id=chain)
+
+    handler = make_handler(
+        server,
+        headers={
+            "Authorization": f"Bearer {second['access_token']}",
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        },
+        body=json.dumps({"refresh_token": spa_refresh}),
+        cookies={"refresh_token": spa_refresh},
+    )
+    with (
+        mock.patch(
+            "actingweb.oauth_session.get_oauth2_session_manager", return_value=mgr
+        ),
+        caplog.at_level(logging.DEBUG, logger="actingweb.handlers.oauth2_endpoints"),
+    ):
+        out = handler._handle_logout_request("POST")
+
+    assert handler.response.status_code == 200
+    assert out["success"] is True
+    assert out["message"] == "Successfully logged out"
+    assert out["cleared_cookies"] == []
+    assert not [
+        c
+        for c in handler.response.cookies
+        if c["max_age"] is not None and c["max_age"] < 0
+    ]
+    # The MCP chain is revoked ...
+    assert second["access_token"] not in store.names(ACTOR, TOKENS)
+    assert second["refresh_token"] not in store.names(ACTOR, REFRESH)
+    # ... and the SPA pair is untouched.
+    assert store.data(OAUTH2_SYSTEM_ACTOR, _ACCESS_TOKEN_BUCKET, spa_access)
+    assert store.data(OAUTH2_SYSTEM_ACTOR, _REFRESH_TOKEN_BUCKET, spa_refresh)
+    assert any("ignoring" in r.getMessage() for r in caplog.records)

@@ -956,16 +956,49 @@ class OAuth2SPAHandler(BaseHandler):
             logger.error(f"Could not store the rotated refresh token: {e}")
             return self._store_unavailable()
 
-        # R3: a token issued before the actor was adopted in place mints
-        # nothing, even when its refresh straddled the clean's revokes.
+        # What this rotation minted never left the server: point deletes,
+        # not a chain sweep (the generation-mismatch callers sweep the
+        # actor's tokens themselves, and a revoked chain was swept already).
+        from ..constants import OAUTH2_SYSTEM_ACTOR
+        from ..oauth_session import _ACCESS_TOKEN_BUCKET, _CHAIN_REVOKED_BUCKET
+        from ..single_use import StoreFault, chain_revoked, delete_confirmed
+
+        def _delete_minted(bucket: str, name: str) -> None:
+            if not delete_confirmed(self.config, OAUTH2_SYSTEM_ACTOR, bucket, name):
+                logger.error(
+                    f"Could not delete a token minted for actor {actor_id} by a "
+                    f"refresh that was refused; its storage TTL reaps it"
+                )
+
         revoke_minted = [
-            lambda: session_manager.revoke_session(
-                new_access_token, token_type_hint="access_token"
-            ),
-            lambda: session_manager.revoke_session(
-                new_refresh_token, token_type_hint="refresh_token"
-            ),
+            lambda: _delete_minted(_ACCESS_TOKEN_BUCKET, new_access_token),
+            lambda: _delete_minted(_REFRESH_TOKEN_BUCKET, new_refresh_token),
         ]
+
+        # A logout or theft revocation of this chain that swept after the
+        # consume above left a marker: the pair just minted is deleted and
+        # the refresh fails as a revoked one does. A chain-less legacy token
+        # has no marker to read.
+        if chain_id:
+            try:
+                revoked_meanwhile = chain_revoked(
+                    self.config, OAUTH2_SYSTEM_ACTOR, _CHAIN_REVOKED_BUCKET, chain_id
+                )
+            except StoreFault as e:
+                for removal in revoke_minted:
+                    removal()
+                logger.error(f"Could not read the chain-revoked marker: {e}")
+                return self._store_unavailable()
+            if revoked_meanwhile:
+                for removal in revoke_minted:
+                    removal()
+                logger.info(
+                    f"Refresh for actor {actor_id} raced a revocation of chain "
+                    f"{chain_id[:8]}...; deleted the tokens it minted"
+                )
+                return self._json_error(
+                    401, "Invalid or expired refresh_token", "invalid_grant"
+                )
 
         try:
             if not session_generation.guard(

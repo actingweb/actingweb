@@ -222,6 +222,13 @@ MCP_REFRESH_TOKEN_REUSE_WINDOW = 86400 * 2  # 2 days
 # Max frequency of the opportunistic expired MCP token purge, per process.
 MCP_TOKEN_PURGE_INTERVAL = 3600  # 1 hour
 
+# A revoked refresh-token chain leaves a marker row, written before the sweep,
+# that a rotation reads after it minted: a rotation whose consume preceded the
+# sweep then deletes what it minted instead of handing out a live pair. The
+# marker only has to outlive an in-flight rotation (one request); strict reads
+# honour it for this long plus TTL_CLOCK_SKEW_BUFFER.
+CHAIN_REVOKED_MARKER_TTL = 300  # 5 minutes
+
 # Index entry TTLs (slightly longer than the data they reference)
 # This ensures indexes aren't deleted before the data they point to
 INDEX_TTL_BUFFER = 7200  # 2 hours extra buffer for indexes
@@ -283,6 +290,7 @@ def _validate_ttl_constants() -> None:
     assert REFRESH_TOKEN_GRACE_MAX < min(
         SPA_REFRESH_TOKEN_REUSE_WINDOW, MCP_REFRESH_TOKEN_REUSE_WINDOW
     ), "The refresh grace ceiling must be shorter than both reuse windows"
+    assert CHAIN_REVOKED_MARKER_TTL > 0, "Chain-revoked marker TTL must be positive"
     assert INDEX_TTL_BUFFER > 0, "Index TTL buffer must be positive"
     assert TTL_CLOCK_SKEW_BUFFER > 0, "Clock skew buffer must be positive"
 

@@ -603,3 +603,180 @@ def test_the_spa_handler_has_no_logout_endpoint(env: Env) -> None:
     result = env.spa().post("logout")
     assert result.get("status_code") == 404
     assert "Unknown SPA endpoint" in result.get("message", "")
+
+
+# ---------------------------------------------------------------------------
+# A logout that races a refresh (chain-revoked marker, 3.16)
+# ---------------------------------------------------------------------------
+
+
+def _chain_rows(env: Env, chain: str) -> list[tuple[str, str]]:
+    rows = []
+    for bucket in (_ACCESS_TOKEN_BUCKET, _REFRESH_TOKEN_BUCKET):
+        for name in env.store.names(OAUTH2_SYSTEM_ACTOR, bucket):
+            data = env.store.data(OAUTH2_SYSTEM_ACTOR, bucket, name)
+            if isinstance(data, dict) and data.get("chain_id") == chain:
+                rows.append((bucket, name))
+    return rows
+
+
+def _race_logout_into_the_mint(env: Env, logout: Any) -> Any:
+    """Run ``logout`` once, after the refresh consumed its token and before
+    it mints: the window the marker closes."""
+    real = OAuth2SPAHandler._generate_actingweb_token
+    ran: list[Any] = []
+
+    def wrapper(self: Any, *args: Any, **kwargs: Any) -> str:
+        if not ran:
+            ran.append(logout())
+        return real(self, *args, **kwargs)
+
+    return mock.patch.object(OAuth2SPAHandler, "_generate_actingweb_token", wrapper)
+
+
+def test_a_logout_between_the_consume_and_the_mint_leaves_no_live_pair(
+    env: Env,
+) -> None:
+    from actingweb.oauth_session import _CHAIN_REVOKED_BUCKET
+
+    access, refresh, chain = env.login()
+    with _race_logout_into_the_mint(env, lambda: env.logout(headers=_bearer(access))):
+        result = env.refresh(refresh)
+
+    assert result.get("status_code") == 401
+    assert result.get("code") == "invalid_grant"
+    assert _chain_rows(env, chain) == []
+    assert env.has(_CHAIN_REVOKED_BUCKET, chain)
+
+
+def test_the_marker_is_written_before_the_first_chain_delete(env: Env) -> None:
+    from actingweb.oauth_session import _CHAIN_REVOKED_BUCKET
+
+    access, _refresh, chain = env.login()
+    order: list[str] = []
+    db_cls = env.config.DbAttribute.DbAttribute
+    real_set, real_sweep = db_cls.set_attr, db_cls.delete_by_chain
+
+    def set_attr(self: Any, *a: Any, **kw: Any) -> bool:
+        if kw.get("bucket") == _CHAIN_REVOKED_BUCKET:
+            order.append("marker")
+        return real_set(self, *a, **kw)
+
+    def sweep(self: Any, **kw: Any) -> int:
+        order.append("sweep")
+        return real_sweep(self, **kw)
+
+    with (
+        mock.patch.object(db_cls, "set_attr", set_attr),
+        mock.patch.object(db_cls, "delete_by_chain", sweep),
+    ):
+        _handler, result = env.logout(headers=_bearer(access))
+
+    assert result["success"] is True
+    assert order == ["marker", "sweep"]
+    assert env.store.ttls[(OAUTH2_SYSTEM_ACTOR, _CHAIN_REVOKED_BUCKET, chain)] == 300
+
+
+def test_a_marker_write_fault_answers_503_and_deletes_nothing(env: Env) -> None:
+    from actingweb.oauth_session import _CHAIN_REVOKED_BUCKET
+
+    access, refresh, _chain = env.login()
+    env.store.write_faults.add(_CHAIN_REVOKED_BUCKET)
+
+    handler, result = env.logout(headers=_bearer(access))
+
+    assert handler.response.status_code == 503
+    assert result["success"] is False
+    assert env.alive(access, refresh) == (True, True)
+    assert _cleared(handler) == set()
+
+
+def test_a_marker_read_fault_during_a_refresh_deletes_what_it_minted(
+    env: Env,
+) -> None:
+    from actingweb.oauth_session import _CHAIN_REVOKED_BUCKET
+
+    _access, refresh, chain = env.login()
+    before = set(_chain_rows(env, chain))
+    env.store.faulty_buckets.add(_CHAIN_REVOKED_BUCKET)
+
+    result = env.refresh(refresh)
+
+    assert result.get("status_code") == 503
+    # Only the login pair is left (the consumed refresh row is the retry
+    # handle); nothing the refresh minted survives.
+    assert set(_chain_rows(env, chain)) == before
+
+
+def test_a_chainless_legacy_refresh_skips_the_marker_and_rotates(env: Env) -> None:
+    from actingweb.oauth_session import _CHAIN_REVOKED_BUCKET
+
+    legacy = env.mgr.create_refresh_token(ACTOR, "u@example.com")
+    data = env.store.data(OAUTH2_SYSTEM_ACTOR, _REFRESH_TOKEN_BUCKET, legacy)
+    data.pop("chain_id", None)
+    env.store.bucket(OAUTH2_SYSTEM_ACTOR, _REFRESH_TOKEN_BUCKET)[legacy] = {
+        "data": data
+    }
+    env.store.faulty_buckets.add(_CHAIN_REVOKED_BUCKET)  # never read
+
+    result = env.refresh(legacy)
+
+    assert result.get("access_token")
+    assert result.get("refresh_token")
+
+
+def test_a_generation_mismatch_point_deletes_and_sweeps_nothing(env: Env) -> None:
+    from actingweb import session_generation
+
+    access, refresh, chain = env.login()
+    # A generation the login was not stamped with (what an adoption bump
+    # leaves).
+    env.store.bucket(ACTOR, session_generation._BUCKET)[session_generation._NAME] = {
+        "data": "a-later-generation"
+    }
+    sweeps: list[int] = []
+    db_cls = env.config.DbAttribute.DbAttribute
+    real = db_cls.delete_by_chain
+
+    with mock.patch.object(
+        db_cls,
+        "delete_by_chain",
+        lambda self, **kw: sweeps.append(1) or real(self, **kw),
+    ):
+        result = env.refresh(refresh)
+
+    assert result.get("status_code") == 401
+    assert sweeps == []
+    # Only the login pair remains; nothing the refresh minted does.
+    assert set(_chain_rows(env, chain)) == {
+        (_ACCESS_TOKEN_BUCKET, access),
+        (_REFRESH_TOKEN_BUCKET, refresh),
+    }
+
+
+def test_the_purge_covers_the_marker_bucket(env: Env) -> None:
+    from actingweb.oauth_session import _CHAIN_REVOKED_BUCKET
+
+    env.mgr.purge_expired_tokens()
+    assert env.store.purges and _CHAIN_REVOKED_BUCKET in (env.store.purges[-1] or [])
+
+
+def test_revoke_writes_the_chain_marker(env: Env) -> None:
+    from actingweb.oauth_session import _CHAIN_REVOKED_BUCKET
+
+    access, _refresh, chain = env.login()
+    _handler, result = env.revoke({"token": access})
+    assert result["success"] is True
+    assert env.has(_CHAIN_REVOKED_BUCKET, chain)
+
+
+def test_the_theft_branch_writes_the_chain_marker(env: Env) -> None:
+    from actingweb.oauth_session import _CHAIN_REVOKED_BUCKET
+
+    env.config.refresh_token_grace_period = 0
+    _access, refresh, chain = env.login()
+    assert env.refresh(refresh).get("access_token")
+    replay = env.refresh(refresh)  # a consumed token again: theft
+    assert replay.get("code") == "refresh_token_reused"
+    assert env.has(_CHAIN_REVOKED_BUCKET, chain)
+    assert _chain_rows(env, chain) == []

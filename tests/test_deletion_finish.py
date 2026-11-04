@@ -553,6 +553,58 @@ class TestLeaseKeeper:
             finish_deletion(actor, config=config, hooks=hooks, origin="delete")
         assert renewals, "the lease was not renewed after a 90 s sweep"
 
+    def test_the_generation_is_bumped_before_the_token_sweep(self, env: Any) -> None:
+        """A refresh whose consume preceded the sweep mints after it; the
+        bump makes its generation guard delete what it minted (3.16)."""
+        from actingweb import session_generation
+
+        config, hooks, _events = env
+        actor = create_core_actor(config, uuid_email())
+        actor_id = str(actor.id)
+        before = session_generation.current(actor_id, config)
+        order: list[str] = []
+        real_bump = session_generation.bump
+
+        def bump(actor_id: str, cfg: Any) -> str:
+            order.append("bump")
+            return real_bump(actor_id, cfg)
+
+        def sweep(*args: Any, **kwargs: Any) -> int:
+            # The stamp a pre-sweep credential carries no longer matches.
+            order.append("sweep")
+            assert not session_generation.matches(before, actor_id, config)
+            return 0
+
+        with (
+            patch.object(session_generation, "bump", bump),
+            patch("actingweb.oauth2._revoke_all_actor_tokens", sweep),
+        ):
+            finish_deletion(actor, config=config, hooks=hooks, origin="delete")
+        assert order == ["bump", "sweep"]
+
+    def test_a_bump_fault_releases_the_lease_and_raises(self, env: Any) -> None:
+        from actingweb import session_generation
+
+        config, hooks, _events = env
+        actor = create_core_actor(config, uuid_email())
+        swept: list[int] = []
+        with (
+            patch.object(
+                session_generation,
+                "bump",
+                side_effect=DbError("session generation write"),
+            ),
+            patch(
+                "actingweb.oauth2._revoke_all_actor_tokens",
+                lambda *a, **k: swept.append(1) or 0,
+            ),
+        ):
+            with pytest.raises(DbError):
+                finish_deletion(actor, config=config, hooks=hooks, origin="delete")
+        assert swept == []
+        tombstone = _tombstone(config, str(actor.id))
+        assert tombstone is not None and not tombstone.get("lease_id")
+
     def test_a_slow_client_sweep_is_renewed_before_the_wipe(self, env: Any) -> None:
         """Re-verification 3, V10: the keeper ran between the token and the
         client sweep only, so a slow client sweep went unrenewed into the

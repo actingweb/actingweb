@@ -358,7 +358,7 @@ class TestTrustCRUD:
             "relationship": "friend",
         }
         mock_db_trust.get.return_value = mock_trust_data
-        # Physical delete fails (record NOT removed)
+        # This record's own delete finds it gone (a sibling's cascade)
         mock_db_trust.delete.return_value = False
         mock_config.DbTrust.DbTrust.return_value = mock_db_trust
 
@@ -380,9 +380,13 @@ class TestTrustCRUD:
             result = trust.delete()
 
         assert result is False
-        # The guard stops the cascade from re-entering the sweep.
-        mock_registry.delete_client.assert_not_called()
+        # The guard stops the cascade from re-entering the sweep; the
+        # connection's own tokens are still revoked, and no client disabled.
         mock_registry._delete_client_trust_relationship.assert_not_called()
+        mock_registry.disable_client.assert_not_called()
+        mock_registry.revoke_connection_tokens.assert_called_once_with(
+            "test_actor", "mcp_client_abc123"
+        )
 
 
 class TestTrustsCollection:

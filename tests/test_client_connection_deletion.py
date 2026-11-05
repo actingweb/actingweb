@@ -389,7 +389,12 @@ def test_delete_client_without_an_index_row_refuses_a_non_owner() -> None:
     delete_confirmed.assert_not_called()
 
 
-def test_actor_deletion_keeps_an_index_row_naming_another_actor() -> None:
+@pytest.mark.parametrize("indexed", ["actor-x", {"actor_id": "actor-y"}])
+def test_actor_deletion_keeps_an_index_row_naming_another_actor(
+    indexed: Any,
+) -> None:
+    """Including a malformed value: it names no actor, so it is not this
+    one's (eighth verification, 4)."""
     from actingweb.config import Config
     from actingweb.oauth2_server.client_registry import MCPClientRegistry
 
@@ -399,7 +404,7 @@ def test_actor_deletion_keeps_an_index_row_naming_another_actor() -> None:
         patch("actingweb.attribute.Attributes") as attributes,
         patch("actingweb.single_use.delete_confirmed") as delete_confirmed,
     ):
-        attributes.return_value.get_attr.return_value = {"data": "actor-x"}
+        attributes.return_value.get_attr.return_value = {"data": indexed}
         assert registry.delete_client(
             "mcp_ab12", actor_id="actor-y", actor_deleted=True
         )

@@ -81,9 +81,10 @@ SECURITY
     instead of logged under a 204 while the client stayed live. The
     revocation, the owner's client deletion, the provider-token delete and
     the deletion of that actor's other rows of the client run before the
-    row goes, so their faults leave the row in place, and retrying the same
-    ``DELETE /<actor>/trust/<rel>/<peer>`` finishes them (it answered 404
-    with the other rows left). A row an earlier row's cleanup already
+    row goes, so their faults leave the row in place, and deleting the same
+    row again finishes them: ``TrustManager.delete_relationship``, and
+    ``DELETE /<actor>/trust/<rel>/<peer>``, which calls the same deletion
+    while the row exists (a retry answered 404 with the other rows left). A row an earlier row's cleanup already
     removed no longer fails an actor's bulk trust deletion, and any error
     deleting the client's other rows, or a refusal with the row still
     there, is raised as well;

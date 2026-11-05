@@ -28,17 +28,19 @@ The table is updated in the same change as the code.
 ## Order, per row
 
 The second column says whether a step runs before or after the row
-delete (step 7).
+delete (step 7). The rows are in the order the steps run. There is no
+step 5: the hook was listed there until it moved to step 0, where it
+runs, and the other numbers were kept so references to them stay valid.
 
 | # | Step | Before the row? | On a fault | Retry reaches it by |
 | --- | --- | --- | --- | --- |
+| 0 | Lifecycle hook `trust_deleted`, before step 1, outside `Trust.delete`: `DELETE /<actor>/trust/<rel>/<peer>` and `TrustManager.delete_relationship`. The sweep (step 6) uses the latter, so sibling rows fire it on every route | yes | a `DbError` propagates (503), row stays; any other hook exception is logged and the delete goes on | the row; **the hook fires again on a retry** |
 | 1 | Remote DELETE to the peer (peer trusts only) | yes | a refusal or no answer is logged; with `delete_peer`, the call answers False and the row stays. A 404 counts as deleted (the peer has no row) | the row |
 | 2 | Subscriptions, remote-peer store, callback state, peer profile, capabilities, peer permissions | yes | a raised `DbError` stops it, row stays. Their return values are not checked: a store that answers False instead of raising lets the row go with its data left (subscriptions are non-strict: a fault leaves orphans) | the row (when it raised) |
 | 3a | Owner (the client row is in this actor's bucket, and the index names no other actor): `disable_client` (tokens, then index row, then client row; both rows confirmed) | yes | `DbError`, row stays, and the client row stays (a token store that cannot list every token raises before any row goes; an index row confirmed gone with the client row not is a failure) | the row; `client_owned_by` reads the client row and the missing index names nobody else, so the retry takes 3a again |
 | 3b | Connection, including a client row the index gives to another actor: `revoke_connection_tokens` (this actor's tokens for the client; chains marked first; a bucket the first pass cannot read raises) | yes | `DbError`, row stays | the row |
 | 4 | Provider tokens `oauth_tokens:<peer_id>` (OAuth2 rows) | yes | `DbError`, row stays | the row |
-| 5 | Lifecycle hook `trust_deleted`, before the core delete: `DELETE /<actor>/trust/<rel>/<peer>` and `TrustManager.delete_relationship`. The sweep (step 6) uses the latter, so sibling rows fire it on every route | yes | a `DbError` propagates (503), row stays; any other hook exception is logged and the delete goes on | the row; **the hook fires again on a retry** |
-| 6 | Sibling sweep: this actor's other rows of the client, each through the full route (steps 1-9 for that row). The deletes it makes skip their own sweep (`MCPClientRegistry.sweeping`, a context-local guard) | yes | `DbError` after trying every row (an exception, or a refused delete of a row still listed, counts as a fault); this row stays, and so do the siblings that faulted | the row, on every route (the one-row route retries the same peer id and sweeps again) |
+| 6 | Sibling sweep: this actor's other rows of the client, each through the full route (steps 0-9 for that row). The deletes it makes skip their own sweep (`MCPClientRegistry.sweeping`, a context-local guard) | yes | `DbError` after trying every row (an exception, or a refused delete of a row still listed, counts as a fault); this row stays, and so do the siblings that faulted | the row, on every route (the one-row route retries the same peer id and sweeps again) |
 | 7 | **The row** (`DbTrust.delete`) | n/a | `DbError`, row stays | the row |
 | 8 | Custom permissions (shared store and its cache) | no | `DbError`; the permissions are left with no row (inert: nothing reads them without a row). The siblings are already gone (step 6) | no route. The next row created for the same peer id clears them first: `Trust.create` when no row exists (a peer's trust, approved again), `TrustManager.create_or_update_oauth_trust` for OAuth2 rows |
 | 9 | MCP cache eviction (`finally`, once the row is gone) | no | cannot fault | n/a |
@@ -94,7 +96,17 @@ cached permissions for a row with the same peer id until it restarts. See
   origin gate above. It decides only whether a peer is notified, never what
   is deleted locally, and `is_valid_peer_id` stops a peer from creating
   such a row since 3.4.
-- **Step 5:** a retry fires `trust_deleted` again. Hooks must tolerate this
-  (they already must, because the protocol allows a repeated DELETE).
+- **Step 0:** a retry fires `trust_deleted` again. Hooks must tolerate this
+  (they already must, because the protocol allows a repeated DELETE). A
+  hook must not delete the same client's connection itself
+  (`delete_client_connection`): that starts a second sweep, which finds
+  the sibling whose hook is running, and recurses. The guard only stops
+  `Trust.delete` from sweeping, not the sweep itself.
+- **Steps 4 to 7, a re-login in between:** the row is read before step 4
+  and deleted at step 7, after the sweep. An OAuth2 login for the same
+  peer id in that window rewrites the row with fresh provider tokens and
+  permissions; step 7 then deletes it and step 8 its permissions, but the
+  new `oauth_tokens:<peer_id>` stays without a row. They grant nothing
+  there, and the next login for that peer id overwrites them.
 - **D2:** an owner deleting a client leaves other actors' connections on
   the same server. See `thoughts/todo/client-deletion-leaves-other-actors-connections.md`.

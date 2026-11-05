@@ -482,14 +482,16 @@ class MCPClientRegistry:
 
     def indexed_owner(self, client_id: str) -> str | None:
         """The actor the client's global index row names, or None when there
-        is no index row. Raises ``DbError`` on a fault."""
+        is no index row. A malformed value is returned as text, so it names
+        no actor and is never mistaken for "no index". Raises ``DbError`` on
+        a fault."""
         index_row = attribute.Attributes(
             actor_id=OAUTH2_SYSTEM_ACTOR,
             bucket=CLIENT_INDEX_BUCKET,
             config=self.config,
         ).get_attr(name=client_id)
         owner = index_row.get("data") if index_row else None
-        return owner if isinstance(owner, str) and owner else None
+        return str(owner) if owner else None
 
     def sweeping(self, actor_id: str, client_id: str) -> bool:
         """Whether a sweep of ``actor_id``'s rows of ``client_id`` is running

@@ -2418,3 +2418,40 @@ owner's `actor_id`.
 `CHANGELOG.rst`
 
 **Rationale**: these are accepted, so the table has to name them.
+
+### 2026-11-05, after verification thoughts/verifications/2026-11-05-3-16-dependency-security-rollup-reverify-7.md
+
+#### 33. The eighth run's Low points
+
+**Category**: Verification fix (Issues 1-4)
+
+**What changed**:
+- **Issue 1:** the table lists the `trust_deleted` hook as step 0, first,
+  where it runs (before the remote DELETE, outside `Trust.delete`). The
+  other step numbers are kept, so test labels and references stay valid;
+  the table says why there is no step 5.
+- **Issue 2:** the changelog names `TrustManager.delete_relationship`,
+  which the `same-row` route tests, and says that
+  `DELETE /<actor>/trust/<rel>/<peer>` calls the same deletion while the
+  row exists. An HTTP fault case would need creator auth through an
+  OAuth-configured test app; the handler only adds a 404 pre-check above
+  that call.
+- **Issue 3:** a new residue entry covers the window from step 4 to
+  step 7: a re-login in between leaves fresh provider tokens without a row.
+- **Issue 4:**
+  - `indexed_owner` returns a malformed index value as text, so it names
+    no actor. Actor deletion then keeps that index row again, and
+    `Trust.delete` takes the connection path. The actor-deletion test is
+    parametrized with a malformed value.
+  - The vacuous `delete_client` assertion in `test_trust_core.py` now
+    checks `disable_client` and `revoke_connection_tokens`.
+  - The step 0 residue says that a hook must not end the same client's
+    connection itself.
+
+**Files affected**:
+- `actingweb/oauth2_server/client_registry.py`: `indexed_owner`.
+- `tests/test_trust_core.py`, `tests/test_client_connection_deletion.py`.
+- `thoughts/reference/trust-row-deletion-invariants.md`, `CHANGELOG.rst`.
+
+**Rationale**: the table and the changelog must say exactly what the code
+does and what the tests show.

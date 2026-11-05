@@ -2455,3 +2455,30 @@ owner's `actor_id`.
 
 **Rationale**: the table and the changelog must say exactly what the code
 does and what the tests show.
+
+### 2026-11-05, after the PR review (#170, claude-review)
+
+#### 34. The client manager's not-found path is documented; the vouch sweep names its memory bound
+
+**Category**: UX refinement (review suggestions 1 and 2)
+
+**What changed**:
+- **Suggestion 1:** the docstring of `OAuth2ClientManager.delete_client`
+  and the guide `docs/guides/oauth2-setup.rst` now say what the not-found
+  path does. It ends this actor's own connection to that client id and
+  answers False, which is how a retry finishes a deletion that raised. A
+  client row left without its index row is deleted in full. The behaviour
+  is unchanged; the reviewer had found it undocumented.
+- **Suggestion 2:** the `mark-actors-vouched` docstring and the
+  `--creator` help say that `--creator` also bounds the run's memory.
+- **Not changed:** suggestion 3 is a note with nothing to change.
+  Suggestion 4 (split the PR) conflicts with the owner's rule of one PR per
+  plan. Suggestion 5 is CI, which is green or being watched.
+
+**Files affected**:
+- `actingweb/interface/oauth_client_manager.py`
+- `docs/guides/oauth2-setup.rst`
+- `actingweb/maintenance/mark_actors_vouched.py`
+
+**Rationale**: a call with a side effect on a path that answers False has
+to say so.

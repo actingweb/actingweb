@@ -43,8 +43,8 @@ Rules:
 
 The actor list is a full scan on both backends: this is maintenance, not a
 serving path. It is read as it is scanned, keeping only each matching
-actor's id and creator (about 220 MB per million actors), then processed in
-sorted id order. On DynamoDB the scan is strongly consistent, since the
+actor's id and creator (about 220 MB per million actors; ``--creator``
+keeps only that creator's actors), then processed in sorted id order. On DynamoDB the scan is strongly consistent, since the
 command writes back the creator it read, so it costs twice the read units of
 an eventual scan; ``--rate-limit`` caps it in read capacity units per second
 (ignored on PostgreSQL).
@@ -221,7 +221,11 @@ def main(argv: list[str] | None = None) -> int:
         "--marker", default="operator", help="auth_method value to write"
     )
     parser.add_argument("--include-factory", action="store_true")
-    parser.add_argument("--creator", default=None)
+    parser.add_argument(
+        "--creator",
+        default=None,
+        help="only actors with this creator (also bounds the run's memory)",
+    )
     parser.add_argument("--start-after", default=None)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument(

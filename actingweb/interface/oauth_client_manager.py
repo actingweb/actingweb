@@ -155,13 +155,24 @@ class OAuth2ClientManager:
 
     def delete_client(self, client_id: str) -> bool:
         """
-        Delete an OAuth2 client.
+        Delete an OAuth2 client registered under this actor.
+
+        When the client is not found, this actor's own connection to that
+        client id (its tokens and trust rows for it) is still ended, and the
+        call answers False. That is how a retry finishes a deletion that
+        raised part way, and it never touches another actor's data. A client
+        row left without its index row is deleted in full, and answers
+        True.
 
         Args:
             client_id: The client identifier to delete
 
         Returns:
-            True if deletion was successful, False otherwise
+            True if the client was deleted, False when it was not found or
+            does not belong to this actor
+
+        Raises:
+            DbError: on a storage fault; retrying finishes the deletion
         """
         try:
             # Verify client belongs to this actor before deletion

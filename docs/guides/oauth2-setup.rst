@@ -279,7 +279,9 @@ client's index row is global and deleting it would disable the client for every 
 user's connection to a client registered elsewhere (for example a dynamically registered client,
 which lives under the system actor), call ``delete_client_connection(actor_id, client_id)``, or
 delete that user's trust row: it revokes that user's tokens for the client and deletes that user's
-rows of it.
+rows of it. ``OAuth2ClientManager.delete_client(client_id)`` does the same for its actor when the
+client is not found (it answers ``False``), so a deletion that raised ``DbError`` part way is
+finished by calling it again.
 
 Error Handling
 --------------

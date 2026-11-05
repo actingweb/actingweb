@@ -2203,8 +2203,8 @@ class Actor:
                         f"Failed to cleanup peer permissions cache for {rel['peerid']}: {e}"
                     )
 
-            # Finally the trust record itself. Trust.delete removes its custom
-            # permissions and stored provider tokens right after the row.
+            # Finally the trust record itself, with its OAuth2 cleanup
+            # (thoughts/reference/trust-row-deletion-invariants.md).
             dbtrust = trust.Trust(
                 actor_id=self.id, peerid=rel["peerid"], config=self.config
             )

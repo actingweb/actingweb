@@ -90,8 +90,9 @@ SECURITY
     tokens go, so a refresh that raced the deletion deletes what it minted;
   - a trust row's custom permissions are deleted after the row, not before
     (a fault in between left a live row on its trust type's defaults, which
-    can be wider), through the cache that permission checks read, and a new
-    OAuth2 row with the same peer id starts without them;
+    can be wider), always (a "none" the permission cache held from before
+    another process wrote them skipped the delete), and a new OAuth2 row
+    with the same peer id starts without them;
   - the provider tokens an OAuth2 login stored for the row
     (``oauth_tokens:<peer_id>``, Google's refresh token among them) are
     deleted with it.

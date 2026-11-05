@@ -299,8 +299,9 @@ class TrustManager:
     def delete_relationship(self, peer_id: str) -> bool:
         """Delete a trust relationship with lifecycle hook execution.
 
-        Note: Associated permissions are automatically deleted by the core
-        delete_reciprocal_trust method.
+        The row's custom permissions go with it (``Trust.delete``). A
+        ``DbError`` leaves what a retry needs; ``trust_deleted`` fires again
+        on that retry.
         """
         # Get relationship data before deletion for the hook
         relationship = self.get_relationship(peer_id)
@@ -618,10 +619,9 @@ class TrustManager:
                     permission_store = get_trust_permission_store(
                         self._core_actor.config
                     )
-                    if (
-                        permission_store.get_permissions(self._core_actor.id, peer_id)
-                        is not None
-                    ) and not permission_store.delete_permissions(
+                    # Unconditionally, as in Trust.delete: a cached "none"
+                    # can hide permissions another process wrote.
+                    if not permission_store.delete_permissions(
                         self._core_actor.id, peer_id
                     ):
                         raise DbError("trust permissions delete", self._core_actor.id)

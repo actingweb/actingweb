@@ -841,3 +841,192 @@ class TestClientConnectionDeletion:
             assert self._rows_for(fresh, client_id) == []
         finally:
             actor.delete()
+
+
+# Fault targets for TestTrustDeletionConverges, one per row of the table in
+# thoughts/reference/trust-row-deletion-invariants.md that can fault:
+# (scenarios it fires in, the step's table row).
+_FAULT_TARGETS = {
+    "revoke": (("owner", "connection"), "3b"),
+    "disable": (("owner",), "3a"),
+    "provider_tokens": (("owner", "connection"), "4"),
+    "row": (("owner", "connection"), "6"),
+    "permissions": (("owner", "connection"), "7"),
+    "sibling_row": (("owner", "connection"), "8"),
+}
+_CASES = [
+    pytest.param(scenario, target, route, id=f"{scenario}-{target}-{route}")
+    for target, (scenarios, _step) in _FAULT_TARGETS.items()
+    for scenario in scenarios
+    for route in ("one-row", "every-row")
+]
+
+
+class TestTrustDeletionConverges:
+    """The two rules of thoughts/reference/trust-row-deletion-invariants.md,
+    for every step that can fault: the fault raises (never a success), and
+    retrying the route until it succeeds leaves nothing that authorises the
+    connection (the client too, for its owner)."""
+
+    @staticmethod
+    def _rows_for(actor: ActorInterface, client_id: str) -> list:
+        return TestClientConnectionDeletion._rows_for(actor, client_id)
+
+    @staticmethod
+    def _fault(original, *, on_call: int = 1, when=None):
+        """``original`` that raises DbError on its ``on_call``-th matching call."""
+        from actingweb.db.exceptions import DbError
+
+        state = {"calls": 0, "fired": False}
+
+        def wrapper(*args, **kwargs):
+            if when is None or when(*args, **kwargs):
+                state["calls"] += 1
+                if state["calls"] == on_call:
+                    state["fired"] = True
+                    raise DbError("injected fault")
+            return original(*args, **kwargs)
+
+        return wrapper, state
+
+    def _setup(self, config, scenario: str) -> dict:
+        """An actor with two rows of one client, custom permissions on both,
+        provider tokens on the authorization rows, and a live access token."""
+        from actingweb.oauth2_server.token_manager import get_actingweb_token_manager
+
+        holder = ActorInterface.create(creator=f"{scenario}@example.com", config=config)
+        owner = (
+            holder
+            if scenario == "owner"
+            else ActorInterface.create(creator="owner@example.com", config=config)
+        )
+        client_id = OAuth2ClientManager(owner.id, config).create_client(  # type: ignore[arg-type]
+            client_name="Converge", trust_type="mcp_client"
+        )["client_id"]
+        sources = (
+            ["oauth2_client"] if scenario == "owner" else ["oauth2_client", "oauth2"]
+        )
+        for source in sources:
+            assert holder.trust.create_or_update_oauth_trust(
+                email=f"{scenario}@example.com",
+                trust_type="mcp_client",
+                oauth_tokens={"access_token": "g-at", "refresh_token": "g-rt"},
+                established_via=source,
+                client_id=client_id,
+            )
+        peer_ids = [t.peerid for t in self._rows_for(holder, client_id)]
+        assert len(peer_ids) == 2
+        for peer_id in peer_ids:
+            assert TrustPermissionStore(config).store_permissions(
+                TrustPermissions(
+                    actor_id=holder.id,  # type: ignore[arg-type]
+                    peer_id=peer_id,
+                    trust_type="mcp_client",
+                    properties={"patterns": ["memory_*"], "operations": ["read"]},
+                    created_by="test",
+                )
+            )
+        token = get_actingweb_token_manager(config).create_access_token(
+            actor_id=holder.id,  # type: ignore[arg-type]
+            client_id=client_id,
+            scope="mcp",
+            trust_type="mcp_client",
+            grant_type="client_credentials",
+        )
+        assert token is not None
+        return {
+            "holder": holder,
+            "owner": owner,
+            "client_id": client_id,
+            "peer_ids": peer_ids,
+            "access_token": token["access_token"],
+        }
+
+    def _patch(self, config, target: str):
+        from unittest import mock
+
+        from actingweb import attribute
+        from actingweb.constants import OAUTH_TOKENS_PREFIX
+        from actingweb.oauth2_server.client_registry import MCPClientRegistry
+
+        db_trust = config.DbTrust.DbTrust
+        cls, name, kwargs = {
+            "revoke": (MCPClientRegistry, "revoke_connection_tokens", {}),
+            "disable": (MCPClientRegistry, "disable_client", {}),
+            "provider_tokens": (
+                attribute.InternalStore,
+                "set_confirmed",
+                {"when": lambda _s, k, *_a, **_k: k.startswith(OAUTH_TOKENS_PREFIX)},
+            ),
+            "row": (db_trust, "delete", {}),
+            "permissions": (TrustPermissionStore, "delete_permissions", {}),
+            "sibling_row": (db_trust, "delete", {"on_call": 2}),
+        }[target]
+        wrapper, state = self._fault(getattr(cls, name), **kwargs)
+        return mock.patch.object(cls, name, wrapper), state
+
+    @staticmethod
+    def _run(config, holder: ActorInterface, client_id: str, route: str) -> None:
+        from actingweb import actor as actor_module
+
+        if route == "every-row":
+            actor_module.Actor(holder.id, config=config).delete_reciprocal_trust(
+                delete_peer=True
+            )
+            return
+        fresh = ActorInterface(actor_module.Actor(holder.id, config=config))
+        for row in TestClientConnectionDeletion._rows_for(fresh, client_id):
+            fresh.trust.delete_relationship(row.peerid)
+
+    @pytest.mark.parametrize(("scenario", "target", "route"), _CASES)
+    def test_a_fault_at_any_step_raises_and_a_retry_finishes(
+        self, aw_app, scenario: str, target: str, route: str
+    ):
+        from actingweb import actor as actor_module
+        from actingweb.constants import OAUTH_TOKENS_PREFIX
+        from actingweb.db.exceptions import DbError
+        from actingweb.oauth2_server.client_registry import MCPClientRegistry
+        from actingweb.oauth2_server.token_manager import get_actingweb_token_manager
+        from actingweb.trust_permissions import get_trust_permission_store
+
+        config = aw_app.get_config()
+        s = self._setup(config, scenario)
+        holder, client_id = s["holder"], s["client_id"]
+        try:
+            patcher, state = self._patch(config, target)
+            # Rule 1: the fault raises; it never ends in success.
+            with patcher, pytest.raises(DbError):
+                self._run(config, holder, client_id, route)
+            assert state["fired"], f"{target} never ran on the {scenario} path"
+
+            # Rule 2: retrying the route finishes the job.
+            for _ in range(3):
+                fresh = ActorInterface(actor_module.Actor(holder.id, config=config))
+                if not self._rows_for(fresh, client_id):
+                    break
+                self._run(config, holder, client_id, route)
+            fresh = ActorInterface(actor_module.Actor(holder.id, config=config))
+            assert self._rows_for(fresh, client_id) == []
+
+            tokens = get_actingweb_token_manager(config)
+            assert tokens.validate_access_token(s["access_token"]) is None
+            core = actor_module.Actor(holder.id, config=config)
+            assert core.store is not None
+            permissions = get_trust_permission_store(config)
+            for peer_id in s["peer_ids"]:
+                assert core.store[f"{OAUTH_TOKENS_PREFIX}{peer_id}"] is None
+                left = permissions.get_permissions(holder.id, peer_id)  # type: ignore[arg-type]
+                if target == "permissions" and peer_id == s["peer_ids"][0]:
+                    # The table's accepted residue (step 7): inert, no row.
+                    continue
+                assert left is None, f"permissions of {peer_id} survived"
+
+            client = MCPClientRegistry(config)._load_client(client_id)
+            if scenario == "owner":
+                assert client is None, "the owner's client must be gone"
+            else:
+                assert client is not None, "another actor's client must stay"
+        finally:
+            holder.delete()
+            if s["owner"] is not holder:
+                s["owner"].delete()

@@ -221,10 +221,13 @@ class Trust:
             if result and self.config and self.actor_id and peerid:
                 from .trust_permissions import get_trust_permission_store
 
+                # Unconditionally: the store's cache has no TTL, and a "none"
+                # it cached before another instance or process wrote the
+                # permissions would skip the delete. Deleting an absent
+                # attribute succeeds.
                 permission_store = get_trust_permission_store(self.config)
-                if permission_store.get_permissions(self.actor_id, peerid) is not None:
-                    if not permission_store.delete_permissions(self.actor_id, peerid):
-                        raise DbError("trust permissions delete", self.actor_id)
+                if not permission_store.delete_permissions(self.actor_id, peerid):
+                    raise DbError("trust permissions delete", self.actor_id)
 
             # This actor's other rows of the client, only when the record was
             # actually removed: the cleanup re-reads the actor's trust rows

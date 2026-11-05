@@ -1413,6 +1413,10 @@ docs build, `verify_groups`, ruff and pyright at 0 errors and 0 warnings.
   something else already deleted.
 - A retry handle must outlive every step that can fail. A step that
   raises after the row is deleted leaves a retry that answers 404.
+- A multi-step delete is tested by injecting a fault at each step and
+  retrying until it succeeds, against a written table of what each step
+  may leave behind. Testing one step at a time missed the ways the steps
+  interact (Iteration 24). A cache with no TTL must never gate a delete.
 
 
 ## Iterations
@@ -2112,3 +2116,60 @@ Accepted as-is:
 - A peer that claims this actor's own URL as its `baseuri` before 3.4
   still passes the gate. That needs a pre-3.4 plant made with a forged
   `baseuri`.
+
+### 2026-11-05, a convergence check instead of another verification round (owner's request)
+
+#### 24. The trust-row deletion invariants, and one test that holds them
+
+**Category**: New functionality (test) and Bug fix
+
+**What changed**:
+- **The reference note.** `thoughts/reference/trust-row-deletion-invariants.md`
+  states two rules for deleting a trust row:
+  1. a fault raises and never ends in success;
+  2. retrying the route finishes the job.
+
+  Its table gives, for each step: whether it runs before or after the
+  row, what a fault there leaves, and how a retry reaches it. It also
+  lists the accepted leftovers:
+  - permissions left behind with no row, which grant nothing;
+  - `trust_deleted` firing again on a retry;
+  - D2.
+- **The test.** `TestTrustDeletionConverges` runs 22 cases on both
+  backends. It faults each step that can fault:
+  - the revocation;
+  - the owner's client deletion;
+  - the provider tokens;
+  - the row;
+  - the permissions;
+  - a sibling row.
+
+  It covers the owner and connection scenarios, each with two rows, on
+  both the one-row and every-row routes. It asserts that the fault
+  raises, then retries until the job is done. It then asserts that no
+  row, token, provider token or permission is left, and that the client
+  is gone for its owner and kept otherwise. On the `d26c0b2` code, 13
+  of the 22 cases fail.
+- **The bug it found.** `Trust.delete` and `TrustManager` deleted
+  permissions only when the shared store's cache reported them. That
+  cache has no TTL and had already stored "none" for the deterministic
+  peer id before the permissions were written. A write through another
+  instance or process therefore skipped the delete, and the grants
+  outlived the row. Both now delete unconditionally; deleting an absent
+  attribute succeeds.
+- **Stale text** is fixed in two places: the `delete_reciprocal_trust`
+  comment and the `delete_relationship` docstring.
+
+**Files affected**:
+- `thoughts/reference/trust-row-deletion-invariants.md`: new.
+- `tests/integration/test_trust_oauth_integration.py`:
+  `TestTrustDeletionConverges`.
+- `actingweb/trust.py`, `actingweb/interface/trust_manager.py`: the
+  unconditional permission delete.
+- `actingweb/actor.py`: comment.
+- `tests/test_trust_manager_oauth.py`: a permission-store stub for its fake config.
+- `CHANGELOG.rst`: the permissions bullet.
+
+**Rationale**: verifications kept finding new fault windows in this one
+function, because each fix moved one. Now every change is checked against
+a single written rule and one test that runs every step.

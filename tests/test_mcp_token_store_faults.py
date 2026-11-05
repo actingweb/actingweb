@@ -261,13 +261,14 @@ def test_delete_client_fails_when_nothing_is_confirmed_deleted(
         mock.patch.object(server.client_registry, "_delete_client_trust_relationship"),
     ):
         assert not server.client_registry.delete_client(cid, actor_id=owner)
-    assert "can still authenticate" in caplog.text
+    assert "is not confirmed gone" in caplog.text
     assert server.client_registry.load_client_strict(cid) is not None
 
 
-def test_delete_client_succeeds_when_its_index_row_is_gone() -> None:
-    """Either row gone disables the client, so one confirmed delete is a
-    successful client deletion."""
+def test_delete_client_fails_while_its_client_row_stays() -> None:
+    """The index row goes first, then the client row, and both must be
+    confirmed gone: a client row left behind keeps the client listed. The
+    retry finds the row and finishes (sixth verification, Issue 1)."""
     from actingweb.constants import CLIENT_INDEX_BUCKET, OAUTH2_SYSTEM_ACTOR
 
     config, store = make_config()
@@ -277,7 +278,11 @@ def test_delete_client_succeeds_when_its_index_row_is_gone() -> None:
     store.delete_faults.add((owner, "mcp_clients", cid))
 
     with mock.patch.object(server.client_registry, "_delete_client_trust_relationship"):
+        assert not server.client_registry.delete_client(cid, actor_id=owner)
+        assert cid in store.names(owner, "mcp_clients")
+        store.delete_faults.clear()
         assert server.client_registry.delete_client(cid, actor_id=owner)
+    assert cid not in store.names(owner, "mcp_clients")
     assert server.client_registry.load_client_strict(cid) is None
 
 

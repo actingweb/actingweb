@@ -1417,6 +1417,11 @@ docs build, `verify_groups`, ruff and pyright at 0 errors and 0 warnings.
   retrying until it succeeds, against a written table of what each step
   may leave behind. Testing one step at a time missed the ways the steps
   interact (Iteration 24). A cache with no TTL must never gate a delete.
+- A residue is "inert" only if every way a row with that key can be
+  created clears it, and a fault-injection test must pin which call site
+  it faults (here by the row being deleted), not the n-th call: with two
+  identical rows, a retry through the second one hides an ordering
+  regression in the first (Iterations 25 and 27).
 
 
 ## Iterations
@@ -2173,3 +2178,149 @@ Accepted as-is:
 **Rationale**: verifications kept finding new fault windows in this one
 function, because each fix moved one. Now every change is checked against
 a single written rule and one test that runs every step.
+
+### 2026-11-05, after verification thoughts/verifications/2026-11-05-3-16-dependency-security-rollup-reverify-5.md
+
+#### 25. A new row for a peer starts without the permissions a fault left
+
+**Category**: Verification fix (Issue 2, High)
+
+**What changed**: `Trust.create` deletes the peer id's custom permissions
+(shared store, unconditionally) when no row exists yet, and raises
+`DbError` if it cannot. A peer's peer id is stable, so the permissions a
+step-7 fault left were inherited by the next row for that peer once its
+trust was requested and approved again. Only OAuth2 creation cleared them
+before. A create over a live row (it is an upsert, and nothing checks for
+an existing row before a peer's request) keeps the owner's permissions.
+
+**Files affected**:
+- `actingweb/trust.py`: the clear in `create`; the step-7 comment.
+- `tests/integration/test_trust_oauth_integration.py`:
+  `TestPeerRowPermissionResidue` (the re-created row fails on `0f6ee12`;
+  the live-row case guards the upsert).
+
+**Rationale**: the table counted that residue as inert. It was inert only
+for OAuth2 rows.
+
+#### 26. The owner's disable raises on a token fault and needs both rows gone
+
+**Category**: Verification fix (Issue 1)
+
+**What changed**:
+- `disable_client` (step 3a) passes `strict=True`: a
+  `TokenStoreUnavailable` from `revoke_client_tokens` raises `DbError`
+  before any row goes. The direct `delete_client` keeps deleting anyway,
+  as before.
+- `_disable_client` deletes the index row, then the client row, and
+  succeeds only when both are confirmed gone (either one was enough). A
+  fault therefore always leaves the client row, which `client_owned_by`
+  reads, so the owner's retry runs 3a again.
+- `OAuth2ClientManager.delete_client`'s not-found path finishes the full
+  deletion when the actor's own bucket still holds the client row (the
+  index row went, the row did not), instead of only the connection.
+
+**Files affected**:
+- `actingweb/oauth2_server/client_registry.py`
+- `actingweb/interface/oauth_client_manager.py`
+- `tests/test_client_connection_deletion.py`: the order and partial cases,
+  the token fault.
+- `tests/test_client_trust_lookup.py`: the owned not-found path; the
+  existing not-found test pins `client_owned_by` False.
+- `tests/test_mcp_token_store_faults.py`: the two tests of the old "either
+  row is enough" rule now hold the new one (log text; a row left fails,
+  and the retry finishes).
+- `CHANGELOG.rst`: a sub-bullet, and a **Behavior change** for the
+  registry's `delete_client`.
+
+**Rationale**: the table said 3a raises; the code deleted the client with
+unrevoked access tokens and answered success, and a partial disable could
+leave an orphan index row or a listed client nobody could delete.
+
+#### 27. The convergence test sees ordering, siblings and the owner's token fault
+
+**Category**: Verification fix (Issue 3, and Issue 8's fence point)
+
+**What changed**: `TestTrustDeletionConverges` now:
+- has three rows per scenario, and an `owner-single` scenario (the
+  registration row alone), where a disable moved after the row delete
+  leaves a live client with no row to retry from;
+- tracks which row `Trust.delete` is deleting (a stack, since the sweep
+  nests) and faults by depth: 1 is the route's own row, 2 a sibling the
+  sweep deletes. The faulted peer id is recorded, and the permissions
+  residue is skipped for that peer id, not by list order;
+- adds `disable_tokens` (a `TokenStoreUnavailable` in the owner's
+  disable), `client_row` (the client row's delete unconfirmed after the
+  index row went, so the retry must find the client by its row) and
+  `sibling_permissions`;
+- asserts before the run that both access tokens, the provider tokens
+  (counted exactly, the owner's registration row included) and the
+  permissions exist, and mints a refresh token through the
+  authorization-code exchange, asserted dead at the end;
+- asserts after the raise that a fault before the row delete left the
+  route's own row, and that a 3a fault left the client row
+  (`client_owned_by`, since the index row may be gone); at the end, that
+  the owner's client row is gone too.
+
+42 cases. On `0f6ee12` the four `disable_tokens` and the four
+`client_row` cases fail. Moving the
+disable after the row delete fails the four `disable` cases, the
+single-row owner among them. A sibling's faulted row can be deleted by a
+later sibling's own sweep, so the "row stays" check holds for depth 1.
+
+**Files affected**:
+- `tests/integration/test_trust_oauth_integration.py`
+
+**Rationale**: the two-row setup let a retry through the second row hide
+an ordering regression.
+
+#### 28. One origin gate for pre-3.4 rows
+
+**Category**: Verification fix (Issue 4)
+
+**What changed**: `trust_lookup.legacy_oauth2_row(peer_id, baseuri,
+actor_id)`: an OAuth2-family prefix, and no baseuri or one ending in
+`/<actor_id>`. `Trust._oauth2_client_id` and `client_trusts_for_deletion`
+(new `actor_id` argument, passed by the sweep) both use it. A row written
+before the fqdn or protocol changed is the client's again, and the sweep
+no longer takes a legacy row with a peer's baseuri for the client's.
+`actor.py`'s prefix-only remote-DELETE skip is left as it is and
+recorded in the table: it decides only whether a peer is notified.
+
+**Files affected**:
+- `actingweb/oauth2_server/trust_lookup.py`, `actingweb/trust.py`,
+  `actingweb/oauth2_server/client_registry.py`
+- `tests/test_client_connection_deletion.py`: the old-root case.
+- `tests/test_client_trust_lookup.py`: the peer-baseuri case.
+- `CHANGELOG.rst`: a sub-bullet.
+
+**Rationale**: two gates disagreed, and the exact-root one broke on a
+changed root.
+
+#### 29. The sweep raises on any failure; the table says what the code does
+
+**Category**: Verification fix (Issues 5-8)
+
+**What changed**:
+- `_delete_client_trust_relationship` counts any exception deleting a
+  sibling as a fault (raised as `DbError` after the other rows), and its
+  outer handler raises `DbError` instead of logging. The actor-not-found
+  return stays and is recorded as residue: only actor deletion reaches it.
+- `thoughts/reference/trust-row-deletion-invariants.md`: step 1 names the
+  404-as-deleted rule; step 2 says the side stores' return values are not
+  checked; 3a and 3b give the new order and raises; step 5 says which
+  exceptions propagate, and that the sweep fires the hook for sibling rows
+  on every route; step 7 names both clears; step 8 says any exception
+  counts and a later sibling's sweep can delete a faulted sibling. New
+  paragraphs: which rows name a client (the one gate), and the rules'
+  scope (the permission cache is per process with no TTL). New residue
+  entries: step 2, the missing actor, the remote-DELETE skip.
+- `thoughts/todo/mcp-cache-lifecycle-and-revocation.md`: section 7, the
+  permission cache, with its `INDEX.md` row.
+
+**Files affected**:
+- `actingweb/oauth2_server/client_registry.py`
+- `thoughts/reference/trust-row-deletion-invariants.md`
+- `thoughts/todo/mcp-cache-lifecycle-and-revocation.md`, `thoughts/todo/INDEX.md`
+
+**Rationale**: reviews now check against the table, so it must be exactly
+true; a skipped sweep that answered success broke rule 1.

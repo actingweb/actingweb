@@ -182,6 +182,15 @@ def test_permissions_are_cleared_through_the_shared_store() -> None:
             },
             None,
         ),
+        # An OAuth2 row written before the deployment's fqdn or protocol
+        # changed still points at this actor, by its /<actor_id> suffix.
+        (
+            {
+                "peerid": "oauth2_client:x:mcp_ab12",
+                "baseuri": "http://old-host.example/actor-y",
+            },
+            "mcp_ab12",
+        ),
     ],
 )
 def test_the_client_id_is_read_from_the_tag_then_any_oauth2_peer_id(
@@ -354,4 +363,59 @@ def test_actor_deletion_keeps_an_index_row_naming_another_actor() -> None:
         assert registry.delete_client(
             "mcp_ab12", actor_id="actor-y", actor_deleted=True
         )
+    delete_confirmed.assert_not_called()
+
+
+@pytest.mark.parametrize(("confirmed", "deleted"), [([False], 1), ([True, False], 2)])
+def test_a_disable_with_a_row_left_is_not_a_success(
+    confirmed: list[bool], deleted: int
+) -> None:
+    """The index row goes first, then the client row; both must be confirmed
+    gone. A fault at the index row never touches the client row, so the
+    owner's retry still finds its client (sixth verification, Issue 1)."""
+    from actingweb.config import Config
+    from actingweb.oauth2_server.client_registry import MCPClientRegistry
+
+    registry = MCPClientRegistry.__new__(MCPClientRegistry)
+    registry.config = Config(mcp=True, unique_creator=False)
+    registry.clients_bucket = "mcp_clients"
+    with (
+        patch.object(registry, "_load_client", return_value={"actor_id": "actor-x"}),
+        patch(
+            "actingweb.oauth2_server.token_manager.get_actingweb_token_manager"
+        ) as tokens,
+        patch(
+            "actingweb.single_use.delete_confirmed", side_effect=confirmed
+        ) as delete_confirmed,
+    ):
+        tokens.return_value.revoke_client_tokens.return_value = 0
+        assert registry.disable_client("mcp_ab12", actor_id="actor-x") is False
+    assert delete_confirmed.call_count == deleted
+    assert delete_confirmed.call_args_list[0].args[3] == "mcp_ab12"
+    assert delete_confirmed.call_args_list[0].args[1] != "actor-x"  # the index
+
+
+def test_a_token_store_fault_stops_the_owners_disable() -> None:
+    """``disable_client`` (Trust.delete, step 3a) raises before any row goes
+    when the token store cannot list every token; the row stays as the
+    retry handle (sixth verification, Issue 1)."""
+    from actingweb.config import Config
+    from actingweb.db.exceptions import DbError
+    from actingweb.oauth2_server.client_registry import MCPClientRegistry
+    from actingweb.oauth2_server.token_manager import TokenStoreUnavailable
+
+    registry = MCPClientRegistry.__new__(MCPClientRegistry)
+    registry.config = Config(mcp=True, unique_creator=False)
+    with (
+        patch.object(registry, "_load_client", return_value={"actor_id": "actor-x"}),
+        patch(
+            "actingweb.oauth2_server.token_manager.get_actingweb_token_manager"
+        ) as tokens,
+        patch("actingweb.single_use.delete_confirmed") as delete_confirmed,
+    ):
+        tokens.return_value.revoke_client_tokens.side_effect = TokenStoreUnavailable(
+            "bucket"
+        )
+        with pytest.raises(DbError):
+            registry.disable_client("mcp_ab12", actor_id="actor-x")
     delete_confirmed.assert_not_called()

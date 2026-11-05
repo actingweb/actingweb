@@ -22,14 +22,33 @@ def normalize_client_id(client_id: str) -> str:
     return client_id.replace("@", "_at_").replace(".", "_dot_").replace(":", "_colon_")
 
 
-def _oauth2_origin(trust: Any) -> bool:
-    """An OAuth2-family ``established_via``, or none with an OAuth2-family
-    peer-id prefix (rows from before the field): never a peer-protocol row."""
+def legacy_oauth2_row(peer_id: Any, baseuri: Any, actor_id: str | None) -> bool:
+    """Whether a row with no ``established_via`` (written before 3.4) came
+    from an OAuth2 flow: an OAuth2-family peer-id prefix, and no baseuri or
+    this actor's own (``TrustManager.create_or_update_oauth_trust``), never a
+    peer's. The baseuri is compared by its ``/<actor_id>`` suffix, as
+    ``Actor.delete_reciprocal_trust`` spots a self-pointing row, so a row
+    written before the deployment's fqdn or protocol changed still matches.
+    The one copy: ``Trust`` and the deletion lookup both call it."""
+    if str(peer_id or "").split(":", 1)[0] not in OAUTH2_SOURCES:
+        return False
+    uri = str(baseuri or "").rstrip("/")
+    return not uri or (bool(actor_id) and uri.endswith(f"/{actor_id}"))
+
+
+def _oauth2_origin(trust: Any, actor_id: str | None = None) -> bool:
+    """An OAuth2-family ``established_via``, or none and
+    :func:`legacy_oauth2_row` (rows from before the field): never a
+    peer-protocol row."""
     via = getattr(trust, "established_via", None)
     if via in OAUTH2_SOURCES:
         return True
-    peer_id = str(getattr(trust, "peerid", ""))
-    return via is None and peer_id.split(":", 1)[0] in OAUTH2_SOURCES
+    baseuri = getattr(trust, "base_uri", None)
+    if baseuri is None:
+        baseuri = getattr(trust, "baseuri", "")
+    return via is None and legacy_oauth2_row(
+        getattr(trust, "peerid", ""), baseuri, actor_id
+    )
 
 
 def _tagged(trust: Any, client_id: str) -> bool:
@@ -57,9 +76,11 @@ def _client_credentials_shape(trust: Any, normalized: str) -> bool:
     )
 
 
-def _real_email_shape(trust: Any, client_id: str, normalized: str) -> bool:
+def _real_email_shape(
+    trust: Any, client_id: str, normalized: str, actor_id: str | None
+) -> bool:
     """Arm 3: a legacy per-client row, ``<source>:<email>:<client_id>``."""
-    if not _untagged(trust) or not _oauth2_origin(trust):
+    if not _untagged(trust) or not _oauth2_origin(trust, actor_id):
         return False
     parts = str(getattr(trust, "peerid", "")).split(":")
     return (
@@ -94,9 +115,13 @@ def find_client_trust(trusts: Iterable[Any], client_id: str) -> Any | None:
     return None
 
 
-def client_trusts_for_deletion(trusts: Iterable[Any], client_id: str) -> list[Any]:
+def client_trusts_for_deletion(
+    trusts: Iterable[Any], client_id: str, actor_id: str | None = None
+) -> list[Any]:
     """Every trust row that belongs to ``client_id``, in row order (client
-    deletion).
+    deletion). ``actor_id`` is the actor the rows belong to: a legacy row
+    with a baseuri is this client's only when the baseuri is that actor's
+    own (:func:`legacy_oauth2_row`).
 
     An upgraded actor can hold a tagged row and a legacy row for the same
     client under different peer ids; deleting only the first would leave
@@ -120,5 +145,5 @@ def client_trusts_for_deletion(trusts: Iterable[Any], client_id: str) -> list[An
         for trust in trusts
         if _tagged(trust, client_id)
         or _client_credentials_shape(trust, normalized)
-        or _real_email_shape(trust, client_id, normalized)
+        or _real_email_shape(trust, client_id, normalized, actor_id)
     ]

@@ -82,7 +82,21 @@ SECURITY
     revocation, the owner's client deletion and the provider-token delete
     run before the row goes, so their faults leave the row in place for the
     retry; a row an earlier row's cleanup already removed no longer fails
-    an actor's bulk trust deletion;
+    an actor's bulk trust deletion, and any error deleting the client's
+    other rows is raised as well;
+  - the owner's client deletion from a trust row stops with ``DbError``,
+    the row kept, when the token store cannot list every token, instead of
+    deleting the client with access tokens left to expire. A client counts
+    as deleted only when its index row and its row are both confirmed gone,
+    in that order (one of them was enough, and a client row left behind
+    stayed listed but could not be deleted); its owner's
+    ``OAuth2ClientManager.delete_client`` finishes a client whose index row
+    already went;
+  - a row from before ``established_via`` (3.4) belongs to a client when
+    it has no baseuri or this actor's own, compared by its ``/<actor_id>``
+    suffix, so a row written before the fqdn or protocol changed is still
+    the client's; client deletion no longer takes such a row with a peer's
+    baseuri for the client's;
   - a legacy ``oauth2:<email>:<client_id>`` row, which authorises, ends its
     connection too (it cascaded nothing), and a tagged row is routed by its
     ``oauth_client_id``;
@@ -91,8 +105,10 @@ SECURITY
   - a trust row's custom permissions are deleted after the row, not before
     (a fault in between left a live row on its trust type's defaults, which
     can be wider), always (a "none" the permission cache held from before
-    another process wrote them skipped the delete), and a new OAuth2 row
-    with the same peer id starts without them;
+    another process wrote them skipped the delete), and the next row
+    created for the same peer id starts without them (an OAuth2 login, or a
+    peer's trust requested and approved again; a request over a live row
+    keeps them);
   - the provider tokens an OAuth2 login stored for the row
     (``oauth_tokens:<peer_id>``, Google's refresh token among them) are
     deleted with it.
@@ -103,8 +119,9 @@ SECURITY
   ``delete_client`` with the user's actor id for such a client answers
   ``False``. **Check:** code that called the registry's ``delete_client``
   with a user's actor id to remove a client it did not register uses
-  ``delete_client_connection`` instead; ``OAuth2ClientManager.delete_client``
-  is unchanged.
+  ``delete_client_connection`` instead. **Behavior change:** the registry's
+  ``delete_client`` answers ``False`` when only one of the client's two
+  rows is confirmed deleted; a retry finishes it.
 
 - **An unauthenticated ``POST /`` could squat an address, and the address
   owner's first OAuth login adopted the squatter's actor with the squatter's

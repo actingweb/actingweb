@@ -123,6 +123,18 @@ def test_the_segment_arm_compares_the_last_segment_exactly() -> None:
     assert client_trusts_for_deletion([near, other_prefix, tagged], "mcp_abc") == []
 
 
+def test_a_legacy_row_with_a_peers_baseuri_is_not_the_clients() -> None:
+    """The one legacy origin gate (``legacy_oauth2_row``), as ``Trust`` uses
+    it: a pre-3.4 row with no baseuri or this actor's own (under any root)
+    is the client's; one with a peer's baseuri is a peer row (sixth
+    verification, Issue 4)."""
+    own = FakeTrust("oauth2_client:user@example.com:mcp_abc")
+    own.base_uri = "http://old-host.example/actor-y"  # type: ignore[attr-defined]
+    peer = FakeTrust("oauth2:user@example.com:mcp_abc")
+    peer.base_uri = "https://peer.example/0123abcd"  # type: ignore[attr-defined]
+    assert client_trusts_for_deletion([own, peer], "mcp_abc", "actor-y") == [own]
+
+
 def test_a_tagged_row_and_a_legacy_row_of_one_client_are_both_deleted() -> None:
     """An upgraded actor holds the legacy ``oauth2:`` row and the tagged
     ``oauth2_client:`` row under different peer ids. Both are deleted
@@ -274,7 +286,26 @@ def test_a_retry_after_a_trust_fault_finishes_the_leftover_rows() -> None:
     manager.actor_id = "actor-1"
     registry = mock.Mock()
     registry._load_client.return_value = None
+    registry.client_owned_by.return_value = False
     manager._registry = registry
     assert manager.delete_client("mcp_ab12") is False
     registry.delete_client_connection.assert_called_once_with("actor-1", "mcp_ab12")
     registry.delete_client.assert_not_called()
+
+
+def test_a_client_row_whose_index_row_went_is_deleted_by_its_owner() -> None:
+    """A disable that faulted after the index row went leaves the client row:
+    the client stays listed, so its owner's delete must finish the full
+    deletion, not only the connection (sixth verification, Issue 1)."""
+    from actingweb.interface.oauth_client_manager import OAuth2ClientManager
+
+    manager = OAuth2ClientManager.__new__(OAuth2ClientManager)
+    manager.actor_id = "actor-1"
+    registry = mock.Mock()
+    registry._load_client.return_value = None
+    registry.client_owned_by.return_value = True
+    registry.delete_client.return_value = True
+    manager._registry = registry
+    assert manager.delete_client("mcp_ab12") is True
+    registry.delete_client.assert_called_once_with("mcp_ab12", actor_id="actor-1")
+    registry.delete_client_connection.assert_not_called()

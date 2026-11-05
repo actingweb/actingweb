@@ -216,8 +216,9 @@ class Trust:
             # before it: a fault in between would leave a live row on its
             # trust type's defaults, which can be wider. Through the shared
             # store, whose cache the permission evaluator reads. A fault here
-            # raises with the row gone; a new OAuth2 row with the same peer
-            # id clears stale permissions.
+            # raises with the row gone; the next row created for the same
+            # peer id clears them first (Trust.create, and
+            # TrustManager.create_or_update_oauth_trust for OAuth2 rows).
             if result and self.config and self.actor_id and peerid:
                 from .trust_permissions import get_trust_permission_store
 
@@ -260,26 +261,21 @@ class Trust:
         """
         if not self.trust or not isinstance(self.trust, dict):
             return None
-        from .oauth2_server.trust_lookup import OAUTH2_SOURCES
+        from .oauth2_server.trust_lookup import OAUTH2_SOURCES, legacy_oauth2_row
 
         # Only a row an OAuth2 flow wrote. A peer can create a row with any
         # peer id through POST /trust (the pattern allows ':'), and the
         # library records those as established via "trust": a peer id of
         # the form oauth2_client:x:mcp_<id> must never let a remote peer
-        # end, or delete, a client connection on this actor.
-        # A row older than the "trust" tag (3.4) has no established_via;
-        # one an OAuth2 flow wrote then has no baseuri, or this actor's own
-        # (TrustManager.create_or_update_oauth_trust), never a peer's.
+        # end, or delete, a client connection on this actor. A row older
+        # than the "trust" tag (3.4) has no established_via; the one gate
+        # for those is legacy_oauth2_row (its baseuri is none or this
+        # actor's own, never a peer's).
         via = self.trust.get("established_via")
-        prefix = str(self.trust.get("peerid", "")).split(":", 1)[0]
         if via is None:
-            own_uri = (
-                f"{self.config.root}{self.actor_id}"
-                if self.config is not None and self.actor_id
-                else None
-            )
-            baseuri = self.trust.get("baseuri") or ""
-            if prefix not in OAUTH2_SOURCES or baseuri not in ("", own_uri):
+            if not legacy_oauth2_row(
+                self.trust.get("peerid"), self.trust.get("baseuri"), self.actor_id
+            ):
                 return None
         elif via not in OAUTH2_SOURCES:
             return None
@@ -443,6 +439,25 @@ class Trust:
             )
         if not self.handle:
             return False
+        # A new row starts from its trust type's permissions. Trust.delete
+        # deletes a row's custom permissions right after the row, and a fault
+        # there raises with the row gone; the peer id is stable (a peer's
+        # actor id), so those permissions would otherwise come back with the
+        # next row for the same peer. Only when no row exists: create is an
+        # upsert, and a re-sent request must not reset the custom permissions
+        # an owner set on a live row.
+        if (
+            self.config
+            and self.actor_id
+            and self.peerid
+            and self.handle.get(actor_id=self.actor_id, peerid=self.peerid) is None
+        ):
+            from .trust_permissions import get_trust_permission_store
+
+            # The shared store, unconditionally, as in Trust.delete.
+            permission_store = get_trust_permission_store(self.config)
+            if not permission_store.delete_permissions(self.actor_id, self.peerid):
+                raise DbError("trust permissions delete", self.actor_id)
         return self.handle.create(
             actor_id=self.actor_id,
             peerid=self.peerid,

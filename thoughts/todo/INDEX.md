@@ -79,7 +79,7 @@ being re-litigated.
 | Item | What it holds |
 | --- | --- |
 | [DynamoDB known-next](dynamodb-known-next.md) | Six items deferred from the v3.13 scalability plan — the remaining unbatched delete loops, the `consistent_read` audit's ~36 surviving sites, `SubscriptionDiff` seqnr ordering, import-time table-name freezing, GSI-based secret uniqueness, lookup-table write amplification |
-| [MCP cache lifecycle and revocation](mcp-cache-lifecycle-and-revocation.md) | Cross-process invalidation (the large one), trust-freshness policy, `_mcp_client_info_cache`'s client-supplied key, registration not hard-failing on trust-creation failure, and module-global cache keys assuming one app per interpreter (sections 1-3, 5 and 6) |
+| [MCP cache lifecycle and revocation](mcp-cache-lifecycle-and-revocation.md) | Cross-process invalidation (the large one), trust-freshness policy, `_mcp_client_info_cache`'s client-supplied key, registration not hard-failing on trust-creation failure, module-global cache keys assuming one app per interpreter, and the trust permission cache having no TTL (sections 1-3 and 5-7) |
 
 ---
 

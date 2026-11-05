@@ -93,6 +93,18 @@ both `single_use.PurgeThrottle`). Two apps in one process share one
 purge. Harmless on DynamoDB (native TTL reaps anyway); on PostgreSQL the
 purge is the only reaper. Same trigger, same fix: scope by config.
 
+## 7. The trust permission cache has no TTL and is per process
+
+`TrustPermissionStore._cache` (`actingweb/trust_permissions.py`, a
+`BoundedDict`) has no TTL, and a cached None is a hit. A delete and a
+re-create in one worker leave another worker serving its cached grants for
+the same peer id until it restarts. The trust-row deletion rules
+(`thoughts/reference/trust-row-deletion-invariants.md`, "Scope of the
+rules") hold only within one process because of this. Found by the sixth
+verification of `thoughts/plans/2026-11-04-3-16-dependency-security-rollup.md`
+(Issue 7); it predates that plan. A TTL, or the cross-process invalidation
+of section 1, closes it.
+
 ## Related
 
 - `thoughts/plans/2026-07-30-mcp-trust-cache-crosses-clients.md` — the parent

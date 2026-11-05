@@ -167,6 +167,13 @@ class OAuth2ClientManager:
             # Verify client belongs to this actor before deletion
             client_data = self._registry._load_client(client_id)
             if not client_data:
+                # The index row can be gone while this actor's client row
+                # stays (a disable that faulted between the two): the row is
+                # this actor's own, so finish the full deletion.
+                if self._registry.client_owned_by(self.actor_id, client_id):
+                    return self._registry.delete_client(
+                        client_id, actor_id=self.actor_id
+                    )
                 # A deletion that faulted on a trust row after the client row
                 # went answered 503; its retry lands here. Finish it: this
                 # actor's own tokens and rows of that client id, nobody else's.

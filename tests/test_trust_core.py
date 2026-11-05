@@ -2,7 +2,22 @@
 
 from unittest.mock import Mock, patch
 
+import pytest
+
 from actingweb.trust import Trust, Trusts, canonical_connection_method
+
+
+@pytest.fixture(autouse=True)
+def _row_side_stores():
+    """``Trust.delete`` clears the row's permissions and provider tokens
+    right after the row; these tests use a mock ``Config``."""
+    with (
+        patch("actingweb.trust_permissions.get_trust_permission_store") as permissions,
+        patch("actingweb.attribute.InternalStore") as store,
+    ):
+        permissions.return_value.get_permissions.return_value = None
+        store.return_value.set_confirmed.return_value = True
+        yield
 
 
 class TestCanonicalConnectionMethod:
@@ -258,21 +273,25 @@ class TestTrustCRUD:
             mock_registry = Mock()
             mock_get_registry.return_value = mock_registry
 
+            mock_registry.client_owned_by.return_value = True
+            mock_registry.indexed_owner.return_value = None
+            mock_registry.sweeping.return_value = False
+            mock_registry.disable_client.return_value = True
+
             result = trust.delete()
 
             assert result is True
-            # OAuth2 client should be deleted
-            mock_registry.delete_client.assert_called_once()
+            # The owner's client is disabled, then its other rows swept
+            mock_registry.disable_client.assert_called_once()
+            mock_registry._delete_client_trust_relationship.assert_called_once()
 
-    def test_trust_delete_oauth2_client_deletes_record_before_client(self):
-        """Regression: the trust record must be deleted BEFORE delete_client().
-
-        delete_client() cascades back into Trust.delete() via
-        _delete_client_trust_relationship(). If the trust record is not removed
-        first, that cascade re-discovers this same relationship and recurses
-        without bound (the actor-delete self-deadlock / "maximum recursion depth
-        exceeded" bug). Asserting the call order guards the recursion-breaking
-        invariant.
+    def test_trust_delete_oauth2_client_sweeps_before_the_record(self):
+        """The owner's client is disabled and the client's other rows are
+        swept before the record goes, so a fault in either leaves the record
+        for the retry (seventh verification, Issue 1). The sweep excludes
+        this record, and the Trust.delete calls it makes skip their own
+        sweep (the registry's guard), which is what prevents the unbounded
+        recursion the old order ("record first") guarded against.
         """
         call_order: list[str] = []
 
@@ -305,26 +324,32 @@ class TestTrustCRUD:
             "actingweb.oauth2_server.client_registry.get_mcp_client_registry"
         ) as mock_get_registry:
             mock_registry = Mock()
-            mock_registry.delete_client.side_effect = record("client_delete")
+            mock_registry.client_owned_by.return_value = True
+            mock_registry.indexed_owner.return_value = None
+            mock_registry.sweeping.return_value = False
+            mock_registry.disable_client.side_effect = record("client_disable")
+            mock_registry._delete_client_trust_relationship.side_effect = record(
+                "sweep"
+            )
             mock_get_registry.return_value = mock_registry
 
             result = trust.delete()
 
         assert result is True
-        # The local trust record must be removed before the client cleanup that
-        # cascades back into trust deletion.
-        assert call_order == ["record_delete", "client_delete"]
-        mock_registry.delete_client.assert_called_once_with(
+        assert call_order == ["client_disable", "sweep", "record_delete"]
+        mock_registry.disable_client.assert_called_once_with(
             "mcp_client_abc123", actor_id="test_actor"
         )
+        mock_registry._delete_client_trust_relationship.assert_called_once_with(
+            "test_actor",
+            "mcp_client_abc123",
+            exclude_peer_id="oauth2_client:user@example.com:mcp_client_abc123",
+        )
 
-    def test_trust_delete_skips_client_cleanup_when_record_delete_fails(self):
-        """Regression: OAuth2 client cleanup must NOT run if the record delete fails.
-
-        The cleanup cascade re-reads trust relationships from the DB, so if the
-        physical delete returned False (record still live) running delete_client()
-        would re-enter Trust.delete() and recurse without bound. Cleanup is
-        therefore guarded on a successful delete.
+    def test_trust_delete_inside_a_sweep_does_not_sweep_again(self):
+        """Regression: the actor-delete self-deadlock ("maximum recursion
+        depth exceeded"). The sweep cascades back into Trust.delete() for
+        each sibling; inside it, that call must not start another sweep.
         """
         mock_config = Mock()
         mock_db_trust = Mock()
@@ -333,7 +358,7 @@ class TestTrustCRUD:
             "relationship": "friend",
         }
         mock_db_trust.get.return_value = mock_trust_data
-        # Physical delete fails (record NOT removed)
+        # This record's own delete finds it gone (a sibling's cascade)
         mock_db_trust.delete.return_value = False
         mock_config.DbTrust.DbTrust.return_value = mock_db_trust
 
@@ -347,14 +372,21 @@ class TestTrustCRUD:
             "actingweb.oauth2_server.client_registry.get_mcp_client_registry"
         ) as mock_get_registry:
             mock_registry = Mock()
+            # Inside the sweep of this client: the cascade must not re-enter it.
+            mock_registry.sweeping.return_value = True
+            mock_registry.client_owned_by.return_value = False
             mock_get_registry.return_value = mock_registry
 
             result = trust.delete()
 
         assert result is False
-        # Cleanup must be skipped — otherwise the cascade re-enters Trust.delete().
-        mock_get_registry.assert_not_called()
-        mock_registry.delete_client.assert_not_called()
+        # The guard stops the cascade from re-entering the sweep; the
+        # connection's own tokens are still revoked, and no client disabled.
+        mock_registry._delete_client_trust_relationship.assert_not_called()
+        mock_registry.disable_client.assert_not_called()
+        mock_registry.revoke_connection_tokens.assert_called_once_with(
+            "test_actor", "mcp_client_abc123"
+        )
 
 
 class TestTrustsCollection:
@@ -484,59 +516,6 @@ class TestTrustMetadata:
 
 class TestTrustOAuth2Detection:
     """Test OAuth2 client trust detection."""
-
-    def test_is_oauth2_client_trust_by_peerid(self):
-        """Test _is_oauth2_client_trust detects OAuth2 client by peerid format."""
-        mock_config = Mock()
-        mock_db_trust = Mock()
-
-        mock_trust_data = {
-            "peerid": "oauth2_client:user@example.com:mcp_client_123",
-            "relationship": "friend",
-        }
-        mock_db_trust.get.return_value = mock_trust_data
-        mock_config.DbTrust.DbTrust.return_value = mock_db_trust
-
-        trust = Trust(
-            actor_id="test_actor",
-            peerid="oauth2_client:user@example.com:mcp_client_123",
-            config=mock_config,
-        )
-
-        assert trust._is_oauth2_client_trust() is True
-
-    def test_is_oauth2_client_trust_by_established_via(self):
-        """Test _is_oauth2_client_trust detects OAuth2 client by established_via."""
-        mock_config = Mock()
-        mock_db_trust = Mock()
-
-        mock_trust_data = {
-            "peerid": "some_peer",
-            "relationship": "friend",
-            "established_via": "oauth2_client",
-        }
-        mock_db_trust.get.return_value = mock_trust_data
-        mock_config.DbTrust.DbTrust.return_value = mock_db_trust
-
-        trust = Trust(actor_id="test_actor", peerid="some_peer", config=mock_config)
-
-        assert trust._is_oauth2_client_trust() is True
-
-    def test_is_oauth2_client_trust_regular_trust(self):
-        """Test _is_oauth2_client_trust returns False for regular trusts."""
-        mock_config = Mock()
-        mock_db_trust = Mock()
-
-        mock_trust_data = {
-            "peerid": "regular_peer",
-            "relationship": "friend",
-        }
-        mock_db_trust.get.return_value = mock_trust_data
-        mock_config.DbTrust.DbTrust.return_value = mock_db_trust
-
-        trust = Trust(actor_id="test_actor", peerid="regular_peer", config=mock_config)
-
-        assert trust._is_oauth2_client_trust() is False
 
     def test_extract_client_id_from_peerid(self):
         """Test _extract_client_id_from_peerid extracts client_id."""

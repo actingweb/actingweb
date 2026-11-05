@@ -127,7 +127,10 @@ def test_create_verified_trust_refuses_a_bad_id() -> None:
 
 def test_peer_input_validators() -> None:
     assert is_valid_peer_id("0f3a9c")
-    assert is_valid_peer_id("oauth2:user_at_x_dot_com:client_1")
+    assert is_valid_peer_id("urn:peer:user_at_x_dot_com:client_1")  # ':' is allowed
+    # ...but never the library's own OAuth2 peer ids, which a create would
+    # overwrite (client-deletion audit, 2026-11-04).
+    assert not is_valid_peer_id("oauth2:user_at_x_dot_com:client_1")
     for bad in ("", "../x", "a/b", "a?b", "a#b", "a%2fb", "a b", "a'b", "é", "x" * 256):
         assert not is_valid_peer_id(bad), bad
     assert is_valid_peer_baseuri("https://peer.example/p1")

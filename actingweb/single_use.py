@@ -15,7 +15,11 @@ import secrets
 import time
 from typing import TYPE_CHECKING, Any, Literal
 
-from .constants import REFRESH_TOKEN_GRACE_DEFAULT, REFRESH_TOKEN_GRACE_MAX
+from .constants import (
+    CHAIN_REVOKED_MARKER_TTL,
+    REFRESH_TOKEN_GRACE_DEFAULT,
+    REFRESH_TOKEN_GRACE_MAX,
+)
 
 if TYPE_CHECKING:
     from . import config as config_class
@@ -282,6 +286,63 @@ def revoke_chain_confirmed(
     if row and "data" in row:
         raise StoreFault(f"Token chain revocation for actor {actor_id} deleted nothing")
     return 0
+
+
+def mark_chain_revoked(
+    config: "config_class.Config", actor_id: str, bucket: str, chain_id: str
+) -> None:
+    """Record that ``chain_id`` is being revoked, before its sweep reads it.
+
+    A rotation whose consume preceded the sweep mints after it; it reads this
+    marker (:func:`chain_revoked`) once its writes are acknowledged and
+    deletes what it minted. The write is acknowledged before the sweep's
+    first read, so either the sweep sees the rotation's rows or the rotation
+    sees the marker. ``set_attr``, not a create-if-absent: the theft branch
+    and a logout of the same chain may both write it.
+
+    Raises:
+        StoreFault: the marker could not be written; the caller must not
+            sweep (the retry could not write it once the sweep removed the
+            presented token).
+    """
+    from .db import get_attribute
+
+    try:
+        ok = get_attribute(config).set_attr(
+            actor_id=actor_id,
+            bucket=bucket,
+            name=chain_id,
+            data={"revoked_at": int(time.time())},
+            ttl_seconds=CHAIN_REVOKED_MARKER_TTL,
+        )
+    except Exception as e:
+        raise StoreFault(
+            f"Could not mark token chain revoked for actor {actor_id}"
+        ) from e
+    if not ok:
+        raise StoreFault(f"Could not mark token chain revoked for actor {actor_id}")
+
+
+def chain_revoked(
+    config: "config_class.Config", actor_id: str, bucket: str, chain_id: str
+) -> bool:
+    """Whether a revocation of ``chain_id`` has started (a strict read of the
+    marker :func:`mark_chain_revoked` writes; never a cached one).
+
+    Raises:
+        StoreFault: the marker could not be read.
+    """
+    from .db import get_attribute
+
+    try:
+        row = get_attribute(config).get_attr_strict(
+            actor_id=actor_id, bucket=bucket, name=chain_id
+        )
+    except Exception as e:
+        raise StoreFault(
+            f"Could not read the chain-revoked marker for actor {actor_id}"
+        ) from e
+    return bool(row and row.get("data"))
 
 
 class PurgeThrottle:

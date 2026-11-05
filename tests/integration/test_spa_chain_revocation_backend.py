@@ -137,3 +137,63 @@ class TestSpaChainRevocationOnBackend:
                 (_ACCESS_TOKEN_BUCKET, access),
                 (_REFRESH_TOKEN_BUCKET, refresh),
             )
+
+
+@pytest.mark.xdist_group(name="spa_chain_revocation_backend")
+class TestChainRevokedMarkerOnBackend:
+    """The marker a revocation writes before its sweep (3.16)."""
+
+    def test_the_marker_is_readable_with_a_ttl_and_reaped_after_it(
+        self, mgr: OAuth2SessionManager
+    ) -> None:
+        import time
+
+        from actingweb.constants import CHAIN_REVOKED_MARKER_TTL, TTL_CLOCK_SKEW_BUFFER
+        from actingweb.oauth_session import _CHAIN_REVOKED_BUCKET
+        from actingweb.single_use import chain_revoked
+
+        actor_id = f"spa-marker-{uuid.uuid4().hex[:12]}"
+        access, refresh, chain = _login(mgr, actor_id)
+        try:
+            assert not chain_revoked(
+                mgr.config, OAUTH2_SYSTEM_ACTOR, _CHAIN_REVOKED_BUCKET, chain
+            )
+            mgr.revoke_token_chain(
+                actor_id, chain, anchor=(_REFRESH_TOKEN_BUCKET, refresh)
+            )
+            assert chain_revoked(
+                mgr.config, OAUTH2_SYSTEM_ACTOR, _CHAIN_REVOKED_BUCKET, chain
+            )
+            deadline = int(time.time()) + CHAIN_REVOKED_MARKER_TTL
+            if DATABASE_BACKEND == "dynamodb":
+                from actingweb.db.dynamodb.attribute import Attribute
+
+                row = Attribute.get(
+                    OAUTH2_SYSTEM_ACTOR,
+                    f"{_CHAIN_REVOKED_BUCKET}:{chain}",
+                    consistent_read=True,
+                )
+                assert row.ttl_timestamp is not None
+                assert deadline - 5 <= row.ttl_timestamp - TTL_CLOCK_SKEW_BUFFER
+                assert row.ttl_timestamp - TTL_CLOCK_SKEW_BUFFER <= deadline + 5
+            else:
+                db = get_attribute(mgr.config)
+                now = int(time.time())
+                # Other tests' expired markers may go; this one stays.
+                db.delete_expired(now_epoch=now, buckets=[_CHAIN_REVOKED_BUCKET])
+                assert _row(mgr, _CHAIN_REVOKED_BUCKET, chain) is not None
+                db.delete_expired(
+                    now_epoch=now
+                    + CHAIN_REVOKED_MARKER_TTL
+                    + TTL_CLOCK_SKEW_BUFFER
+                    + 5,
+                    buckets=[_CHAIN_REVOKED_BUCKET],
+                )
+                assert _row(mgr, _CHAIN_REVOKED_BUCKET, chain) is None
+        finally:
+            _cleanup(
+                mgr,
+                (_ACCESS_TOKEN_BUCKET, access),
+                (_REFRESH_TOKEN_BUCKET, refresh),
+                (_CHAIN_REVOKED_BUCKET, chain),
+            )

@@ -224,17 +224,14 @@ def classify_rows(
 
 
 def _dynamodb_actor_ids() -> set[str]:
-    """Deliberately NOT ``get_actor_list(config).fetch()``: that convenience
-    wrapper's ``Actor.scan()`` has no ``consistent_read``, so a seconds-old
-    actor could be absent from the very set this whole sweep classifies
-    against -- the one read in this module where staleness is a data-loss
-    bug (case 3 above), not the usual eventual-consistency cost tradeoff.
-    Scan the model directly with ``consistent_read=True`` instead."""
-    from actingweb.db.dynamodb.actor import Actor
+    """Every actor id, on a strongly consistent scan
+    (``DbActorList.iter_rows(consistent=True)``): a seconds-old actor absent
+    from the very set this whole sweep classifies against is the one read in
+    this module where staleness is a data-loss bug (case 3 above), not the
+    usual eventual-consistency cost tradeoff."""
+    from actingweb.db.dynamodb.actor import DbActorList
 
-    return {
-        item.id for item in Actor.scan(consistent_read=True, attributes_to_get=["id"])
-    }
+    return {str(row["id"]) for row in DbActorList().iter_rows(consistent=True)}
 
 
 def _postgresql_actor_ids() -> set[str]:

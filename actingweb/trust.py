@@ -13,13 +13,27 @@ from .db.exceptions import DbError
 # Ids the library makes for OAuth2/MCP trusts never come through here.
 _PEER_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:@+=-]{0,254}$")
 
+# Peer-id prefixes of rows an OAuth2 login wrote (trust_lookup.OAUTH2_SOURCES),
+# repeated here so this module imports nothing from oauth2_server at load.
+_OAUTH2_PREFIXES = ("oauth2", "oauth2_client", "oauth2_interactive")
+
 
 def is_valid_peer_id(value: Any) -> bool:
     """A peer-supplied id: letters, digits and ``_ . : @ + = -``, starting
     with a letter or digit, at most 255 characters. No ``/``, ``?``, ``#``,
     ``%``, quotes or whitespace, so it can sit in a URL path segment and a
-    page without escaping surprises."""
-    return isinstance(value, str) and bool(_PEER_ID_RE.fullmatch(value))
+    page without escaping surprises.
+
+    Never one of the library's OAuth2 peer ids (``oauth2:``,
+    ``oauth2_client:``, ``oauth2_interactive:``): those are deterministic
+    (``<source>:<email>:<client_id>``) and a trust create overwrites a row
+    with the same peer id, so a peer that could name one would replace a
+    user's client connection and could then delete it with its own secret."""
+    return (
+        isinstance(value, str)
+        and bool(_PEER_ID_RE.fullmatch(value))
+        and value.split(":", 1)[0] not in _OAUTH2_PREFIXES
+    )
 
 
 def is_valid_peer_baseuri(value: Any) -> bool:
@@ -125,85 +139,163 @@ class Trust:
         if not self.handle:
             return False
 
-        # Ensure trust data is loaded before checking if it's an OAuth2 client trust
-        # This is necessary because _is_oauth2_client_trust() relies on self.trust being populated
+        # Load the row: which OAuth2 client it connects is read from it.
         if not self.trust:
             self.get()
 
-        # Determine whether OAuth2 client cleanup is needed *before* dropping the
-        # local trust data, since both checks read from self.trust.
+        # Which OAuth2 client this row connects, read *before* the local trust
+        # data is dropped.
         oauth2_client_id: str | None = None
-        if self.config and self._is_oauth2_client_trust():
-            oauth2_client_id = self._extract_client_id_from_peerid()
+        if self.config:
+            oauth2_client_id = self._oauth2_client_id()
 
-        # Delete the trust record FIRST, then perform OAuth2 client cleanup.
-        #
-        # Ordering is critical to avoid unbounded recursion. delete_client()
-        # cascades into client_registry._delete_client_trust_relationship(),
-        # which re-enumerates this actor's trust relationships and calls
-        # delete_relationship() -> delete_reciprocal_trust() -> Trust.delete()
-        # again. If the trust record still existed at that point, the cascade
-        # would re-discover this very relationship and recurse without bound:
-        # a single actor delete self-deadlocks the DB connection pool and
-        # eventually raises "maximum recursion depth exceeded". Removing the
-        # record up front means the cascade finds nothing to delete and stops.
+        # A row connects this actor to a client; it owns the client only when
+        # the client is registered under this actor. Deleting a connection
+        # ends this actor's tokens and rows of the client and nothing else:
+        # the client's index row is global, and deleting it here would
+        # disable the client for every other actor it is connected to.
+        registry: Any = None
+        if oauth2_client_id and self.config:
+            from .oauth2_server.client_registry import get_mcp_client_registry
+
+            registry = get_mcp_client_registry(self.config)
+            # Before the row goes, so a fault leaves the row as the retry
+            # handle (the integrations answer DbError with 503), never a
+            # deleted row beside a live client or live tokens. The owner
+            # disables the client (tokens, client row, index row); any other
+            # actor revokes only its own tokens for it. A retry after the
+            # owner's client is gone takes the connection path.
+            # Owned: the client row is in this actor's bucket and the index
+            # does not name another actor (a copied or restored row would
+            # make every disable refuse, and the row could never go).
+            if registry.client_owned_by(
+                self.actor_id, oauth2_client_id
+            ) and registry.indexed_owner(oauth2_client_id) in (None, self.actor_id):
+                if not registry.disable_client(
+                    oauth2_client_id, actor_id=self.actor_id
+                ):
+                    raise DbError("OAuth2 client deletion", self.actor_id)
+                logger.info(
+                    f"Deleted OAuth2 client {oauth2_client_id} as part of trust "
+                    f"deletion"
+                )
+            else:
+                registry.revoke_connection_tokens(self.actor_id, oauth2_client_id)
+
+        peerid = getattr(self, "peerid", None) or str(
+            (self.trust or {}).get("peerid", "")
+        )
+
+        # The provider tokens an OAuth2 login stored for the row
+        # (TrustManager.create_or_update_oauth_trust), Google's refresh token
+        # among them, also before the row: they grant nothing here, and a
+        # fault then leaves the row for the retry instead of an orphan.
+        if (
+            self.config
+            and self.actor_id
+            and peerid
+            and (oauth2_client_id or peerid.split(":", 1)[0] in _OAUTH2_PREFIXES)
+        ):
+            from . import attribute
+            from .constants import OAUTH_TOKENS_PREFIX
+
+            store = attribute.InternalStore(actor_id=self.actor_id, config=self.config)
+            if not store.set_confirmed(
+                f"{OAUTH_TOKENS_PREFIX}{peerid}", None, raise_on_fault=True
+            ):
+                raise DbError("OAuth2 provider token delete", self.actor_id)
+
+        # This actor's other rows of the client, before this row goes: a
+        # fault then leaves this row, so retrying the same route (one row,
+        # whose retry would otherwise answer 404) sweeps again. The sweep
+        # deletes each sibling through delete_relationship() -> Trust.delete();
+        # while it runs, those nested deletes skip their own sweep (the
+        # registry's in-progress guard), so nothing recurses. A fault raises:
+        # the caller must not report success while another row is live.
+        if (
+            oauth2_client_id
+            and registry is not None
+            and self.actor_id
+            and not registry.sweeping(self.actor_id, oauth2_client_id)
+        ):
+            registry._delete_client_trust_relationship(
+                self.actor_id, oauth2_client_id, exclude_peer_id=peerid
+            )
+
         self.trust = {}
         result = self.handle.delete()
 
-        # If this was an OAuth2 client trust, delete the client registration
-        # (which also revokes tokens). Only do this when the record was actually
-        # removed (result is True): the cleanup cascade re-reads the actor's trust
-        # relationships from the DB, not from the cleared in-memory self.trust, so
-        # if the physical delete failed the record is still live and the cascade
-        # would re-enter Trust.delete() and recurse without bound. Skipping
-        # cleanup on a failed delete keeps the recursion break sound and avoids
-        # revoking a client whose trust relationship still exists.
-        if result and oauth2_client_id and self.config:
-            try:
-                # Pass the trust's actor_id to ensure tokens are revoked in the
-                # correct actor (the client registry lookup might otherwise
-                # resolve a different actor_id).
-                from .oauth2_server.client_registry import get_mcp_client_registry
+        try:
+            # The row's custom permissions go right after the row, never
+            # before it: a fault in between would leave a live row on its
+            # trust type's defaults, which can be wider. Through the shared
+            # store, whose cache the permission evaluator reads. A fault here
+            # raises with the row gone; the next row created for the same
+            # peer id clears them first (Trust.create, and
+            # TrustManager.create_or_update_oauth_trust for OAuth2 rows).
+            if result and self.config and self.actor_id and peerid:
+                from .trust_permissions import get_trust_permission_store
 
-                registry = get_mcp_client_registry(self.config)
-                if registry.delete_client(oauth2_client_id, actor_id=self.actor_id):
-                    logger.info(
-                        f"Deleted OAuth2 client {oauth2_client_id} as part of trust "
-                        f"deletion"
-                    )
-            except Exception as e:  # folds DbError: after trust delete
-                logger.error(f"Error deleting OAuth2 client during trust deletion: {e}")
-                # Continue even if client deletion fails
+                # Unconditionally: the store's cache has no TTL, and a "none"
+                # it cached before another instance or process wrote the
+                # permissions would skip the delete. Deleting an absent
+                # attribute succeeds.
+                permission_store = get_trust_permission_store(self.config)
+                if not permission_store.delete_permissions(self.actor_id, peerid):
+                    raise DbError("trust permissions delete", self.actor_id)
+        finally:
+            if result and self.actor_id:
+                # A deleted trust relationship must stop authorizing
+                # immediately, not at the end of the MCP caches' five-minute
+                # TTL, also when the cleanup above raised. Actor-wide because
+                # the cached ActorInterface carries the trust list itself —
+                # see evict_mcp_caches_for_actor(). No-op when MCP is not in
+                # use.
+                from .mcp.invalidation import evict_caches_for_actor
 
-        if result and self.actor_id:
-            # A deleted trust relationship must stop authorizing immediately,
-            # not at the end of the MCP caches' five-minute TTL. Actor-wide
-            # because the cached ActorInterface carries the trust list itself —
-            # see evict_mcp_caches_for_actor(). No-op when MCP is not in use.
-            from .mcp.invalidation import evict_caches_for_actor
-
-            evict_caches_for_actor(self.actor_id)
+                evict_caches_for_actor(self.actor_id)
 
         return result
 
-    def _is_oauth2_client_trust(self) -> bool:
-        """Check if this trust relationship is for an OAuth2 client."""
+    def _oauth2_client_id(self) -> str | None:
+        """The OAuth2 client this row connects, or None for any other trust.
+
+        The tagged ``oauth_client_id`` wins; an untagged legacy row is read
+        from its peer id (:meth:`_extract_client_id_from_peerid`).
+        """
         if not self.trust or not isinstance(self.trust, dict):
-            return False
+            return None
+        from .oauth2_server.trust_lookup import OAUTH2_SOURCES, legacy_oauth2_row
 
-        peerid = self.trust.get("peerid", "")
-        established_via = self.trust.get("established_via", "")
-        trust_type = self.trust.get("type", "")
-
-        # Check if this is an OAuth2 client trust based on peer_id format or metadata
-        return (
-            str(peerid).startswith("oauth2_client:")
-            or established_via == "oauth2_client"
-            or trust_type in ("oauth2_client", "mcp_client")
-        )
+        # Only a row an OAuth2 flow wrote. A peer can create a row with any
+        # peer id through POST /trust (the pattern allows ':'), and the
+        # library records those as established via "trust": a peer id of
+        # the form oauth2_client:x:mcp_<id> must never let a remote peer
+        # end, or delete, a client connection on this actor. A row older
+        # than the "trust" tag (3.4) has no established_via; the one gate
+        # for those is legacy_oauth2_row (its baseuri is none or this
+        # actor's own, never a peer's).
+        via = self.trust.get("established_via")
+        if via is None:
+            if not legacy_oauth2_row(
+                self.trust.get("peerid"), self.trust.get("baseuri"), self.actor_id
+            ):
+                return None
+        elif via not in OAUTH2_SOURCES:
+            return None
+        tagged = self.trust.get("oauth_client_id")
+        if isinstance(tagged, str) and tagged:
+            return tagged
+        return self._extract_client_id_from_peerid()
 
     def _extract_client_id_from_peerid(self) -> str | None:
-        """Extract client_id from peer_id format: oauth2_client:email:client_id"""
+        """Extract client_id from peer_id format ``<source>:<email>:<client_id>``.
+
+        ``<source>`` is any OAuth2 source trust creation writes
+        (``oauth2_client``, ``oauth2``, ``oauth2_interactive``), so a legacy
+        ``oauth2:`` row of a client is cleaned up like an ``oauth2_client:``
+        one. The client id is the last segment and starts with ``mcp_``, the
+        registry's prefix."""
         if not self.trust or not isinstance(self.trust, dict):
             return None
 
@@ -211,14 +303,13 @@ class Trust:
         if not peerid or not isinstance(peerid, str):
             return None
 
-        # Format: oauth2_client:email:client_id
-        # Client ID is the last component
-        if peerid.startswith("oauth2_client:"):
-            parts = peerid.split(":")
-            if len(parts) >= 3:
-                client_id = parts[-1]  # Last part is the client_id
-                if client_id.startswith("mcp_"):
-                    return client_id
+        from .oauth2_server.trust_lookup import OAUTH2_SOURCES
+
+        parts = peerid.split(":")
+        if len(parts) >= 3 and parts[0] in OAUTH2_SOURCES:
+            client_id = parts[-1]
+            if client_id.startswith("mcp_"):
+                return client_id
 
         return None
 
@@ -352,6 +443,25 @@ class Trust:
             )
         if not self.handle:
             return False
+        # A new row starts from its trust type's permissions. Trust.delete
+        # deletes a row's custom permissions right after the row, and a fault
+        # there raises with the row gone; the peer id is stable (a peer's
+        # actor id), so those permissions would otherwise come back with the
+        # next row for the same peer. Only when no row exists: create is an
+        # upsert, and a re-sent request must not reset the custom permissions
+        # an owner set on a live row.
+        if (
+            self.config
+            and self.actor_id
+            and self.peerid
+            and self.handle.get(actor_id=self.actor_id, peerid=self.peerid) is None
+        ):
+            from .trust_permissions import get_trust_permission_store
+
+            # The shared store, unconditionally, as in Trust.delete.
+            permission_store = get_trust_permission_store(self.config)
+            if not permission_store.delete_permissions(self.actor_id, self.peerid):
+                raise DbError("trust permissions delete", self.actor_id)
         return self.handle.create(
             actor_id=self.actor_id,
             peerid=self.peerid,

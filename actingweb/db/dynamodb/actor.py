@@ -3,8 +3,8 @@ import os
 import random
 import time
 import uuid
-from collections.abc import Callable
-from typing import Any
+from collections.abc import Callable, Iterator
+from typing import Any, Literal
 
 from pynamodb.attributes import UnicodeAttribute
 from pynamodb.connection import Connection
@@ -20,7 +20,11 @@ from pynamodb.indexes import AllProjection, GlobalSecondaryIndex
 from pynamodb.models import Model
 from pynamodb.transactions import TransactWrite
 
-from actingweb.db.creator_rules import is_exempt, normalise_creator
+from actingweb.db.creator_rules import (
+    is_exempt,
+    missing_enforcement_message,
+    normalise_creator,
+)
 from actingweb.db.dynamodb._ensure import ensure_table
 from actingweb.db.dynamodb.creator import Creator
 from actingweb.db.exceptions import CreatorTaken, DbError
@@ -31,6 +35,41 @@ from actingweb.db.exceptions import CreatorTaken, DbError
 """
 
 logger = logging.getLogger(__name__)
+
+
+def _require_creators_backfill(op: str) -> None:
+    """Refuse an enforced write the creators table would not enforce.
+
+    An empty table that was never backfilled (the ``check_ready()`` prewarm
+    creates one before it refuses) holds no record of the existing actors,
+    so a claim against it lands a second actor for an existing creator. The
+    write fails closed with ``DbError(op)`` and the remedy is logged.
+    """
+    from actingweb.db.dynamodb import _backfill_probe
+
+    table = Creator.Meta.table_name
+    try:
+        state = _backfill_probe.cached_backfill_state()
+    except Exception as e:
+        # Without this line the refusal reads only "database error during
+        # actor create", and a role missing GetItem on the table would see
+        # 503s that no retry clears.
+        logger.error(
+            f"could not read the backfill-complete item of the DynamoDB table "
+            f"{table} ({type(e).__name__}: {e}); every enforced create, rename "
+            f"and holder replacement is refused until it can be read. Check "
+            f"that the runtime role has dynamodb:GetItem on {table}"
+        )
+        raise DbError(op) from e
+    if state == "complete":
+        return
+    what = (
+        f"the DynamoDB table {table} does not exist"
+        if state == "table-missing"
+        else f"the DynamoDB table {table} is not backfilled"
+    )
+    logger.error(missing_enforcement_message(what))
+    raise DbError(op)
 
 
 class CreatorIndex(GlobalSecondaryIndex[Any]):
@@ -245,6 +284,7 @@ class DbActor:
             except Exception as e:
                 raise DbError("actor modify") from e
         else:
+            _require_creators_backfill("actor modify")
             record = Creator(creator=new_creator, actor_id=actor_id)
 
             def build(t: TransactWrite) -> None:
@@ -257,7 +297,7 @@ class DbActor:
                     ),
                 )
 
-            codes = self._run_transaction(build, op="actor modify")
+            codes = self._run_transaction(build, op="actor modify", creators="guarded")
             if codes is not None:
                 if self._record_names_other(new_creator, actor_id):
                     raise CreatorTaken(new_creator)
@@ -308,13 +348,14 @@ class DbActor:
             return False
         actor = Actor(id=actor_id, creator=creator, passphrase=passphrase)
         if self.unique_creator and not is_exempt(creator):
+            _require_creators_backfill("actor create")
             record = Creator(creator=creator, actor_id=actor_id)
 
             def build(t: TransactWrite) -> None:
                 t.save(actor, condition=Actor.id.does_not_exist())
                 t.save(record, condition=Creator.creator.does_not_exist())
 
-            codes = self._run_transaction(build, op="actor create")
+            codes = self._run_transaction(build, op="actor create", creators="guarded")
             if codes is not None:
                 if self._actor_exists(actor_id):
                     logger.warning(
@@ -361,6 +402,7 @@ class DbActor:
         creator = normalise_creator(creator)
         if is_exempt(creator):
             raise ValueError("an exempt creator has no holder to replace")
+        _require_creators_backfill("actor replace holder")
         actor = Actor(id=actor_id, creator=creator, passphrase=passphrase or "")
         record = Creator(creator=creator)
 
@@ -372,7 +414,9 @@ class DbActor:
                 condition=Creator.actor_id == old_id,
             )
 
-        codes = self._run_transaction(build, op="actor replace holder")
+        codes = self._run_transaction(
+            build, op="actor replace holder", creators="guarded"
+        )
         if codes is not None:
             if self._actor_exists(actor_id):
                 logger.warning("Trying to create actor that exists(" + actor_id + ")")
@@ -531,7 +575,11 @@ class DbActor:
 
     @classmethod
     def _run_transaction(
-        cls, build: Callable[[TransactWrite], None], *, op: str
+        cls,
+        build: Callable[[TransactWrite], None],
+        *,
+        op: str,
+        creators: Literal["guarded", "unguarded", "none"],
     ) -> list[str | None] | None:
         """Commit one ``TransactWriteItems``: None when it committed, else the
         cancellation code of each item when a condition failed (callers
@@ -540,6 +588,13 @@ class DbActor:
         A ``TransactionConflict`` is retried at most twice, with jitter and
         the same client request token, so a retry of a commit whose answer
         was lost is not applied twice. Anything else raises ``DbError``.
+
+        ``creators`` says how the transaction relates to the creators table,
+        and only chooses the wording of the missing-table ERROR: "guarded"
+        (an enforced actor write that passed :func:`_require_creators_backfill`
+        first), "unguarded" (a creator-record repair that did not) or "none"
+        (a transaction that never touches it, such as a property write).
+        Required, so a new caller has to choose.
         """
         token = uuid.uuid4().hex
         for attempt in range(cls.TRANSACT_ATTEMPTS):
@@ -563,17 +618,84 @@ class DbActor:
                 # the caller's answer (taken, changed) is not an outage.
                 if "ConditionalCheckFailed" in codes:
                     return codes
+                cls._log_missing_table(e, op=op, creators=creators)
                 raise DbError(op) from e
             except Exception as e:
+                cls._log_missing_table(e, op=op, creators=creators)
                 raise DbError(op) from e
         raise DbError(op)
 
+    @staticmethod
+    def _log_missing_table(
+        e: BaseException,
+        *,
+        op: str,
+        creators: Literal["guarded", "unguarded", "none"],
+    ) -> None:
+        """Name the likely table when a claim failed on a missing one. The
+        fault itself stays a ``DbError``.
+
+        A guarded transaction (create, creator rename, holder replacement)
+        passed :func:`_require_creators_backfill` first, which reports a
+        missing creators table itself, so a missing table there is most
+        likely the actor table (prefix drift, a deleted table), else the
+        creators table deleted after this process saw it backfilled. The
+        record repairs of ``actingweb-unique-creators resolve``
+        (:func:`release_stale_record`, :func:`record_for_actor_as_read`,
+        :func:`move_stale_record`) are not guarded, so either table is
+        equally likely there and both are named without a preference. A
+        transaction that never touches the creators table (``"none"``) names
+        neither the creators table nor its remedy."""
+        from actingweb.db.dynamodb.property_lookup import is_resource_not_found
+
+        if not is_resource_not_found(e):
+            return
+        # No DescribeTable to disambiguate: the runtime role may not have it.
+        if creators == "none":
+            logger.error(
+                f"The DynamoDB transaction {op!r} needs a table that does not "
+                "exist. Check AWS_DB_PREFIX and that the application's tables "
+                "were created."
+            )
+            return
+        if creators == "unguarded":
+            logger.error(
+                f"A creator record repair needs a table that does not exist: "
+                f"either {Actor.Meta.table_name} or {Creator.Meta.table_name}. "
+                "Check AWS_DB_PREFIX; a missing creators table is created and "
+                "backfilled by `actingweb-unique-creators enable --apply`."
+            )
+            return
+        # Each candidate gets its own remedy: `enable --apply` creates the
+        # creators table, never the actor table.
+        logger.error(
+            f"An enforced actor write needs a table that does not exist, so it "
+            f"was refused. Most likely {Actor.Meta.table_name}: check "
+            f"AWS_DB_PREFIX and that the table exists. Else "
+            f"{Creator.Meta.table_name}, deleted since this process saw it "
+            "backfilled: run `actingweb-unique-creators enable --apply`."
+        )
+
     def __init__(self, *, unique_creator: bool = False) -> None:
+        """Ensure the actor table only.
+
+        The ``creators`` table that ``unique_creator`` claims against is
+        created by ``actingweb-unique-creators enable --apply`` and by the
+        ``check_ready()`` prewarm, never here: a table created empty would
+        claim creators against no record of the existing actors. An enforced
+        write (create, creator rename, holder replacement) reads the table's
+        backfill-complete item until it has seen it, and raises ``DbError``
+        while the table is missing or not backfilled, logging the remedy. A
+        positive answer is kept for the process's life: a worker that saw
+        the item keeps claiming after an operator runs ``disable --apply``
+        while it serves, and against the emptied table a claim succeeds for
+        an address an actor already holds, a silent duplicate, until it
+        restarts. Turn the application flag off and restart every worker
+        before ``disable``. Reads never probe.
+        """
         self.handle = None
         self.unique_creator = unique_creator
         ensure_table(Actor)
-        if unique_creator:
-            ensure_table(Creator)
 
 
 class DbActorList:
@@ -591,7 +713,9 @@ class DbActorList:
         """
         ret = []
         try:
-            for t in Actor.scan():
+            # Projected: no passphrase in memory, fewer wire bytes (Scan is
+            # still charged on the bytes scanned).
+            for t in Actor.scan(attributes_to_get=["id", "creator"]):
                 ret.append(
                     {
                         "id": t.id,
@@ -604,6 +728,22 @@ class DbActorList:
             logger.error(f"Error fetching actor list: {e}")
             return False
         return ret
+
+    def iter_rows(
+        self, *, consistent: bool = False, rate_limit: float | None = None
+    ) -> Iterator[dict[str, Any]]:
+        """Yield every actor as ``{"id", "creator"}`` as PynamoDB pages the
+        projected Scan. ``consistent`` doubles the read units. A fault raises
+        ``DbError("actor list scan")`` from wherever the iteration is."""
+        try:
+            for t in Actor.scan(
+                attributes_to_get=["id", "creator"],
+                consistent_read=consistent,
+                rate_limit=rate_limit,
+            ):
+                yield {"id": t.id, "creator": t.creator}
+        except Exception as e:
+            raise DbError("actor list scan") from e
 
     def __init__(self):
         self.handle = None
@@ -634,7 +774,12 @@ def release_stale_record(creator: str, actor_id: str) -> bool:
         t.condition_check(Actor, actor_id, condition=actor_as_read(current))
 
     # A failed condition: the record moved or went, or the actor changed.
-    return DbActor._run_transaction(build, op="creator record delete") is None
+    return (
+        DbActor._run_transaction(
+            build, op="creator record delete", creators="unguarded"
+        )
+        is None
+    )
 
 
 def record_for_actor_as_read(
@@ -659,7 +804,10 @@ def record_for_actor_as_read(
             )
         t.condition_check(Actor, actor.id, condition=actor_as_read(actor))
 
-    return DbActor._run_transaction(build, op="creator record write") is None
+    return (
+        DbActor._run_transaction(build, op="creator record write", creators="unguarded")
+        is None
+    )
 
 
 def move_stale_record(creator: str, stale_id: str, actor: "Actor") -> bool:
@@ -687,7 +835,10 @@ def move_stale_record(creator: str, stale_id: str, actor: "Actor") -> bool:
         t.condition_check(Actor, stale_id, condition=actor_as_read(stale))
         t.condition_check(Actor, actor.id, condition=actor_as_read(actor))
 
-    return DbActor._run_transaction(build, op="creator record move") is None
+    return (
+        DbActor._run_transaction(build, op="creator record move", creators="unguarded")
+        is None
+    )
 
 
 def actor_as_read(row: "Actor | None") -> Any:

@@ -494,18 +494,11 @@ def main() -> int:
     config = Config()
     _log_target(config, "REPAIR" if args.repair else "dry-run", args.rps)
 
-    try:
-        actors = get_actor_list(config).fetch()
-    except DbError as e:  # folds DbError: exit 2, store unreadable
-        logger.error(f"The actor list could not be read; nothing scanned: {e}")
-        return 2
-    if not isinstance(actors, list):
-        # A backend that answers a fault with False must not read as "none".
-        logger.error("The actor list could not be read; nothing scanned")
-        return 2
-    if not actors:
-        logger.info("No actors found")
-        return 0
+    # Streamed: memory does not grow with the fleet. Eventually consistent
+    # (only ids are used; each actor's lists are read afterwards), resumed
+    # from the per-actor checkpoint.
+    rows = iter(get_actor_list(config).iter_rows())
+    actors_read = 0
 
     checkpoint = Checkpoint(args.checkpoint_file if args.repair else None)
     limiter = RateLimiter(args.rps)
@@ -515,7 +508,22 @@ def main() -> int:
     total_errored = 0
     actors_swept = 0
 
-    for actor in actors:
+    while True:
+        try:
+            actor = next(rows)
+        except StopIteration:
+            break
+        except DbError as e:  # folds DbError: exit 2, the sweep stops here
+            if not actors_read:
+                logger.error(f"The actor list could not be read; nothing scanned: {e}")
+            else:
+                logger.error(
+                    f"The actor list could not be read past {actors_read} "
+                    f"actor(s); the sweep stopped there: {e}. Re-run"
+                    + (" to resume from the checkpoint." if args.repair else ".")
+                )
+            return 2
+        actors_read += 1
         actor_id = actor.get("id") if isinstance(actor, dict) else None
         if not actor_id or checkpoint.is_done(actor_id):
             continue
@@ -541,6 +549,10 @@ def main() -> int:
         # which is the intended nag.
         if not errored and not unhealthy:
             checkpoint.mark_done(actor_id)
+
+    if not actors_read:
+        logger.info("No actors found")
+        return 0
 
     logger.info(
         f"Summary: actors_swept={actors_swept} lists_checked={total_checked} "

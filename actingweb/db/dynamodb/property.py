@@ -384,7 +384,7 @@ class DbProperty:
 
             # A failed condition (the value moved on, or another actor took
             # the row first) is not a fault: nothing to heal.
-            DbActor._run_transaction(build, op="property lookup heal")  # pyright: ignore[reportPrivateUsage]
+            DbActor._run_transaction(build, op="property lookup heal", creators="none")  # pyright: ignore[reportPrivateUsage]
         except Exception as e:  # folds DbError: best effort, logged
             logger.warning(
                 f"LOOKUP_HEAL_FAILED: property={name} actor={actor_id} error={e}"
@@ -452,7 +452,7 @@ class DbProperty:
                     condition=own_or_absent,
                 )
 
-            codes = DbActor._run_transaction(build, op="property set")  # pyright: ignore[reportPrivateUsage]
+            codes = DbActor._run_transaction(build, op="property set", creators="none")  # pyright: ignore[reportPrivateUsage]
             if codes is None:
                 self.handle = Property(id=actor_id, name=name, value=new_value)
                 return True
@@ -494,6 +494,7 @@ class DbProperty:
                 fallback = DbActor._run_transaction(  # pyright: ignore[reportPrivateUsage]
                     lambda t, w=with_delete: release_and_save(t, w),
                     op="property set",
+                    creators="none",
                 )
                 if fallback is None:
                     self.handle = Property(id=actor_id, name=name, value=new_value)
@@ -549,7 +550,9 @@ class DbProperty:
                             | (PropertyLookupV2.actor_id == actor_id),
                         )
 
-                codes = DbActor._run_transaction(build, op="property delete")  # pyright: ignore[reportPrivateUsage]
+                codes = DbActor._run_transaction(
+                    build, op="property delete", creators="none"
+                )  # pyright: ignore[reportPrivateUsage]
                 if codes is None:
                     self.handle = None
                     return

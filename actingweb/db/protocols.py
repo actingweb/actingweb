@@ -35,6 +35,7 @@ docstring says otherwise:
   (missing arguments or handle, an id that is taken).
 """
 
+from collections.abc import Iterator
 from datetime import datetime
 from typing import Any, Protocol, runtime_checkable
 
@@ -222,6 +223,28 @@ class DbActorListProtocol(Protocol):
         Returns:
             List of actor dicts (``[]`` when there are none); False on a read
             fault with ``strict=False``
+        """
+        ...
+
+    def iter_rows(
+        self, *, consistent: bool = False, rate_limit: float | None = None
+    ) -> Iterator[dict[str, Any]]:
+        """
+        Yield every actor as ``{"id", "creator"}``, as it is read.
+
+        The streaming form of :meth:`fetch` for operator sweeps: memory does
+        not grow with the fleet. Not a snapshot: an actor created, deleted or
+        renamed during the sweep can appear in neither or both states.
+
+        Args:
+            consistent: Strongly consistent reads where the backend has a
+                choice (DynamoDB; twice the read units). PostgreSQL reads
+                are read-committed per page either way.
+            rate_limit: DynamoDB read capacity units per second; ignored on
+                PostgreSQL.
+
+        Raises:
+            DbError: on a read fault, from wherever the iteration is.
         """
         ...
 
@@ -1015,6 +1038,9 @@ class DbSubscriptionProtocol(Protocol):
         """
         Modify subscription using self.handle.
 
+        ``callback`` is a bool (or None to leave it); anything else raises
+        ``TypeError`` before any I/O, on both backends.
+
         Returns:
             True on success; False only without a handle or arguments.
             A fault raises ``DbError``.
@@ -1057,6 +1083,10 @@ class DbSubscriptionProtocol(Protocol):
     ) -> bool:
         """
         Create new subscription.
+
+        ``callback`` is a bool (``True`` for a subscription that delivers
+        callbacks); anything else raises ``TypeError`` before any I/O, on
+        both backends.
 
         Returns:
             True on success; False only without a handle or arguments.
@@ -1475,6 +1505,7 @@ class DbAttributeProtocol(Protocol):
 
         Returns:
             Number of rows deleted (0 when the backend relies on native TTL).
+            A fault raises ``DbError``.
         """
         ...
 

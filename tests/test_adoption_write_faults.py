@@ -107,8 +107,13 @@ class TestMarkerWriteFault:
 class TestBackfillListFault:
     def test_unreadable_actor_list_is_refused_not_a_zero_scan(self) -> None:
         config = make_config()
+
+        def rows() -> Any:
+            raise DbError("actor list scan")
+            yield  # pragma: no cover - faults on the first pull
+
         failing = MagicMock()
-        failing.return_value.fetch.return_value = False
+        failing.return_value.iter_rows.side_effect = lambda **_kw: rows()
 
         with patch("actingweb.db.get_actor_list", failing):
             with pytest.raises(script.ActorListUnavailable):
@@ -199,8 +204,12 @@ class TestThirdIterationFaults:
 
 class TestBackfillResume:
     def test_dynamodb_scan_fault_is_an_unreadable_list(self) -> None:
+        def rows() -> Any:
+            yield {"id": "a1", "creator": "x@example.com"}
+            raise RuntimeError("scan throttled")  # lazy: a fault mid-scan
+
         failing = MagicMock()
-        failing.return_value.fetch.side_effect = RuntimeError("scan throttled")
+        failing.return_value.iter_rows.side_effect = lambda **_kw: rows()
 
         with patch("actingweb.db.get_actor_list", failing):
             with pytest.raises(script.ActorListUnavailable):

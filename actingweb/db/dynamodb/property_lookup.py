@@ -258,7 +258,9 @@ def take_over(
             | (PropertyLookupV2.actor_id == owner),
         )
 
-    codes = DbActor._run_transaction(build, op="property lookup takeover")  # pyright: ignore[reportPrivateUsage]
+    codes = DbActor._run_transaction(
+        build, op="property lookup takeover", creators="none"
+    )  # pyright: ignore[reportPrivateUsage]
     if codes is not None:
         return False
     logger.warning(

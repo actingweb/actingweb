@@ -59,6 +59,7 @@ def make_handler(
     params: dict[str, str] | None = None,
     headers: dict[str, str] | None = None,
     json_body: bool = False,
+    cookies: dict[str, str] | None = None,
 ) -> OAuth2EndpointsHandler:
     if isinstance(body, dict):
         raw = json.dumps(body) if json_body else urlencode(body)
@@ -69,7 +70,7 @@ def make_handler(
         params=params or {},
         body=raw,
         headers=headers if headers is not None else {"Accept": "application/json"},
-        cookies={},
+        cookies=cookies or {},
     )
     with mock.patch(
         "actingweb.oauth2_server.oauth2_server.get_actingweb_oauth2_server",

@@ -6,6 +6,7 @@ credentials to authenticate with ActingWeb. Client credentials are stored
 per-actor but clients are not treated as actors themselves.
 """
 
+import contextvars
 import logging
 import secrets
 import time
@@ -19,6 +20,14 @@ from ..db.exceptions import DbError
 from ..secret_compare import secret_equals
 
 logger = logging.getLogger(__name__)
+
+# The (actor id, client id) sweeps of a client's trust rows running in this
+# context. The sweep deletes each row through Trust.delete(), which sweeps
+# the client's other rows before its own row goes; inside a running sweep it
+# must not start another (the rows it would find are the ones being swept).
+_SWEEPS: contextvars.ContextVar[frozenset[tuple[str, str]]] = contextvars.ContextVar(
+    "oauth2_client_trust_sweeps", default=frozenset()
+)
 
 # token_endpoint_auth_method values accepted at registration. "none" is a
 # public client; the two secret transports are both accepted for any
@@ -325,9 +334,50 @@ class MCPClientRegistry:
         if actor_deleted:
             from ..single_use import delete_confirmed
 
+            # Only an index row that names this actor: a client row copied
+            # into the deleted actor's bucket must not disable a client
+            # registered elsewhere.
+            indexed_owner = self.indexed_owner(client_id)
+            if indexed_owner and actor_id and indexed_owner != actor_id:
+                logger.error(
+                    f"Not deleting the index row of OAuth2 client {client_id}: "
+                    f"it names actor {indexed_owner}, not the deleted {actor_id}"
+                )
+                return True
             return delete_confirmed(
                 self.config, OAUTH2_SYSTEM_ACTOR, CLIENT_INDEX_BUCKET, client_id
             )
+        owner_id = self._disable_client(client_id, actor_id)
+        if owner_id is None:
+            return False
+        # Delete corresponding trust relationship
+        self._delete_client_trust_relationship(owner_id, client_id)
+        logger.info(
+            f"Successfully deleted OAuth2 client {client_id} for actor {owner_id}"
+        )
+        return True
+
+    def disable_client(self, client_id: str, *, actor_id: str) -> bool:
+        """Steps 1-3 of :meth:`delete_client` for its owner ``actor_id``:
+        revoke the client's tokens and delete its row and index row, leaving
+        the trust rows. ``Trust.delete`` calls it before it deletes the row,
+        so a fault leaves the row for the retry. False when ``actor_id`` does
+        not own the client or neither row is confirmed gone; a fault raises
+        ``DbError``."""
+        return self._disable_client(client_id, actor_id, strict=True) is not None
+
+    def _disable_client(
+        self, client_id: str, actor_id: str | None, *, strict: bool = False
+    ) -> str | None:
+        """Revoke, then delete the client's index row and its row. The owner's
+        actor id when the client is disabled, None when it is refused or
+        either row is not confirmed gone.
+
+        ``strict`` (``Trust.delete``): a token store that cannot list every
+        token raises ``DbError`` before any row goes, so the trust row stays
+        as the retry handle. Otherwise the client is deleted anyway, which
+        stops its refresh tokens; unrevoked access tokens expire within an
+        hour."""
         try:
             # First find the client to get metadata (and actor_id if not provided).
             client_data = self._load_client(client_id)
@@ -337,6 +387,30 @@ class MCPClientRegistry:
             # which is the authoritative source for token/client storage.
             if not actor_id and client_data:
                 actor_id = client_data.get("actor_id")
+            # Only the owner deletes a client: its index row is global, so a
+            # caller that merely holds a connection (a user who authorized
+            # another actor's or the system actor's client) would disable it
+            # for everyone. Such a caller removes its own connection with
+            # delete_client_connection().
+            owner = client_data.get("actor_id") if client_data else None
+            if owner and actor_id and owner != actor_id:
+                logger.error(
+                    f"Refusing to delete OAuth2 client {client_id} for actor "
+                    f"{actor_id}: it is registered under actor {owner}"
+                )
+                return None
+            if (
+                not client_data
+                and actor_id
+                and not self.client_owned_by(actor_id, client_id)
+            ):
+                # No index row to say who owns it: only the caller's own
+                # client bucket can, and it does not hold this client.
+                logger.error(
+                    f"Refusing to delete OAuth2 client {client_id} for actor "
+                    f"{actor_id}: it is not registered under that actor"
+                )
+                return None
 
             # The global client index is only a best-effort lookup optimization
             # (see _search_client_in_actors). Under heavy concurrent access to the
@@ -346,7 +420,7 @@ class MCPClientRegistry:
             # out here is what previously orphaned the client (it stayed listable).
             if not actor_id:
                 logger.warning(f"Client {client_id} not found for deletion")
-                return False
+                return None
             if not client_data:
                 logger.warning(
                     f"Client {client_id} missing from global index; deleting from "
@@ -364,6 +438,8 @@ class MCPClientRegistry:
                 revoked_count = token_manager.revoke_client_tokens(actor_id, client_id)
                 logger.info(f"Revoked {revoked_count} tokens for client {client_id}")
             except TokenStoreUnavailable as e:
+                if strict:
+                    raise DbError("OAuth2 client token revocation", actor_id) from e
                 # Deleting the client below is what stops its refresh tokens
                 # (the grants cannot authenticate it any more), so go on; an
                 # access token that was not revoked lives out its TTL (1 h).
@@ -374,46 +450,90 @@ class MCPClientRegistry:
                     f"an hour"
                 )
 
-            # Delete the client row and its index row, confirming each: the
-            # token endpoint needs both to authenticate the client, so either
-            # one gone disables it. A plain delete cannot be trusted to report
-            # a fault (DynamoDB swallows it), and the outage that stopped the
-            # token listing above usually fails these too.
+            # Delete the index row, then the client row, confirming each (a
+            # plain delete cannot be trusted to report a fault: DynamoDB
+            # swallows it). Both must go: an index row left behind points at
+            # nothing, and a client row left behind keeps the client listed.
+            # Index first, so a fault leaves the client row, which makes its
+            # owner retry the full disable (client_owned_by reads the row).
             from ..single_use import delete_confirmed
 
-            row_gone = delete_confirmed(
-                self.config, actor_id, self.clients_bucket, client_id
-            )
             index_gone = delete_confirmed(
                 self.config, OAUTH2_SYSTEM_ACTOR, CLIENT_INDEX_BUCKET, client_id
             )
-            if not row_gone and not index_gone:
+            row_gone = index_gone and delete_confirmed(
+                self.config, actor_id, self.clients_bucket, client_id
+            )
+            if not row_gone:
                 logger.error(
                     f"Could not delete OAuth2 client {client_id} for actor "
-                    f"{actor_id}: neither its row nor its index row is confirmed "
-                    f"gone, so it can still authenticate"
+                    f"{actor_id}: its "
+                    f"{'row' if index_gone else 'index row'} is not confirmed gone"
                 )
-                return False
-            if not (row_gone and index_gone):
-                logger.warning(
-                    f"OAuth2 client {client_id}: only its "
-                    f"{'row' if row_gone else 'index row'} is confirmed deleted; "
-                    f"that is enough to disable it"
-                )
+                return None
 
-            # Delete corresponding trust relationship
-            self._delete_client_trust_relationship(actor_id, client_id)
-
-            logger.info(
-                f"Successfully deleted OAuth2 client {client_id} for actor {actor_id}"
-            )
-            return True
+            return actor_id
 
         except DbError:
             raise
         except Exception as e:
             logger.error(f"Error deleting client {client_id}: {e}")
-            return False
+            return None
+
+    def indexed_owner(self, client_id: str) -> str | None:
+        """The actor the client's global index row names, or None when there
+        is no index row. A malformed value is returned as text, so it names
+        no actor and is never mistaken for "no index". Raises ``DbError`` on
+        a fault."""
+        index_row = attribute.Attributes(
+            actor_id=OAUTH2_SYSTEM_ACTOR,
+            bucket=CLIENT_INDEX_BUCKET,
+            config=self.config,
+        ).get_attr(name=client_id)
+        owner = index_row.get("data") if index_row else None
+        return str(owner) if owner else None
+
+    def sweeping(self, actor_id: str, client_id: str) -> bool:
+        """Whether a sweep of ``actor_id``'s rows of ``client_id`` is running
+        in this context (:meth:`_delete_client_trust_relationship`)."""
+        return (actor_id, client_id) in _SWEEPS.get()
+
+    def client_owned_by(self, actor_id: str, client_id: str) -> bool:
+        """Whether ``client_id`` is registered under ``actor_id``: its row is
+        in that actor's own client bucket. Needs no global index read, so a
+        missing index row never turns an owner into a mere connection.
+        Raises ``DbError`` on a fault."""
+        bucket = attribute.Attributes(
+            actor_id=actor_id, bucket=self.clients_bucket, config=self.config
+        )
+        row = bucket.get_attr(name=client_id)
+        data = row.get("data") if row else None
+        # The row names its owner; a row in this bucket naming another
+        # actor (copied, restored, malformed) is not ownership.
+        return isinstance(data, dict) and data.get("actor_id") == actor_id
+
+    def revoke_connection_tokens(self, actor_id: str, client_id: str) -> int:
+        """Revoke ``actor_id``'s tokens for ``client_id``, and only those.
+
+        Raises ``DbError`` when a token could not be confirmed revoked, so
+        the caller can stop before it removes what a retry would need.
+        """
+        from .token_manager import TokenStoreUnavailable, get_actingweb_token_manager
+
+        try:
+            return get_actingweb_token_manager(self.config).revoke_client_tokens(
+                actor_id, client_id
+            )
+        except TokenStoreUnavailable as e:
+            raise DbError("OAuth2 client token revocation", actor_id) from e
+
+    def delete_client_connection(self, actor_id: str, client_id: str) -> None:
+        """End one actor's connection to a client: revoke that actor's
+        tokens for it, then delete that actor's trust rows of it. The client,
+        its index row and every other actor's connection stay. Raises
+        ``DbError`` on a fault; a retry finishes what is left."""
+        self.revoke_connection_tokens(actor_id, client_id)
+        self._delete_client_trust_relationship(actor_id, client_id)
 
     def _store_client(
         self, actor_id: str, client_id: str, client_data: dict[str, Any]
@@ -588,14 +708,30 @@ class MCPClientRegistry:
             )
             # Don't raise - client registration can continue without trust relationship
 
-    def _delete_client_trust_relationship(self, actor_id: str, client_id: str) -> None:
+    def _delete_client_trust_relationship(
+        self, actor_id: str, client_id: str, *, exclude_peer_id: str | None = None
+    ) -> None:
         """
-        Delete the trust relationship for an OAuth2 client.
+        Delete every trust row of ``actor_id`` for an OAuth2 client, except
+        ``exclude_peer_id`` (the row ``Trust.delete`` is deleting, which goes
+        after this sweep). While it runs, the nested ``Trust.delete`` calls
+        skip their own sweep (:meth:`sweeping`). Every row is tried; any
+        failure raises ``DbError``.
 
         Args:
             actor_id: Actor this client belongs to
             client_id: OAuth2 client ID
+            exclude_peer_id: A row to leave
         """
+        guard = _SWEEPS.set(_SWEEPS.get() | {(actor_id, client_id)})
+        try:
+            self._sweep_client_trusts(actor_id, client_id, exclude_peer_id)
+        finally:
+            _SWEEPS.reset(guard)
+
+    def _sweep_client_trusts(
+        self, actor_id: str, client_id: str, exclude_peer_id: str | None
+    ) -> None:
         try:
             from .. import actor as actor_module
             from ..interface.actor_interface import ActorInterface
@@ -614,58 +750,85 @@ class MCPClientRegistry:
                 core_actor=core_actor, service_registry=registry
             )
 
-            # Find and delete the trust relationship for this client
-            # The peer ID should be in format "oauth2_client:client_id"
-            expected_peer_patterns = [
-                f"oauth2_client:{client_id}",  # New format
-                f"oauth2:{client_id}",  # Alternative format
-                client_id,  # Direct client_id match
+            # Every row of this client: the row the authentication resolver
+            # finds, any legacy row beside it (an upgraded actor can hold a
+            # tagged and a legacy row under different peer ids), and the
+            # real-email legacy rows whose last peer-id segment is the
+            # client id. Never a substring match: an unrelated row whose
+            # peer id contains this id must survive.
+            from .trust_lookup import client_trusts_for_deletion
+
+            trusts = [
+                t
+                for t in client_trusts_for_deletion(
+                    actor_interface.trust.relationships, client_id, actor_id
+                )
+                if t.peerid != exclude_peer_id
             ]
-
-            deleted = False
-            for trust in actor_interface.trust.relationships:
-                if hasattr(trust, "peerid"):
-                    peer_id = trust.peerid
-                    # Check if this trust relationship belongs to our client
-                    for pattern in expected_peer_patterns:
-                        if pattern in peer_id or peer_id.endswith(client_id):
-                            try:
-                                # Delete the trust relationship
-                                success = actor_interface.trust.delete_relationship(
-                                    peer_id
-                                )
-                                if success:
-                                    logger.info(
-                                        f"Deleted trust relationship for OAuth2 client {client_id}: {peer_id}"
-                                    )
-                                    deleted = True
-                                    break
-                                else:
-                                    logger.warning(
-                                        f"Failed to delete trust relationship {peer_id} for client {client_id}"
-                                    )
-                            except DbError:
-                                raise
-                            except Exception as e:
-                                logger.error(
-                                    f"Error deleting trust relationship {peer_id} for client {client_id}: {e}"
-                                )
-
-                if deleted:
-                    break
-
-            if not deleted:
+            if not trusts and exclude_peer_id is not None:
+                return
+            if not trusts:
                 logger.warning(
                     f"No trust relationship found to delete for OAuth2 client {client_id}"
                 )
+                return
+            # Every row is tried before a fault is raised: the client row and
+            # its index are already gone, so a retry finds no client to start
+            # from (``OAuth2ClientManager.delete_client`` sweeps the actor's
+            # leftover rows on that "not found" path).
+            first_fault: DbError | None = None
+            for trust in trusts:
+                peer_id = trust.peerid
+                try:
+                    if actor_interface.trust.delete_relationship(peer_id):
+                        logger.info(
+                            f"Deleted trust relationship for OAuth2 client {client_id}: {peer_id}"
+                        )
+                    elif not any(
+                        t.peerid == peer_id for t in actor_interface.trust.relationships
+                    ):
+                        # Deleting an earlier row of this client cascaded
+                        # (``Trust.delete`` deletes the client again), and
+                        # this row went with it.
+                        logger.info(
+                            f"Trust relationship {peer_id} for OAuth2 client {client_id} was already deleted"
+                        )
+                    else:
+                        # Refused, and the row is still there: not a success.
+                        logger.error(
+                            f"Failed to delete trust relationship {peer_id} for client {client_id}"
+                        )
+                        if first_fault is None:
+                            first_fault = DbError(
+                                "OAuth2 client trust delete", actor_id
+                            )
+                except DbError as e:  # folds DbError: raised after the other rows
+                    if first_fault is None:
+                        first_fault = e
+                    logger.error(
+                        f"Database error deleting trust relationship {peer_id} for client {client_id}: {e}"
+                    )
+                except Exception as e:
+                    # Any other failure is a row that may still be live: it
+                    # must not end in success either.
+                    logger.error(
+                        f"Error deleting trust relationship {peer_id} for client {client_id}: {e}"
+                    )
+                    if first_fault is None:
+                        first_fault = DbError("OAuth2 client trust delete", actor_id)
+                        first_fault.__cause__ = e
+            if first_fault is not None:
+                raise first_fault
 
         except DbError:
             raise
         except Exception as e:
+            # The caller (Trust.delete) must not report success while another
+            # row of the client may be live.
             logger.error(
                 f"Error deleting trust relationship for client {client_id}: {e}"
             )
-            # Don't raise - client deletion can continue
+            raise DbError("OAuth2 client trust delete", actor_id) from e
 
     def _update_global_index(self, client_id: str, actor_id: str) -> None:
         """Update the global client index using attribute buckets."""

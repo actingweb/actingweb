@@ -60,20 +60,6 @@ order and `limit=1` cannot work. Fixing it needs a key-format change
 existing diff rows. Until then a large diff backlog is re-read entirely on
 every fetch.
 
-## 4. `DbActorList.fetch` pagination
-
-`actor.py`'s `DbActorList.fetch()` is an unpaginated full-table scan
-materialised into a list, with an explicit "Admin/maintenance use only … do not
-call it on a serving path" docstring.
-
-**It is on a real operational path now:** both
-`actingweb/maintenance/migrate_property_lists.py` and
-`verify_property_lists.py` call `get_actor_list(config).fetch()` to enumerate
-the fleet. Those are the operator tools that exist to make a migration safe to
-run, and their input grows with the deployment. "Add a limit/cursor API before
-anyone uses it at scale" is therefore "before the next fleet sweep on a large
-table".
-
 ## 5. Import-time freezing of `Meta.table_name` / host
 
 Every DynamoDB model binds `AWS_DB_PREFIX` / `AWS_DB_HOST` /

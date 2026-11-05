@@ -383,8 +383,14 @@ def test_maybe_purge_runs_once_per_interval(
     assert len(store.purges) == 1
     purged = store.purges[0]
     assert purged is not None
-    assert len(purged) == 7
-    assert {TOKENS, REFRESH, PROVIDER, "mcp_auth_codes"} <= set(purged)
+    assert len(purged) == 8
+    assert {
+        TOKENS,
+        REFRESH,
+        PROVIDER,
+        "mcp_auth_codes",
+        "mcp_revoked_chains",
+    } <= set(purged)
 
     monkeypatch.setattr(
         tm_mod._mcp_purge_throttle,
@@ -801,3 +807,88 @@ class TestAnUnconfirmedDeleteStillRevokes:
             tm.revoke_client_tokens(ACTOR, CLIENT)
         assert tm.validate_access_token(second["access_token"]) is None
         assert tm.refresh_access_token(second["refresh_token"], CLIENT) is None
+
+
+# ---------------------------------------------------------------------------
+# A revocation that races a rotation (chain-revoked marker, 3.16)
+# ---------------------------------------------------------------------------
+
+REVOKED = "mcp_revoked_chains"
+
+
+def _chain_rows(store: MemoryStore, chain: str) -> list[tuple[str, str]]:
+    rows = []
+    for bucket in (TOKENS, REFRESH):
+        for name in store.names(ACTOR, bucket):
+            data = store.data(ACTOR, bucket, name)
+            if isinstance(data, dict) and data.get("chain_id") == chain:
+                rows.append((bucket, name))
+    return rows
+
+
+def test_a_revocation_between_the_consume_and_the_mint_leaves_no_live_pair(
+    env: tuple[ActingWebTokenManager, MemoryStore], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tm, store = env
+    first = _login(tm)
+    old_refresh = first["refresh_token"]
+    chain = _chain(store, REFRESH, old_refresh)
+    real = tm._create_access_token_from_refresh
+    ran: list[bool] = []
+
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        if not ran:
+            # The old access row is gone after the consume; the consumed
+            # refresh token still names the chain.
+            ran.append(tm.revoke_token(old_refresh))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(tm, "_create_access_token_from_refresh", wrapper)
+
+    assert tm.refresh_access_token(old_refresh, CLIENT) is None
+    assert ran == [True]
+    assert _chain_rows(store, chain) == []
+    assert store.data(ACTOR, REVOKED, chain) is not None
+
+
+def test_revoke_chain_writes_the_marker_before_its_first_read(
+    env: tuple[ActingWebTokenManager, MemoryStore], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tm, store = env
+    first = _login(tm)
+    chain = _chain(store, REFRESH, first["refresh_token"])
+    order: list[str] = []
+    real_snapshot = tm._snapshot_bucket
+
+    def snapshot(actor_id: str, bucket: str) -> Any:
+        order.append("read" if store.data(ACTOR, REVOKED, chain) is None else "marked")
+        return real_snapshot(actor_id, bucket)
+
+    monkeypatch.setattr(tm, "_snapshot_bucket", snapshot)
+    assert tm.revoke_token(first["access_token"])
+    assert order and order[0] == "marked"
+
+
+def test_a_marker_write_fault_revokes_nothing(
+    env: tuple[ActingWebTokenManager, MemoryStore],
+) -> None:
+    tm, store = env
+    first = _login(tm)
+    chain = _chain(store, REFRESH, first["refresh_token"])
+    store.write_faults.add(REVOKED)
+    with pytest.raises(tm_mod.TokenStoreUnavailable):
+        tm.revoke_token(first["access_token"])
+    assert len(_chain_rows(store, chain)) == 2
+
+
+def test_a_marker_read_fault_deletes_what_the_rotation_minted(
+    env: tuple[ActingWebTokenManager, MemoryStore],
+) -> None:
+    tm, store = env
+    first = _login(tm)
+    chain = _chain(store, REFRESH, first["refresh_token"])
+    store.faulty_buckets.add(REVOKED)
+    with pytest.raises(tm_mod.TokenStoreUnavailable):
+        tm.refresh_access_token(first["refresh_token"], CLIENT)
+    # Only the consumed refresh row (the retry handle) is left.
+    assert _chain_rows(store, chain) == [(REFRESH, first["refresh_token"])]

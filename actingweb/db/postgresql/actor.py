@@ -1,6 +1,7 @@
 """PostgreSQL implementation of actor database operations."""
 
 import logging
+from collections.abc import Iterator
 from typing import Any
 
 import psycopg
@@ -9,12 +10,76 @@ from actingweb.db.creator_rules import (
     UNIQUE_INDEX_NAME,
     dup_value,
     is_exempt,
+    missing_enforcement_message,
     normalise_creator,
 )
 from actingweb.db.exceptions import CreatorTaken, DbError
-from actingweb.db.postgresql.connection import get_connection
+from actingweb.db.postgresql.connection import get_connection, get_schema_name
 
 logger = logging.getLogger(__name__)
+
+# Rows per keyset page of DbActorList.iter_rows.
+_ITER_PAGE = 1000
+
+# Schemas whose ``ux_actors_creator`` was seen valid. Positive only: an
+# absent index or a fault is probed again on the next enforced write.
+_index_seen_valid: set[str] = set()
+
+
+def creator_index_state() -> str:
+    """``"valid"``, ``"invalid"`` or ``"missing"`` for ``ux_actors_creator``
+    in the current schema. Raises on a fault."""
+    schema = get_schema_name()
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT i.indisvalid FROM pg_index i "
+                "JOIN pg_class c ON c.oid = i.indexrelid "
+                "JOIN pg_namespace n ON n.oid = c.relnamespace "
+                "WHERE c.relname = %s AND n.nspname = %s",
+                (UNIQUE_INDEX_NAME, schema),
+            )
+            row = cur.fetchone()
+    if not row:
+        return "missing"
+    return "valid" if row[0] else "invalid"
+
+
+def _creator_index_present() -> bool:
+    """Whether ``ux_actors_creator`` is valid in the current schema; one
+    query per process and schema once it has been seen. Raises on a fault."""
+    schema = get_schema_name()
+    if schema in _index_seen_valid:
+        return True
+    if creator_index_state() != "valid":
+        return False
+    _index_seen_valid.add(schema)
+    return True
+
+
+def reset_index_probe() -> None:
+    """Forget what the index probe saw (tests that build or drop it)."""
+    _index_seen_valid.clear()
+
+
+def _require_creator_index(op: str) -> None:
+    """Refuse an enforced write the index would not enforce.
+
+    Without a valid index a claim is a plain write that lands a duplicate,
+    so the write fails closed with ``DbError(op)`` and the remedy is logged.
+    """
+    try:
+        present = _creator_index_present()
+    except Exception as e:
+        raise DbError(op) from e
+    if present:
+        return
+    logger.error(
+        missing_enforcement_message(
+            f"the PostgreSQL index {UNIQUE_INDEX_NAME} is missing or INVALID"
+        )
+    )
+    raise DbError(op)
 
 
 def _is_creator_violation(e: psycopg.errors.UniqueViolation) -> bool:
@@ -38,6 +103,12 @@ class DbActor:
         ``unique_creator`` is enforced by the partial unique index
         ``ux_actors_creator``, which ``actingweb-unique-creators enable``
         builds; the startup check refuses to run with the flag on without it.
+        An enforced write (create, creator rename, holder replacement) checks
+        the index once per process and raises ``DbError`` while it is missing,
+        so a process that skipped the check cannot land a duplicate. A
+        positive answer is kept for the process's life: a worker that saw the
+        index keeps writing without it if an operator drops it (``disable``)
+        while the worker runs, until it restarts. Reads never probe.
         """
         self.handle = None
         self.unique_creator = unique_creator
@@ -201,6 +272,8 @@ class DbActor:
         if self.get(actor_id=actor_id):
             logger.warning(f"Trying to create actor that exists({actor_id})")
             return False
+        if self.unique_creator and not is_exempt(creator):
+            _require_creator_index("actor create")
 
         try:
             with get_connection() as conn:
@@ -249,6 +322,7 @@ class DbActor:
         creator = normalise_creator(creator)
         if is_exempt(creator):
             raise ValueError("an exempt creator has no holder to replace")
+        _require_creator_index("actor replace holder")
         try:
             with get_connection() as conn:
                 with conn.cursor() as cur:
@@ -352,6 +426,8 @@ class DbActor:
 
         if not updates:
             return True  # Nothing to update
+        if creator and self.unique_creator and not is_exempt(creator):
+            _require_creator_index("actor modify")
 
         params.append(actor_id)
         where = "id = %s"
@@ -469,3 +545,33 @@ class DbActorList:
                 raise DbError("actor list fetch") from e
             logger.error(f"Error fetching actor list: {e}")
             return False
+
+    def iter_rows(
+        self, *, consistent: bool = False, rate_limit: float | None = None
+    ) -> Iterator[dict[str, Any]]:
+        """Yield every actor as ``{"id", "creator"}`` in id order, in keyset
+        pages of ``_ITER_PAGE``.
+
+        Each page takes its own pooled connection and releases it before
+        yielding, so a sweep abandoned part-way holds none. Reads are
+        read-committed per page, not a fleet snapshot. ``consistent`` and
+        ``rate_limit`` are accepted for parity with DynamoDB and ignored.
+        """
+        last = ""
+        while True:
+            try:
+                with get_connection() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            "SELECT id, creator FROM actors WHERE id > %s "
+                            "ORDER BY id LIMIT %s",
+                            (last, _ITER_PAGE),
+                        )
+                        page = cur.fetchall()
+            except Exception as e:
+                raise DbError("actor list scan") from e
+            for row in page:
+                yield {"id": row[0], "creator": row[1]}
+            if len(page) < _ITER_PAGE:
+                return
+            last = page[-1][0]

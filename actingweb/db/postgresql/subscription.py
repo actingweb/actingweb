@@ -5,6 +5,7 @@ from typing import Any
 
 import psycopg
 
+from actingweb.db._validation import check_subscription_callback
 from actingweb.db.exceptions import DbError
 from actingweb.db.postgresql.connection import get_connection
 
@@ -125,7 +126,9 @@ class DbSubscription:
 
         Raises:
             DbError: on a backend fault
+            TypeError: ``callback`` is not a bool
         """
+        check_subscription_callback(callback, modifying=False)
         if not actor_id or not peerid or not subid:
             return False
 
@@ -215,7 +218,9 @@ class DbSubscription:
 
         Raises:
             DbError: on a backend fault
+            TypeError: ``callback`` is neither a bool nor None
         """
+        check_subscription_callback(callback, modifying=True)
         if not self.handle:
             logger.debug("Attempted modification of DbSubscription without db handle")
             return False

@@ -54,6 +54,17 @@ def test_create_or_update_oauth_trust_creates_and_stores_tokens(monkeypatch):
     actor = FakeCoreActor()
     tm = TrustManager(actor)  # type: ignore[arg-type]
 
+    # A new OAuth2 row clears stale custom permissions first; FakeConfig has
+    # no database behind the permission store.
+    class FakePermissionStore:
+        def delete_permissions(self, _actor_id: str, _peer_id: str) -> bool:
+            return True
+
+    monkeypatch.setattr(
+        "actingweb.trust_permissions.get_trust_permission_store",
+        lambda _config: FakePermissionStore(),
+    )
+
     # Stub DbTrust.create/get/modify used inside TrustManager
     class FakeDbTrust:
         def __init__(self) -> None:

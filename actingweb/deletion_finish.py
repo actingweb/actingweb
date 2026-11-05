@@ -191,8 +191,18 @@ def finish_deletion(
         # below: a slow token or client sweep must count against the lease
         # (re-verification N6).
         keep_lease = _lease_keeper(actor_id, config, data)
+        from . import session_generation
+        from .db import get_actor
         from .oauth2 import _delete_actor_clients, _revoke_all_actor_tokens
 
+        # Fence the sweep: a refresh whose consume preceded it mints after
+        # it, and its generation guard then deletes what it minted. The SPA
+        # sweep has no chain to mark (the MCP sweep marks each chain it
+        # reaches), so the generation is the fence. A
+        # resume whose actor row is already gone skips it: the wipe below
+        # would not reach the buckets, and the new row would be an orphan.
+        if not resumed or get_actor(config).get(actor_id=actor_id) is not None:
+            session_generation.bump(actor_id, config)
         revoked = _revoke_all_actor_tokens(config, actor_id, spa=not spa_revoked)
         keep_lease()
         _delete_actor_clients(

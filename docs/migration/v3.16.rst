@@ -218,7 +218,12 @@ checkout, ``scripts/mark_actors_vouched.py`` run the same code.)
 The tool writes ``auth_method`` on actors that have none and leaves every
 actor that already carries a marker alone. It resumes with
 ``--start-after <actor id>`` and scans the whole actor table (maintenance, not
-a serving path). ``--include-factory`` also re-marks ``factory`` actors, for a
+a serving path). The scan is streamed and keeps only each matching actor's id
+and creator, about 220 MB per million actors, before it processes them in
+sorted id order. On DynamoDB it is strongly consistent, because the tool
+writes back the creator it read, so it costs twice the read units of an
+eventual scan; ``--rate-limit <units per second>`` caps it (ignored on
+PostgreSQL). ``--include-factory`` also re-marks ``factory`` actors, for a
 deployment that kept the factory open after upgrading and wants to vouch for
 what it created; run that while no sign-in is served, since a sign-in replacing
 one of those actors (or a sibling of it) deletes it whichever is first. A value that does not vouch (``factory``,
@@ -260,7 +265,15 @@ Direct ``Actor.create`` and ``ActorInterface.create`` callers
 
 Both take ``auth_method`` (default ``"app"``: the application vouches for the
 creator). Pass ``"factory"`` for anything created from unauthenticated input.
-Nothing to do otherwise.
+
+A process that creates actors without ``integrate_*`` (a worker, a script, a
+test harness that builds ``Config()`` directly) must also call
+``ActingWebApp.check_ready()`` or run against a store where
+``actingweb-unique-creators enable --apply`` has run. The ``DbActor``
+constructor no longer creates the DynamoDB ``<prefix>_creators`` table, and
+on PostgreSQL the first enforced create or creator change checks for
+``ux_actors_creator``.
+Without it, with uniqueness on and ``enable --apply`` not yet run, every actor create and creator change (a rename, a holder replacement) for a non-exempt creator, including the OAuth2 system actor bootstrap, raises ``DbError`` (``database error during actor create``, or ``actor modify`` and ``actor replace holder`` for the changes; 503 through the integrations, and retrying does not clear it) on both backends. Run ``actingweb-unique-creators enable --apply`` first, or call ``check_ready()``, which names the command.
 
 .. code-block:: python
 
@@ -714,10 +727,24 @@ module docstring of ``actingweb.db.protocols`` states:
   subid=None)`` as one atomic update that returns the new sequence number
   (None when the row is gone). The library no longer writes ``previous + 1``
   through ``modify(seqnr=...)``, which let two concurrent changes share a
-  number.
+  number;
+- take ``callback`` on ``DbSubscription.create`` and ``modify`` as a bool
+  only (``None`` on ``modify`` leaves it), raising ``TypeError`` before any
+  I/O for anything else;
+- raise ``DbError`` from ``DbAttribute.delete_expired`` on a fault rather
+  than answer 0 (a backend with native TTL may still answer 0 without
+  doing anything);
+- implement ``DbActorList.iter_rows(*, consistent=False, rate_limit=None)``,
+  yielding each actor as ``{"id", "creator"}`` as it is read, without
+  holding the fleet in memory, and raising ``DbError`` on a fault.
+  ``actingweb-mark-actors-vouched``, ``actingweb-migrate-property-lists``
+  and ``actingweb-verify-property-lists`` call it.
+  (``actingweb-verify-orphans`` reads the DynamoDB or PostgreSQL tables
+  directly and supports only those two backends.)
 
 A backend without ``strict`` fails with ``TypeError`` at its first call; one
-without ``increment_seq`` fails with ``AttributeError`` at its first diff.
+without ``increment_seq`` fails with ``AttributeError`` at its first diff;
+one without ``iter_rows`` stops those three commands before they scan.
 
 For reverse lookup (see `One reverse-lookup mechanism`_) a backend must also:
 
@@ -853,8 +880,8 @@ The flag is **on by default**. An application that cannot take the step
 below yet opts out with ``with_unique_creator(False)``, which keeps the
 duplicate-tolerant path (the adoption rules for several actors sharing a
 creator). Code that builds ``Config()`` and creates actors without
-``integrate_*`` should call ``ActingWebApp.check_ready()`` as an
-application does; ``BaseHandler`` no longer defaults its ``config``, so a
+``integrate_*`` must call ``ActingWebApp.check_ready()`` as an
+application does. Without it, with uniqueness on and ``enable --apply`` not yet run, every actor create and creator change (a rename, a holder replacement) for a non-exempt creator, including the OAuth2 system actor bootstrap, raises ``DbError`` (``database error during actor create``, or ``actor modify`` and ``actor replace holder`` for the changes; 503 through the integrations, and retrying does not clear it) on both backends. Run ``actingweb-unique-creators enable --apply`` first, or call ``check_ready()``, which names the command. ``BaseHandler`` no longer defaults its ``config``, so a
 handler built without one raises ``ValueError`` instead of enforcing a store
 that was never checked.
 

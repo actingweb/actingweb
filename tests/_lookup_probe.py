@@ -20,13 +20,16 @@ probe under tests still running with the stub).
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import os
+from collections.abc import Callable, Iterator
 from typing import Any
 
 import pytest
 
 _real_probe: Callable[[Any], None] | None = None
 _real_unique: Callable[[Any], None] | None = None
+_real_pg_index: Callable[[], bool] | None = None
+_real_ddb_backfill: Callable[[], str] | None = None
 
 
 def real_probe() -> Callable[[Any], None]:
@@ -89,3 +92,91 @@ def real_unique_probe(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         ActingWebApp, "_check_unique_creator_ready", real_unique_probe_fn()
     )
+
+
+def _postgresql_run() -> bool:
+    return os.environ.get("DATABASE_BACKEND", "dynamodb") == "postgresql"
+
+
+def real_pg_index_probe_fn() -> Callable[[], bool]:
+    """The real ``actingweb.db.postgresql.actor._creator_index_present``."""
+    global _real_pg_index
+    if _real_pg_index is None:
+        from actingweb.db.postgresql import actor as pg_actor
+
+        _real_pg_index = pg_actor._creator_index_present  # pyright: ignore[reportPrivateUsage]
+    return _real_pg_index
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _stub_pg_creator_index_probe() -> None:
+    """Stub the PostgreSQL ``ux_actors_creator`` probe for the whole process.
+
+    An enforced create refuses while the index is missing, and the index
+    cannot be built over the shared schemas, which hold deliberate duplicate
+    creators (the unit ``public`` schema and the per-worker integration
+    schemas, which Alembic builds without it). Tests that are about the
+    probe request ``real_pg_index_probe``. A DynamoDB run imports no psycopg.
+    """
+    if not _postgresql_run():
+        return
+    from actingweb.db.postgresql import actor as pg_actor
+
+    real_pg_index_probe_fn()
+    pg_actor._creator_index_present = lambda: True  # pyright: ignore[reportPrivateUsage]
+
+
+@pytest.fixture
+def real_pg_index_probe(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Run the real PostgreSQL creator-index probe in this test, with a
+    clean cache before and after."""
+    from actingweb.db.postgresql import actor as pg_actor
+
+    pg_actor.reset_index_probe()
+    monkeypatch.setattr(pg_actor, "_creator_index_present", real_pg_index_probe_fn())
+    yield
+    pg_actor.reset_index_probe()
+
+
+def real_dynamodb_backfill_probe_fn() -> Callable[[], str]:
+    """The real ``actingweb.db.dynamodb._backfill_probe.cached_backfill_state``."""
+    global _real_ddb_backfill
+    if _real_ddb_backfill is None:
+        from actingweb.db.dynamodb import _backfill_probe
+
+        _real_ddb_backfill = _backfill_probe.cached_backfill_state
+    return _real_ddb_backfill
+
+
+@pytest.fixture(autouse=True)
+def _stub_dynamodb_backfill_probe(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stub the DynamoDB creators backfill probe in every test.
+
+    An enforced create refuses while the creators table is not backfilled,
+    and the shared test stores cannot be (they hold deliberate duplicate
+    creators). Installed on every backend: several unit tests pin
+    ``database="dynamodb"`` whatever the run's backend. Function-scoped, not
+    session-scoped like the other stubs: importing anything under
+    ``actingweb.db.dynamodb`` imports every table model, whose names freeze
+    at import, and a session fixture can run before the integration
+    conftest has set the worker's ``AWS_DB_PREFIX``. Tests that are about
+    the probe request ``real_dynamodb_backfill_probe``.
+    """
+    from actingweb.db.dynamodb import _backfill_probe
+
+    real_dynamodb_backfill_probe_fn()
+    monkeypatch.setattr(_backfill_probe, "cached_backfill_state", lambda: "complete")
+
+
+@pytest.fixture
+def real_dynamodb_backfill_probe(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Run the real DynamoDB backfill probe in this test, with a clean cache
+    before and after."""
+    from actingweb.db.dynamodb import _backfill_probe
+
+    _backfill_probe.reset_backfill_probe()
+    monkeypatch.setattr(
+        _backfill_probe, "cached_backfill_state", real_dynamodb_backfill_probe_fn()
+    )
+    yield
+    _backfill_probe.reset_backfill_probe()

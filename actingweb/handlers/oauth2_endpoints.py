@@ -1131,6 +1131,13 @@ class OAuth2EndpointsHandler(BaseHandler):
             Response dict: ``action`` is ``success`` or ``retry``
         """
         if token and token.startswith(self.oauth2_server.token_manager.token_prefix):
+            if refresh_tokens:
+                # An MCP login is an AI agent's, an SPA session the user's:
+                # one never ends the other (owner rule, 2026-11-04).
+                logger.debug(
+                    f"MCP token logout: ignoring {len(refresh_tokens)} SPA "
+                    "refresh token(s) presented beside it"
+                )
             return self._handle_mcp_token_logout(token)
         return self._handle_session_token_logout(
             token, refresh_tokens or [], clear_provider_token=clear_provider_token
@@ -1211,8 +1218,11 @@ class OAuth2EndpointsHandler(BaseHandler):
     def _handle_mcp_token_logout(self, token: str) -> dict[str, Any]:
         """Revoke an MCP access token and its refresh-token chain on logout.
 
-        On success the endpoint answers as it always has (success, cookies
-        cleared). On a token store fault the action is ``retry``, which
+        Only that MCP chain ends: an MCP login is an AI agent's on behalf of
+        the user, not the user's browser session, so no cookie is cleared
+        (``cleared_cookies`` is ``[]``, no ``Set-Cookie``) and an SPA refresh
+        token sent beside it is ignored. The response shape is the same as
+        every logout's. On a token store fault the action is ``retry``, which
         :meth:`_handle_logout_request` answers with 503 and ``Retry-After``,
         so the client presents the token again. What the retry finds depends
         on where the fault hit (see ``ActingWebTokenManager.revoke_token``):
@@ -1233,7 +1243,7 @@ class OAuth2EndpointsHandler(BaseHandler):
         return {
             "action": "success",
             "message": "Successfully logged out",
-            "clear_cookies": list(_LOGOUT_COOKIES),
+            "clear_cookies": [],
             "redirect_url": f"{self.config.proto}{self.config.fqdn}/",
         }
 

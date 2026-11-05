@@ -151,8 +151,13 @@ class TestBundledMaintenanceExitCodes:
         import importlib
 
         tool = importlib.import_module(f"actingweb.maintenance.{module}")
+
+        def rows() -> Any:
+            raise DbError("actor list scan")
+            yield  # pragma: no cover - a generator that faults on first pull
+
         failing = mock.Mock()
-        failing.return_value.fetch.side_effect = DbError("actor list fetch")
+        failing.return_value.iter_rows.side_effect = lambda **_kw: rows()
         monkeypatch.setattr("sys.argv", [module])
         monkeypatch.setattr("actingweb.db.get_actor_list", failing)
         assert tool.main() == 2
@@ -160,17 +165,38 @@ class TestBundledMaintenanceExitCodes:
     @pytest.mark.parametrize(
         "module", ["migrate_property_lists", "verify_property_lists"]
     )
-    def test_a_folded_actor_list_exits_2_not_0(
-        self, module: str, monkeypatch: Any
+    def test_a_fault_part_way_exits_2_and_names_the_resume(
+        self, module: str, monkeypatch: Any, caplog: pytest.LogCaptureFixture
     ) -> None:
+        """A streamed scan faults where it is: the sweep stops there, keeps
+        what it did, and says how far it got (3.16)."""
         import importlib
+        import logging
 
         tool = importlib.import_module(f"actingweb.maintenance.{module}")
-        folding = mock.Mock()
-        folding.return_value.fetch.return_value = False
+        swept: list[str] = []
+
+        def rows() -> Any:
+            yield {"id": "a1", "creator": "x@example.com"}
+            raise DbError("actor list scan")
+
+        failing = mock.Mock()
+        failing.return_value.iter_rows.side_effect = lambda **_kw: rows()
+        sweep = "migrate_actor" if module.startswith("migrate") else "sweep_actor"
+        monkeypatch.setattr(
+            tool,
+            sweep,
+            lambda actor_id, *a, **k: (
+                swept.append(actor_id)
+                or ((0, 0, 0, []) if sweep == "migrate_actor" else (0, 0, 0))
+            ),
+        )
         monkeypatch.setattr("sys.argv", [module])
-        monkeypatch.setattr("actingweb.db.get_actor_list", folding)
-        assert tool.main() == 2
+        monkeypatch.setattr("actingweb.db.get_actor_list", failing)
+        with caplog.at_level(logging.ERROR):
+            assert tool.main() == 2
+        assert swept == ["a1"]
+        assert any("past 1 actor" in r.getMessage() for r in caplog.records)
 
 
 class TestBundledRegistryRetry:

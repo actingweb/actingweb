@@ -236,7 +236,8 @@ class TestEnable:
         from actingweb.db.dynamodb.creator import Creator
 
         creator = _email()
-        _actor(fresh_store, creator)
+        # A row without a claim: an enforced create before enable fails closed.
+        _raw_row(_id(), creator)
         assert unique_creators.main(["enable", "--apply"]) == 0
         Creator(creator="#meta#backfill").delete()  # a run that stopped here
         assert unique_creators.main(["disable", "--apply"]) == 0
@@ -525,9 +526,9 @@ class TestResolveOutsideRecords:
         real = DbActor._run_transaction.__func__  # type: ignore[attr-defined]
         seen: list[str | None] = []
 
-        def observed(cls: Any, build: Any, *, op: str) -> Any:
+        def observed(cls: Any, build: Any, *, op: str, **kw: Any) -> Any:
             seen.append(_record(creator))
-            return real(cls, build, op=op)
+            return real(cls, build, op=op, **kw)
 
         with mock.patch.object(DbActor, "_run_transaction", classmethod(observed)):
             assert unique_creators.main(["resolve", "--apply", "--keep", kept]) == 0
@@ -806,3 +807,75 @@ class TestForceEmailRewriteHeld:
         with mock.patch.object(db_class, "get_creator_holder", return_value=actor.id):
             loaded = Actor(actor_id=actor.id, config=self._forced(enforced_store))
         assert loaded.creator == email
+
+
+class TestFailClosedBeforeEnable:
+    """A bare ``Config()`` with uniqueness on, before ``enable --apply``:
+    every enforced create raises ``DbError`` on both backends, and succeeds
+    once enforcement is in place."""
+
+    @pytest.fixture
+    def real_probe(self, request: pytest.FixtureRequest) -> None:
+        request.getfixturevalue(
+            "real_dynamodb_backfill_probe" if DYNAMODB else "real_pg_index_probe"
+        )
+
+    @dynamodb_only
+    def test_the_prewarmed_empty_table_still_refuses(
+        self, fresh_store: Any, real_probe: None
+    ) -> None:
+        """What a refused first start leaves: ``check_ready()`` prewarms the
+        creators table, empty, before it raises ``UniqueCreatorNotReady``."""
+        from actingweb.db.dynamodb.creator import Creator
+
+        Creator.create_table(wait=True)
+        creator = _email()
+        _raw_row(_id(), creator)  # an existing user, no record
+        with pytest.raises(DbError) as raised:
+            get_actor(fresh_store).create(actor_id=_id(), creator=creator)
+        assert not isinstance(raised.value, CreatorTaken)
+        assert _record(creator) is None
+
+    def test_create_raises_until_enable_then_records_the_creator(
+        self, fresh_store: Any, real_probe: None, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        from ._isolated_store import enable_enforcement
+
+        creator = _email()
+        actor_id = _id()
+        with caplog.at_level(logging.ERROR):
+            with pytest.raises(DbError) as raised:
+                get_actor(fresh_store).create(
+                    actor_id=actor_id, creator=creator, passphrase="pw"
+                )
+        assert not isinstance(raised.value, CreatorTaken)
+        assert any(
+            "actingweb-unique-creators enable --apply" in r.getMessage()
+            for r in caplog.records
+            if r.levelno >= logging.ERROR
+        )
+        assert get_actor(fresh_store).get(actor_id=actor_id) is None
+
+        enable_enforcement(fresh_store)
+        assert get_actor(fresh_store).create(
+            actor_id=actor_id, creator=creator, passphrase="pw"
+        )
+        assert _holder(fresh_store, creator) == actor_id
+        with pytest.raises(CreatorTaken):
+            get_actor(fresh_store).create(actor_id=_id(), creator=creator)
+
+    @dynamodb_only
+    def test_report_names_the_missing_table(
+        self, fresh_store: Any, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        from actingweb.db.dynamodb.creator import Creator
+
+        assert not Creator.exists()
+        with caplog.at_level(logging.WARNING):
+            unique_creators.main(["report"])
+        assert any(
+            Creator.Meta.table_name in r.getMessage()
+            and "does not exist" in r.getMessage()
+            and "enable --apply" in r.getMessage()
+            for r in caplog.records
+        )

@@ -448,97 +448,40 @@ class AsyncMCPHandler(MCPHandler):
                 f"Access denied: unable to verify permission to access resource '{uri}'",
             )
 
-        # Find the corresponding method hook and extract URI template variables
-        from ..mcp.decorators import get_mcp_metadata, is_mcp_exposed
+        # Find the corresponding resource hook (the sync handler's resolver
+        # and formatter, so Flask and FastAPI answer the same).
+        from ..mcp.uri import resolve_resource, resource_arguments
+        from .mcp import format_resource_read_result
 
-        # Import URI template matching logic
         try:
-            from ..mcp.uri import match_uri_template
-
-            for method_name, hooks in self.hooks._method_hooks.items():
-                for hook in hooks:
-                    if is_mcp_exposed(hook):
-                        metadata = get_mcp_metadata(hook)
-                        if metadata and metadata.get("type") == "resource":
-                            # Prefer 'uri_template' from decorator; fall back to legacy 'uri'
-                            uri_template = (
-                                metadata.get("uri_template")
-                                or metadata.get("uri")
-                                or f"actingweb://{method_name}"
-                            )
-                            if uri_template:
-                                match_result = match_uri_template(uri_template, uri)
-                                if match_result is not None:
-                                    try:
-                                        # Extract variables from URI
-                                        uri_variables = match_result
-
-                                        # Merge URI variables into arguments
-                                        arguments = {**uri_variables}
-
-                                        # Execute the method hook - check if it's async
-                                        if inspect.iscoroutinefunction(hook):
-                                            result = await hook(
-                                                actor, method_name, arguments
-                                            )
-                                        else:
-                                            result = hook(actor, method_name, arguments)
-
-                                        # Check if result is already properly structured MCP content
-                                        if (
-                                            isinstance(result, dict)
-                                            and "contents" in result
-                                        ):
-                                            # Result is already MCP-formatted, use it directly
-                                            return {
-                                                "jsonrpc": "2.0",
-                                                "id": request_id,
-                                                "result": result,
-                                            }
-                                        else:
-                                            # Legacy handling: wrap in text content
-                                            if isinstance(result, str):
-                                                content_text = result
-                                            elif isinstance(result, dict):
-                                                content_text = str(
-                                                    result.get("content", result)
-                                                )
-                                            else:
-                                                content_text = str(result)
-
-                                            return {
-                                                "jsonrpc": "2.0",
-                                                "id": request_id,
-                                                "result": {
-                                                    "contents": [
-                                                        {
-                                                            "uri": uri,
-                                                            "mimeType": metadata.get(
-                                                                "mimeType", "text/plain"
-                                                            ),
-                                                            "text": content_text,
-                                                        }
-                                                    ]
-                                                },
-                                            }
-                                    except DbError as e:  # folds DbError: answered by _db_fault_response
-                                        return self._db_fault_response(request_id, e)
-                                    except Exception as e:
-                                        logger.error(
-                                            f"Error executing resource read for {uri}: {e}"
-                                        )
-                                        return self._create_jsonrpc_error(
-                                            request_id,
-                                            -32603,
-                                            f"Resource read failed: {str(e)}",
-                                        )
-
-        except ImportError:
-            logger.warning("Failed to import URI template matching helper")
+            found = resolve_resource(str(uri), self.hooks._method_hooks)
         except DbError:
             raise
         except Exception as e:
             logger.error(f"Unexpected error during resource lookup: {e}", exc_info=True)
+            found = None
+        if found is not None:
+            method_name, hook, metadata, variables = found
+            arguments = resource_arguments(params, variables, str(uri))
+            try:
+                if inspect.iscoroutinefunction(hook):
+                    result = await hook(actor, method_name, arguments)
+                else:
+                    result = hook(actor, method_name, arguments)
+                return {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "result": format_resource_read_result(result, uri, metadata),
+                }
+            except DbError as e:  # folds DbError: answered by _db_fault_response
+                return self._db_fault_response(request_id, e)
+            except Exception as e:
+                logger.error(f"Error executing resource read for {uri}: {e}")
+                return self._create_jsonrpc_error(
+                    request_id,
+                    -32603,
+                    f"Resource read failed: {str(e)}",
+                )
 
         return self._create_jsonrpc_error(
             request_id, -32601, f"Resource not found: {uri}"

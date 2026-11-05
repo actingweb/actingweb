@@ -8,6 +8,130 @@ Unreleased
 SECURITY
 ~~~~~~~~
 
+- **PyJWT 2.15 is the minimum, and the lock moves past every open advisory.**
+  The SPA ``jwt_bearer`` grant decodes the unverified assertion
+  (``verify_signature=False``) to check its issuer before validating it.
+  Below 2.15, PyJWT can be driven into a ``RecursionError`` while parsing
+  that payload, and it accepts OKP keys whose public and private halves
+  disagree. **Behavior change:** ``pyjwt`` must be ``>=2.15,<3``; an
+  application that pins an older version fails to resolve. The lock (CI,
+  docs and the demo) moves to these versions:
+
+  - ``certifi`` 2026.10.23, which drops the emSign roots with compromised
+    intermediate CAs;
+  - ``urllib3`` 2.8.0;
+  - ``oauthlib`` 4.0.1 (its breaking changes and fixed advisories are on
+    the provider side, which the library does not use);
+  - ``werkzeug`` 3.1.9, ``mako`` 1.4.3 and ``setuptools`` 84.2.1;
+  - ``filelock``, ``virtualenv`` and ``python-discovery`` (1.6.0 to
+    1.9.4, a ``virtualenv`` dependency), used only in development.
+
+  **Check:** a deployment that resolves its own dependencies upgrades
+  ``certifi`` and ``urllib3`` as well, since the library's constraints
+  already allow the fixed versions. A deployment still on v3.15.1 runs the
+  same unverified decode with a ``^2.14`` floor, which already allows the
+  fixed release: ``pip install -U "pyjwt>=2.15"`` closes the advisory there
+  today, with no library upgrade.
+
+- **A logout that raced a refresh of the same session could leave the
+  session live.** ``/oauth/logout``, ``/oauth/revoke`` and the theft response
+  sweep a refresh-token chain once. A refresh whose consume of the old token
+  landed before that sweep minted its new pair after it, so the client got a
+  working access and refresh token for a chain the user had just ended. The
+  MCP ladder had the same window, and actor deletion swept SPA tokens with no
+  fence at all. Now every chain revocation writes a chain-revoked marker
+  (``spa_revoked_chains`` under the system actor, ``mcp_revoked_chains``
+  under the user's actor, 300 s TTL) before its first read, and every
+  rotation reads it after minting: when it is there the rotation deletes the
+  pair it minted and answers ``invalid_grant`` (401 on the SPA endpoint, 400
+  on ``/oauth/token``). Actor deletion bumps the session generation before
+  its token sweep, so the rotation's generation guard does the same.
+  **Behavior change:** a marker that cannot be written revokes nothing
+  (the retry completes it), and a marker that cannot be read during a
+  refresh deletes what was minted. Logout, ``/oauth/revoke`` and the SPA
+  endpoint answer either with 503 and ``Retry-After``; ``/oauth/token``
+  answers 500 ``server_error``, its existing answer to a token-store fault
+  (the theft response there writes a marker too). A refresh now
+  reads one more row (DynamoDB 3 to 4 reads, PostgreSQL 2 to 3), and a
+  refused rotation deletes its two rows instead of sweeping the chain
+  again. On PostgreSQL ``delete_expired`` raises ``DbError`` on a fault
+  instead of answering 0; the library's callers fold it, the token purges
+  with a WARNING and ``actingweb-deletions`` with a printed line.
+  **Check:** on DynamoDB, native TTL on the attributes table reaps the
+  marker rows as it reaps tokens; without it both marker buckets grow by one
+  row per revocation.
+
+- **Disconnecting an OAuth2 client disabled it for every user.** Deleting a
+  trust row of an MCP client (the trust page, ``TrustManager.delete_relationship``,
+  an actor's deletion or adoption) deleted the client itself, with the
+  actor passed as its owner. ``delete_client`` kept that actor without
+  comparing it with the client's registration and deleted the client's
+  global index row, so the client stopped authenticating for every user
+  connected to it. A user who knew a client id could do this on purpose:
+  authorize the client as themselves, then delete their own row. Now a row
+  deletes the client only when the client is registered under that row's
+  actor. Otherwise it revokes that actor's tokens for the client before the
+  row goes, then deletes that actor's other rows of it, and the registration
+  and every other connection stay. ``delete_client(client_id, actor_id=...)``
+  refuses an ``actor_id`` the client is not registered under, and the new
+  ``delete_client_connection(actor_id, client_id)`` ends one connection.
+  The same change closes these gaps on the deletion path:
+
+  - a fault in that cleanup is raised (503 through the integrations)
+    instead of logged under a 204 while the client stayed live. The
+    revocation, the owner's client deletion, the provider-token delete and
+    the deletion of that actor's other rows of the client run before the
+    row goes, so their faults leave the row in place, and deleting the same
+    row again finishes them: ``TrustManager.delete_relationship``, and
+    ``DELETE /<actor>/trust/<rel>/<peer>``, which calls the same deletion
+    while the row exists (a retry answered 404 with the other rows left). A row an earlier row's cleanup already
+    removed no longer fails an actor's bulk trust deletion, and any error
+    deleting the client's other rows, or a refusal with the row still
+    there, is raised as well;
+  - the owner's client deletion from a trust row stops with ``DbError``,
+    the row kept, when the token store cannot list every token, instead of
+    deleting the client with access tokens left to expire. A client counts
+    as deleted only when its index row and its row are both confirmed gone,
+    in that order (one of them was enough, and a client row left behind
+    stayed listed but could not be deleted); its owner's
+    ``OAuth2ClientManager.delete_client`` finishes a client whose index row
+    already went. A client row in an actor's bucket whose index row names
+    another actor (copied or restored) is ended as a connection: every
+    deletion of that actor's row refused it, so the row could never go;
+  - a row from before ``established_via`` (3.4) belongs to a client when
+    it has no baseuri or this actor's own, compared by its ``/<actor_id>``
+    suffix, so a row written before the fqdn or protocol changed is still
+    the client's; client deletion and the MCP client-credentials lookup no
+    longer take such a row with a peer's baseuri for the client's;
+  - a legacy ``oauth2:<email>:<client_id>`` row, which authorises, ends its
+    connection too (it cascaded nothing), and a tagged row is routed by its
+    ``oauth_client_id``;
+  - every token chain the revocation reaches is marked revoked before its
+    tokens go, so a refresh that raced the deletion deletes what it minted;
+  - a trust row's custom permissions are deleted after the row, not before
+    (a fault in between left a live row on its trust type's defaults, which
+    can be wider), always (a "none" the permission cache held from before
+    another process wrote them skipped the delete), and the next row
+    created for the same peer id starts without them (an OAuth2 login, or a
+    peer's trust requested and approved again; a request over a live row
+    keeps them);
+  - the provider tokens an OAuth2 login stored for the row
+    (``oauth_tokens:<peer_id>``, Google's refresh token among them) are
+    deleted with it.
+
+  **Behavior change:** disconnecting a dynamically registered client (from
+  ``/oauth/register``, registered under the system actor) no longer deletes
+  its registration; the client must authorize again to reach that user.
+  ``delete_client`` with the user's actor id for such a client answers
+  ``False``. **Check:** code that called the registry's ``delete_client``
+  with a user's actor id to remove a client it did not register uses
+  ``delete_client_connection`` instead. **Behavior change:** the registry's
+  ``delete_client`` answers ``False`` when only one of the client's two
+  rows is confirmed deleted; a retry with the owner's ``actor_id`` finishes
+  it. **Behavior change:** an MCP client-credentials token for a pre-3.4
+  trust row with a peer's baseuri no longer authorises; such a row was
+  never written by the library's OAuth2 flows.
+
 - **An unauthenticated ``POST /`` could squat an address, and the address
   owner's first OAuth login adopted the squatter's actor with the squatter's
   credentials still live.** The actor factory creates an actor for any
@@ -540,8 +664,8 @@ CHANGED
   adoption code stays for it). A deployment with duplicate creators refuses to
   start with ``UniqueCreatorNotReady`` until ``actingweb-unique-creators``
   ``report``, ``resolve --apply`` and ``enable --apply`` have run, or it opts
-  out. A fresh deployment starts once (which creates the tables and stops),
-  runs ``enable --apply``, and starts again; with no actors yet the refusal
+  out. A fresh deployment under ``integrate_*`` starts once (which creates
+  the tables and stops), runs ``enable --apply``, and starts again; with no actors yet the refusal
   says exactly that. The consumer-visible shifts the flag brought, now the
   default: a held creator at ``POST /`` answers 403, ``PUT /trust/trustee``
   409, a store whose enforcement cannot be read 503, and DynamoDB actor
@@ -557,7 +681,15 @@ CHANGED
   ``TypeError`` instead of being read as ``unique_creator``. The readiness check now reads one consistent
   item instead of calling ``DescribeTable``, so ``DescribeTable`` can still be
   dropped from the runtime role. Code that builds ``Config()`` and creates
-  actors without ``integrate_*`` should call ``check_ready()``.
+  actors without ``integrate_*`` must call ``check_ready()``: without it,
+  with uniqueness on and ``enable --apply`` not yet run, every actor create,
+  including the OAuth2 system actor bootstrap, raises ``DbError``
+  (``database error during actor create``, 503 through the integrations, and
+  retrying does not clear it) on both backends, with an ERROR naming the
+  missing or unbackfilled table, or the missing index, and the command. On
+  DynamoDB a fault while reading the creators table's backfill item refuses
+  the write too, with an ERROR naming the table, the fault and the
+  ``dynamodb:GetItem`` permission it needs.
 
 - **Breaking: ``with_unique_creator()`` is enforced by the database.** Before
   3.16 the flag made ``Actor.create`` list the creator's actors and refuse
@@ -578,8 +710,12 @@ CHANGED
     ``enable --apply`` first. A fault while checking refuses to start too:
     starting unchecked on DynamoDB, against an empty auto-created
     ``creators`` table, would let existing users' sign-ins create second
-    actors. If your IAM policy lists tables by name, add
-    ``<prefix>_creators`` first.
+    actors. A process that builds ``Config()`` directly no longer creates
+    that table, nor claims against one that is not backfilled (the table a
+    refused first start leaves is empty), nor without the index on
+    PostgreSQL: its enforced creates and creator changes raise ``DbError``
+    until ``enable --apply`` has run. If your IAM policy
+    lists tables by name, add ``<prefix>_creators`` first.
   - The factory no longer returns the existing actor to a caller who
     supplies its passphrase: a second ``POST /`` for a held creator answers
     403 "Creator already exists" whatever the passphrase (this also removes
@@ -1250,8 +1386,12 @@ ADDED
   writes ``auth_method`` (default ``operator``; an unvouched value is
   refused) on actors with no marker, with ``--creator``, ``--start-after`` to
   resume, ``--dry-run`` and ``--include-factory`` to also re-mark ``factory``
-  actors. It needs the 3.16 library, scans the whole actor table, and prints
-  ``scanned``, ``marked``, ``skipped``, ``pending`` (marked, but still waiting
+  actors. It needs the 3.16 library and scans the whole actor table, streamed
+  (only each matching actor's id and creator is kept, about 220 MB per
+  million actors) and strongly consistent on DynamoDB, since it writes back
+  the creator it read (twice the read units of an eventual scan;
+  ``--rate-limit`` caps it in read capacity units per second, ignored on
+  PostgreSQL). It prints ``scanned``, ``marked``, ``skipped``, ``pending`` (marked, but still waiting
   for email verification, so still unvouched) and ``errors``. Exit 0 when
   every actor was handled, 1 when one could not be marked (re-run it without
   ``--start-after``; the summary says so), 2 when the actor list could not be
@@ -1425,6 +1565,73 @@ ADDED
 
 FIXED
 ~~~~~
+
+- **A subscription ``callback`` that was not a bool was stored as ``True``
+  on DynamoDB and failed as a store fault on PostgreSQL.** The column is a
+  boolean on both backends, but nothing checked the argument: PynamoDB
+  coerced any truthy value (a URL, on the path that found it) to ``True``,
+  and PostgreSQL answered the failed cast as a ``DbError``, which read as an
+  outage. ``DbSubscription.create`` and ``modify`` now refuse a non-bool
+  before any I/O on both backends. **Behavior change:** a non-bool
+  ``callback`` raises ``TypeError`` naming the type (never the value);
+  ``modify`` still accepts ``None`` to leave it. No request can reach it
+  (the handlers pass literals), so only code that calls the backend
+  directly needs checking.
+
+- **FastAPI answered ``resources/read`` differently from Flask.** The async
+  handler sent a ``dict`` result as ``str()`` (or, when it had a
+  ``content`` key, that value alone), read ``mimeType`` from a key the
+  decorator never writes (so every answer was ``text/plain``), passed the
+  hook only the template's variables, and ignored a resource declared only
+  by ``uri_pattern``; the Flask handler passed only the request params, not
+  the variables. Both handlers now share one resolver and one formatter,
+  and pass the hook the request params, then the template's variables over
+  them, then ``uri``, which is always the requested URI. **Behavior change
+  for FastAPI deployments:** a ``dict`` body is indented JSON with the
+  declared ``mime_type`` (``application/json`` when undeclared), including a
+  ``dict`` with a ``content`` key, which was unwrapped before; a hook
+  receives ``uri`` and the other request params; a ``uri_pattern`` resource
+  resolves; and a ``dict`` holding a value JSON cannot serialise (a
+  ``datetime``) answers the generic error instead of a Python repr.
+  **Behavior change for Flask deployments:** a hook also receives the
+  template's variables, which win over a request param of the same name.
+  **Check:** a FastAPI client that parsed the old ``text/plain`` body or a
+  hook that returned ``{"content": ...}``; a hook that splats its arguments
+  into a fixed signature (it now receives ``uri``); a template with a
+  variable named ``uri`` (the hook sees the requested URI under that name).
+
+- **Deleting an OAuth2 client could delete another client's trust row.**
+  Client deletion matched trust rows by substring
+  (``pattern in peer_id or peer_id.endswith(client_id)``) and deleted the
+  first hit, so an unrelated row on the same actor whose peer id contained
+  the client id could go instead. It now deletes every row of the client,
+  each found exactly: the rows the MCP authentication resolver accepts
+  (``oauth_client_id``, then the exact legacy peer id), plus the real-email
+  legacy rows ``<source>:<email>:<client_id>``. A second row of the same
+  client (an upgraded actor can hold a legacy ``oauth2:`` row beside the
+  tagged ``oauth2_client:`` one) was already removed for generated
+  ``mcp_`` client ids, by the cascade that deleting the tagged row runs; it is
+  now deleted directly, whatever the client id, and a fault on one row no
+  longer stops the deletion of the others (the first fault is raised to
+  the client-deletion caller after them, also when the deletion started
+  from a trust-row delete). A retry through
+  ``OAuth2ClientManager.delete_client`` after such a fault deletes the
+  actor's leftover rows of that client id even though the client itself is
+  already gone. **Behavior change:**
+  an unrelated row whose peer id merely contains the client id is kept; a
+  two-segment ``oauth2_client:<client_id>`` row, which the resolver
+  already ignored, is no longer deleted with the client.
+
+- **An MCP-token logout cleared the browser's SPA session cookies.**
+  ``/oauth/logout`` with an MCP access token (``aw_…``) revoked the MCP
+  chain and then cleared every session cookie, while any SPA refresh token
+  sent beside it stayed live: half a logout of a session it did not own. An
+  MCP login is an AI agent's on behalf of the user, not the user's browser
+  session, so now that logout ends only the MCP chain; SPA refresh tokens
+  presented with it are ignored and logged at DEBUG. **Behavior change:**
+  the response keeps its shape (``"Successfully logged out"``,
+  ``redirect_url``), but ``cleared_cookies`` is ``[]`` and no ``Set-Cookie``
+  is sent. A browser ends its own session by logging out of the SPA.
 
 - **A reverse-lookup row stayed with an actor that no longer held the
   value.** Releasing an indexed value's lookup row is best effort, so a

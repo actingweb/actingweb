@@ -1,0 +1,466 @@
+"""Deleting a connection to an OAuth2 client ends that connection only (3.16).
+
+Audit 2026-11-04 (thoughts/research/2026-11-04-client-deletion-lifecycle-audit.md):
+``Trust.delete`` on any actor's client row deleted the client itself, and
+with it the global index row, disabling the client for every actor (D1).
+Now a row's actor deletes the client only when the client is registered
+under it; otherwise it revokes its own tokens and deletes its own rows.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+from unittest.mock import Mock, patch
+
+import pytest
+
+from actingweb.db.exceptions import DbError
+from actingweb.trust import Trust
+
+REGISTRY = "actingweb.oauth2_server.client_registry.get_mcp_client_registry"
+
+
+@pytest.fixture(autouse=True)
+def _row_side_stores() -> Any:
+    """The permission and provider-token stores ``Trust.delete`` clears
+    right after the row; these unit tests use a mock ``Config``."""
+    with (
+        patch("actingweb.trust_permissions.get_trust_permission_store") as permissions,
+        patch("actingweb.attribute.InternalStore") as store,
+    ):
+        permissions.return_value.get_permissions.return_value = None
+        store.return_value.set_confirmed.return_value = True
+        yield
+
+
+def _trust(data: dict[str, Any], *, deleted: bool = True) -> tuple[Trust, Mock]:
+    config = Mock()
+    db_trust = Mock()
+    db_trust.get.return_value = data
+    db_trust.delete.return_value = deleted
+    config.DbTrust.DbTrust.return_value = db_trust
+    return Trust(actor_id="actor-y", peerid=data["peerid"], config=config), db_trust
+
+
+def _registry(*, owner: bool) -> Mock:
+    registry = Mock()
+    registry.client_owned_by.return_value = owner
+    registry.delete_client.return_value = True
+    registry.disable_client.return_value = True
+    registry.indexed_owner.return_value = None
+    registry.sweeping.return_value = False
+    return registry
+
+
+TAGGED = {
+    "peerid": "oauth2_client:y_at_x_dot_com:mcp_ab12",
+    "oauth_client_id": "mcp_ab12",
+    "established_via": "oauth2_client",
+}
+
+
+def test_a_connection_of_another_actors_client_never_deletes_the_client() -> None:
+    trust, db_trust = _trust(TAGGED)
+    registry = _registry(owner=False)
+    calls: list[str] = []
+    registry.revoke_connection_tokens.side_effect = lambda *a: calls.append("revoke")
+    registry._delete_client_trust_relationship.side_effect = lambda *a, **k: (
+        calls.append("sweep")
+    )
+    db_trust.delete.side_effect = lambda: calls.append("row") or True
+    with patch(REGISTRY, return_value=registry):
+        assert trust.delete() is True
+    registry.client_owned_by.assert_called_once_with("actor-y", "mcp_ab12")
+    registry.delete_client.assert_not_called()
+    assert calls == ["revoke", "sweep", "row"], "tokens and siblings go first"
+    registry._delete_client_trust_relationship.assert_called_once_with(
+        "actor-y", "mcp_ab12", exclude_peer_id=TAGGED["peerid"]
+    )
+
+
+def test_the_owner_disables_its_client_before_the_row_goes() -> None:
+    trust, db_trust = _trust(TAGGED)
+    registry = _registry(owner=True)
+    calls: list[str] = []
+    registry.disable_client.side_effect = lambda *a, **k: calls.append("client") or True
+    db_trust.delete.side_effect = lambda: calls.append("row") or True
+    with patch(REGISTRY, return_value=registry):
+        assert trust.delete() is True
+    registry.disable_client.assert_called_once_with("mcp_ab12", actor_id="actor-y")
+    registry.revoke_connection_tokens.assert_not_called()
+    assert calls == ["client", "row"]
+    registry._delete_client_trust_relationship.assert_called_once_with(
+        "actor-y", "mcp_ab12", exclude_peer_id=TAGGED["peerid"]
+    )
+
+
+def test_a_client_the_index_gives_to_another_actor_is_a_connection() -> None:
+    """A client row copied into this actor's bucket, with the index naming
+    another owner: every disable refused, so the row could never be deleted
+    (seventh verification, 5). It is ended as a connection."""
+    trust, _ = _trust(TAGGED)
+    registry = _registry(owner=True)
+    registry.indexed_owner.return_value = "actor-x"
+    with patch(REGISTRY, return_value=registry):
+        assert trust.delete() is True
+    registry.disable_client.assert_not_called()
+    registry.revoke_connection_tokens.assert_called_once_with("actor-y", "mcp_ab12")
+
+
+def test_a_sibling_fault_keeps_the_row_for_the_same_routes_retry() -> None:
+    """The sweep ran after the row: a sibling fault left a 404 for the
+    one-row route's retry, with the sibling live (seventh verification, 1)."""
+    trust, db_trust = _trust(TAGGED)
+    registry = _registry(owner=False)
+    registry._delete_client_trust_relationship.side_effect = DbError("sweep")
+    with patch(REGISTRY, return_value=registry), pytest.raises(DbError):
+        trust.delete()
+    db_trust.delete.assert_not_called()
+
+
+def test_a_nested_delete_inside_a_sweep_does_not_sweep_again() -> None:
+    trust, db_trust = _trust(TAGGED)
+    registry = _registry(owner=False)
+    registry.sweeping.return_value = True
+    with patch(REGISTRY, return_value=registry):
+        assert trust.delete() is True
+    registry._delete_client_trust_relationship.assert_not_called()
+    db_trust.delete.assert_called_once()
+
+
+def test_a_revocation_fault_keeps_the_row_as_the_retry_handle() -> None:
+    trust, db_trust = _trust(TAGGED)
+    registry = _registry(owner=False)
+    registry.revoke_connection_tokens.side_effect = DbError("token revoke")
+    with patch(REGISTRY, return_value=registry), pytest.raises(DbError):
+        trust.delete()
+    db_trust.delete.assert_not_called()
+
+
+def test_a_failed_client_deletion_is_raised_and_keeps_the_row() -> None:
+    """The trust UI answered 204 while the client stayed live (D4); then a
+    503 with the row gone left the retry a 404 (fifth verification, 2)."""
+    trust, db_trust = _trust(TAGGED)
+    registry = _registry(owner=True)
+    registry.disable_client.return_value = False
+    with patch(REGISTRY, return_value=registry), pytest.raises(DbError):
+        trust.delete()
+    db_trust.delete.assert_not_called()
+
+
+def test_a_provider_token_fault_keeps_the_row() -> None:
+    trust, db_trust = _trust(TAGGED)
+    registry = _registry(owner=False)
+    with (
+        patch(REGISTRY, return_value=registry),
+        patch("actingweb.attribute.InternalStore") as store,
+        pytest.raises(DbError),
+    ):
+        store.return_value.set_confirmed.return_value = False
+        trust.delete()
+    db_trust.delete.assert_not_called()
+
+
+def test_the_caches_are_evicted_when_the_cleanup_after_the_row_raises() -> None:
+    trust, _ = _trust(TAGGED)
+    registry = _registry(owner=False)
+    with (
+        patch(REGISTRY, return_value=registry),
+        patch("actingweb.trust_permissions.get_trust_permission_store") as shared,
+        patch("actingweb.mcp.invalidation.evict_caches_for_actor") as evict,
+        pytest.raises(DbError),
+    ):
+        shared.return_value.delete_permissions.side_effect = DbError("permissions")
+        trust.delete()
+    evict.assert_called_once_with("actor-y")
+
+
+def test_permissions_are_cleared_through_the_shared_store() -> None:
+    """A fresh store instance left the evaluator's cache with the old
+    grants (fifth verification, 4)."""
+    trust, _ = _trust(TAGGED)
+    with (
+        patch(REGISTRY, return_value=_registry(owner=False)),
+        patch("actingweb.trust_permissions.get_trust_permission_store") as shared,
+    ):
+        shared.return_value.get_permissions.return_value = object()
+        shared.return_value.delete_permissions.return_value = True
+        assert trust.delete() is True
+    shared.return_value.delete_permissions.assert_called_once_with(
+        "actor-y", TAGGED["peerid"]
+    )
+
+
+@pytest.mark.parametrize(
+    ("data", "expected"),
+    [
+        ({"peerid": "oauth2:y_at_x_dot_com:mcp_ab12"}, "mcp_ab12"),  # legacy, D5
+        ({"peerid": "oauth2_client:mcp_ab12:mcp_ab12"}, "mcp_ab12"),
+        ({"peerid": "oauth2_interactive:y_at_x_dot_com"}, None),
+        ({"peerid": "0123abcd", "relationship": "friend"}, None),
+        ({"peerid": "oauth2:y:z", "oauth_client_id": "mcp_tag"}, "mcp_tag"),
+        # A peer-created row (POST /trust) is recorded as established via
+        # "trust": its peer id never names a client.
+        (
+            {"peerid": "oauth2_client:x:mcp_ab12", "established_via": "trust"},
+            None,
+        ),
+        (
+            {
+                "peerid": "0123abcd",
+                "established_via": "trust",
+                "oauth_client_id": "mcp_ab12",
+            },
+            None,
+        ),
+        # Before 3.4 a peer row had no established_via; it has the peer's
+        # baseuri, which an OAuth2 row never has.
+        (
+            {
+                "peerid": "oauth2_client:x:mcp_ab12",
+                "baseuri": "https://peer.example/abc",
+            },
+            None,
+        ),
+        # An OAuth2 row written before the deployment's fqdn or protocol
+        # changed still points at this actor, by its /<actor_id> suffix.
+        (
+            {
+                "peerid": "oauth2_client:x:mcp_ab12",
+                "baseuri": "http://old-host.example/actor-y",
+            },
+            "mcp_ab12",
+        ),
+    ],
+)
+def test_the_client_id_is_read_from_the_tag_then_any_oauth2_peer_id(
+    data: dict[str, Any], expected: str | None
+) -> None:
+    trust, _ = _trust(data)
+    trust.get()
+    assert trust._oauth2_client_id() == expected
+
+
+def test_a_legacy_oauth2_row_ends_its_connection() -> None:
+    """D5: an ``oauth2:`` row authorises (arm 2) but cascaded nothing."""
+    trust, _ = _trust({"peerid": "oauth2:y_at_x_dot_com:mcp_ab12"})
+    registry = _registry(owner=False)
+    with patch(REGISTRY, return_value=registry):
+        assert trust.delete() is True
+    registry.revoke_connection_tokens.assert_called_once_with("actor-y", "mcp_ab12")
+
+
+def test_delete_client_refuses_a_caller_that_does_not_own_the_client() -> None:
+    from actingweb.config import Config
+    from actingweb.oauth2_server.client_registry import MCPClientRegistry
+
+    registry = MCPClientRegistry.__new__(MCPClientRegistry)
+    registry.config = Config(mcp=True, unique_creator=False)
+    with (
+        patch.object(registry, "_load_client", return_value={"actor_id": "actor-x"}),
+        patch("actingweb.single_use.delete_confirmed") as delete_confirmed,
+    ):
+        assert registry.delete_client("mcp_ab12", actor_id="actor-y") is False
+    delete_confirmed.assert_not_called()
+
+
+class TestTheTokenSweepMarksEveryChainFirst:
+    """D8: a refresh whose consume preceded the sweep must find a marker."""
+
+    def _manager(self, rows: dict[str, dict[str, Any]]) -> Any:
+        from actingweb.oauth2_server.token_manager import ActingWebTokenManager
+
+        manager = ActingWebTokenManager.__new__(ActingWebTokenManager)
+        manager.config = Mock()
+        manager.tokens_bucket = "mcp_tokens"
+        manager.refresh_tokens_bucket = "mcp_refresh_tokens"
+        manager.revoked_chains_bucket = "mcp_revoked_chains"
+        manager._snapshot_bucket = Mock(  # type: ignore[method-assign]
+            side_effect=lambda _a, bucket: rows.get(bucket, {})
+        )
+        return manager
+
+    def test_chains_are_marked_before_any_token_is_removed(self) -> None:
+        events: list[str] = []
+        rows = {
+            "mcp_tokens": {"at": {"data": {"client_id": "c", "chain_id": "k1"}}},
+            "mcp_refresh_tokens": {
+                "rt": {"data": {"client_id": "c", "chain_id": "k2"}},
+                "other": {"data": {"client_id": "d", "chain_id": "k3"}},
+            },
+        }
+        manager = self._manager(rows)
+        manager._remove_access_token = lambda name, **_k: events.append(name) or True
+        manager._remove_refresh_token_row = lambda _a, name: events.append(name) or True
+        with patch(
+            "actingweb.oauth2_server.token_manager.mark_chain_revoked",
+            side_effect=lambda _c, _a, _b, chain: events.append(f"mark:{chain}"),
+        ):
+            assert manager.revoke_client_tokens("actor-y", "c") == 2
+        assert events == ["mark:k1", "mark:k2", "at", "rt"]
+
+    def test_an_unmarkable_chain_keeps_its_tokens_and_raises(self) -> None:
+        from actingweb.oauth2_server.token_manager import TokenStoreUnavailable
+        from actingweb.single_use import StoreFault
+
+        rows = {
+            "mcp_refresh_tokens": {"rt": {"data": {"client_id": "c", "chain_id": "k"}}}
+        }
+        manager = self._manager(rows)
+        manager._remove_refresh_token_row = Mock(return_value=True)
+        manager._remove_access_token = Mock(return_value=True)
+        with (
+            patch(
+                "actingweb.oauth2_server.token_manager.mark_chain_revoked",
+                side_effect=StoreFault("marker write"),
+            ),
+            pytest.raises(TokenStoreUnavailable),
+        ):
+            manager.revoke_client_tokens("actor-y", "c")
+        manager._remove_refresh_token_row.assert_not_called()
+
+    def test_a_bucket_the_first_pass_cannot_read_is_reported(self) -> None:
+        """Without the first pass, a rotation between the second snapshot and
+        the per-token marker is unfenced: say so (fifth verification, 8)."""
+        from actingweb.oauth2_server.token_manager import TokenStoreUnavailable
+
+        reads: list[str] = []
+        manager = self._manager({})
+
+        def snapshot(_a: str, bucket: str) -> dict[str, Any] | None:
+            reads.append(bucket)
+            return None if reads.count(bucket) == 1 else {}
+
+        manager._snapshot_bucket = Mock(side_effect=snapshot)  # type: ignore[method-assign]
+        with pytest.raises(TokenStoreUnavailable, match="could not read"):
+            manager.revoke_client_tokens("actor-y", "c")
+
+
+@pytest.mark.parametrize(
+    "peer_id",
+    [
+        "oauth2_client:y_at_x_dot_com:mcp_ab12",
+        "oauth2:a:b",
+        "oauth2_interactive:a",
+        "oauth2",
+    ],
+)
+def test_a_peer_cannot_take_an_oauth2_peer_id(peer_id: str) -> None:
+    """A trust create overwrites a row with the same peer id, and the
+    library's OAuth2 peer ids are deterministic: a peer naming one through
+    POST /trust would replace a user's client connection."""
+    from actingweb.trust import is_valid_peer_id
+
+    assert not is_valid_peer_id(peer_id)
+    assert is_valid_peer_id("9f2c1a7e0b4d4c3e8a1f")
+    assert is_valid_peer_id("oauth3:not-ours")
+
+
+def test_ownership_is_the_actors_own_row_naming_it() -> None:
+    from actingweb.config import Config
+    from actingweb.oauth2_server.client_registry import MCPClientRegistry
+
+    registry = MCPClientRegistry.__new__(MCPClientRegistry)
+    registry.config = Config(mcp=True, unique_creator=False)
+    registry.clients_bucket = "mcp_clients"
+    for row, expected in [
+        ({"data": {"actor_id": "actor-y"}}, True),
+        ({"data": {"actor_id": "actor-x"}}, False),  # copied or restored
+        ({"data": "garbage"}, False),
+        (None, False),
+    ]:
+        with patch("actingweb.attribute.Attributes") as attributes:
+            attributes.return_value.get_attr.return_value = row
+            assert registry.client_owned_by("actor-y", "mcp_ab12") is expected
+
+
+def test_delete_client_without_an_index_row_refuses_a_non_owner() -> None:
+    from actingweb.config import Config
+    from actingweb.oauth2_server.client_registry import MCPClientRegistry
+
+    registry = MCPClientRegistry.__new__(MCPClientRegistry)
+    registry.config = Config(mcp=True, unique_creator=False)
+    with (
+        patch.object(registry, "_load_client", return_value=None),
+        patch.object(registry, "client_owned_by", return_value=False),
+        patch("actingweb.single_use.delete_confirmed") as delete_confirmed,
+    ):
+        assert registry.delete_client("mcp_ab12", actor_id="actor-y") is False
+    delete_confirmed.assert_not_called()
+
+
+@pytest.mark.parametrize("indexed", ["actor-x", {"actor_id": "actor-y"}])
+def test_actor_deletion_keeps_an_index_row_naming_another_actor(
+    indexed: Any,
+) -> None:
+    """Including a malformed value: it names no actor, so it is not this
+    one's (eighth verification, 4)."""
+    from actingweb.config import Config
+    from actingweb.oauth2_server.client_registry import MCPClientRegistry
+
+    registry = MCPClientRegistry.__new__(MCPClientRegistry)
+    registry.config = Config(mcp=True, unique_creator=False)
+    with (
+        patch("actingweb.attribute.Attributes") as attributes,
+        patch("actingweb.single_use.delete_confirmed") as delete_confirmed,
+    ):
+        attributes.return_value.get_attr.return_value = {"data": indexed}
+        assert registry.delete_client(
+            "mcp_ab12", actor_id="actor-y", actor_deleted=True
+        )
+    delete_confirmed.assert_not_called()
+
+
+@pytest.mark.parametrize(("confirmed", "deleted"), [([False], 1), ([True, False], 2)])
+def test_a_disable_with_a_row_left_is_not_a_success(
+    confirmed: list[bool], deleted: int
+) -> None:
+    """The index row goes first, then the client row; both must be confirmed
+    gone. A fault at the index row never touches the client row, so the
+    owner's retry still finds its client (sixth verification, Issue 1)."""
+    from actingweb.config import Config
+    from actingweb.oauth2_server.client_registry import MCPClientRegistry
+
+    registry = MCPClientRegistry.__new__(MCPClientRegistry)
+    registry.config = Config(mcp=True, unique_creator=False)
+    registry.clients_bucket = "mcp_clients"
+    with (
+        patch.object(registry, "_load_client", return_value={"actor_id": "actor-x"}),
+        patch(
+            "actingweb.oauth2_server.token_manager.get_actingweb_token_manager"
+        ) as tokens,
+        patch(
+            "actingweb.single_use.delete_confirmed", side_effect=confirmed
+        ) as delete_confirmed,
+    ):
+        tokens.return_value.revoke_client_tokens.return_value = 0
+        assert registry.disable_client("mcp_ab12", actor_id="actor-x") is False
+    assert delete_confirmed.call_count == deleted
+    assert delete_confirmed.call_args_list[0].args[3] == "mcp_ab12"
+    assert delete_confirmed.call_args_list[0].args[1] != "actor-x"  # the index
+
+
+def test_a_token_store_fault_stops_the_owners_disable() -> None:
+    """``disable_client`` (Trust.delete, step 3a) raises before any row goes
+    when the token store cannot list every token; the row stays as the
+    retry handle (sixth verification, Issue 1)."""
+    from actingweb.config import Config
+    from actingweb.db.exceptions import DbError
+    from actingweb.oauth2_server.client_registry import MCPClientRegistry
+    from actingweb.oauth2_server.token_manager import TokenStoreUnavailable
+
+    registry = MCPClientRegistry.__new__(MCPClientRegistry)
+    registry.config = Config(mcp=True, unique_creator=False)
+    with (
+        patch.object(registry, "_load_client", return_value={"actor_id": "actor-x"}),
+        patch(
+            "actingweb.oauth2_server.token_manager.get_actingweb_token_manager"
+        ) as tokens,
+        patch("actingweb.single_use.delete_confirmed") as delete_confirmed,
+    ):
+        tokens.return_value.revoke_client_tokens.side_effect = TokenStoreUnavailable(
+            "bucket"
+        )
+        with pytest.raises(DbError):
+            registry.disable_client("mcp_ab12", actor_id="actor-x")
+    delete_confirmed.assert_not_called()

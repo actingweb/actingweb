@@ -990,8 +990,15 @@ only the access token, so the refresh token still worked for up to 14 days.)
 An access token expires after an hour, and an expired token cannot be
 looked up, so a client that logs out after being idle should also send its
 refresh token, in the JSON body or in the ``refresh_token`` cookie. With no
-access token the refresh token alone drives the revocation; with both, each is
-revoked.
+access token the refresh token alone drives the revocation; with both SPA
+tokens, each is revoked. An MCP access token (an AI agent's login, not the user's) ends only that MCP chain: an SPA refresh token sent beside it is ignored and logged, ``cleared_cookies`` is ``[]`` and no ``Set-Cookie`` is sent; the browser session ends when the user logs out of the SPA.
+
+A logout that lands while a refresh of the same chain is in flight still ends
+the chain (3.16): the revocation writes a short-lived chain-revoked marker
+before it deletes anything, and a refresh that consumed its token before the
+sweep reads the marker after minting, deletes the pair it minted and answers
+401 ``invalid_grant``. A marker that cannot be written answers 503 and
+revokes nothing, so the retry ends the chain.
 
 .. code-block:: javascript
 
@@ -1605,7 +1612,8 @@ Check session status.
 POST /oauth/logout
 ~~~~~~~~~~~~~~~~~~~~~~
 
-Revoke the session's refresh-token chain and clear its cookies.
+Revoke the session's refresh-token chain and clear its cookies. With an MCP
+access token, revoke that MCP chain only and clear nothing.
 
 **Headers:**
 
@@ -1620,9 +1628,9 @@ Revoke the session's refresh-token chain and clear its cookies.
    }
 
 The refresh token may also arrive in the ``refresh_token`` cookie (any method).
-When both the body and the cookie name a token, and when an access token and a
-refresh token are both present, each is revoked. A missing, empty or malformed
-body is ignored, never a 400.
+When both the body and the cookie name a token, and when an SPA access token
+and a refresh token are both present, each is revoked. A missing, empty or
+malformed body is ignored, never a 400. An MCP access token (an AI agent's login, not the user's) ends only that MCP chain: an SPA refresh token sent beside it is ignored and logged, ``cleared_cookies`` is ``[]`` and no ``Set-Cookie`` is sent; the browser session ends when the user logs out of the SPA.
 
 **Response:**
 
@@ -1633,6 +1641,18 @@ body is ignored, never a 400.
        "message": "Successfully logged out",
        "redirect_url": "https://example.com/",
        "cleared_cookies": ["access_token", "oauth_token", "refresh_token", "session_id"]
+   }
+
+The same logout with an MCP access token (``aw_…``) answers the same shape
+with nothing cleared:
+
+.. code-block:: json
+
+   {
+       "success": true,
+       "message": "Successfully logged out",
+       "redirect_url": "https://example.com/",
+       "cleared_cookies": []
    }
 
 The ``refresh_token`` cookie is cleared at ``/`` and at ``/oauth/spa/token``.

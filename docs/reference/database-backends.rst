@@ -258,7 +258,9 @@ a deterministic cadence.
 DynamoDB deletes expired items automatically, but **TTL must be enabled on the
 attributes table**, pointed at the ``ttl_timestamp`` attribute. The library does
 not (and cannot reliably) enable this for you, and a full-table ``Scan`` to purge
-is deliberately avoided, so without this step expired tokens are never removed.
+is deliberately avoided, so without this step expired tokens are never removed,
+and the chain-revoked marker buckets grow by one row per logout or revocation
+with nothing warning about it.
 
 .. important::
 
@@ -267,8 +269,9 @@ is deliberately avoided, so without this step expired tokens are never removed.
    attributes). DynamoDB TTL deletes an item *only* when its ``ttl_timestamp``
    attribute is present and in the past. ActingWeb writes ``ttl_timestamp`` only
    for temporary data that is *meant* to expire — SPA access/refresh tokens,
-   OAuth login sessions, mobile exchange tickets, state nonces, and index
-   entries. Every permanent write goes through ``set_attr`` with no ``ttl``, so
+   OAuth login sessions, mobile exchange tickets, state nonces, index
+   entries, and the chain-revoked markers a logout or revocation writes
+   (``spa_revoked_chains``, ``mcp_revoked_chains``, 5 minutes). Every permanent write goes through ``set_attr`` with no ``ttl``, so
    those items have **no** ``ttl_timestamp`` and are never eligible for TTL
    deletion. (If your own code calls ``set_attr(..., ttl_seconds=...)`` it is
    likewise opting that item into expiry — don't pass a TTL for data you want to
@@ -566,7 +569,13 @@ Both integrations answer a ``DbError`` that reaches them with **503**,
 ``Retry-After: 5`` and a fixed body
 (``{"error": "temporarily_unavailable", ...}``); the exception text goes to
 the log only. A backend error a retry cannot fix (a validation, size or
-constraint error) answers **500** without ``Retry-After``. ``CreatorTaken``,
+constraint error) answers **500** without ``Retry-After``. One refusal a
+retry does not clear still answers 503: an actor create or creator change
+refused because creator uniqueness is on and the database does not enforce
+it yet (an ERROR names ``actingweb-unique-creators enable --apply``).
+``check_ready()`` stops an integrated application from starting in that
+state; a creators table or ``ux_actors_creator`` index removed after
+startup answers the same 503 until it is restored. ``CreatorTaken``,
 a ``DbError`` subclass for a creator another actor holds, answers **409**: the
 actor backends raise it under ``with_unique_creator()``, and PostgreSQL also
 whenever the ``ux_actors_creator`` index exists (see

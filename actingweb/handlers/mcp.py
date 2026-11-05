@@ -14,7 +14,6 @@ MCP is not available at all.
 import hashlib
 import json
 import logging
-import re
 import threading
 import time
 from typing import Any
@@ -632,6 +631,36 @@ def mcp_www_authenticate(base_url: str) -> str:
         f'resource_metadata="{base_url}/.well-known/oauth-protected-resource/mcp", '
         f'authorization_uri="{base_url}/oauth/authorize"'
     )
+
+
+def format_resource_read_result(
+    result: Any, uri: str, metadata: dict[str, Any]
+) -> dict[str, Any]:
+    """The ``resources/read`` result for what a resource hook returned.
+
+    Shared by the sync and async handlers, so Flask and FastAPI answer the
+    same: a ``dict`` with a ``contents`` key passes through unchanged;
+    another ``dict`` is indented JSON (``json.dumps`` raises ``TypeError``
+    on a value it cannot serialise); a ``str`` is sent as it is; anything
+    else as ``str()``. ``mimeType`` is the decorator's ``mime_type``,
+    ``application/json`` when undeclared.
+    """
+    if isinstance(result, dict) and "contents" in result:
+        return result
+    if isinstance(result, dict):
+        text = json.dumps(result, indent=2)
+    else:
+        text = str(result)
+    return {
+        "contents": [
+            {
+                "uri": uri,
+                # Output key follows the MCP spec; the decorator says mime_type.
+                "mimeType": metadata.get("mime_type", "application/json"),
+                "text": text,
+            }
+        ]
+    }
 
 
 def format_call_tool_result(
@@ -1906,91 +1935,31 @@ class MCPHandler(BaseHandler):
                 )
 
             # Find the corresponding resource hook
-            from ..mcp.decorators import get_mcp_metadata, is_mcp_exposed
-            from ..mcp.uri import match_uri_template
+            from ..mcp.uri import resolve_resource, resource_arguments
 
-            for method_name, hooks in self.hooks._method_hooks.items():
-                for hook in hooks:
-                    if is_mcp_exposed(hook):
-                        metadata = get_mcp_metadata(hook)
-                        if metadata and metadata.get("type") == "resource":
-                            # Prefer 'uri_template' from decorator; fall back to legacy
-                            resource_uri = (
-                                metadata.get("uri_template")
-                                or metadata.get("uri")
-                                or f"actingweb://{method_name}"
-                            )
-                            uri_pattern = metadata.get("uri_pattern")
-
-                            # Check for template/pattern match
-                            uri_matches = False
-                            variables: dict[str, str] | None = None
-                            try:
-                                variables = match_uri_template(
-                                    str(resource_uri), str(uri)
-                                )
-                            except Exception:  # folds DbError: no DB access
-                                variables = None
-                            if variables is not None:
-                                uri_matches = True
-                            elif uri_pattern:
-                                try:
-                                    if re.fullmatch(uri_pattern, str(uri)):
-                                        uri_matches = True
-                                except re.error:
-                                    logger.warning(
-                                        f"Invalid URI pattern in resource metadata: {uri_pattern}"
-                                    )
-
-                            if uri_matches:
-                                try:
-                                    # Actor is already an ActorInterface from authenticate_and_get_actor()
-                                    # No need to wrap it again
-
-                                    # Execute the resource hook
-                                    result = hook(actor, method_name, params)
-
-                                    # Handle different result formats
-                                    if isinstance(result, dict):
-                                        if "contents" in result:
-                                            # Result is already MCP-formatted
-                                            return {
-                                                "jsonrpc": "2.0",
-                                                "id": request_id,
-                                                "result": result,
-                                            }
-                                        else:
-                                            # Convert dict to JSON content
-                                            content_text = json.dumps(result, indent=2)
-                                    else:
-                                        # Convert other types to string
-                                        content_text = str(result)
-
-                                    return {
-                                        "jsonrpc": "2.0",
-                                        "id": request_id,
-                                        "result": {
-                                            "contents": [
-                                                {
-                                                    "uri": uri,
-                                                    # Output key follows MCP spec; decorator uses 'mime_type'
-                                                    "mimeType": metadata.get(
-                                                        "mime_type", "application/json"
-                                                    ),
-                                                    "text": content_text,
-                                                }
-                                            ]
-                                        },
-                                    }
-                                except DbError:
-                                    raise
-                                except Exception as e:
-                                    logger.error(f"Error executing resource {uri}: {e}")
-                                    return self._create_jsonrpc_error(
-                                        request_id,
-                                        -32603,
-                                        f"Resource execution failed: {str(e)}",
-                                    )
+            found = resolve_resource(str(uri), self.hooks._method_hooks)
+            if found is not None:
+                method_name, hook, metadata, variables = found
+                try:
+                    result = hook(
+                        actor,
+                        method_name,
+                        resource_arguments(params, variables, str(uri)),
+                    )
+                    return {
+                        "jsonrpc": "2.0",
+                        "id": request_id,
+                        "result": format_resource_read_result(result, uri, metadata),
+                    }
+                except DbError:
+                    raise
+                except Exception as e:
+                    logger.error(f"Error executing resource {uri}: {e}")
+                    return self._create_jsonrpc_error(
+                        request_id,
+                        -32603,
+                        f"Resource execution failed: {str(e)}",
+                    )
 
             return self._create_jsonrpc_error(
                 request_id, -32601, f"Resource not found: {uri}"
@@ -2610,61 +2579,26 @@ class MCPHandler(BaseHandler):
             Trust relationship instance or None
         """
         try:
-            trusts = actor.trust.relationships
+            from ..oauth2_server.trust_lookup import find_client_trust
 
-            # Arm 1: exact oauth_client_id match. Written on every trust row
-            # created by either live MCP creation path (both pass
-            # established_via="oauth2_client" together with client_id), so
-            # this covers every row created since that field was introduced.
-            for trust in trusts:
-                if getattr(trust, "oauth_client_id", None) == client_id:
-                    logger.debug(
-                        f"Found MCP trust for client {client_id} (oauth_client_id match)"
-                    )
-                    return trust
-
-            # Arm 2: exact peer-id fallback, for legacy rows predating the
-            # oauth_client_id field (oauth_client_id is None). Requires an
-            # OAuth2-family established_via -- or None with a legacy
-            # oauth2/oauth2_client peer-id prefix -- AND full-string equality
-            # against a peer id constructed the same way trust creation does
-            # (trust_manager.py normalizes and formats
-            # "{source}:{normalized_email}:{normalized_client}"). We don't
-            # have the user's real email here (MCP token records carry none),
-            # so this only reconstructs the shape produced when the dynamic
-            # client-credentials flow used client_id as the email identifier
-            # (client_registry.py passes email=client_id) -- never
-            # containment, never a bare segment compare, so a peer id crafted
-            # through the ordinary /trust peer protocol cannot occupy this
-            # slot. Legacy rows created via the interactive-authorize flow
-            # with a real email and no oauth_client_id are a known residual
-            # lockout risk, documented in the migration guide.
-            normalized_client = (
-                client_id.replace("@", "_at_")
-                .replace(".", "_dot_")
-                .replace(":", "_colon_")
-            )
-            candidates = {
-                f"oauth2_client:{normalized_client}:{normalized_client}",
-                f"oauth2:{normalized_client}:{normalized_client}",
-            }
-            for trust in trusts:
-                if getattr(trust, "oauth_client_id", None) is not None:
-                    continue  # already checked in arm 1
-                via = getattr(trust, "established_via", None)
-                peer_id_str = str(getattr(trust, "peerid", ""))
-                is_oauth2_family = via in ("oauth2", "oauth2_client")
-                is_legacy_none_with_prefix = via is None and (
-                    peer_id_str.startswith("oauth2:")
-                    or peer_id_str.startswith("oauth2_client:")
+            # Arm 1: exact oauth_client_id match (every row created since the
+            # field was introduced). Arm 2: exact peer-id equality for legacy
+            # rows without it, against the shape the client-credentials flow
+            # wrote ("{source}:{normalized}:{normalized}"); never containment
+            # or a bare segment compare, so a peer id crafted through the
+            # ordinary /trust peer protocol cannot occupy this slot. Legacy
+            # rows from the interactive-authorize flow with a real email and
+            # no oauth_client_id are a known residual lockout risk,
+            # documented in the migration guide.
+            trust = find_client_trust(actor.trust.relationships, client_id, actor.id)
+            if trust is not None:
+                how = (
+                    "oauth_client_id"
+                    if getattr(trust, "oauth_client_id", None) == client_id
+                    else "legacy peer-id"
                 )
-                if not (is_oauth2_family or is_legacy_none_with_prefix):
-                    continue
-                if peer_id_str in candidates:
-                    logger.debug(
-                        f"Found MCP trust for client {client_id} (legacy peer-id match)"
-                    )
-                    return trust
+                logger.debug(f"Found MCP trust for client {client_id} ({how} match)")
+                return trust
 
             logger.warning(
                 f"No trust found for MCP client {client_id} on actor {actor.id}; "

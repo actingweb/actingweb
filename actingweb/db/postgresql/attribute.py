@@ -748,6 +748,9 @@ class DbAttribute:
 
         Returns:
             Number of rows deleted.
+
+        Raises:
+            DbError: on a backend fault (never answered as 0).
         """
         if now_epoch is None:
             now_epoch = int(time.time())
@@ -769,8 +772,10 @@ class DbAttribute:
                 conn.commit()
             return deleted if deleted and deleted > 0 else 0
         except Exception as e:
-            logger.error(f"Error purging expired attributes: {e}")
-            return 0
+            # Not 0: a fault must not read as "nothing expired" to the only
+            # reaper of these rows. Every library caller folds it (a WARNING
+            # in the token purges, a printed line in actingweb-deletions).
+            raise DbError("expired attribute purge") from e
 
     @staticmethod
     def delete_by_chain(

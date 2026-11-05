@@ -299,8 +299,9 @@ class TrustManager:
     def delete_relationship(self, peer_id: str) -> bool:
         """Delete a trust relationship with lifecycle hook execution.
 
-        Note: Associated permissions are automatically deleted by the core
-        delete_reciprocal_trust method.
+        The row's custom permissions go with it (``Trust.delete``). A
+        ``DbError`` leaves what a retry needs; ``trust_deleted`` fires again
+        on that retry.
         """
         # Get relationship data before deletion for the hook
         relationship = self.get_relationship(peer_id)
@@ -321,8 +322,8 @@ class TrustManager:
     def delete_all_relationships(self) -> bool:
         """Delete all trust relationships.
 
-        Note: Associated permissions are automatically deleted by the core
-        delete_reciprocal_trust method for each relationship.
+        Note: each row's custom permissions are deleted with it
+        (``Trust.delete``).
         """
         result = self._core_actor.delete_reciprocal_trust(delete_peer=True)
         return bool(result)
@@ -477,11 +478,9 @@ class TrustManager:
             # For MCP clients, include client_id to ensure each client gets its own trust relationship
             # Format: "oauth2:email_at_example_dot_com:client_123abc"
             normalized_email = email.replace("@", "_at_").replace(".", "_dot_")
-            normalized_client = (
-                client_id.replace("@", "_at_")
-                .replace(".", "_dot_")
-                .replace(":", "_colon_")
-            )
+            from ..oauth2_server.trust_lookup import normalize_client_id
+
+            normalized_client = normalize_client_id(client_id)
             peer_id = f"{source}:{normalized_email}:{normalized_client}"
         else:
             # Legacy format for backward compatibility
@@ -606,6 +605,26 @@ class TrustManager:
                     client_metadata["oauth_client_id"] = client_id
 
                 now_iso = datetime.utcnow().isoformat()
+
+                # A new row starts from its trust type's permissions. The peer
+                # id is deterministic, so custom permissions a faulted delete
+                # of an earlier connection left behind would otherwise come
+                # back with a reconnect (Trust.delete deletes them right after
+                # the row, and a fault there raises with the row gone).
+                if self._core_actor.config and self._core_actor.id:
+                    from ..trust_permissions import get_trust_permission_store
+
+                    # The shared store: its cache is what permission checks
+                    # read, so a fresh instance would leave them stale.
+                    permission_store = get_trust_permission_store(
+                        self._core_actor.config
+                    )
+                    # Unconditionally, as in Trust.delete: a cached "none"
+                    # can hide permissions another process wrote.
+                    if not permission_store.delete_permissions(
+                        self._core_actor.id, peer_id
+                    ):
+                        raise DbError("trust permissions delete", self._core_actor.id)
 
                 created = db.create(
                     actor_id=self._core_actor.id,

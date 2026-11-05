@@ -1,7 +1,8 @@
 # todo/ — prioritised index
 
 Every file in this directory, ordered by what to do next. **Last full re-rank:
-2026-11-01.** Rows marked **Planned for 3.16** have an owner-chosen approach and a
+2026-11-01.** Rows, files and the todos the 3.16 roll-up touched were
+re-checked on 2026-11-05, after it merged; the order still stands. Rows marked **Planned for 3.16** have an owner-chosen approach and a
 plan (2026-11-02); none is left.
 
 **This directory holds only what is *not* done.** When work lands, its file is
@@ -79,7 +80,7 @@ being re-litigated.
 | Item | What it holds |
 | --- | --- |
 | [DynamoDB known-next](dynamodb-known-next.md) | Six items deferred from the v3.13 scalability plan — the remaining unbatched delete loops, the `consistent_read` audit's ~36 surviving sites, `SubscriptionDiff` seqnr ordering, import-time table-name freezing, GSI-based secret uniqueness, lookup-table write amplification |
-| [MCP cache lifecycle and revocation](mcp-cache-lifecycle-and-revocation.md) | Cross-process invalidation (the large one), trust-freshness policy, `_mcp_client_info_cache`'s client-supplied key, registration not hard-failing on trust-creation failure, module-global cache keys assuming one app per interpreter, and the trust permission cache having no TTL (sections 1-3 and 5-7) |
+| [MCP cache lifecycle and revocation](mcp-cache-lifecycle-and-revocation.md) | Cross-process invalidation (the large one), trust-freshness policy, `_mcp_client_info_cache`'s client-supplied key, registration not hard-failing on trust-creation failure, module-global cache keys assuming one app per interpreter, and the trust permission cache having no TTL (sections 1-3, 5, 6 and 8; 4 and 7 were closed by the 3.16 roll-up) |
 
 ---
 

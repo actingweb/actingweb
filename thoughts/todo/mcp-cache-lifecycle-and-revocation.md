@@ -93,7 +93,7 @@ both `single_use.PurgeThrottle`). Two apps in one process share one
 purge. Harmless on DynamoDB (native TTL reaps anyway); on PostgreSQL the
 purge is the only reaper. Same trigger, same fix: scope by config.
 
-## 7. The trust permission cache has no TTL and is per process
+## 8. The trust permission cache has no TTL and is per process
 
 `TrustPermissionStore._cache` (`actingweb/trust_permissions.py`, a
 `BoundedDict`) has no TTL, and a cached None is a hit. A delete and a

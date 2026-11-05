@@ -135,6 +135,70 @@ def test_a_legacy_row_with_a_peers_baseuri_is_not_the_clients() -> None:
     assert client_trusts_for_deletion([own, peer], "mcp_abc", "actor-y") == [own]
 
 
+def test_a_legacy_client_credentials_row_with_a_peers_baseuri_is_neither() -> None:
+    """Arm 2 takes the same legacy gate as arm 3 and ``Trust``: the resolver
+    and the deletion lookup never take a pre-3.4 row with a peer's baseuri
+    for the client's (seventh verification, Issue 3)."""
+    own = FakeTrust("oauth2_client:mcp_abc:mcp_abc")
+    own.base_uri = "http://old-host.example/actor-y"  # type: ignore[attr-defined]
+    peer = FakeTrust("oauth2_client:mcp_abc:mcp_abc")
+    peer.base_uri = "https://peer.example/0123abcd"  # type: ignore[attr-defined]
+    assert find_client_trust([peer], "mcp_abc", "actor-y") is None
+    assert client_trusts_for_deletion([peer], "mcp_abc", "actor-y") == []
+    assert find_client_trust([own], "mcp_abc", "actor-y") is own
+    assert client_trusts_for_deletion([own], "mcp_abc", "actor-y") == [own]
+
+
+def test_the_excluded_row_is_left_and_nested_deletes_see_the_sweep() -> None:
+    """``Trust.delete`` sweeps the other rows before its own row goes, and
+    the deletes the sweep makes must not start a sweep of their own."""
+    tagged, legacy = _two_rows()
+    registry = MCPClientRegistry.__new__(MCPClientRegistry)
+    seen: list[bool] = []
+
+    class _Watching(_DeletingTrustManager):
+        def delete_relationship(self, peer_id: str) -> bool:
+            seen.append(registry.sweeping("actor-1", "mcp_ab12"))
+            return super().delete_relationship(peer_id)
+
+    manager = _Watching([tagged, legacy])
+    registry.config = Config(mcp=True, unique_creator=False)
+    core = mock.Mock()
+    core.actor = {"id": "actor-1"}
+    interface = mock.Mock()
+    interface.trust = manager
+    with (
+        mock.patch("actingweb.actor.Actor", return_value=core),
+        mock.patch(
+            "actingweb.interface.actor_interface.ActorInterface",
+            return_value=interface,
+        ),
+    ):
+        registry._delete_client_trust_relationship(
+            "actor-1", "mcp_ab12", exclude_peer_id=tagged.peerid
+        )
+    assert manager.deleted == [legacy.peerid]
+    assert seen == [True]
+    assert not registry.sweeping("actor-1", "mcp_ab12"), "the guard is reset"
+
+
+def test_a_refused_delete_of_a_listed_row_is_a_fault() -> None:
+    """``delete_relationship`` answering False with the row still listed
+    ended the sweep in success (seventh verification, Issue 4)."""
+    tagged, legacy = _two_rows()
+
+    class _Refusing(_DeletingTrustManager):
+        def delete_relationship(self, peer_id: str) -> bool:
+            if peer_id == tagged.peerid:
+                return False
+            return super().delete_relationship(peer_id)
+
+    manager = _Refusing([tagged, legacy])
+    with pytest.raises(DbError):
+        _delete("mcp_ab12", [], manager)
+    assert manager.deleted == [legacy.peerid]
+
+
 def test_a_tagged_row_and_a_legacy_row_of_one_client_are_both_deleted() -> None:
     """An upgraded actor holds the legacy ``oauth2:`` row and the tagged
     ``oauth2_client:`` row under different peer ids. Both are deleted

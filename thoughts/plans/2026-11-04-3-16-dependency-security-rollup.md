@@ -1422,6 +1422,10 @@ docs build, `verify_groups`, ruff and pyright at 0 errors and 0 warnings.
   it faults (here by the row being deleted), not the n-th call: with two
   identical rows, a retry through the second one hides an ordering
   regression in the first (Iterations 25 and 27).
+- A retry handle has to be the same key the caller retries with. Rows
+  re-read on each call (the bulk and client routes) hid that the one-row
+  route retries by peer id, and that peer id was gone. Test every route
+  the way its caller retries it: the same request, repeated (Iteration 30).
 
 
 ## Iterations
@@ -2324,3 +2328,93 @@ changed root.
 
 **Rationale**: reviews now check against the table, so it must be exactly
 true; a skipped sweep that answered success broke rule 1.
+
+### 2026-11-05, after verification thoughts/verifications/2026-11-05-3-16-dependency-security-rollup-reverify-6.md
+
+#### 30. The sibling sweep runs before the row, so the one-row route can retry
+
+**Category**: Verification fix (Issues 1 and 2)
+
+**What changed**: `Trust.delete` deletes the actor's other rows of the
+client (the sweep) before its own row, not after it, and skips this row
+(`exclude_peer_id`). The sweep sets a context-local guard
+(`client_registry._SWEEPS`, read through `MCPClientRegistry.sweeping`), so
+the `Trust.delete` calls it makes for the siblings don't start a sweep of
+their own. That guard replaces "row first, so the sweep cannot find it" as
+the protection against recursion. Now a sibling fault leaves the route's
+own row, and retrying the same `DELETE /<actor>/trust/<rel>/<peer>` sweeps
+again instead of answering 404. A permission-store fault now comes after
+the sweep, so it no longer skips it.
+
+The table is renumbered: 6 sweep, 7 row, 8 permissions, 9 eviction.
+
+The convergence test gains a `same-row` route, which retries the first
+peer id until the rows are gone. For a sibling fault on the one-row
+routes, it asserts that the route's own row stays. On the previous library
+code, 10 of the 63 cases fail: every sibling fault on `same-row` and
+`one-row`, plus the permissions fault on `same-row`.
+
+**Files affected**:
+- `actingweb/trust.py`: the sweep moves before `handle.delete()`.
+- `actingweb/oauth2_server/client_registry.py`: `_SWEEPS`, `sweeping`,
+  `exclude_peer_id`, and the loop split into `_sweep_client_trusts`.
+- `tests/integration/test_trust_oauth_integration.py`: the `same-row` route,
+  the root check, and the step labels.
+- `tests/test_client_connection_deletion.py`: the new order, a sibling
+  fault keeps the row, and a nested delete does not sweep.
+- `tests/test_client_trust_lookup.py`: the excluded row, and the guard
+  during and after the sweep.
+- `tests/test_trust_core.py`: the two tests that pinned "record first" as
+  the recursion fix now pin the new order and the guard.
+- `thoughts/reference/trust-row-deletion-invariants.md`, `CHANGELOG.rst`.
+
+**Rationale**: rule 2 says a raise leaves a retry handle. With the sweep
+after the row, the one-row route's retry was a 404 while the token-less
+sibling connection rows still authorised a new login.
+
+#### 31. The legacy gate on arm 2, a refused sibling delete is a fault, a foreign index is a connection
+
+**Category**: Verification fix (Issues 3-5)
+
+**What changed**:
+- **Issue 3:** arm 2 of the lookup (legacy client-credentials rows)
+  admits a row with no `established_via` only through `legacy_oauth2_row`.
+  `find_client_trust` takes the actor id, and `handlers/mcp.py` passes it.
+  The table now says that only the library writes `oauth_client_id`, which
+  is why arm 1 needs no origin check.
+- **Issue 4:** in the sweep, a delete that answers False while the row is
+  still listed now records a fault instead of a warning.
+- **Issue 5:** `Trust.delete` takes the owner path only when the index
+  names no other actor (`MCPClientRegistry.indexed_owner`, which the
+  `actor_deleted` path now uses too). A client row copied into another
+  actor's bucket is ended as a connection, not refused on every retry.
+
+**Files affected**:
+- `actingweb/oauth2_server/trust_lookup.py`, `actingweb/handlers/mcp.py`
+- `actingweb/oauth2_server/client_registry.py`, `actingweb/trust.py`
+- `tests/test_client_trust_lookup.py`: arm 2 with a peer's baseuri, and a
+  refused delete.
+- `tests/test_client_connection_deletion.py`: an index naming another actor.
+- `CHANGELOG.rst`: the resolver's **Behavior change**, and the foreign
+  index.
+
+**Rationale**: the table claimed one gate and a converging 3a, and the
+code had neither.
+
+#### 32. The remaining points, written into the table
+
+**Category**: Verification fix (Issue 6, and the unverified points)
+
+**What changed**: new residue entries in the table:
+- the read, clear and create race in `Trust.create`;
+- the permanent 503 for a row that always fails;
+- the copied client row left inert;
+- a token store that never lists, which blocks the strict owner path.
+
+The changelog now says that the registry's `delete_client` retry needs the
+owner's `actor_id`.
+
+**Files affected**: `thoughts/reference/trust-row-deletion-invariants.md`,
+`CHANGELOG.rst`
+
+**Rationale**: these are accepted, so the table has to name them.

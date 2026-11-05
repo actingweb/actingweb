@@ -6,6 +6,7 @@ credentials to authenticate with ActingWeb. Client credentials are stored
 per-actor but clients are not treated as actors themselves.
 """
 
+import contextvars
 import logging
 import secrets
 import time
@@ -19,6 +20,14 @@ from ..db.exceptions import DbError
 from ..secret_compare import secret_equals
 
 logger = logging.getLogger(__name__)
+
+# The (actor id, client id) sweeps of a client's trust rows running in this
+# context. The sweep deletes each row through Trust.delete(), which sweeps
+# the client's other rows before its own row goes; inside a running sweep it
+# must not start another (the rows it would find are the ones being swept).
+_SWEEPS: contextvars.ContextVar[frozenset[tuple[str, str]]] = contextvars.ContextVar(
+    "oauth2_client_trust_sweeps", default=frozenset()
+)
 
 # token_endpoint_auth_method values accepted at registration. "none" is a
 # public client; the two secret transports are both accepted for any
@@ -328,12 +337,7 @@ class MCPClientRegistry:
             # Only an index row that names this actor: a client row copied
             # into the deleted actor's bucket must not disable a client
             # registered elsewhere.
-            index_row = attribute.Attributes(
-                actor_id=OAUTH2_SYSTEM_ACTOR,
-                bucket=CLIENT_INDEX_BUCKET,
-                config=self.config,
-            ).get_attr(name=client_id)
-            indexed_owner = index_row.get("data") if index_row else None
+            indexed_owner = self.indexed_owner(client_id)
             if indexed_owner and actor_id and indexed_owner != actor_id:
                 logger.error(
                     f"Not deleting the index row of OAuth2 client {client_id}: "
@@ -475,6 +479,22 @@ class MCPClientRegistry:
         except Exception as e:
             logger.error(f"Error deleting client {client_id}: {e}")
             return None
+
+    def indexed_owner(self, client_id: str) -> str | None:
+        """The actor the client's global index row names, or None when there
+        is no index row. Raises ``DbError`` on a fault."""
+        index_row = attribute.Attributes(
+            actor_id=OAUTH2_SYSTEM_ACTOR,
+            bucket=CLIENT_INDEX_BUCKET,
+            config=self.config,
+        ).get_attr(name=client_id)
+        owner = index_row.get("data") if index_row else None
+        return owner if isinstance(owner, str) and owner else None
+
+    def sweeping(self, actor_id: str, client_id: str) -> bool:
+        """Whether a sweep of ``actor_id``'s rows of ``client_id`` is running
+        in this context (:meth:`_delete_client_trust_relationship`)."""
+        return (actor_id, client_id) in _SWEEPS.get()
 
     def client_owned_by(self, actor_id: str, client_id: str) -> bool:
         """Whether ``client_id`` is registered under ``actor_id``: its row is
@@ -686,14 +706,30 @@ class MCPClientRegistry:
             )
             # Don't raise - client registration can continue without trust relationship
 
-    def _delete_client_trust_relationship(self, actor_id: str, client_id: str) -> None:
+    def _delete_client_trust_relationship(
+        self, actor_id: str, client_id: str, *, exclude_peer_id: str | None = None
+    ) -> None:
         """
-        Delete the trust relationship for an OAuth2 client.
+        Delete every trust row of ``actor_id`` for an OAuth2 client, except
+        ``exclude_peer_id`` (the row ``Trust.delete`` is deleting, which goes
+        after this sweep). While it runs, the nested ``Trust.delete`` calls
+        skip their own sweep (:meth:`sweeping`). Every row is tried; any
+        failure raises ``DbError``.
 
         Args:
             actor_id: Actor this client belongs to
             client_id: OAuth2 client ID
+            exclude_peer_id: A row to leave
         """
+        guard = _SWEEPS.set(_SWEEPS.get() | {(actor_id, client_id)})
+        try:
+            self._sweep_client_trusts(actor_id, client_id, exclude_peer_id)
+        finally:
+            _SWEEPS.reset(guard)
+
+    def _sweep_client_trusts(
+        self, actor_id: str, client_id: str, exclude_peer_id: str | None
+    ) -> None:
         try:
             from .. import actor as actor_module
             from ..interface.actor_interface import ActorInterface
@@ -720,9 +756,15 @@ class MCPClientRegistry:
             # peer id contains this id must survive.
             from .trust_lookup import client_trusts_for_deletion
 
-            trusts = client_trusts_for_deletion(
-                actor_interface.trust.relationships, client_id, actor_id
-            )
+            trusts = [
+                t
+                for t in client_trusts_for_deletion(
+                    actor_interface.trust.relationships, client_id, actor_id
+                )
+                if t.peerid != exclude_peer_id
+            ]
+            if not trusts and exclude_peer_id is not None:
+                return
             if not trusts:
                 logger.warning(
                     f"No trust relationship found to delete for OAuth2 client {client_id}"
@@ -750,9 +792,14 @@ class MCPClientRegistry:
                             f"Trust relationship {peer_id} for OAuth2 client {client_id} was already deleted"
                         )
                     else:
-                        logger.warning(
+                        # Refused, and the row is still there: not a success.
+                        logger.error(
                             f"Failed to delete trust relationship {peer_id} for client {client_id}"
                         )
+                        if first_fault is None:
+                            first_fault = DbError(
+                                "OAuth2 client trust delete", actor_id
+                            )
                 except DbError as e:  # folds DbError: raised after the other rows
                     if first_fault is None:
                         first_fault = e

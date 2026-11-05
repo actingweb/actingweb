@@ -47,6 +47,8 @@ def _registry(*, owner: bool) -> Mock:
     registry.client_owned_by.return_value = owner
     registry.delete_client.return_value = True
     registry.disable_client.return_value = True
+    registry.indexed_owner.return_value = None
+    registry.sweeping.return_value = False
     return registry
 
 
@@ -62,14 +64,17 @@ def test_a_connection_of_another_actors_client_never_deletes_the_client() -> Non
     registry = _registry(owner=False)
     calls: list[str] = []
     registry.revoke_connection_tokens.side_effect = lambda *a: calls.append("revoke")
+    registry._delete_client_trust_relationship.side_effect = lambda *a, **k: (
+        calls.append("sweep")
+    )
     db_trust.delete.side_effect = lambda: calls.append("row") or True
     with patch(REGISTRY, return_value=registry):
         assert trust.delete() is True
     registry.client_owned_by.assert_called_once_with("actor-y", "mcp_ab12")
     registry.delete_client.assert_not_called()
-    assert calls == ["revoke", "row"], "tokens go before the row"
+    assert calls == ["revoke", "sweep", "row"], "tokens and siblings go first"
     registry._delete_client_trust_relationship.assert_called_once_with(
-        "actor-y", "mcp_ab12"
+        "actor-y", "mcp_ab12", exclude_peer_id=TAGGED["peerid"]
     )
 
 
@@ -85,8 +90,42 @@ def test_the_owner_disables_its_client_before_the_row_goes() -> None:
     registry.revoke_connection_tokens.assert_not_called()
     assert calls == ["client", "row"]
     registry._delete_client_trust_relationship.assert_called_once_with(
-        "actor-y", "mcp_ab12"
+        "actor-y", "mcp_ab12", exclude_peer_id=TAGGED["peerid"]
     )
+
+
+def test_a_client_the_index_gives_to_another_actor_is_a_connection() -> None:
+    """A client row copied into this actor's bucket, with the index naming
+    another owner: every disable refused, so the row could never be deleted
+    (seventh verification, 5). It is ended as a connection."""
+    trust, _ = _trust(TAGGED)
+    registry = _registry(owner=True)
+    registry.indexed_owner.return_value = "actor-x"
+    with patch(REGISTRY, return_value=registry):
+        assert trust.delete() is True
+    registry.disable_client.assert_not_called()
+    registry.revoke_connection_tokens.assert_called_once_with("actor-y", "mcp_ab12")
+
+
+def test_a_sibling_fault_keeps_the_row_for_the_same_routes_retry() -> None:
+    """The sweep ran after the row: a sibling fault left a 404 for the
+    one-row route's retry, with the sibling live (seventh verification, 1)."""
+    trust, db_trust = _trust(TAGGED)
+    registry = _registry(owner=False)
+    registry._delete_client_trust_relationship.side_effect = DbError("sweep")
+    with patch(REGISTRY, return_value=registry), pytest.raises(DbError):
+        trust.delete()
+    db_trust.delete.assert_not_called()
+
+
+def test_a_nested_delete_inside_a_sweep_does_not_sweep_again() -> None:
+    trust, db_trust = _trust(TAGGED)
+    registry = _registry(owner=False)
+    registry.sweeping.return_value = True
+    with patch(REGISTRY, return_value=registry):
+        assert trust.delete() is True
+    registry._delete_client_trust_relationship.assert_not_called()
+    db_trust.delete.assert_called_once()
 
 
 def test_a_revocation_fault_keeps_the_row_as_the_retry_handle() -> None:
@@ -125,12 +164,13 @@ def test_a_provider_token_fault_keeps_the_row() -> None:
 def test_the_caches_are_evicted_when_the_cleanup_after_the_row_raises() -> None:
     trust, _ = _trust(TAGGED)
     registry = _registry(owner=False)
-    registry._delete_client_trust_relationship.side_effect = DbError("sweep")
     with (
         patch(REGISTRY, return_value=registry),
+        patch("actingweb.trust_permissions.get_trust_permission_store") as shared,
         patch("actingweb.mcp.invalidation.evict_caches_for_actor") as evict,
         pytest.raises(DbError),
     ):
+        shared.return_value.delete_permissions.side_effect = DbError("permissions")
         trust.delete()
     evict.assert_called_once_with("actor-y")
 

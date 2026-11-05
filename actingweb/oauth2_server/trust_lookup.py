@@ -60,17 +60,18 @@ def _untagged(trust: Any) -> bool:
     return getattr(trust, "oauth_client_id", None) is None
 
 
-def _client_credentials_shape(trust: Any, normalized: str) -> bool:
-    """Arm 2: a legacy client-credentials row, ``{source}:{n}:{n}``."""
+def _client_credentials_shape(
+    trust: Any, normalized: str, actor_id: str | None
+) -> bool:
+    """Arm 2: a legacy client-credentials row, ``{source}:{n}:{n}``. With no
+    ``established_via``, only a row :func:`legacy_oauth2_row` admits."""
     if not _untagged(trust):
         return False
     via = getattr(trust, "established_via", None)
     peer_id = str(getattr(trust, "peerid", ""))
     oauth2_family = via in ("oauth2", "oauth2_client")
-    legacy_prefixed = via is None and (
-        peer_id.startswith("oauth2:") or peer_id.startswith("oauth2_client:")
-    )
-    return (oauth2_family or legacy_prefixed) and peer_id in (
+    legacy = via is None and _oauth2_origin(trust, actor_id)
+    return (oauth2_family or legacy) and peer_id in (
         f"oauth2_client:{normalized}:{normalized}",
         f"oauth2:{normalized}:{normalized}",
     )
@@ -90,7 +91,9 @@ def _real_email_shape(
     )
 
 
-def find_client_trust(trusts: Iterable[Any], client_id: str) -> Any | None:
+def find_client_trust(
+    trusts: Iterable[Any], client_id: str, actor_id: str | None = None
+) -> Any | None:
     """The one trust row that authorises ``client_id``, or None (the MCP
     authentication resolver).
 
@@ -100,7 +103,9 @@ def find_client_trust(trusts: Iterable[Any], client_id: str) -> Any | None:
        ``oauth2_client`` ``established_via`` (or none and an ``oauth2:`` /
        ``oauth2_client:`` prefix) whose peer id equals
        ``{source}:{normalized}:{normalized}``, the shape the
-       client-credentials flow wrote with the client id as its email.
+       client-credentials flow wrote with the client id as its email. A row
+       with no ``established_via`` must also have no baseuri or
+       ``actor_id``'s own (:func:`legacy_oauth2_row`).
 
     Arm 3 (:func:`client_trusts_for_deletion`) is never consulted here.
     """
@@ -110,7 +115,7 @@ def find_client_trust(trusts: Iterable[Any], client_id: str) -> Any | None:
             return trust
     normalized = normalize_client_id(client_id)
     for trust in rows:
-        if _client_credentials_shape(trust, normalized):
+        if _client_credentials_shape(trust, normalized, actor_id):
             return trust
     return None
 
@@ -144,6 +149,6 @@ def client_trusts_for_deletion(
         trust
         for trust in trusts
         if _tagged(trust, client_id)
-        or _client_credentials_shape(trust, normalized)
+        or _client_credentials_shape(trust, normalized, actor_id)
         or _real_email_shape(trust, client_id, normalized, actor_id)
     ]

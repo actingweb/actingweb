@@ -846,7 +846,7 @@ class TestClientConnectionDeletion:
 # Fault targets for TestTrustDeletionConverges, one per row of the table in
 # thoughts/reference/trust-row-deletion-invariants.md that can fault:
 # target -> ({scenario: depth}, the step's table row). Depth 1 faults the row
-# the route deletes; depth 2 a sibling row its sweep (step 8) deletes. The
+# the route deletes; depth 2 a sibling row its sweep (step 6) deletes. The
 # owner's own row disables the client (3a), so its revoke (3b) is a sibling's.
 _FAULT_TARGETS = {
     "revoke": ({"connection": 1, "owner": 2}, "3b"),
@@ -854,19 +854,22 @@ _FAULT_TARGETS = {
     "disable_tokens": ({"owner": 1, "owner-single": 1}, "3a"),
     "client_row": ({"owner": 1, "owner-single": 1}, "3a"),
     "provider_tokens": ({"owner": 1, "connection": 1, "owner-single": 1}, "4"),
-    "row": ({"owner": 1, "connection": 1, "owner-single": 1}, "6"),
-    "permissions": ({"owner": 1, "connection": 1, "owner-single": 1}, "7"),
-    "sibling_row": ({"owner": 2, "connection": 2}, "8"),
-    "sibling_permissions": ({"owner": 2, "connection": 2}, "8"),
+    "row": ({"owner": 1, "connection": 1, "owner-single": 1}, "7"),
+    "permissions": ({"owner": 1, "connection": 1, "owner-single": 1}, "8"),
+    "sibling_row": ({"owner": 2, "connection": 2}, "6"),
+    "sibling_permissions": ({"owner": 2, "connection": 2}, "6"),
 }
 _CASES = [
     pytest.param(scenario, target, route, id=f"{scenario}-{target}-{route}")
     for target, (depths, _step) in _FAULT_TARGETS.items()
     for scenario in depths
-    for route in ("one-row", "every-row")
+    for route in ("same-row", "one-row", "every-row")
 ]
 # Steps that run before the row delete: a fault there leaves the faulted row.
-_BEFORE_ROW = ("3a", "3b", "4", "6")
+_BEFORE_ROW = ("3a", "3b", "4", "7")
+# Routes that retry the row they started from: a sibling fault (step 6, the
+# sweep before the row) must leave that row, or the retry is a 404.
+_RETRY_THE_ROOT = ("same-row", "one-row")
 
 
 class TestTrustDeletionConverges:
@@ -1043,6 +1046,7 @@ class TestTrustDeletionConverges:
             ):
                 state["fired"] = True
                 state["victim"] = stack[-1]
+                state["root"] = stack[0]
                 if error is None:
                     return False
                 raise error("injected fault")
@@ -1054,9 +1058,17 @@ class TestTrustDeletionConverges:
         return patches, state
 
     @classmethod
-    def _run(cls, config, holder: ActorInterface, client_id: str, route: str) -> None:
+    def _run(
+        cls, config, holder: ActorInterface, client_id: str, route: str, first: str
+    ) -> None:
+        """``same-row``: ``DELETE /<actor>/trust/<rel>/<first>``, the same
+        peer id on every retry (404 once the row is gone); ``one-row``: each
+        row still listed; ``every-row``: the bulk delete."""
         from actingweb import actor as actor_module
 
+        if route == "same-row":
+            cls._fresh(config, holder).trust.delete_relationship(first)
+            return
         if route == "every-row":
             actor_module.Actor(holder.id, config=config).delete_reciprocal_trust(
                 delete_peer=True
@@ -1084,8 +1096,9 @@ class TestTrustDeletionConverges:
         try:
             patches, state = self._patch(config, target, depths[scenario])
             # Rule 1: the fault raises; it never ends in success.
+            first = s["peer_ids"][0]
             with patches, pytest.raises(DbError):
-                self._run(config, holder, client_id, route)
+                self._run(config, holder, client_id, route, first)
             assert state["fired"], f"{target} never ran on the {scenario} path"
             left_rows = [
                 t.peerid for t in self._rows_for(self._fresh(config, holder), client_id)
@@ -1096,6 +1109,10 @@ class TestTrustDeletionConverges:
             # delete a sibling that faulted.
             if step in _BEFORE_ROW and depths[scenario] == 1:
                 assert state["victim"] in left_rows, "the faulted row must stay"
+            if step == "6" and route in _RETRY_THE_ROOT:
+                assert state["root"] in left_rows, (
+                    "a sibling fault must leave the route's own row"
+                )
             if step == "3a":
                 # The client row, which the retry reads (the index row may
                 # already be gone).
@@ -1108,7 +1125,7 @@ class TestTrustDeletionConverges:
             for _ in range(4):
                 if not self._rows_for(self._fresh(config, holder), client_id):
                     break
-                self._run(config, holder, client_id, route)
+                self._run(config, holder, client_id, route, first)
             assert self._rows_for(self._fresh(config, holder), client_id) == []
 
             tokens = get_actingweb_token_manager(config)
@@ -1121,9 +1138,9 @@ class TestTrustDeletionConverges:
             for peer_id in s["peer_ids"]:
                 assert core.store[f"{OAUTH_TOKENS_PREFIX}{peer_id}"] is None
                 left = permissions.get_permissions(holder.id, peer_id)  # type: ignore[arg-type]
-                if step in ("7", "8") and "permissions" in target:
+                if step in ("6", "8") and "permissions" in target:
                     if peer_id == state["victim"]:
-                        # The table's accepted residue (step 7): the row is
+                        # The table's accepted residue (step 8): the row is
                         # gone, and the next row for this peer id clears it.
                         continue
                 assert left is None, f"permissions of {peer_id} survived"
@@ -1145,7 +1162,7 @@ class TestTrustDeletionConverges:
 
 class TestPeerRowPermissionResidue:
     """Trust.delete deletes a row's custom permissions after the row, so a
-    fault there leaves them with the row gone (the table's step 7). A peer's
+    fault there leaves them with the row gone (the table's step 8). A peer's
     peer id is stable: the next row for it must not inherit them (sixth
     verification, Issue 2)."""
 

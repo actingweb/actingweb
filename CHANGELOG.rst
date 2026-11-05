@@ -79,11 +79,14 @@ SECURITY
 
   - a fault in that cleanup is raised (503 through the integrations)
     instead of logged under a 204 while the client stayed live. The
-    revocation, the owner's client deletion and the provider-token delete
-    run before the row goes, so their faults leave the row in place for the
-    retry; a row an earlier row's cleanup already removed no longer fails
-    an actor's bulk trust deletion, and any error deleting the client's
-    other rows is raised as well;
+    revocation, the owner's client deletion, the provider-token delete and
+    the deletion of that actor's other rows of the client run before the
+    row goes, so their faults leave the row in place, and retrying the same
+    ``DELETE /<actor>/trust/<rel>/<peer>`` finishes them (it answered 404
+    with the other rows left). A row an earlier row's cleanup already
+    removed no longer fails an actor's bulk trust deletion, and any error
+    deleting the client's other rows, or a refusal with the row still
+    there, is raised as well;
   - the owner's client deletion from a trust row stops with ``DbError``,
     the row kept, when the token store cannot list every token, instead of
     deleting the client with access tokens left to expire. A client counts
@@ -91,12 +94,14 @@ SECURITY
     in that order (one of them was enough, and a client row left behind
     stayed listed but could not be deleted); its owner's
     ``OAuth2ClientManager.delete_client`` finishes a client whose index row
-    already went;
+    already went. A client row in an actor's bucket whose index row names
+    another actor (copied or restored) is ended as a connection: every
+    deletion of that actor's row refused it, so the row could never go;
   - a row from before ``established_via`` (3.4) belongs to a client when
     it has no baseuri or this actor's own, compared by its ``/<actor_id>``
     suffix, so a row written before the fqdn or protocol changed is still
-    the client's; client deletion no longer takes such a row with a peer's
-    baseuri for the client's;
+    the client's; client deletion and the MCP client-credentials lookup no
+    longer take such a row with a peer's baseuri for the client's;
   - a legacy ``oauth2:<email>:<client_id>`` row, which authorises, ends its
     connection too (it cascaded nothing), and a tagged row is routed by its
     ``oauth_client_id``;
@@ -121,7 +126,10 @@ SECURITY
   with a user's actor id to remove a client it did not register uses
   ``delete_client_connection`` instead. **Behavior change:** the registry's
   ``delete_client`` answers ``False`` when only one of the client's two
-  rows is confirmed deleted; a retry finishes it.
+  rows is confirmed deleted; a retry with the owner's ``actor_id`` finishes
+  it. **Behavior change:** an MCP client-credentials token for a pre-3.4
+  trust row with a peer's baseuri no longer authorises; such a row was
+  never written by the library's OAuth2 flows.
 
 - **An unauthenticated ``POST /`` could squat an address, and the address
   owner's first OAuth login adopted the squatter's actor with the squatter's

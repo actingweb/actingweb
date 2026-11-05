@@ -165,7 +165,12 @@ class Trust:
             # disables the client (tokens, client row, index row); any other
             # actor revokes only its own tokens for it. A retry after the
             # owner's client is gone takes the connection path.
-            if registry.client_owned_by(self.actor_id, oauth2_client_id):
+            # Owned: the client row is in this actor's bucket and the index
+            # does not name another actor (a copied or restored row would
+            # make every disable refuse, and the row could never go).
+            if registry.client_owned_by(
+                self.actor_id, oauth2_client_id
+            ) and registry.indexed_owner(oauth2_client_id) in (None, self.actor_id):
                 if not registry.disable_client(
                     oauth2_client_id, actor_id=self.actor_id
                 ):
@@ -200,14 +205,23 @@ class Trust:
             ):
                 raise DbError("OAuth2 provider token delete", self.actor_id)
 
-        # Delete the trust record FIRST, then perform the OAuth2 cleanup.
-        #
-        # Ordering is critical to avoid unbounded recursion. The cleanup
-        # re-enumerates this actor's trust relationships and calls
-        # delete_relationship() -> delete_reciprocal_trust() -> Trust.delete()
-        # for the client's other rows. If this record still existed at that
-        # point, the cleanup would re-discover it and recurse without bound.
-        # Removing the record up front means the cleanup cannot find it.
+        # This actor's other rows of the client, before this row goes: a
+        # fault then leaves this row, so retrying the same route (one row,
+        # whose retry would otherwise answer 404) sweeps again. The sweep
+        # deletes each sibling through delete_relationship() -> Trust.delete();
+        # while it runs, those nested deletes skip their own sweep (the
+        # registry's in-progress guard), so nothing recurses. A fault raises:
+        # the caller must not report success while another row is live.
+        if (
+            oauth2_client_id
+            and registry is not None
+            and self.actor_id
+            and not registry.sweeping(self.actor_id, oauth2_client_id)
+        ):
+            registry._delete_client_trust_relationship(
+                self.actor_id, oauth2_client_id, exclude_peer_id=peerid
+            )
+
         self.trust = {}
         result = self.handle.delete()
 
@@ -229,16 +243,6 @@ class Trust:
                 permission_store = get_trust_permission_store(self.config)
                 if not permission_store.delete_permissions(self.actor_id, peerid):
                     raise DbError("trust permissions delete", self.actor_id)
-
-            # This actor's other rows of the client, only when the record was
-            # actually removed: the cleanup re-reads the actor's trust rows
-            # from the DB, so a record still there would be found again. A
-            # fault raises: the caller must not report success while another
-            # row of the client is live.
-            if result and oauth2_client_id and registry is not None:
-                registry._delete_client_trust_relationship(
-                    self.actor_id, oauth2_client_id
-                )
         finally:
             if result and self.actor_id:
                 # A deleted trust relationship must stop authorizing

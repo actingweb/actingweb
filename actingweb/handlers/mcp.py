@@ -2590,7 +2590,7 @@ class MCPHandler(BaseHandler):
             # rows from the interactive-authorize flow with a real email and
             # no oauth_client_id are a known residual lockout risk,
             # documented in the migration guide.
-            trust = find_client_trust(actor.trust.relationships, client_id)
+            trust = find_client_trust(actor.trust.relationships, client_id, actor.id)
             if trust is not None:
                 how = (
                     "oauth_client_id"

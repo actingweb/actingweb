@@ -274,6 +274,8 @@ class TestTrustCRUD:
             mock_get_registry.return_value = mock_registry
 
             mock_registry.client_owned_by.return_value = True
+            mock_registry.indexed_owner.return_value = None
+            mock_registry.sweeping.return_value = False
             mock_registry.disable_client.return_value = True
 
             result = trust.delete()
@@ -283,16 +285,13 @@ class TestTrustCRUD:
             mock_registry.disable_client.assert_called_once()
             mock_registry._delete_client_trust_relationship.assert_called_once()
 
-    def test_trust_delete_oauth2_client_deletes_record_before_client(self):
-        """Regression: the trust record must be deleted BEFORE the sweep of
-        the client's other rows.
-
-        The sweep (_delete_client_trust_relationship) cascades back into
-        Trust.delete(). If the trust record is not removed first, that cascade
-        re-discovers this same relationship and recurses without bound (the
-        actor-delete self-deadlock / "maximum recursion depth exceeded" bug).
-        The owner's client is disabled before the record goes, so a fault
-        there leaves the record for the retry.
+    def test_trust_delete_oauth2_client_sweeps_before_the_record(self):
+        """The owner's client is disabled and the client's other rows are
+        swept before the record goes, so a fault in either leaves the record
+        for the retry (seventh verification, Issue 1). The sweep excludes
+        this record, and the Trust.delete calls it makes skip their own
+        sweep (the registry's guard), which is what prevents the unbounded
+        recursion the old order ("record first") guarded against.
         """
         call_order: list[str] = []
 
@@ -326,6 +325,8 @@ class TestTrustCRUD:
         ) as mock_get_registry:
             mock_registry = Mock()
             mock_registry.client_owned_by.return_value = True
+            mock_registry.indexed_owner.return_value = None
+            mock_registry.sweeping.return_value = False
             mock_registry.disable_client.side_effect = record("client_disable")
             mock_registry._delete_client_trust_relationship.side_effect = record(
                 "sweep"
@@ -335,20 +336,20 @@ class TestTrustCRUD:
             result = trust.delete()
 
         assert result is True
-        # The local trust record must be removed before the sweep that
-        # cascades back into trust deletion.
-        assert call_order == ["client_disable", "record_delete", "sweep"]
+        assert call_order == ["client_disable", "sweep", "record_delete"]
         mock_registry.disable_client.assert_called_once_with(
             "mcp_client_abc123", actor_id="test_actor"
         )
+        mock_registry._delete_client_trust_relationship.assert_called_once_with(
+            "test_actor",
+            "mcp_client_abc123",
+            exclude_peer_id="oauth2_client:user@example.com:mcp_client_abc123",
+        )
 
-    def test_trust_delete_skips_client_cleanup_when_record_delete_fails(self):
-        """Regression: OAuth2 client cleanup must NOT run if the record delete fails.
-
-        The cleanup cascade re-reads trust relationships from the DB, so if the
-        physical delete returned False (record still live) running delete_client()
-        would re-enter Trust.delete() and recurse without bound. Cleanup is
-        therefore guarded on a successful delete.
+    def test_trust_delete_inside_a_sweep_does_not_sweep_again(self):
+        """Regression: the actor-delete self-deadlock ("maximum recursion
+        depth exceeded"). The sweep cascades back into Trust.delete() for
+        each sibling; inside it, that call must not start another sweep.
         """
         mock_config = Mock()
         mock_db_trust = Mock()
@@ -371,13 +372,15 @@ class TestTrustCRUD:
             "actingweb.oauth2_server.client_registry.get_mcp_client_registry"
         ) as mock_get_registry:
             mock_registry = Mock()
+            # Inside the sweep of this client: the cascade must not re-enter it.
+            mock_registry.sweeping.return_value = True
+            mock_registry.client_owned_by.return_value = False
             mock_get_registry.return_value = mock_registry
 
             result = trust.delete()
 
         assert result is False
-        # Cleanup must be skipped — otherwise the cascade re-enters Trust.delete().
-        # (The registry is consulted before the delete, for ownership.)
+        # The guard stops the cascade from re-entering the sweep.
         mock_registry.delete_client.assert_not_called()
         mock_registry._delete_client_trust_relationship.assert_not_called()
 

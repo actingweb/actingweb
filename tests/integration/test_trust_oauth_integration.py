@@ -812,3 +812,32 @@ class TestClientConnectionDeletion:
             assert kept is not None and kept.properties["patterns"] == ["memory_*"]  # type: ignore[index]
         finally:
             actor.delete()
+
+    def test_bulk_deletion_passes_a_row_an_earlier_rows_cleanup_removed(self, aw_app):
+        """An owner holds its registration row and the row of authorizing
+        its own client. Deleting the first sweeps the second, which the bulk
+        loop then reaches in its stale list: already gone is not a failure
+        (fifth verification, Issue 1)."""
+        from actingweb import actor as actor_module
+
+        config = aw_app.get_config()
+        actor = ActorInterface.create(creator="bulk@example.com", config=config)
+        try:
+            client_id = OAuth2ClientManager(actor.id, config).create_client(  # type: ignore[arg-type]
+                client_name="Own Client", trust_type="mcp_client"
+            )["client_id"]
+            assert actor.trust.create_or_update_oauth_trust(
+                email="bulk@example.com",
+                trust_type="mcp_client",
+                oauth_tokens={"access_token": "g-at"},
+                established_via="oauth2_client",
+                client_id=client_id,
+            )
+            assert len(self._rows_for(actor, client_id)) == 2
+
+            core = actor_module.Actor(actor.id, config=config)
+            assert core.delete_reciprocal_trust(delete_peer=True) is True
+            fresh = ActorInterface(actor_module.Actor(actor.id, config=config))
+            assert self._rows_for(fresh, client_id) == []
+        finally:
+            actor.delete()

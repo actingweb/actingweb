@@ -1736,8 +1736,15 @@ class ActingWebTokenManager:
         # the reuse window, so a rotation in flight shows its chain here).
         # A rotation that read no marker minted before it was written, so
         # the second snapshot sees what it minted.
+        fence_unread: list[str] = []
         for bucket in (self.tokens_bucket, self.refresh_tokens_bucket):
-            for token_attr in (self._snapshot_bucket(actor_id, bucket) or {}).values():
+            first = self._snapshot_bucket(actor_id, bucket)
+            if first is None:
+                # The fence is weaker for this bucket: chains are marked one
+                # token at a time below. Counted, so the call still raises.
+                fence_unread.append(bucket)
+                continue
+            for token_attr in first.values():
                 token_data = (token_attr or {}).get("data")
                 if isinstance(token_data, dict) and (
                     client_id is None or token_data.get("client_id") == client_id
@@ -1786,6 +1793,7 @@ class ActingWebTokenManager:
         else:
             logger.debug(f"No tokens found to revoke {scope}")
 
+        unreadable.extend(b for b in fence_unread if b not in unreadable)
         if unreadable or unconfirmed:
             problems = [f"could not read {bucket}" for bucket in unreadable]
             if unconfirmed:

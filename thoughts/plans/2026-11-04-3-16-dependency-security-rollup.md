@@ -1376,6 +1376,10 @@ docs build, `verify_groups`, ruff and pyright at 0 errors and 0 warnings.
   of that change (Iteration 20) found that a remote peer could reach the
   same cascade through `POST /trust` with an OAuth2-shaped peer id;
   peer-supplied ids now refuse the OAuth2 prefixes.
+- After the fifth verification (Iterations 21-23), the steps of
+  `Trust.delete` that can fail run before the row goes (the owner's
+  client deletion, the token revocation and the provider tokens). Only
+  the permissions and the sibling sweep run after the row.
 
 ### Learnings
 - `make test-all-parallel` ends with `docker compose down -v`, so the next
@@ -1403,6 +1407,12 @@ docs build, `verify_groups`, ruff and pyright at 0 errors and 0 warnings.
   client. Ownership is "the client's row is in my own `mcp_clients`
   bucket", which needs no global index read, so a missing index row cannot
   promote a connection to an owner.
+- `DbTrust.delete()` returning False means "no row to delete", which
+  includes "already gone". Treat a False as a failure only after
+  re-reading the row; a stale list in a bulk loop reaches rows that
+  something else already deleted.
+- A retry handle must outlive every step that can fail. A step that
+  raises after the row is deleted leaves a retry that answers 404.
 
 
 ## Iterations
@@ -1991,3 +2001,114 @@ Accepted as-is:
 
 **Rationale**: the D1 fix had to hold against the protocol's
 unauthenticated trust request as well as against signed-in users.
+
+### 2026-11-05, after verification thoughts/verifications/2026-11-05-3-16-dependency-security-rollup-reverify-4.md
+
+#### 21. An already-gone row no longer fails bulk trust deletion
+
+**Category**: Bug fix (verification Issue 1, High, a regression from Iteration 20)
+
+**What changed**: Iteration 20 raised `DbError` whenever `Trust.delete()`
+returned False. On both backends, False also means the row was already
+gone: `Trust.delete` loads the row first, and a missing row leaves no
+handle. `delete_reciprocal_trust` reads its list once, so it failed in two
+cases:
+- a client's sibling sweep had already deleted a later row in the list;
+- a peer's reciprocal DELETE landed after the list was read.
+
+Now it raises only when a re-read finds the row still there.
+`delete_peer_trustee` also treats a 404 from the remote actor as already
+deleted, so a retry after a local fault can finish (Issue 9).
+
+**Files affected**:
+- `actingweb/actor.py`: re-read on False in `delete_reciprocal_trust`;
+  `delete_peer_trustee` accepts a 404.
+- `tests/integration/test_trust_oauth_integration.py`: new
+  `test_bulk_deletion_passes_a_row_an_earlier_rows_cleanup_removed`. An
+  owner holds its registration row and its own authorization row. The
+  test raises `DbError` on the old code.
+
+**Rationale**: a bulk deletion (`Actor.delete`, purge,
+`delete_all_relationships`) of an actor with two rows of one client
+answered 503 every time.
+
+#### 22. The steps that can fail run before the row goes, and eviction always runs
+
+**Category**: Verification fix (Issues 2, 3, 4 and 6)
+
+**What changed**: `Trust.delete` now runs in this order:
+1. **Owner or connection.** An owner calls the new
+   `MCPClientRegistry.disable_client`: steps 1-3 of `delete_client`, which
+   revoke the tokens and delete the client row and the index row, but not
+   the trust rows. A non-owner revokes only its own tokens.
+2. **Provider tokens.** They are deleted next: they grant nothing on this
+   server, so deleting them before the row is safe.
+3. **The row** is deleted.
+4. **After the row:** its permissions, then the sweep of the actor's other
+   rows of the client.
+5. **Eviction.** The MCP caches are evicted in a `finally` once the row is
+   gone.
+
+So a fault in steps 1-2 answers 503 and leaves the row as the retry handle.
+A retry after the owner's client is disabled takes the connection path.
+
+Other changes:
+- `delete_client` is now `_disable_client` plus the sweep.
+- Permissions are cleared through `get_trust_permission_store(config)`, the
+  singleton whose cache the evaluator reads, both here and when
+  `TrustManager` creates a new OAuth2 row.
+- A False from `delete_permissions` raises.
+- The now-unused `Trust._is_oauth2_client_trust` and its three tests are
+  removed.
+
+**Files affected**:
+- `actingweb/trust.py`: the new order, the shared store, the `finally`
+  eviction, the dead helper removed.
+- `actingweb/oauth2_server/client_registry.py`: `disable_client` and
+  `_disable_client`; `delete_client` uses them.
+- `actingweb/interface/trust_manager.py`: the shared store, raise on False,
+  docstring.
+- `tests/test_client_connection_deletion.py`: these tests:
+  - `test_the_owner_disables_its_client_before_the_row_goes`;
+  - `test_a_failed_client_deletion_is_raised_and_keeps_the_row`;
+  - `test_a_provider_token_fault_keeps_the_row`;
+  - `test_the_caches_are_evicted_when_the_cleanup_after_the_row_raises`;
+  - `test_permissions_are_cleared_through_the_shared_store`.
+- `tests/test_trust_core.py`: the order test asserts
+  disable, then row, then sweep; the fixture patches the shared store.
+
+**Rationale**: after a 503 with the row already gone, the retry got a 404,
+and the client or the provider tokens stayed live. Separately, a fresh
+store instance left the evaluator's cache serving the deleted grants.
+
+#### 23. Smaller verification points
+
+**Category**: Verification fix (Issues 5, 7 and 8)
+
+**What changed**:
+- **Issue 5, the origin gate.** A row with no `established_via` is older
+  than 3.4. It now names a client only when its `baseuri` is empty or this
+  actor's own URL, as on every row an OAuth2 flow wrote; a row a peer
+  planted before 3.4 carries the peer's URL.
+- **Issue 8, the token sweep.** A bucket its first pass cannot read is
+  reported (`TokenStoreUnavailable`), so a weaker fence is never silent.
+- **Issue 7, the changelog.** The older client-deletion entry no longer
+  says the trust-row cascade logs the fault, and the new SECURITY entry
+  describes the before-the-row order.
+
+**Files affected**:
+- `actingweb/trust.py`
+- `actingweb/oauth2_server/token_manager.py`
+- `CHANGELOG.rst`
+- `tests/test_client_connection_deletion.py`: these tests:
+  - a pre-3.4 peer row with a `baseuri` names no client;
+  - `test_a_bucket_the_first_pass_cannot_read_is_reported`.
+
+Accepted as-is:
+- Issue 9, adoption: `_delete_actor_clients` without `actor_deleted`
+  raises permanently for a client row whose index row names another
+  actor. That needs a copied or restored bucket row, and refusing is
+  the safe answer.
+- A peer that claims this actor's own URL as its `baseuri` before 3.4
+  still passes the gate. That needs a pre-3.4 plant made with a forged
+  `baseuri`.

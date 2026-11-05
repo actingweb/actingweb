@@ -1264,7 +1264,11 @@ class Actor:
                 )
                 self.last_response_code = 408
                 return False
-            if response.status_code < 200 or response.status_code > 299:
+            # 404: the remote actor is already gone, for example after an
+            # earlier attempt whose local cleanup below raised; finish it.
+            if response.status_code != 404 and (
+                response.status_code < 200 or response.status_code > 299
+            ):
                 logger.debug(
                     "Not able to delete peer actor remotely, peer is unwilling"
                 )
@@ -2204,9 +2208,18 @@ class Actor:
             dbtrust = trust.Trust(
                 actor_id=self.id, peerid=rel["peerid"], config=self.config
             )
-            if not dbtrust.delete():
-                # Not a peer's refusal: callers (Actor.delete, purge) bulk-
-                # delete what is left, which would skip this row's cleanup.
+            if (
+                not dbtrust.delete()
+                and trust.Trust(
+                    actor_id=self.id, peerid=rel["peerid"], config=self.config
+                ).get()
+            ):
+                # False also means the row was already gone: an earlier row's
+                # cleanup (a client's sibling rows) or a peer's reciprocal
+                # DELETE removed it after the list above was read. Only a row
+                # still there is a failure, and not a peer's refusal: callers
+                # (Actor.delete, purge) bulk-delete what is left, which would
+                # skip this row's cleanup.
                 raise DbError("trust delete", self.id)
         if notify_peers and delete_peer and (not success_once or failed_once):
             return False

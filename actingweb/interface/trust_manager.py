@@ -321,8 +321,8 @@ class TrustManager:
     def delete_all_relationships(self) -> bool:
         """Delete all trust relationships.
 
-        Note: Associated permissions are automatically deleted by the core
-        delete_reciprocal_trust method for each relationship.
+        Note: each row's custom permissions are deleted with it
+        (``Trust.delete``).
         """
         result = self._core_actor.delete_reciprocal_trust(delete_peer=True)
         return bool(result)
@@ -611,16 +611,20 @@ class TrustManager:
                 # back with a reconnect (Trust.delete deletes them right after
                 # the row, and a fault there raises with the row gone).
                 if self._core_actor.config and self._core_actor.id:
-                    from ..trust_permissions import TrustPermissionStore
+                    from ..trust_permissions import get_trust_permission_store
 
-                    permission_store = TrustPermissionStore(self._core_actor.config)
+                    # The shared store: its cache is what permission checks
+                    # read, so a fresh instance would leave them stale.
+                    permission_store = get_trust_permission_store(
+                        self._core_actor.config
+                    )
                     if (
                         permission_store.get_permissions(self._core_actor.id, peer_id)
                         is not None
+                    ) and not permission_store.delete_permissions(
+                        self._core_actor.id, peer_id
                     ):
-                        permission_store.delete_permissions(
-                            self._core_actor.id, peer_id
-                        )
+                        raise DbError("trust permissions delete", self._core_actor.id)
 
                 created = db.create(
                     actor_id=self._core_actor.id,

@@ -25,7 +25,7 @@ def _row_side_stores() -> Any:
     """The permission and provider-token stores ``Trust.delete`` clears
     right after the row; these unit tests use a mock ``Config``."""
     with (
-        patch("actingweb.trust_permissions.TrustPermissionStore") as permissions,
+        patch("actingweb.trust_permissions.get_trust_permission_store") as permissions,
         patch("actingweb.attribute.InternalStore") as store,
     ):
         permissions.return_value.get_permissions.return_value = None
@@ -46,6 +46,7 @@ def _registry(*, owner: bool) -> Mock:
     registry = Mock()
     registry.client_owned_by.return_value = owner
     registry.delete_client.return_value = True
+    registry.disable_client.return_value = True
     return registry
 
 
@@ -72,13 +73,20 @@ def test_a_connection_of_another_actors_client_never_deletes_the_client() -> Non
     )
 
 
-def test_the_owner_deletes_its_client() -> None:
-    trust, _ = _trust(TAGGED)
+def test_the_owner_disables_its_client_before_the_row_goes() -> None:
+    trust, db_trust = _trust(TAGGED)
     registry = _registry(owner=True)
+    calls: list[str] = []
+    registry.disable_client.side_effect = lambda *a, **k: calls.append("client") or True
+    db_trust.delete.side_effect = lambda: calls.append("row") or True
     with patch(REGISTRY, return_value=registry):
         assert trust.delete() is True
-    registry.delete_client.assert_called_once_with("mcp_ab12", actor_id="actor-y")
+    registry.disable_client.assert_called_once_with("mcp_ab12", actor_id="actor-y")
     registry.revoke_connection_tokens.assert_not_called()
+    assert calls == ["client", "row"]
+    registry._delete_client_trust_relationship.assert_called_once_with(
+        "actor-y", "mcp_ab12"
+    )
 
 
 def test_a_revocation_fault_keeps_the_row_as_the_retry_handle() -> None:
@@ -90,13 +98,57 @@ def test_a_revocation_fault_keeps_the_row_as_the_retry_handle() -> None:
     db_trust.delete.assert_not_called()
 
 
-def test_a_failed_client_deletion_is_raised_not_folded() -> None:
-    """The trust UI answered 204 while the client stayed live (D4)."""
-    trust, _ = _trust(TAGGED)
+def test_a_failed_client_deletion_is_raised_and_keeps_the_row() -> None:
+    """The trust UI answered 204 while the client stayed live (D4); then a
+    503 with the row gone left the retry a 404 (fifth verification, 2)."""
+    trust, db_trust = _trust(TAGGED)
     registry = _registry(owner=True)
-    registry.delete_client.return_value = False
+    registry.disable_client.return_value = False
     with patch(REGISTRY, return_value=registry), pytest.raises(DbError):
         trust.delete()
+    db_trust.delete.assert_not_called()
+
+
+def test_a_provider_token_fault_keeps_the_row() -> None:
+    trust, db_trust = _trust(TAGGED)
+    registry = _registry(owner=False)
+    with (
+        patch(REGISTRY, return_value=registry),
+        patch("actingweb.attribute.InternalStore") as store,
+        pytest.raises(DbError),
+    ):
+        store.return_value.set_confirmed.return_value = False
+        trust.delete()
+    db_trust.delete.assert_not_called()
+
+
+def test_the_caches_are_evicted_when_the_cleanup_after_the_row_raises() -> None:
+    trust, _ = _trust(TAGGED)
+    registry = _registry(owner=False)
+    registry._delete_client_trust_relationship.side_effect = DbError("sweep")
+    with (
+        patch(REGISTRY, return_value=registry),
+        patch("actingweb.mcp.invalidation.evict_caches_for_actor") as evict,
+        pytest.raises(DbError),
+    ):
+        trust.delete()
+    evict.assert_called_once_with("actor-y")
+
+
+def test_permissions_are_cleared_through_the_shared_store() -> None:
+    """A fresh store instance left the evaluator's cache with the old
+    grants (fifth verification, 4)."""
+    trust, _ = _trust(TAGGED)
+    with (
+        patch(REGISTRY, return_value=_registry(owner=False)),
+        patch("actingweb.trust_permissions.get_trust_permission_store") as shared,
+    ):
+        shared.return_value.get_permissions.return_value = object()
+        shared.return_value.delete_permissions.return_value = True
+        assert trust.delete() is True
+    shared.return_value.delete_permissions.assert_called_once_with(
+        "actor-y", TAGGED["peerid"]
+    )
 
 
 @pytest.mark.parametrize(
@@ -118,6 +170,15 @@ def test_a_failed_client_deletion_is_raised_not_folded() -> None:
                 "peerid": "0123abcd",
                 "established_via": "trust",
                 "oauth_client_id": "mcp_ab12",
+            },
+            None,
+        ),
+        # Before 3.4 a peer row had no established_via; it has the peer's
+        # baseuri, which an OAuth2 row never has.
+        (
+            {
+                "peerid": "oauth2_client:x:mcp_ab12",
+                "baseuri": "https://peer.example/abc",
             },
             None,
         ),
@@ -208,6 +269,22 @@ class TestTheTokenSweepMarksEveryChainFirst:
         ):
             manager.revoke_client_tokens("actor-y", "c")
         manager._remove_refresh_token_row.assert_not_called()
+
+    def test_a_bucket_the_first_pass_cannot_read_is_reported(self) -> None:
+        """Without the first pass, a rotation between the second snapshot and
+        the per-token marker is unfenced: say so (fifth verification, 8)."""
+        from actingweb.oauth2_server.token_manager import TokenStoreUnavailable
+
+        reads: list[str] = []
+        manager = self._manager({})
+
+        def snapshot(_a: str, bucket: str) -> dict[str, Any] | None:
+            reads.append(bucket)
+            return None if reads.count(bucket) == 1 else {}
+
+        manager._snapshot_bucket = Mock(side_effect=snapshot)  # type: ignore[method-assign]
+        with pytest.raises(TokenStoreUnavailable, match="could not read"):
+            manager.revoke_client_tokens("actor-y", "c")
 
 
 @pytest.mark.parametrize(

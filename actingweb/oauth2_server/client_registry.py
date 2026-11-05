@@ -343,6 +343,29 @@ class MCPClientRegistry:
             return delete_confirmed(
                 self.config, OAUTH2_SYSTEM_ACTOR, CLIENT_INDEX_BUCKET, client_id
             )
+        owner_id = self._disable_client(client_id, actor_id)
+        if owner_id is None:
+            return False
+        # Delete corresponding trust relationship
+        self._delete_client_trust_relationship(owner_id, client_id)
+        logger.info(
+            f"Successfully deleted OAuth2 client {client_id} for actor {owner_id}"
+        )
+        return True
+
+    def disable_client(self, client_id: str, *, actor_id: str) -> bool:
+        """Steps 1-3 of :meth:`delete_client` for its owner ``actor_id``:
+        revoke the client's tokens and delete its row and index row, leaving
+        the trust rows. ``Trust.delete`` calls it before it deletes the row,
+        so a fault leaves the row for the retry. False when ``actor_id`` does
+        not own the client or neither row is confirmed gone; a fault raises
+        ``DbError``."""
+        return self._disable_client(client_id, actor_id) is not None
+
+    def _disable_client(self, client_id: str, actor_id: str | None) -> str | None:
+        """Revoke, then delete the client row and its index row. The owner's
+        actor id when the client is disabled, None when it is refused or not
+        confirmed."""
         try:
             # First find the client to get metadata (and actor_id if not provided).
             client_data = self._load_client(client_id)
@@ -363,7 +386,7 @@ class MCPClientRegistry:
                     f"Refusing to delete OAuth2 client {client_id} for actor "
                     f"{actor_id}: it is registered under actor {owner}"
                 )
-                return False
+                return None
             if (
                 not client_data
                 and actor_id
@@ -375,7 +398,7 @@ class MCPClientRegistry:
                     f"Refusing to delete OAuth2 client {client_id} for actor "
                     f"{actor_id}: it is not registered under that actor"
                 )
-                return False
+                return None
 
             # The global client index is only a best-effort lookup optimization
             # (see _search_client_in_actors). Under heavy concurrent access to the
@@ -385,7 +408,7 @@ class MCPClientRegistry:
             # out here is what previously orphaned the client (it stayed listable).
             if not actor_id:
                 logger.warning(f"Client {client_id} not found for deletion")
-                return False
+                return None
             if not client_data:
                 logger.warning(
                     f"Client {client_id} missing from global index; deleting from "
@@ -432,7 +455,7 @@ class MCPClientRegistry:
                     f"{actor_id}: neither its row nor its index row is confirmed "
                     f"gone, so it can still authenticate"
                 )
-                return False
+                return None
             if not (row_gone and index_gone):
                 logger.warning(
                     f"OAuth2 client {client_id}: only its "
@@ -440,19 +463,13 @@ class MCPClientRegistry:
                     f"that is enough to disable it"
                 )
 
-            # Delete corresponding trust relationship
-            self._delete_client_trust_relationship(actor_id, client_id)
-
-            logger.info(
-                f"Successfully deleted OAuth2 client {client_id} for actor {actor_id}"
-            )
-            return True
+            return actor_id
 
         except DbError:
             raise
         except Exception as e:
             logger.error(f"Error deleting client {client_id}: {e}")
-            return False
+            return None
 
     def client_owned_by(self, actor_id: str, client_id: str) -> bool:
         """Whether ``client_id`` is registered under ``actor_id``: its row is

@@ -78,8 +78,11 @@ SECURITY
   The same change closes these gaps on the deletion path:
 
   - a fault in that cleanup is raised (503 through the integrations)
-    instead of logged under a 204 while the client stayed live, and a
-    revocation fault leaves the row in place for the retry;
+    instead of logged under a 204 while the client stayed live. The
+    revocation, the owner's client deletion and the provider-token delete
+    run before the row goes, so their faults leave the row in place for the
+    retry; a row an earlier row's cleanup already removed no longer fails
+    an actor's bulk trust deletion;
   - a legacy ``oauth2:<email>:<client_id>`` row, which authorises, ends its
     connection too (it cascaded nothing), and a tagged row is routed by its
     ``oauth_client_id``;
@@ -87,7 +90,8 @@ SECURITY
     tokens go, so a refresh that raced the deletion deletes what it minted;
   - a trust row's custom permissions are deleted after the row, not before
     (a fault in between left a live row on its trust type's defaults, which
-    can be wider);
+    can be wider), through the cache that permission checks read, and a new
+    OAuth2 row with the same peer id starts without them;
   - the provider tokens an OAuth2 login stored for the row
     (``oauth_tokens:<peer_id>``, Google's refresh token among them) are
     deleted with it.
@@ -1582,8 +1586,8 @@ FIXED
   ``mcp_`` client ids, by the cascade that deleting the tagged row runs; it is
   now deleted directly, whatever the client id, and a fault on one row no
   longer stops the deletion of the others (the first fault is raised to
-  the client-deletion caller after them; when the deletion started from a
-  trust-row delete, that cascade logs it). A retry through
+  the client-deletion caller after them, also when the deletion started
+  from a trust-row delete). A retry through
   ``OAuth2ClientManager.delete_client`` after such a fault deletes the
   actor's leftover rows of that client id even though the client itself is
   already gone. **Behavior change:**

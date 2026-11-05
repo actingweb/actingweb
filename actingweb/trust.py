@@ -139,8 +139,7 @@ class Trust:
         if not self.handle:
             return False
 
-        # Ensure trust data is loaded before checking if it's an OAuth2 client trust
-        # This is necessary because _is_oauth2_client_trust() relies on self.trust being populated
+        # Load the row: which OAuth2 client it connects is read from it.
         if not self.trust:
             self.get()
 
@@ -156,17 +155,50 @@ class Trust:
         # the client's index row is global, and deleting it here would
         # disable the client for every other actor it is connected to.
         registry: Any = None
-        owner = False
         if oauth2_client_id and self.config:
             from .oauth2_server.client_registry import get_mcp_client_registry
 
             registry = get_mcp_client_registry(self.config)
-            owner = registry.client_owned_by(self.actor_id, oauth2_client_id)
-            if not owner:
-                # Before the row goes: a fault leaves the row as the retry
-                # handle (the integrations answer DbError with 503), never a
-                # deleted row beside live tokens.
+            # Before the row goes, so a fault leaves the row as the retry
+            # handle (the integrations answer DbError with 503), never a
+            # deleted row beside a live client or live tokens. The owner
+            # disables the client (tokens, client row, index row); any other
+            # actor revokes only its own tokens for it. A retry after the
+            # owner's client is gone takes the connection path.
+            if registry.client_owned_by(self.actor_id, oauth2_client_id):
+                if not registry.disable_client(
+                    oauth2_client_id, actor_id=self.actor_id
+                ):
+                    raise DbError("OAuth2 client deletion", self.actor_id)
+                logger.info(
+                    f"Deleted OAuth2 client {oauth2_client_id} as part of trust "
+                    f"deletion"
+                )
+            else:
                 registry.revoke_connection_tokens(self.actor_id, oauth2_client_id)
+
+        peerid = getattr(self, "peerid", None) or str(
+            (self.trust or {}).get("peerid", "")
+        )
+
+        # The provider tokens an OAuth2 login stored for the row
+        # (TrustManager.create_or_update_oauth_trust), Google's refresh token
+        # among them, also before the row: they grant nothing here, and a
+        # fault then leaves the row for the retry instead of an orphan.
+        if (
+            self.config
+            and self.actor_id
+            and peerid
+            and (oauth2_client_id or peerid.split(":", 1)[0] in _OAUTH2_PREFIXES)
+        ):
+            from . import attribute
+            from .constants import OAUTH_TOKENS_PREFIX
+
+            store = attribute.InternalStore(actor_id=self.actor_id, config=self.config)
+            if not store.set_confirmed(
+                f"{OAUTH_TOKENS_PREFIX}{peerid}", None, raise_on_fault=True
+            ):
+                raise DbError("OAuth2 provider token delete", self.actor_id)
 
         # Delete the trust record FIRST, then perform the OAuth2 cleanup.
         #
@@ -176,80 +208,46 @@ class Trust:
         # for the client's other rows. If this record still existed at that
         # point, the cleanup would re-discover it and recurse without bound.
         # Removing the record up front means the cleanup cannot find it.
-        peerid = getattr(self, "peerid", None) or str(
-            (self.trust or {}).get("peerid", "")
-        )
         self.trust = {}
         result = self.handle.delete()
 
-        # Right after the row and before anything below can raise: the row's
-        # custom permissions (deleted first, a fault in between would leave a
-        # live row on its trust type's defaults, which can be wider) and the
-        # provider tokens an OAuth2 login stored for it
-        # (TrustManager.create_or_update_oauth_trust), Google's refresh
-        # token among them. A fault here raises with the row gone; a new
-        # OAuth2 row with the same peer id clears stale permissions.
-        if result and self.config and self.actor_id and peerid:
-            from .trust_permissions import TrustPermissionStore
+        try:
+            # The row's custom permissions go right after the row, never
+            # before it: a fault in between would leave a live row on its
+            # trust type's defaults, which can be wider. Through the shared
+            # store, whose cache the permission evaluator reads. A fault here
+            # raises with the row gone; a new OAuth2 row with the same peer
+            # id clears stale permissions.
+            if result and self.config and self.actor_id and peerid:
+                from .trust_permissions import get_trust_permission_store
 
-            permission_store = TrustPermissionStore(self.config)
-            if permission_store.get_permissions(self.actor_id, peerid) is not None:
-                permission_store.delete_permissions(self.actor_id, peerid)
-            if oauth2_client_id or peerid.split(":", 1)[0] in _OAUTH2_PREFIXES:
-                from . import attribute
-                from .constants import OAUTH_TOKENS_PREFIX
+                permission_store = get_trust_permission_store(self.config)
+                if permission_store.get_permissions(self.actor_id, peerid) is not None:
+                    if not permission_store.delete_permissions(self.actor_id, peerid):
+                        raise DbError("trust permissions delete", self.actor_id)
 
-                store = attribute.InternalStore(
-                    actor_id=self.actor_id, config=self.config
-                )
-                if not store.set_confirmed(
-                    f"{OAUTH_TOKENS_PREFIX}{peerid}", None, raise_on_fault=True
-                ):
-                    raise DbError("OAuth2 provider token delete", self.actor_id)
-
-        # Only when the record was actually removed: the cleanup re-reads the
-        # actor's trust rows from the DB, so a record still there would be
-        # found again. A fault in the cleanup raises: the caller must not
-        # report success while the client, or another row of it, is live.
-        if result and oauth2_client_id and registry is not None:
-            if owner:
-                if not registry.delete_client(oauth2_client_id, actor_id=self.actor_id):
-                    raise DbError("OAuth2 client deletion", self.actor_id)
-                logger.info(
-                    f"Deleted OAuth2 client {oauth2_client_id} as part of trust "
-                    f"deletion"
-                )
-            else:
+            # This actor's other rows of the client, only when the record was
+            # actually removed: the cleanup re-reads the actor's trust rows
+            # from the DB, so a record still there would be found again. A
+            # fault raises: the caller must not report success while another
+            # row of the client is live.
+            if result and oauth2_client_id and registry is not None:
                 registry._delete_client_trust_relationship(
                     self.actor_id, oauth2_client_id
                 )
+        finally:
+            if result and self.actor_id:
+                # A deleted trust relationship must stop authorizing
+                # immediately, not at the end of the MCP caches' five-minute
+                # TTL, also when the cleanup above raised. Actor-wide because
+                # the cached ActorInterface carries the trust list itself —
+                # see evict_mcp_caches_for_actor(). No-op when MCP is not in
+                # use.
+                from .mcp.invalidation import evict_caches_for_actor
 
-        if result and self.actor_id:
-            # A deleted trust relationship must stop authorizing immediately,
-            # not at the end of the MCP caches' five-minute TTL. Actor-wide
-            # because the cached ActorInterface carries the trust list itself —
-            # see evict_mcp_caches_for_actor(). No-op when MCP is not in use.
-            from .mcp.invalidation import evict_caches_for_actor
-
-            evict_caches_for_actor(self.actor_id)
+                evict_caches_for_actor(self.actor_id)
 
         return result
-
-    def _is_oauth2_client_trust(self) -> bool:
-        """Check if this trust relationship is for an OAuth2 client."""
-        if not self.trust or not isinstance(self.trust, dict):
-            return False
-
-        peerid = self.trust.get("peerid", "")
-        established_via = self.trust.get("established_via", "")
-        trust_type = self.trust.get("type", "")
-
-        # Check if this is an OAuth2 client trust based on peer_id format or metadata
-        return (
-            str(peerid).startswith("oauth2_client:")
-            or established_via == "oauth2_client"
-            or trust_type in ("oauth2_client", "mcp_client")
-        )
 
     def _oauth2_client_id(self) -> str | None:
         """The OAuth2 client this row connects, or None for any other trust.
@@ -266,9 +264,21 @@ class Trust:
         # library records those as established via "trust": a peer id of
         # the form oauth2_client:x:mcp_<id> must never let a remote peer
         # end, or delete, a client connection on this actor.
+        # A row older than the "trust" tag (3.4) has no established_via;
+        # one an OAuth2 flow wrote then has no baseuri, or this actor's own
+        # (TrustManager.create_or_update_oauth_trust), never a peer's.
         via = self.trust.get("established_via")
         prefix = str(self.trust.get("peerid", "")).split(":", 1)[0]
-        if not (via in OAUTH2_SOURCES or (via is None and prefix in OAUTH2_SOURCES)):
+        if via is None:
+            own_uri = (
+                f"{self.config.root}{self.actor_id}"
+                if self.config is not None and self.actor_id
+                else None
+            )
+            baseuri = self.trust.get("baseuri") or ""
+            if prefix not in OAUTH2_SOURCES or baseuri not in ("", own_uri):
+                return None
+        elif via not in OAUTH2_SOURCES:
             return None
         tagged = self.trust.get("oauth_client_id")
         if isinstance(tagged, str) and tagged:

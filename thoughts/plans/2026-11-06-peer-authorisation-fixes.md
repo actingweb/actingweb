@@ -692,15 +692,48 @@ D a peer with an `admin` trust:
 
 ### Verification
 
-- [ ] Run the contract's `### Checks` fast tier verbatim
-- [ ] Run the contract's `### Checks` full tier before the phase commit, one
+- [x] Run the contract's `### Checks` fast tier verbatim
+- [x] Run the contract's `### Checks` full tier before the phase commit, one
       run at a time
-- [ ] `grep -n '("", "callbacks"' actingweb/config.py` returns nothing
-- [ ] `git show --stat HEAD -- tests/integration/wire` shows `WA1` to `WA11`,
+- [x] `grep -n '("", "callbacks"' actingweb/config.py` returns nothing
+- [x] `git show --stat HEAD -- tests/integration/wire` shows `WA1` to `WA11`,
       `WA15` and `WA17` added and no other recording changed
-- [ ] The verification document holds the pre-fix run for each row
+- [x] The verification document holds the pre-fix run for each row
 
-### Implementation Status: Not Started
+### Notes
+
+- **Deviation: 401 whenever the request carries no `Authorization`
+  header.** A stale web session cookie takes the `www` path
+  (`base_handler.py:190-212`) and, with no OAuth provider, answers 403
+  rather than redirecting; on `/callbacks` any failed authentication
+  without the header now answers 401 with a challenge (redirect included).
+  Credentials that match nobody keep 403 (`WA4`).
+- **A callback for an unknown subscription id, by the right peer, answers
+  403** (was 404), as the specification says for a callback URI that does
+  not exist with authentication data (`actingweb-spec.rst:1153-1159`) and
+  as the plan's "403 when none" has it. One more existing test pinned the
+  404: `test_subscription_flow.py::test_016`, updated (verification).
+- The callback handler: `_authenticate_callback` (one place for the 401,
+  403 and 404), `_peer_segments` (the 400 for an empty or short peer
+  segment), `_refuse_reserved_name`; module helpers
+  `is_reserved_callback_name` and `low_granularity_fetch_url`. A fetch for
+  a trust with no base URI answers 503 with nothing processed.
+- `check_authorisation` keeps its matching in `_match_access_row`; the
+  binding is applied after a row admits the request.
+- The wire apps gained a generic callback hook (`wire_ping`) for `WA3`,
+  `WA4` and `WA11`; `wire_pair` is a factory object with `add_peer()` for
+  C, S, D and E. The `WA` rows are recorded in both topologies.
+- Pre-fix runs and the changed tests: verification document, "Phase 1".
+  Not predicted there: an unauthenticated generic callback answered 200 on
+  GET, POST and PUT (nothing ran), and a bare `/callbacks/subscriptions`
+  POST or DELETE raised (500).
+- Until Phase 3 lands, the binding is to a row a creation request can
+  replace; nothing ships between the commits of this PR.
+- Release impact: `check_authorisation` and `AuthResult.authorize` gain
+  keyword-only parameters with defaults (additive); the behaviour changes
+  are the changelog's (Phase 5). 3.16 is a minor.
+
+### Implementation Status: Complete
 
 ---
 

@@ -199,3 +199,112 @@ owners = []
 exposure = false
 expected = "A's permission PUT with an exclusion answers 200 with the permission callback to B nested (204, B's permissions hook nested); B fetches nothing after an exclusion and its replica keeps the excluded property (the wire apps leave auto_delete_on_revocation off, as the consumer does)."
 reason = ["2026-11-07 first recording (peer-authorisation-fixes:0)"]
+
+# ---------------------------------------------------------------------------
+# peer-authorisation-fixes, Phase 1: who may reach /callbacks (recorded with
+# the fix; the pre-fix runs are in the plan's verification document)
+# ---------------------------------------------------------------------------
+
+[rows."WA1"]
+test = "test_wire_access.py::test_wa1_unauthenticated_subscription_callback"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "No credentials: a subscription callback for B's subscription and for an unknown id both answer 401; nothing applied."
+reason = ["2026-11-07 first recording (peer-authorisation-fixes:1)"]
+
+[rows."WA2"]
+test = "test_wire_access.py::test_wa2_unauthenticated_permission_callback"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "No credentials: a permission callback for A and for a peer B has no trust with answer 401; nothing stored, no hook."
+reason = ["2026-11-07 first recording (peer-authorisation-fixes:1)"]
+
+[rows."WA3"]
+test = "test_wire_access.py::test_wa3_unauthenticated_generic_callback"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "No credentials: GET, POST, PUT and DELETE on /callbacks/<name> answer 401 with a challenge; the hook does not run."
+reason = ["2026-11-07 first recording (peer-authorisation-fixes:1)"]
+
+[rows."WA4"]
+test = "test_wire_access.py::test_wa4_unknown_bearer"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "A bearer that matches no trust answers 403 on the subscription, permission and generic callbacks (auth.py unchanged)."
+reason = ["2026-11-07 first recording (peer-authorisation-fixes:1)"]
+
+[rows."WA5"]
+test = "test_wire_access.py::test_wa5_other_peers_under_the_publishers_id"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "C (friend), S (subscriber) and D (admin), each with an approved trust to B, posting a subscription or permission callback under A's id: 403; nothing applied."
+reason = ["2026-11-07 first recording (peer-authorisation-fixes:1)"]
+
+[rows."WA6"]
+test = "test_wire_access.py::test_wa6_the_subscribers_creator"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "B's creator posting a subscription or permission callback: 403 (the peer branches admit only the peer they name)."
+reason = ["2026-11-07 first recording (peer-authorisation-fixes:1)"]
+
+[rows."WA7"]
+test = "test_wire_access.py::test_wa7_unapproved_peer"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "E, whose trust B has not approved, posting under its own id: 403 for both callbacks."
+reason = ["2026-11-07 first recording (peer-authorisation-fixes:1)"]
+
+[rows."WA8"]
+test = "test_wire_access.py::test_wa8_fetch_goes_to_the_stored_base_uri"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "A low-granularity callback whose body url names wire_other_app: B fetches the diff from A's stored base URI with its bearer and acknowledges it; wire_other_app receives nothing."
+reason = ["2026-11-07 first recording (peer-authorisation-fixes:1)"]
+
+[rows."WA9"]
+test = "test_wire_access.py::test_wa9_delete_the_subscription_callback"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "DELETE /<B>/callbacks/subscriptions/<A>/<subid> by C and by B's creator: 403; B keeps its subscription."
+reason = ["2026-11-07 first recording (peer-authorisation-fixes:1)"]
+
+[rows."WA10"]
+test = "test_wire_access.py::test_wa10_subscriber_posts_to_its_publisher"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "B, with its bearer, posting a callback to A under the id of its own subscription at A (A's row, callback false): 403; A holds nothing of B."
+reason = ["2026-11-07 first recording (peer-authorisation-fixes:1)"]
+
+[rows."WA11"]
+test = "test_wire_access.py::test_wa11_generic_and_reserved_names"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "A peer's GET, POST and DELETE: wire_ping runs its hook (200); an unhandled name answers 200 as before; permissions, subscription, www and resource_x answer 403 with no hook; a bare subscriptions answers 403 on GET and 400 on POST and DELETE (the subscription branch with its ids missing)."
+reason = ["2026-11-07 first recording (peer-authorisation-fixes:1)"]
+
+[rows."WA15"]
+test = "test_wire_access.py::test_wa15_callback_type"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "A's bearer, a subscription callback of type permission and of an unknown type: 400; nothing applied, B's sequence unchanged, no hook."
+reason = ["2026-11-07 first recording (peer-authorisation-fixes:1)"]
+
+[rows."WA17"]
+test = "test_wire_access.py::test_wa17_permission_timestamp"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "A's bearer, a permission callback a day ahead, then a current one: both apply (excluded first, then second) and the stored fetched_at is never in the future."
+reason = ["2026-11-07 first recording (peer-authorisation-fixes:1)"]

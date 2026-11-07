@@ -7,6 +7,13 @@ Provides scalable callback delivery with:
   seeds a new manager; workers do not share breaker state)
 - Automatic granularity downgrade for large payloads
 - Connection pooling via shared HTTP client
+
+The granularity downgrade sends a resource URL with no stored diff. A 3.16
+subscriber never fetches a callback's ``url``: it builds the fetch from the
+trust's stored base URI as ``subscriptions/<own id>/<subid>/<sequence>``
+(``handlers/callbacks.py``), where no diff exists for a downgraded callback.
+The library never calls the downgrade itself; a downgrade is not fetchable by
+a 3.16 subscriber.
 """
 
 import asyncio

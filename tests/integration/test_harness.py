@@ -299,6 +299,12 @@ def _add_recording_hooks(aw_app: ActingWebApp) -> None:
         )
         return True
 
+    @aw_app.callback_hook("wire_ping")
+    def record_ping(actor, name, data):
+        """An application callback on the generic branch (``/callbacks/wire_ping``)."""
+        record_event("callback", actor=actor.id, name=name, method=data.get("method"))
+        return {"pong": True}
+
     @aw_app.method_hook("wire_import")
     async def wire_import(actor, method_name, data):
         """Suspend one list's subtarget, clear and refill it, resume."""

@@ -285,8 +285,11 @@ class Config:
             ("", "oauth", "", "a"),
             # Allow owners on subscriptions
             ("owner", "callbacks/subscriptions", "POST", "a"),
-            # Allow anybody callbacks witout auth
-            ("", "callbacks", "", "a"),
+            # Any authenticated caller on callbacks; the two peer branches
+            # (callbacks/subscriptions/<peer>/..., callbacks/permissions/<peer>)
+            # also require the caller to be the peer they name
+            # (handlers/callbacks.py)
+            ("any", "callbacks", "", "a"),
             # Allow only creator access to /www
             ("creator", "www", "", "a"),
             # Allow creator access to /properties

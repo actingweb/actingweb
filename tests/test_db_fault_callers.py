@@ -324,6 +324,13 @@ class TestB10PermissionCallback:
         handler = CallbacksHandler(webobj, config)
         check = mock.Mock()
         check.check_authorisation.return_value = True
+        # Authenticated as the peer the path names (callbacks authenticate first).
+        check.response = {"code": 200, "text": "Ok", "headers": {}}
+        check.acl = {
+            "authenticated": True,
+            "peerid": "granting-peer",
+            "relationship": "friend",
+        }
         handler._authenticate_dual_context = mock.Mock(  # type: ignore[method-assign]
             return_value=mock.Mock(actor=actor, auth_obj=check)
         )

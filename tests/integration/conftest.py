@@ -1059,12 +1059,16 @@ def wire_pair(wire_app, wire_peer_app, worker_info):
     """A factory for a publisher A and a subscriber B with trust, grant and
     subscription, in one of two topologies; torn down through the library.
 
-    Returns a callable ``make(topology, *, grant, subtarget, granularity,
-    warm_capabilities, relationship, subscribe)`` that returns a
-    ``Scenario``; ``relationship`` is ``friend`` or one of the consumer's
-    types (``subscriber``, ``subscriber_adopted``), ``subscribe=False``
-    stops before B subscribes. ``topology`` is ``same_host`` (both on
-    ``wire_app``) or ``two_hosts`` (B on ``wire_peer_app``).
+    Returns a ``WirePairFactory``: calling it, ``make(topology, *, grant,
+    subtarget, granularity, warm_capabilities, relationship, subscribe)``,
+    returns a ``Scenario``; ``relationship`` is ``friend`` or one of the
+    consumer's types (``subscriber``, ``subscriber_adopted``),
+    ``subscribe=False`` stops before B subscribes. ``topology`` is
+    ``same_host`` (both on ``wire_app``) or ``two_hosts`` (B on
+    ``wire_peer_app``). ``add_peer(scenario, name, relationship, *,
+    approve)`` adds a third actor on ``wire_app`` with a trust to B, named in
+    the scenario (its id, creator and trust secret), and returns it with its
+    trust secret.
     """
     import uuid
 
@@ -1165,7 +1169,60 @@ def wire_pair(wire_app, wire_peer_app, worker_info):
         scenario.trust_secret = trust["secret"]
         return scenario
 
-    yield make
+    def add_peer(
+        scenario: Scenario,
+        name: str,
+        relationship: str = "friend",
+        *,
+        approve: bool = True,
+    ) -> tuple[WireActor, str]:
+        b = scenario.subscribers[0]
+        peer = create(name, wire_app)
+        response = requests.post(
+            f"{peer.url}/trust",
+            json={"url": b.url, "relationship": relationship},
+            auth=peer.basic,
+        )
+        assert response.status_code == 201, response.text
+        secret = response.json()["secret"]
+        if approve:
+            assert (
+                requests.put(
+                    f"{b.url}/trust/{relationship}/{peer.id}",
+                    json={"approved": True},
+                    auth=b.basic,
+                ).status_code
+                == 204
+            )
+            response = requests.put(
+                f"{peer.url}/trust/{relationship}/{b.id}",
+                json={"approved": True},
+                auth=peer.basic,
+            )
+            assert response.status_code in (200, 204), response.text
+        scenario.name(peer.id, name)
+        scenario.name(peer.creator, f"{name}.creator")
+        scenario.name(peer.passphrase, f"{name}.passphrase", secret=True)
+        scenario.name(secret, f"trust:{name}-B", secret=True)
+        return peer, secret
+
+    class WirePairFactory:
+        """``wire_pair``'s value: call it for a pair; ``add_peer`` for more."""
+
+        def __call__(self, *args: Any, **kwargs: Any) -> Scenario:
+            return make(*args, **kwargs)
+
+        def add_peer(
+            self,
+            scenario: Scenario,
+            name: str,
+            relationship: str = "friend",
+            *,
+            approve: bool = True,
+        ) -> tuple[WireActor, str]:
+            return add_peer(scenario, name, relationship, approve=approve)
+
+    yield WirePairFactory()
 
     # Teardown through the library, by id: suspension rows first (actor
     # deletion leaves them), then the actors. Fails loudly on a leftover.

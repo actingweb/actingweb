@@ -18,6 +18,36 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+# Callback names the library dispatches itself. On the generic branch
+# (``/callbacks/<name>``) they answer 403, so the hooks registered under them
+# only ever receive data the library built.
+RESERVED_CALLBACK_NAMES = frozenset(
+    {"permissions", "subscription", "subscriptions", "www"}
+)
+
+# The callback types the subscription path accepts; an absent type is a diff.
+ACCEPTED_SUBSCRIPTION_CALLBACK_TYPES = frozenset({"diff", "resync"})
+
+
+def is_reserved_callback_name(name: str) -> bool:
+    """Whether ``name`` (its first path segment) is one of the library's own
+    callback hook names: ``RESERVED_CALLBACK_NAMES`` or any ``resource_*``."""
+    first = (name or "").split("/", 1)[0].lower()
+    return first in RESERVED_CALLBACK_NAMES or first.startswith("resource_")
+
+
+def low_granularity_fetch_url(
+    baseuri: str, own_id: str, subscription_id: str, sequence: int
+) -> str:
+    """The diff a low-granularity callback announces, under the publisher's
+    stored base URI: ``<baseuri>/subscriptions/<own id>/<subid>/<sequence>``.
+
+    The callback body's ``url`` is never fetched: the receiver sends the
+    trust's secret with the fetch, so the host it goes to must be the one the
+    trust was made with."""
+    return f"{baseuri.rstrip('/')}/subscriptions/{own_id}/{subscription_id}/{sequence}"
+
+
 def _has_wildcard(pattern: str) -> bool:
     """Whether a pattern must go through the glob matcher rather than be
     read as one exact name: it holds an unescaped wildcard, or a backslash
@@ -26,6 +56,67 @@ def _has_wildcard(pattern: str) -> bool:
 
 
 class CallbacksHandler(base_handler.BaseHandler):
+    """``/<actor>/callbacks/<name>``.
+
+    Every request is authenticated (401 with a challenge when it carries no
+    credentials). The two peer branches, ``subscriptions/<peer>/<subid>`` and
+    ``permissions/<peer>``, admit only the peer they name (403 for anyone
+    else, the creator and an ``admin`` peer included). The generic branch
+    admits any authenticated caller to the application's callback hook,
+    except for the library's own hook names (``is_reserved_callback_name``),
+    which answer 403.
+    """
+
+    def _authenticate_callback(
+        self, actor_id: str, name: str
+    ) -> "base_handler.AuthResult | None":
+        """Authenticate a callback request; answer and return None on failure.
+
+        A request without an ``Authorization`` header answers 401 with a
+        challenge, whatever else it carries (a web UI session cookie that
+        would redirect to a login, or fail, included: a callback is never a
+        browser navigation); credentials that match nobody answer 403; an
+        unknown actor 404."""
+        auth_result = self._authenticate_dual_context(
+            actor_id, "callbacks", "callbacks", name, add_response=False
+        )
+        if not auth_result.actor or not auth_result.auth_obj:
+            if self.response:
+                self.response.set_status(404, "Actor not found")
+            return None
+        auth_obj = auth_result.auth_obj
+        code = auth_obj.response["code"]
+        if code == 200 and auth_obj.acl["authenticated"]:
+            return auth_result
+        headers = getattr(self.request, "headers", None) or {}
+        if code in (200, 302) or "Authorization" not in headers:
+            auth_obj.response["code"] = 401
+            auth_obj.response["text"] = "Authentication required"
+            auth_obj.response["headers"]["WWW-Authenticate"] = (
+                f'Basic realm="{getattr(self.config, "auth_realm", "")}"'
+            )
+        auth.add_auth_response(appreq=self, auth_obj=auth_obj)
+        return None
+
+    def _refuse_reserved_name(self, name: str) -> bool:
+        """Answer 403 for a library hook name on the generic branch."""
+        if not is_reserved_callback_name(name):
+            return False
+        logger.debug(f"Refused callback to the reserved name {name!r}")
+        if self.response:
+            self.response.set_status(403, "Forbidden")
+        return True
+
+    def _peer_segments(self, path: list[str], count: int) -> list[str] | None:
+        """The ``count`` segments after the branch name, all non-empty, or
+        None after answering 400."""
+        segments = path[1 : 1 + count]
+        if len(segments) < count or not all(segments):
+            if self.response:
+                self.response.set_status(400, "Missing peer or subscription id")
+            return None
+        return segments
+
     def get(self, actor_id, name):
         """Handles GETs to callbacks"""
         # A GET with a _method override changes state: refuse one a
@@ -38,20 +129,12 @@ class CallbacksHandler(base_handler.BaseHandler):
         if self.request.get("_method") == "POST":
             self.post(actor_id, name)
             return
-        auth_result = self._authenticate_dual_context(
-            actor_id, "callbacks", "callbacks", name, add_response=False
-        )
-        if (
-            not auth_result.actor
-            or not auth_result.auth_obj
-            or (
-                auth_result.auth_obj.response["code"] != 200
-                and auth_result.auth_obj.response["code"] != 401
-            )
-        ):
-            auth.add_auth_response(appreq=self, auth_obj=auth_result.auth_obj)
+        auth_result = self._authenticate_callback(actor_id, name)
+        if auth_result is None:
             return
         myself = auth_result.actor
+        if self._refuse_reserved_name(name):
+            return
         if not auth_result.authorize("GET", "callbacks", name):
             return
         # Execute callback hook for GET
@@ -77,22 +160,24 @@ class CallbacksHandler(base_handler.BaseHandler):
 
     def delete(self, actor_id, name):
         """Handles deletion of callbacks, like subscriptions"""
-        auth_result = self._authenticate_dual_context(
-            actor_id, "callbacks", "callbacks", name
-        )
-        if not auth_result.success:
+        auth_result = self._authenticate_callback(actor_id, name)
+        if auth_result is None:
             return
         myself = auth_result.actor
         check = auth_result.auth_obj
         path = name.split("/")
         if path[0] == "subscriptions":
-            peerid = path[1]
-            subid = path[2]
+            segments = self._peer_segments(path, 2)
+            if segments is None:
+                return
+            peerid, subid = segments
             if not check.check_authorisation(
                 path="callbacks",
                 subpath="subscriptions",
                 method="DELETE",
                 peerid=peerid,
+                path_peer=peerid,
+                peer_caller_only=True,
             ):
                 if self.response:
                     self.response.set_status(403, "Forbidden")
@@ -150,6 +235,8 @@ class CallbacksHandler(base_handler.BaseHandler):
                 return
             self.response.set_status(404, "Not found")
             return
+        if self._refuse_reserved_name(name):
+            return
         if not check.check_authorisation(
             path="callbacks", subpath=name, method="DELETE"
         ):
@@ -175,33 +262,36 @@ class CallbacksHandler(base_handler.BaseHandler):
 
     def post(self, actor_id, name):
         """Handles POST callbacks"""
-        auth_result = self._authenticate_dual_context(
-            actor_id, "callbacks", "callbacks", name, add_response=False
-        )
+        auth_result = self._authenticate_callback(actor_id, name)
+        if auth_result is None:
+            return
         myself = auth_result.actor
         check = auth_result.auth_obj
-        # Allow unauthenticated requests to /callbacks/subscriptions and
-        # /callbacks/permissions, so do the auth check further below
         path = name.split("/")
 
         # Handle permission callbacks: /callbacks/permissions/{granting_actor_id}
         if path[0] == "permissions" and len(path) >= 2:
-            granting_actor_id = path[1]
-
-            actor_interface = self._get_actor_interface(myself) if myself else None
-            if not actor_interface:
-                self.response.set_status(404, "Not found")
+            segments = self._peer_segments(path, 1)
+            if segments is None:
                 return
+            granting_actor_id = segments[0]
 
-            # Verify trust relationship exists with granting actor
-            if not check or not check.check_authorisation(
+            # Only the granting peer itself, before anything is read.
+            if not check.check_authorisation(
                 path="callbacks",
                 subpath="permissions",
                 method="POST",
                 peerid=granting_actor_id,
+                path_peer=granting_actor_id,
+                peer_caller_only=True,
             ):
                 if self.response:
                     self.response.set_status(403, "Forbidden")
+                return
+
+            actor_interface = self._get_actor_interface(myself)
+            if not actor_interface:
+                self.response.set_status(404, "Not found")
                 return
 
             # Parse request body
@@ -220,9 +310,8 @@ class CallbacksHandler(base_handler.BaseHandler):
 
             # Store permissions in PeerPermissionStore
             permission_changes: dict = {}
+            success = False
             try:
-                from datetime import UTC, datetime
-
                 from actingweb.peer_permissions import (
                     PeerPermissions,
                     detect_permission_changes,
@@ -231,7 +320,12 @@ class CallbacksHandler(base_handler.BaseHandler):
                 )
 
                 perm_data = params.get("data", {})
-                timestamp = params.get("timestamp", datetime.now(UTC).isoformat())
+                timestamp = self._clamped_permission_timestamp(
+                    params.get("timestamp"), granting_actor_id
+                )
+                if timestamp is None:
+                    self.response.set_status(400, "Invalid timestamp")
+                    return
 
                 peer_perms = PeerPermissions(
                     actor_id=actor_id,
@@ -325,8 +419,9 @@ class CallbacksHandler(base_handler.BaseHandler):
                 self.response.set_status(500, "Internal error")
                 return
 
-            # Execute permission callback hook for app-specific handling
-            if self.hooks:
+            # Execute permission callback hook for app-specific handling, only
+            # for an update the store accepted (an older one is ignored).
+            if self.hooks and success:
                 hook_data = params.copy()
                 hook_data["granting_actor_id"] = granting_actor_id
                 hook_data["method"] = "POST"
@@ -339,15 +434,34 @@ class CallbacksHandler(base_handler.BaseHandler):
             return
 
         if path[0] == "subscriptions":
-            peerid = path[1]
-            subid = path[2]
+            segments = self._peer_segments(path, 2)
+            if segments is None:
+                return
+            peerid, subid = segments
+
+            # Only the publisher the path names, before the subscription is
+            # looked up, so another caller cannot tell a real id from an
+            # unknown one.
+            if not check.check_authorisation(
+                path="callbacks",
+                subpath="subscriptions",
+                method="POST",
+                peerid=peerid,
+                path_peer=peerid,
+                peer_caller_only=True,
+            ):
+                if self.response:
+                    self.response.set_status(403, "Forbidden")
+                return
 
             # Use developer API to get callback subscription
-            actor_interface = self._get_actor_interface(myself) if myself else None
+            actor_interface = self._get_actor_interface(myself)
             if not actor_interface:
                 self.response.set_status(404, "Not found")
                 return
 
+            # Only a subscription this actor made (callback true): a peer
+            # cannot post to its publisher under its own subscription id.
             sub_info = actor_interface.subscriptions.get_callback_subscription(
                 peer_id=peerid, subscription_id=subid
             )
@@ -355,15 +469,6 @@ class CallbacksHandler(base_handler.BaseHandler):
                 # Convert to dict for hook compatibility
                 sub = sub_info.to_dict()
                 logger.debug(f"Found subscription {subid} for peer {peerid}")
-                if not check or not check.check_authorisation(
-                    path="callbacks",
-                    subpath="subscriptions",
-                    method="POST",
-                    peerid=peerid,
-                ):
-                    if self.response:
-                        self.response.set_status(403, "Forbidden")
-                    return
                 try:
                     body: str | bytes | None = self.request.body
                     if body is None:
@@ -375,6 +480,17 @@ class CallbacksHandler(base_handler.BaseHandler):
                     params = json.loads(body_str)
                 except (TypeError, ValueError, KeyError):
                     self.response.set_status(400, "Error in json body")
+                    return
+                if not isinstance(params, dict):
+                    self.response.set_status(400, "Error in json body")
+                    return
+                callback_type = params.get("type", "diff")
+                if callback_type not in ACCEPTED_SUBSCRIPTION_CALLBACK_TYPES:
+                    logger.warning(
+                        f"Refused subscription callback from {peerid} for {subid}: "
+                        f"type {callback_type!r} is not diff or resync"
+                    )
+                    self.response.set_status(400, "Unsupported callback type")
                     return
 
                 # Process subscription callback internally FIRST (if configured)
@@ -428,14 +544,9 @@ class CallbacksHandler(base_handler.BaseHandler):
                 else:
                     self.response.set_status(400, "Processing error")
                 return
-            self.response.set_status(404, "Not found")
+            self.response.set_status(403, "Forbidden")
             return
-        if (
-            not myself
-            or not check
-            or (check.response["code"] != 200 and check.response["code"] != 401)
-        ):
-            auth.add_auth_response(appreq=self, auth_obj=check)
+        if self._refuse_reserved_name(name):
             return
         if not auth_result.authorize("POST", "callbacks", name):
             return
@@ -469,6 +580,36 @@ class CallbacksHandler(base_handler.BaseHandler):
                 self.response.write(json.dumps(hook_result))
         else:
             self.response.set_status(403, "Forbidden")
+
+    def _clamped_permission_timestamp(
+        self, value: Any, granting_actor_id: str
+    ) -> str | None:
+        """The ``fetched_at`` to store for a permission callback: the earlier
+        of the body's ``timestamp`` and this receiver's clock, as ISO-8601 in
+        UTC. Absent, it is now; unparsable, None (the caller answers 400).
+
+        A timestamp in the future would make every later update look older
+        and be ignored; clamped, a sender with a fast clock still delivers."""
+        from datetime import UTC, datetime
+
+        now = datetime.now(UTC)
+        if value is None:
+            return now.isoformat()
+        if not isinstance(value, str):
+            return None
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=UTC)
+        if parsed > now:
+            logger.warning(
+                f"Permission callback from {granting_actor_id} carries a timestamp "
+                f"in the future ({parsed.isoformat()}); stored as {now.isoformat()}"
+            )
+            return now.isoformat()
+        return parsed.astimezone(UTC).isoformat()
 
     def _process_subscription_callback_internal(
         self,
@@ -613,10 +754,26 @@ class CallbacksHandler(base_handler.BaseHandler):
                     )
                     trust_data = trust.get()
                     secret = trust_data.get("secret", "") if trust_data else ""
+                    baseuri = trust_data.get("baseuri", "") if trust_data else ""
+                    if not baseuri:
+                        logger.warning(
+                            f"Cannot fetch the low-granularity diff from {peer_id}: "
+                            "the trust has no base URI"
+                        )
+                        self._callback_retry_later = True
+                        return False
+                    # The stored base URI, never the body's url (the bearer
+                    # goes with the request).
+                    fetch_url = low_granularity_fetch_url(
+                        baseuri,
+                        actor_interface._core_actor.id or "",
+                        subscription_id,
+                        params["sequence"],
+                    )
 
                     with httpx.Client(timeout=10.0) as client:
                         response = client.get(
-                            callback_url,
+                            fetch_url,
                             headers={
                                 "Authorization": f"Bearer {secret}",
                             },
@@ -635,7 +792,9 @@ class CallbacksHandler(base_handler.BaseHandler):
                         # process nothing, so the sequence does not advance
                         # past data that was never applied.
                         logger.warning(
-                            f"Failed to fetch low-granularity data: {response.status_code}"
+                            f"Failed to fetch low-granularity data from {peer_id}'s "
+                            f"stored base URI: {response.status_code} (if the peer "
+                            "moved, update the trust's base URI)"
                         )
                         self._callback_retry_later = True
                         return False

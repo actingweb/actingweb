@@ -40,6 +40,9 @@ def test_the_answer_to_a_claimed_sequence(result: ProcessResult, status: int) ->
     handler = CallbacksHandler(webobj, config)
     check = mock.Mock()
     check.check_authorisation.return_value = True
+    # Authenticated as the peer the path names (callbacks authenticate first).
+    check.response = {"code": 200, "text": "Ok", "headers": {}}
+    check.acl = {"authenticated": True, "peerid": "peer1", "relationship": "friend"}
     handler._authenticate_dual_context = mock.Mock(  # type: ignore[method-assign]
         return_value=mock.Mock(actor=actor, auth_obj=check)
     )
@@ -75,6 +78,9 @@ def test_a_low_granularity_diff_that_cannot_be_fetched_is_not_processed() -> Non
     handler = CallbacksHandler(webobj, config)
     check = mock.Mock()
     check.check_authorisation.return_value = True
+    # Authenticated as the peer the path names (callbacks authenticate first).
+    check.response = {"code": 200, "text": "Ok", "headers": {}}
+    check.acl = {"authenticated": True, "peerid": "peer1", "relationship": "friend"}
     handler._authenticate_dual_context = mock.Mock(  # type: ignore[method-assign]
         return_value=mock.Mock(actor=actor, auth_obj=check)
     )
@@ -86,7 +92,11 @@ def test_a_low_granularity_diff_that_cannot_be_fetched_is_not_processed() -> Non
         mock.patch("actingweb.trust.Trust") as trust,
         mock.patch.object(CallbackProcessor, "process_callback_sync") as process,
     ):
-        trust.return_value.get.return_value = {"secret": "s"}
+        # The fetch goes to the trust's stored base URI.
+        trust.return_value.get.return_value = {
+            "secret": "s",
+            "baseuri": "https://peer.example.com/peer1",
+        }
         handler.post(aid(actor), "subscriptions/peer1/sub1")
 
     process.assert_not_called()
@@ -107,6 +117,9 @@ def _low_granularity_handler(granularity: str = "low") -> tuple[Any, Any, Any]:
     handler = CallbacksHandler(webobj, config)
     check = mock.Mock()
     check.check_authorisation.return_value = True
+    # Authenticated as the peer the path names (callbacks authenticate first).
+    check.response = {"code": 200, "text": "Ok", "headers": {}}
+    check.acl = {"authenticated": True, "peerid": "peer1", "relationship": "friend"}
     handler._authenticate_dual_context = mock.Mock(  # type: ignore[method-assign]
         return_value=mock.Mock(actor=actor, auth_obj=check)
     )
@@ -150,6 +163,9 @@ def test_a_resync_with_an_empty_baseline_is_applied() -> None:
     handler = CallbacksHandler(webobj, config)
     check = mock.Mock()
     check.check_authorisation.return_value = True
+    # Authenticated as the peer the path names (callbacks authenticate first).
+    check.response = {"code": 200, "text": "Ok", "headers": {}}
+    check.acl = {"authenticated": True, "peerid": "peer1", "relationship": "friend"}
     handler._authenticate_dual_context = mock.Mock(  # type: ignore[method-assign]
         return_value=mock.Mock(actor=actor, auth_obj=check)
     )

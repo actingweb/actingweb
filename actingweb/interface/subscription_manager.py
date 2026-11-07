@@ -524,7 +524,11 @@ class SubscriptionManager:
         sub_data = self._core_actor.get_subscription(
             peerid=peer_id, subid=subscription_id, callback=True
         )
-        if sub_data and isinstance(sub_data, dict):
+        # The backends look the row up by peer and id without filtering on
+        # the flag: a row this actor holds as publisher (callback false)
+        # must not be found here, or a subscriber could post callbacks to its
+        # publisher under its own subscription id.
+        if sub_data and isinstance(sub_data, dict) and sub_data.get("callback"):
             return SubscriptionInfo(sub_data)
         return None
 

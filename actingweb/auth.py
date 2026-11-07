@@ -738,14 +738,65 @@ class Auth:
         return None
 
     def check_authorisation(
-        self, path="", subpath="", method="", peerid="", approved=True
+        self,
+        path="",
+        subpath="",
+        method="",
+        peerid="",
+        approved=True,
+        *,
+        path_peer: str | None = None,
+        peer_caller_only: bool = False,
     ):
         """Checks if the authenticated user has acl access rights in config.py.
 
         Takes the path, subpath, method, and peerid of the path (if auth user
         is different from the peer that owns the path, e.g. creator). If approved
         is False, then the trust relationship does not need to be approved for
-        access"""
+        access.
+
+        ``method`` is the HTTP method the request performs: a row admits only
+        the methods it lists, whatever the request does (a PUT or DELETE is
+        never admitted by a GET row).
+
+        ``path_peer`` is the peer id the request's path names (for example
+        ``<peer>`` in ``/subscriptions/<peer>/<subid>``). When it is set and
+        the caller is authenticated as a peer, the caller must be that peer,
+        whichever row matched, application ``acl_rules`` included; an
+        ``admin`` peer is exempt unless ``peer_caller_only`` is set. With
+        ``peer_caller_only`` the path is a peer's own (the callback paths): a
+        caller that is not a peer (creator, trustee, OAuth2, MCP and SPA
+        callers) is refused too. ``peerid`` is separate: it is what ``owner``
+        rows compare with, unchanged."""
+        allowed = self._match_access_row(
+            path=path, subpath=subpath, method=method, peerid=peerid, approved=approved
+        )
+        if not allowed or (path_peer is None and not peer_caller_only):
+            return allowed
+        caller = self.acl["peerid"] or ""
+        if not caller:
+            if peer_caller_only:
+                logger.debug(
+                    "Rejected authorization: the path is a peer's own and the "
+                    "caller is not a peer"
+                )
+                return False
+            return True
+        if path_peer is not None and caller != path_peer:
+            relationship = (self.acl["relationship"] or "").lower()
+            if relationship == "admin" and not peer_caller_only:
+                return True
+            logger.debug(
+                "Rejected authorization: the caller is not the peer the path names"
+            )
+            return False
+        return True
+
+    def _match_access_row(
+        self, path="", subpath="", method="", peerid="", approved=True
+    ) -> bool:
+        """The access table lookup: the first row matching the caller's role,
+        the path and the method admits the request."""
         # For DELETE operations on trust relationships, always allow deletion regardless of approval status
         # This ensures that broken or partially approved relationships can still be cleaned up
         if (

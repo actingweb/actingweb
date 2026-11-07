@@ -1,5 +1,8 @@
 # TODO: `Actor.subs_list` is falsy-guarded — a Query per write for quiet actors, staleness for busy ones
 
+**Plan:** `thoughts/plans/2026-11-06-subs-list-cache-lifetime.md` (proposed, for 3.16). The plan supersedes this file,
+which is deleted when the plan lands; where the two disagree, the plan wins.
+
 **Severity:** Medium-high. A broad cost defect with a live consumer measurement,
 plus a correctness residue that survives across processes. Neither is a
 regression; both predate 3.13.

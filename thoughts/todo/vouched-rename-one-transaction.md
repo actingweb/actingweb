@@ -1,5 +1,8 @@
 # The vouched SDK rename is several writes, not one transaction
 
+**Plan:** `thoughts/plans/2026-11-06-email-as-creator-at-write-time.md` (proposed, for 3.16). The plan supersedes this file,
+which is deleted when the plan lands; where the two disagree, the plan wins.
+
 **Status:** Open, not urgent. Recorded 2026-11-02 by the audit of
 `ActorInterface.modify_creator` (vouched) in
 `thoughts/plans/2026-11-02-3-16-owner-decided-followups.md`, Iterations

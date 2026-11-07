@@ -47,6 +47,12 @@ status: proposed
   file list is the one under "What was built" there, and its rows that
   restrict reads use an `excluded_patterns` grant (a `friend` grant only
   adds). The research pass is next.
+- **2026-11-07, later**: The research pass is done
+  (`thoughts/research/2026-11-07-peer-authorisation-research-pass.md`):
+  the three `[research]` items answered from the code, five decisions laid
+  out for the redraft (replacement guard, where the peer binding lives,
+  GET-for-write on subscriptions, state written before the fix, the
+  `permission` type). Nothing here changes until `/update_plan`.
 
 ## Overview
 

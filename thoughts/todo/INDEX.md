@@ -91,7 +91,8 @@ stays its own PR after the fix. Both plans are redrafted after the spike.
 (`emm-suite-against-master.md`; done 2026-11-07); the wire spike (done
 2026-11-07, `research/2026-11-07-subscription-wire-spike.md`, harness on
 `spike/subscription-wire-harness`); the security plan's
-research pass (trust replacement, the access table with application rows,
+research pass (done 2026-11-07,
+`research/2026-11-07-peer-authorisation-research-pass.md`) (trust replacement, the access table with application rows,
 what forged state survives on each backend); then `/update_plan` on the
 baseline plan and on the security plan. The runs are sequential because
 they share Docker and the local ports.

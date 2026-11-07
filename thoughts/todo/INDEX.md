@@ -38,10 +38,10 @@ paragraph, which says what that plan uses from the others and wins on that
 detail. One PR per plan, one commit per phase; a plan starts when the one
 before it has merged and its gates are met, because the checks allow one
 test run at a time. The 3.16 tag stays held until all six have merged.
-Proposed is not approved: four of the six (`peer-authorisation-fixes`,
-`subscription-wire-baseline`, `attribute-list-v2-port`, `spec-1-5`) say in
-their "Readiness" paragraph that they need another draft first, the first
-two after a research pass.
+Proposed is not approved: `attribute-list-v2-port` and `spec-1-5` say in
+their "Readiness" paragraph that they need another draft first;
+`peer-authorisation-fixes` and `subscription-wire-baseline` were redrafted on
+2026-11-07 after the spike and the research pass and await approval.
 
 | Order | Plan | Todo it closes | Needs first |
 | --- | --- | --- | --- |
@@ -113,11 +113,12 @@ they share Docker and the local ports.
    cannot tell a regression from noise and stays out of the regression set.
 4. **Before plan 2 starts:** the recordings shaped like Emm's use exist,
    the import flow (one subtarget suspended and resumed around list writes)
-   included. Whether the remaining rows form a second tier is the baseline
-   plan's open decision.
+   included (`WD10.import`, from the security plan's Phase 0). Every row is
+   in the regression set (one tier, owner 2026-11-07).
 5. **In every commit of plans 2 to 5:** the only changed recordings are the
-   ones the phase names; any other is a regression to explain before the
-   next phase.
+   ones `tests/integration/wire/rows.toml` assigns to that plan and phase
+   (the only copy of that list, owner 2026-11-07; `verify_groups.py` checks
+   it); any other is a regression to explain before the next phase.
 
 ## 1. High leverage
 

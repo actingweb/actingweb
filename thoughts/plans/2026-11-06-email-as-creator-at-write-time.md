@@ -22,6 +22,13 @@ Evaluation Notes say how.
   the gates between them moved to one copy in `thoughts/todo/INDEX.md`
   (owner); the copy here is a pointer. Phase 4's verification gains the Emm
   run (owner).
+- **2026-11-07, from the wire baseline's redraft (owner)**:
+  `tests/integration/wire/rows.toml` is now the only copy of which phase may
+  change which recording (owners as `plan:phase`, checked by
+  `verify_groups.py` against a commit's `Wire-Phase` trailer); this plan's
+  "Re-recorded" and "Identical" lists are superseded by it and are dropped
+  at its next draft. No row is owned here; every recording must stay
+  identical. Reserved ids: `WE1`-`WE9`.
 
 ## Overview
 

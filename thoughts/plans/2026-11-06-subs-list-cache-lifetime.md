@@ -31,6 +31,14 @@ status: proposed
   and the email plan removes it in the same release; whether Phase 1 can do
   without it, or the email plan can go first, would remove that dependency
   and is for this plan's next draft.
+- **2026-11-07, from the wire baseline's redraft (owner)**:
+  `tests/integration/wire/rows.toml` is now the only copy of which phase may
+  change which recording (owners as `plan:phase`, checked by
+  `verify_groups.py` against a commit's `Wire-Phase` trailer); this plan's
+  "Re-recorded" and "Identical" lists are superseded by it and are dropped
+  at its next draft. Rows owned here: `WC6`, `WC7` and `WM1` (the stale
+  memo, the risk this plan addresses), all in Phase 2. Reserved ids:
+  `WM2`-`WM9`.
 
 ## Overview
 

@@ -37,6 +37,18 @@ status: proposed
   (owner); the copy here is a pointer. "This plan" corrected: the security
   plan is not a dependency, no phase here uses anything it adds. Phase 5's
   verification gains the Emm run (owner).
+- **2026-11-07, from the wire baseline's redraft (owner)**:
+  `tests/integration/wire/rows.toml` is now the only copy of which phase may
+  change which recording (owners as `plan:phase`, checked by
+  `verify_groups.py` against a commit's `Wire-Phase` trailer); this plan's
+  "Re-recorded" and "Identical" lists are superseded by it and are dropped
+  at its next draft. Rows owned here: Phase 4 owns `WS1.subtarget`,
+  `WS2.subtarget`, `WS3`/`WS5`/`WS9` below target level, `WL1`-`WL8`,
+  `WL10`, `WL11.subtarget`, `WL13`-`WL17`, `WD9`, `WD15`; Phase 2 owns
+  `WL12`; `WC5` is run by hand in Phase 3 and owned by no phase. The
+  `remote:<peer>$aux` side bucket must be added to `actingweb-peer-state`'s
+  whitelist (security plan, Phase 4). Reserved ids: `WD21`-`WD29`,
+  `WL18`-`WL29`.
 
 ## Overview
 

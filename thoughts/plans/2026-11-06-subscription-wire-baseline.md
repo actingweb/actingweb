@@ -35,6 +35,17 @@ status: proposed
   that restricts reads uses `excluded_patterns`; and the gap resync calls
   no data hook. The three decisions are taken on that note. "What Already
   Exists" and Phase 1's `WD9` are stale until the redraft.
+- **2026-11-07, decisions (owner)**, taken on the spike note, for the
+  redraft: (1) **full transcripts**, recorded from the first scenario step,
+  setup excluded; (2) **timestamp tokens carry the format class only**, one
+  file per row for both backends, `WD3`'s backend difference asserted
+  explicitly instead; (3) **one tier**: every row is in each later plan's
+  must-stay-identical list unless that plan names it for re-recording, and
+  each row's registry entry names the plan expected to change it; (4)
+  **retire** `test_subscription_suspension_flow.py`, the processor-less
+  classes of `test_subscription_processing_flow.py` and the
+  non-publish-path classes of `test_fanout_flow.py` once rows cover them,
+  each deletion naming its covering row or unit test; tighten the rest.
 
 ## Overview
 

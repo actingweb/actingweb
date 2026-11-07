@@ -53,6 +53,23 @@ status: proposed
   out for the redraft (replacement guard, where the peer binding lives,
   GET-for-write on subscriptions, state written before the fix, the
   `permission` type). Nothing here changes until `/update_plan`.
+- **2026-11-07, decisions (owner)**, taken on the research pass, for the
+  redraft: (1) **a replacement guard**: a trust-creation request for an
+  existing peer id replaces the row only when it verifies against the
+  *stored* base URI, and then swaps credentials only, keeping the owner's
+  `approved` and the stored relationship; (2) **the peer binding is one
+  central rule in `check_authorisation`**: a matched row whose path holds
+  `<id>` requires the caller's peer id to equal the path's (creator,
+  trustee and admin exempt), so application `acl_rules` are covered, and
+  every call site passes the real peer id; (3) **subscription PUT and
+  DELETE are authorised with their real method**, not as GET; an
+  application whose peers clear or delete through a GET-only row (the
+  consumer's `subscriber` type) needs new rows, which the migration guide
+  and the consumer's adoption must say; (4) **an operator command** for
+  state written before the fix (peer-permission rows with no trust row,
+  callback state for missing subscriptions, an optional replica rebuild),
+  dry run by default; (5) **only `diff` and `resync` are accepted on the
+  subscription callback path**; any other type answers 400.
 
 ## Overview
 

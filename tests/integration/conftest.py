@@ -1066,9 +1066,9 @@ def wire_pair(wire_app, wire_peer_app, worker_info):
     ``subscribe=False`` stops before B subscribes. ``topology`` is
     ``same_host`` (both on ``wire_app``) or ``two_hosts`` (B on
     ``wire_peer_app``). ``add_peer(scenario, name, relationship, *,
-    approve)`` adds a third actor on ``wire_app`` with a trust to B, named in
-    the scenario (its id, creator and trust secret), and returns it with its
-    trust secret.
+    approve, to)`` adds a third actor on ``wire_app`` with a trust to B
+    (``to="B"``) or to A (``to="A"``), named in the scenario (its id,
+    creator and trust secret), and returns it with its trust secret.
     """
     import uuid
 
@@ -1175,12 +1175,13 @@ def wire_pair(wire_app, wire_peer_app, worker_info):
         relationship: str = "friend",
         *,
         approve: bool = True,
+        to: str = "B",
     ) -> tuple[WireActor, str]:
-        b = scenario.subscribers[0]
+        other = scenario.subscribers[0] if to == "B" else scenario.publisher
         peer = create(name, wire_app)
         response = requests.post(
             f"{peer.url}/trust",
-            json={"url": b.url, "relationship": relationship},
+            json={"url": other.url, "relationship": relationship},
             auth=peer.basic,
         )
         assert response.status_code == 201, response.text
@@ -1188,14 +1189,14 @@ def wire_pair(wire_app, wire_peer_app, worker_info):
         if approve:
             assert (
                 requests.put(
-                    f"{b.url}/trust/{relationship}/{peer.id}",
+                    f"{other.url}/trust/{relationship}/{peer.id}",
                     json={"approved": True},
-                    auth=b.basic,
+                    auth=other.basic,
                 ).status_code
                 == 204
             )
             response = requests.put(
-                f"{peer.url}/trust/{relationship}/{b.id}",
+                f"{peer.url}/trust/{relationship}/{other.id}",
                 json={"approved": True},
                 auth=peer.basic,
             )
@@ -1203,7 +1204,7 @@ def wire_pair(wire_app, wire_peer_app, worker_info):
         scenario.name(peer.id, name)
         scenario.name(peer.creator, f"{name}.creator")
         scenario.name(peer.passphrase, f"{name}.passphrase", secret=True)
-        scenario.name(secret, f"trust:{name}-B", secret=True)
+        scenario.name(secret, f"trust:{name}-{to}", secret=True)
         return peer, secret
 
     class WirePairFactory:
@@ -1219,8 +1220,9 @@ def wire_pair(wire_app, wire_peer_app, worker_info):
             relationship: str = "friend",
             *,
             approve: bool = True,
+            to: str = "B",
         ) -> tuple[WireActor, str]:
-            return add_peer(scenario, name, relationship, approve=approve)
+            return add_peer(scenario, name, relationship, approve=approve, to=to)
 
     yield WirePairFactory()
 

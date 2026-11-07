@@ -68,7 +68,10 @@ test = "test_wire_peer_paths.py::test_wd6_subscriber"
 owners = ["peer-authorisation-fixes:2"]
 exposure = false
 expected = "WD6 in a pair of the consumer's subscriber type: the acknowledgement PUT is admitted by the GET-only row today (204). Phase 2 authorises it as a PUT: 403, the queue unchanged because the GET already consumed the diff."
-reason = ["2026-11-07 first recording (peer-authorisation-fixes:0)"]
+reason = [
+  "2026-11-07 first recording (peer-authorisation-fixes:0)",
+  "2026-11-07 the method rule: the acknowledgement PUT answers 403; the diff was already consumed by B's GET (peer-authorisation-fixes:2)",
+]
 
 [rows."WD6.subscriber_adopted"]
 test = "test_wire_peer_paths.py::test_wd6_subscriber"
@@ -137,7 +140,10 @@ test = "test_wire_peer_paths.py::test_wq3_subscriber"
 owners = ["peer-authorisation-fixes:2"]
 exposure = false
 expected = "WQ3 in a subscriber pair: every clear is admitted by the GET-only row today. Phase 2 authorises them as PUT: each clear 403 and the queue keeps its diffs."
-reason = ["2026-11-07 first recording (peer-authorisation-fixes:0)"]
+reason = [
+  "2026-11-07 first recording (peer-authorisation-fixes:0)",
+  "2026-11-07 the method rule: every clear answers 403 and the queue keeps its diffs (peer-authorisation-fixes:2)",
+]
 
 [rows."WQ3.subscriber_adopted"]
 test = "test_wire_peer_paths.py::test_wq3_subscriber"
@@ -183,7 +189,10 @@ test = "test_wire_peer_paths.py::test_wc4_subscriber"
 owners = ["peer-authorisation-fixes:2"]
 exposure = false
 expected = "WC4 in a subscriber pair: A's DELETE to B is admitted by B's GET-only row today. Phase 2 authorises it as a DELETE: 403 and B keeps a dangling callback subscription."
-reason = ["2026-11-07 first recording (peer-authorisation-fixes:0)"]
+reason = [
+  "2026-11-07 first recording (peer-authorisation-fixes:0)",
+  "2026-11-07 the method rule: A's DELETE to B answers 403 and B keeps a dangling callback subscription (peer-authorisation-fixes:2)",
+]
 
 [rows."WC4.subscriber_adopted"]
 test = "test_wire_peer_paths.py::test_wc4_subscriber"
@@ -311,3 +320,48 @@ reason = [
   "2026-11-07 first recording (peer-authorisation-fixes:1)",
   "2026-11-07 the clamp replaced by a skew window and 400, owner decision on the Phase 1 review (peer-authorisation-fixes:1)",
 ]
+
+# ---------------------------------------------------------------------------
+# peer-authorisation-fixes, Phase 2: /subscriptions, /permissions and
+# /trust/<type>/<id> for the peer they name (recorded with the fix)
+# ---------------------------------------------------------------------------
+
+[rows."WA12"]
+test = "test_wire_access.py::test_wa12_another_peers_subscriptions"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "C (friend of A) lists, reads, consumes, clears and deletes B's subscription at A: 403 each; B's queue and subscription unchanged."
+reason = ["2026-11-07 first recording (peer-authorisation-fixes:2)"]
+
+[rows."WA13"]
+test = "test_wire_access.py::test_wa13_subscribe_under_another_peers_id"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "C creating a subscription at A under B's id: 403, as before the fix."
+reason = ["2026-11-07 first recording (peer-authorisation-fixes:2)"]
+
+[rows."WA14"]
+test = "test_wire_access.py::test_wa14_permission_query"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "GET /permissions/<peer> at A: B (friend), associate, partner, subscriber and admin peers each read their own (200); C reading B's 403; A's creator and an admin peer read B's (200); an unknown id the same 403 as another peer's."
+reason = ["2026-11-07 first recording (peer-authorisation-fixes:2)"]
+
+[rows."WA16"]
+test = "test_wire_access.py::test_wa16_application_trust_row"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "S, of the consumer's subscriber type (an application GET row on trust/<type>/<id>), reading B's trust row and its permissions at A: 403 each; its own: 200."
+reason = ["2026-11-07 first recording (peer-authorisation-fixes:2)"]
+
+[rows."WA18"]
+test = "test_wire_access.py::test_wa18_subscription_root_query"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "C listing A's subscriptions with ?peerid=<B>, and with no query: 403 (no built-in row admits a friend on the root; with one, a peer sees only its own rows, unit tests)."
+reason = ["2026-11-07 first recording (peer-authorisation-fixes:2)"]

@@ -73,3 +73,49 @@ the binding. Findings and disposition:
 - A timestamp that overflows in UTC answered 500: 400.
 - A peer trustee's Basic retry after a refused bearer cannot succeed on the
   peer branches: for the changelog (Phase 5).
+
+## Phase 2: `/subscriptions`, `/permissions`, `/trust/<type>/<id>`; the method rule
+
+### Pre-fix runs
+
+The scenarios added to `tests/integration/test_wire_access.py`, run on the
+tree at `ef5fba1` with the Phase 2 library changes set aside, DynamoDB, both
+topologies (identical outcomes). Requests go to A; C, D, S and the other
+peers hold trusts to A.
+
+| Row | Before the fix | After the fix (recorded) |
+| --- | --- | --- |
+| WA12 | C (friend): lists B's subscriptions **200**, reads B's subscription **200**, **consumes B's diff (200)**, **clears B's queue (204)**, **deletes B's subscription (204, hook ran)** | 403 each; B's queue and subscription unchanged |
+| WA13 | C subscribing under B's id: 403 (the existing binding) | 403 |
+| WA14 | Each peer reads its own (200, every type); **C reads B's permissions (200)**; A's creator reading B's **403** (no row); an admin reads B's 200; C asking for an unknown id 404 | Own 200; C 403; A's creator 200; admin 200; the unknown id 403, the same as another peer's |
+| WA16 | S (`subscriber`, an application GET row on `trust/<type>/<id>`): **reads B's trust row (200), its secret and verification token included**, and B's permissions (200); its own 200 | B's: 403 each; its own: 200 |
+| WA18 | C, `GET /subscriptions?peerid=<B>`: **200 with B's rows**; with no query 403 | 403 for both |
+
+Expected from reading: `WA12`, `WA14`, `WA16` open; confirmed. Not
+predicted: `WA18`'s query reached B's rows because the FastAPI route binds
+`?peerid=` to the path's peer (`fastapi_integration.py:1253-1264`), so the
+query is the per-peer path and the binding refuses it there; the root
+handler's own filter is covered by the unit tests.
+
+### Re-recorded: the three `.subscriber` rows
+
+Read diff, each matching the plan's prediction; the `.subscriber_adopted`
+rows and every other recording are byte-identical:
+
+- `WD6.subscriber`: B's acknowledgement `PUT …/<subid>` answers 403 (was
+  204); the diff was already consumed by B's `GET …/<subid>/1`, so A's queue
+  is the same as before.
+- `WQ3.subscriber`: every clear answers 403 (`{"sequence": 1}`, `0`, none,
+  text, an unknown id, `GET ?_method=PUT`), where before the first two and
+  the override were 204 and the malformed ones 400 and 404; A's queue keeps
+  all three diffs.
+- `WC4.subscriber`: A's `DELETE /<B>/subscriptions/<A>/<subid>` answers 403
+  (was 204); A deletes its own row and answers its creator 204; B keeps a
+  dangling callback subscription.
+
+### Existing tests changed, and why
+
+- `tests/test_permissions_handler.py::test_get_permissions_authorization_failed`:
+  authorisation now precedes the trust lookup and carries `path_peer`; the
+  test asserts both (the plan's listed `:150-167` needed no change: a
+  creator-like mock still reaches the 404 for a missing trust).

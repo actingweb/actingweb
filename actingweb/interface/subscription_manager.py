@@ -171,6 +171,21 @@ class PeerSyncResult:
     error: str | None = None
 
 
+def _log_peer_clear_failure(proxy: Any, message: str) -> None:
+    """Log a failed clear or acknowledgement at the publisher with its status:
+    WARNING, or ERROR for a 403 (the publisher's access rows refuse it, so it
+    will keep failing and the publisher's queue keeps growing)."""
+    status = getattr(proxy, "last_response_code", None)
+    log = logger.error if status == 403 else logger.warning
+    hint = (
+        " (refused: the publisher's access rows must admit PUT on "
+        "subscriptions/<id>/<subid>)"
+        if status == 403
+        else ""
+    )
+    log(f"{message}: {status}{hint}")
+
+
 class SubscriptionManager:
     """
     Simplified interface for managing subscriptions.
@@ -1202,9 +1217,10 @@ class SubscriptionManager:
                     )
                     if clear_response is None or "error" in (clear_response or {}):
                         # Log warning but don't fail the sync
-                        logger.warning(
+                        _log_peer_clear_failure(
+                            proxy,
                             f"Failed to clear duplicate diffs on peer {peer_id} for subscription "
-                            f"{subscription_id}, sequence {final_seq}"
+                            f"{subscription_id}, sequence {final_seq}",
                         )
                     else:
                         logger.debug(
@@ -1227,9 +1243,10 @@ class SubscriptionManager:
             )
             if clear_response is None or "error" in (clear_response or {}):
                 # Log warning but don't fail the sync
-                logger.warning(
+                _log_peer_clear_failure(
+                    proxy,
                     f"Failed to clear diffs on peer {peer_id} for subscription "
-                    f"{subscription_id}, sequence {max_sequence}"
+                    f"{subscription_id}, sequence {max_sequence}",
                 )
 
         # Update local subscription sequence after processing diffs
@@ -2088,9 +2105,10 @@ class SubscriptionManager:
                     )
                     if clear_response is None or "error" in (clear_response or {}):
                         # Log warning but don't fail the sync
-                        logger.warning(
+                        _log_peer_clear_failure(
+                            proxy,
                             f"Failed to clear duplicate diffs on peer {peer_id} for subscription "
-                            f"{subscription_id}, sequence {final_seq}"
+                            f"{subscription_id}, sequence {final_seq}",
                         )
                     else:
                         logger.debug(
@@ -2112,9 +2130,10 @@ class SubscriptionManager:
                 path=path, params={"sequence": max_sequence}
             )
             if clear_response is None or "error" in (clear_response or {}):
-                logger.warning(
+                _log_peer_clear_failure(
+                    proxy,
                     f"Failed to clear diffs on peer {peer_id} for subscription "
-                    f"{subscription_id}, sequence {max_sequence}"
+                    f"{subscription_id}, sequence {max_sequence}",
                 )
 
         # Update local subscription sequence after processing diffs

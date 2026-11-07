@@ -537,6 +537,7 @@ class TrustPeerHandler(base_handler.BaseHandler):
             method="GET",
             peerid=peerid,
             approved=False,  # Allow access even if not fully approved
+            path_peer=peerid,
         ):
             if self.response:
                 self.response.set_status(403)
@@ -640,12 +641,15 @@ class TrustPeerHandler(base_handler.BaseHandler):
                 method="POST",
                 peerid=peerid,
                 approved=False,
+                path_peer=peerid,
             ):
                 if self.response:
                     self.response.set_status(403)
                 return
         else:
-            if not auth_result.authorize("POST", "trust", "<type>/<id>"):
+            if not auth_result.authorize(
+                "POST", "trust", "<type>/<id>", path_peer=peerid
+            ):
                 return
 
         # Use developer API - ActorInterface with TrustManager
@@ -713,7 +717,7 @@ class TrustPeerHandler(base_handler.BaseHandler):
         if not auth_result.success:
             return
         myself = auth_result.actor
-        if not auth_result.authorize("PUT", "trust", "<type>/<id>"):
+        if not auth_result.authorize("PUT", "trust", "<type>/<id>", path_peer=peerid):
             return
         approved = None
         permission_updates = None
@@ -967,6 +971,7 @@ class TrustPeerHandler(base_handler.BaseHandler):
             method="DELETE",
             peerid=peerid,
             approved=False,
+            path_peer=peerid,
         ):
             if self.response:
                 self.response.set_status(403)
@@ -1058,7 +1063,7 @@ class TrustPermissionHandler(base_handler.BaseHandler):
             return
 
         # Same authorization as trust endpoint
-        if not auth_result.authorize("GET", "trust", "<type>/<id>"):
+        if not auth_result.authorize("GET", "trust", "<type>/<id>", path_peer=peerid):
             return
 
         try:
@@ -1166,7 +1171,7 @@ class TrustPermissionHandler(base_handler.BaseHandler):
         myself = auth_result.actor
 
         # Same authorization as trust endpoint
-        if not auth_result.authorize("PUT", "trust", "<type>/<id>"):
+        if not auth_result.authorize("PUT", "trust", "<type>/<id>", path_peer=peerid):
             return
 
         try:
@@ -1234,7 +1239,9 @@ class TrustPermissionHandler(base_handler.BaseHandler):
             return
 
         # Same authorization as trust endpoint
-        if not auth_result.authorize("DELETE", "trust", "<type>/<id>"):
+        if not auth_result.authorize(
+            "DELETE", "trust", "<type>/<id>", path_peer=peerid
+        ):
             return
 
         try:

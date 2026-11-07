@@ -1020,9 +1020,18 @@ class CallbacksHandler(base_handler.BaseHandler):
                             path=path, params={"sequence": sequence}
                         )
                         if ack_response is None or "error" in (ack_response or {}):
-                            logger.warning(
+                            status = proxy.last_response_code
+                            log = logger.error if status == 403 else logger.warning
+                            log(
                                 f"Failed to send PUT acknowledgment to {peer_id} "
-                                f"for subscription {subscription_id} seq={sequence}"
+                                f"for subscription {subscription_id} seq={sequence}: "
+                                f"{status}"
+                                + (
+                                    " (refused: the publisher's access rows must "
+                                    "admit PUT on subscriptions/<id>/<subid>)"
+                                    if status == 403
+                                    else ""
+                                )
                             )
                         else:
                             logger.debug(

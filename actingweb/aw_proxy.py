@@ -354,6 +354,15 @@ class AwProxy:
                     "code": response.status_code,
                     "message": str(result["error"]),
                 }
+            elif "error" not in result:
+                # A refusal with no JSON body (a 403 most often) is still a
+                # failure: without this the caller read {} as success.
+                if not isinstance(result, dict):
+                    result = {}
+                result["error"] = {
+                    "code": response.status_code,
+                    "message": "The peer refused the change",
+                }
         return result
 
     def delete_resource(self, path=None):
@@ -727,6 +736,15 @@ class AwProxy:
                 result["error"] = {
                     "code": response.status_code,
                     "message": str(result["error"]),
+                }
+            elif "error" not in result:
+                # A refusal with no JSON body (a 403 most often) is still a
+                # failure: without this the caller read {} as success.
+                if not isinstance(result, dict):
+                    result = {}
+                result["error"] = {
+                    "code": response.status_code,
+                    "message": "The peer refused the change",
                 }
         return result
 

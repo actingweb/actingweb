@@ -49,6 +49,27 @@ class PermissionsHandler(base_handler.BaseHandler):
 
         myself = auth_result.actor
 
+        # Authorise before the trust is looked up, so a peer cannot tell an
+        # unknown id from another peer's: both answer 403. A peer reads only
+        # its own permissions (``path_peer``); the creator and an admin peer
+        # may read any. ``subpath="<id>"`` is the template literal the access
+        # rows use; ``peerid`` is what ``owner`` rows compare with.
+        check = auth_result.auth_obj
+        if not check or not check.check_authorisation(
+            path="permissions",
+            subpath="<id>",
+            method="GET",
+            peerid=peer_id,
+            path_peer=peer_id,
+        ):
+            logger.warning(
+                f"Authorization failed: peer {check.acl.get('peerid') if check else ''} "
+                f"querying {peer_id}'s permissions from {actor_id}"
+            )
+            if self.response:
+                self.response.set_status(403, "Forbidden")
+            return
+
         # Get ActorInterface to access trust relationship
         actor_interface = self._get_actor_interface(myself)
         if not actor_interface:
@@ -71,23 +92,6 @@ class PermissionsHandler(base_handler.BaseHandler):
             )
             if self.response:
                 self.response.set_status(404, "Trust relationship not found")
-            return
-
-        # Check authorization - peer must be requesting their own permissions
-        # Note: We pass subpath="<id>" (the template literal) to match the ACL pattern
-        # "permissions/<id>". The actual peer_id is passed as peerid for ownership checks.
-        check = auth_result.auth_obj
-        if not check or not check.check_authorisation(
-            path="permissions",
-            subpath="<id>",
-            method="GET",
-            peerid=peer_id,
-        ):
-            logger.warning(
-                f"Authorization failed: peer {peer_id} querying permissions from {actor_id}"
-            )
-            if self.response:
-                self.response.set_status(403, "Forbidden")
             return
 
         # Get permissions from TrustPermissionStore

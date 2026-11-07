@@ -688,21 +688,37 @@ class AuthenticatedSubscriptionManager:
             granularity=granularity,
         )
 
-    # Delegate read-only operations without permission checks
+    def _own_rows(self, subscriptions: list[Any]) -> list[Any]:
+        """Only the subscriptions of the accessor's own trust.
+
+        Owner mode (no accessor) sees every row. A peer view sees the rows
+        whose peer is the peer itself; a client view the rows whose peer is
+        its trust's peer id, and nothing when it has no trust."""
+        if not self._auth_context.accessor_id:
+            return subscriptions
+        if self._auth_context.is_peer:
+            own = self._auth_context.peer_id
+        else:
+            own = str(self._auth_context.trust_relationship.get("peerid") or "")
+        if not own:
+            return []
+        return [sub for sub in subscriptions if getattr(sub, "peer_id", None) == own]
+
+    # Read-only listings, limited to the accessor's own trust
     @property
     def all_subscriptions(self) -> list[Any]:
-        """Get all subscriptions."""
-        return self._manager.all_subscriptions
+        """Get the subscriptions this view may see (all of them in owner mode)."""
+        return self._own_rows(self._manager.all_subscriptions)
 
     @property
     def outbound_subscriptions(self) -> list[Any]:
-        """Get outbound subscriptions."""
-        return self._manager.outbound_subscriptions
+        """Get outbound subscriptions this view may see."""
+        return self._own_rows(self._manager.outbound_subscriptions)
 
     @property
     def inbound_subscriptions(self) -> list[Any]:
-        """Get inbound subscriptions."""
-        return self._manager.inbound_subscriptions
+        """Get inbound subscriptions this view may see."""
+        return self._own_rows(self._manager.inbound_subscriptions)
 
 
 class AuthenticatedActorView:

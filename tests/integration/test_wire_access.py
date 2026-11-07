@@ -399,3 +399,137 @@ def test_wa17_permission_timestamp(wire_pair, topology):
     )
     _probe(s, "stored after the second", stored)
     check("WA17", s.recording(), variant=topology)
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: /subscriptions, /permissions and /trust for the peer they name.
+# The requests go to A; C, S, D and the other peers hold trusts to A.
+# ---------------------------------------------------------------------------
+
+
+def _put_property(s: Scenario, name: str, value: Any) -> requests.Response:
+    a = s.publisher
+    return requests.put(f"{a.url}/properties/{name}", json=value, auth=a.basic)
+
+
+@pytest.mark.parametrize("topology", TOPOLOGIES)
+def test_wa12_another_peers_subscriptions(wire_pair, topology):
+    """WA12: C reads, clears, consumes and deletes B's subscription at A."""
+    s = wire_pair(topology, grant=["*"])
+    a, b = s.publisher, s.subscribers[0]
+    _, secret = wire_pair.add_peer(s, "C", "friend", to="A")
+    s.step("A writes", lambda: _put_property(s, "x", {"v": 1}))
+    subid = _subid(s)
+    base = f"{a.url}/subscriptions/{b.id}"
+    for label, method, url, body in (
+        ("C lists B's subscriptions", "GET", base, None),
+        ("C reads B's subscription", "GET", f"{base}/{subid}", None),
+        ("C consumes B's diff", "GET", f"{base}/{subid}/1", None),
+        ("C clears B's queue", "PUT", f"{base}/{subid}", {"sequence": 1}),
+        ("C deletes B's subscription", "DELETE", f"{base}/{subid}", None),
+    ):
+        s.step(
+            label,
+            lambda method=method, url=url, body=body: requests.request(
+                method, url, json=body, headers=_bearer(secret)
+            ),
+        )
+    check("WA12", s.recording(), variant=topology)
+
+
+@pytest.mark.parametrize("topology", TOPOLOGIES)
+def test_wa13_subscribe_under_another_peers_id(wire_pair, topology):
+    """WA13: C creates a subscription at A under B's id."""
+    s = wire_pair(topology, grant=["*"], subscribe=False)
+    a, b = s.publisher, s.subscribers[0]
+    _, secret = wire_pair.add_peer(s, "C", "friend", to="A")
+    s.step(
+        "C subscribes as B",
+        _post(
+            f"{a.url}/subscriptions/{b.id}",
+            {"target": "properties", "granularity": "high"},
+            _bearer(secret),
+        ),
+    )
+    check("WA13", s.recording(), variant=topology)
+
+
+@pytest.mark.parametrize("topology", TOPOLOGIES)
+def test_wa14_permission_query(wire_pair, topology):
+    """WA14: ``GET /permissions/<peer>`` at A: each peer reads its own, for
+    every built-in type and the consumer's; C reads B's; A's creator and an
+    admin peer read B's; C asks for an unknown id."""
+    s = wire_pair(topology, grant=["*"])
+    a, b = s.publisher, s.subscribers[0]
+
+    def query(peer_id: str, **kwargs: Any) -> Callable[[], requests.Response]:
+        return lambda: requests.get(f"{a.url}/permissions/{peer_id}", **kwargs)
+
+    s.step("B reads its own (friend)", query(b.id, headers=_bearer(s.trust_secret)))
+    for name, relationship in (
+        ("P1", "associate"),
+        ("P2", "partner"),
+        ("P3", "subscriber"),
+    ):
+        peer, secret = wire_pair.add_peer(s, name, relationship, to="A")
+        s.step(
+            f"{name} reads its own ({relationship})",
+            query(peer.id, headers=_bearer(secret)),
+        )
+    _, c_secret = wire_pair.add_peer(s, "C", "friend", to="A")
+    d, d_secret = wire_pair.add_peer(s, "D", "admin", to="A")
+    s.step("D reads its own (admin)", query(d.id, headers=_bearer(d_secret)))
+    s.step("C reads B's", query(b.id, headers=_bearer(c_secret)))
+    s.step("A's creator reads B's", query(b.id, auth=a.basic))
+    s.step("D reads B's", query(b.id, headers=_bearer(d_secret)))
+    x_id = uuid.uuid4().hex
+    s.name(x_id, "X")
+    s.step("C asks for an unknown id", query(x_id, headers=_bearer(c_secret)))
+    check("WA14", s.recording(), variant=topology)
+
+
+@pytest.mark.parametrize("topology", TOPOLOGIES)
+def test_wa16_application_trust_row(wire_pair, topology):
+    """WA16: S, of the consumer's ``subscriber`` type (whose rows grant GET on
+    ``trust/<type>/<id>``), reads B's trust row and its permissions at A, then
+    its own."""
+    from actingweb.trust import Trust
+
+    s = wire_pair(topology, relationship="subscriber", grant=["allowed"])
+    a, b = s.publisher, s.subscribers[0]
+    peer, secret = wire_pair.add_peer(s, "S", "subscriber", to="A")
+    # A trust row read back carries its verification token: name A's.
+    for other, name in ((b, "B"), (peer, "S")):
+        row = Trust(actor_id=a.id, peerid=other.id, config=a.host.config).get()
+        if row and row.get("verification_token"):
+            s.name(row["verification_token"], f"token:A-{name}", secret=True)
+    for label, url in (
+        ("S reads B's trust", f"{a.url}/trust/subscriber/{b.id}"),
+        ("S reads B's permissions", f"{a.url}/trust/subscriber/{b.id}/permissions"),
+        ("S reads its own trust", f"{a.url}/trust/subscriber/{peer.id}"),
+        (
+            "S reads its own permissions",
+            f"{a.url}/trust/subscriber/{peer.id}/permissions",
+        ),
+    ):
+        s.step(label, lambda url=url: requests.get(url, headers=_bearer(secret)))
+    check("WA16", s.recording(), variant=topology)
+
+
+@pytest.mark.parametrize("topology", TOPOLOGIES)
+def test_wa18_subscription_root_query(wire_pair, topology):
+    """WA18: C lists A's subscriptions naming B in the query."""
+    s = wire_pair(topology, grant=["*"])
+    a, b = s.publisher, s.subscribers[0]
+    _, secret = wire_pair.add_peer(s, "C", "friend", to="A")
+    s.step(
+        "C lists ?peerid=<B>",
+        lambda: requests.get(
+            f"{a.url}/subscriptions", params={"peerid": b.id}, headers=_bearer(secret)
+        ),
+    )
+    s.step(
+        "C lists with no query",
+        lambda: requests.get(f"{a.url}/subscriptions", headers=_bearer(secret)),
+    )
+    check("WA18", s.recording(), variant=topology)

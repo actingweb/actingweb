@@ -862,15 +862,46 @@ New rows:
 
 ### Verification
 
-- [ ] Run the contract's `### Checks` fast tier verbatim
-- [ ] Run the contract's `### Checks` full tier before the phase commit
-- [ ] `git show --stat HEAD -- tests/integration/wire` shows `WA12` to
+- [x] Run the contract's `### Checks` fast tier verbatim
+- [x] Run the contract's `### Checks` full tier before the phase commit
+- [x] `git show --stat HEAD -- tests/integration/wire` shows `WA12` to
       `WA14`, `WA16`, `WA18` added, the three `.subscriber` files changed,
       and nothing else
-- [ ] The verification document holds the pre-fix runs and the read diff of
+- [x] The verification document holds the pre-fix runs and the read diff of
       the three `.subscriber` files
 
-### Implementation Status: Not Started
+### Notes
+
+- **A refusal with no body was read as success.** `AwProxy.change_resource`
+  and its async twin returned `{}` for a non-2xx answer without a JSON
+  body, and every caller tests `"error" in result`, so a 403 on the clear
+  or the acknowledgement was logged as success. Both now return an `error`
+  with the status for any non-2xx answer; the subscriber's WARNINGs carry
+  the status (ERROR for a 403, naming the rows the publisher must admit),
+  through one helper (`_log_peer_clear_failure`).
+- The method rule and its WARNING live in one helper,
+  `_authorize_subscription_write` (`handlers/subscription.py`); the
+  once-per-process set is keyed on (relationship, path).
+- The subscription root: a peer caller lists only its own rows. On
+  FastAPI the root route binds `?peerid=` as the path's peer
+  (`fastapi_integration.py:1253-1264`), so the query reaches the per-peer
+  handler and the binding refuses it there (`WA18`); the root handler's
+  filter is the unit tests'.
+- Permission rows: `owner`, `creator` and `admin`, as planned. A peer of
+  any built-in type and an application type with a `permissions/<id>` row
+  reads its own (`WA14`).
+- Not changed, recorded: no built-in row admits an `admin` peer on
+  `/subscriptions` (the exemption applies only after a row admits), and a
+  `friend` cannot read its own trust's `/permissions` sub-resource (the
+  handler passes no peer id, so `owner` never binds), both as before.
+- The trust DELETE keeps its row lookup before authorisation (known, as
+  planned).
+- Pre-fix runs, the three re-recordings and the changed test: verification
+  document, "Phase 2".
+- Release impact: no new route or option; the behaviour changes are the
+  changelog's (Phase 5).
+
+### Implementation Status: Complete
 
 ---
 

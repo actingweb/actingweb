@@ -220,6 +220,21 @@ resolving such a name to the underlying store's method would hand a
 permission-scoped accessor an unfiltered whole-partition read. Such a list
 is still reachable through the unauthenticated ``actor.property_lists``.
 
+Subscription Listings
+~~~~~~~~~~~~~~~~~~~~~
+
+``view.subscriptions.all_subscriptions``, ``outbound_subscriptions`` and
+``inbound_subscriptions`` list only the rows of the accessor's own trust: a
+peer view the subscriptions whose peer is that peer, a client view the ones
+whose peer is its trust's peer id, and a client view with no trust nothing.
+Owner mode lists every row. Before 3.16 a peer or client view listed every
+peer's subscriptions.
+
+.. code-block:: python
+
+    peer_view = actor.as_peer(peer_id, trust)
+    mine = peer_view.subscriptions.all_subscriptions   # this peer's rows only
+
 Permission Errors
 -----------------
 

@@ -1,9 +1,60 @@
 import json
 import logging
+import threading
+from typing import Any
 
 from actingweb.handlers import base_handler
 
 logger = logging.getLogger(__name__)
+
+# (relationship, path) pairs whose GET-row refusal of a PUT or DELETE has been
+# logged at WARNING in this process: once each, so a deployment that must add
+# the rows sees it without a line per gap resync.
+_GET_ROW_REFUSALS_LOGGED: set[tuple[str, str]] = set()
+_GET_ROW_REFUSALS_LOCK = threading.Lock()
+
+
+def _authorize_subscription_write(
+    auth_result: "base_handler.AuthResult", method: str, peerid: str
+) -> bool:
+    """Authorise a PUT or DELETE on ``subscriptions/<id>/<subid>`` as the
+    method it is (a GET row admits only GET), for the peer the path names.
+
+    When the refusal is one a GET row would have admitted (before 3.16 the
+    handler authorised these as GET), log it once per process per
+    relationship and path at WARNING, naming the rows the deployment adds.
+    """
+    if auth_result.authorize(method, "subscriptions", "<id>/<subid>", path_peer=peerid):
+        return True
+    auth_obj = auth_result.auth_obj
+    if auth_obj is None or not auth_obj.check_authorisation(
+        path="subscriptions", subpath="<id>/<subid>", method="GET", path_peer=peerid
+    ):
+        return False
+    relationship = str(auth_obj.acl.get("relationship") or "")
+    key = (relationship, "subscriptions/<id>/<subid>")
+    with _GET_ROW_REFUSALS_LOCK:
+        first = key not in _GET_ROW_REFUSALS_LOGGED
+        _GET_ROW_REFUSALS_LOGGED.add(key)
+    if first:
+        logger.warning(
+            f"Refused {method} on subscriptions/<id>/<subid> for relationship "
+            f"'{relationship}': its access rows admit only GET there, and since "
+            "3.16 a row authorises the method a request performs. A subscriber "
+            "of this type cannot clear its queue or be unsubscribed. Add "
+            '("subscriptions/<id>/<subid>", "PUT", "a") and '
+            '("subscriptions/<id>/<subid>", "DELETE", "a") to its acl_rules '
+            "(docs/migration/v3.16.rst). Logged once per process."
+        )
+    return False
+
+
+def _own_subscriptions_only(auth_obj: Any, requested: str | None) -> str | None:
+    """The peer whose subscriptions the root listing may show: a peer caller
+    sees only its own, whatever the query names; creator and trustee keep
+    the query."""
+    caller = str((auth_obj.acl.get("peerid") if auth_obj else "") or "")
+    return caller or requested
 
 
 class SubscriptionRootHandler(base_handler.BaseHandler):
@@ -17,9 +68,12 @@ class SubscriptionRootHandler(base_handler.BaseHandler):
         if self.request.get("_method") == "POST":
             self.post(actor_id)
             return
-        myself = self.require_authenticated_actor(actor_id, "subscriptions", "GET")
-        if not myself:
+        auth_result = self.authenticate_actor(actor_id, "subscriptions")
+        if not auth_result.success:
             return
+        if not auth_result.authorize("GET", "subscriptions"):
+            return
+        myself = auth_result.actor
 
         # Use developer API - ActorInterface with SubscriptionManager
         actor_interface = self._get_actor_interface(myself)
@@ -28,7 +82,10 @@ class SubscriptionRootHandler(base_handler.BaseHandler):
                 self.response.set_status(500, "Internal error")
             return
 
-        peerid = self.request.get("peerid")
+        # A peer caller lists only its own rows, whatever ?peerid= names.
+        peerid = _own_subscriptions_only(
+            auth_result.auth_obj, self.request.get("peerid")
+        )
         target = self.request.get("target")
         subtarget = self.request.get("subtarget")
         resource = self.request.get("resource")
@@ -146,6 +203,7 @@ class SubscriptionRelationshipHandler(base_handler.BaseHandler):
             method="GET",
             peerid=peerid,
             approved=False,  # Allow access even if not fully approved
+            path_peer=peerid,
         ):
             if self.response:
                 self.response.set_status(403)
@@ -201,7 +259,7 @@ class SubscriptionRelationshipHandler(base_handler.BaseHandler):
         if not auth_result.success:
             return
         myself = auth_result.actor
-        if not auth_result.authorize("POST", "subscriptions", "<id>"):
+        if not auth_result.authorize("POST", "subscriptions", "<id>", path_peer=peerid):
             return
         try:
             body = self.request.body
@@ -311,7 +369,9 @@ class SubscriptionHandler(base_handler.BaseHandler):
         if not auth_result.success:
             return
         myself = auth_result.actor
-        if not auth_result.authorize("GET", "subscriptions", "<id>/<subid>"):
+        if not auth_result.authorize(
+            "GET", "subscriptions", "<id>/<subid>", path_peer=peerid
+        ):
             return
 
         # Use developer API - ActorInterface with SubscriptionManager
@@ -378,7 +438,8 @@ class SubscriptionHandler(base_handler.BaseHandler):
         if not auth_result.success:
             return
         myself = auth_result.actor
-        if not auth_result.authorize("GET", "subscriptions", "<id>/<subid>"):
+        # The method the request performs (a GET ?_method=PUT included).
+        if not _authorize_subscription_write(auth_result, "PUT", peerid):
             return
         try:
             body = self.request.body
@@ -437,7 +498,8 @@ class SubscriptionHandler(base_handler.BaseHandler):
         if not auth_result.success:
             return
         myself = auth_result.actor
-        if not auth_result.authorize("GET", "subscriptions", "<id>/<subid>"):
+        # The method the request performs (a GET ?_method=DELETE included).
+        if not _authorize_subscription_write(auth_result, "DELETE", peerid):
             return
         # Do not delete remote subscription if this is from our peer
         acl_peerid = auth_result.auth_obj.acl.get("peerid", "")
@@ -545,7 +607,10 @@ class SubscriptionDiffHandler(base_handler.BaseHandler):
         if not auth_result.success:
             return
         myself = auth_result.actor
-        if not auth_result.authorize("GET", "subscriptions", "<id>/<subid>"):
+        # A GET that consumes the diff is still a GET.
+        if not auth_result.authorize(
+            "GET", "subscriptions", "<id>/<subid>", path_peer=peerid
+        ):
             return
 
         # Use developer API - ActorInterface with SubscriptionManager

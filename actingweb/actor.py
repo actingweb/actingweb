@@ -2541,9 +2541,14 @@ class Actor:
             )
             if response.status_code == 204:
                 return True
-            else:
-                logger.debug("Failed to delete remote subscription at url(" + url + ")")
-                return False
+            # A refusal leaves the peer holding a subscription nobody serves:
+            # visible at WARNING, with the status (403 most often means the
+            # peer's access rows do not admit DELETE on its subscription).
+            log = logger.error if response.status_code == 403 else logger.warning
+            log(
+                f"Failed to delete remote subscription at {url}: {response.status_code}"
+            )
+            return False
         except Exception:  # folds DbError: peer HTTP only
             return False
 

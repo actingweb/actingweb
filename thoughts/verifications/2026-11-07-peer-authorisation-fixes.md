@@ -35,7 +35,7 @@ snapshot showed afterwards:
 | WA10 | B, its bearer, to A under the id of its own subscription at A: **204; A's replica of B gained `planted`** | 403; A holds nothing of B |
 | WA11 | A's bearer on the generic branch: `wire_ping` runs its hook (200); an unhandled name 200; **`permissions` ran the `permissions` hook (200)** on GET, POST and DELETE; `subscription`, `www`, `resource_x` 200; a bare `subscriptions` GET 200, POST and DELETE **500** (`IndexError`) | `wire_ping` and the unhandled name as before; the reserved names 403 with no hook; a bare `subscriptions` 403 on GET, 400 on POST and DELETE |
 | WA15 | Type `permission`: **204, applied** with the data hook told type `permission`; an unknown type 204, applied as a diff | 400 for both; nothing applied |
-| WA17 | A permission callback a day ahead **stored with `fetched_at` in the future**; the next, current one **ignored** (B still excludes `first`) | Both applied (B excludes `second`); the stored time is never ahead |
+| WA17 | A permission callback a day ahead **stored with `fetched_at` in the future**; the next, current one **ignored** (B still excludes `first`) | The first 400 (more than 5 minutes ahead), the second applied (B excludes `second`); the stored time is never ahead |
 
 Expected from reading (plan, Phase 1 "New Tests"): 204 and applied for
 `WA1`, `WA2`, `WA4`, `WA5`, `WA6`, `WA10`, `WA15`; `wire_other_app` receives
@@ -58,3 +58,18 @@ settled), and a bare `/callbacks/subscriptions` POST or DELETE raised (500).
   plan's list): a callback for an unknown subscription id by the right peer
   answers 403, as the specification says for a callback URI that does not
   exist with authentication data (was 404).
+
+### Outside voice on the Phase 1 commit
+
+codex and a fresh-context reviewer, on `8307037..91d027c`. No route around
+the binding. Findings and disposition:
+
+- The clamp lost the sender's order (a fast sender's grant arriving after
+  its revoke was applied): owner decision, replaced by a 5-minute skew
+  window and 400; `WA17` re-recorded.
+- A stale permission update still deleted revoked replica data and synced
+  (only the hook waited for the store): fixed, nothing runs for it.
+- A PUT to a callback was authorised as POST: authorised as PUT.
+- A timestamp that overflows in UTC answered 500: 400.
+- A peer trustee's Basic retry after a refused bearer cannot succeed on the
+  peer branches: for the changelog (Phase 5).

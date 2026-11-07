@@ -76,17 +76,37 @@
        }
       ],
       "peer_permissions": {
-       "actions": null,
+       "actions": {
+        "allowed": [
+         "*"
+        ],
+        "denied": [
+         "delete_*",
+         "admin_*",
+         "system_*"
+        ]
+       },
        "actor_id": "<B>",
        "extra_attributes": {},
        "fetch_error": null,
        "fetched_at": "<ts:iso-offset>",
-       "methods": null,
+       "methods": {
+        "allowed": [
+         "*"
+        ],
+        "denied": [
+         "delete_*",
+         "admin_*",
+         "system_*"
+        ]
+       },
        "peer_id": "<A>",
        "prompts": null,
        "properties": {
         "excluded_patterns": [
-         "first"
+         "private/*",
+         "security/*",
+         "_internal/*"
         ],
         "operations": [
          "read"
@@ -95,8 +115,28 @@
          "*"
         ]
        },
-       "resources": null,
-       "tools": null
+       "resources": {
+        "excluded_patterns": [
+         "private/*",
+         "security/*"
+        ],
+        "operations": [
+         "read",
+         "write"
+        ],
+        "patterns": [
+         "*"
+        ]
+       },
+       "tools": {
+        "allowed": [
+         "*"
+        ],
+        "denied": [
+         "admin_*",
+         "system_*"
+        ]
+       }
       },
       "replica": {
        "lists": {},
@@ -129,38 +169,13 @@
    },
    "result": {
     "body": "",
-    "status": 204
+    "status": 400
    },
    "step": "a day ahead",
    "wire": [
     {
      "auth": "bearer:trust:A-B",
-     "children": [
-      {
-       "actor": "<B>",
-       "data": {
-        "properties": {
-         "excluded_patterns": [
-          "first"
-         ],
-         "operations": [
-          "read"
-         ],
-         "patterns": [
-          "*"
-         ]
-        }
-       },
-       "event": "permissions",
-       "granting_actor_id": "<A>",
-       "permission_changes": {
-        "granted_patterns": [],
-        "has_revocations": false,
-        "is_initial": false,
-        "revoked_patterns": []
-       }
-      }
-     ],
+     "children": [],
      "headers": {},
      "host": "wire_peer_app",
      "method": "POST",
@@ -186,7 +201,7 @@
       "type": "permission"
      },
      "response": null,
-     "status": 204
+     "status": 400
     }
    ]
   },
@@ -266,17 +281,37 @@
        }
       ],
       "peer_permissions": {
-       "actions": null,
+       "actions": {
+        "allowed": [
+         "*"
+        ],
+        "denied": [
+         "delete_*",
+         "admin_*",
+         "system_*"
+        ]
+       },
        "actor_id": "<B>",
        "extra_attributes": {},
        "fetch_error": null,
        "fetched_at": "<ts:iso-offset>",
-       "methods": null,
+       "methods": {
+        "allowed": [
+         "*"
+        ],
+        "denied": [
+         "delete_*",
+         "admin_*",
+         "system_*"
+        ]
+       },
        "peer_id": "<A>",
        "prompts": null,
        "properties": {
         "excluded_patterns": [
-         "first"
+         "private/*",
+         "security/*",
+         "_internal/*"
         ],
         "operations": [
          "read"
@@ -285,8 +320,28 @@
          "*"
         ]
        },
-       "resources": null,
-       "tools": null
+       "resources": {
+        "excluded_patterns": [
+         "private/*",
+         "security/*"
+        ],
+        "operations": [
+         "read",
+         "write"
+        ],
+        "patterns": [
+         "*"
+        ]
+       },
+       "tools": {
+        "allowed": [
+         "*"
+        ],
+        "denied": [
+         "admin_*",
+         "system_*"
+        ]
+       }
       },
       "replica": {
        "lists": {},
@@ -319,7 +374,9 @@
    },
    "result": {
     "excluded": [
-     "first"
+     "private/*",
+     "security/*",
+     "_internal/*"
     ],
     "fetched_at_in_the_future": false
    },

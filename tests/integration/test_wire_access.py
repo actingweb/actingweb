@@ -364,8 +364,9 @@ def test_wa15_callback_type(wire_pair, topology):
 
 @pytest.mark.parametrize("topology", TOPOLOGIES)
 def test_wa17_permission_timestamp(wire_pair, topology):
-    """WA17: A's bearer, a permission callback a day ahead, then one with a
-    current timestamp: both apply, and the stored time is never ahead."""
+    """WA17: A's bearer, a permission callback a day ahead (refused: more
+    than the allowed skew ahead), then one with a current timestamp (applied);
+    the stored time is never ahead."""
     s = wire_pair(topology, grant=["*"])
     a = s.publisher
     _, perm_url = _urls(s, _subid(s))

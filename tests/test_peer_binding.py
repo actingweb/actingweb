@@ -505,7 +505,7 @@ class TestPermissionTimestamp:
         assert out.response.status_code == 400
         assert w.stored_permissions(w.a) is None
 
-    def test_a_future_timestamp_is_clamped_with_a_warning(
+    def test_a_timestamp_a_day_ahead_is_400_with_a_warning(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
         w = World()
@@ -514,13 +514,10 @@ class TestPermissionTimestamp:
             out = w.request(
                 "POST", f"permissions/{w.a}", _permission_body(ahead), as_peer=w.a
             )
-        assert out.response.status_code == 204
-        stored = w.stored_permissions(w.a)
-        assert stored
-        fetched = datetime.fromisoformat(stored["fetched_at"])
-        assert fetched <= datetime.now(UTC)
-        assert any("in the future" in r.getMessage() for r in caplog.records)
-        # A later, current update still applies.
+        assert out.response.status_code == 400
+        assert w.stored_permissions(w.a) is None
+        assert any("ahead of this" in r.getMessage() for r in caplog.records)
+        # A current update applies.
         out = w.request(
             "POST",
             f"permissions/{w.a}",
@@ -530,6 +527,20 @@ class TestPermissionTimestamp:
         assert out.response.status_code == 204
         stored = w.stored_permissions(w.a)
         assert stored and stored["properties"]["excluded_patterns"] == ["later"]
+
+    def test_within_the_skew_the_senders_order_holds(self) -> None:
+        """A sender two minutes fast: its revoke arrives before its earlier
+        grant; the grant is older and changes nothing."""
+        w = World()
+        fast = datetime.now(UTC) + timedelta(minutes=2)
+        revoke = _permission_body((fast + timedelta(seconds=1)).isoformat(), "revoked")
+        grant = _permission_body(fast.isoformat(), "granted")
+        out = w.request("POST", f"permissions/{w.a}", revoke, as_peer=w.a)
+        assert out.response.status_code == 204
+        out = w.request("POST", f"permissions/{w.a}", grant, as_peer=w.a)
+        assert out.response.status_code == 204
+        stored = w.stored_permissions(w.a)
+        assert stored and stored["properties"]["excluded_patterns"] == ["revoked"]
 
     def test_an_older_update_is_ignored_and_runs_no_hook(self) -> None:
         hooks = HookRegistry()
@@ -602,3 +613,73 @@ class TestReservedNames:
     )
     def test_is_reserved_callback_name(self, name: str, reserved: bool) -> None:
         assert is_reserved_callback_name(name) is reserved
+
+
+class TestPhase1ReviewFixes:
+    """The outside voice on the Phase 1 commit (verification document)."""
+
+    def test_a_put_is_authorised_as_put(self) -> None:
+        hooks = HookRegistry()
+        hook = mock.Mock(return_value={"pong": True})
+        hooks.register_callback_hook("ping", hook)
+        w = World(hooks=hooks)
+        # The callbacks row narrowed to POST: a PUT is not admitted by it.
+        index = w.config.access.index(("any", "callbacks", "", "a"))
+        w.config.access[index] = ("any", "callbacks", "POST", "a")
+        out = w.request("PUT", "ping", {"x": 1}, as_peer=w.a)
+        assert out.response.status_code == 403
+        hook.assert_not_called()
+        out = w.request("POST", "ping", {"x": 1}, as_peer=w.a)
+        assert out.response.status_code == 200
+        assert hook.call_args.args[2]["method"] == "POST"
+
+    def test_a_put_reaches_the_hook_as_put(self) -> None:
+        hooks = HookRegistry()
+        hook = mock.Mock(return_value={"pong": True})
+        hooks.register_callback_hook("ping", hook)
+        w = World(hooks=hooks)
+        out = w.request("PUT", "ping", {"x": 1}, as_peer=w.a)
+        assert out.response.status_code == 200
+        assert hook.call_args.args[2]["method"] == "PUT"
+
+    def test_a_timestamp_that_overflows_in_utc_is_400(self) -> None:
+        w = World()
+        out = w.request(
+            "POST",
+            f"permissions/{w.a}",
+            _permission_body("0001-01-01T00:00:00+05:00"),
+            as_peer=w.a,
+        )
+        assert out.response.status_code == 400
+        assert w.stored_permissions(w.a) is None
+
+    def test_a_stale_update_deletes_and_syncs_nothing(self) -> None:
+        w = World()
+        w.config.auto_delete_on_revocation = True  # type: ignore[attr-defined]
+        now = datetime.now(UTC)
+        out = w.request(
+            "POST", f"permissions/{w.a}", _permission_body(now.isoformat()), as_peer=w.a
+        )
+        assert out.response.status_code == 204
+        older = (now - timedelta(hours=1)).isoformat()
+        with (
+            mock.patch.object(CallbacksHandler, "_delete_revoked_peer_data") as delete,
+            mock.patch.object(
+                CallbacksHandler, "_incremental_sync_granted_properties"
+            ) as sync,
+        ):
+            out = w.request(
+                "POST",
+                f"permissions/{w.a}",
+                {
+                    "type": "permission",
+                    "timestamp": older,
+                    "data": {"properties": {"patterns": [], "operations": ["read"]}},
+                },
+                as_peer=w.a,
+            )
+        assert out.response.status_code == 204
+        delete.assert_not_called()
+        sync.assert_not_called()
+        stored = w.stored_permissions(w.a)
+        assert stored and stored["properties"]["excluded_patterns"] == ["x"]

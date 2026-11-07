@@ -1,6 +1,7 @@
 import json
 import logging
 from collections.abc import Callable
+from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
 from actingweb import auth
@@ -24,6 +25,10 @@ logger = logging.getLogger(__name__)
 RESERVED_CALLBACK_NAMES = frozenset(
     {"permissions", "subscription", "subscriptions", "www"}
 )
+
+# How far ahead of the receiver's clock a permission callback's timestamp may
+# be: ordinary clock skew. Further ahead answers 400.
+PERMISSION_TIMESTAMP_SKEW = timedelta(minutes=5)
 
 # The callback types the subscription path accepts; an absent type is a diff.
 ACCEPTED_SUBSCRIPTION_CALLBACK_TYPES = frozenset({"diff", "resync"})
@@ -155,8 +160,9 @@ class CallbacksHandler(base_handler.BaseHandler):
             self.response.set_status(403, "Forbidden")
 
     def put(self, actor_id, name):
-        """PUT requests are handled as POST for callbacks"""
-        self.post(actor_id, name)
+        """PUT requests are handled like POST, but authorised as PUT: an
+        access row admits the method a request performs."""
+        self.post(actor_id, name, method="PUT")
 
     def delete(self, actor_id, name):
         """Handles deletion of callbacks, like subscriptions"""
@@ -260,8 +266,8 @@ class CallbacksHandler(base_handler.BaseHandler):
         else:
             self.response.set_status(403, "Forbidden")
 
-    def post(self, actor_id, name):
-        """Handles POST callbacks"""
+    def post(self, actor_id, name, method: str = "POST"):
+        """Handles POST callbacks (and PUT, authorised as ``method``)"""
         auth_result = self._authenticate_callback(actor_id, name)
         if auth_result is None:
             return
@@ -280,7 +286,7 @@ class CallbacksHandler(base_handler.BaseHandler):
             if not check.check_authorisation(
                 path="callbacks",
                 subpath="permissions",
-                method="POST",
+                method=method,
                 peerid=granting_actor_id,
                 path_peer=granting_actor_id,
                 peer_caller_only=True,
@@ -320,11 +326,11 @@ class CallbacksHandler(base_handler.BaseHandler):
                 )
 
                 perm_data = params.get("data", {})
-                timestamp = self._clamped_permission_timestamp(
+                timestamp, refusal = self._accepted_permission_timestamp(
                     params.get("timestamp"), granting_actor_id
                 )
                 if timestamp is None:
-                    self.response.set_status(400, "Invalid timestamp")
+                    self.response.set_status(400, refusal)
                     return
 
                 peer_perms = PeerPermissions(
@@ -345,6 +351,23 @@ class CallbacksHandler(base_handler.BaseHandler):
 
                 # Get old permissions before storing new ones (for comparison)
                 old_permissions = store.get_permissions(actor_id, granting_actor_id)
+
+                # An update older than the one stored changes nothing: no
+                # deletion of revoked data, no sync, no hook (the store would
+                # refuse it too; deciding here keeps the side effects in step).
+                if (
+                    old_permissions
+                    and old_permissions.fetched_at
+                    and peer_perms.fetched_at
+                    and peer_perms.fetched_at < old_permissions.fetched_at
+                ):
+                    logger.info(
+                        f"Ignored a permission callback from {granting_actor_id} "
+                        f"older than the stored one ({peer_perms.fetched_at} < "
+                        f"{old_permissions.fetched_at})"
+                    )
+                    self.response.set_status(204, "No Content")
+                    return
 
                 # Detect what changed
                 permission_changes = detect_permission_changes(
@@ -380,7 +403,8 @@ class CallbacksHandler(base_handler.BaseHandler):
                     myself.config, "_subscription_config", None
                 )
                 if (
-                    permission_changes.get("granted_patterns")
+                    success
+                    and permission_changes.get("granted_patterns")
                     and subscription_config
                     and subscription_config.enabled
                     and subscription_config.auto_storage
@@ -445,7 +469,7 @@ class CallbacksHandler(base_handler.BaseHandler):
             if not check.check_authorisation(
                 path="callbacks",
                 subpath="subscriptions",
-                method="POST",
+                method=method,
                 peerid=peerid,
                 path_peer=peerid,
                 peer_caller_only=True,
@@ -548,7 +572,7 @@ class CallbacksHandler(base_handler.BaseHandler):
             return
         if self._refuse_reserved_name(name):
             return
-        if not auth_result.authorize("POST", "callbacks", name):
+        if not auth_result.authorize(method, "callbacks", name):
             return
         # Execute callback hook for POST
         hook_result = None
@@ -568,7 +592,7 @@ class CallbacksHandler(base_handler.BaseHandler):
                 except (TypeError, ValueError, KeyError):
                     hook_data = {}
 
-                hook_data["method"] = "POST"
+                hook_data["method"] = method
                 hook_result = self.hooks.execute_callback_hooks(
                     name, actor_interface, hook_data
                 )
@@ -581,35 +605,40 @@ class CallbacksHandler(base_handler.BaseHandler):
         else:
             self.response.set_status(403, "Forbidden")
 
-    def _clamped_permission_timestamp(
+    def _accepted_permission_timestamp(
         self, value: Any, granting_actor_id: str
-    ) -> str | None:
-        """The ``fetched_at`` to store for a permission callback: the earlier
-        of the body's ``timestamp`` and this receiver's clock, as ISO-8601 in
-        UTC. Absent, it is now; unparsable, None (the caller answers 400).
+    ) -> tuple[str | None, str]:
+        """The ``fetched_at`` to store for a permission callback, or None and
+        the reason it is refused (the caller answers 400).
 
-        A timestamp in the future would make every later update look older
-        and be ignored; clamped, a sender with a fast clock still delivers."""
+        The sender's own timestamp, in UTC, so updates keep the sender's
+        order even when they arrive out of order; absent, it is now. A
+        timestamp more than ``PERMISSION_TIMESTAMP_SKEW`` ahead of this
+        receiver's clock is refused: stored, it would make every later
+        update look older and be ignored."""
         from datetime import UTC, datetime
 
         now = datetime.now(UTC)
         if value is None:
-            return now.isoformat()
+            return now.isoformat(), ""
         if not isinstance(value, str):
-            return None
+            return None, "Invalid timestamp"
         try:
             parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-        except ValueError:
-            return None
-        if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=UTC)
-        if parsed > now:
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=UTC)
+            parsed = parsed.astimezone(UTC)
+        except (ValueError, OverflowError):
+            return None, "Invalid timestamp"
+        if parsed > now + PERMISSION_TIMESTAMP_SKEW:
             logger.warning(
-                f"Permission callback from {granting_actor_id} carries a timestamp "
-                f"in the future ({parsed.isoformat()}); stored as {now.isoformat()}"
+                f"Refused a permission callback from {granting_actor_id}: its "
+                f"timestamp {parsed.isoformat()} is more than "
+                f"{int(PERMISSION_TIMESTAMP_SKEW.total_seconds())} s ahead of this "
+                f"receiver's clock ({now.isoformat()}); check the sender's clock"
             )
-            return now.isoformat()
-        return parsed.astimezone(UTC).isoformat()
+            return None, "Timestamp in the future"
+        return parsed.isoformat(), ""
 
     def _process_subscription_callback_internal(
         self,

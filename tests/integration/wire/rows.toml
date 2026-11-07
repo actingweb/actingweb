@@ -306,5 +306,8 @@ test = "test_wire_access.py::test_wa17_permission_timestamp"
 topologies = ["same_host", "two_hosts"]
 owners = []
 exposure = false
-expected = "A's bearer, a permission callback a day ahead, then a current one: both apply (excluded first, then second) and the stored fetched_at is never in the future."
-reason = ["2026-11-07 first recording (peer-authorisation-fixes:1)"]
+expected = "A's bearer, a permission callback a day ahead answers 400 (more than the allowed skew ahead; nothing stored), then a current one applies (excluded second); the stored fetched_at is never in the future."
+reason = [
+  "2026-11-07 first recording (peer-authorisation-fixes:1)",
+  "2026-11-07 the clamp replaced by a skew window and 400, owner decision on the Phase 1 review (peer-authorisation-fixes:1)",
+]

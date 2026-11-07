@@ -113,6 +113,13 @@ status: active
   confirmed: the operator command reads per actor with `--rps`; a PUT or
   DELETE refused where a GET row would have admitted it is logged once per
   process per relationship and path at WARNING.
+- **2026-11-07, Phase 1 review (owner)**: the outside voice on the Phase 1
+  commit found that clamping a future permission timestamp loses the
+  sender's order; the clamp is replaced by a 5-minute skew window and 400
+  ("Decisions Made"). Folded with it, as mechanical: a stale permission
+  update deletes and syncs nothing (only the hook waited for the store); a
+  PUT to a callback is authorised as PUT; an overflowing timestamp answers
+  400. Its own commit, before Phase 2.
 
 ## Overview
 
@@ -245,12 +252,15 @@ its T6 (a 409 on a repeated trust request), which the guard here replaces.
   rightful sender (second review). Refused with 403. Its other callers
   (`subscription_manager.py:898`, `:1570`, `:1789`, `:2675`) are all on the
   subscriber side and only ever want such rows.
-- [New 2026-11-07] **A permission callback's timestamp is clamped** (owner,
-  review of the redraft): `fetched_at` is the earlier of the body's
-  timestamp and the receiver's clock, so a far-future value cannot block
-  later updates and a sender with a fast clock still delivers; the receiver
-  logs a WARNING with both times when it clamps. A timestamp that does not
-  parse as ISO-8601 answers 400.
+- [Updated 2026-11-07, on the Phase 1 review] **A permission callback's
+  timestamp is kept within a skew window** (owner): the receiver stores the
+  sender's timestamp as sent, so updates keep the sender's order even when
+  they arrive out of order, and refuses with 400 and a WARNING a timestamp
+  more than 5 minutes ahead of its own clock, so nothing far in the future
+  is stored. A timestamp that does not parse as ISO-8601 (or overflows in
+  UTC) answers 400. This replaces the clamp decided on the redraft's
+  review: clamping lost the sender's order, so a fast sender's grant
+  arriving after its revoke was applied and the revoke lost.
 - [New 2026-11-07] **An operator command removes state written before the
   fix** (owner), dry run by default; it reports and prunes, and does not
   rebuild replicas (owner, review of the redraft: the `ListAttribute` plan
@@ -573,9 +583,11 @@ Identical across five sequential runs per backend and under
     `path_peer=<peer>, peer_caller_only=True`, before any lookup, so a
     caller that is not the peer cannot tell a real subscription id from an
     unknown one.
-  - Permission branch: `timestamp` must parse as ISO-8601 (else 400);
-    `fetched_at` is the earlier of it and now, with a WARNING naming both
-    when clamped; the `permissions` hook runs only when the store accepted
+  - Permission branch: `timestamp` must parse as ISO-8601 (else 400) and
+    be at most 5 minutes ahead of the receiver's clock (else 400 with a
+    WARNING naming both times; the clamp of the first draft, replaced on the
+    Phase 1 review); an update older than the stored one deletes, syncs and
+    runs nothing; the `permissions` hook runs only when the store accepted
     the update.
   - Subscription branch, `type`: absent, `diff` or `resync`; anything else
     400, checked before both the processor and the legacy hook branch
@@ -625,7 +637,7 @@ D a peer with an `admin` trust:
 | WA10 | To A, by B with its bearer, under the id of B's own subscription at A | 403; nothing in A's replica store for B |
 | WA11 | A peer's `GET`, `POST` and `DELETE` to a generic path a hook handles, to one no hook handles, and to each reserved name | The hook's answer; today's answer for the unhandled one; 403 for each reserved name, no hook run |
 | WA15 | A's bearer: a subscription callback with `type` `permission`, and with an unknown type | 400; nothing applied, sequence unchanged, no hook |
-| WA17 | A's bearer: a permission callback with a timestamp a day ahead, then one with a current timestamp | Both applied; the stored `fetched_at` is not in the future |
+| WA17 | A's bearer: a permission callback with a timestamp a day ahead, then one with a current timestamp | The first 400 (beyond the skew window), the second applied; the stored `fetched_at` is not in the future |
 
 ### New Tests, both unit and integration tests
 
@@ -732,6 +744,17 @@ D a peer with an `admin` trust:
 - Release impact: `check_authorisation` and `AuthResult.authorize` gain
   keyword-only parameters with defaults (additive); the behaviour changes
   are the changelog's (Phase 5). 3.16 is a minor.
+- **Outside voice on the Phase 1 commit** (codex and a fresh-context
+  reviewer): no route around the binding (the `_method` overrides, the
+  integrations' `name`, case, bare branch names and every token path's
+  `acl["peerid"]` checked). Folded in its own commit after Phase 1: the
+  timestamp window (owner decision above), a stale permission update
+  deleting and syncing nothing, a PUT authorised as PUT (the hook is told
+  `PUT`), an overflowing timestamp 400; `WA17` re-recorded. For the Phase 5
+  changelog: a peer trustee's Basic retry after a refused bearer
+  (`aw_proxy.py:132-135`) cannot succeed on the two peer branches. Noted,
+  not changed: an access row with `r` does not refuse (any matching row
+  admits, `auth.py`), so a row cannot narrow a broader one below it.
 
 ### Implementation Status: Complete
 

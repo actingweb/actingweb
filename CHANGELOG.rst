@@ -655,6 +655,10 @@ CHANGED
   ``UniqueCreatorNotReady`` should catch ``StoreNotReady`` (their common base
   class), or the combined refusal escapes it. A PostgreSQL deployment must
   run ``alembic upgrade head`` (revision ``f6a7b8c9d0e1``) before the deploy.
+  A DynamoDB role that lists its actions needs ``dynamodb:BatchGetItem`` on
+  ``<prefix>_property_lookup_v2``: the check reads the markers with one
+  ``BatchGetItem`` at every start, and a role without it refuses to start
+  with "could not be checked" (it was not needed before 3.16).
   An application that never uses reverse lookup calls
   ``with_indexed_properties([])``.
 

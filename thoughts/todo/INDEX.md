@@ -45,7 +45,7 @@ two after a research pass.
 
 | Order | Plan | Todo it closes | Needs first |
 | --- | --- | --- | --- |
-| Before 0 | [Emm's suite against `master`](emm-suite-against-master.md): the consumer's tests run on the library as it is, so what 3.16 already changes for Emm is known before more lands | Itself | A worktree of this repo, a worktree of Emm on a 3.16 adoption branch with its own virtualenv |
+| Before 0 | [Emm's suite against `master`](emm-suite-against-master.md): the consumer's tests run on the library as it is, so what 3.16 already changes for Emm is known before more lands. **The `master` run is done (2026-11-07, `research/2026-11-07-emm-suite-against-master.md`): no library regression, five Emm-side adoption failures as the baseline.** The file stays for the per-plan runs | Itself | Nothing now; the worktrees exist |
 | 0 | [`peer-authorisation-fixes`](../plans/2026-11-06-peer-authorisation-fixes.md): unauthenticated callers refused on `/callbacks`, a callback's URL fetched only from the peer, a peer limited to its own permissions and subscriptions; first, the fourteen legitimate flows the fix must leave unchanged, recorded on the harness the baseline spike builds | None; found by the reviews of the other plans and confirmed by a run | Nothing. Security first |
 | 1 | [`subscription-wire-baseline`](../plans/2026-11-06-subscription-wire-baseline.md): what a publisher sends and a subscriber holds today, recorded per flow, so every later change to it is a file diff; the existing subscription tests made to assert one outcome | None; found by the review of the other plans | Its spike, before plan 0 is redrafted; plan 0 merged, which lands the harness |
 | 2 | [`subs-list-cache-lifetime`](../plans/2026-11-06-subs-list-cache-lifetime.md): per-request actors on the MCP path, a subscription list that caches empty | [`subs_list` cache asymmetry](subs-list-cache-asymmetry.md) | Plan 0, for the view filter its new accessor inherits; plan 1 |
@@ -98,7 +98,8 @@ they share Docker and the local ports.
 
 1. **Before plan 0 starts:** [Emm's suite on `master`](emm-suite-against-master.md)
    has run and every failure is triaged. What is left is the baseline for
-   the runs below.
+   the runs below. **Met 2026-11-07**; the baseline is the five tests in
+   the research note.
 2. **Before the PR opens, for each plan that changes library code:** Emm's
    suite on that plan's branch shows no failure the baseline did not have;
    the result is in the plan's verification document. Each such plan's last

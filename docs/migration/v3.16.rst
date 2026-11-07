@@ -59,9 +59,16 @@ check only the first three items and item 11.
 3. **An OAuth-only deployment should close the factory:**
    ``.with_open_factory(False)``.
 4. Code calling ``Actor.create`` or ``ActorInterface.create`` directly needs
-   nothing for new ids: the new ``auth_method`` keyword defaults to ``"app"``.
-   With a caller-supplied ``actor_id`` that is already taken, ``create`` now
-   returns ``False`` (``ActorInterface.create`` raises) instead of ``True``.
+   no new argument for new ids: the new ``auth_method`` keyword defaults to
+   ``"app"``. With a caller-supplied ``actor_id`` that is already taken,
+   ``create`` now returns ``False`` (``ActorInterface.create`` raises)
+   instead of ``True``. **A process that creates actors without
+   ``integrate_*``** (a worker, a restore or import script, a test harness
+   that builds ``Config()`` itself) must call ``check_ready()`` or run
+   against a store where ``actingweb-unique-creators enable --apply`` has
+   run, item 12 included: on a store without it, a fresh table prefix the
+   library auto-created for instance, every create raises ``DbError``
+   (see `Direct Actor.create and ActorInterface.create callers`_).
 5. MCP sign-ins now write the same actor fields as the other paths.
 6. A hook on ``actor_deleted`` or ``actor_deleted_complete`` may now see
    ``reason="replaced_at_adoption"``.
@@ -666,8 +673,15 @@ running without it means ``--apply``).
 
 - *DynamoDB:* the markers are reserved rows in the existing
   ``<prefix>_property_lookup_v2`` table (``#meta#backfill#<name>`` and
-  ``#meta#configured``); no new table. With auto-create off, the runtime role
-  also needs ``PutItem`` and ``BatchGetItem`` on that table. You can drop the
+  ``#meta#configured``); no new table. **The runtime role needs
+  ``BatchGetItem`` on that table** whatever the auto-create setting: the
+  startup check reads the markers with one ``BatchGetItem`` at every start,
+  and a role without it refuses to start with
+  ``PropertyLookupNotReady`` ("could not be checked"). It also needs
+  ``PutItem`` there, for the markers an empty store writes when it marks
+  itself ready. A policy that lists actions (``GetItem``, ``PutItem``,
+  ``Query``, ...) rather than granting ``dynamodb:*`` is the usual way to
+  miss ``BatchGetItem``: it was not needed before 3.16. You can drop the
   v1 ``<prefix>_property_lookup`` table and the ``property-index`` GSI on
   ``<prefix>_properties`` once the backfill is verified; nothing reads them.
 - *PostgreSQL:* a new table ``property_lookup_backfill``. Run

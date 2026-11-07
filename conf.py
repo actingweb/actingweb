@@ -85,6 +85,10 @@ exclude_patterns = [
     '.venv/**',
     'venv',
     'venv/**',
+    # Git worktrees of this repository live under .claude/worktrees/ and
+    # carry a second docs tree, which a local build would otherwise pick up.
+    '.claude',
+    '.claude/**',
 ]
 
 # The name of the Pygments (syntax highlighting) style to use.

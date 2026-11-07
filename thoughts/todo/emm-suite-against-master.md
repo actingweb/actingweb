@@ -22,7 +22,18 @@ Emm in one pin change, and a failure then has no merge to be bisected to.
 - **A check the wire recordings cannot give.** The recordings prove what two
   test apps shaped like Emm exchange; Emm's suite proves Emm.
 
-## What is known before the first run
+## The first run, on `master`: done 2026-11-07
+
+Recorded in
+[`research/2026-11-07-emm-suite-against-master.md`](../research/2026-11-07-emm-suite-against-master.md):
+no library regression; five failing tests, all documented 3.16 changes Emm
+adopts on its branch, plus the pin guard deselected by design. **That list
+is the baseline** for the runs below until Emm's branch adopts them. The
+two worktrees exist and stay; the research note says how to re-point them
+at a plan's commit. The section below is what was known before it ran,
+kept because the run confirmed both points.
+
+## What was known before the first run
 
 Read on 2026-11-06, not run:
 
@@ -82,9 +93,13 @@ main checkout moves and Emm's working environment stays on 3.15.1 (owner,
 
 ## Needs first
 
-- The two worktrees and Emm's virtualenv, not yet created; nothing in
-  Emm's tree has been touched from here.
-- Emm's preview environment and Docker free.
+- The two worktrees and Emm's virtualenv exist since 2026-11-07
+  (`.claude/worktrees/master-5a7e07f` here, `.claude/worktrees/emm-3-16`
+  on branch `actingweb-3-16-adoption` in Emm, uncommitted adoption edits
+  in it). A run on a plan's branch re-points the library worktree and
+  reinstalls, per the research note.
+- Emm's preview environment and Docker free; environment 8 is the one the
+  runs use.
 
 Delete this file when the last of the six plans has merged with its run
 recorded. The order and the rule that each plan waits on its run are in

@@ -1,0 +1,201 @@
+# The wire rows: what each recording records and which plan phase may change it.
+#
+# The only copy of row ownership (thoughts/plans/2026-11-06-subscription-wire-baseline.md,
+# "rows.toml is the only copy"). tests/integration/verify_groups.py checks it.
+#
+# Schema
+#
+#   [reserved]                       id ranges a later plan may add rows under
+#   "<plan slug>" = ["WX1-WX9", ...]
+#
+#   [rows."<row>"]                   one entry per row (a variant suffix such as
+#                                    ".target" or ".subscriber" is part of <row>)
+#   test = "<file>::<function>"      the scenario that records it
+#   topologies = ["same_host", "two_hosts"]
+#                                    optional; when present the row has one file
+#                                    per topology, wire/<row>.<topology>.json (the
+#                                    transcripts name different hosts), otherwise
+#                                    one file, wire/<row>.json. One file serves
+#                                    both backends.
+#   owners = ["<plan slug>:<phase>"] the phases expected to change the recording;
+#                                    any other change to it is a regression
+#   exposure = false                 true when the row records data reaching a
+#                                    peer that may not read it
+#   expected = "..."                 what it records, and what is known to be wrong
+#   reason = ["<date> <why the file was written or rewritten> (<plan:phase>)"]
+#
+# A recording is what the library does, right or wrong. Re-record a row with
+# WIRE_RECORD=1 (refused under CI) and add a dated line to its `reason`.
+
+[reserved]
+"peer-authorisation-fixes" = ["WA1-WA18", "WT1-WT9"]
+"subscription-wire-baseline" = ["WS1-WS9", "WL1-WL17", "WD1-WD20", "WQ1-WQ9", "WC1-WC9", "WM1", "WP1-WP9"]
+"attribute-list-v2-port" = ["WD21-WD29", "WL18-WL29"]
+"spec-1-5" = ["WS10-WS19", "WL30-WL39", "WA19-WA29"]
+"subs-list-cache-lifetime" = ["WM2-WM9"]
+"email-as-creator-at-write-time" = ["WE1-WE9"]
+
+# ---------------------------------------------------------------------------
+# peer-authorisation-fixes, Phase 0: the flows over the paths the fix changes
+# ---------------------------------------------------------------------------
+
+[rows."WS1.target"]
+test = "test_wire_peer_paths.py::test_ws1_target"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "Each PUT's callback nested in it, the data hook nested in the callback; the replica holds an object as sent, a string and a number wrapped as {\"value\": ...}; the diffs stay queued at A."
+reason = ["2026-11-07 first recording (peer-authorisation-fixes:0)"]
+
+[rows."WL11.target"]
+test = "test_wire_peer_paths.py::test_wl11_target"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "One top-level callback per SDK list operation (append, insert, update, update_where, delete, extend, pop, pop(0), remove_where, metadata, clear, delete_all), each with its operation and length; the replica follows and is empty after the delete."
+reason = ["2026-11-07 first recording (peer-authorisation-fixes:0)"]
+
+[rows."WD6"]
+test = "test_wire_peer_paths.py::test_wd6_low_granularity"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "A low-granularity callback with a url and no data; B fetches the diff with its bearer (the GET consumes it), runs the data hook and acknowledges with PUT {\"sequence\": 1}, 204."
+reason = ["2026-11-07 first recording (peer-authorisation-fixes:0)"]
+
+[rows."WD6.subscriber"]
+test = "test_wire_peer_paths.py::test_wd6_subscriber"
+owners = ["peer-authorisation-fixes:2"]
+exposure = false
+expected = "WD6 in a pair of the consumer's subscriber type: the acknowledgement PUT is admitted by the GET-only row today (204). Phase 2 authorises it as a PUT: 403, the queue unchanged because the GET already consumed the diff."
+reason = ["2026-11-07 first recording (peer-authorisation-fixes:0)"]
+
+[rows."WD6.subscriber_adopted"]
+test = "test_wire_peer_paths.py::test_wd6_subscriber"
+owners = []
+exposure = false
+expected = "WD6 in a subscriber pair with the two adoption rows: identical through every phase, the proof the migration step is enough."
+reason = ["2026-11-07 first recording (peer-authorisation-fixes:0)"]
+
+[rows."WD8"]
+test = "test_wire_peer_paths.py::test_wd8_duplicate"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "The append's callback posted again with the same bearer: 204, no data hook, the replica unchanged (a duplicate)."
+reason = ["2026-11-07 first recording (peer-authorisation-fixes:0)"]
+
+[rows."WD10"]
+test = "test_wire_peer_paths.py::test_wd10_suspend_resume"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "Writes while suspended send nothing and queue nothing; resume sends one resync callback (sequence 1, no data); B fetches GET /<A>/properties inside it and the data hook gets the baseline as type resync; the deleted property never reaches B."
+reason = ["2026-11-07 first recording (peer-authorisation-fixes:0)"]
+
+[rows."WD10.import"]
+test = "test_wire_peer_paths.py::test_wd10_import"
+owners = []
+exposure = false
+expected = "The consumer's import: the method answers {\"callbacks_sent\": 1, \"length\": 3} and then the resync for subtarget memories arrives as a top-level request with B's fetch of the list nested in it; A's queue keeps diffs 1 and 2."
+reason = ["2026-11-07 first recording (peer-authorisation-fixes:0)"]
+
+[rows."WD12"]
+test = "test_wire_peer_paths.py::test_wd12_full_state_fallback"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "A believes B lacks subscriptionresync: resume sends a low-granularity callback for a high-granularity subscription; B fetches the full-state diff and acknowledges it. Known wrong: B's replica gets the list's items again (an extend onto what it holds) and the object y stored as a JSON string wrapped as {\"value\": ...} (thoughts/todo/full-state-fallback-replica.md)."
+reason = ["2026-11-07 first recording (peer-authorisation-fixes:0)"]
+
+[rows."WQ1"]
+test = "test_wire_peer_paths.py::test_wq1_poll_queue"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "B's GET of its subscription at A lists both queued diffs with their sequence and timestamp; nothing is cleared."
+reason = ["2026-11-07 first recording (peer-authorisation-fixes:0)"]
+
+[rows."WQ2"]
+test = "test_wire_peer_paths.py::test_wq2_single_diff"
+topologies = ["same_host", "two_hosts"]
+owners = ["spec-1-5:3"]
+exposure = false
+expected = "The first GET of diff 1 answers 200 and consumes it; the second answers 404. The specification forbids a consuming GET (actingweb-spec.rst:1207, :2885-2887)."
+reason = ["2026-11-07 first recording (peer-authorisation-fixes:0)"]
+
+[rows."WQ3"]
+test = "test_wire_peer_paths.py::test_wq3_clear"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "PUT {\"sequence\": 1} 204 clears diff 1; {\"sequence\": 0} 204; no sequence 400; text 400; an unknown id 404; GET ?_method=PUT&sequence=2 204 clears the rest."
+reason = ["2026-11-07 first recording (peer-authorisation-fixes:0)"]
+
+[rows."WQ3.subscriber"]
+test = "test_wire_peer_paths.py::test_wq3_subscriber"
+owners = ["peer-authorisation-fixes:2"]
+exposure = false
+expected = "WQ3 in a subscriber pair: every clear is admitted by the GET-only row today. Phase 2 authorises them as PUT: each clear 403 and the queue keeps its diffs."
+reason = ["2026-11-07 first recording (peer-authorisation-fixes:0)"]
+
+[rows."WQ3.subscriber_adopted"]
+test = "test_wire_peer_paths.py::test_wq3_subscriber"
+owners = []
+exposure = false
+expected = "WQ3 in a subscriber pair with the two adoption rows: identical through every phase."
+reason = ["2026-11-07 first recording (peer-authorisation-fixes:0)"]
+
+[rows."WC1"]
+test = "test_wire_peer_paths.py::test_wc1_subscribe_through_own_actor"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "B's creator's POST /<B>/subscriptions answers 204 after B's POST /<A>/subscriptions/<B> (201) and B's baseline GET /<A>/properties, both nested in it."
+reason = ["2026-11-07 first recording (peer-authorisation-fixes:0)"]
+
+[rows."WC2"]
+test = "test_wire_peer_paths.py::test_wc2_subscribe_direct"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "B's bearer POST /<A>/subscriptions/<B>: 201 with the new subscription; A holds it, B holds nothing (it did not go through its own actor)."
+reason = ["2026-11-07 first recording (peer-authorisation-fixes:0)"]
+
+[rows."WC3"]
+test = "test_wire_peer_paths.py::test_wc3_subscriber_unsubscribes"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "B's creator deletes its subscription: B sends DELETE /<A>/callbacks/subscriptions/<B>/<subid> (204, A's subscription_deleted hook nested); both rows gone."
+reason = ["2026-11-07 first recording (peer-authorisation-fixes:0)"]
+
+[rows."WC4"]
+test = "test_wire_peer_paths.py::test_wc4_publisher_unsubscribes"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "A's creator deletes B's subscription: A sends DELETE /<B>/subscriptions/<A>/<subid> (204); both rows gone; A's subscription_deleted hook runs."
+reason = ["2026-11-07 first recording (peer-authorisation-fixes:0)"]
+
+[rows."WC4.subscriber"]
+test = "test_wire_peer_paths.py::test_wc4_subscriber"
+owners = ["peer-authorisation-fixes:2"]
+exposure = false
+expected = "WC4 in a subscriber pair: A's DELETE to B is admitted by B's GET-only row today. Phase 2 authorises it as a DELETE: 403 and B keeps a dangling callback subscription."
+reason = ["2026-11-07 first recording (peer-authorisation-fixes:0)"]
+
+[rows."WC4.subscriber_adopted"]
+test = "test_wire_peer_paths.py::test_wc4_subscriber"
+owners = []
+exposure = false
+expected = "WC4 in a subscriber pair with the two adoption rows: identical through every phase."
+reason = ["2026-11-07 first recording (peer-authorisation-fixes:0)"]
+
+[rows."WP1"]
+test = "test_wire_peer_paths.py::test_wp1_permission_callback"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "A's permission PUT with an exclusion answers 200 with the permission callback to B nested (204, B's permissions hook nested); B fetches nothing after an exclusion and its replica keeps the excluded property (the wire apps leave auto_delete_on_revocation off, as the consumer does)."
+reason = ["2026-11-07 first recording (peer-authorisation-fixes:0)"]

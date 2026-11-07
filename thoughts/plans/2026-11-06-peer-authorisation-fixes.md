@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: active
 ---
 
 # Implementation Plan: callers reach only what is theirs on `/callbacks`, `/permissions` and `/subscriptions`
@@ -106,6 +106,13 @@ status: proposed
   callback names answer 403, as the specification says; a future permission
   timestamp is clamped to the receiver's clock; the operator command drops
   the replica rebuild. The rest folded as mechanical.
+- **2026-11-07, approved and started (owner)**: `/implement_plan` on
+  `fix/3.16.0-peer-authorisation`, branched from `docs/3-16-rollup-records`
+  so the records land in this PR (they stay local until it opens: the repo
+  is public and they describe the holes). The two deduced decisions are
+  confirmed: the operator command reads per actor with `--rps`; a PUT or
+  DELETE refused where a GET row would have admitted it is logged once per
+  process per relationship and path at WARNING.
 
 ## Overview
 
@@ -256,7 +263,7 @@ its T6 (a 409 on a repeated trust request), which the guard here replaces.
   REST write's callbacks block whatever the flag says (the handler runs in
   the executor). Two topologies.
 
-Deduced; confirm at approval:
+Confirmed by the owner at approval (2026-11-07):
 
 - **The operator command reads per actor** (one Query per bucket prefix on
   DynamoDB, one indexed `SELECT` on PostgreSQL) with `--rps` throttling from
@@ -435,21 +442,110 @@ instead of restating the list.
 
 ### Verification
 
-- [ ] Run the contract's `### Checks` fast tier verbatim
-- [ ] Run the contract's `### Checks` full tier before the phase commit, one
+- [x] Run the contract's `### Checks` fast tier verbatim
+- [x] Run the contract's `### Checks` full tier before the phase commit, one
       run at a time, both backends
-- [ ] `poetry run pytest tests/integration -m wire -p no:rerunfailures` passes
+- [x] `poetry run pytest tests/integration -m wire -p no:rerunfailures` passes
       five times in a row on each backend, sequentially, and once under
       `make test-all-parallel`
-- [ ] `git show --stat HEAD -- actingweb examples` is empty
-- [ ] Each recording is read against the research notes' "as read" sections
+- [x] `git show --stat HEAD -- actingweb examples` is empty
+- [x] Each recording is read against the research notes' "as read" sections
       and every difference is in "Recorded outcomes"
 
 ### Recorded outcomes
 
-Filled by the first recording.
+First recorded 2026-11-07, both backends, both topologies; each file is read
+against the "as read" sections of the research notes and the spike note.
+Identical across five sequential runs per backend and under
+`make test-all-parallel` on both.
 
-### Implementation Status: Not Started
+- As read: `WS1.target`, `WL11.target` (one top-level callback per SDK list
+  operation, `metadata` for `set_description`, `delete_all` for `delete`),
+  `WD8` (the duplicate answers 204 with no hook), `WD10` and `WD10.import`
+  (the spike's shape), `WQ1`, `WQ2` (200 then 404: the GET consumes),
+  `WQ3` (`{"sequence": 0}` 204; no sequence and text 400; an unknown id 404;
+  `GET ?_method=PUT&sequence=2` 204 and clears the rest), `WC1` to `WC4`.
+- `WD6`: the acknowledgement PUT clears nothing, the diff is already
+  consumed by B's GET, as the outside voice predicted.
+- `WD6`, `WQ3`, `WC4` `.subscriber`: every PUT and the publisher's DELETE
+  are admitted by the GET-only row today (204), byte-for-byte the same
+  shape as `.subscriber_adopted`. Phase 2 re-records the three
+  `.subscriber` rows.
+- `WP1`: no fetch follows an exclusion; B's replica keeps the excluded
+  property. The wire apps leave `auto_delete_on_revocation` off, as the
+  consumer does; the plan's "B's follow-up fetch" happens only after a
+  grant (the setup's grant shows it in the logs, not in the row).
+- `WD12`, known wrong and recorded as is: the fallback a publisher sends a
+  subscriber it thinks lacks resync is applied as an ordinary diff; B's
+  list gets its items again (an `extend`), the object `y` is stored as a
+  JSON string wrapped in `{"value": ...}`. Filed as
+  `thoughts/todo/full-state-fallback-replica.md` (with an INDEX row); not in
+  scope here.
+
+### Notes
+
+- **Deviation, `rows.toml` schema:** a row run in both topologies has one
+  file per topology (`<row>.<topology>.json`, a `topologies` key) because
+  the transcripts name different hosts; the baseline plan's `second` key
+  stays for a declared backend difference. `verify_groups.py` checks the
+  registry (every recording has a row and every row its recordings and
+  scenario, owners as `plan:phase`, exposure listed, no `.actual.json`
+  left over). The commit-trailer check (`Wire-Phase:`) is the baseline
+  plan's Phase 1; this plan's commits carry the trailer already.
+- **Deviation, `extra_acl_rules`:** the adoption rows are a second trust
+  type, `subscriber_adopted`, registered on every wire app beside
+  `subscriber` (`test_harness.py`, `SUBSCRIBER_ADOPTION_ROWS`), selected
+  with `wire_pair(relationship=...)`; no separate keyword was needed. A row
+  whose method does not match falls through (`auth.py:807`), so the order
+  of the rows does not matter.
+- `wire_pair` gained `subscribe=False` (for `WC1`, `WC2`) and the scenario
+  carries `relationship` and `trust_secret`; `Scenario.name()` names a
+  value first seen mid-row, and a secret under a secret key that nobody
+  named becomes `mid-row#N`, so a bearer carrying it resolves and an
+  unknown bearer still fails the guard. The port guard covers every
+  worker's ports (`localhost:5[5-9]xx`).
+- The settle conditions that poll B's replica tolerate an `IndexError`: a
+  list read during a resync's rewrite raises it (seen once under parallel
+  load in `WD10.import`; noted in the todo above).
+- The wire rows run from the repository root (`pytest tests/ -m wire`): from
+  `tests/` the integration `pytest.ini` becomes the rootdir and the root
+  conftest is not loaded.
+- Harness self-tests: `tests/integration/test_wire_harness.py` (normaliser,
+  guard, named and unnamed mid-row secrets, the comparer under `CI` and its
+  row list, the recorder's 500 and nesting, a real callback recorded once
+  without its secret, the registry check).
+- Release impact: none; test and CI only.
+- **Outside voice on the Phase 0 commit** (codex and a fresh-context
+  reviewer, 2026-11-07), folded before Phase 1, every row re-recorded on the
+  unfixed tree (only fields added) and identical five times per backend:
+  - the snapshot gains both sides' trust rows (authorisation fields, the
+    secret by name, the verification token as present or not), the
+    publisher's grant row and the subscriber's stored peer permissions, so
+    Phases 1 to 3 cannot change them unseen and Phase 3 needs no snapshot
+    change;
+  - `WIRE_RECORD` takes row ids (`WIRE_RECORD=WD6.subscriber,...`), never
+    "all": a re-recording rewrites only the rows it names;
+  - a step opens and closes the recorder only when no wire request is in
+    flight (a counter in the middleware), and returns a deep copy;
+  - a secret under a secret key that nobody named fails the guard (the
+    first draft's automatic `mid-row#N` would have let a leaked credential
+    pass); a scenario names one with `Scenario.name(..., secret=True)`;
+  - a handler exception after its response started keeps the status the
+    caller received; snapshot rows sort by what they subscribe to before
+    their random id;
+  - the registry check: an owner must be a `[reserved]` plan and a row id
+    must fall in a reserved range;
+  - CI: the wire step runs unless cancelled (also when the main step
+    failed), and the PR summary counts a missing wire result as an error.
+  Accepted as is: the recorder's one stack per process nests by start time,
+  not by cause (a step's requests are sequential, and `-n` workers are
+  separate processes); format-only timestamp tokens (owner decision); an
+  HTML body recorded by length; the start probe accepting whatever answers
+  on the port (one run at a time is the rule); the registry not proving a
+  scenario calls `check()` for its row (a missing call shows as an orphan
+  recording only when the file exists).
+
+### Implementation Status: Complete
 
 ---
 

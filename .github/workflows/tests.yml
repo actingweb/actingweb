@@ -261,7 +261,7 @@ jobs:
           #     (KeyError: <WorkerController gwN> in _assign_work_unit) that itself
           #     hangs the controller; failing fast is strictly better here.
           poetry run pytest tests/ \
-            -m "not benchmark" \
+            -m "not benchmark and not wire" \
             -n 4 \
             --dist loadgroup \
             --max-worker-restart=0 \
@@ -304,6 +304,41 @@ jobs:
           # green across enough runs to call it gone —
           # thoughts/todo/2026-06-15-postgres-parallel-delete-not-persisting.md.
           ACTINGWEB_PG_DELETE_DIAGNOSTICS: '1'
+
+      - name: Run the wire recordings
+        # Also when the main step failed: the wire comparison is its own
+        # evidence and the summary reports it separately.
+        if: ${{ !cancelled() && needs.changes.outputs.code == 'true' }}
+        # The wire rows (tests/integration/wire/rows.toml) compare recorded
+        # transcripts between two actors. They never rerun: a recording that
+        # differs is a behaviour change, not a flake. Run from the repository
+        # root over tests/, so the root conftest (and its hang watchdog) loads.
+        timeout-minutes: 10
+        run: |
+          poetry run pytest tests/ \
+            -m wire \
+            -p no:rerunfailures \
+            --timeout=300 \
+            --timeout-method=thread \
+            -v \
+            --tb=short \
+            --junitxml=test-results/wire-${{ matrix.backend }}.xml \
+            --cov=actingweb \
+            --cov-append \
+            --cov-report=xml:coverage-${{ matrix.backend }}.xml \
+            --cov-report=html:htmlcov-${{ matrix.backend }}
+        env:
+          DATABASE_BACKEND: ${{ matrix.backend }}
+          PYTEST_WATCHDOG_SECONDS: 540
+          AWS_ACCESS_KEY_ID: test
+          AWS_SECRET_ACCESS_KEY: test
+          AWS_DB_HOST: http://localhost:8000
+          AWS_DB_PREFIX: test
+          PG_DB_HOST: localhost
+          PG_DB_PORT: 5432
+          PG_DB_NAME: actingweb_test
+          PG_DB_USER: actingweb
+          PG_DB_PASSWORD: testpassword
 
       - name: Report test flakiness
         if: always() && needs.changes.outputs.code == 'true'
@@ -409,10 +444,23 @@ jobs:
 
             const backends = ['dynamodb', 'postgresql'];
             let hasFlakiness = false;
+            const wireMissing = [];
 
             for (const backend of backends) {
               const xmlPath = `all-test-results/test-results-${backend}/tests-${backend}.xml`;
               const stats = parseJUnitXML(xmlPath);
+              // The wire recordings run in their own step with their own file.
+              const wire = parseJUnitXML(`all-test-results/test-results-${backend}/wire-${backend}.xml`);
+              if (stats && wire) {
+                stats.total += wire.total;
+                stats.passed += wire.passed;
+                stats.failures += wire.failures;
+                stats.errors += wire.errors;
+              } else if (stats) {
+                // No wire results: count it as a failure, never as a pass.
+                stats.errors += 1;
+                wireMissing.push(backend);
+              }
 
               if (stats) {
                 const statusEmoji = (stats.failures + stats.errors) > 0 ? '❌' : '✅';
@@ -429,6 +477,10 @@ jobs:
             }
 
             comment += '\n';
+
+            for (const backend of wireMissing) {
+              comment += `> ⚠️ ${backend}: the wire recordings did not report (wire-${backend}.xml missing)\n\n`;
+            }
 
             if (hasFlakiness) {
               comment += '### ⚠️ Flakiness Detected\n\n';

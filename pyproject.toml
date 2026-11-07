@@ -212,4 +212,5 @@ markers = [
     "dynamodb: marks tests specific to DynamoDB backend",
     "postgresql: marks tests specific to PostgreSQL backend",
     "benchmark: marks performance benchmark tests (incompatible with parallel execution)",
+    "wire: wire recordings (tests/integration/_wire.py); never rerun",
 ]

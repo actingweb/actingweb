@@ -1,0 +1,599 @@
+{
+ "steps": [
+  {
+   "after": {
+    "publisher": {
+     "grants": {
+      "B": {
+       "actions": null,
+       "actor_id": "<A>",
+       "created_by": "system",
+       "methods": null,
+       "notes": null,
+       "peer_id": "<B>",
+       "prompts": null,
+       "properties": {
+        "operations": [
+         "read"
+        ],
+        "patterns": [
+         "*"
+        ]
+       },
+       "resources": null,
+       "tools": null,
+       "trust_type": "friend",
+       "updated_at": null
+      }
+     },
+     "queue": [
+      {
+       "diffs": [
+        {
+         "data": "{\"memories\": {\"list\": \"memories\", \"operation\": \"append\", \"length\": 1, \"item\": {\"text\": \"old one\"}, \"index\": 0}}",
+         "sequence": 1,
+         "timestamp": "<ts:stored>"
+        },
+        {
+         "data": "{\"memories\": {\"list\": \"memories\", \"operation\": \"append\", \"length\": 2, \"item\": {\"text\": \"old two\"}, \"index\": 1}}",
+         "sequence": 2,
+         "timestamp": "<ts:stored>"
+        }
+       ],
+       "granularity": "high",
+       "peer": "<B>",
+       "sequence": 2,
+       "subscriptionid": "<sub1>",
+       "subtarget": "",
+       "target": "properties"
+      }
+     ],
+     "subscriptions": [
+      {
+       "callback": false,
+       "granularity": "high",
+       "peerid": "<B>",
+       "resource": "",
+       "sequence": 2,
+       "subscriptionid": "<sub1>",
+       "subtarget": "",
+       "target": "properties"
+      }
+     ],
+     "suspensions": [],
+     "trust": {
+      "B": {
+       "approved": true,
+       "baseuri": "http://<wire_peer_app>/<B>",
+       "established_via": "trust",
+       "has_verification_token": true,
+       "peer_approved": true,
+       "relationship": "friend",
+       "secret": "<secret:trust:A-B>",
+       "verified": true
+      }
+     }
+    },
+    "subscribers": {
+     "B": {
+      "callback_state": [
+       {
+        "last_seq": 2,
+        "pending_count": 0,
+        "pending_sequences": [],
+        "resync_pending": false,
+        "subscriptionid": "<sub1>",
+        "version": 2
+       }
+      ],
+      "peer_permissions": {
+       "actions": {
+        "allowed": [
+         "*"
+        ],
+        "denied": [
+         "delete_*",
+         "admin_*",
+         "system_*"
+        ]
+       },
+       "actor_id": "<B>",
+       "extra_attributes": {},
+       "fetch_error": null,
+       "fetched_at": "<ts:iso-offset>",
+       "methods": {
+        "allowed": [
+         "*"
+        ],
+        "denied": [
+         "delete_*",
+         "admin_*",
+         "system_*"
+        ]
+       },
+       "peer_id": "<A>",
+       "prompts": null,
+       "properties": {
+        "excluded_patterns": [
+         "private/*",
+         "security/*",
+         "_internal/*"
+        ],
+        "operations": [
+         "read"
+        ],
+        "patterns": [
+         "*"
+        ]
+       },
+       "resources": {
+        "excluded_patterns": [
+         "private/*",
+         "security/*"
+        ],
+        "operations": [
+         "read",
+         "write"
+        ],
+        "patterns": [
+         "*"
+        ]
+       },
+       "tools": {
+        "allowed": [
+         "*"
+        ],
+        "denied": [
+         "admin_*",
+         "system_*"
+        ]
+       }
+      },
+      "replica": {
+       "lists": {
+        "memories": [
+         {
+          "text": "old one"
+         },
+         {
+          "text": "old two"
+         }
+        ]
+       },
+       "scalars": {}
+      },
+      "subscriptions": [
+       {
+        "callback": true,
+        "granularity": "high",
+        "peerid": "<A>",
+        "resource": "",
+        "sequence": 2,
+        "subscriptionid": "<sub1>",
+        "subtarget": "",
+        "target": "properties"
+       }
+      ],
+      "trust": {
+       "approved": true,
+       "baseuri": "http://<wire_app>/<A>",
+       "established_via": "trust",
+       "has_verification_token": true,
+       "peer_approved": true,
+       "relationship": "friend",
+       "secret": "<secret:trust:A-B>",
+       "verified": true
+      }
+     }
+    }
+   },
+   "result": 2,
+   "step": "seed two items (SDK, test thread)",
+   "wire": [
+    {
+     "auth": "bearer:trust:A-B",
+     "children": [
+      {
+       "actor": "<B>",
+       "data": {
+        "memories": {
+         "index": 0,
+         "item": {
+          "text": "old one"
+         },
+         "length": 1,
+         "list": "memories",
+         "operation": "append"
+        }
+       },
+       "event": "subscription_data",
+       "peer": "<A>",
+       "sequence": 1,
+       "target": "properties",
+       "type": "diff"
+      }
+     ],
+     "headers": {},
+     "host": "wire_peer_app",
+     "method": "POST",
+     "path": "/<B>/callbacks/subscriptions/<A>/<sub1>",
+     "query": "",
+     "request": {
+      "data": {
+       "memories": {
+        "index": 0,
+        "item": {
+         "text": "old one"
+        },
+        "length": 1,
+        "list": "memories",
+        "operation": "append"
+       }
+      },
+      "granularity": "high",
+      "id": "<A>",
+      "sequence": 1,
+      "subscriptionid": "<sub1>",
+      "target": "properties",
+      "timestamp": "<ts:space>"
+     },
+     "response": null,
+     "status": 204
+    },
+    {
+     "auth": "bearer:trust:A-B",
+     "children": [
+      {
+       "actor": "<B>",
+       "data": {
+        "memories": {
+         "index": 1,
+         "item": {
+          "text": "old two"
+         },
+         "length": 2,
+         "list": "memories",
+         "operation": "append"
+        }
+       },
+       "event": "subscription_data",
+       "peer": "<A>",
+       "sequence": 2,
+       "target": "properties",
+       "type": "diff"
+      }
+     ],
+     "headers": {},
+     "host": "wire_peer_app",
+     "method": "POST",
+     "path": "/<B>/callbacks/subscriptions/<A>/<sub1>",
+     "query": "",
+     "request": {
+      "data": {
+       "memories": {
+        "index": 1,
+        "item": {
+         "text": "old two"
+        },
+        "length": 2,
+        "list": "memories",
+        "operation": "append"
+       }
+      },
+      "granularity": "high",
+      "id": "<A>",
+      "sequence": 2,
+      "subscriptionid": "<sub1>",
+      "target": "properties",
+      "timestamp": "<ts:space>"
+     },
+     "response": null,
+     "status": 204
+    }
+   ]
+  },
+  {
+   "after": {
+    "publisher": {
+     "grants": {
+      "B": {
+       "actions": null,
+       "actor_id": "<A>",
+       "created_by": "system",
+       "methods": null,
+       "notes": null,
+       "peer_id": "<B>",
+       "prompts": null,
+       "properties": {
+        "operations": [
+         "read"
+        ],
+        "patterns": [
+         "*"
+        ]
+       },
+       "resources": null,
+       "tools": null,
+       "trust_type": "friend",
+       "updated_at": null
+      }
+     },
+     "queue": [
+      {
+       "diffs": [
+        {
+         "data": "{\"memories\": {\"list\": \"memories\", \"operation\": \"append\", \"length\": 1, \"item\": {\"text\": \"old one\"}, \"index\": 0}}",
+         "sequence": 1,
+         "timestamp": "<ts:stored>"
+        },
+        {
+         "data": "{\"memories\": {\"list\": \"memories\", \"operation\": \"append\", \"length\": 2, \"item\": {\"text\": \"old two\"}, \"index\": 1}}",
+         "sequence": 2,
+         "timestamp": "<ts:stored>"
+        }
+       ],
+       "granularity": "high",
+       "peer": "<B>",
+       "sequence": 3,
+       "subscriptionid": "<sub1>",
+       "subtarget": "",
+       "target": "properties"
+      }
+     ],
+     "subscriptions": [
+      {
+       "callback": false,
+       "granularity": "high",
+       "peerid": "<B>",
+       "resource": "",
+       "sequence": 3,
+       "subscriptionid": "<sub1>",
+       "subtarget": "",
+       "target": "properties"
+      }
+     ],
+     "suspensions": [],
+     "trust": {
+      "B": {
+       "approved": true,
+       "baseuri": "http://<wire_peer_app>/<B>",
+       "established_via": "trust",
+       "has_verification_token": true,
+       "peer_approved": true,
+       "relationship": "friend",
+       "secret": "<secret:trust:A-B>",
+       "verified": true
+      }
+     }
+    },
+    "subscribers": {
+     "B": {
+      "callback_state": [
+       {
+        "last_seq": 3,
+        "pending_count": 0,
+        "pending_sequences": [],
+        "resync_pending": false,
+        "subscriptionid": "<sub1>",
+        "version": 3
+       }
+      ],
+      "peer_permissions": {
+       "actions": {
+        "allowed": [
+         "*"
+        ],
+        "denied": [
+         "delete_*",
+         "admin_*",
+         "system_*"
+        ]
+       },
+       "actor_id": "<B>",
+       "extra_attributes": {},
+       "fetch_error": null,
+       "fetched_at": "<ts:iso-offset>",
+       "methods": {
+        "allowed": [
+         "*"
+        ],
+        "denied": [
+         "delete_*",
+         "admin_*",
+         "system_*"
+        ]
+       },
+       "peer_id": "<A>",
+       "prompts": null,
+       "properties": {
+        "excluded_patterns": [
+         "private/*",
+         "security/*",
+         "_internal/*"
+        ],
+        "operations": [
+         "read"
+        ],
+        "patterns": [
+         "*"
+        ]
+       },
+       "resources": {
+        "excluded_patterns": [
+         "private/*",
+         "security/*"
+        ],
+        "operations": [
+         "read",
+         "write"
+        ],
+        "patterns": [
+         "*"
+        ]
+       },
+       "tools": {
+        "allowed": [
+         "*"
+        ],
+        "denied": [
+         "admin_*",
+         "system_*"
+        ]
+       }
+      },
+      "replica": {
+       "lists": {
+        "memories": [
+         {
+          "text": "new one"
+         },
+         {
+          "text": "new two"
+         },
+         {
+          "text": "new three"
+         }
+        ]
+       },
+       "scalars": {}
+      },
+      "subscriptions": [
+       {
+        "callback": true,
+        "granularity": "high",
+        "peerid": "<A>",
+        "resource": "",
+        "sequence": 3,
+        "subscriptionid": "<sub1>",
+        "subtarget": "",
+        "target": "properties"
+       }
+      ],
+      "trust": {
+       "approved": true,
+       "baseuri": "http://<wire_app>/<A>",
+       "established_via": "trust",
+       "has_verification_token": true,
+       "peer_approved": true,
+       "relationship": "friend",
+       "secret": "<secret:trust:A-B>",
+       "verified": true
+      }
+     }
+    }
+   },
+   "result": {
+    "body": {
+     "callbacks_sent": 1,
+     "length": 3
+    },
+    "status": 200
+   },
+   "step": "import (async method hook on the loop)",
+   "wire": [
+    {
+     "auth": "basic:<A.creator>",
+     "children": [],
+     "headers": {
+      "content-type": "application/json"
+     },
+     "host": "wire_app",
+     "method": "POST",
+     "path": "/<A>/methods/wire_import",
+     "query": "",
+     "request": {
+      "clear": true,
+      "items": [
+       {
+        "text": "new one"
+       },
+       {
+        "text": "new two"
+       },
+       {
+        "text": "new three"
+       }
+      ],
+      "list": "memories"
+     },
+     "response": {
+      "callbacks_sent": 1,
+      "length": 3
+     },
+     "status": 200
+    },
+    {
+     "auth": "bearer:trust:A-B",
+     "children": [
+      {
+       "auth": "bearer:trust:A-B",
+       "children": [],
+       "headers": {
+        "content-type": "application/json"
+       },
+       "host": "wire_app",
+       "method": "GET",
+       "path": "/<A>/properties/memories",
+       "query": "",
+       "request": null,
+       "response": [
+        {
+         "text": "new one"
+        },
+        {
+         "text": "new two"
+        },
+        {
+         "text": "new three"
+        }
+       ],
+       "status": 200
+      },
+      {
+       "actor": "<B>",
+       "data": {
+        "memories": {
+         "_list": true,
+         "items": [
+          {
+           "text": "new one"
+          },
+          {
+           "text": "new two"
+          },
+          {
+           "text": "new three"
+          }
+         ]
+        }
+       },
+       "event": "subscription_data",
+       "peer": "<A>",
+       "sequence": 3,
+       "target": "properties",
+       "type": "resync"
+      }
+     ],
+     "headers": {},
+     "host": "wire_peer_app",
+     "method": "POST",
+     "path": "/<B>/callbacks/subscriptions/<A>/<sub1>",
+     "query": "",
+     "request": {
+      "granularity": "high",
+      "id": "<A>",
+      "sequence": 3,
+      "subscriptionid": "<sub1>",
+      "subtarget": "memories",
+      "target": "properties",
+      "timestamp": "<ts:iso-offset>",
+      "type": "resync",
+      "url": "http://<wire_app>/<A>/properties/memories"
+     },
+     "response": null,
+     "status": 204
+    }
+   ]
+  }
+ ]
+}

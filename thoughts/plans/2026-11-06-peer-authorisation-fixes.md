@@ -42,6 +42,11 @@ status: proposed
   carries a "Superseded in part" note until the redraft; a decision and the
   Readiness paragraph record the order: spike, research pass, then this
   plan's redraft.
+- **2026-11-07, later**: The spike is done
+  (`thoughts/research/2026-11-07-subscription-wire-spike.md`); Phase 0's
+  file list is the one under "What was built" there, and its rows that
+  restrict reads use an `excluded_patterns` grant (a `friend` grant only
+  adds). The research pass is next.
 
 ## Overview
 

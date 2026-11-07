@@ -88,7 +88,9 @@ records the fourteen flows its fix must leave unchanged; the baseline plan
 stays its own PR after the fix. Both plans are redrafted after the spike.
 
 **Before the first PR, in this order:** the Emm run on `master`
-(`emm-suite-against-master.md`); the wire spike; the security plan's
+(`emm-suite-against-master.md`; done 2026-11-07); the wire spike (done
+2026-11-07, `research/2026-11-07-subscription-wire-spike.md`, harness on
+`spike/subscription-wire-harness`); the security plan's
 research pass (trust replacement, the access table with application rows,
 what forged state survives on each backend); then `/update_plan` on the
 baseline plan and on the security plan. The runs are sequential because

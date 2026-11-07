@@ -27,6 +27,14 @@ status: proposed
   security plan is redrafted; the security plan's Phase 0 lands what the
   spike built. Recorded in the Decisions, the Readiness paragraph and "What
   Already Exists".
+- **2026-11-07, later**: The spike is done:
+  `thoughts/research/2026-11-07-subscription-wire-spike.md` (harness on
+  `spike/subscription-wire-harness`, four rows, one file per row on both
+  backends over nine runs). Two premises here are wrong and the redraft
+  takes them from the note: a `friend` grant only adds patterns, so a row
+  that restricts reads uses `excluded_patterns`; and the gap resync calls
+  no data hook. The three decisions are taken on that note. "What Already
+  Exists" and Phase 1's `WD9` are stale until the redraft.
 
 ## Overview
 

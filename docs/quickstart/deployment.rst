@@ -124,7 +124,10 @@ pod restart). Size a peer's retry tolerance for the replica count.
 Notes
 =====
 
-- Ensure AWS IAM policies allow DynamoDB operations your app requires.
+- Ensure AWS IAM policies allow the DynamoDB actions the library uses; the
+  list, including the ones the startup checks need (``BatchGetItem`` on the
+  lookup table, ``ConditionCheckItem``), is in :doc:`configuration`,
+  "Production (AWS DynamoDB)".
 - For base paths (reverse proxies, API gateways), templates should use ``actor_root`` and ``actor_www``; see :doc:`../guides/web-ui`.
 - See :doc:`../reference/routing-overview` for generated routes and structure.
 

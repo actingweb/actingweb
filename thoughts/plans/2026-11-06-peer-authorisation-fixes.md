@@ -61,11 +61,22 @@ status: proposed
   central rule in `check_authorisation`**: a matched row whose path holds
   `<id>` requires the caller's peer id to equal the path's (creator,
   trustee and admin exempt), so application `acl_rules` are covered, and
-  every call site passes the real peer id; (3) **subscription PUT and
-  DELETE are authorised with their real method**, not as GET; an
-  application whose peers clear or delete through a GET-only row (the
-  consumer's `subscriber` type) needs new rows, which the migration guide
-  and the consumer's adoption must say; (4) **an operator command** for
+  every call site passes the real peer id; (3) **an access row authorises
+  the HTTP method the request performs, not its effect** (owner, restated
+  after a walk-through of the queue-clearing flows): a GET with a side
+  effect (`GET …/<subid>/<seq>` consumes the diff) stays a GET under a GET
+  row; a `GET ?_method=PUT|DELETE` is evaluated as PUT or DELETE (it
+  already dispatches into `put()`/`delete()`, `handlers/subscription.py:302-306`);
+  a PUT or DELETE is never admitted by a GET row. So `put()` and `delete()`
+  authorise as `"PUT"` and `"DELETE"` (today `"GET"`, `:381`, `:440`).
+  Consequence to carry: a peer type whose rows grant only GET on
+  `subscriptions/<id>/<subid>` (the consumer's `subscriber`) loses the
+  gap-resync clear, the low-granularity acknowledgement and the
+  publisher-initiated unsubscribe, each failing quietly (a WARNING, the
+  queue grows, a dangling callback subscription); the changelog's
+  **Behavior change:**, the migration guide and the consumer's adoption
+  list name the two rows to add (`PUT`, `DELETE` on that path), and a wire
+  row in a `subscriber`-shaped pair shows it; (4) **an operator command** for
   state written before the fix (peer-permission rows with no trust row,
   callback state for missing subscriptions, an optional replica rebuild),
   dry run by default; (5) **only `diff` and `resync` are accepted on the

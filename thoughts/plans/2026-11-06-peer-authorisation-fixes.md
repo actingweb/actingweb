@@ -96,6 +96,16 @@ status: proposed
   and 2 sit on the central rule; two phases are new (trust replacement, the
   operator command); the old Phase 3 is Phase 5. The five-dimension review
   of the redraft is in the Evaluation Notes under "Third review".
+- **2026-11-07, review of the redraft folded**: five evaluators and the
+  outside voice (Codex and a fresh-context reviewer); findings and their
+  disposition under "Third review". Seven decisions taken on it (owner):
+  no `admin` exemption on `/callbacks`; the initiator keeps a trust row it
+  already had during a re-pair; a moved peer re-pairs after the owner
+  updates the base URI, and a creator-only local delete is added for a dead
+  peer; a credential swap fires no `trust_request_received`; refused
+  callback names answer 403, as the specification says; a future permission
+  timestamp is clamped to the receiver's clock; the operator command drops
+  the replica rebuild. The rest folded as mechanical.
 
 ## Overview
 
@@ -123,8 +133,9 @@ below.
 
 **Readiness, 2026-11-07.** Redrafted after the spike and the research pass,
 with every decision the second review left open taken by the owner. The
-five-dimension review of the redraft is recorded under "Third review" and
-folded where mechanical. Approval is the owner's.
+five-dimension review of the redraft and the outside voice are recorded
+under "Third review"; the seven decisions it raised are taken and the rest
+folded. No open question remains. Approval is the owner's.
 
 **This plan: first.** It needs nothing merged; Emm's suite on `master` has
 run (gate 1, `research/2026-11-07-emm-suite-against-master.md`). Phase 0
@@ -158,7 +169,12 @@ its T6 (a 409 on a repeated trust request), which the guard here replaces.
   (owner). `check_authorisation` gains a keyword `path_peer`: when it is
   set and the caller is authenticated as a peer, the caller's peer id must
   equal it, or the check fails, whichever row matched. Creator and trustee
-  are not peer callers and are unaffected; an `admin` peer is exempt. Every
+  are not peer callers and are unaffected; an `admin` peer is exempt
+  everywhere except `/callbacks` (owner, review of the redraft), where the
+  two peer branches (`callbacks/subscriptions/<peer>/…`,
+  `callbacks/permissions/<peer>`) also require a peer caller: creator,
+  trustee, OAuth2, MCP and SPA callers, and an admin peer naming another
+  peer, are refused there with 403. An empty path peer answers 400. Every
   handler that names a peer in its path passes it, through
   `check_authorisation` or through `AuthResult.authorize(..., path_peer=)`.
   It is separate from the existing `peerid` argument, so `owner` rows match
@@ -171,19 +187,44 @@ its T6 (a 409 on a repeated trust request), which the guard here replaces.
   authorise as themselves.
 - [New 2026-11-07] **A trust-creation request for an existing peer id
   verifies against the stored base URI and swaps credentials only** (owner).
-  The owner's `approved`, the stored relationship, base URI, description and
-  grants are kept; a failed verification answers 403 and changes nothing.
+  The swap sets `secret`, a fresh `verification_token`, `verified=True`
+  and `peer_approved=True`; it keeps `approved`, the relationship, base URI,
+  description, `created_at` and the grants. The new secret passes the same
+  uniqueness check creation has (`trust.py:420-427`). A failed verification
+  answers 403 and changes nothing. A swap answers 201 or 202 from the
+  stored `approved` and fires no `trust_request_received` (owner, review of
+  the redraft); it is logged at INFO.
+- [New 2026-11-07] **The initiator keeps a row it already had** (owner):
+  `create_reciprocal_trust` against a peer it already trusts writes nothing
+  before the request, stores the new secret only after a 201 or 202, and
+  never deletes a row that existed before the call. A refused re-pair
+  changes nothing on either side.
+- [New 2026-11-07] **Re-pairing after a refusal** (owner): a peer that moved
+  is re-paired by the owner updating the stored base URI (`PUT
+  /trust/<rel>/<peer>` with `baseuri`, creator or trustee, as today); a
+  change of relationship is a delete and a new pairing; a dead peer is
+  removed with a new, creator-only local delete
+  (`DELETE /trust/<rel>/<peer>?notify=false`), which never contacts the
+  peer and always removes the local row.
 - **Every unauthenticated callback request answers 401**, and **generic
   `/callbacks/<name>` admits any authenticated caller** (owner, 2026-11-07):
   the empty-role row becomes an `any` row.
 - [New 2026-11-07] **The library's own hook names are reserved on the
   generic callback branch** (owner): `permissions`, `subscription`,
-  `subscriptions`, `www` and any `resource_*` name answer 404 there, so
-  those hooks only receive data the library built.
+  `subscriptions`, `www` and any `resource_*` name answer 403 there (the
+  specification's status for a callback URI that does not exist,
+  `docs/protocol/actingweb-spec.rst:1158-1159`; owner, review of the
+  redraft), on GET, POST, PUT and DELETE, so those hooks only receive data
+  the library built.
 - [Updated 2026-11-07] **A callback's fetch URL is built from the stored
   base URI** (owner): `<baseuri>/subscriptions/<own id>/<subid>/<sequence>`,
   as the resync and the acknowledgement already do. The body's `url` is
-  never fetched.
+  never fetched; a body with `url` and no `data` still selects the fetch
+  branch, as the specification's callback shape has it
+  (`actingweb-spec.rst:2858-2861`). A `FanOutManager` downgrade, which sends
+  a resource URL with no stored diff (`fanout.py:486-490`, `:620-623`), is
+  not fetchable under this rule; the library never calls it, and the
+  changelog says it is unsupported for a subscriber on 3.16.
 - [New 2026-11-07] **Only `diff` and `resync` are accepted on the
   subscription callback path** (owner); an absent `type` is a diff; any
   other answers 400.
@@ -194,9 +235,19 @@ its T6 (a 409 on a repeated trust request), which the guard here replaces.
   made** (a row with `callback` true), enforced in
   `SubscriptionManager.get_callback_subscription`, not on the callback
   DELETE, where the row is the publisher's and the subscriber is the
-  rightful sender (second review).
+  rightful sender (second review). Refused with 403. Its other callers
+  (`subscription_manager.py:898`, `:1570`, `:1789`, `:2675`) are all on the
+  subscriber side and only ever want such rows.
+- [New 2026-11-07] **A permission callback's timestamp is clamped** (owner,
+  review of the redraft): `fetched_at` is the earlier of the body's
+  timestamp and the receiver's clock, so a far-future value cannot block
+  later updates and a sender with a fast clock still delivers; the receiver
+  logs a WARNING with both times when it clamps. A timestamp that does not
+  parse as ISO-8601 answers 400.
 - [New 2026-11-07] **An operator command removes state written before the
-  fix** (owner), dry run by default.
+  fix** (owner), dry run by default; it reports and prunes, and does not
+  rebuild replicas (owner, review of the redraft: the `ListAttribute` plan
+  rewrites the replica code and brings its own `reset`).
 - [Updated 2026-11-07] **The wire apps are shaped like the consumer's off
   Lambda**: processing with automatic storage, peer capabilities,
   permissions and profiles, and **synchronous callbacks off**. With them on,
@@ -207,14 +258,14 @@ its T6 (a 409 on a repeated trust request), which the guard here replaces.
 
 Deduced; confirm at approval:
 
-- **A permission callback whose `timestamp` is more than five minutes in
-  the future answers 400.** Today it would outrank every genuine callback in
-  the process (`peer_permissions.py:259-268`); bounding it is the second
-  review's Phase 1 proposal and no sender produces one.
-- **The operator command scans actors like `actingweb-verify-orphans`** and
-  never rebuilds a replica unless asked: a rebuild deletes the bucket before
-  the baseline fetch, and a fetch that fails leaves it empty until the next
-  resync.
+- **The operator command reads per actor** (one Query per bucket prefix on
+  DynamoDB, one indexed `SELECT` on PostgreSQL) with `--rps` throttling from
+  `verify_orphans.RateLimiter`, rather than whole-table scans joined in
+  memory: its decisions are per actor and its deletes are per row.
+- **The refusal of a PUT or DELETE admitted only by a GET row is logged
+  once per process per relationship and path at WARNING**, naming the two
+  rows to add. The publisher is the deployment that must add them, and its
+  access check logs only at DEBUG today (`auth.py:774-785`).
 
 ## What We're NOT Doing
 
@@ -299,14 +350,29 @@ with the baseline plan, which adds the rest.
   type with the two rows the consumer adds in its adoption
   (`("subscriptions/<id>/<subid>", "PUT", "a")`,
   `("subscriptions/<id>/<subid>", "DELETE", "a")`); registered as a second
-  type, `subscriber_adopted`, so both variants run in one session.
+  type, `subscriber_adopted`, on every wire app's configuration (rows are
+  per configuration, `permission_integration.py:409-416`; the type itself is
+  shared through the system actor, `trust_type_registry.py:181-183`), so
+  both variants run in one session.
+- A third recorded app, `wire_other_app` (5563), for rows that record that
+  a host named in a request receives nothing (Phases 1 and 3).
+- The driver registers a secret, token or id first seen mid-row under a
+  numbered name (`trust:A-B#2`), so the normaliser's guard still fails on
+  anything unnamed.
 - `tests/integration/test_wire_peer_paths.py` (new) - the rows below.
 - `tests/integration/wire/` - one file per row, and `rows.toml`: what each
   records and which phase or plan is expected to change it.
-- `.github/workflows/tests.yml` - a step of the `tests` job, inside the
-  `changes` gate, after the main step: `pytest tests/integration -m wire -p
-  no:rerunfailures`; the main step deselects `-m "not wire"`. Same
-  environment, junit and coverage handling as the main step.
+- `.github/workflows/tests.yml` - a step of the `tests` job after the main
+  step, with the same `if: needs.changes.outputs.code == 'true'` gate and
+  its own `timeout-minutes`: `pytest tests/ -m wire -p no:rerunfailures`
+  (from `tests/`, so the root conftest and its hang watchdog load), its own
+  junit file (`test-results/wire-${backend}.xml`, read by the summary step)
+  and `--cov=actingweb --cov-append` into the main step's coverage file. The
+  main step's marker becomes `-m "not benchmark and not wire"` (pytest keeps
+  only the last `-m`). The marker is registered in `pyproject.toml` and
+  `tests/integration/pytest.ini` (`--strict-markers`). Locally, `make
+  test-all-parallel` passes no `-m` and so runs the wire rows in parallel;
+  the five-run check below is the sequential one.
 - `tests/integration/verify_groups.py` - every scenario has a recording and
   every recording a scenario.
 
@@ -334,7 +400,12 @@ both topologies unless stated; "SDK" is a step in the test process:
 | WD6, WQ3, WC4 `.subscriber_adopted` | The same, with the two adoption rows | Identical through every phase: the proof the migration step is enough |
 
 A row that restricts reads grants with `excluded_patterns`: a `friend` grant
-only adds patterns (spike note, "Findings beyond the questions").
+only adds patterns (spike note, "Findings beyond the questions"). `WQ2`
+records a GET that consumes a diff, which the specification forbids
+(`actingweb-spec.rst:1207`, `:2885-2887`); its `rows.toml` entry names
+`spec-1-5` as the plan expected to change it. `rows.toml` has a column
+naming the plan or phase that owns each row, which the later plans read
+instead of restating the list.
 
 ### New Tests, both unit and integration tests
 
@@ -387,109 +458,141 @@ Filled by the first recording.
 ### Changes
 
 - `actingweb/auth.py` - `check_authorisation(..., *, path_peer: str | None
-  = None)`: after a row matches, when `path_peer` is set and
-  `self.acl["peerid"]` is non-empty, return False unless the two are equal
-  or the caller's relationship is `admin`. The existing `peerid` argument
-  and the `owner` match are unchanged.
+  = None, peer_caller_only: bool = False)`: after a row matches, when
+  `path_peer` is set and `self.acl["peerid"]` is non-empty, return False
+  unless the two are equal or (only when `peer_caller_only` is False) the
+  caller's relationship is `admin`. With `peer_caller_only`, a caller whose
+  `acl["peerid"]` is empty (creator, trustee, OAuth2, MCP, SPA) fails too.
+  The existing `peerid` argument and the `owner` match are unchanged.
 - `actingweb/handlers/base_handler.py:373-395` - `authorize(method, path,
   subpath, *, path_peer=None)` passes it through.
 - `actingweb/handlers/callbacks.py`
-  - `post()`: authenticate with `add_response=True` on every branch; an
-    unauthenticated request answers 401 with a challenge.
-  - Permission branch: `path_peer=<peer>`; a `timestamp` more than five
-    minutes ahead of now answers 400.
-  - Subscription branch: `path_peer=<peer>`, checked before the subscription
-    lookup, so a caller that is not the peer cannot tell a real subscription
-    id from an unknown one.
-  - Subscription branch, `type`: absent or `diff` or `resync`; anything else
-    400, before the processor.
+  - `get()`, `post()` (and so `put()`, `:74-76`), `delete()`: authenticate
+    with `add_response=True` and return on failure; an unauthenticated
+    request answers 401 with a challenge on every branch.
+  - The two peer branches (`permissions/<peer>`, `subscriptions/<peer>/<subid>`
+    on POST; `subscriptions/<peer>/<subid>` on DELETE): an empty peer
+    segment answers 400; a path shorter than the branch needs answers 400
+    (today `:341-343` and `:88-90` raise `IndexError`); then
+    `path_peer=<peer>, peer_caller_only=True`, before any lookup, so a
+    caller that is not the peer cannot tell a real subscription id from an
+    unknown one.
+  - Permission branch: `timestamp` must parse as ISO-8601 (else 400);
+    `fetched_at` is the earlier of it and now, with a WARNING naming both
+    when clamped; the `permissions` hook runs only when the store accepted
+    the update.
+  - Subscription branch, `type`: absent, `diff` or `resync`; anything else
+    400, checked before both the processor and the legacy hook branch
+    (`:402-415`).
   - Low-granularity fetch (`:600-628`): the URL is
-    `<trust baseuri>/subscriptions/<own id>/<subid>/<sequence>`; the body's
-    `url` is not read for the fetch (it is still passed to legacy hooks).
-  - `delete()`: `path_peer=<peer>`.
-  - Generic branch: names `permissions`, `subscription`, `subscriptions`,
-    `www` and `resource_*` answer 404; the rest run the hook as today for an
-    authenticated caller.
+    `<trust baseuri>/subscriptions/<own id>/<subid>/<sequence>` (joined so a
+    stored base URI with a trailing slash gives one slash); the body's `url`
+    is not fetched; it still selects the branch and is still passed to
+    legacy hooks.
+  - Generic branch, on GET, POST and DELETE: names `permissions`,
+    `subscription`, `subscriptions`, `www` and `resource_*` answer 403; the
+    rest run the hook as today for an authenticated caller.
 - `actingweb/interface/subscription_manager.py:524-528`
-  (`get_callback_subscription`) - returns only a row with `callback` true,
-  on both backends (the backends do not filter on the flag,
-  `db/dynamodb/subscription.py:69-73`, `db/postgresql/subscription.py:59-66`).
+  (`get_callback_subscription`) - returns only a row with `callback` true
+  (the backends do not filter on the flag, `db/dynamodb/subscription.py:69-73`,
+  `db/postgresql/subscription.py:59-66`); the handler answers 403 when none.
   Not used by the callback DELETE.
 - `actingweb/config.py:286-289` - `("", "callbacks", "", "a")` becomes
-  `("any", "callbacks", "", "a")`; the `owner` row above it stays (harmless,
-  and an application may depend on its order).
+  `("any", "callbacks", "", "a")`; the `owner` row above it stays.
+- `actingweb/fanout.py` - a module docstring line: a low-granularity
+  downgrade is not fetchable by a 3.16 subscriber.
 - Docstrings in `callbacks.py` and `auth.py`.
 
 ### Wire rows
 
 The Phase 0 recordings are byte-identical after this commit, both
 topologies, both backends. The URL rule changes nothing in `WD6` and `WD12`:
-the stored base URI and the publisher's own root produce the same URL on the
-wire apps.
+the stored base URI and the publisher's own root give the same URL on the
+wire apps. The rows below that record "the other host receives nothing" use
+a third recorded app, `wire_other_app` (5563), added to Phase 0's fixtures.
 
 New rows, recorded with the fix in place. C is a third actor with an
-approved `friend` trust to B; `S` a peer of the consumer's `subscriber` type:
+approved `friend` trust to B; S a peer of the consumer's `subscriber` type;
+D a peer with an `admin` trust:
 
 | Row | Request to B | Recorded |
 | --- | --- | --- |
 | WA1 | No credentials: a subscription callback for a real subscription, and for an unknown id | 401 for both; nothing applied |
 | WA2 | No credentials: a permission callback for a peer with a trust, and for one without | 401; nothing stored, no hook |
-| WA3 | No credentials: `GET`, `POST`, `DELETE` on `/callbacks/<name>` | 401 with a challenge |
-| WA4 | A bearer that is nobody's, on the three paths | 403 (unchanged) |
-| WA5 | C, and S, post a subscription callback and a permission callback under A's id | 403; nothing applied |
+| WA3 | No credentials: `GET`, `POST`, `PUT`, `DELETE` on `/callbacks/<name>` | 401 with a challenge |
+| WA4 | A bearer that is nobody's, on the three paths | 403 |
+| WA5 | C, S and D post a subscription callback and a permission callback under A's id | 403; nothing applied |
 | WA6 | B's creator posts either | 403 |
 | WA7 | A peer whose trust is not approved posts a callback | 403 |
-| WA8 | A low-granularity callback with A's bearer whose body `url` names another host | B fetches from A's stored base URI; the other host receives nothing |
+| WA8 | A low-granularity callback with A's bearer whose body `url` names `wire_other_app` | B fetches from A's stored base URI; `wire_other_app` receives nothing |
 | WA9 | `DELETE /<B>/callbacks/subscriptions/<A>/<subid>` by C and by B's creator | 403; the subscription remains |
-| WA10 | To A, by B with its bearer, under the id of B's own subscription at A | 404; nothing in A's replica store for B |
-| WA11 | A peer's `POST` to a generic path a hook handles, to one no hook handles, and to each reserved name | The hook's answer; today's answer for the unhandled one; 404 for each reserved name, no hook run |
-| WA15 | A's bearer: a subscription callback with `type` `permission`, and with an unknown type | 400; nothing applied, sequence unchanged |
+| WA10 | To A, by B with its bearer, under the id of B's own subscription at A | 403; nothing in A's replica store for B |
+| WA11 | A peer's `GET`, `POST` and `DELETE` to a generic path a hook handles, to one no hook handles, and to each reserved name | The hook's answer; today's answer for the unhandled one; 403 for each reserved name, no hook run |
+| WA15 | A's bearer: a subscription callback with `type` `permission`, and with an unknown type | 400; nothing applied, sequence unchanged, no hook |
+| WA17 | A's bearer: a permission callback with a timestamp a day ahead, then one with a current timestamp | Both applied; the stored `fetched_at` is not in the future |
 
 ### New Tests, both unit and integration tests
 
 - Before the handler changes, on the tree as it is: the scenarios of `WA1`
-  to `WA15` run once and their output goes into the verification document.
-  No recording of it is committed.
-- Unit, `check_authorisation` with `path_peer`: a peer equal to it passes; a
-  different peer fails whatever row matched, including an application row
-  inserted at index 0 and a row without `<id>`; creator and trustee pass; an
-  `admin` peer passes; without `path_peer` behaviour is unchanged (the
-  existing auth tests pass untouched).
+  to `WA17` run once and their output goes into the verification document
+  (expected from reading: 204 and applied for `WA1`, `WA2`, `WA4`, `WA5`,
+  `WA6`, `WA10`, `WA15`; `wire_other_app` receives the fetch for `WA8`; the
+  subscription deleted for `WA9`). No recording of it is committed.
+- Unit, `check_authorisation`: with `path_peer`, a peer equal to it passes;
+  a different peer fails whatever row matched, including an application row
+  inserted at index 0 and a row without `<id>`; creator and trustee pass;
+  an `admin` peer passes; with `peer_caller_only`, creator, trustee and an
+  admin peer naming another peer fail; without either, behaviour is
+  unchanged (the existing auth tests pass untouched).
 - Unit, real storage, each callback branch: unauthenticated 401 and nothing
-  stored, deleted or run; another peer 403; the creator 403; an unapproved
-  peer 403; the peer itself 204 for high and low granularity, a resync and a
-  permission callback.
-- The low-granularity fetch goes to the stored base URI whatever the body's
-  `url` says; the HTTP client is patched to fail the test on any other host.
-- A subscriber posting to its publisher under its own subscription id, both
-  backends: 404, nothing stored.
-- A permission callback with a future `timestamp`: 400, nothing stored.
-- Reserved names on the generic branch: 404, no hook called; an ordinary
-  name with a hook: the hook runs.
+  stored, deleted or run; another peer 403; the creator 403; an admin peer
+  under another id 403; an unapproved peer 403; an empty or short peer
+  segment 400; the peer itself 204 for high and low granularity, a resync
+  and a permission callback.
+- Unit: `type` other than `diff`/`resync` 400 and neither the processor nor
+  a legacy hook is called.
+- Unit: the low-granularity fetch goes to the stored base URI, with and
+  without a trailing slash on it, whatever the body's `url` says; the HTTP
+  client is patched to fail the test on any other host.
+- Unit: a subscriber posting to its publisher under its own subscription
+  id, both backends: 403, nothing stored.
+- Unit: permission timestamp: unparsable 400; future clamped with a
+  WARNING; an older one than stored ignored as today.
+- Unit: reserved names on GET, POST, DELETE 403, no hook (a `*` hook
+  included); an ordinary name with a hook: the hook runs.
 - Integration, both backends, both topologies: the wire rows.
-- Existing tests that pin today's behaviour and change:
-  `tests/test_callback_in_progress_answer.py:41-45`,
-  `tests/test_permissions_handler.py:150-167`, `:182-214`; each is updated
-  in this commit with a line in the verification saying why.
+- Existing tests that pin today's behaviour, each updated in this commit
+  with a line in the verification saying why:
+  `tests/test_callback_in_progress_answer.py:41-45`, `:76-80`, `:108-112`,
+  `:151-155` (mocked `auth_obj`: give it a real response code and a trust
+  with `baseuri`), `tests/test_db_fault_callers.py:325-329`,
+  `tests/integration/test_subscription_flow.py:953-970` (`test_038`: a
+  deleted peer's bearer now answers 403 before the lookup, not 404).
 
 ### Failure Scenarios
 
 - A peer on an older library sends an unauthenticated callback - none does;
-  every sender has sent the bearer since callbacks existed
-  (`actor.py:2683`, `trust_permissions.py:386-388`); the Phase 0 rows staying
-  identical is the check.
-- A publisher that moved sends a low-granularity callback - the fetch goes to
-  the stored base URI and fails there; the callback answers 503 as any failed
-  fetch does today and the subscriber retries; the owner updates the base
-  URI. Logged with the remedy.
+  the synchronous senders always send the bearer (`actor.py:2683`,
+  `aw_proxy.py:123-125`), the asynchronous permission sender only when the
+  row has a secret (`trust_permissions.py:381-383`), which every trust row
+  does; the Phase 0 rows staying identical is the check.
+- A publisher that moved sends a low-granularity callback - the fetch goes
+  to the stored base URI and fails there; the callback answers 503 as any
+  failed fetch does today and the subscriber retries; the owner updates the
+  base URI (Phase 3's remedy). Logged with the remedy.
 - An application that pointed a third party at `/callbacks/<name>` - it
-  received 200 and nothing ran; it now receives 401. Changelog.
-- An application whose own hook is named like a reserved name - it was
-  reachable only with forged data; 404 now. Changelog.
+  received a 2xx and nothing ran; it now receives 401. Changelog.
+- An application whose own hook is named like a reserved name - reachable
+  only with data the caller chose; 403 now. Changelog.
+- A request carrying a stale `oauth_token` cookie on `/callbacks` - takes
+  the `www` authentication path (`base_handler.py:194-212`); the unit tests
+  cover it and record whether it answers 401 or redirects; a redirect is
+  changed to 401 on `/callbacks`.
 - A call site that names a peer but forgets `path_peer` - the unit test per
   handler and the `WA` rows catch it; Phase 2 adds the rest of the sites.
-- The publisher-row rule refuses a legitimate callback - a subscriber's row
-  for its own subscription always has the flag (`WC1`, `WC2`).
+- Until Phase 3 lands, the binding is to a row a creation request can
+  replace; nothing ships between the commits of one PR, and each phase's
+  verification says so.
 
 ### Verification
 
@@ -497,8 +600,8 @@ approved `friend` trust to B; `S` a peer of the consumer's `subscriber` type:
 - [ ] Run the contract's `### Checks` full tier before the phase commit, one
       run at a time
 - [ ] `grep -n '("", "callbacks"' actingweb/config.py` returns nothing
-- [ ] `git show --stat HEAD -- tests/integration/wire` shows `WA1` to `WA11`
-      and `WA15` added and no other recording changed
+- [ ] `git show --stat HEAD -- tests/integration/wire` shows `WA1` to `WA11`,
+      `WA15` and `WA17` added and no other recording changed
 - [ ] The verification document holds the pre-fix run for each row
 
 ### Implementation Status: Not Started
@@ -523,19 +626,38 @@ approved `friend` trust to B; `S` a peer of the consumer's `subscriber` type:
   reads its own.
 - `actingweb/handlers/trust.py` - the per-relationship GET, POST, PUT and
   DELETE (`:534-540`, `:637-648`, `:716`, `:964-973`) and the permissions
-  sub-handlers (`:1169`, `:1237`) pass `path_peer=<peerid>`. An application
+  sub-handlers (`:1061`, `:1169`, `:1237`) pass `path_peer=<peerid>`. The
+  DELETE keeps its row lookup before authorisation (`:944-961`, needed by
+  `delete_reciprocal_trust`), so a peer can still tell an existing row from
+  an unknown id there; recorded as known, not changed.
+- `actingweb/handlers/subscription.py:20-49` (`GET /subscriptions?peerid=`)
+  - a peer caller sees only its own rows (the query's `peerid` is replaced
+  by `acl["peerid"]`); creator and trustee unchanged. The path rule cannot
+  reach a peer named in the query.
+- `put()` and `delete()` in `subscription.py`: when the refusal is one a GET
+  row would have admitted, log once per process per relationship and path
+  at WARNING, naming the two rows to add. An application
   row such as the consumer's `("trust/<type>/<id>", "GET")` then admits a
   peer to its own row only.
-- `actingweb/interface/authenticated_views.py:691-705` - a peer or client
-  view lists only its own trust's subscriptions; owner mode unchanged.
+- `actingweb/interface/authenticated_views.py:691-705` - one private filter
+  method on `AuthenticatedSubscriptionManager`, used by the three
+  properties: a peer or client view lists only its own trust's
+  subscriptions; owner mode unchanged. The `subs_list` plan's
+  `get_subscriptions_by_peer()` passes through the same method.
+- `actingweb/actor.py:2545` - the publisher's failed remote unsubscribe is
+  logged at WARNING with the status (today DEBUG);
+  `handlers/callbacks.py:835-838` and `interface/subscription_manager.py:1201-1204`,
+  `:1226-1229` (and the async copies) include the status in their WARNING,
+  and log a 403 at ERROR.
 - `docs/sdk/authenticated-views.rst` - what a view lists.
 
 ### Wire rows
 
 Byte-identical: every Phase 0 row except the three `.subscriber` rows, and
 `WA1` to `WA15`. Re-recorded in this commit, with the diff read and written
-into the verification: `WD6.subscriber` (B's acknowledgement 403, the diff
-stays queued), `WQ3.subscriber` (each clear 403, the queue unchanged),
+into the verification: `WD6.subscriber` (B's acknowledgement 403; the diff
+is already gone, consumed by B's GET, so the queue is unchanged from
+today), `WQ3.subscriber` (each clear 403, the queue keeps its diffs),
 `WC4.subscriber` (A's delete to B 403, B keeps its callback subscription).
 The `.subscriber_adopted` rows stay identical.
 
@@ -546,7 +668,8 @@ New rows:
 | WA12 | C: `GET /subscriptions/<B>`, and `GET`, `PUT`, `DELETE` and the diff `GET` on `…/<B>/<subid>` | 403 each; nothing listed, cleared, consumed or deleted |
 | WA13 | C: `POST /subscriptions/<B>` | 403, as before |
 | WA14 | `GET /permissions/<B>` by B for each built-in type and `subscriber`, by C, by A's creator, by an admin peer, for an unknown id | B reads its own for every type; C 403; creator and admin 200; the unknown id the same 403 |
-| WA16 | S (`subscriber` type): `GET /trust/subscriber/<B>` on A | 403; its own row 200 |
+| WA16 | S (`subscriber` type): `GET /trust/subscriber/<B>` and `GET /trust/subscriber/<B>/permissions` on A | 403 each; its own 200 |
+| WA18 | C: `GET /subscriptions?peerid=<B>` on A | Only C's own rows |
 
 ### New Tests, both unit and integration tests
 
@@ -559,17 +682,25 @@ New rows:
 - Permission query: own, for each built-in type and a custom type; another
   peer's 403; the creator and an admin peer any; an unknown id 403; a
   pending peer 403.
-- Trust: a peer of an application type with a `trust/<type>/<id>` GET row
-  reads its own row and not another's.
+- Trust, one test per site (`:534`, `:637`/`:648`, `:716`, `:964`, `:1061`,
+  `:1169`, `:1237`): another peer 403, the peer itself as before; an
+  application type's `trust/<type>/<id>` GET row admits its own row only.
+- The subscription root with `?peerid=`: a peer sees only its own.
+- The once-per-process WARNING on a GET-row refusal, and its absence on a
+  plain refusal.
+- Existing tests moved here from Phase 1:
+  `tests/test_permissions_handler.py:150-167`, `:182-214` (authorisation
+  now precedes the lookup and carries `path_peer`).
 - View filter: two peers' subscriptions; a peer view and a client view each
   see their own; a client view with no trust sees nothing.
 
 ### Failure Scenarios
 
 - An application whose peers clear or delete through a GET-only row (the
-  consumer) - the clear, the acknowledgement and the publisher's delete fail
-  with 403 and a WARNING, the queue grows and a dangling callback
-  subscription stays. **Behavior change** with the two rows to add, in the
+  consumer) - the gap-resync clear and the publisher's delete fail with 403
+  (the low-granularity acknowledgement too, but its diff was already
+  consumed by the GET), the queue grows and a dangling callback
+  subscription stays; the publisher logs the WARNING naming the rows. **Behavior change** with the two rows to add, in the
   changelog and the migration guide; the `.subscriber` re-recordings show it
   and the `.subscriber_adopted` rows show the remedy.
 - An application that used a `friend` peer to administer other peers'
@@ -582,8 +713,8 @@ New rows:
 - [ ] Run the contract's `### Checks` fast tier verbatim
 - [ ] Run the contract's `### Checks` full tier before the phase commit
 - [ ] `git show --stat HEAD -- tests/integration/wire` shows `WA12` to
-      `WA14`, `WA16` added, the three `.subscriber` files changed, and
-      nothing else
+      `WA14`, `WA16`, `WA18` added, the three `.subscriber` files changed,
+      and nothing else
 - [ ] The verification document holds the pre-fix runs and the read diff of
       the three `.subscriber` files
 
@@ -595,60 +726,108 @@ New rows:
 
 ### Changes
 
-- `actingweb/actor.py:1913-2005` (`create_verified_trust`) - when a row for
-  the peer id exists: verify with a GET to `<stored baseuri>/trust/<stored
-  relationship>/<own id>` carrying the request's `secret` as bearer, and
-  compare the request's `verify` with the returned `verification_token`, as
-  today but against the stored base URI. On a match:
-  `Trust.modify(secret=<new>, verification_token=<fresh>, verified=True,
-  peer_approved=True)` and nothing else; the answer is the row as stored
-  (201 when approved, 202 otherwise, as today). On anything else: return
-  False, row untouched, and the handler answers 403 as for any refused
-  creation. A row that does not exist is created as today.
-- `actingweb/trust.py:391-482` (`Trust.create`) - no longer reached for an
-  existing peer id from this path; its same-secret refusal stays.
-- `actingweb/handlers/trust.py:370-495` - unchanged apart from the log line
-  naming a refused replacement (actor, peer id; never the base URI from the
-  body).
+Receiver side:
+
+- `actingweb/actor.py:1913-2005` (`create_verified_trust`) - read the row
+  for the peer id once, and pass it on (no second read in `Trust.create`).
+  When it exists: verify with a GET to `<stored baseuri>/trust/<stored
+  relationship>/<own id>` carrying the request's `secret` as bearer,
+  comparing the request's `verify` with the returned `verification_token`,
+  as today but against the stored row. On a match, check the new secret
+  with `is_token_in_db` (a hit on any row, the peer's own included, is a
+  refusal, as creation does today), then `Trust.modify(secret=<new>,
+  verification_token=<fresh>, verified=True, peer_approved=True)` and
+  nothing else, and return the row marked as replaced. On anything else
+  (unreachable, wrong token, non-JSON, secret in use): return False, row
+  untouched. A row that does not exist is created as today.
+- `actingweb/handlers/trust.py:370-495` - the status comes from the stored
+  row's `approved` (201 or 202), not from the configuration (today
+  `:427-433`, `:492-495`); a replacement fires no `trust_request_received`
+  and is logged at INFO (actor, peer id); a refused replacement answers 403
+  with the reason phrase `Existing trust not verified` and is logged at
+  WARNING (actor, peer id; never the base URI from the body).
+- `actingweb/trust.py:391-482` (`Trust.create`) - takes the row already
+  read, so the creation path reads it once.
+
+Initiator side:
+
+- `actingweb/actor.py:1647-1775` (`create_reciprocal_trust`) and its async
+  twin (`:1776-1911`) - when a row for the peer already exists: write
+  nothing before the request; after a 201 or 202, `Trust.modify` the new
+  secret and token (and `peer_approved` on 201); on anything else, leave the
+  existing row as it was and return False, logging a WARNING with the
+  status and the reason phrase it already stores (`:1745-1750`). A row
+  that did not exist before the call is created and deleted on failure, as
+  today.
+
+The remedies:
+
+- `actingweb/handlers/trust.py:886-1049` (DELETE) - `?notify=false`,
+  creator only (403 for anyone else): `delete_peer_trust(notify_peer=False)`,
+  which never contacts the peer and removes the local row and its cascade
+  (`actor.py:2084-2223`). `?peer=true` keeps its meaning.
+- Updating a stored base URI is `PUT /trust/<rel>/<peer>` with `baseuri`,
+  creator or trustee, as today (`:711-885`); unchanged, documented in
+  Phase 5.
 
 ### Wire rows
 
-Phases 0 to 2 recordings are byte-identical. New, two hosts:
+Phases 0 to 2 recordings are byte-identical. New, two hosts (`WT2` uses
+`wire_other_app` as the named base URI). The driver registers a secret, a
+token or an id introduced mid-row under a numbered name (`trust:A-B#2`):
 
 | Row | Steps | Recorded |
 | --- | --- | --- |
-| WT1 | B re-initiates its trust to A (the library's `create_relationship`, as the consumer does), then A writes | A's row keeps `approved` and relationship; the next callback carries the new secret; the replica updates |
-| WT2 | A creation request for B's id naming another base URI | 403; A's row unchanged; the verification request goes to B's stored base URI and the named host receives nothing |
+| WT1 | B re-initiates its trust to A (`create_relationship`, as the consumer does), then A writes | A's row keeps `approved` and relationship; 201 from the stored row; B's row `peer_approved`; the next callback carries the new secret; the replica updates; no `trust_request_received` |
+| WT2 | A creation request for B's id naming `wire_other_app` as base URI | 403; A's row unchanged; the verification goes to B's stored base URI; `wire_other_app` receives nothing |
 | WT3 | A creation request for a new peer id | As today (201 or 202) |
+| WT4 | B re-initiates asking for a different relationship type | 403; both rows unchanged; B's subscriptions intact |
+| WT5 | A's creator: `DELETE /trust/<rel>/<B>?notify=false` with B unreachable; then the same as B's bearer | 204 and A's row and cascade gone, B contacted by nothing; B's bearer 403 |
 
 ### New Tests, both unit and integration tests
 
-- Before the change: `WT1` and `WT2` run once on the tree as it is (expected
-  from reading: the row overwritten, `approved` reset), output into the
-  verification document.
-- Unit, both backends: replacement with a verifying peer swaps the secret
-  and token and keeps `approved`, relationship, base URI, description,
-  `created_at` and the grants; with a non-verifying peer (unreachable,
-  wrong token, non-JSON) 403 and every field unchanged; the same secret
-  again 403 as today.
-- The consumer's re-pair: `create_reciprocal_trust` against an existing
-  approved row succeeds and leaves both rows approved.
+- Before the change: `WT1`, `WT2` and `WT4` run once on the tree as it is
+  (expected from reading: A's row overwritten and `approved` reset; B's row
+  deleted on the refusal), output into the verification document.
+- Unit, both backends, receiver: a verifying peer swaps `secret`, the token,
+  sets `verified` and `peer_approved`, and keeps `approved`, relationship,
+  base URI, description, `created_at` and the grants; non-verifying peers
+  (unreachable, wrong token, non-JSON) 403 and every field unchanged; a new
+  secret already in use 403; the status follows the stored `approved` with
+  and without auto-accept; `trust_request_received` not called on a swap
+  and called on a creation.
+- Unit, both backends, initiator: an existing approved row survives a 403,
+  a 5xx and a connection error unchanged; a 201 swaps its secret and keeps
+  it approved; a new peer's row is still deleted on failure.
+- Unit: `?notify=false` by the creator removes the row with no outbound
+  request (the HTTP client patched to fail); by a peer or trustee 403.
+- Existing tests updated: `tests/test_trust_verification_token_missing.py:31-48`,
+  `:57-73`, `:82-98` (the patched `Trust` gets `get.return_value = None`).
 
 ### Failure Scenarios
 
-- A peer that genuinely moved re-initiates from its new address - refused;
-  the owner deletes the trust and the peer pairs again. Migration guide.
-- A peer unreachable at the moment of re-initiation - refused, row kept; the
-  initiator deletes its own new row on the 403 (`actor.py:1751-1775`) and
-  retries later.
-- An initiator that relied on a re-POST to reset approval - none found in the
-  library or the consumer.
+- A peer that moved re-initiates from its new address - refused; the owner
+  updates the base URI and the peer pairs again. Migration guide, with the
+  request.
+- A peer that wants another relationship type - refused (`WT4`); delete and
+  pair again.
+- A peer unreachable at the moment of re-initiation - refused, both rows
+  kept; the initiator retries later.
+- A dead peer whose trust cannot be deleted because the remote delete fails -
+  `?notify=false`.
+- A development setup whose base URI changes on every start (the
+  consumer's preview tunnel without a fixed domain) - every re-pair is a
+  moved peer; the migration guide says to use a fixed domain or delete and
+  pair again.
+- Rows replaced before the fix are undetectable (they were stored with
+  `verified` true against the body's base URI); the changelog says a
+  deployment that suspects it deletes and re-establishes the trust.
 
 ### Verification
 
 - [ ] Run the contract's `### Checks` fast tier verbatim
 - [ ] Run the contract's `### Checks` full tier before the phase commit
-- [ ] `git show --stat HEAD -- tests/integration/wire` shows `WT1` to `WT3`
+- [ ] `git show --stat HEAD -- tests/integration/wire` shows `WT1` to `WT5`
       added and nothing else
 
 ### Implementation Status: Not Started
@@ -660,18 +839,34 @@ Phases 0 to 2 recordings are byte-identical. New, two hosts:
 ### Changes
 
 - `actingweb/maintenance/peer_state.py` (new) and the script entry
-  `actingweb-peer-state = "actingweb.maintenance.peer_state:main"` - same
-  environment as the application; `report` (default) and `prune --apply`.
-  Per actor (all actors, or `--actor <id>`):
-  - `_peer_permissions` rows whose peer id has no trust row;
-  - `_callback_state` `state:` and `pending:` rows whose `<peer>:<subid>` has
-    no callback subscription;
-  - `remote:<peer>` buckets whose peer has no trust row;
-  - with `--rebuild-replicas` and `--apply` only: for each subscription, the
-    replica is replaced by a fresh baseline fetch (keys absent from the
-    baseline are removed).
-  Prints one line per item and a total; exits 1 when `report` finds any.
+  `actingweb-peer-state = "actingweb.maintenance.peer_state:main"`. Same
+  environment as the application. Subcommands `report` and `prune
+  [--apply]`, required; optional positional `ACTOR_ID`; `--rps` (default as
+  `actingweb-verify-orphans`, reusing its `RateLimiter`). Per actor, reading
+  strictly (a fault exits 2, never prunes on a guess), it reports:
+  - `_peer_permissions` rows whose name is not `<actor>:<peer>` for a peer
+    with a trust row, compared as whole names built from the live trust
+    list (peer ids may contain `:`);
+  - `_peer_permissions` rows whose stored `fetched_at` is in the future or
+    does not parse, for any peer;
+  - `_callback_state` rows whose name is not `state:` or `pending:` plus
+    `<peer>:<subid>` for a subscription with `callback` true, compared as
+    whole names;
+  - `remote:<peer>` buckets with no trust row for `<peer>`, or with a trust
+    row but no subscription with `callback` true to that peer. The matcher
+    is an explicit whitelist of bucket names built by
+    `get_remote_bucket` (`remote_storage.py:30-52`); any other `remote:`
+    bucket is reported as unknown and never pruned (the `ListAttribute`
+    plan's `remote:<peer>$aux` side bucket extends the whitelist there).
+  Exit codes: 0 nothing found, 1 found (report) or pruned (prune), 2 a store
+  could not be read. Documented in the module docstring, as the existing
+  commands do. It runs no application hook. After `prune --apply`, running
+  application processes keep cached permissions until restarted; the
+  output says so.
 - `docs/guides/database-maintenance.rst` - a section for the command.
+- `thoughts/todo/INDEX.md` - the dependency table gains: `attribute-list-v2-port`
+  → `peer-authorisation-fixes`, hard: its side bucket must be added to the
+  command's whitelist.
 
 ### Wire rows
 
@@ -679,21 +874,26 @@ Unchanged; the command is not on the wire.
 
 ### New Tests, both unit and integration tests
 
-- Unit, both backends: each kind of stale row is reported and, with
-  `--apply`, removed; a row that belongs to a live trust or subscription is
-  kept; `report` changes nothing; `--rebuild-replicas` without `--apply` is
-  refused.
-- Integration: after a pair is set up and a stale permission row and a stale
-  pending row are planted through the library, `prune --apply` removes them
-  and the pair's next callback is applied as before.
+- Unit, both backends, following `tests/test_deletions_command.py`: each
+  kind of stale row is reported and, with `prune --apply`, removed; a row of
+  a live trust or subscription is kept, including one whose peer id
+  contains `:`; a `remote:` bucket outside the whitelist is reported as
+  unknown and kept; `report` changes nothing; `ACTOR_ID` limits the run;
+  exit codes 0, 1 and 2 (a read fault injected).
+- Integration: a pair set up, a stale permission row, a future-dated one for
+  the live peer and a stale pending row planted through the library;
+  `prune --apply` removes them and the pair's next callback and permission
+  update are applied as before.
 
 ### Failure Scenarios
 
-- A stale-looking row that is in use - only rows with no trust or no
-  subscription qualify; both are read strictly (a read fault stops the
-  command with a non-zero exit, never prunes on a guess).
-- A replica rebuild whose fetch fails - the old replica is kept (the fetch
-  happens before anything is deleted) and the item is reported as failed.
+- A row created between the command's read and its delete - the command is
+  documented to run after every instance is on 3.16; a row it misreads as
+  stale is one that was just created for a new trust or subscription, and
+  the next callback recreates it. The guide says to run it in a quiet
+  period.
+- A stale-looking row that is in use - only whole-name mismatches against
+  live trusts and `callback`-true subscriptions qualify.
 
 ### Verification
 
@@ -709,51 +909,83 @@ Unchanged; the command is not on the wire.
 ### Changes
 
 - `CHANGELOG.rst`, `Unreleased`, `SECURITY` (each claim checked against the
-  pre-fix runs in the verification document):
-  - Unauthenticated callbacks were accepted; the trust's secret could be
-    sent to a URL from the request. **Behavior change:** callbacks are
-    authenticated, the peer paths require the peer they name, the fetch URL
-    is built from the stored base URI, only `diff` and `resync` are accepted
-    on the subscription path, and the library's hook names are reserved on
-    the generic branch. **Check:** third parties pointed at `/callbacks/<name>`
-    now receive 401.
+  pre-fix runs in the verification document, "Exactly-true" wording):
+  - Unauthenticated callbacks were accepted, and a low-granularity callback
+    made the receiver send the trust's secret to the URL in the request.
+    **Behavior change:** callbacks are authenticated (401), the two peer
+    paths require the peer they name (403 for anyone else, the creator
+    included), the fetch URL is built from the stored base URI, only `diff`
+    and `resync` are accepted on the subscription path (400), and the
+    library's hook names are reserved on the generic branch (403).
+    **Check:** third parties pointed at `/callbacks/<name>` now receive 401;
+    a `FanOutManager` low-granularity downgrade is not fetchable by a 3.16
+    subscriber.
   - A peer could reach another peer's permissions, subscriptions and trust
-    row through any row that admitted it, application rows included.
-    **Behavior change:** one rule binds a peer to its own.
-  - **Breaking:** a PUT or DELETE is no longer admitted by a GET row.
-    **Check:** an application type with `("subscriptions/<id>/<subid>",
-    "GET")` and no PUT and DELETE rows (the pattern the access-control guide
-    shows) adds them, or its subscribers' queue clears and the publisher's
-    unsubscribe fail quietly.
-  - A trust-creation request could replace an existing trust row, resetting
-    its approval. **Behavior change:** it verifies against the stored base
-    URI and swaps credentials only; a moved peer is re-paired by deleting the
-    trust.
+    row through any row that admitted it, application `acl_rules`
+    included. **Behavior change:** one rule binds a peer caller to the peer
+    its path names; `GET /subscriptions?peerid=` lists a peer's own rows.
+  - A trust-creation request for an existing peer replaced the row, reset
+    its approval and changed its role. **Behavior change:** it verifies
+    against the stored base URI and swaps the secret only; a moved peer is
+    re-paired after the owner updates the base URI; a refused re-pair
+    changes neither side; a swap fires no `trust_request_received`.
   - A subscriber could post to its publisher under its own subscription id.
+  - A permission callback with a far-future timestamp blocked every later
+    update in the process. **Behavior change:** clamped to the receiver's
+    clock; an unparsable timestamp answers 400.
   - Peer and client views listed every peer's subscriptions.
-- `CHANGELOG.rst`, `ADDED` - `actingweb-peer-state`.
-- `docs/migration/v3.16.rst` - a "Start here" item and a section "Peer paths
-  are bound to their peer": the method rule and the two rows, the
-  replacement rule and the re-pair remedy, the command, the 401s.
-- `docs/protocol/actingweb-spec.rst:1153-1159` (the contradictory callback
-  rule), `:2036-2042` (true after Phase 2), `:1747-1751` (who updates a
-  row), `:1568-1574` (replacement) - aligned.
-- `docs/guides/access-control.rst`, `access-control-simple.rst` - how rows
-  match (first match, prefix, the method), the peer binding, and the
-  subscriber example gains PUT and DELETE rows.
+  - Trust rows replaced before the fix cannot be detected; a deployment
+    that suspects it deletes and re-establishes the trust.
+- `CHANGELOG.rst`, `CHANGED`: **Breaking:** an access row authorises the
+  method a request performs; a PUT or DELETE is no longer admitted by a GET
+  row. **Check:** an application type whose peers clear their queue or are
+  unsubscribed by their publisher through `("subscriptions/<id>/<subid>",
+  "GET", "a")` adds `("subscriptions/<id>/<subid>", "PUT", "a")` and
+  `("subscriptions/<id>/<subid>", "DELETE", "a")` on the publisher, or the
+  gap-resync clear and the publisher's unsubscribe fail with 403 (logged
+  once at WARNING by the publisher). `friend` is unaffected.
+- `CHANGELOG.rst`, `ADDED` - `actingweb-peer-state`; `DELETE
+  /trust/<rel>/<peer>?notify=false` for the creator.
+- `docs/migration/v3.16.rst` - a "Start here" item (and the "first three
+  items and item 11" sentence at `:16-17` updated), and a section "Peer
+  paths are bound to their peer" with: the two rows as an `acl_rules=[...]`
+  block and who adds them (the publisher's deployment); that `friend` is
+  unaffected (`config.py:336`); the re-pair recipe (`PUT
+  /trust/<rel>/<peer>` with `baseuri` for a moved peer; delete and pair
+  again for a new relationship; `?notify=false` for a dead peer; a fixed
+  domain for development tunnels); `actingweb-peer-state report`, then
+  `prune --apply`, after every instance is on 3.16, then a restart; the log
+  lines to grep for; the reserved names and that only a direct
+  `/callbacks/<name>` request is affected.
+- `docs/protocol/actingweb-spec.rst` - aligned with the decisions: `:1153-1159`
+  (callback authentication, one rule), `:1207` and `:2885-2887` (a note
+  that the diff GET consumes today and `spec-1-5` owns the change),
+  `:1568-1574` and `:1881-1882` (replacement of an existing relationship),
+  `:1747-1751` (who updates a row), `:2041-2042` (the creator and admin may
+  also query), `:2858-2861` (the receiver fetches under the stored base
+  URI).
+- `docs/guides/access-control.rst:117-214`, `access-control-simple.rst:171-221`
+  - how rows match (first match, string prefix, the method, application
+  rows first), the peer binding, and the subscriber examples gain GET, PUT
+  and DELETE rows on `subscriptions/<id>/<subid>`.
 - `docs/guides/trust-relationships.rst:108-113` and
   `docs/guides/p2p-quickstart.rst:44-49` - the pending-trust contradiction.
 - `docs/reference/security.rst`, `docs/reference/routing-overview.rst:36`,
   `docs/reference/hooks-reference.rst:46-53`, `README.rst:255-256` -
-  callbacks are authenticated; reserved names.
-- `examples/demo/shared_hooks/app/callback_hooks.py` and the demo README -
-  the webhook examples need an authenticated caller until the opt-in.
-- `thoughts/research/2026-11-07-emm-suite-against-master.md` is a snapshot
-  and stays; the Emm adoption items (the two rows; a re-pair from a new
-  address needs a delete) go into this plan's verification document and
-  Emm's inbound note when the PR opens.
-- `thoughts/plans/2026-11-06-spec-1-5.md` - a dated Update Log line: T6 is
-  replaced by Phase 3 here.
+  callbacks are authenticated; reserved names; the admin exemption and
+  where it does not apply.
+- `examples/demo/shared_hooks/app/callback_hooks.py:47`, `:62` and the demo
+  README - the `email_verify` link example becomes an authenticated
+  example until the opt-in.
+- `thoughts/plans/2026-11-06-spec-1-5.md` - T6 rewritten in its body (`:291-292`,
+  the test at `:343-345`, the failure scenario at `:360`, the changelog line
+  at `:695`): the replacement guard here replaces the 409; and `:317-318`
+  corrected (`WA4` is 403). A dated Update Log line says so.
+- `thoughts/plans/2026-11-06-subscription-wire-baseline.md:196-199` - "What
+  Already Exists" points at `rows.toml` instead of a list.
+- The Emm adoption items (the two rows; the re-pair recipe; a fixed preview
+  domain) go into this plan's verification document and Emm's inbound note
+  when the PR opens.
 
 ### New Tests, both unit and integration tests
 
@@ -761,23 +993,90 @@ Unchanged; the command is not on the wire.
 
 ### Failure Scenarios
 
-- The access-control guide's example still shows a GET-only subscriber -
-  the grep below.
+- A docs example still shows a subscriber without PUT and DELETE rows - the
+  grep below.
 
 ### Verification
 
 - [ ] Run the contract's `### Checks` full tier verbatim (docs build included)
-- [ ] `grep -rn '"subscriptions/<id>/<subid>", "GET"' docs` shows each
-      example with PUT and DELETE rows beside it
+- [ ] `grep -rln '"subscriptions/<id>/<subid>", "DELETE"' docs/guides/access-control.rst docs/guides/access-control-simple.rst`
+      lists both files
 - [ ] Emm's suite on this branch, as `thoughts/todo/emm-suite-against-master.md`
       describes, with the two rows added on Emm's adoption branch: no failure
-      the `master` run did not have; the result in the verification document
+      the `master` run did not have; also checked: a re-pair that answers 201
+      does not create a second subscription (`../actingweb_mcp/api/trust.py:286-298`);
+      the result in the verification document
 
 ### Implementation Status: Not Started
 
 ---
 
 ## Evaluation Notes
+
+### Third review, 2026-11-07: the redraft
+
+Five evaluators (architecture; security; tests and code quality;
+usability; scalability) read Phases 0 to 5 against the code, then the outside
+voice (Codex, run outside the command sandbox, and a fresh-context reviewer)
+was given their findings. Nothing was run. Disposition:
+
+Taken to the owner and decided (Update Log, "review of the redraft
+folded"): the `admin` exemption on `/callbacks`; the initiator's side of a
+re-pair; the re-pair remedies and the local delete; the hook on a swap;
+403 for refused callback names; clamping the permission timestamp; dropping
+the replica rebuild.
+
+Folded as mechanical:
+
+- Architecture: the creator passing the new `any` row on the peer callback
+  branches (now `peer_caller_only`); `get()` and the generic `delete()`;
+  `trust.py:1061`; the trust DELETE's lookup order (kept, recorded); the
+  same-secret check on the swap; the status from the stored row;
+  `IndexError` on short paths; reserved names on every method; the body's
+  `url` still selecting the branch; `FanOutManager`'s downgrade.
+- Security: an empty peer segment; an unparsable timestamp; the
+  subscription root's `?peerid=`; prune comparing whole names, counting only
+  `callback`-true subscriptions, catching future-dated rows for trusted
+  peers, never splitting on `:`, and a `remote:` whitelist; processes
+  keeping cached permissions after a prune; devtest writing any bucket when
+  on (unchanged; it must stay off in production, as documented).
+- Tests and code quality: the existing tests that break, each listed in the
+  phase that breaks it; `WA4` recorded at 403; `WA8` and `WT2` needing a
+  third listener; mid-row names in the normaliser; the second trust type on
+  every app's configuration; the CI step's marker, junit, coverage,
+  watchdog, gate and timeout; per-site trust tests; tests for every Phase 4
+  behaviour.
+- Usability: the publisher logging the GET-row refusal; status codes in the
+  subscriber's warnings and `actor.py:2545` at WARNING; concrete migration
+  content; a docs grep that can fail; **Breaking:** under `CHANGED`; the
+  operator command's subcommand, positional actor, exit codes and `--rps`
+  like the existing commands; Emm's preview tunnel as a moved peer.
+- Scalability: one read of the existing row in Phase 3; per-actor reads
+  and `--rps` in Phase 4.
+- Outside voice: the `WD6.subscriber` prediction (the diff GET already
+  consumes); the spec ranges the decisions contradict; T6 rewritten in the
+  spec plan's body, not only its log; the `remote:<peer>$aux` bucket and the
+  INDEX dependency; later plans' statements about these rows (`rows.toml`
+  owner column); `peer_approved` and `verified` named in the swap; one
+  filter method for the views; the binding being unsound until Phase 3,
+  stated in each verification.
+
+Unverified notes:
+
+- How the integrations route `/callbacks/permissions/` with a trailing slash
+  (whether `path[1]` arrives empty); the 400 covers both.
+- Whether an MCP client token authenticates on `/callbacks` as a peer
+  caller; `peer_caller_only` refuses it either way unless its peer id is the
+  path's.
+- What an unauthenticated generic callback answers today (the handler sets
+  no status); the pre-fix run of `WA3` settles the changelog wording.
+- A health check configured outside the consumer's repository calling
+  `/callbacks/ping` anonymously would go from 2xx to 401.
+
+### Earlier reviews
+
+The sections below are the reviews of the first draft and are kept as they
+were. Where they say a review is owed, the third review above is it.
 
 Phases 1 to 3 were written from findings the reviews of the other plans made
 (three reviewers reached the callback finding independently) and from one run

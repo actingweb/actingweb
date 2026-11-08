@@ -122,9 +122,12 @@ class SubscriptionRootHandler(base_handler.BaseHandler):
             self.response.set_status(200, "Ok")
 
     def post(self, actor_id):
-        myself = self.require_authenticated_actor(actor_id, "subscriptions", "POST")
-        if not myself:
+        auth_result = self.authenticate_actor(actor_id, "subscriptions")
+        if not auth_result.success:
             return
+        if not auth_result.authorize("POST", "subscriptions"):
+            return
+        myself = auth_result.actor
 
         # Use developer API - ActorInterface with SubscriptionManager
         actor_interface = self._get_actor_interface(myself)
@@ -155,6 +158,14 @@ class SubscriptionRootHandler(base_handler.BaseHandler):
         if not peerid or len(peerid) == 0:
             if self.response:
                 self.response.set_status(400, "Missing peer URL")
+            return
+        # A peer caller (an application row may admit one here) can make
+        # this actor subscribe only to itself, never to another peer.
+        acl = getattr(auth_result.auth_obj, "acl", None)
+        caller = acl.get("peerid") if isinstance(acl, dict) else ""
+        if isinstance(caller, str) and caller and peerid != caller:
+            if self.response:
+                self.response.set_status(403, "Forbidden")
             return
         if not target or len(target) == 0:
             if self.response:

@@ -113,6 +113,19 @@ status: active
   confirmed: the operator command reads per actor with `--rps`; a PUT or
   DELETE refused where a GET row would have admitted it is logged once per
   process per relationship and path at WARNING.
+- **2026-11-08, Phase 3's re-pair (owner)**: the plan's receiver rule
+  (verify with the request's new secret) and its initiator rule (write
+  nothing before the answer) cannot both hold: the initiator would answer
+  the verification with its old secret and every re-pair would fail. A
+  fallback to the stored secret plus the initiator's verification token was
+  considered and dropped: anyone holding that token (leaked to other peers
+  before this fix) could take over the trust. Decided: a trust request for
+  a peer that already has a row must carry the current trust secret as its
+  bearer, or it answers 403 and nothing changes; the receiver then swaps in
+  the new secret and nothing else; the initiator writes nothing until the
+  answer. No verification round trip for a swap. A moved peer is re-pointed
+  by the owner, as decided; a peer that lost its secret deletes and pairs
+  again.
 - **2026-11-07, Phase 1 review (owner)**: the outside voice on the Phase 1
   commit found that clamping a future permission timestamp loses the
   sender's order; the clamp is replaced by a 5-minute skew window and 400
@@ -900,6 +913,22 @@ New rows:
   document, "Phase 2".
 - Release impact: no new route or option; the behaviour changes are the
   changelog's (Phase 5).
+- **Outside voice on the Phase 2 commit** (codex and a fresh-context
+  reviewer), folded in its own commit: the trust-site tests now insert a
+  row that admits C, so only the binding refuses it (before, the default
+  rows refused first and the tests passed without `path_peer`); a peer on
+  its own trust row (where an application row admits it) cannot approve it
+  or write or reset its own permissions (`_is_non_admin_peer`); the
+  subscription root's POST lets a peer caller subscribe the actor only to
+  itself; a client view lists the rows it creates (under its accessor id)
+  and its trust's peer id under either key; `AwProxy` turns any non-object
+  JSON body of a non-2xx answer into an error; the async proxy's 403 is
+  tested. Recorded, not changed: the trust DELETE still answers 404 for an
+  unknown row before authorisation, to unauthenticated callers too
+  (`delete_reciprocal_trust` relies on it; planned as known); FastAPI binds
+  the root's `?peerid=` to the per-peer handler (403) where Flask filters
+  (200); the default `owner` rows never bind on `authorize()` calls, which
+  pass no `peerid` (a design note for the specification plan).
 
 ### Implementation Status: Complete
 

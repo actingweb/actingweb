@@ -693,16 +693,22 @@ class AuthenticatedSubscriptionManager:
 
         Owner mode (no accessor) sees every row. A peer view sees the rows
         whose peer is the peer itself; a client view the rows whose peer is
-        its trust's peer id, and nothing when it has no trust."""
+        its own accessor id or its trust's peer id."""
         if not self._auth_context.accessor_id:
             return subscriptions
         if self._auth_context.is_peer:
-            own = self._auth_context.peer_id
+            own = {self._auth_context.peer_id}
         else:
-            own = str(self._auth_context.trust_relationship.get("peerid") or "")
-        if not own:
-            return []
-        return [sub for sub in subscriptions if getattr(sub, "peer_id", None) == own]
+            # A client's rows: the ones it creates (under its accessor id,
+            # ``create_local_subscription``) and its trust's peer id, under
+            # either key a trust dict carries.
+            trust = self._auth_context.trust_relationship
+            own = {
+                self._auth_context.accessor_id,
+                str(trust.get("peerid") or trust.get("peer_id") or ""),
+            }
+        own.discard("")
+        return [sub for sub in subscriptions if getattr(sub, "peer_id", None) in own]
 
     # Read-only listings, limited to the accessor's own trust
     @property

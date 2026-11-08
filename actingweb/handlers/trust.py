@@ -86,6 +86,18 @@ def _public_trust_row(row: Any) -> Any:
 
 
 # Handling requests to trust/
+def _is_non_admin_peer(auth_obj: Any) -> bool:
+    """Whether the caller is a peer other than an ``admin`` one. A peer may
+    read and delete its own trust row, but never approve it or write its own
+    permissions, whatever an application row admits."""
+    acl = getattr(auth_obj, "acl", None)
+    if not isinstance(acl, dict):
+        return False
+    peer = acl.get("peerid") or ""
+    relationship = str(acl.get("relationship") or "").lower()
+    return isinstance(peer, str) and bool(peer) and relationship != "admin"
+
+
 class TrustHandler(base_handler.BaseHandler):
     def get(self, actor_id):
         # A GET with a _method override changes state: refuse one a
@@ -762,6 +774,19 @@ class TrustPeerHandler(base_handler.BaseHandler):
                 desc = ""
         from actingweb.trust import is_valid_peer_baseuri
 
+        # A peer on its own row (an application row may admit it) never
+        # approves the relationship or writes its own permissions: those are
+        # the owner's.
+        if _is_non_admin_peer(auth_result.auth_obj) and (
+            approved is not None or permission_updates is not None
+        ):
+            logger.warning(
+                f"Refused a peer's PUT on its own trust row for {actor_id}: "
+                "approval and permissions are the owner's"
+            )
+            if self.response:
+                self.response.set_status(403, "Forbidden")
+            return
         if baseuri and not is_valid_peer_baseuri(baseuri):
             # The peer may PUT its own row: the base URI it moves to must be
             # as plain as the one it was admitted with (it is fetched and
@@ -1173,6 +1198,11 @@ class TrustPermissionHandler(base_handler.BaseHandler):
         # Same authorization as trust endpoint
         if not auth_result.authorize("PUT", "trust", "<type>/<id>", path_peer=peerid):
             return
+        # A peer never writes its own permissions (they are the owner's grant).
+        if _is_non_admin_peer(auth_result.auth_obj):
+            if self.response:
+                self.response.set_status(403, "Forbidden")
+            return
 
         try:
             body = self.request.body
@@ -1242,6 +1272,11 @@ class TrustPermissionHandler(base_handler.BaseHandler):
         if not auth_result.authorize(
             "DELETE", "trust", "<type>/<id>", path_peer=peerid
         ):
+            return
+        # A peer never resets its own permissions (they are the owner's grant).
+        if _is_non_admin_peer(auth_result.auth_obj):
+            if self.response:
+                self.response.set_status(403, "Forbidden")
             return
 
         try:

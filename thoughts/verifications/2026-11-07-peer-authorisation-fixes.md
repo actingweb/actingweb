@@ -119,3 +119,33 @@ rows and every other recording are byte-identical:
   authorisation now precedes the trust lookup and carries `path_peer`; the
   test asserts both (the plan's listed `:150-167` needed no change: a
   creator-like mock still reaches the 404 for a missing trust).
+
+### Outside voice on the Phase 2 commit
+
+codex and a fresh-context reviewer, on `ef5fba1..cf4f972`. Findings and
+disposition (folded in their own commit):
+
+- The trust-site tests passed without `path_peer` (the default rows refused
+  C first): each now inserts a row that admits C.
+- A peer bound to its own trust row could, under an application row
+  admitting every method, approve the row or write its own permissions:
+  refused for every peer but an admin.
+- The trust DELETE answers 404 for an unknown row before authorisation,
+  unauthenticated callers included: kept, as planned
+  (`delete_reciprocal_trust` relies on the 404); an existence probe for
+  (actor, relationship, peer id) remains.
+- A client view filtered on its trust's peer id but creates rows under its
+  accessor id: lists both.
+- The subscription root's POST did not bind the body's `peerid`: a peer
+  caller may subscribe the actor only to itself.
+- `AwProxy` raised on a non-2xx answer whose JSON body is not an object:
+  turned into an error; the async 403 is tested.
+- FastAPI and Flask answer the root's `?peerid=` differently (403 through
+  the per-peer handler, a filtered 200): recorded.
+- The default `owner` rows never bind through `authorize()`, which passes
+  no `peerid`: a design note for the specification plan.
+
+Answered with nothing found: every `change_resource` caller treats `error`
+as failure or ignores the result; no code reads `.subscriptions` through a
+view; `acl["rights"]` is never read, so the method rule's second probe
+changes nothing later in the request.

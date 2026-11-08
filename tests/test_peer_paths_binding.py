@@ -376,6 +376,9 @@ class TestTrustSites:
     def test_another_peer_is_refused(
         self, world: Publisher, handler: Any, method: str, body: Any
     ) -> None:
+        # A row that admits friends on any trust row, every method, ahead of
+        # the defaults: only the binding refuses C on B's row.
+        world.config.access.insert(0, ("friend", "trust/<type>/<id>", "", "a"))
         b = world.peers["b"]
         out = world.call(handler, method, "friend", b, as_peer="c", body=body)
         assert out.response.status_code == 403
@@ -502,3 +505,112 @@ class TestARefusalIsSeen:
             )
         errors = [r for r in caplog.records if r.levelno == logging.ERROR]
         assert errors and "403" in errors[0].getMessage()
+
+
+class TestTheOwnersPartOfATrustRow:
+    """The Phase 2 review: a peer bound to its own row still never approves
+    it or writes its own permissions."""
+
+    @pytest.fixture
+    def admitted(self, world: Publisher) -> Publisher:
+        world.config.access.insert(0, ("friend", "trust/<type>/<id>", "", "a"))
+        return world
+
+    def test_a_peer_cannot_approve_its_own_row(self, admitted: Publisher) -> None:
+        c = admitted.peers["c"]
+        out = admitted.call(
+            TrustPeerHandler, "PUT", "friend", c, as_peer="c", body={"approved": True}
+        )
+        assert out.response.status_code == 403
+
+    def test_a_peer_cannot_write_its_own_permissions(self, admitted: Publisher) -> None:
+        c = admitted.peers["c"]
+        for method, body in (
+            ("PUT", {"properties": {"patterns": ["*"]}}),
+            ("DELETE", None),
+        ):
+            out = admitted.call(
+                TrustPermissionHandler, method, "friend", c, as_peer="c", body=body
+            )
+            assert out.response.status_code == 403, method
+
+    def test_a_peer_may_still_describe_its_own_row(self, admitted: Publisher) -> None:
+        c = admitted.peers["c"]
+        out = admitted.call(
+            TrustPeerHandler, "PUT", "friend", c, as_peer="c", body={"desc": "mine"}
+        )
+        assert out.response.status_code != 403
+
+    def test_an_admin_peer_may_write_anothers_permissions(
+        self, world: Publisher
+    ) -> None:
+        b = world.peers["b"]
+        out = world.call(
+            TrustPermissionHandler,
+            "PUT",
+            "friend",
+            b,
+            as_peer="d",
+            body={"properties": {"patterns": ["x"], "operations": ["read"]}},
+        )
+        assert out.response.status_code != 403
+
+
+class TestTheSubscriptionRootPost:
+    def test_a_peer_cannot_subscribe_the_actor_to_another_peer(
+        self, world: Publisher
+    ) -> None:
+        world.config.access.insert(0, ("friend", "subscriptions", "POST", "a"))
+        with mock.patch(
+            "actingweb.interface.subscription_manager.SubscriptionManager.subscribe_to_peer"
+        ) as subscribe:
+            out = world.call(
+                SubscriptionRootHandler,
+                "POST",
+                as_peer="c",
+                body={"peerid": world.peers["b"], "target": "properties"},
+            )
+        assert out.response.status_code == 403
+        subscribe.assert_not_called()
+
+
+class TestAClientViewListsWhatItCreates:
+    def test_rows_it_creates_are_listed(self, world: Publisher) -> None:
+        actor = ActorInterface(world.a)
+        view = actor.as_client("client-new", {"peer_id": "unused"})
+        with mock.patch(
+            "actingweb.interface.authenticated_views.AuthenticatedSubscriptionManager._check_subscription_permission"
+        ):
+            assert view.subscriptions.create_local_subscription("properties")
+        assert {s.peer_id for s in view.subscriptions.all_subscriptions} == {
+            "client-new"
+        }
+
+
+class TestTheProxyOnOddBodies:
+    def test_a_403_with_a_null_body_is_an_error(self) -> None:
+        from actingweb.aw_proxy import AwProxy
+
+        refused = mock.Mock(status_code=403, content=b"null")
+        refused.json.return_value = None
+        proxy = AwProxy(config=make_config())
+        proxy.trust = {"baseuri": "https://a.example.test/a", "secret": "s"}
+        proxy._maybe_retry_with_basic = mock.Mock(return_value=None)  # type: ignore[method-assign]
+        with mock.patch("actingweb.aw_proxy.requests.put", return_value=refused):
+            result = proxy.change_resource(path="x", params={"a": 1})
+        assert result is not None and result["error"]["code"] == 403
+
+    def test_the_async_twin_sees_a_403_with_no_body(self) -> None:
+        import asyncio
+
+        from actingweb.aw_proxy import AwProxy
+
+        refused = mock.Mock(status_code=403, content=b"")
+        refused.json.side_effect = ValueError("no body")
+        client = mock.MagicMock()
+        client.__aenter__.return_value.put = mock.AsyncMock(return_value=refused)
+        proxy = AwProxy(config=make_config())
+        proxy.trust = {"baseuri": "https://a.example.test/a", "secret": "s"}
+        with mock.patch("actingweb.aw_proxy.httpx.AsyncClient", return_value=client):
+            result = asyncio.run(proxy.change_resource_async(path="x", params={"a": 1}))
+        assert result is not None and result["error"]["code"] == 403

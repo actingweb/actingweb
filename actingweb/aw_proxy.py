@@ -349,6 +349,9 @@ class AwProxy:
             result = {}
         # Ensure error responses from peers have a structured error with the HTTP status code
         if response.status_code < 200 or response.status_code > 299:
+            if not isinstance(result, dict):
+                # A JSON body that is not an object (null, a number, a list).
+                result = {}
             if "error" in result and not isinstance(result["error"], dict):
                 result["error"] = {
                     "code": response.status_code,
@@ -357,8 +360,6 @@ class AwProxy:
             elif "error" not in result:
                 # A refusal with no JSON body (a 403 most often) is still a
                 # failure: without this the caller read {} as success.
-                if not isinstance(result, dict):
-                    result = {}
                 result["error"] = {
                     "code": response.status_code,
                     "message": "The peer refused the change",
@@ -732,6 +733,9 @@ class AwProxy:
             result = {}
         # Ensure error responses from peers have a structured error with the HTTP status code
         if response.status_code < 200 or response.status_code > 299:
+            if not isinstance(result, dict):
+                # A JSON body that is not an object (null, a number, a list).
+                result = {}
             if "error" in result and not isinstance(result["error"], dict):
                 result["error"] = {
                     "code": response.status_code,
@@ -740,8 +744,6 @@ class AwProxy:
             elif "error" not in result:
                 # A refusal with no JSON body (a 403 most often) is still a
                 # failure: without this the caller read {} as success.
-                if not isinstance(result, dict):
-                    result = {}
                 result["error"] = {
                     "code": response.status_code,
                     "message": "The peer refused the change",

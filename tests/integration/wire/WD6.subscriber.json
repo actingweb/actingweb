@@ -209,7 +209,7 @@
           "sequence": 1
          },
          "response": null,
-         "status": 403
+         "status": 204
         }
        ],
        "headers": {},

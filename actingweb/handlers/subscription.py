@@ -1,52 +1,25 @@
 import json
 import logging
-import threading
 from typing import Any
 
 from actingweb.handlers import base_handler
 
 logger = logging.getLogger(__name__)
 
+
 # (relationship, path) pairs whose GET-row refusal of a PUT or DELETE has been
 # logged at WARNING in this process: once each, so a deployment that must add
 # the rows sees it without a line per gap resync.
-_GET_ROW_REFUSALS_LOGGED: set[tuple[str, str]] = set()
-_GET_ROW_REFUSALS_LOCK = threading.Lock()
-
-
 def _authorize_subscription_write(
     auth_result: "base_handler.AuthResult", method: str, peerid: str
 ) -> bool:
     """Authorise a PUT or DELETE on ``subscriptions/<id>/<subid>`` as the
-    method it is (a GET row admits only GET), for the peer the path names.
-
-    When the refusal is one a GET row would have admitted (before 3.16 the
-    handler authorised these as GET), log it once per process per
-    relationship and path at WARNING, naming the rows the deployment adds.
-    """
-    if auth_result.authorize(method, "subscriptions", "<id>/<subid>", path_peer=peerid):
-        return True
-    auth_obj = auth_result.auth_obj
-    if auth_obj is None or not auth_obj.check_authorisation(
-        path="subscriptions", subpath="<id>/<subid>", method="GET", path_peer=peerid
-    ):
-        return False
-    relationship = str(auth_obj.acl.get("relationship") or "")
-    key = (relationship, "subscriptions/<id>/<subid>")
-    with _GET_ROW_REFUSALS_LOCK:
-        first = key not in _GET_ROW_REFUSALS_LOGGED
-        _GET_ROW_REFUSALS_LOGGED.add(key)
-    if first:
-        logger.warning(
-            f"Refused {method} on subscriptions/<id>/<subid> for relationship "
-            f"'{relationship}': its access rows admit only GET there, and since "
-            "3.16 a row authorises the method a request performs. A subscriber "
-            "of this type cannot clear its queue or be unsubscribed. Add "
-            '("subscriptions/<id>/<subid>", "PUT", "a") and '
-            '("subscriptions/<id>/<subid>", "DELETE", "a") to its acl_rules '
-            "(docs/migration/v3.16.rst). Logged once per process."
-        )
-    return False
+    method it is, for the peer the path names. The built-in ``owner`` row
+    admits a peer to its own subscriptions whatever its relationship's rows
+    say (3.16); another peer is refused by the path binding."""
+    return auth_result.authorize(
+        method, "subscriptions", "<id>/<subid>", path_peer=peerid
+    )
 
 
 def _own_subscriptions_only(auth_obj: Any, requested: str | None) -> str | None:

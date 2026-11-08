@@ -678,11 +678,6 @@
       {
        "diffs": [
         {
-         "data": "{\"allowed\": {\"v\": 1}}",
-         "sequence": 1,
-         "timestamp": "<ts:stored>"
-        },
-        {
          "data": "{\"allowed\": {\"v\": 2}}",
          "sequence": 2,
          "timestamp": "<ts:stored>"
@@ -810,7 +805,7 @@
    },
    "result": {
     "body": "",
-    "status": 403
+    "status": 204
    },
    "step": "PUT sequence 1",
    "wire": [
@@ -826,7 +821,7 @@
       "sequence": 1
      },
      "response": null,
-     "status": 403
+     "status": 204
     }
    ]
   },
@@ -858,23 +853,7 @@
      },
      "queue": [
       {
-       "diffs": [
-        {
-         "data": "{\"allowed\": {\"v\": 1}}",
-         "sequence": 1,
-         "timestamp": "<ts:stored>"
-        },
-        {
-         "data": "{\"allowed\": {\"v\": 2}}",
-         "sequence": 2,
-         "timestamp": "<ts:stored>"
-        },
-        {
-         "data": "{\"allowed\": {\"v\": 3}}",
-         "sequence": 3,
-         "timestamp": "<ts:stored>"
-        }
-       ],
+       "diffs": [],
        "granularity": "high",
        "peer": "<B>",
        "sequence": 3,
@@ -992,7 +971,7 @@
    },
    "result": {
     "body": "",
-    "status": 403
+    "status": 204
    },
    "step": "PUT sequence 0",
    "wire": [
@@ -1008,7 +987,7 @@
       "sequence": 0
      },
      "response": null,
-     "status": 403
+     "status": 204
     }
    ]
   },
@@ -1040,23 +1019,7 @@
      },
      "queue": [
       {
-       "diffs": [
-        {
-         "data": "{\"allowed\": {\"v\": 1}}",
-         "sequence": 1,
-         "timestamp": "<ts:stored>"
-        },
-        {
-         "data": "{\"allowed\": {\"v\": 2}}",
-         "sequence": 2,
-         "timestamp": "<ts:stored>"
-        },
-        {
-         "data": "{\"allowed\": {\"v\": 3}}",
-         "sequence": 3,
-         "timestamp": "<ts:stored>"
-        }
-       ],
+       "diffs": [],
        "granularity": "high",
        "peer": "<B>",
        "sequence": 3,
@@ -1174,7 +1137,7 @@
    },
    "result": {
     "body": "",
-    "status": 403
+    "status": 400
    },
    "step": "PUT without a sequence",
    "wire": [
@@ -1188,7 +1151,7 @@
      "query": "",
      "request": {},
      "response": null,
-     "status": 403
+     "status": 400
     }
    ]
   },
@@ -1220,23 +1183,7 @@
      },
      "queue": [
       {
-       "diffs": [
-        {
-         "data": "{\"allowed\": {\"v\": 1}}",
-         "sequence": 1,
-         "timestamp": "<ts:stored>"
-        },
-        {
-         "data": "{\"allowed\": {\"v\": 2}}",
-         "sequence": 2,
-         "timestamp": "<ts:stored>"
-        },
-        {
-         "data": "{\"allowed\": {\"v\": 3}}",
-         "sequence": 3,
-         "timestamp": "<ts:stored>"
-        }
-       ],
+       "diffs": [],
        "granularity": "high",
        "peer": "<B>",
        "sequence": 3,
@@ -1354,7 +1301,7 @@
    },
    "result": {
     "body": "",
-    "status": 403
+    "status": 400
    },
    "step": "PUT text",
    "wire": [
@@ -1368,7 +1315,7 @@
      "query": "",
      "request": "not json",
      "response": null,
-     "status": 403
+     "status": 400
     }
    ]
   },
@@ -1400,23 +1347,7 @@
      },
      "queue": [
       {
-       "diffs": [
-        {
-         "data": "{\"allowed\": {\"v\": 1}}",
-         "sequence": 1,
-         "timestamp": "<ts:stored>"
-        },
-        {
-         "data": "{\"allowed\": {\"v\": 2}}",
-         "sequence": 2,
-         "timestamp": "<ts:stored>"
-        },
-        {
-         "data": "{\"allowed\": {\"v\": 3}}",
-         "sequence": 3,
-         "timestamp": "<ts:stored>"
-        }
-       ],
+       "diffs": [],
        "granularity": "high",
        "peer": "<B>",
        "sequence": 3,
@@ -1534,7 +1465,7 @@
    },
    "result": {
     "body": "",
-    "status": 403
+    "status": 404
    },
    "step": "PUT on an unknown subscription id",
    "wire": [
@@ -1550,7 +1481,7 @@
       "sequence": 1
      },
      "response": null,
-     "status": 403
+     "status": 404
     }
    ]
   },
@@ -1582,23 +1513,7 @@
      },
      "queue": [
       {
-       "diffs": [
-        {
-         "data": "{\"allowed\": {\"v\": 1}}",
-         "sequence": 1,
-         "timestamp": "<ts:stored>"
-        },
-        {
-         "data": "{\"allowed\": {\"v\": 2}}",
-         "sequence": 2,
-         "timestamp": "<ts:stored>"
-        },
-        {
-         "data": "{\"allowed\": {\"v\": 3}}",
-         "sequence": 3,
-         "timestamp": "<ts:stored>"
-        }
-       ],
+       "diffs": [],
        "granularity": "high",
        "peer": "<B>",
        "sequence": 3,
@@ -1716,7 +1631,7 @@
    },
    "result": {
     "body": "",
-    "status": 403
+    "status": 204
    },
    "step": "GET ?_method=PUT&sequence=2",
    "wire": [
@@ -1730,7 +1645,7 @@
      "query": "_method=PUT&sequence=2",
      "request": null,
      "response": null,
-     "status": 403
+     "status": 204
     }
    ]
   }

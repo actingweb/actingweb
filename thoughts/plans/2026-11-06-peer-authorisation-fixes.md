@@ -1,6 +1,6 @@
 ---
 status: done
-verified: thoughts/verifications/2026-11-08-peer-authorisation-fixes-reverify-3.md
+verified: thoughts/verifications/2026-11-08-peer-authorisation-fixes-reverify-4.md
 ---
 
 # Implementation Plan: callers reach only what is theirs on `/callbacks`, `/permissions` and `/subscriptions`
@@ -252,6 +252,18 @@ its T6 (a 409 on a repeated trust request), which the guard here replaces.
   earlier findings in the brief; their findings and this batch make the
   next verification. A repository-wide `/cso` audit was judged more than
   the question needs.
+- [New 2026-11-08, iteration 32] **The `owner` rows bind to the path's
+  peer** (owner, reverify-4 Issue 2): `AuthResult.authorize` passes the
+  path's peer as `peerid`, so the built-in `owner` rows admit a peer to its
+  own subscription and trust row. A GET-only subscriber type needs no
+  adoption rows (they stay harmless); a peer also reads its own trust's
+  permissions and may PUT its own trust row (approval and permissions stay
+  the owner's). Supersedes the "add PUT and DELETE rows" migration step.
+- [New 2026-11-08, iteration 33] **`FanOutManager` sends a large payload in
+  full** (owner, reverify-4 Issue 4), with a WARNING above
+  `max_payload_for_high_granularity`; the downgrade to an unfetchable URL is
+  gone. The parameter and `DeliveryResult.granularity_downgraded` (now
+  always False) stay for compatibility.
 - [Updated 2026-11-07] **One central peer binding, keyed on the call site**
   (owner). `check_authorisation` gains a keyword `path_peer`: when it is
   set and the caller is authenticated as a peer, the caller's peer id must
@@ -2343,3 +2355,128 @@ the sender timestamp, and the sync sender's WARNING.
 **Files affected**: `CHANGELOG.rst`, `docs/migration/v3.16.rst`
 
 **Rationale**: they named lost races only, and the restore as certain.
+
+
+### 2026-11-08, after verification thoughts/verifications/2026-11-08-peer-authorisation-fixes-reverify-4.md
+
+The whole-branch review (iteration 25's decision): the security review found
+nothing; the code review and the outside voice found the issues below.
+
+#### 32. The `owner` rows bind to the path's peer
+
+**Category**: Decision changed (owner); Verification fix (Issue 2)
+
+**What changed**: `AuthResult.authorize` passes `peerid=path_peer`.
+`_authorize_subscription_write` is a plain `authorize` (its once-per-process
+"add two rows" WARNING could no longer fire for a peer and is removed). The
+three `.subscriber` wire rows re-recorded: identical to their adopted
+variants apart from the relationship name (`Wire-Phase:
+peer-authorisation-fixes:2`, the rows' owner). Docs: the CHANGELOG entry
+(no longer "Breaking"), the migration guide's step and item 18, both
+access-control guides.
+
+**Files affected**: `actingweb/handlers/base_handler.py`,
+`actingweb/handlers/subscription.py`; `tests/test_peer_paths_binding.py`
+(the method-rule tests now assert the owner row admits a peer's own PUT and
+DELETE and refuses another peer's; the trust-permissions GET);
+`tests/integration/wire/{WD6,WQ3,WC4}.subscriber.json`, `rows.toml`;
+`CHANGELOG.rst`, `docs/migration/v3.16.rst`,
+`docs/guides/access-control.rst`, `docs/guides/access-control-simple.rst`
+
+**Rationale**: the `owner` rows were inert on every `authorize()` path,
+which is why the method rule needed adoption rows at all.
+
+#### 33. `FanOutManager` sends a large payload in full
+
+**Category**: Decision (owner); Verification fix (Issue 4)
+
+**What changed**: no low-granularity URL; the data is sent, with a WARNING
+above the threshold. `_build_resource_url` removed. Docstrings of the
+manager, `with_subscription_processing` and `SubscriptionProcessingConfig`.
+
+**Files affected**: `actingweb/fanout.py`, `actingweb/interface/app.py`,
+`actingweb/subscription_config.py`; `tests/test_fanout.py`
+(`test_a_large_payload_is_sent_in_full`)
+
+**Rationale**: a 3.16 subscriber never fetches the callback's URL, so every
+redelivery failed and the peer's circuit opened.
+
+#### 34. Creating the trust approves a peer's pending request
+
+**Category**: Bug fix (Issue 1)
+
+**What changed**: `create_reciprocal_trust` and its async twin, finding an
+unapproved row for the peer at the stored base URI and relationship,
+approve it through `modify_trust_and_notify` (`_approve_on_create`)
+instead of re-pairing.
+
+**Files affected**: `actingweb/actor.py`; `tests/test_trust_re_pair.py` -
+`test_creating_the_trust_approves_a_pending_request`
+
+**Rationale**: the re-pair swapped the secret and left the row unapproved,
+while the call returned as if it had succeeded; before 3.16 the upsert
+approved it.
+
+#### 35. The initiator's create is conditional; a failure removes only its own row
+
+**Category**: Verification fix (Issue 3)
+
+**What changed**: `only_if_absent=True` on both initiator creates;
+`_drop_failed_attempt` deletes the row only while it holds this attempt's
+secret.
+
+**Files affected**: `actingweb/actor.py`; `tests/test_trust_re_pair.py` -
+`test_a_row_written_meanwhile_is_not_replaced`,
+`test_a_refused_attempt_keeps_a_row_another_request_wrote`;
+`tests/test_actor_logging_redaction.py` (its mocked `get` sequence)
+
+**Rationale**: a request from the peer landing between the read and the
+write was overwritten and then possibly deleted.
+
+#### 36. An ignored revocation asks the peer; an untimed callback keeps the timestamp
+
+**Category**: Verification fix (Issues 5 and 6)
+
+**What changed**: a callback ignored as older that would revoke runs
+`_reconcile_with_granting_peer` (a permission query; its revocations
+deleted when `auto_delete_on_revocation`; stored; WARNING). A callback
+without a timestamp carries the stored `sender_timestamp` forward.
+
+**Files affected**: `actingweb/handlers/callbacks.py`;
+`tests/test_peer_binding.py` - `test_an_ignored_revocation_asks_the_peer`,
+`test_a_callback_without_a_timestamp_keeps_the_last_one`, the stale-update
+test (the peer does not answer)
+
+**Rationale**: sender instances with skewed clocks dropped a revocation
+silently; an untimed callback erased the ordering.
+
+#### 37. Smaller fixes from the whole-branch review
+
+**Category**: Verification fix (Issues 7 to 15)
+
+**What changed**:
+- `prune --apply` exits 2 when a removed copy was not rebuilt (Issue 7;
+  docstring, guide, CHANGELOG).
+- The async re-pair POST catches `Exception` (Issue 8).
+- `DELETE /callbacks/subscriptions/...` loads hook data from the row it
+  deletes (`callback=True`) and says so (Issue 9).
+- DynamoDB `modify` writes every attribute it is given (Issue 10).
+- The security reference: approval applies to the current row (Issue 11);
+  the heading "never replaces a verified or approved trust row" (Issue 13).
+- PostgreSQL's upsert writes `created_at` as DynamoDB does (Issue 12).
+- Type hints on `DbTrust.create`'s new keywords and `CallbacksHandler.post`
+  (Issue 14).
+- `_re_pair` takes `proven` from `post()` (Issue 15; the sync and async
+  initiator twins stay, sharing their request and answer helpers).
+
+**Files affected**: `actingweb/maintenance/peer_state.py`,
+`actingweb/actor.py`, `actingweb/handlers/callbacks.py`,
+`actingweb/handlers/trust.py`, `actingweb/db/dynamodb/trust.py`,
+`actingweb/db/postgresql/trust.py`, `docs/reference/security.rst`,
+`docs/guides/database-maintenance.rst`, `CHANGELOG.rst`;
+`tests/test_peer_state_command.py` (exit 2),
+`tests/test_trust_re_pair.py` - `test_the_async_re_pair_probes_after_any_send_error`,
+`test_a_stale_handle_still_writes_what_it_is_given`,
+`test_replacing_a_pending_row_renews_its_creation_time`
+
+**Rationale**: the whole-branch review's remaining findings.

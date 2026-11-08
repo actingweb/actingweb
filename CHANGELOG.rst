@@ -27,8 +27,10 @@ SECURITY
   library's own hook names (``permissions``, ``subscription``,
   ``subscriptions``, ``www``, ``resource_*``) answer 403 on the generic
   branch. **Check:** a third party pointed at ``/callbacks/<name>`` without
-  credentials now receives 401; ``FanOutManager``'s granularity downgrade is
-  not fetchable by a 3.16 subscriber; ``FanOutManager`` delivers only with
+  credentials now receives 401; ``FanOutManager`` no longer downgrades a
+  payload over ``max_payload_for_high_granularity`` to a resource URL (a
+  3.16 subscriber does not fetch it): it sends it in full and logs a
+  WARNING; ``FanOutManager`` delivers only with
   the trust's secret, to ``<baseuri>/callbacks/subscriptions/<own id>/<subid>``
   under the trust's stored base URI (not a stored ``callback_url``); a peer
   trustee's Basic retry after a refused bearer cannot succeed on the two
@@ -71,17 +73,22 @@ SECURITY
   a request that verified is approved automatically; any other waits for the
   owner (202). A pending row (stored unverified and not yet approved) is
   replaced only by a request that verifies; a re-pair never marks a row
-  verified. A trust modification writes only the attributes it changes, on
-  a row that still exists (DynamoDB saved the whole loaded row, so a request
-  authenticated just before a re-pair could write the old secret back). An
+  verified. A trust modification writes the attributes it is given, and
+  only those, on a row that still exists (DynamoDB saved the whole loaded
+  row, so a request authenticated just before a re-pair could write the old
+  secret back). An
   initiator whose re-pair answer is lost asks the peer with the new secret
   before giving up; the per-peer trust ``GET`` answers the row's own peer
   while the owner has not approved it (202 with the row, as the spec's
   "pending"), where it answered 403.
-  A new row is written conditionally, so a request racing another never
-  replaces its row. The library's initiator re-pairs a peer it already
-  trusts with its current secret, only toward the stored base URI, and
-  stores the new secret only after the peer accepts. **Check:** an actor id
+  A new row is written conditionally on both sides, so a request racing
+  another never replaces its row, and an initiator whose request failed
+  removes only the row it wrote. The library's initiator re-pairs a peer it
+  already trusts with its current secret, only toward the stored base URI,
+  and stores the new secret only after the peer accepts; toward a peer
+  whose own request waits for approval, creating the trust approves it (and
+  tells the peer), as before. A replaced pending row takes the
+  replacement's creation time on both backends. **Check:** an actor id
   is self-asserted, so a host running its own server can still be verified
   (and, with auto-accept, approved) under another actor's id, which then
   blocks the real peer; its owner removes the row with ``DELETE
@@ -109,7 +116,11 @@ SECURITY
   not stored; a copy stored from a query keeps the last callback's sender
   timestamp, so an older callback stays older. Peer data a losing callback
   deleted and the stored copy grants is fetched again from the granting
-  peer (best effort; a failure is logged).
+  peer (best effort; a failure is logged). A callback that would revoke but
+  is older than the last one (two sender instances whose clocks differ) is
+  checked against the peer's current permissions, which are then stored
+  and their revocations applied (logged at WARNING). A callback without a
+  timestamp keeps the last one's.
   **Behavior change:** after five lost races in a row, or on a storage
   fault, a callback answers 503 with ``Retry-After``, and the library's
   sender resends a 503 up to twice with the same body (``Retry-After``
@@ -626,20 +637,21 @@ REMOVED
 CHANGED
 ~~~~~~~
 
-- **Breaking: an access row authorises the method a request performs; a PUT
-  or DELETE is no longer admitted by a GET row.** The subscription handler
+- **An access row authorises the method a request performs; a PUT or
+  DELETE is no longer admitted by a GET row.** The subscription handler
   authorised ``PUT`` and ``DELETE`` on ``subscriptions/<id>/<subid>`` (and
   ``GET ?_method=PUT|DELETE``) as GET, so a row granting GET there let a
-  peer clear queues and delete subscriptions. **Check:** an application
-  trust type whose peers clear their queue or are unsubscribed by their
-  publisher through ``("subscriptions/<id>/<subid>", "GET", "a")`` adds
-  ``("subscriptions/<id>/<subid>", "PUT", "a")`` and
-  ``("subscriptions/<id>/<subid>", "DELETE", "a")`` on the publisher, or the
-  gap-resync clear, the low-granularity acknowledgement and the publisher's
-  unsubscribe answer 403 (logged once per process and relationship at
-  WARNING by the publisher, at ERROR by the subscriber). ``friend`` is
-  unaffected. A ``PUT`` to ``/callbacks/<name>`` is authorised as PUT and
-  reaches the hook as ``PUT``.
+  peer clear queues and delete subscriptions. A peer's own subscription and
+  trust row are admitted by the built-in ``owner`` rows, which now compare
+  with the peer the path names (they never matched on these handlers
+  before), so a subscriber type with only a GET row needs no new rows: it
+  clears its own queue and is unsubscribed as before, and no other peer
+  reaches it. **Behavior change:** through the ``owner`` rows a peer of any
+  relationship type also reads its own trust's permissions
+  (``GET /trust/<rel>/<peer>/permissions``) and may ``PUT`` its own trust
+  row (its description and base URI; approving it and writing its
+  permissions stay the owner's, 403). A ``PUT`` to ``/callbacks/<name>`` is
+  authorised as PUT and reaches the hook as ``PUT``.
 - **A peer of any relationship type reads its own granted permissions**
   (``GET /permissions/<peer>``), through the ``owner`` row; the creator and
   an ``admin`` peer read any. Before, only ``associate``, ``friend``,
@@ -1393,7 +1405,8 @@ ADDED
   (a forged one for a trusted peer looks real). A trusted peer's removed
   copy (a live one, or one stamped in the future) is rebuilt right after
   its removal by a permission query to its peer. Strict reads; exit 0
-  nothing found, 1 found or removed, 2 a store could not be read. See the
+  nothing found, 1 found or removed, 2 a store could not be read, a delete
+  failed or a removed copy was not rebuilt. See the
   maintenance guide.
 - **``DELETE /<actor>/trust/<relationship>/<peer>?notify=false``**, creator
   only: removes the row and its cascade without contacting the peer (a dead

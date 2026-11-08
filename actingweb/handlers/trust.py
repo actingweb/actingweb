@@ -450,7 +450,7 @@ class TrustRelationshipHandler(base_handler.BaseHandler):
         if existing and (
             proven or existing.get("verified") or existing.get("approved")
         ):
-            self._re_pair(myself, auth_result, peerid, relationship, secret)
+            self._re_pair(myself, proven, peerid, relationship, secret)
             return
         headers = getattr(self.request, "headers", None) or {}
         if not existing and str(headers.get("Authorization", "")).lower().startswith(
@@ -541,7 +541,7 @@ class TrustRelationshipHandler(base_handler.BaseHandler):
     def _re_pair(
         self,
         myself: Any,
-        auth_result: Any,
+        proven: bool,
         peerid: str,
         relationship: str,
         secret: str,
@@ -553,13 +553,8 @@ class TrustRelationshipHandler(base_handler.BaseHandler):
         (``Actor.replace_trust_secret``). The answer follows the stored
         approval (201 or 202) and no ``trust_request_received`` hook runs: no
         new relationship was requested. Anything else answers 403 and
-        changes nothing."""
-        acl = getattr(auth_result.auth_obj, "acl", None)
-        proven = (
-            isinstance(acl, dict)
-            and bool(acl.get("authenticated"))
-            and acl.get("peerid") == peerid
-        )
+        changes nothing. ``proven``: the request authenticated as this peer
+        (its bearer is the trust's current secret)."""
         reason = "the request did not carry the trust's current secret"
         new_trust = None
         if proven:

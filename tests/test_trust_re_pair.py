@@ -1004,3 +1004,158 @@ class TestTheMetaCheckAndThePendingReplacement:
         messages = [r.getMessage() for r in caplog.records]
         assert not any("its pending row (base URI" in m for m in messages)
         assert any("a row was created meanwhile" in m for m in messages)
+
+
+# ---------------------------------------------------------------------------
+# Verification of 2026-11-08 (reverify-4, the whole-branch review)
+# ---------------------------------------------------------------------------
+
+
+class TestTheInitiatorAfterTheWholeBranchReview:
+    def test_creating_the_trust_approves_a_pending_request(self) -> None:
+        """Issue 1: the owner creating the trust toward a peer whose request
+        waits approves it, as before 3.16, instead of a re-pair."""
+        w = Initiator()
+        assert Trust(actor_id=aid(w.b), peerid=w.a, config=w.config).modify(
+            approved=False
+        )
+        notified = mock.Mock(status_code=204, reason="No Content", content=b"")
+        with (
+            mock.patch.object(w.b, "get_peer_info", return_value=w.peer_info),
+            mock.patch("actingweb.actor.requests.post", return_value=notified) as post,
+        ):
+            result = w.b.create_reciprocal_trust(
+                url=w.url, secret=_new_secret(), relationship="friend"
+            )
+        assert result
+        row = w.row()
+        assert row["approved"] is True
+        assert row["secret"] == w.secret  # no re-pair: the secret stays
+        assert all(
+            "Bearer" not in str(c.kwargs.get("headers", {}).get("Authorization", ""))
+            or w.secret in str(c.kwargs["headers"]["Authorization"])
+            for c in post.call_args_list
+        )
+
+    def test_a_row_written_meanwhile_is_not_replaced(self) -> None:
+        """Issue 3: the initiator's create is conditional."""
+        config = make_config()
+        b = create_core_actor(config, uuid_email(), passphrase=PASSPHRASE)
+        peer = f"peer-n-{uuid.uuid4().hex[:8]}"
+        info = {"last_response_code": 200, "data": {"id": peer, "type": "urn:test"}}
+        theirs = uuid.uuid4().hex
+        real_create = Trust.create
+        raced: list[int] = []
+
+        def racing(self: Trust, *args: Any, **kwargs: Any) -> Any:
+            if not raced:
+                raced.append(1)
+                # The peer's own request lands between the read and the write.
+                assert real_create(
+                    Trust(actor_id=aid(b), peerid=peer, config=config),
+                    baseuri=f"https://{peer}.example.test/{peer}",
+                    peer_type="urn:test",
+                    relationship="friend",
+                    secret=theirs,
+                )
+            return real_create(self, *args, **kwargs)
+
+        with (
+            mock.patch.object(b, "get_peer_info", return_value=info),
+            mock.patch.object(Trust, "create", racing),
+            mock.patch("actingweb.actor.requests.post") as post,
+        ):
+            result = b.create_reciprocal_trust(
+                url=f"https://{peer}.example.test/{peer}",
+                secret=_new_secret(),
+                relationship="friend",
+            )
+        assert result is False
+        post.assert_not_called()
+        row = Trust(actor_id=aid(b), peerid=peer, config=config).get() or {}
+        assert row.get("secret") == theirs
+
+    def test_a_refused_attempt_keeps_a_row_another_request_wrote(self) -> None:
+        """Issue 3: on a refusal, only this attempt's own row is deleted."""
+        config = make_config()
+        b = create_core_actor(config, uuid_email(), passphrase=PASSPHRASE)
+        peer = f"peer-k-{uuid.uuid4().hex[:8]}"
+        url = f"https://{peer}.example.test/{peer}"
+        info = {"last_response_code": 200, "data": {"id": peer, "type": "urn:test"}}
+        theirs = uuid.uuid4().hex
+
+        def refuse_after_a_replacement(**_kwargs: Any) -> Any:
+            # Another request swaps the row's secret while ours is in flight.
+            assert Trust(actor_id=aid(b), peerid=peer, config=config).modify(
+                secret=theirs
+            )
+            return mock.Mock(status_code=403, reason="Forbidden", content=b"")
+
+        with (
+            mock.patch.object(b, "get_peer_info", return_value=info),
+            mock.patch(
+                "actingweb.actor.requests.post", side_effect=refuse_after_a_replacement
+            ),
+        ):
+            assert (
+                b.create_reciprocal_trust(
+                    url=url, secret=_new_secret(), relationship="friend"
+                )
+                is False
+            )
+        row = Trust(actor_id=aid(b), peerid=peer, config=config).get() or {}
+        assert row.get("secret") == theirs
+
+    def test_the_async_re_pair_probes_after_any_send_error(self) -> None:
+        """Issue 8: an error that is not an ``httpx.HTTPError`` (an invalid
+        URL) reaches the probe too."""
+        w = Initiator()
+        new = _new_secret()
+        client = mock.MagicMock()
+        client.__aenter__.return_value.post = mock.AsyncMock(
+            side_effect=httpx.InvalidURL("bad")
+        )
+        client.__aenter__.return_value.get = mock.AsyncMock(
+            return_value=mock.Mock(
+                status_code=200,
+                json=lambda: {"peerid": aid(w.b), "approved": True},
+            )
+        )
+        with (
+            mock.patch.object(
+                w.b, "get_peer_info_async", mock.AsyncMock(return_value=w.peer_info)
+            ),
+            mock.patch("httpx.AsyncClient", return_value=client),
+        ):
+            assert asyncio.run(
+                w.b.create_reciprocal_trust_async(
+                    url=w.url, secret=new, relationship="friend"
+                )
+            )
+        assert w.row()["secret"] == new
+
+
+class TestTheTrustStoreAfterTheWholeBranchReview:
+    def test_a_stale_handle_still_writes_what_it_is_given(self) -> None:
+        """Issue 10: a modify writes every attribute passed, not only those
+        that differ from what this handle last read."""
+        w = Initiator()
+        stale = Trust(actor_id=aid(w.b), peerid=w.a, config=w.config)
+        assert (stale.get() or {})["approved"] is True
+        assert Trust(actor_id=aid(w.b), peerid=w.a, config=w.config).modify(
+            approved=False
+        )
+        assert stale.modify(approved=True) is True
+        assert w.row()["approved"] is True
+
+    def test_replacing_a_pending_row_renews_its_creation_time(self) -> None:
+        """Issue 12: both backends write the replacement's created_at."""
+        w = Receiver()
+        peer = f"peer-c-{uuid.uuid4().hex[:8]}"
+        assert _create(w, peer, meta_id="the-squatter").response.status_code == 202
+        first = w.row(peer).get("created_at")
+        import time
+
+        time.sleep(1.1)
+        _create(w, peer)
+        assert w.row(peer).get("created_at") != first

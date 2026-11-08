@@ -386,7 +386,9 @@ class AuthResult:
             path: Path for authorization (defaults to path used in authentication)
             subpath: Subpath for authorization
             path_peer: The peer id the request's path names; a peer caller
-                must be that peer (``Auth.check_authorisation``)
+                must be that peer (``Auth.check_authorisation``). It is also
+                the ``peerid`` that ``owner`` rows compare with, so they admit
+                a peer to its own paths (owner, 2026-11-08).
 
         Returns:
             True if authorized, False otherwise. Sets 403 response if unauthorized.
@@ -395,7 +397,11 @@ class AuthResult:
             return False
 
         if self.auth_obj.check_authorisation(
-            path=path, subpath=subpath, method=method.upper(), path_peer=path_peer
+            path=path,
+            subpath=subpath,
+            method=method.upper(),
+            peerid=path_peer or "",
+            path_peer=path_peer,
         ):
             return True
         else:

@@ -1,3 +1,4 @@
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -190,11 +191,6 @@ class TestFanOutManager:
         cb = self.manager._get_circuit_breaker("peer1")
         assert cb.failure_count == 0
         assert cb.state == CircuitState.CLOSED
-
-    def test_build_resource_url(self) -> None:
-        """Build resource URL correctly."""
-        url = self.manager._build_resource_url("properties")
-        assert url == "https://example.com/actor123/properties"
 
     @pytest.mark.asyncio
     async def test_deliver_to_empty_subscribers(self) -> None:
@@ -478,8 +474,9 @@ class TestFanOutManager:
         assert result.results[0].error == "circuit_open"
 
     @pytest.mark.asyncio
-    async def test_granularity_downgrade(self) -> None:
-        """Large payload triggers granularity downgrade."""
+    async def test_a_large_payload_is_sent_in_full(self) -> None:
+        """Reverify-4, Issue 4 (owner): no downgrade to a URL a 3.16
+        subscriber cannot fetch; the data is sent, with a WARNING."""
         # Create manager with small threshold
         manager = FanOutManager(
             actor=self.mock_actor,
@@ -510,12 +507,19 @@ class TestFanOutManager:
                 subscriptions, large_payload, "properties", 1
             )
 
-            # Check that downgrade header was set
             call_args = mock_client.post.call_args
             headers = call_args.kwargs.get("headers", {})
-            assert headers.get("X-ActingWeb-Granularity-Downgraded") == "true"
+            assert "X-ActingWeb-Granularity-Downgraded" not in headers
+            content = call_args.kwargs["content"]
+            if headers.get("Content-Encoding") == "gzip":
+                import gzip
 
-        assert result.results[0].granularity_downgraded is True
+                content = gzip.decompress(content)
+            sent = json.loads(content)
+            assert sent["granularity"] == "high" and "url" not in sent
+            assert sent["data"] == large_payload
+
+        assert result.results[0].granularity_downgraded is False
 
     @pytest.mark.asyncio
     async def test_no_downgrade_for_low_granularity(self) -> None:

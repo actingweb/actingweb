@@ -189,10 +189,9 @@ be able to create subscriptions or receive callbacks.
        # ACL rules allow HTTP endpoint access
        acl_rules=[
            ("subscriptions/<id>", "POST", "a"),  # Can create subscriptions
-           # Its own subscription: poll, clear the queue, be unsubscribed
+           # Its own subscription: poll (the built-in owner row admits
+           # clearing the queue and being unsubscribed)
            ("subscriptions/<id>/<subid>", "GET", "a"),
-           ("subscriptions/<id>/<subid>", "PUT", "a"),
-           ("subscriptions/<id>/<subid>", "DELETE", "a"),
            ("properties", "GET", "a"),           # Can read properties
            ("callbacks", "", "a"),               # Can receive callbacks (all methods)
        ]
@@ -218,10 +217,9 @@ permissions and trust row), whichever row matched. See
    # Allow creating subscriptions (actor-to-actor data sharing)
    ("subscriptions/<id>", "POST", "a")
 
-   # A subscriber's own subscription: poll, clear the queue, be unsubscribed
+   # A subscriber's own subscription: poll (PUT and DELETE on it are the
+   # built-in owner row's)
    ("subscriptions/<id>/<subid>", "GET", "a")
-   ("subscriptions/<id>/<subid>", "PUT", "a")
-   ("subscriptions/<id>/<subid>", "DELETE", "a")
 
    # Allow reading properties
    ("properties", "GET", "a")

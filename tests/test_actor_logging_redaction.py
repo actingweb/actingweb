@@ -41,7 +41,13 @@ async def test_async_trust_request_logs_no_secret(
     dbtrust.create.return_value = True
     # No row for the peer yet (3.16: a peer with a row re-pairs instead),
     # then the row just created.
-    dbtrust.get.side_effect = [None, {"verification_token": VERIFY}]
+    # The existence check, the created row, then the failed attempt's
+    # cleanup reading the row back (it removes only its own attempt).
+    dbtrust.get.side_effect = [
+        None,
+        {"verification_token": VERIFY, "secret": SECRET},
+        {"secret": SECRET},
+    ]
 
     class _FailingClient:
         def __init__(self, *args: Any, **kwargs: Any) -> None:

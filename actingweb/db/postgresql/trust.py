@@ -25,6 +25,7 @@ ON CONFLICT (id, peerid) DO UPDATE SET
     verification_token = EXCLUDED.verification_token,
     peer_identifier = EXCLUDED.peer_identifier,
     established_via = EXCLUDED.established_via,
+    created_at = EXCLUDED.created_at,
     last_accessed = EXCLUDED.last_accessed,
     last_connected_via = EXCLUDED.last_connected_via,
     client_name = EXCLUDED.client_name,

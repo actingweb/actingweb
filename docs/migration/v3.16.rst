@@ -132,10 +132,9 @@ items, item 11 and item 18.
 18. **Callbacks are authenticated, and a peer reaches only its own paths**
     (see `Peer paths are bound to their peer`_). A ``/callbacks`` request
     without credentials answers 401; an access row admits only the method a
-    request performs, so **an application trust type whose rows grant only
-    GET on ``subscriptions/<id>/<subid>`` must add PUT and DELETE rows** on
-    the publisher, or its subscribers' queue clears and the publisher's
-    unsubscribe fail with 403. A trust request for a peer that already has a
+    request performs; a peer's own subscription and trust row are admitted
+    by the built-in ``owner`` rows, so a GET-only subscriber type needs no
+    new rows. A trust request for a peer that already has a
     trust is a re-pair that must carry the current secret. After every
     instance runs 3.16, run ``actingweb-peer-state report`` (then ``prune
     --apply``) and restart.
@@ -1279,33 +1278,19 @@ access row that admitted it, and a trust request for an existing peer
 replaced its trust row (see the 3.16 ``SECURITY`` entries in the changelog).
 3.16 closes each of these; what an application may need to do:
 
-**Add PUT and DELETE rows to a GET-only subscriber type.** An access row
-now admits only the HTTP method a request performs: a PUT or DELETE (or a
-``GET ?_method=PUT|DELETE``) is no longer admitted by a GET row. A trust type
-whose ``acl_rules`` grant only GET on its subscription (the pattern
-``actingweb_mcp``'s ``subscriber`` type used) must add the two rows **on the
-publisher**, the deployment that serves the subscription:
-
-.. code-block:: python
-
-    access.add_trust_type(
-        name="subscriber",
-        # ...
-        acl_rules=[
-            ("subscriptions/<id>/<subid>", "GET", "a"),
-            ("subscriptions/<id>/<subid>", "PUT", "a"),     # 3.16: clear the queue
-            ("subscriptions/<id>/<subid>", "DELETE", "a"),  # 3.16: be unsubscribed
-            # ...
-        ],
-    )
-
-Without them the subscriber's gap-resync clear and low-granularity
-acknowledgement answer 403 (its queue at the publisher keeps growing), and
-the publisher's unsubscribe answers 403 (the subscriber keeps a subscription
-nobody serves). The publisher logs the first refusal per relationship at
-WARNING (``Refused PUT on subscriptions/<id>/<subid> for relationship
-'subscriber'``); the subscriber logs each at ERROR with the status. The
-built-in ``friend`` type is unaffected: its row admits every method.
+**A row admits the method a request performs; a peer's own paths are the
+``owner`` rows'.** An access row now admits only the HTTP method a request
+performs: a PUT or DELETE (or a ``GET ?_method=PUT|DELETE``) is no longer
+admitted by a GET row. A peer's own subscription
+(``subscriptions/<id>/<subid>``) and its own trust row are admitted by the
+built-in ``owner`` rows, which now compare with the peer the path names, so
+a trust type whose ``acl_rules`` grant only GET on its subscription (the
+pattern ``actingweb_mcp``'s ``subscriber`` type used) needs nothing new: its
+subscribers clear their queue and are unsubscribed as before, and another
+peer's PUT or DELETE answers 403. PUT and DELETE rows an application added
+are harmless. Through the ``owner`` rows a peer also reads its own trust's
+permissions and may ``PUT`` its own trust row (description and base URI;
+approval and permissions stay the owner's).
 
 **Callbacks are authenticated.** Every ``/callbacks`` request without
 credentials answers 401 with a challenge. The two library branches,
@@ -1314,9 +1299,9 @@ credentials answers 401 with a challenge. The two library branches,
 anyone else, the actor's creator and an ``admin`` peer included). Only
 ``diff`` and ``resync`` callbacks are accepted on the subscription branch
 (400). A low-granularity diff is fetched from the trust's stored base URI,
-never from the callback's ``url``, so ``FanOutManager``'s granularity
-downgrade (which sends a resource URL) is not fetchable by a 3.16
-subscriber. A permission callback's timestamp may be at most five minutes
+never from the callback's ``url``; ``FanOutManager`` therefore no longer
+downgrades a large payload to a resource URL, it sends it in full and logs
+a WARNING above ``max_payload_for_high_granularity``. A permission callback's timestamp may be at most five minutes
 ahead of the receiver's clock (400 beyond, and for one that does not
 parse): check the sender's clock if you see ``Refused a permission
 callback``. A stored permission copy is written conditionally on the row

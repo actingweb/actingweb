@@ -1,3 +1,4 @@
+import dataclasses
 import json
 import logging
 from collections.abc import Callable
@@ -214,11 +215,14 @@ class CallbacksHandler(base_handler.BaseHandler):
             if self.hooks:
                 from ..subscription import Subscription
 
+                # The publisher ends our subscription to it: the row is the
+                # one we made (callback=True), the one delete_callback_
+                # subscription removes.
                 sub_obj = Subscription(
                     actor_id=actor_id,
                     peerid=peerid,
                     subid=subid,
-                    callback=False,  # Callback subscription is inbound (callback=False)
+                    callback=True,
                     config=myself.config,
                 )
                 sub_data = sub_obj.subscription if sub_obj.subscription else {}
@@ -227,7 +231,8 @@ class CallbacksHandler(base_handler.BaseHandler):
                 peer_id=peerid, subscription_id=subid
             ):
                 # Execute lifecycle hook after successful deletion
-                # This is a peer-initiated deletion (they're deleting their subscription to us)
+                # A peer-initiated deletion: the publisher ended our
+                # subscription to it
                 if self.hooks and peerid:
                     try:
                         logger.info(
@@ -279,7 +284,7 @@ class CallbacksHandler(base_handler.BaseHandler):
         else:
             self.response.set_status(403, "Forbidden")
 
-    def post(self, actor_id, name, method: str = "POST"):
+    def post(self, actor_id: str, name: str, method: str = "POST") -> None:
         """Handles POST callbacks (and PUT, authorised as ``method``)"""
         auth_result = self._authenticate_callback(actor_id, name)
         if auth_result is None:
@@ -415,6 +420,15 @@ class CallbacksHandler(base_handler.BaseHandler):
                             f"Ignored a permission callback from {granting_actor_id} "
                             f"older than its last one ({current} < {previous})"
                         )
+                        if detect_permission_changes(old_permissions, peer_perms).get(
+                            "has_revocations"
+                        ):
+                            # Two sender instances with skewed clocks can make
+                            # a revocation look older than the grant before
+                            # it: the peer's current permissions decide.
+                            self._reconcile_with_granting_peer(
+                                myself, actor_interface, actor_id, granting_actor_id
+                            )
                         self._sync_permitted_patterns(
                             myself,
                             actor_interface,
@@ -441,7 +455,18 @@ class CallbacksHandler(base_handler.BaseHandler):
                         )
                         deleted.extend(revoked)
 
-                    success = store.replace_permissions(peer_perms, expected)
+                    # A callback without a timestamp keeps the last one's, so
+                    # a later resend of an older callback stays older.
+                    to_store = peer_perms
+                    if current is None and isinstance(previous, str):
+                        to_store = dataclasses.replace(
+                            peer_perms,
+                            extra_attributes={
+                                **peer_perms.extra_attributes,
+                                SENDER_TIMESTAMP_KEY: previous,
+                            },
+                        )
+                    success = store.replace_permissions(to_store, expected)
                     if success:
                         break
                 else:
@@ -1133,6 +1158,48 @@ class CallbacksHandler(base_handler.BaseHandler):
                 exc_info=True,
             )
             return False
+
+    def _reconcile_with_granting_peer(
+        self,
+        myself: Any,
+        actor_interface: "ActorInterface",
+        actor_id: str,
+        peer_id: str,
+    ) -> None:
+        """An ignored callback would have revoked part of the stored copy:
+        ask the peer for its current permissions, delete what they revoke
+        (when ``auto_delete_on_revocation`` is on) and store them. Best
+        effort: a failure is logged, the callback is already answered."""
+        from actingweb.peer_permissions import (
+            detect_permission_changes,
+            fetch_peer_permissions,
+            get_peer_permission_store,
+        )
+
+        logger.warning(
+            f"A permission callback from {peer_id} that revokes access was older "
+            "than the last one (sender clocks may differ); asking the peer for "
+            "its current permissions"
+        )
+        try:
+            fetched = fetch_peer_permissions(actor_id, peer_id, myself.config)
+            if fetched.fetch_error:
+                logger.warning(
+                    f"Could not ask {peer_id} for its permissions: {fetched.fetch_error}"
+                )
+                return
+            store = get_peer_permission_store(myself.config)
+            _, stored = store.read_stored_permissions(actor_id, peer_id)
+            changes = detect_permission_changes(stored, fetched)
+            if changes.get("has_revocations") and getattr(
+                myself.config, "auto_delete_on_revocation", False
+            ):
+                self._delete_revoked_peer_data(
+                    actor_interface, peer_id, changes.get("revoked_patterns", [])
+                )
+            store.store_permissions(fetched)
+        except Exception as e:  # folds DbError: best effort, answer decided
+            logger.warning(f"Could not reconcile permissions with {peer_id}: {e}")
 
     def _sync_permitted_patterns(
         self,

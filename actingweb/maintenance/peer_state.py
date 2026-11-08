@@ -19,7 +19,7 @@ Subcommands (both required to name one; dry run unless ``--apply``):
 ``prune [ACTOR_ID] [--apply]``
     The same rows; with ``--apply`` they are deleted. Exit 0 when nothing is
     found, 1 when rows were found (dry run) or removed, 2 when a store could
-    not be read or a delete failed.
+    not be read, a delete failed, or a removed copy was not rebuilt.
 
 Kinds, per actor (names are compared whole: a peer id may contain ``:``):
 
@@ -265,9 +265,16 @@ def scan(
     return findings
 
 
-def prune(config: Any, findings: list[Finding], limiter: RateLimiter) -> int:
-    """Delete the prunable findings; the number removed. A fault raises
-    ``StoreUnavailable`` after printing what was removed so far."""
+def prune(
+    config: Any,
+    findings: list[Finding],
+    limiter: RateLimiter,
+    not_rebuilt: list[Finding] | None = None,
+) -> int:
+    """Delete the prunable findings; the number removed. A trusted peer's
+    copy is rebuilt right after its removal; one that is not is appended to
+    ``not_rebuilt``. A fault raises ``StoreUnavailable`` after printing what
+    was removed so far."""
     from actingweb.db import get_attribute
 
     attributes = get_attribute(config)
@@ -293,8 +300,13 @@ def prune(config: Any, findings: list[Finding], limiter: RateLimiter) -> int:
             )
         removed += 1
         print(f"removed\t{f.actor_id}\t{f.kind}\t{f.bucket}\t{f.name or '-'}")
-        if f.kind in REBUILT_KINDS and f.name:
-            _rebuild_copy(config, f, limiter)
+        if (
+            f.kind in REBUILT_KINDS
+            and f.name
+            and not _rebuild_copy(config, f, limiter)
+            and not_rebuilt is not None
+        ):
+            not_rebuilt.append(f)
     return removed
 
 
@@ -329,15 +341,24 @@ def cmd_prune(args: argparse.Namespace) -> int:
         count = sum(1 for f in findings if f.prunable)
         print(f"Dry run: would remove {count}. Re-run with --apply.")
         return 1
-    removed = prune(config, findings, limiter)
+    not_rebuilt: list[Finding] = []
+    removed = prune(config, findings, limiter, not_rebuilt)
     print(
         f"Removed {removed}. Restart the application's processes: they keep "
         "permissions they cached until then."
     )
+    if not_rebuilt:
+        # A removed copy that was not rebuilt leaves the peer's next callback
+        # taken for its first: exit as a failure, so a script notices.
+        print(
+            f"Not rebuilt: {len(not_rebuilt)}. Run the permission query for "
+            "each once its peer answers."
+        )
+        return 2
     return 1
 
 
-def _rebuild_copy(config: Any, f: Finding, limiter: RateLimiter) -> None:
+def _rebuild_copy(config: Any, f: Finding, limiter: RateLimiter) -> bool:
     """Query the peer whose copy was just removed (a ``permissions-copy``, or
     a ``future-permissions`` row of a trusted peer) and store its answer,
     before the next removal: without a copy, the peer's next callback is
@@ -361,8 +382,9 @@ def _rebuild_copy(config: Any, f: Finding, limiter: RateLimiter) -> None:
         why = "store fault"
     if why:
         print(f"not rebuilt\t{f.actor_id}\t{peer_id}\t{why}")
-    else:
-        print(f"rebuilt\t{f.actor_id}\t{peer_id}")
+        return False
+    print(f"rebuilt\t{f.actor_id}\t{peer_id}")
+    return True
 
 
 def _build_parser() -> argparse.ArgumentParser:

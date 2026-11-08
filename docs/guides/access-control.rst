@@ -155,7 +155,8 @@ but never approve it or write its own permissions.
 
 * ``subscriptions/<id>`` - Creating subscriptions (POST)
 * ``subscriptions/<id>/<subid>`` - A subscriber's own subscription: GET to
-  poll its queue, PUT to clear it, DELETE when its publisher unsubscribes it
+  poll its queue (PUT to clear it and DELETE to end it are admitted by the
+  built-in ``owner`` row)
 * ``properties`` - Property access (GET/PUT)
 * ``trust/<type>/<id>`` - Trust relationship management
 * ``callbacks`` - Receiving subscription callbacks
@@ -227,19 +228,19 @@ For actor-to-actor subscription scenarios, you need to specify ACL rules:
        # ACL rules enable HTTP endpoint access
        acl_rules=[
            ("subscriptions/<id>", "POST", "a"),  # Create subscriptions
-           # Its own subscription: poll, clear the queue, be unsubscribed
+           # Its own subscription: poll (clearing the queue and being
+           # unsubscribed are the built-in ``owner`` row's)
            ("subscriptions/<id>/<subid>", "GET", "a"),
-           ("subscriptions/<id>/<subid>", "PUT", "a"),
-           ("subscriptions/<id>/<subid>", "DELETE", "a"),
            ("properties", "GET", "a"),           # Read properties
            ("callbacks", "", "a"),               # Receive callbacks (all methods)
        ]
    )
 
-Without the PUT and DELETE rows (on the publisher, the deployment serving
-the subscription) a subscriber of this type cannot clear its queue after a
-gap resync or a low-granularity callback, and its publisher cannot
-unsubscribe it: both answer 403 since 3.16.
+A row admits only the method a request performs. A peer's PUT and DELETE
+on its own subscription (clearing its queue, being unsubscribed by its
+publisher) are admitted by the built-in ``("owner", "subscriptions", "",
+"a")`` row, which compares with the peer the path names; no other peer
+reaches that subscription.
 
 Architecture
 ============

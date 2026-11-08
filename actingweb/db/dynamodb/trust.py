@@ -254,76 +254,77 @@ class DbTrust:
             logger.debug("Attempted modification of DbTrust without db handle")
             return False
         before = dict(self.handle.attribute_values)
+        # Every attribute the caller passed is written, whatever this handle
+        # last read: comparing with the handle would skip a write the
+        # database needs when another process changed the row.
+        given: dict[str, Any] = {}
         if baseuri and len(baseuri) > 0:
-            self.handle.baseuri = baseuri
+            given["baseuri"] = baseuri
         if secret and len(secret) > 0:
-            self.handle.secret = secret
+            given["secret"] = secret
         if desc and len(desc) > 0:
-            self.handle.desc = desc
+            given["desc"] = desc
         if approved is not None:
-            self.handle.approved = approved
+            given["approved"] = approved
         if verified is not None:
-            self.handle.verified = verified
+            given["verified"] = verified
         if verification_token and len(verification_token) > 0:
-            self.handle.verification_token = verification_token
+            given["verification_token"] = verification_token
         if peer_approved is not None:
-            self.handle.peer_approved = peer_approved
+            given["peer_approved"] = peer_approved
 
         # Handle new unified trust attributes
         if peer_identifier is not None:
-            self.handle.peer_identifier = peer_identifier
+            given["peer_identifier"] = peer_identifier
         if established_via is not None:
-            self.handle.established_via = established_via
+            given["established_via"] = established_via
         if created_at is not None:
             try:
-                self.handle.created_at = _parse_timestamp(created_at)
+                given["created_at"] = _parse_timestamp(created_at)
             except ValueError as e:
                 logger.warning(f"Invalid created_at timestamp: {e}")
                 # Keep existing value if parsing fails
         if last_accessed is not None:
             try:
-                self.handle.last_accessed = _parse_timestamp(last_accessed)
+                given["last_accessed"] = _parse_timestamp(last_accessed)
             except ValueError as e:
                 logger.warning(f"Invalid last_accessed timestamp: {e}")
                 # Keep existing value if parsing fails
 
         if last_connected_via is not None:
-            self.handle.last_connected_via = canonical_connection_method(
+            given["last_connected_via"] = canonical_connection_method(
                 last_connected_via
             )
 
         # Handle client metadata for OAuth2 clients
         if client_name is not None:
-            self.handle.client_name = client_name
+            given["client_name"] = client_name
         if client_version is not None:
-            self.handle.client_version = client_version
+            given["client_version"] = client_version
         if client_platform is not None:
-            self.handle.client_platform = client_platform
+            given["client_platform"] = client_platform
         if oauth_client_id is not None:
-            self.handle.oauth_client_id = oauth_client_id
+            given["oauth_client_id"] = oauth_client_id
 
         # Handle peer capability tracking fields
         if aw_supported is not None:
-            self.handle.aw_supported = aw_supported
+            given["aw_supported"] = aw_supported
         if aw_version is not None:
-            self.handle.aw_version = aw_version
+            given["aw_version"] = aw_version
         if capabilities_fetched_at is not None:
             try:
-                self.handle.capabilities_fetched_at = _parse_timestamp(
+                given["capabilities_fetched_at"] = _parse_timestamp(
                     capabilities_fetched_at
                 )
             except ValueError as e:
                 logger.warning(f"Invalid capabilities_fetched_at timestamp: {e}")
                 # Keep existing value if parsing fails
 
-        changed = {
-            name: value
-            for name, value in self.handle.attribute_values.items()
-            if before.get(name) != value
-        }
-        if not changed:
+        if not given:
             return True
-        actions = [getattr(Trust, name).set(value) for name, value in changed.items()]
+        for name, value in given.items():
+            setattr(self.handle, name, value)
+        actions = [getattr(Trust, name).set(value) for name, value in given.items()]
         try:
             self.handle.update(actions=actions, condition=Trust.id.exists())
         except UpdateError as e:
@@ -367,8 +368,8 @@ class DbTrust:
         aw_version=None,
         capabilities_fetched_at=None,
         *,
-        only_if_absent=False,
-        only_if_pending=False,
+        only_if_absent: bool = False,
+        only_if_pending: bool = False,
     ):
         """Create a new trust (an upsert; ``only_if_absent`` writes only when
         no row exists for the actor and peer, and answers False when one

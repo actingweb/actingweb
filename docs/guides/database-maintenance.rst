@@ -192,7 +192,8 @@ restart them after ``prune --apply``. A row created between the command's
 read and its delete (a trust or subscription made at that moment) is misread
 as stale and removed; the next callback writes it again, which is why it is
 run in a quiet period. Exit codes: 0 nothing found, 1 rows found (report or
-dry run) or removed, 2 a store could not be read or a delete failed.
+dry run) or removed, 2 a store could not be read, a delete failed, or a
+removed copy was not rebuilt.
 
 Cost, per actor: one read each of its trust rows, its subscriptions, its
 attribute bucket names and the two buckets; ``--rps`` (default 10, ``0`` for

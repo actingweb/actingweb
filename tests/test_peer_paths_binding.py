@@ -21,7 +21,6 @@ from unittest import mock
 import pytest
 
 from actingweb.aw_web_request import AWWebObj
-from actingweb.handlers import subscription as subscription_handlers
 from actingweb.handlers.permissions import PermissionsHandler
 from actingweb.handlers.subscription import (
     SubscriptionDiffHandler,
@@ -142,16 +141,6 @@ def world() -> Publisher:
     return Publisher()
 
 
-@pytest.fixture(autouse=True)
-def _fresh_refusal_log() -> Any:
-    """The once-per-process WARNING keeps state; each test starts clean."""
-    saved = set(subscription_handlers._GET_ROW_REFUSALS_LOGGED)
-    subscription_handlers._GET_ROW_REFUSALS_LOGGED.clear()
-    yield
-    subscription_handlers._GET_ROW_REFUSALS_LOGGED.clear()
-    subscription_handlers._GET_ROW_REFUSALS_LOGGED.update(saved)
-
-
 # ---------------------------------------------------------------------------
 # Subscriptions
 # ---------------------------------------------------------------------------
@@ -224,9 +213,12 @@ class TestTheMethodRule:
             ("GET", {"_method": "DELETE"}),
         ],
     )
-    def test_a_get_only_row_refuses_put_and_delete(
+    def test_the_owner_row_admits_a_peers_own_put_and_delete(
         self, world: Publisher, method: str, params: dict[str, str] | None
     ) -> None:
+        """Reverify-4, Issue 2 (owner): a subscriber type with only a GET row
+        clears and ends its own subscription through the ``owner`` row; no
+        adoption rows are needed."""
         g = world.peers["g"]
         out = world.call(
             SubscriptionHandler,
@@ -237,30 +229,27 @@ class TestTheMethodRule:
             body={"sequence": 1} if method == "PUT" else None,
             params=params,
         )
-        assert out.response.status_code == 403
-        assert world.diffs("g") == [1]
-        assert world.has_subscription("g")
+        # Admitted (a method override without a body answers 400, not 403).
+        assert out.response.status_code != 403
+        if params is None:
+            assert out.response.status_code in (200, 204)
 
-    def test_the_refusal_is_logged_once_at_warning(
-        self, world: Publisher, caplog: pytest.LogCaptureFixture
+    def test_the_owner_row_admits_no_other_peers_subscription(
+        self, world: Publisher
     ) -> None:
         g = world.peers["g"]
-        with caplog.at_level(logging.WARNING, logger="actingweb.handlers.subscription"):
-            for _ in range(3):
-                world.call(
-                    SubscriptionHandler,
-                    "PUT",
-                    g,
-                    "sub-g",
-                    as_peer="g",
-                    body={"sequence": 1},
-                )
-            world.call(SubscriptionHandler, "DELETE", g, "sub-g", as_peer="g")
-        warnings = [r.getMessage() for r in caplog.records]
-        assert len(warnings) == 1
-        assert GET_ONLY_TYPE in warnings[0]
-        assert '("subscriptions/<id>/<subid>", "PUT", "a")' in warnings[0]
-        assert '("subscriptions/<id>/<subid>", "DELETE", "a")' in warnings[0]
+        for method in ("PUT", "DELETE"):
+            out = world.call(
+                SubscriptionHandler,
+                method,
+                g,
+                "sub-g",
+                as_peer="b",
+                body={"sequence": 1} if method == "PUT" else None,
+            )
+            assert out.response.status_code == 403
+        assert world.diffs("g") == [1]
+        assert world.has_subscription("g")
 
     def test_a_plain_refusal_is_not_logged(
         self, world: Publisher, caplog: pytest.LogCaptureFixture
@@ -388,11 +377,11 @@ class TestTrustSites:
         b = world.peers["b"]
         out = world.call(TrustPeerHandler, "GET", "friend", b, as_peer="b")
         assert out.response.status_code == 200
-        # As before: no built-in row admits a friend on its trust's
-        # permissions (the handler passes no peer id, so ``owner`` never
-        # binds); an application row does, for its own row only.
+        # The ``owner`` row admits a peer to its own trust's permissions
+        # (reverify-4, Issue 2: the handler passes the path's peer); reading
+        # them only, writing stays the owner's (TrustPermissionHandler).
         out = world.call(TrustPermissionHandler, "GET", "friend", b, as_peer="b")
-        assert out.response.status_code == 403
+        assert out.response.status_code != 403
         g = world.peers["g"]
         out = world.call(TrustPermissionHandler, "GET", GET_ONLY_TYPE, g, as_peer="g")
         # Admitted (the test type is not registered, so no defaults: 404).

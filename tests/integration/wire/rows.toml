@@ -76,11 +76,12 @@ reason = [
 test = "test_wire_peer_paths.py::test_wd6_subscriber"
 owners = ["peer-authorisation-fixes:2"]
 exposure = false
-expected = "WD6 in a pair of the consumer's subscriber type: the acknowledgement PUT is admitted by the GET-only row today (204). Phase 2 authorises it as a PUT: 403, the queue unchanged because the GET already consumed the diff."
+expected = "WD6 in a pair of the consumer's subscriber type, without adoption rows: the acknowledgement PUT is admitted by the built-in owner row (the peer's own path), as in the adopted variant (204)."
 reason = [
   "2026-11-07 first recording (peer-authorisation-fixes:0)",
   "2026-11-07 the method rule: the acknowledgement PUT answers 403; the diff was already consumed by B's GET (peer-authorisation-fixes:2)",
   "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
+  "2026-11-08 the owner rows bind to the path's peer (reverify-4, Issue 2, owner): admitted as in the adopted variant (peer-authorisation-fixes:2)",
 ]
 
 [rows."WD6.subscriber_adopted"]
@@ -173,11 +174,12 @@ reason = [
 test = "test_wire_peer_paths.py::test_wq3_subscriber"
 owners = ["peer-authorisation-fixes:2"]
 exposure = false
-expected = "WQ3 in a subscriber pair: every clear is admitted by the GET-only row today. Phase 2 authorises them as PUT: each clear 403 and the queue keeps its diffs."
+expected = "WQ3 in a subscriber pair without adoption rows: every clear is admitted by the built-in owner row, as in the adopted variant."
 reason = [
   "2026-11-07 first recording (peer-authorisation-fixes:0)",
   "2026-11-07 the method rule: every clear answers 403 and the queue keeps its diffs (peer-authorisation-fixes:2)",
   "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
+  "2026-11-08 the owner rows bind to the path's peer (reverify-4, Issue 2, owner): admitted as in the adopted variant (peer-authorisation-fixes:2)",
 ]
 
 [rows."WQ3.subscriber_adopted"]
@@ -238,11 +240,12 @@ reason = [
 test = "test_wire_peer_paths.py::test_wc4_subscriber"
 owners = ["peer-authorisation-fixes:2"]
 exposure = false
-expected = "WC4 in a subscriber pair: A's DELETE to B is admitted by B's GET-only row today. Phase 2 authorises it as a DELETE: 403 and B keeps a dangling callback subscription."
+expected = "WC4 in a subscriber pair without adoption rows: A's DELETE to B is admitted by the built-in owner row, as in the adopted variant."
 reason = [
   "2026-11-07 first recording (peer-authorisation-fixes:0)",
   "2026-11-07 the method rule: A's DELETE to B answers 403 and B keeps a dangling callback subscription (peer-authorisation-fixes:2)",
   "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
+  "2026-11-08 the owner rows bind to the path's peer (reverify-4, Issue 2, owner): admitted as in the adopted variant (peer-authorisation-fixes:2)",
 ]
 
 [rows."WC4.subscriber_adopted"]

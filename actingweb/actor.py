@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import datetime
 import json
@@ -1721,6 +1722,10 @@ class Actor:
             if refusal:
                 logger.warning(f"Not re-pairing with {peer['id']}: {refusal}")
                 return False
+            if not existing.get("approved"):
+                # The peer's request waits for this owner: creating the trust
+                # approves it (as before 3.16), and the peer is told.
+                return self._approve_on_create(peer["id"], existing)
             request = self._re_pair_request(existing, secret, desc, relationship)
             try:
                 response = requests.post(
@@ -1756,6 +1761,7 @@ class Actor:
             verified=True,  # Requesting actor has verified=True by default per ActingWeb spec
             desc=desc,
             established_via="trust",
+            only_if_absent=True,
         ):
             logger.warning(
                 "Trying to establish a new Reciprocal trust when peer relationship already exists ("
@@ -1766,6 +1772,9 @@ class Actor:
         # Since we are initiating the relationship, we implicitly approve it
         # It is not verified until the peer has verified us
         new_trust = dbtrust.get()
+        # A failed request removes only this attempt's row, not one another
+        # request wrote meanwhile.
+        attempt_secret = (new_trust or {}).get("secret")
         params = {
             "baseuri": (self.config.root if self.config else "") + (self.id or ""),
             "id": self.id,
@@ -1796,7 +1805,7 @@ class Actor:
             )
         except Exception:  # folds DbError: peer HTTP only
             logger.debug("Not able to create trust with peer, deleting my trust.")
-            dbtrust.delete()
+            self._drop_failed_attempt(peer["id"], attempt_secret)
             return False
         if self.last_response_code == 201 or self.last_response_code == 202:
             # Reload the trust to check if approval was done
@@ -1817,7 +1826,7 @@ class Actor:
             return mod_trust.get()
         else:
             logger.debug("Not able to create trust with peer, deleting my trust.")
-            dbtrust.delete()
+            self._drop_failed_attempt(peer["id"], attempt_secret)
             return False
 
     async def create_reciprocal_trust_async(
@@ -1885,6 +1894,12 @@ class Actor:
             if refusal:
                 logger.warning(f"Not re-pairing with {peer['id']}: {refusal}")
                 return False
+            if not existing.get("approved"):
+                # The peer's request waits for this owner: creating the trust
+                # approves it (as before 3.16), and the peer is told.
+                return await asyncio.to_thread(
+                    self._approve_on_create, peer["id"], existing
+                )
             request = self._re_pair_request(existing, secret, desc, relationship)
             try:
                 async with httpx.AsyncClient(timeout=10.0) as client:
@@ -1893,7 +1908,7 @@ class Actor:
                         content=request["data"],
                         headers=request["headers"],
                     )
-            except httpx.HTTPError as e:
+            except Exception as e:  # folds DbError: peer HTTP only (InvalidURL too)
                 return await self._re_pair_unknown_async(
                     peer["id"], existing, secret, relationship, f"no answer ({e})"
                 )
@@ -1920,6 +1935,7 @@ class Actor:
             verified=True,
             desc=desc,
             established_via="trust",
+            only_if_absent=True,
         ):
             logger.warning(
                 f"Trying to establish a new Reciprocal trust when peer relationship already exists ({peer['id']})"
@@ -1928,6 +1944,9 @@ class Actor:
 
         # Request relationship from peer async
         new_trust = dbtrust.get()
+        # A failed request removes only this attempt's row, not one another
+        # request wrote meanwhile.
+        attempt_secret = (new_trust or {}).get("secret")
         params = {
             "baseuri": (self.config.root if self.config else "") + (self.id or ""),
             "id": self.id,
@@ -1960,13 +1979,13 @@ class Actor:
                 )
         except httpx.TimeoutException:
             logger.debug("Timeout creating trust with peer async, deleting my trust.")
-            dbtrust.delete()
+            self._drop_failed_attempt(peer["id"], attempt_secret)
             return False
         except httpx.RequestError as e:
             logger.debug(
                 f"Not able to create trust with peer async: {e}, deleting my trust."
             )
-            dbtrust.delete()
+            self._drop_failed_attempt(peer["id"], attempt_secret)
             return False
 
         if self.last_response_code == 201 or self.last_response_code == 202:
@@ -1986,8 +2005,38 @@ class Actor:
             return mod_trust.get()
         else:
             logger.debug("Not able to create trust with peer async, deleting my trust.")
-            dbtrust.delete()
+            self._drop_failed_attempt(peer["id"], attempt_secret)
             return False
+
+    def _drop_failed_attempt(self, peerid: str, attempt_secret: Any) -> None:
+        """Delete this call's own row after the peer refused or did not
+        answer: only while it still holds the secret this attempt wrote, so a
+        row another request wrote meanwhile stays."""
+        current = trust.Trust(actor_id=self.id, peerid=peerid, config=self.config)
+        row = current.get()
+        if row and attempt_secret and row.get("secret") == attempt_secret:
+            current.delete()
+        elif row:
+            logger.warning(
+                f"Kept the trust row for {peerid}: another request replaced this "
+                "attempt's row"
+            )
+
+    def _approve_on_create(
+        self, peerid: str, existing: dict[str, Any]
+    ) -> dict[str, Any] | bool:
+        """Approve a peer's pending request when this actor's owner creates
+        the trust toward it, notifying the peer as an approval does."""
+        if not self.modify_trust_and_notify(
+            relationship=existing.get("relationship"), peerid=peerid, approved=True
+        ):
+            logger.warning(f"Could not approve the pending trust with {peerid}")
+            return False
+        logger.info(f"Approved the pending trust request from {peerid}")
+        return (
+            trust.Trust(actor_id=self.id, peerid=peerid, config=self.config).get()
+            or False
+        )
 
     @staticmethod
     def _re_pair_refusal(url: str, existing: dict[str, Any], relationship: str) -> str:

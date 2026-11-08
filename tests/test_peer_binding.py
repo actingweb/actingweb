@@ -662,7 +662,16 @@ class TestPhase1ReviewFixes:
         )
         assert out.response.status_code == 204
         older = (now - timedelta(hours=1)).isoformat()
+        from actingweb.peer_permissions import PeerPermissions
+
+        # The stale update revokes: the peer is asked (reverify-4, Issue 5);
+        # here it does not answer, so nothing changes.
+        unanswered = PeerPermissions(actor_id="x", peer_id=w.a, fetch_error="down")
         with (
+            mock.patch(
+                "actingweb.peer_permissions.fetch_peer_permissions",
+                return_value=unanswered,
+            ),
             mock.patch.object(CallbacksHandler, "_delete_revoked_peer_data") as delete,
             mock.patch.object(
                 CallbacksHandler, "_incremental_sync_granted_properties"
@@ -1009,6 +1018,79 @@ class TestEveryWriterOfTheCopyIsConditional:
             fetched_at=datetime.now(UTC).isoformat(),
         )
         assert PeerPermissionStore(w.config).store_permissions(queried) is True
+        resent = w.request(
+            "POST",
+            f"permissions/{w.a}",
+            _grant_body((now - timedelta(seconds=20)).isoformat(), ["old/*"]),
+            as_peer=w.a,
+        )
+        assert resent.response.status_code == 204
+        stored = w.stored_permissions(w.a)
+        assert stored and stored["properties"]["patterns"] == ["new/*"]
+
+    def test_an_ignored_revocation_asks_the_peer(self) -> None:
+        """Reverify-4, Issue 5: a revocation that looks older (sender
+        instances with skewed clocks) is checked against the peer's current
+        permissions, which decide."""
+        from actingweb.peer_permissions import PeerPermissions
+
+        w = World()
+        w.config.auto_delete_on_revocation = True  # type: ignore[attr-defined]
+        now = datetime.now(UTC)
+        grant = w.request(
+            "POST",
+            f"permissions/{w.a}",
+            _grant_body((now - timedelta(seconds=10)).isoformat(), ["p/*"]),
+            as_peer=w.a,
+        )
+        assert grant.response.status_code == 204
+        current = PeerPermissions(
+            actor_id=aid(w.b),
+            peer_id=w.a,
+            properties={"patterns": [], "operations": ["read"]},
+            fetched_at=datetime.now(UTC).isoformat(),
+        )
+        with (
+            mock.patch(
+                "actingweb.peer_permissions.fetch_peer_permissions",
+                return_value=current,
+            ) as fetch,
+            mock.patch.object(CallbacksHandler, "_delete_revoked_peer_data") as delete,
+        ):
+            out = w.request(
+                "POST",
+                f"permissions/{w.a}",
+                _grant_body((now - timedelta(seconds=20)).isoformat(), []),
+                as_peer=w.a,
+            )
+        assert out.response.status_code == 204
+        fetch.assert_called_once()
+        assert delete.call_args.args[2] == ["p/*"]
+        stored = w.stored_permissions(w.a)
+        assert stored and stored["properties"]["patterns"] == []
+
+    def test_a_callback_without_a_timestamp_keeps_the_last_one(self) -> None:
+        """Reverify-4, Issue 6: a later resend of an older callback stays
+        older after a callback that carried no timestamp."""
+        w = World()
+        now = datetime.now(UTC)
+        newer = w.request(
+            "POST",
+            f"permissions/{w.a}",
+            _grant_body((now - timedelta(seconds=10)).isoformat(), ["new/*"]),
+            as_peer=w.a,
+        )
+        assert newer.response.status_code == 204
+        untimed = w.request(
+            "POST",
+            f"permissions/{w.a}",
+            {
+                "type": "permission",
+                "data": {"properties": {"patterns": ["new/*"], "operations": ["read"]}},
+            },
+            as_peer=w.a,
+        )
+        assert untimed.response.status_code == 204
         resent = w.request(
             "POST",
             f"permissions/{w.a}",

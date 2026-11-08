@@ -200,8 +200,10 @@ class TestPrune:
             return_value=unanswered,
         ):
             code, out = _run(capsys, "prune", w.id, "--apply")
-        assert code == 1
+        # Reverify-4, Issue 7: a removed copy not rebuilt exits 2.
+        assert code == 2
         assert "Restart the application's processes" in out
+        assert "Not rebuilt: 1." in out
         # The live peer's future copy is removed and, its peer not answering,
         # listed as not rebuilt.
         assert f"not rebuilt\t{w.id}\t{w.live_hex}\tdown" in out
@@ -277,7 +279,7 @@ class TestAllPermissions:
             return_value=unanswered,
         ):
             code, out = _run(capsys, "prune", w.id, "--all-permissions", "--apply")
-        assert code == 1 and "permissions-copy" in out
+        assert code == 2 and "permissions-copy" in out
         assert f"not rebuilt\t{w.id}\t{w.live}\tdown" in out
         assert w.permission_names() == set()
 
@@ -332,7 +334,7 @@ class TestAllPermissions:
             side_effect=DbError("trust read", w.id),
         ):
             code, out = _run(capsys, "prune", w.id, "--all-permissions", "--apply")
-        assert code == 1
+        assert code == 2
         assert f"not rebuilt\t{w.id}\t{w.live}\tstore fault" in out
         assert f"not rebuilt\t{w.id}\t{w.live_hex}\tstore fault" in out
 

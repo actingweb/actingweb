@@ -5,15 +5,14 @@ Provides scalable callback delivery with:
 - Parallel HTTP requests with bounded concurrency
 - Circuit breaker pattern for failing peers, per process (persistence only
   seeds a new manager; workers do not share breaker state)
-- Automatic granularity downgrade for large payloads
 - Connection pooling via shared HTTP client
 
-The granularity downgrade sends a resource URL with no stored diff. A 3.16
-subscriber never fetches a callback's ``url``: it builds the fetch from the
-trust's stored base URI as ``subscriptions/<own id>/<subid>/<sequence>``
-(``handlers/callbacks.py``), where no diff exists for a downgraded callback.
-The library never calls the downgrade itself; a downgrade is not fetchable by
-a 3.16 subscriber.
+A payload over ``max_payload_for_high_granularity`` is sent in full, with a
+WARNING (3.16, owner): the low-granularity downgrade it used to send carried
+a resource URL with no stored diff, which a 3.16 subscriber never fetches (it
+builds the fetch from the trust's stored base URI as
+``subscriptions/<own id>/<subid>/<sequence>``, ``handlers/callbacks.py``), so
+every redelivery failed and the peer's circuit opened.
 """
 
 import asyncio
@@ -209,7 +208,8 @@ class FanOutManager:
     Manages callback delivery to multiple subscribers at scale.
 
     Implements protocol v1.4 features:
-    - Automatic granularity downgrade when payload > threshold
+    - A WARNING when a payload exceeds the high-granularity threshold (it is
+      still sent in full)
     - Circuit breaker pattern for handling 429/503 responses (per process)
     - Optional compression for large payloads
     - Connection pooling via shared HTTP client
@@ -235,7 +235,8 @@ class FanOutManager:
         Args:
             actor: The actor sending callbacks
             max_concurrent: Maximum concurrent HTTP requests
-            max_payload_for_high_granularity: Payload size limit before downgrade
+            max_payload_for_high_granularity: Payload size above which a
+                delivery logs a WARNING (it is sent in full; no downgrade)
             circuit_breaker_threshold: Failures before opening circuit
             circuit_breaker_cooldown: Seconds before testing recovery
             request_timeout: HTTP request timeout in seconds
@@ -518,16 +519,15 @@ class FanOutManager:
                 "Content-Type": "application/json",
             }
 
-            # Handle granularity downgrade
+            # Always the data: a downgrade to a URL is not fetchable by a 3.16
+            # subscriber (module docstring).
             granularity_downgraded = False
             if needs_downgrade and granularity == "high":
-                # Downgrade to low granularity - send URL instead of data
-                callback_wrapper["granularity"] = "low"
-                callback_wrapper["url"] = self._build_resource_url(target)
-                headers["X-ActingWeb-Granularity-Downgraded"] = "true"
-                granularity_downgraded = True
-            else:
-                callback_wrapper["data"] = payload
+                logger.warning(
+                    f"Callback to {peer_id} for {target} exceeds "
+                    f"{self._max_payload_size} bytes; sent in full"
+                )
+            callback_wrapper["data"] = payload
 
             body = json.dumps(callback_wrapper)
             body_bytes = body.encode("utf-8")
@@ -650,11 +650,6 @@ class FanOutManager:
     def _get_timestamp(self) -> str:
         """Get ISO timestamp for callback."""
         return datetime.now(UTC).isoformat()
-
-    def _build_resource_url(self, target: str) -> str:
-        """Build URL for low granularity callbacks."""
-        config = self._actor.config
-        return f"{config.proto}{config.fqdn}/{self._actor.id}/{target}"
 
     def _get_peer_capabilities(self, peer_id: str) -> "PeerCapabilities | None":
         """Get peer capabilities if available."""

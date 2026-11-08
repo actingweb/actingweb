@@ -1896,3 +1896,17 @@ the two owner decisions.
 **Files affected**: `CHANGELOG.rst`, `docs/migration/v3.16.rst`,
 `docs/reference/security.rst`, `docs/guides/database-maintenance.rst`,
 `docs/protocol/actingweb-spec.rst`, this plan.
+
+#### 10. Emm's suite on the iteration
+
+**Category**: Verification (gate 2)
+
+**What changed**: nothing in the library. Emm's suite re-run against
+`d836bd0` (the library worktree re-pointed; the adoption worktree with the
+two `subscriber` rows; environment 9): PostgreSQL 2 failed / 7406 passed,
+DynamoDB 3 failed / 54 passed, the `master` baseline's failures by name.
+The Full tier on `d836bd0`: DynamoDB 6025 passed, PostgreSQL 5822 passed,
+the docs build.
+
+**Rationale**: the iteration changed library code; gate 2 asks for the run
+before the PR.

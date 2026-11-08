@@ -41,7 +41,8 @@ kept because the run confirmed both points.
   passed, DynamoDB 3 failed / 54 passed: the baseline's failures by name.
   Recorded in `verifications/2026-11-07-peer-authorisation-fixes.md`, with
   Emm's adoption items (one new: Emm's connect flow subscribes twice after
-  a re-pair answering 201). Re-run after that plan's `/iterate_plan`.
+  a re-pair answering 201). Re-run on 2026-11-08 after that plan's
+  iteration (`d836bd0`): the same counts and failures.
 
 ## What was known before the first run
 

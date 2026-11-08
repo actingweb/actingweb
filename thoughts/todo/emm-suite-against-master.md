@@ -33,6 +33,16 @@ two worktrees exist and stay; the research note says how to re-point them
 at a plan's commit. The section below is what was known before it ran,
 kept because the run confirmed both points.
 
+## Per-plan runs
+
+- **`peer-authorisation-fixes`, 2026-11-08:** the library worktree at
+  `0ce0112`, Emm's adoption worktree with the plan's two `subscriber` rows
+  (uncommitted, owner decision), environment 9. PostgreSQL 2 failed / 7406
+  passed, DynamoDB 3 failed / 54 passed: the baseline's failures by name.
+  Recorded in `verifications/2026-11-07-peer-authorisation-fixes.md`, with
+  Emm's adoption items (one new: Emm's connect flow subscribes twice after
+  a re-pair answering 201). Re-run after that plan's `/iterate_plan`.
+
 ## What was known before the first run
 
 Read on 2026-11-06, not run:

@@ -31,7 +31,9 @@ moderate problem outranks an expensive fix to a slightly worse one.
 
 ## Planned for 3.16: order, dependencies and gates
 
-Six plans, all `status: proposed` (2026-11-06). **This section is the one
+Six plans (2026-11-06): `peer-authorisation-fixes` implemented and
+verified (2026-11-08, issues open, below); the other five `status:
+proposed`. **This section is the one
 copy of the order, of what depends on what between the plans, and of the
 gates between them.** Each plan keeps a pointer here and its own "This plan"
 paragraph, which says what that plan uses from the others and wins on that
@@ -40,13 +42,14 @@ before it has merged and its gates are met, because the checks allow one
 test run at a time. The 3.16 tag stays held until all six have merged.
 Proposed is not approved: `attribute-list-v2-port` and `spec-1-5` say in
 their "Readiness" paragraph that they need another draft first;
-`peer-authorisation-fixes` and `subscription-wire-baseline` were redrafted on
-2026-11-07 after the spike and the research pass and await approval.
+`subscription-wire-baseline` was redrafted on 2026-11-07 after the spike and
+the research pass and awaits approval (its "What Already Exists" now points
+at `rows.toml`).
 
 | Order | Plan | Todo it closes | Needs first |
 | --- | --- | --- | --- |
 | Before 0 | [Emm's suite against `master`](emm-suite-against-master.md): the consumer's tests run on the library as it is, so what 3.16 already changes for Emm is known before more lands. **The `master` run is done (2026-11-07, `research/2026-11-07-emm-suite-against-master.md`): no library regression, five Emm-side adoption failures as the baseline.** The file stays for the per-plan runs | Itself | Nothing now; the worktrees exist |
-| 0 | [`peer-authorisation-fixes`](../plans/2026-11-06-peer-authorisation-fixes.md): unauthenticated callers refused on `/callbacks`, a callback's URL fetched only from the peer, a peer limited to its own permissions and subscriptions; first, the fourteen legitimate flows the fix must leave unchanged, recorded on the harness the baseline spike builds | None; found by the reviews of the other plans and confirmed by a run | Nothing. Security first. **Implemented 2026-11-08** on `fix/3.16.0-peer-authorisation` (local; the PR carries the records branch, which stays local until then); `/verify_implementation` next |
+| 0 | [`peer-authorisation-fixes`](../plans/2026-11-06-peer-authorisation-fixes.md): unauthenticated callers refused on `/callbacks`, a callback's URL fetched only from the peer, a peer limited to its own permissions and subscriptions; first, the fourteen legitimate flows the fix must leave unchanged, recorded on the harness the baseline spike builds | None; found by the reviews of the other plans and confirmed by a run | Nothing. Security first. **Implemented and verified 2026-11-08** on `fix/3.16.0-peer-authorisation` (local; the PR carries the records branch, which stays local until then). Gate 2 met (Emm's run). The verification (`verifications/2026-11-08-peer-authorisation-fixes.md`) found four issues the PR must not open with: an `admin` peer's secret read turns into a takeover through the re-pair, the re-pair's swap races the usage write on DynamoDB, a lost answer splits a pairing, a verified squat is permanent, a sender with a slow clock has its revocation dropped. `/iterate_plan` next, two of them owner decisions |
 | 1 | [`subscription-wire-baseline`](../plans/2026-11-06-subscription-wire-baseline.md): what a publisher sends and a subscriber holds today, recorded per flow, so every later change to it is a file diff; the existing subscription tests made to assert one outcome | None; found by the review of the other plans | Its spike, before plan 0 is redrafted; plan 0 merged, which lands the harness |
 | 2 | [`subs-list-cache-lifetime`](../plans/2026-11-06-subs-list-cache-lifetime.md): per-request actors on the MCP path, a subscription list that caches empty | [`subs_list` cache asymmetry](subs-list-cache-asymmetry.md) | Plan 0, for the view filter its new accessor inherits; plan 1 |
 | 3 | [`attribute-list-v2-port`](../plans/2026-11-06-attribute-list-v2-port.md): replica lists on the rank format, list diffs from REST and web-UI edits, diffs filtered before they are stored | [`ListAttribute` shift-loop design](attribute-list-shift-design.md) | Plan 1; ahead of plan 4 because the specification plan waits on it |
@@ -107,7 +110,10 @@ they share Docker and the local ports.
    suite on that plan's branch shows no failure the baseline did not have;
    the result is in the plan's verification document. Each such plan's last
    phase carries the checkbox; the baseline plan changes only tests and has
-   none.
+   none. **Met for plan 0 on 2026-11-08** (both backends, the baseline's
+   failures only; `verifications/2026-11-07-peer-authorisation-fixes.md`,
+   "Emm's suite on this branch"); `/iterate_plan` changes re-run it before
+   the PR.
 3. **Before any plan re-records a wire recording:** that recording has been
    shown byte-identical over repeated runs on both backends. One that is not
    cannot tell a regression from noise and stays out of the regression set.

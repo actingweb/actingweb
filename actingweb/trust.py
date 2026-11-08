@@ -406,12 +406,19 @@ class Trust:
         last_connected_via: str | None = None,
         *,
         known_absent: bool = False,
+        only_if_absent: bool = False,
     ) -> bool:
         """Create a new trust relationship.
 
         ``known_absent``: the caller has just read that no row exists for the
         peer, so the read that decides whether stale custom permissions are
-        cleared is skipped (one read per creation)."""
+        cleared is skipped (one read per creation).
+
+        ``only_if_absent``: write only if no row exists for the peer, in one
+        conditional write; False when one does (a creation request never
+        replaces a row, even one created since the caller's read). Stale
+        custom permissions are cleared after the write succeeds, so a lost
+        race never touches the winner's."""
         self.trust = {"baseuri": baseuri, "type": peer_type}
         if not relationship or len(relationship) == 0:
             self.trust["relationship"] = (
@@ -449,6 +456,26 @@ class Trust:
             )
         if not self.handle:
             return False
+        if only_if_absent:
+            if not self._create_row(
+                approved,
+                verified,
+                peer_approved,
+                peer_identifier,
+                established_via,
+                created_at,
+                last_accessed,
+                last_connected_via,
+                only_if_absent=True,
+            ):
+                return False
+            if self.config and self.actor_id and self.peerid:
+                from .trust_permissions import get_trust_permission_store
+
+                permission_store = get_trust_permission_store(self.config)
+                if not permission_store.delete_permissions(self.actor_id, self.peerid):
+                    raise DbError("trust permissions delete", self.actor_id)
+            return True
         # A new row starts from its trust type's permissions. Trust.delete
         # deletes a row's custom permissions right after the row, and a fault
         # there raises with the row gone; the peer id is stable (a peer's
@@ -471,6 +498,31 @@ class Trust:
             permission_store = get_trust_permission_store(self.config)
             if not permission_store.delete_permissions(self.actor_id, self.peerid):
                 raise DbError("trust permissions delete", self.actor_id)
+        return self._create_row(
+            approved,
+            verified,
+            peer_approved,
+            peer_identifier,
+            established_via,
+            created_at,
+            last_accessed,
+            last_connected_via,
+        )
+
+    def _create_row(
+        self,
+        approved: bool,
+        verified: bool,
+        peer_approved: bool,
+        peer_identifier: str | None,
+        established_via: str | None,
+        created_at: str | None,
+        last_accessed: str | None,
+        last_connected_via: str | None,
+        *,
+        only_if_absent: bool = False,
+    ) -> bool:
+        assert self.handle is not None and self.trust is not None
         return self.handle.create(
             actor_id=self.actor_id,
             peerid=self.peerid,
@@ -488,6 +540,7 @@ class Trust:
             created_at=created_at,
             last_accessed=last_accessed,
             last_connected_via=last_connected_via,
+            only_if_absent=only_if_absent,
         )
 
     def __init__(

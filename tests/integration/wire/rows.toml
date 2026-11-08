@@ -400,8 +400,11 @@ test = "test_wire_trust.py::test_wt4_re_pair_with_another_relationship"
 topologies = ["same_host", "two_hosts"]
 owners = []
 exposure = false
-expected = "B re-initiates asking for admin, with its current secret: 403; both rows unchanged; B's subscription intact."
-reason = ["2026-11-08 first recording (peer-authorisation-fixes:3)"]
+expected = "B re-initiates asking for admin: B refuses it itself (the trust is friend: delete and pair again) and sends A nothing; both rows unchanged; B's subscription intact. The receiver's own 403 for a different relationship is the unit tests'."
+reason = [
+  "2026-11-08 first recording (peer-authorisation-fixes:3)",
+  "2026-11-08 the initiator refuses a different relationship before sending (outside voice on Phase 3) (peer-authorisation-fixes:3)",
+]
 
 [rows."WT5"]
 test = "test_wire_trust.py::test_wt5_local_delete"

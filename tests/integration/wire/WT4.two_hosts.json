@@ -204,25 +204,6 @@
       "version": "3.15.1"
      },
      "status": 200
-    },
-    {
-     "auth": "bearer:trust:A-B",
-     "children": [],
-     "headers": {},
-     "host": "wire_app",
-     "method": "POST",
-     "path": "/<A>/trust/admin",
-     "query": "",
-     "request": {
-      "baseuri": "http://<wire_peer_app>/<B>",
-      "desc": "",
-      "id": "<B>",
-      "secret": "<secret:trust:A-B#2>",
-      "type": "urn:actingweb:test:integration",
-      "verify": "<secret:token:B-A#1>"
-     },
-     "response": null,
-     "status": 403
     }
    ]
   }

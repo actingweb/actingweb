@@ -5,7 +5,7 @@ from typing import Any
 
 from pynamodb.attributes import BooleanAttribute, UnicodeAttribute, UTCDateTimeAttribute
 from pynamodb.constants import PAY_PER_REQUEST_BILLING_MODE
-from pynamodb.exceptions import DoesNotExist
+from pynamodb.exceptions import DoesNotExist, PutError
 from pynamodb.indexes import AllProjection, GlobalSecondaryIndex
 from pynamodb.models import Model
 
@@ -345,8 +345,12 @@ class DbTrust:
         aw_supported=None,
         aw_version=None,
         capabilities_fetched_at=None,
+        *,
+        only_if_absent=False,
     ):
-        """Create a new trust"""
+        """Create a new trust (an upsert; ``only_if_absent`` writes only when
+        no row exists for the actor and peer, and answers False when one
+        does)."""
         if not actor_id or not peerid:
             return False
         # Create trust with existing attributes
@@ -421,7 +425,16 @@ class DbTrust:
 
         self.handle = Trust(**trust_kwargs)
         try:
-            self.handle.save()
+            if only_if_absent:
+                self.handle.save(condition=Trust.id.does_not_exist())
+            else:
+                self.handle.save()
+        except PutError as e:
+            if only_if_absent and e.cause_response_code == (
+                "ConditionalCheckFailedException"
+            ):
+                return False
+            raise DbError("trust create") from e
         except Exception as e:
             raise DbError("trust create") from e
         return True

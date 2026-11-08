@@ -404,3 +404,170 @@ class TestTheLocalDelete:
         out = self._delete(w, {"Authorization": f"Bearer {w.secrets[w.b]}"})
         assert out.response.status_code == 403
         assert w.row(w.b)
+
+
+# ---------------------------------------------------------------------------
+# The outside voice on the Phase 3 commit
+# ---------------------------------------------------------------------------
+
+
+class TestPhase3ReviewFixes:
+    def test_a_url_other_than_the_stored_base_uri_gets_nothing(self) -> None:
+        """A server whose /meta claims the peer's id never receives the
+        current secret."""
+        w = Initiator()
+        before = w.row()
+        with (
+            mock.patch.object(w.b, "get_peer_info", return_value=w.peer_info),
+            mock.patch("actingweb.actor.requests.post") as post,
+        ):
+            assert (
+                w.b.create_reciprocal_trust(
+                    url="https://evil.example.test/claims-a",
+                    secret=_new_secret(),
+                    relationship="friend",
+                )
+                is False
+            )
+        post.assert_not_called()
+        assert _state(w.row()) == _state(before)
+
+    def test_the_async_twin_also_sends_nothing_elsewhere(self) -> None:
+        w = Initiator()
+        with (
+            mock.patch.object(
+                w.b, "get_peer_info_async", mock.AsyncMock(return_value=w.peer_info)
+            ),
+            mock.patch("httpx.AsyncClient") as client,
+        ):
+            assert (
+                asyncio.run(
+                    w.b.create_reciprocal_trust_async(
+                        url="https://evil.example.test/claims-a",
+                        secret=_new_secret(),
+                        relationship="friend",
+                    )
+                )
+                is False
+            )
+        client.assert_not_called()
+
+    def test_another_relationship_is_refused_before_sending(self) -> None:
+        w = Initiator()
+        with (
+            mock.patch.object(w.b, "get_peer_info", return_value=w.peer_info),
+            mock.patch("actingweb.actor.requests.post") as post,
+        ):
+            assert (
+                w.b.create_reciprocal_trust(
+                    url=w.url, secret=_new_secret(), relationship="admin"
+                )
+                is False
+            )
+        post.assert_not_called()
+
+    def test_a_202_leaves_the_peer_unapproved(self) -> None:
+        w = Initiator()
+        answer = mock.Mock(status_code=202, reason="Accepted", content=b"{}")
+        with (
+            mock.patch.object(w.b, "get_peer_info", return_value=w.peer_info),
+            mock.patch("actingweb.actor.requests.post", return_value=answer),
+        ):
+            assert w.b.create_reciprocal_trust(
+                url=w.url, secret=_new_secret(), relationship="friend"
+            )
+        assert w.row()["peer_approved"] is False
+
+    def test_a_bearer_for_a_peer_with_no_row_is_403_and_creates_nothing(
+        self,
+    ) -> None:
+        w = Receiver()
+        lost = f"peer-l-{uuid.uuid4().hex[:8]}"
+        with mock.patch("actingweb.actor.requests.get") as verify:
+            out = w.request(lost, _new_secret(), bearer=uuid.uuid4().hex)
+        assert out.response.status_code == 403
+        verify.assert_not_called()
+        assert not w.row(lost)
+
+    def _squat(self, w: Receiver) -> str:
+        """An unverified row for a peer id, as an unauthenticated request
+        that failed verification leaves one."""
+        squatted = f"peer-s-{uuid.uuid4().hex[:8]}"
+        assert Trust(actor_id=aid(w.a), peerid=squatted, config=w.config).create(
+            baseuri="https://squatter.example.test/x",
+            peer_type="urn:test",
+            relationship="friend",
+            secret=uuid.uuid4().hex,
+            verified=False,
+        )
+        assert get_trust_permission_store(w.config).store_permissions(
+            TrustPermissions(
+                actor_id=aid(w.a),
+                peer_id=squatted,
+                trust_type="friend",
+                properties={"patterns": ["squatted/*"], "operations": ["read"]},
+            )
+        )
+        return squatted
+
+    def test_a_verifying_request_replaces_an_unverified_row(self) -> None:
+        w = Receiver()
+        squatted = self._squat(w)
+        new = _new_secret()
+        verified = mock.Mock(
+            status_code=200, content=b'{"verification_token": "whatever"}'
+        )
+        with mock.patch("actingweb.actor.requests.get", return_value=verified) as get:
+            out = w.request(squatted, new)
+        assert out.response.status_code in (201, 202)
+        assert get.call_args.kwargs["url"].startswith(
+            f"https://{squatted}.example.test/{squatted}"
+        )
+        row = w.row(squatted)
+        assert row["verified"] is True and row["secret"] == new
+        assert row["baseuri"] == f"https://{squatted}.example.test/{squatted}"
+        # The squatter's grant does not carry over.
+        assert not get_trust_permission_store(w.config).get_permissions(
+            aid(w.a), squatted
+        )
+
+    def test_a_request_that_does_not_verify_leaves_an_unverified_row(
+        self,
+    ) -> None:
+        w = Receiver()
+        squatted = self._squat(w)
+        before = w.row(squatted)
+        refused = mock.Mock(status_code=403, content=b"")
+        with mock.patch("actingweb.actor.requests.get", return_value=refused):
+            out = w.request(squatted, _new_secret())
+        assert out.response.status_code == 403
+        assert _state(w.row(squatted)) == _state(before)
+
+
+class TestTheConditionalCreate:
+    def test_only_if_absent_never_replaces_and_keeps_the_grant(self) -> None:
+        w = Receiver()
+        before = w.row(w.b)
+        assert (
+            Trust(actor_id=aid(w.a), peerid=w.b, config=w.config).create(
+                baseuri="https://elsewhere.example.test/x",
+                relationship="admin",
+                secret=_new_secret(),
+                verified=True,
+                only_if_absent=True,
+            )
+            is False
+        )
+        assert _state(w.row(w.b)) == _state(before)
+        assert get_trust_permission_store(w.config).get_permissions(aid(w.a), w.b)
+
+    def test_only_if_absent_creates_a_new_row(self) -> None:
+        w = Receiver()
+        peer = f"peer-n-{uuid.uuid4().hex[:8]}"
+        assert Trust(actor_id=aid(w.a), peerid=peer, config=w.config).create(
+            baseuri="https://n.example.test/n",
+            relationship="friend",
+            secret=_new_secret(),
+            only_if_absent=True,
+        )
+        assert w.row(peer)["baseuri"] == "https://n.example.test/n"

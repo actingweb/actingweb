@@ -183,3 +183,22 @@ stored, nothing refuses it).
   removed actor1's row only, actor2's stale row is removed by its owner
   (`?notify=false`) before actor1 initiates again; without that the
   request is a re-pair actor1 cannot prove (403, then 408 from actor1).
+
+### Outside voice on the Phase 3 commit
+
+codex and a fresh-context reviewer, on `a53efb8..3d0ae38`. Findings and
+disposition (folded in their own commit):
+
+- **[critical]** The initiator sent its current secret to any URL whose
+  `/meta` claimed the peer's id: it re-pairs only toward the stored base
+  URI. Tested with a URL other than the stored one: nothing is sent.
+- A creation could overwrite a row created during its verification (both
+  backends upsert): conditional creates on both backends; the stale-grant
+  cleanup runs only after the write wins.
+- A re-pair to a peer that lost its row left that peer an unverified row: a
+  bearer for a peer with no row answers 403.
+- An unverified (squatted) row blocked the real peer: owner decision, a
+  verifying request replaces it, without the squatter's grants.
+- `peer_approved` after a 202, a different relationship (refused before
+  sending; `WT4` re-recorded), the half-finished re-pair's log: fixed.
+- Recorded: `trust_initiated` runs at the initiator for a re-pair.

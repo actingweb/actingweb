@@ -811,6 +811,8 @@ class DbTrustProtocol(Protocol):
         aw_supported: str | None = None,
         aw_version: str | None = None,
         capabilities_fetched_at: str | datetime | None = None,
+        *,
+        only_if_absent: bool = False,
     ) -> bool:
         """
         Create new trust.
@@ -818,6 +820,9 @@ class DbTrustProtocol(Protocol):
         Returns:
             True on success; False only without a handle or arguments.
             A fault raises ``DbError``.
+
+        ``only_if_absent``: write only when no row exists for (actor, peer);
+        False when one does (a creation request never replaces a row).
         """
         ...
 

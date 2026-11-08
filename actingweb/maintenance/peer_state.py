@@ -34,12 +34,19 @@ Kinds, per actor (names are compared whole: a peer id may contain ``:``):
     A ``_callback_state`` row whose name is not ``state:`` or ``pending:``
     plus ``<peer>:<subid>`` of a subscription this actor made (``callback``
     true).
+``permissions-copy`` (only with ``--all-permissions``)
+    Every other ``_peer_permissions`` row: a forged copy for a peer the actor
+    does trust (a pre-3.16 unauthenticated callback with a current timestamp)
+    looks like a real one. Removed, it is rebuilt from the peer's next
+    permission callback or the next query.
 ``remote-data``
     A ``remote:<peer>`` bucket (``RemotePeerStore``) for a peer with no trust
     row, or with no subscription this actor made to it. Only bucket names
     ``get_remote_bucket()`` builds for a well-formed peer id are considered;
     any other ``remote:`` bucket is reported as ``remote-unknown`` and never
-    removed.
+    removed. Peer data stored for a trusted peer without a subscription this
+    actor made (an application writing ``RemotePeerStore`` itself) counts as
+    stale: the library removes it too when the last subscription goes.
 
 Run it with the same environment as the application (``DATABASE_BACKEND``,
 the database prefix, credentials), after every instance runs 3.16, and in a
@@ -81,6 +88,7 @@ FUTURE_SKEW = timedelta(minutes=5)
 PEER_PERMISSIONS = "peer-permissions"
 FUTURE_PERMISSIONS = "future-permissions"
 CALLBACK_STATE = "callback-state"
+PERMISSIONS_COPY = "permissions-copy"
 REMOTE_DATA = "remote-data"
 REMOTE_UNKNOWN = "remote-unknown"
 
@@ -142,7 +150,12 @@ def _remote_peer(bucket: str) -> str | None:
 
 
 def scan_actor(
-    config: Any, actor_id: str, limiter: RateLimiter, now: datetime | None = None
+    config: Any,
+    actor_id: str,
+    limiter: RateLimiter,
+    now: datetime | None = None,
+    *,
+    all_permissions: bool = False,
 ) -> list[Finding]:
     """Every stale row of one actor. Reads strictly: a fault raises
     ``StoreUnavailable`` (nothing is pruned on a guess)."""
@@ -202,6 +215,12 @@ def scan_actor(
             findings.append(
                 Finding(actor_id, FUTURE_PERMISSIONS, PEER_PERMISSIONS_BUCKET, name)
             )
+        elif all_permissions:
+            # A live peer's copy: a forged one (a pre-3.16 unauthenticated
+            # callback with a current timestamp) looks like any other.
+            findings.append(
+                Finding(actor_id, PERMISSIONS_COPY, PEER_PERMISSIONS_BUCKET, name)
+            )
     for name in sorted(states):
         if name not in state_names:
             findings.append(
@@ -230,10 +249,14 @@ def _actor_ids(config: Any, only: str | None) -> list[str]:
     return sorted(i for i in ids if not i.startswith(RESERVED_ACTOR_ID_PREFIX))
 
 
-def scan(config: Any, only: str | None, limiter: RateLimiter) -> list[Finding]:
+def scan(
+    config: Any, only: str | None, limiter: RateLimiter, all_permissions: bool = False
+) -> list[Finding]:
     findings: list[Finding] = []
     for actor_id in _actor_ids(config, only):
-        findings.extend(scan_actor(config, actor_id, limiter))
+        findings.extend(
+            scan_actor(config, actor_id, limiter, all_permissions=all_permissions)
+        )
     return findings
 
 
@@ -280,7 +303,9 @@ def _print(findings: list[Finding]) -> None:
 
 
 def cmd_report(args: argparse.Namespace) -> int:
-    findings = scan(make_config(), args.actor_id, RateLimiter(args.rps))
+    findings = scan(
+        make_config(), args.actor_id, RateLimiter(args.rps), args.all_permissions
+    )
     _print(findings)
     # Only what prune would remove counts: an unknown bucket is information.
     return 1 if any(f.prunable for f in findings) else 0
@@ -289,7 +314,7 @@ def cmd_report(args: argparse.Namespace) -> int:
 def cmd_prune(args: argparse.Namespace) -> int:
     config = make_config()
     limiter = RateLimiter(args.rps)
-    findings = scan(config, args.actor_id, limiter)
+    findings = scan(config, args.actor_id, limiter, args.all_permissions)
     _print(findings)
     if not any(f.prunable for f in findings):
         return 0
@@ -319,6 +344,12 @@ def _build_parser() -> argparse.ArgumentParser:
             default=10.0,
             help="reads and deletes per second (default 10, as "
             "actingweb-verify-orphans; 0 = unlimited)",
+        )
+        p.add_argument(
+            "--all-permissions",
+            action="store_true",
+            help="also every live peer's stored permission copy (rebuilt from "
+            "its next permission callback or query)",
         )
 
     common(sub.add_parser("report", help="list stale peer state"))

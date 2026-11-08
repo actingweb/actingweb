@@ -66,6 +66,8 @@ class TestVerificationTokenMissingFromPeerResponse:
         with (
             patch("actingweb.actor.requests.get", return_value=peer_response),
             patch("actingweb.actor.trust.Trust", return_value=mock_trust),
+            # The base URI serves the claimed id (3.16 binds the two).
+            patch.object(Actor, "_base_uri_serves", return_value=True),
         ):
             actor.create_verified_trust(
                 baseuri="https://peer.example.com/peeractor",

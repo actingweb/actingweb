@@ -135,7 +135,11 @@ class TestFanOutManager:
         self.mock_actor.id = "actor123"
         self.mock_actor.config.proto = "https://"
         self.mock_actor.config.fqdn = "example.com"
-        self.mock_actor.trust.get_trust.return_value = {"secret": "test_token"}
+        # A trust with a secret and a base URI: delivery goes there (3.16).
+        self.mock_actor.trust.get_trust.return_value = {
+            "secret": "test_token",
+            "baseuri": "https://peer1.example.com/peer1",
+        }
 
         self.manager = FanOutManager(
             actor=self.mock_actor,
@@ -683,10 +687,15 @@ class TestFanOutManager:
             call_args = mock_client.post.call_args
             headers = call_args.kwargs.get("headers", {})
             assert headers.get("Authorization") == "Bearer test_token"
+            # To the trust's stored base URI, not the stored callback_url.
+            assert call_args.args[0] == (
+                "https://peer1.example.com/peer1/callbacks/subscriptions/actor123/sub1"
+            )
 
     @pytest.mark.asyncio
-    async def test_no_auth_when_no_trust(self) -> None:
-        """No authorization when trust doesn't exist."""
+    async def test_nothing_is_sent_without_a_trust(self) -> None:
+        """No trust (or no secret): nothing is sent; a 3.16 receiver would
+        refuse an unauthenticated callback."""
         self.mock_actor.trust.get_trust.return_value = None
 
         subscriptions = [
@@ -698,23 +707,18 @@ class TestFanOutManager:
             }
         ]
 
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-
         with patch("httpx.AsyncClient") as mock_client_class:
             mock_client = AsyncMock()
-            mock_client.post.return_value = mock_response
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
             mock_client.__aexit__ = AsyncMock(return_value=None)
             mock_client_class.return_value = mock_client
 
-            await self.manager.deliver_to_subscribers(
+            result = await self.manager.deliver_to_subscribers(
                 subscriptions, {"data": "test"}, "properties", 1
             )
 
-            call_args = mock_client.post.call_args
-            headers = call_args.kwargs.get("headers", {})
-            assert "Authorization" not in headers
+            mock_client.post.assert_not_called()
+            assert result.failed == 1
 
 
 class TestFanOutResult:

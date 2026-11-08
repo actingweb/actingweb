@@ -688,14 +688,18 @@ class TrustPeerHandler(base_handler.BaseHandler):
             return
 
         # Unlike the list route, this response keeps ``secret`` and
-        # ``verification_token``: the spec says the shared secret SHOULD be
-        # readable here by creator and admin (actingweb-spec.rst, "Reading
-        # Trust Relationship Data"), and peer verification reads
-        # ``verification_token`` from this route (Actor.create_verified_trust,
-        # actor.py). Do not strip them here. Client-supplied text is
-        # sanitised as on the list route.
+        # ``verification_token`` for the creator, the trustee and the peer the
+        # row belongs to: peer verification reads ``verification_token`` from
+        # this route (Actor.create_verified_trust, actor.py). Any other peer,
+        # an ``admin`` one included, never receives them: with another peer's
+        # secret it could act as that peer, re-pair its trust and lock it
+        # out (3.16). Client-supplied text is sanitised as on the list route.
         if isinstance(my_trust, dict):
             my_trust = _sanitize_trust_text(dict(my_trust))
+            caller = auth_result.auth_obj.acl.get("peerid") or ""
+            if caller and caller != peerid:
+                my_trust.pop("secret", None)
+                my_trust.pop("verification_token", None)
         out = json.dumps(my_trust)
         self.response.write(out)
         self.response.headers["Content-Type"] = "application/json"
@@ -855,6 +859,23 @@ class TrustPeerHandler(base_handler.BaseHandler):
                 desc = ""
         from actingweb.trust import is_valid_peer_baseuri
 
+        # Another peer's row (an ``admin`` peer is admitted to it) keeps its
+        # base URI: it is where the trust's secret goes.
+        put_acl = getattr(auth_result.auth_obj, "acl", None)
+        put_caller = put_acl.get("peerid") if isinstance(put_acl, dict) else ""
+        if (
+            isinstance(put_caller, str)
+            and put_caller
+            and put_caller != peerid
+            and baseuri
+        ):
+            logger.warning(
+                f"Refused a peer's base URI change on another peer's trust row at "
+                f"{actor_id}"
+            )
+            if self.response:
+                self.response.set_status(403, "Forbidden")
+            return
         # A peer on its own row (an application row may admit it) never
         # approves the relationship or writes its own permissions: those are
         # the owner's.

@@ -28,8 +28,11 @@ SECURITY
   ``subscriptions``, ``www``, ``resource_*``) answer 403 on the generic
   branch. **Check:** a third party pointed at ``/callbacks/<name>`` without
   credentials now receives 401; ``FanOutManager``'s granularity downgrade is
-  not fetchable by a 3.16 subscriber; a peer trustee's Basic retry after a
-  refused bearer cannot succeed on the two peer branches.
+  not fetchable by a 3.16 subscriber; ``FanOutManager`` delivers only with
+  the trust's secret, to ``<baseuri>/callbacks/subscriptions/<own id>/<subid>``
+  under the trust's stored base URI (not a stored ``callback_url``); a peer
+  trustee's Basic retry after a refused bearer cannot succeed on the two
+  peer branches.
 - **A peer could reach another peer's subscriptions, permissions and trust
   row through any access row that admitted it, application ``acl_rules``
   included.** Rows are matched by relationship and path prefix, and ``<id>``
@@ -44,7 +47,11 @@ SECURITY
   before the lookup, so an unknown id and another peer's answer the same
   403, and the creator and an ``admin`` peer may query any; ``GET
   /subscriptions?peerid=`` lists a peer's own rows; a peer on its own trust
-  row cannot approve it or write its own permissions.
+  row cannot approve it or write its own permissions; the per-peer trust
+  ``GET`` returns ``secret`` and ``verification_token`` only to the creator,
+  the trustee and the peer the row belongs to (an ``admin`` peer no longer
+  receives another peer's secret), and no peer changes another peer's base
+  URI.
 - **A trust request for an existing peer replaced its trust row.** ``POST
   /<actor>/trust/<relationship>`` upserted the row from the request,
   unauthenticated: a re-sent request reset the owner's approval and could
@@ -55,9 +62,15 @@ SECURITY
   bearer, and then swaps only the secret (relationship, approval, base URI
   and grants stay; the answer follows the stored approval; no
   ``trust_request_received``); anything else answers 403 and changes
-  nothing. A pending row (stored unverified and not yet approved) is
-  replaced only by a request that verifies; a re-pair never marks a row
-  verified.
+  nothing. A creation request is verified only when the requester answers
+  with its token and its base URI's ``/meta`` names the peer id it claims. A
+  pending row (stored unverified and not yet approved) is replaced only by
+  a request that verifies; a re-pair never marks a row verified. A trust
+  modification writes only the attributes it changes, on a row that still
+  exists (DynamoDB saved the whole loaded row, so a request authenticated
+  just before a re-pair could write the old secret back). An initiator whose
+  re-pair answer is lost asks the peer with the new secret before giving
+  up.
   A new row is written conditionally, so a request racing another never
   replaces its row. The library's initiator re-pairs a peer it already
   trusts with its current secret, only toward the stored base URI, and
@@ -71,9 +84,12 @@ SECURITY
 - **A permission callback with a far-future timestamp blocked every later
   permission update.** Later updates looked older and were ignored.
   **Behavior change:** a timestamp more than five minutes ahead of the
-  receiver's clock, or one that does not parse, answers 400; an update
-  older than the stored one changes nothing (no deletion of revoked data,
-  no sync, no hook).
+  receiver's clock, or one that does not parse, answers 400. A callback
+  older, by the sender's own clock, than the sender's last callback changes
+  nothing (no deletion of revoked data, no sync, no hook); a stored copy
+  carries the receiver's clock in ``fetched_at`` and the sender's timestamp
+  in ``extra_attributes["sender_timestamp"]``, so a copy fetched by query
+  never makes a slow sender's callback look older.
 - **Peer and client views listed every peer's subscriptions.**
   **Behavior change:** ``view.subscriptions.all_subscriptions``,
   ``outbound_subscriptions`` and ``inbound_subscriptions`` list the
@@ -1345,8 +1361,10 @@ ADDED
   --rps``) finds and removes peer state written before 3.16: permission
   copies for peers with no trust or stamped in the future, callback state
   for subscriptions the actor never made, and peer data for peers with no
-  trust or subscription. Strict reads; exit 0 nothing found, 1 found or
-  removed, 2 a store could not be read. See the maintenance guide.
+  trust or subscription; ``--all-permissions`` also every live peer's copy
+  (a forged one for a trusted peer looks real). Strict reads; exit 0
+  nothing found, 1 found or removed, 2 a store could not be read. See the
+  maintenance guide.
 - **``DELETE /<actor>/trust/<relationship>/<peer>?notify=false``**, creator
   only: removes the row and its cascade without contacting the peer (a dead
   or unreachable peer).

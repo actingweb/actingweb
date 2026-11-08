@@ -1721,11 +1721,17 @@ class Actor:
                     headers=request["headers"],
                 )
             except Exception as e:  # folds DbError: peer HTTP only
-                logger.warning(
-                    f"Re-pairing with {peer['id']} failed: no answer ({e}); "
-                    "the existing trust is unchanged"
+                return self._re_pair_unknown(
+                    peer["id"], existing, secret, relationship, f"no answer ({e})"
                 )
-                return False
+            if response.status_code >= 500:
+                return self._re_pair_unknown(
+                    peer["id"],
+                    existing,
+                    secret,
+                    relationship,
+                    f"{response.status_code} {response.reason}",
+                )
             return self._finish_re_pair(
                 peer["id"], secret, response.status_code, response.reason
             )
@@ -1879,11 +1885,17 @@ class Actor:
                         headers=request["headers"],
                     )
             except httpx.HTTPError as e:
-                logger.warning(
-                    f"Re-pairing with {peer['id']} failed: no answer ({e}); "
-                    "the existing trust is unchanged"
+                return await self._re_pair_unknown_async(
+                    peer["id"], existing, secret, relationship, f"no answer ({e})"
                 )
-                return False
+            if response.status_code >= 500:
+                return await self._re_pair_unknown_async(
+                    peer["id"],
+                    existing,
+                    secret,
+                    relationship,
+                    f"{response.status_code} {response.reason_phrase}",
+                )
             return self._finish_re_pair(
                 peer["id"], secret, response.status_code, response.reason_phrase
             )
@@ -2020,6 +2032,84 @@ class Actor:
             },
         }
 
+    def _re_pair_probe_request(
+        self, existing: dict[str, Any], secret: str, relationship: str
+    ) -> tuple[str, dict[str, str]]:
+        """The GET that asks the peer whether it holds ``secret`` for us: our
+        own trust row at the stored base URI, the new secret as bearer."""
+        url = (
+            str(existing.get("baseuri") or "").rstrip("/")
+            + f"/trust/{relationship}/{self.id}"
+        )
+        return url, {"Authorization": f"Bearer {secret}"}
+
+    def _re_pair_probed(
+        self, peerid: str, secret: str, status: int | None, body: Any, why: str
+    ) -> dict[str, Any] | bool:
+        """Finish a re-pair whose answer was lost, from the probe's result."""
+        if status == 200:
+            approved = isinstance(body, dict) and bool(body.get("approved"))
+            logger.info(
+                f"Re-pairing with {peerid}: the answer was lost ({why}), but the "
+                "peer holds the new secret"
+            )
+            return self._finish_re_pair(
+                peerid, secret, 201 if approved else 202, "confirmed by a probe"
+            )
+        logger.warning(
+            f"Re-pairing with {peerid}: no answer ({why}), and the peer did not "
+            "confirm the new secret; the existing trust is unchanged here. If "
+            "requests to the peer now answer 403, the peer accepted it: delete the "
+            "trust on both sides (?notify=false) and pair again"
+        )
+        return False
+
+    def _re_pair_unknown(
+        self,
+        peerid: str,
+        existing: dict[str, Any],
+        secret: str,
+        relationship: str,
+        why: str,
+    ) -> dict[str, Any] | bool:
+        """The re-pair's answer was lost or a server error: the peer may have
+        swapped the secret. Ask it, with the new secret."""
+        url, headers = self._re_pair_probe_request(existing, secret, relationship)
+        try:
+            probe = requests.get(url=url, headers=headers, timeout=(5, 10))
+            status: int | None = probe.status_code
+            try:
+                body: Any = probe.json() if status == 200 else None
+            except ValueError:
+                body = None
+        except Exception:  # folds DbError: peer HTTP only
+            status, body = None, None
+        return self._re_pair_probed(peerid, secret, status, body, why)
+
+    async def _re_pair_unknown_async(
+        self,
+        peerid: str,
+        existing: dict[str, Any],
+        secret: str,
+        relationship: str,
+        why: str,
+    ) -> dict[str, Any] | bool:
+        """Async twin of ``_re_pair_unknown``."""
+        import httpx
+
+        url, headers = self._re_pair_probe_request(existing, secret, relationship)
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                probe = await client.get(url, headers=headers)
+            status: int | None = probe.status_code
+            try:
+                body: Any = probe.json() if status == 200 else None
+            except ValueError:
+                body = None
+        except httpx.HTTPError:
+            status, body = None, None
+        return self._re_pair_probed(peerid, secret, status, body, why)
+
     def _finish_re_pair(
         self, peerid: str, secret: str, status: int, reason: str
     ) -> dict[str, Any] | bool:
@@ -2141,6 +2231,15 @@ class Actor:
             except Exception:  # folds DbError: peer HTTP only
                 logger.debug("No response when verifying trust at url" + requrl + ")")
                 verified = False
+        if verified and not self._base_uri_serves(baseuri, peerid):
+            # The verification proves only that the requester controls the
+            # base URI it sent; the row is verified only if that base URI is
+            # the actor it claims to be (its /meta names the peer id).
+            logger.warning(
+                f"Trust request for {peerid}: its base URI does not serve that "
+                "actor; stored as unverified"
+            )
+            verified = False
         new_trust = trust.Trust(actor_id=self.id, peerid=peerid, config=self.config)
         if existing:
             # A pending row: replaced only by a request that verified, in one
@@ -2186,6 +2285,17 @@ class Actor:
             )
             return False
         return new_trust.get()
+
+    def _base_uri_serves(self, baseuri: str, peerid: str) -> bool:
+        """Whether ``<baseuri>/meta`` names ``peerid`` as its id (one try)."""
+        try:
+            res = self.get_peer_info(baseuri, max_retries=1)
+        except Exception:  # folds DbError: peer HTTP only
+            return False
+        if not res or not 200 <= int(res.get("last_response_code") or 0) < 300:
+            return False
+        data = res.get("data")
+        return isinstance(data, dict) and data.get("id") == peerid
 
     def replace_trust_secret(
         self, peerid: str, relationship: str, secret: str

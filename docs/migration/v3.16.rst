@@ -1336,7 +1336,9 @@ answers the same 403 for an unknown id and another peer's. ``GET
 /subscriptions?peerid=`` and the root listing show a peer its own rows; a
 peer view's and a client view's subscription listings show the accessor's
 own. A peer on its own trust row (where an application row admits it) can no
-longer approve the row or write its own permissions.
+longer approve the row or write its own permissions. The per-peer trust
+``GET`` no longer returns another peer's ``secret`` to an ``admin`` peer,
+and no peer changes another peer's base URI.
 
 **Re-pairing.** A trust request (``POST /<actor>/trust/<relationship>``)
 for a peer that already has a trust row is a re-pair: it is accepted only
@@ -1360,9 +1362,12 @@ else answers 403 and changes nothing:
 - **A development tunnel whose address changes on every start** is a moved
   peer each time: give it a fixed domain, or delete and pair again.
 
-A pending trust row, one stored unverified (a request whose verification
-failed) and not yet approved by the owner, is replaced by a later request
-that verifies; its custom permissions are not kept. An approved row is the
+A creation request is verified only when the requester returns its token
+and its base URI's ``/meta`` names the peer id it claims, so a host cannot
+verify under another actor's id. A pending trust row, one stored unverified
+(a request whose verification failed) and not yet approved by the owner, is
+replaced by a later request that verifies; its custom permissions are not
+kept. An approved row is the
 owner's, and only a re-pair with its secret changes it. Trust rows replaced before 3.16 cannot be told
 apart from legitimate ones; a deployment that suspects one deletes the
 trust and pairs again, which also rotates its secret.
@@ -1374,6 +1379,10 @@ quiet period:
 
     actingweb-peer-state report          # what is stale
     actingweb-peer-state prune --apply   # remove it
+    # A deployment that may have received forged permission copies for
+    # peers it trusts also drops every copy (each rebuilds from the peer's
+    # next permission callback or query):
+    actingweb-peer-state prune --all-permissions --apply
 
 then restart the application's processes (they keep permissions they cached
 until restarted). See :doc:`../guides/database-maintenance` ("Peer State

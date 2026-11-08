@@ -213,6 +213,24 @@ class PeerPermissions:
         return glob_match(name, pattern)
 
 
+# The key in ``PeerPermissions.extra_attributes`` holding the timestamp the
+# granting peer put in its permission callback: callbacks are ordered by it,
+# against the previous callback only (a copy fetched by query has none).
+SENDER_TIMESTAMP_KEY = "sender_timestamp"
+
+
+def _parsed_time(value: str) -> datetime:
+    """An ISO-8601 timestamp as an aware UTC time; one that does not parse
+    sorts first."""
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=UTC)
+        return parsed.astimezone(UTC)
+    except (ValueError, OverflowError):
+        return datetime.min.replace(tzinfo=UTC)
+
+
 class PeerPermissionStore:
     """
     Storage manager for peer permission caching.
@@ -256,11 +274,14 @@ class PeerPermissionStore:
             )
             return False
 
-        # Check timestamp ordering - reject older updates
+        # Check timestamp ordering - reject older updates. ``fetched_at`` is
+        # this receiver's clock on every path (a query and a callback alike),
+        # compared as times, not strings (a row stored before 3.16 may carry
+        # a sender's timestamp in another format).
         cache_key = f"{permissions.actor_id}:{permissions.peer_id}"
         existing = self._cache.get(cache_key)
         if existing and existing.fetched_at and permissions.fetched_at:
-            if permissions.fetched_at < existing.fetched_at:
+            if _parsed_time(permissions.fetched_at) < _parsed_time(existing.fetched_at):
                 logger.debug(
                     f"Ignoring older permission update for {cache_key}: "
                     f"{permissions.fetched_at} < {existing.fetched_at}"

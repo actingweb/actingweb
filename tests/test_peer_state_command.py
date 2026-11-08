@@ -246,3 +246,18 @@ class TestThePermissionSenderLogsSuccess:
         finally:
             patch.stopall()
         assert not [r for r in caplog.records if "Failed to notify" in r.getMessage()]
+
+
+class TestAllPermissions:
+    """Verification of 2026-11-08, Issue 5: a forged copy for a trusted
+    peer is removed only with --all-permissions."""
+
+    def test_a_live_copy_is_listed_and_removed_only_on_request(
+        self, config: Any, capsys: Any
+    ) -> None:
+        w = World(config)
+        code, out = _run(capsys, "report", w.id)
+        assert code == 0 and "permissions-copy" not in out
+        code, out = _run(capsys, "prune", w.id, "--all-permissions", "--apply")
+        assert code == 1 and "permissions-copy" in out
+        assert w.permission_names() == set()

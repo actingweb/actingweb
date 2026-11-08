@@ -614,3 +614,45 @@ class TestTheProxyOnOddBodies:
         with mock.patch("actingweb.aw_proxy.httpx.AsyncClient", return_value=client):
             result = asyncio.run(proxy.change_resource_async(path="x", params={"a": 1}))
         assert result is not None and result["error"]["code"] == 403
+
+
+class TestNoPeerReadsAnothersSecret:
+    """Verification of 2026-11-08, Issue 1: an ``admin`` peer reads another
+    peer's trust row without its secret, and cannot move its base URI."""
+
+    def test_an_admin_peer_gets_no_secret(self, world: Publisher) -> None:
+        b = world.peers["b"]
+        out = world.call(TrustPeerHandler, "GET", "friend", b, as_peer="d")
+        assert out.response.status_code == 200
+        row = json.loads(out.response.body)
+        assert row["peerid"] == b
+        assert "secret" not in row and "verification_token" not in row
+
+    @pytest.mark.parametrize("who", ["b", "creator"])
+    def test_the_peer_itself_and_the_creator_do(
+        self, world: Publisher, who: str
+    ) -> None:
+        b = world.peers["b"]
+        kwargs: dict[str, Any] = (
+            {"creator": True} if who == "creator" else {"as_peer": "b"}
+        )
+        out = world.call(TrustPeerHandler, "GET", "friend", b, **kwargs)
+        row = json.loads(out.response.body)
+        assert row["secret"] == world.secrets["b"]
+        assert row.get("verification_token")
+
+    def test_an_admin_peer_cannot_move_anothers_base_uri(
+        self, world: Publisher
+    ) -> None:
+        b = world.peers["b"]
+        out = world.call(
+            TrustPeerHandler,
+            "PUT",
+            "friend",
+            b,
+            as_peer="d",
+            body={"baseuri": "https://evil.example.test/x"},
+        )
+        assert out.response.status_code == 403
+        row = Trust(actor_id=aid(world.a), peerid=b, config=world.config).get()
+        assert row and row["baseuri"] == f"https://{b}.example.test/{b}"

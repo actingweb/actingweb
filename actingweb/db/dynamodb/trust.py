@@ -5,7 +5,7 @@ from typing import Any
 
 from pynamodb.attributes import BooleanAttribute, UnicodeAttribute, UTCDateTimeAttribute
 from pynamodb.constants import PAY_PER_REQUEST_BILLING_MODE
-from pynamodb.exceptions import DoesNotExist, PutError
+from pynamodb.exceptions import DoesNotExist, PutError, UpdateError
 from pynamodb.indexes import AllProjection, GlobalSecondaryIndex
 from pynamodb.models import Model
 
@@ -244,11 +244,16 @@ class DbTrust:
     ):
         """Modify a trust
 
-        If bools are none, they will not be changed.
+        If bools are none, they will not be changed. Only the attributes given
+        are written, in one update conditioned on the row still existing: a
+        concurrent change to another attribute (a re-pair's secret swap, say)
+        is never written back over, and a row deleted meanwhile is not
+        recreated (False).
         """
         if not self.handle:
             logger.debug("Attempted modification of DbTrust without db handle")
             return False
+        before = dict(self.handle.attribute_values)
         if baseuri and len(baseuri) > 0:
             self.handle.baseuri = baseuri
         if secret and len(secret) > 0:
@@ -311,8 +316,20 @@ class DbTrust:
                 logger.warning(f"Invalid capabilities_fetched_at timestamp: {e}")
                 # Keep existing value if parsing fails
 
+        changed = {
+            name: value
+            for name, value in self.handle.attribute_values.items()
+            if before.get(name) != value
+        }
+        if not changed:
+            return True
+        actions = [getattr(Trust, name).set(value) for name, value in changed.items()]
         try:
-            self.handle.save()
+            self.handle.update(actions=actions, condition=Trust.id.exists())
+        except UpdateError as e:
+            if e.cause_response_code == "ConditionalCheckFailedException":
+                return False
+            raise DbError("trust modify") from e
         except Exception as e:
             raise DbError("trust modify") from e
         return True

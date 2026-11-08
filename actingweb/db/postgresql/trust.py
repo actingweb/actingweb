@@ -615,8 +615,10 @@ class DbTrust:
                         """,
                         tuple(params),
                     )
+                    updated = cur.rowcount
                 conn.commit()
-            return True
+            # A row deleted meanwhile is not modified (and not recreated).
+            return updated > 0
 
         except Exception as e:
             raise DbError("trust modify") from e

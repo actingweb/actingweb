@@ -313,13 +313,22 @@ class CallbacksHandler(base_handler.BaseHandler):
             except (TypeError, ValueError, KeyError):
                 self.response.set_status(400, "Error in json body")
                 return
+            if not isinstance(params, dict) or not isinstance(
+                params.get("data", {}), dict
+            ):
+                self.response.set_status(400, "Error in json body")
+                return
 
             # Store permissions in PeerPermissionStore
             permission_changes: dict = {}
             success = False
             try:
+                from datetime import UTC, datetime
+
                 from actingweb.peer_permissions import (
+                    SENDER_TIMESTAMP_KEY,
                     PeerPermissions,
+                    _parsed_time,
                     detect_permission_changes,
                     get_peer_permission_store,
                     normalize_property_permission,
@@ -344,7 +353,16 @@ class CallbacksHandler(base_handler.BaseHandler):
                     tools=perm_data.get("tools"),
                     resources=perm_data.get("resources"),
                     prompts=perm_data.get("prompts"),
-                    fetched_at=timestamp,
+                    # This receiver's clock, as a copy fetched by query has:
+                    # the store orders every copy by it.
+                    fetched_at=datetime.now(UTC).isoformat(),
+                    # The sender's own timestamp orders its callbacks among
+                    # themselves (its clock, compared only with itself).
+                    extra_attributes=(
+                        {SENDER_TIMESTAMP_KEY: timestamp}
+                        if params.get("timestamp") is not None
+                        else {}
+                    ),
                 )
 
                 store = get_peer_permission_store(myself.config)
@@ -352,19 +370,25 @@ class CallbacksHandler(base_handler.BaseHandler):
                 # Get old permissions before storing new ones (for comparison)
                 old_permissions = store.get_permissions(actor_id, granting_actor_id)
 
-                # An update older than the one stored changes nothing: no
-                # deletion of revoked data, no sync, no hook (the store would
-                # refuse it too; deciding here keeps the side effects in step).
+                # A callback older, by the sender's clock, than the sender's
+                # last stored callback changes nothing: no deletion of revoked
+                # data, no sync, no hook. Only callbacks are compared, each by
+                # its sender's own clock: a copy fetched by query carries none,
+                # so a slow sender's next callback is never taken for older.
+                previous = (
+                    (old_permissions.extra_attributes or {}).get(SENDER_TIMESTAMP_KEY)
+                    if old_permissions
+                    else None
+                )
+                current = peer_perms.extra_attributes.get(SENDER_TIMESTAMP_KEY)
                 if (
-                    old_permissions
-                    and old_permissions.fetched_at
-                    and peer_perms.fetched_at
-                    and peer_perms.fetched_at < old_permissions.fetched_at
+                    isinstance(previous, str)
+                    and isinstance(current, str)
+                    and _parsed_time(current) < _parsed_time(previous)
                 ):
                     logger.info(
                         f"Ignored a permission callback from {granting_actor_id} "
-                        f"older than the stored one ({peer_perms.fetched_at} < "
-                        f"{old_permissions.fetched_at})"
+                        f"older than its last one ({current} < {previous})"
                     )
                     self.response.set_status(204, "No Content")
                     return
@@ -448,7 +472,7 @@ class CallbacksHandler(base_handler.BaseHandler):
             if self.hooks and success:
                 hook_data = params.copy()
                 hook_data["granting_actor_id"] = granting_actor_id
-                hook_data["method"] = "POST"
+                hook_data["method"] = method
                 hook_data["permission_changes"] = permission_changes
                 self.hooks.execute_callback_hooks(
                     "permissions", actor_interface, hook_data

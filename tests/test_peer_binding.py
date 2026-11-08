@@ -16,7 +16,7 @@ import base64
 import json
 import logging
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from typing import Any
 from unittest import mock
 
@@ -683,3 +683,83 @@ class TestPhase1ReviewFixes:
         sync.assert_not_called()
         stored = w.stored_permissions(w.a)
         assert stored and stored["properties"]["excluded_patterns"] == ["x"]
+
+
+class TestThePermissionOrderUsesOneClock:
+    """Verification of 2026-11-08, Issue 7: callbacks are ordered by the
+    sender's clock among themselves only; every stored copy carries the
+    receiver's clock, compared as times."""
+
+    def _store(self, w: World, fetched_at: str, extra: dict[str, Any]) -> None:
+        from actingweb.peer_permissions import (
+            PeerPermissions,
+            get_peer_permission_store,
+        )
+
+        store = get_peer_permission_store(w.config)
+        store._cache.clear()  # noqa: SLF001 - start from the stored row
+        assert store.store_permissions(
+            PeerPermissions(
+                actor_id=aid(w.b),
+                peer_id=w.a,
+                properties={"patterns": ["*"], "operations": ["read"]},
+                fetched_at=fetched_at,
+                extra_attributes=extra,
+            )
+        )
+
+    def test_a_slow_senders_revocation_after_a_fetched_copy_applies(self) -> None:
+        w = World()
+        # A copy the receiver fetched by query, stamped with its own clock.
+        self._store(w, datetime.now(UTC).isoformat(), {})
+        slow = (datetime.now(UTC) - timedelta(seconds=30)).isoformat()
+        out = w.request(
+            "POST",
+            f"permissions/{w.a}",
+            _permission_body(slow, excluded="revoked"),
+            as_peer=w.a,
+        )
+        assert out.response.status_code == 204
+        stored = w.stored_permissions(w.a)
+        assert stored and stored["properties"]["excluded_patterns"] == ["revoked"]
+        assert stored["extra_attributes"]["sender_timestamp"]
+
+    def test_a_row_stamped_in_another_offset_does_not_block_a_newer_one(
+        self,
+    ) -> None:
+        w = World()
+        # Stored before 3.16, an hour ago, in the sender's +02:00 format: as a
+        # string it sorts after the current UTC time.
+        an_hour_ago = (datetime.now(UTC) - timedelta(hours=1)).astimezone(
+            timezone(timedelta(hours=2))
+        )
+        self._store(w, an_hour_ago.isoformat(), {})
+        out = w.request(
+            "POST",
+            f"permissions/{w.a}",
+            _permission_body(datetime.now(UTC).isoformat(), excluded="newer"),
+            as_peer=w.a,
+        )
+        assert out.response.status_code == 204
+        stored = w.stored_permissions(w.a)
+        assert stored and stored["properties"]["excluded_patterns"] == ["newer"]
+
+
+class TestThePermissionBranchEdges:
+    """Verification of 2026-11-08, Issue 9."""
+
+    def test_a_put_reaches_the_permissions_hook_as_put(self) -> None:
+        hooks = HookRegistry()
+        hook = mock.Mock(return_value=True)
+        hooks.register_callback_hook("permissions", hook)
+        w = World(hooks=hooks)
+        out = w.request("PUT", f"permissions/{w.a}", _permission_body(), as_peer=w.a)
+        assert out.response.status_code == 204
+        assert hook.call_args.args[2]["method"] == "PUT"
+
+    @pytest.mark.parametrize("body", [[1, 2], 3, {"data": [1]}, {"data": "x"}])
+    def test_a_body_that_is_not_an_object_is_400(self, body: Any) -> None:
+        w = World()
+        out = w.request("POST", f"permissions/{w.a}", body, as_peer=w.a)
+        assert out.response.status_code == 400
+        assert w.stored_permissions(w.a) is None

@@ -168,7 +168,17 @@ What it lists, per actor (names compared whole; a peer id may contain
 - ``remote-data``: peer data (``remote:<peer>``) for a peer with no trust,
   or with no subscription the actor made to it;
 - ``remote-unknown``: a ``remote:`` bucket whose name the library does not
-  build for a peer id; reported, never removed.
+  build for a peer id; reported, never removed;
+- ``permissions-copy``, only with ``--all-permissions``: every other stored
+  permission copy. A forged copy for a peer the actor trusts (a pre-3.16
+  unauthenticated callback with a current timestamp) looks like a real one;
+  each removed copy is rebuilt from the peer's next permission callback or
+  query.
+
+``remote-data`` covers data an application stored for a trusted peer through
+``RemotePeerStore`` without a subscription the actor made to it: the library
+removes that data too when the last subscription to the peer goes, so an
+application that keeps peer data that way runs ``report`` first.
 
 It never rebuilds a replica: removed peer data comes back with the next
 subscription callback or sync. It runs no application hook. Running

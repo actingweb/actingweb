@@ -124,6 +124,26 @@ def _new_secret() -> str:
     return uuid.uuid4().hex + uuid.uuid4().hex
 
 
+def _peer_answers(
+    peer: str, token: str = "whatever", meta_id: str | None = None
+) -> Any:
+    """``requests.get`` as a peer at its base URI answers: its trust row with
+    ``token`` on the verification GET, and its ``/meta`` naming ``meta_id``
+    (the peer itself unless given)."""
+
+    def get(url: str, **_kw: Any) -> Any:
+        if url.rstrip("/").endswith("/meta"):
+            body = json.dumps({"id": meta_id or peer, "type": "urn:test"})
+            return mock.Mock(
+                status_code=200, content=body.encode(), json=lambda: json.loads(body)
+            )
+        return mock.Mock(
+            status_code=200, content=json.dumps({"verification_token": token}).encode()
+        )
+
+    return get
+
+
 # ---------------------------------------------------------------------------
 # The receiver
 # ---------------------------------------------------------------------------
@@ -313,6 +333,12 @@ class TestTheInitiator:
         with (
             mock.patch.object(w.b, "get_peer_info", return_value=w.peer_info),
             mock.patch("actingweb.actor.requests.post", **kwargs),
+            # The probe after a lost answer or a 5xx: the peer does not hold
+            # the new secret.
+            mock.patch(
+                "actingweb.actor.requests.get",
+                return_value=mock.Mock(status_code=403),
+            ),
         ):
             assert (
                 w.b.create_reciprocal_trust(
@@ -514,10 +540,9 @@ class TestPhase3ReviewFixes:
         w = Receiver()
         squatted = self._squat(w)
         new = _new_secret()
-        verified = mock.Mock(
-            status_code=200, content=b'{"verification_token": "whatever"}'
-        )
-        with mock.patch("actingweb.actor.requests.get", return_value=verified) as get:
+        with mock.patch(
+            "actingweb.actor.requests.get", side_effect=_peer_answers(squatted)
+        ) as get:
             out = w.request(squatted, new)
         assert out.response.status_code in (201, 202)
         assert get.call_args.kwargs["url"].startswith(
@@ -598,10 +623,9 @@ class TestOnlyAPendingRowIsReplaceable:
         assert out.response.status_code in (201, 202)
         assert w.row(peer)["verified"] is False
         # The real peer's verifying request still replaces it.
-        verified = mock.Mock(
-            status_code=200, content=b'{"verification_token": "whatever"}'
-        )
-        with mock.patch("actingweb.actor.requests.get", return_value=verified):
+        with mock.patch(
+            "actingweb.actor.requests.get", side_effect=_peer_answers(peer)
+        ):
             out = w.request(peer, _new_secret())
         assert out.response.status_code in (201, 202)
         row = w.row(peer)
@@ -612,10 +636,9 @@ class TestOnlyAPendingRowIsReplaceable:
         w = Receiver()
         peer, _secret = self._pending(w, approved=True)
         before = w.row(peer)
-        verified = mock.Mock(
-            status_code=200, content=b'{"verification_token": "whatever"}'
-        )
-        with mock.patch("actingweb.actor.requests.get", return_value=verified) as get:
+        with mock.patch(
+            "actingweb.actor.requests.get", side_effect=_peer_answers(peer)
+        ) as get:
             out = w.request(peer, _new_secret())
         assert out.response.status_code == 403
         get.assert_not_called()
@@ -636,3 +659,139 @@ class TestOnlyAPendingRowIsReplaceable:
             is False
         )
         assert _state(w.row(peer)) == _state(before)
+
+
+class TestTheClaimIsBound:
+    """Verification of 2026-11-08, Issue 4: a request verifies only when its
+    base URI serves the peer id it claims."""
+
+    def test_a_base_uri_serving_another_id_is_stored_unverified(self) -> None:
+        w = Receiver()
+        claimed = f"peer-v-{uuid.uuid4().hex[:8]}"
+        with mock.patch(
+            "actingweb.actor.requests.get",
+            side_effect=_peer_answers(claimed, meta_id="someone-else"),
+        ):
+            out = w.request(claimed, _new_secret())
+        assert out.response.status_code in (201, 202)
+        assert w.row(claimed)["verified"] is False
+
+    def test_a_squat_from_a_foreign_base_uri_cannot_replace_a_pending_row(
+        self,
+    ) -> None:
+        w = Receiver()
+        peer = f"peer-p-{uuid.uuid4().hex[:8]}"
+        assert Trust(actor_id=aid(w.a), peerid=peer, config=w.config).create(
+            baseuri="https://first.example.test/x",
+            peer_type="urn:test",
+            relationship="friend",
+            secret=uuid.uuid4().hex,
+            verified=False,
+        )
+        before = w.row(peer)
+        with mock.patch(
+            "actingweb.actor.requests.get",
+            side_effect=_peer_answers(peer, meta_id="the-squatters-own-id"),
+        ):
+            out = w.request(peer, _new_secret())
+        assert out.response.status_code == 403
+        assert _state(w.row(peer)) == _state(before)
+
+
+class TestTheSwapIsNotWrittenBack:
+    """Verification of 2026-11-08, Issue 2: a modify writes only the
+    attributes it is given, on a row that still exists."""
+
+    def test_a_usage_write_loaded_before_the_swap_keeps_the_new_secret(
+        self,
+    ) -> None:
+        w = Receiver()
+        stale = Trust(actor_id=aid(w.a), peerid=w.b, config=w.config)
+        assert stale.get()  # loaded with the old secret
+        new = _new_secret()
+        swapped, reason = w.a.replace_trust_secret(
+            peerid=w.b, relationship="friend", secret=new
+        )
+        assert swapped, reason
+        # A request authenticated just before the swap records its usage.
+        assert stale.modify(last_accessed="2026-11-08T12:00:00+00:00")
+        assert w.row(w.b)["secret"] == new
+
+    def test_a_modify_after_a_delete_does_not_recreate_the_row(self) -> None:
+        w = Receiver()
+        stale = Trust(actor_id=aid(w.a), peerid=w.b, config=w.config)
+        assert stale.get()
+        assert Trust(actor_id=aid(w.a), peerid=w.b, config=w.config).delete()
+        assert stale.modify(last_accessed="2026-11-08T12:00:00+00:00") is False
+        assert not w.row(w.b)
+
+
+class TestALostAnswerIsProbed:
+    """Verification of 2026-11-08, Issue 3: when the re-pair's answer is lost,
+    the initiator asks the peer with the new secret."""
+
+    def test_a_lost_answer_the_peer_confirms_stores_the_new_secret(self) -> None:
+        w = Initiator()
+        new = _new_secret()
+        confirmed = mock.Mock(status_code=200, json=lambda: {"approved": True})
+        with (
+            mock.patch.object(w.b, "get_peer_info", return_value=w.peer_info),
+            mock.patch(
+                "actingweb.actor.requests.post", side_effect=ConnectionError("lost")
+            ),
+            mock.patch("actingweb.actor.requests.get", return_value=confirmed) as get,
+        ):
+            assert w.b.create_reciprocal_trust(
+                url=w.url, secret=new, relationship="friend"
+            )
+        probe = get.call_args.kwargs
+        assert probe["url"] == f"{w.url}/trust/friend/{aid(w.b)}"
+        assert probe["headers"]["Authorization"] == f"Bearer {new}"
+        assert w.row()["secret"] == new
+
+    def test_a_server_error_the_peer_does_not_confirm_changes_nothing(
+        self,
+    ) -> None:
+        w = Initiator()
+        before = w.row()
+        with (
+            mock.patch.object(w.b, "get_peer_info", return_value=w.peer_info),
+            mock.patch(
+                "actingweb.actor.requests.post",
+                return_value=mock.Mock(status_code=502, reason="Bad Gateway"),
+            ),
+            mock.patch(
+                "actingweb.actor.requests.get", return_value=mock.Mock(status_code=403)
+            ),
+        ):
+            assert (
+                w.b.create_reciprocal_trust(
+                    url=w.url, secret=_new_secret(), relationship="friend"
+                )
+                is False
+            )
+        assert _state(w.row()) == _state(before)
+
+    def test_the_async_twin_probes_too(self) -> None:
+        w = Initiator()
+        new = _new_secret()
+        client = mock.MagicMock()
+        client.__aenter__.return_value.post = mock.AsyncMock(
+            side_effect=httpx.ConnectError("lost")
+        )
+        client.__aenter__.return_value.get = mock.AsyncMock(
+            return_value=mock.Mock(status_code=200, json=lambda: {"approved": False})
+        )
+        with (
+            mock.patch.object(
+                w.b, "get_peer_info_async", mock.AsyncMock(return_value=w.peer_info)
+            ),
+            mock.patch("httpx.AsyncClient", return_value=client),
+        ):
+            assert asyncio.run(
+                w.b.create_reciprocal_trust_async(
+                    url=w.url, secret=new, relationship="friend"
+                )
+            )
+        row = w.row()
+        assert row["secret"] == new and row["peer_approved"] is False

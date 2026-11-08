@@ -470,8 +470,27 @@ class FanOutManager:
         granularity: str,
         needs_downgrade: bool,
     ) -> DeliveryResult:
-        """Deliver callback to a single subscriber."""
+        """Deliver callback to a single subscriber.
+
+        Only with the trust's secret, and only to the trust's stored base URI
+        (``<baseuri>/callbacks/subscriptions/<own id>/<subid>``): a 3.16
+        receiver refuses an unauthenticated callback, and the bearer must go
+        to the host the trust was made with, not to a stored ``callback_url``.
+        """
         cb = self._get_circuit_breaker(peer_id)
+        trust = self._actor.trust.get_trust(peer_id)
+        secret = str((trust or {}).get("secret") or "")
+        baseuri = str((trust or {}).get("baseuri") or "").rstrip("/")
+        if not secret or not baseuri:
+            return DeliveryResult(
+                peer_id=peer_id,
+                subscription_id=subscription_id,
+                success=False,
+                error="no trust with a secret and a base URI for this peer",
+            )
+        callback_url = (
+            f"{baseuri}/callbacks/subscriptions/{self._actor.id}/{subscription_id}"
+        )
 
         try:
             # Build callback wrapper per protocol spec
@@ -510,10 +529,7 @@ class FanOutManager:
                     body_bytes = gzip.compress(body_bytes)
                     headers["Content-Encoding"] = "gzip"
 
-            # Add auth token
-            trust = self._actor.trust.get_trust(peer_id)
-            if trust:
-                headers["Authorization"] = f"Bearer {trust.get('secret', '')}"
+            headers["Authorization"] = f"Bearer {secret}"
 
             # Make HTTP request using shared client for connection pooling
             client = await get_shared_client(self._request_timeout)

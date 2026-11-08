@@ -793,7 +793,12 @@ class Auth:
         return True
 
     def _match_access_row(
-        self, path="", subpath="", method="", peerid="", approved=True
+        self,
+        path: str = "",
+        subpath: str | None = "",
+        method: str = "",
+        peerid: str = "",
+        approved: bool = True,
     ) -> bool:
         """The access table lookup: the first row matching the caller's role,
         the path and the method admits the request."""

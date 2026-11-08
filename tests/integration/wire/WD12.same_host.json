@@ -93,7 +93,9 @@
         ]
        },
        "actor_id": "<B>",
-       "extra_attributes": {},
+       "extra_attributes": {
+        "sender_timestamp": "<ts:iso-offset>"
+       },
        "fetch_error": null,
        "fetched_at": "<ts:iso-offset>",
        "methods": {
@@ -332,7 +334,9 @@
         ]
        },
        "actor_id": "<B>",
-       "extra_attributes": {},
+       "extra_attributes": {
+        "sender_timestamp": "<ts:iso-offset>"
+       },
        "fetch_error": null,
        "fetched_at": "<ts:iso-offset>",
        "methods": {
@@ -520,7 +524,9 @@
         ]
        },
        "actor_id": "<B>",
-       "extra_attributes": {},
+       "extra_attributes": {
+        "sender_timestamp": "<ts:iso-offset>"
+       },
        "fetch_error": null,
        "fetched_at": "<ts:iso-offset>",
        "methods": {
@@ -726,7 +732,9 @@
         ]
        },
        "actor_id": "<B>",
-       "extra_attributes": {},
+       "extra_attributes": {
+        "sender_timestamp": "<ts:iso-offset>"
+       },
        "fetch_error": null,
        "fetched_at": "<ts:iso-offset>",
        "methods": {
@@ -932,7 +940,9 @@
         ]
        },
        "actor_id": "<B>",
-       "extra_attributes": {},
+       "extra_attributes": {
+        "sender_timestamp": "<ts:iso-offset>"
+       },
        "fetch_error": null,
        "fetched_at": "<ts:iso-offset>",
        "methods": {
@@ -1125,7 +1135,9 @@
         ]
        },
        "actor_id": "<B>",
-       "extra_attributes": {},
+       "extra_attributes": {
+        "sender_timestamp": "<ts:iso-offset>"
+       },
        "fetch_error": null,
        "fetched_at": "<ts:iso-offset>",
        "methods": {

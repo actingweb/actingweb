@@ -213,6 +213,13 @@ its T6 (a 409 on a repeated trust request), which the guard here replaces.
   format decisions: full transcripts from the first scenario step, timestamp
   tokens carrying the format class only, one file per row for both
   backends.
+- [Updated 2026-11-08, iteration 1] **No peer reads another peer's secret**
+  (owner): the per-peer trust GET returns `secret` and `verification_token`
+  only to the creator, the trustee and the row's own peer; no peer changes
+  another peer's base URI. This narrows the `admin` exemption below.
+- [Updated 2026-11-08, iteration 2] **A verification binds the claimed id**
+  (owner): a creation is verified only when the requester's base URI serves
+  the claimed peer id (`/meta`).
 - [Updated 2026-11-07] **One central peer binding, keyed on the call site**
   (owner). `check_authorisation` gains a keyword `path_peer`: when it is
   set and the caller is authenticated as a peer, the caller's peer id must
@@ -1713,3 +1720,179 @@ every later run; Emm's suite on this branch matches its `master` baseline.
   failure would have been silent without it.
 - One-sided local deletes now need the other owner's help to re-pair
   (migration guide).
+
+## Iterations
+
+### 2026-11-08, after verification thoughts/verifications/2026-11-08-peer-authorisation-fixes.md
+
+#### 1. No peer reads another peer's secret
+
+**Category**: Verification fix (Issue 1); Decision changed (owner)
+
+**What changed**: the per-peer trust GET leaves out `secret` and
+`verification_token` for every peer caller but the row's own, `admin`
+included; the creator, the trustee and the peer itself still receive them.
+A peer caller cannot change the base URI of another peer's row (403).
+
+**Files affected**:
+- `actingweb/handlers/trust.py` - `TrustPeerHandler.get` (redaction),
+  `TrustPeerHandler.put` (base URI)
+- `tests/test_peer_paths_binding.py` - `TestNoPeerReadsAnothersSecret`
+
+**Rationale**: an `admin` peer read another peer's secret, then authenticated
+as that peer (passing the `/callbacks` binding the owner denied admins) and
+re-paired its trust, locking it out.
+
+#### 2. A verified row is bound to its base URI
+
+**Category**: Verification fix (Issue 4); Decision changed (owner)
+
+**What changed**: `create_verified_trust` marks a creation verified only
+when, besides the token check, the requester's base URI serves the claimed
+peer id (`<baseuri>/meta`'s `id`, one try, `Actor._base_uri_serves`);
+otherwise the row is stored unverified (a new peer) or the request is
+refused (a pending row is replaced only by a verified request). `WT3`
+re-recorded: A's `GET /<N>/meta` after the verification GET.
+
+**Files affected**:
+- `actingweb/actor.py` - `create_verified_trust`, `_base_uri_serves`
+- `tests/test_trust_re_pair.py` - `_peer_answers`, `TestTheClaimIsBound`;
+  the pending-row tests answer `/meta`
+- `tests/test_trust_verification_token_missing.py` - the matching-token
+  test patches `_base_uri_serves`
+- `tests/integration/wire/WT3.*.json`, `rows.toml`
+
+**Rationale**: a verification proved only that the requester controls the
+base URI it sent, so a squat under another actor's id was stored verified
+and, since a verified row is never replaced, blocked the real peer.
+
+#### 3. A trust modify writes only its own attributes, on a live row
+
+**Category**: Verification fix (Issue 2)
+
+**What changed**: DynamoDB's `DbTrust.modify` sends only the attributes it
+changes, in one `UpdateItem` conditioned on the row existing (it saved the
+whole loaded item); PostgreSQL's returns False when its `UPDATE` touched no
+row. A usage write from a request authenticated just before a re-pair no
+longer writes the old secret back, and a modify racing a delete no longer
+recreates the row (DynamoDB) or reports success (PostgreSQL).
+
+**Files affected**:
+- `actingweb/db/dynamodb/trust.py` - `modify`
+- `actingweb/db/postgresql/trust.py` - `modify` (rowcount)
+- `tests/test_trust_re_pair.py` - `TestTheSwapIsNotWrittenBack` (both
+  tests fail on both backends without the change)
+
+**Rationale**: the re-pair's swap raced `_record_trust_usage`, which modifies
+the row on every authenticated bearer request; the two sides then held
+different secrets with nothing logged.
+
+#### 4. A lost re-pair answer is probed
+
+**Category**: Verification fix (Issue 3)
+
+**What changed**: when the re-pair's request gets no answer or a 5xx, the
+initiator GETs its own trust row at the stored base URI with the new secret
+as bearer; a 200 means the peer swapped, and the new secret is stored (with
+`peer_approved` from the answer's `approved`); anything else leaves the row
+and logs that the peer may have accepted, with the recovery. Sync and async.
+
+**Files affected**:
+- `actingweb/actor.py` - `_re_pair_unknown`, `_re_pair_unknown_async`,
+  `_re_pair_probe_request`, `_re_pair_probed`; both re-pair branches
+- `tests/test_trust_re_pair.py` - `TestALostAnswerIsProbed`; the refusal
+  test patches the probe
+
+**Rationale**: a swap committed at the peer whose answer was lost left the
+two sides on different secrets, with a log saying nothing changed.
+
+#### 5. Permission callbacks ordered by one clock at a time
+
+**Category**: Verification fix (Issue 7)
+
+**What changed**: a permission callback stores this receiver's clock in
+`fetched_at`, as a copy fetched by query does, and the sender's timestamp in
+`extra_attributes["sender_timestamp"]` (not a new field: `from_dict` is
+`cls(**data)`, so a 3.15 instance would fail on an unknown key during a
+rolling deploy). A callback is ignored only when it is older, by the
+sender's clock, than the sender's last stored callback; the store compares
+`fetched_at` as parsed times, not strings. The five-minute skew window
+stays. Every wire row whose snapshot holds B's stored copy (all 44)
+re-recorded; the only difference is the added key (checked over all 81
+changed files).
+
+**Files affected**:
+- `actingweb/handlers/callbacks.py` - the permission branch
+- `actingweb/peer_permissions.py` - `SENDER_TIMESTAMP_KEY`, `_parsed_time`,
+  `store_permissions`
+- `tests/test_peer_binding.py` - `TestThePermissionOrderUsesOneClock`
+- `tests/integration/wire/*.json`, `rows.toml` (a reason line per row)
+
+**Rationale**: a copy fetched by query carried the receiver's clock and a
+callback the sender's; a sender with a slow clock had its revocation
+answered 204 and dropped, and rows stored before 3.16 in another offset
+blocked newer updates as strings.
+
+#### 6. `actingweb-peer-state --all-permissions`
+
+**Category**: Verification fix (Issue 5)
+
+**What changed**: `report` and `prune` take `--all-permissions`, which also
+lists every live peer's stored permission copy (`permissions-copy`), so a
+forged copy for a trusted peer can be removed (each rebuilds from the next
+callback or query). The guide and the module docstring also say what
+`remote-data` removes for a trusted peer without a subscription (Issue 11).
+
+**Files affected**:
+- `actingweb/maintenance/peer_state.py`; `docs/guides/database-maintenance.rst`
+- `tests/test_peer_state_command.py` - `TestAllPermissions`
+
+**Rationale**: a pre-3.16 forged copy for a trusted peer with a current
+timestamp looked like a real one.
+
+#### 7. `FanOutManager` delivers only with the trust's secret, to its base URI
+
+**Category**: Verification fix (Issue 6)
+
+**What changed**: no trust, secret or base URI: nothing is sent (a failed
+result); the callback goes to `<baseuri>/callbacks/subscriptions/<own
+id>/<subid>` under the stored base URI, not to a stored `callback_url`.
+
+**Files affected**:
+- `actingweb/fanout.py` - `_deliver_single`
+- `tests/test_fanout.py` - the mocked trust carries a base URI; the no-trust
+  test now asserts nothing is sent; the header test asserts the URL
+
+**Rationale**: it sent unauthenticated callbacks (refused by a 3.16
+receiver), and to a URL the trust was not made with.
+
+#### 8. The permission branch's edges, the demo webhooks, a type hint
+
+**Category**: Verification fix (Issues 8, 9, 10)
+
+**What changed**: the `permissions` hook is told the real method (`PUT` for
+a PUT); a body or `data` that is not a JSON object answers 400, not 500;
+the demo's `sms_webhook` and `payment_webhook` docstrings say a provider
+cannot call `/callbacks` without credentials; `_match_access_row` is typed.
+
+**Files affected**:
+- `actingweb/handlers/callbacks.py`; `actingweb/auth.py`
+- `examples/demo/shared_hooks/app/callback_hooks.py` (docstrings only)
+- `tests/test_peer_binding.py` - `TestThePermissionBranchEdges`
+
+**Rationale**: the verification's low findings.
+
+#### 9. Documentation for iterations 1 to 7
+
+**Category**: Verification fix
+
+**What changed**: the changelog's `SECURITY` and `ADDED` entries, the
+migration guide, the security reference, the maintenance guide and the
+specification note describe the secret redaction, the `/meta` binding, the
+field-level trust modify, the lost-answer probe, the one-clock ordering,
+`FanOutManager`'s delivery and `--all-permissions`. Decisions Made gains
+the two owner decisions.
+
+**Files affected**: `CHANGELOG.rst`, `docs/migration/v3.16.rst`,
+`docs/reference/security.rst`, `docs/guides/database-maintenance.rst`,
+`docs/protocol/actingweb-spec.rst`, this plan.

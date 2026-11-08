@@ -84,7 +84,9 @@
       "peer_permissions": {
        "actions": null,
        "actor_id": "<B>",
-       "extra_attributes": {},
+       "extra_attributes": {
+        "sender_timestamp": "<ts:iso-offset>"
+       },
        "fetch_error": null,
        "fetched_at": "<ts:iso-offset>",
        "methods": {
@@ -298,7 +300,9 @@
       "peer_permissions": {
        "actions": null,
        "actor_id": "<B>",
-       "extra_attributes": {},
+       "extra_attributes": {
+        "sender_timestamp": "<ts:iso-offset>"
+       },
        "fetch_error": null,
        "fetched_at": "<ts:iso-offset>",
        "methods": {
@@ -517,7 +521,9 @@
       "peer_permissions": {
        "actions": null,
        "actor_id": "<B>",
-       "extra_attributes": {},
+       "extra_attributes": {
+        "sender_timestamp": "<ts:iso-offset>"
+       },
        "fetch_error": null,
        "fetched_at": "<ts:iso-offset>",
        "methods": {
@@ -736,7 +742,9 @@
       "peer_permissions": {
        "actions": null,
        "actor_id": "<B>",
-       "extra_attributes": {},
+       "extra_attributes": {
+        "sender_timestamp": "<ts:iso-offset>"
+       },
        "fetch_error": null,
        "fetched_at": "<ts:iso-offset>",
        "methods": {
@@ -916,7 +924,9 @@
       "peer_permissions": {
        "actions": null,
        "actor_id": "<B>",
-       "extra_attributes": {},
+       "extra_attributes": {
+        "sender_timestamp": "<ts:iso-offset>"
+       },
        "fetch_error": null,
        "fetched_at": "<ts:iso-offset>",
        "methods": {
@@ -1096,7 +1106,9 @@
       "peer_permissions": {
        "actions": null,
        "actor_id": "<B>",
-       "extra_attributes": {},
+       "extra_attributes": {
+        "sender_timestamp": "<ts:iso-offset>"
+       },
        "fetch_error": null,
        "fetched_at": "<ts:iso-offset>",
        "methods": {
@@ -1274,7 +1286,9 @@
       "peer_permissions": {
        "actions": null,
        "actor_id": "<B>",
-       "extra_attributes": {},
+       "extra_attributes": {
+        "sender_timestamp": "<ts:iso-offset>"
+       },
        "fetch_error": null,
        "fetched_at": "<ts:iso-offset>",
        "methods": {
@@ -1452,7 +1466,9 @@
       "peer_permissions": {
        "actions": null,
        "actor_id": "<B>",
-       "extra_attributes": {},
+       "extra_attributes": {
+        "sender_timestamp": "<ts:iso-offset>"
+       },
        "fetch_error": null,
        "fetched_at": "<ts:iso-offset>",
        "methods": {
@@ -1632,7 +1648,9 @@
       "peer_permissions": {
        "actions": null,
        "actor_id": "<B>",
-       "extra_attributes": {},
+       "extra_attributes": {
+        "sender_timestamp": "<ts:iso-offset>"
+       },
        "fetch_error": null,
        "fetched_at": "<ts:iso-offset>",
        "methods": {

@@ -1597,7 +1597,9 @@ requesting actor itself, authenticated with the current shared secret as
 bearer token, and then only replace the secret; the relationship, its
 approval and the base URI stay, and the response follows the stored
 approval (201 or 202). Otherwise B MUST answer 403 Forbidden and change
-nothing. (A relationship B stored without verifying it, and has not
+nothing. B MUST treat a new relationship as verified only when the
+verification succeeds and the requesting actor's base URI serves its claimed
+id (its ``/meta`` ``id``). (A relationship B stored without verifying it, and has not
 approved, MAY be replaced by a request that verifies.)
 
 If the requested actor wants to do a verification of the requesting

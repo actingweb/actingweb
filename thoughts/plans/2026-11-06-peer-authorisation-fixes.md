@@ -2480,3 +2480,9 @@ silently; an untimed callback erased the ordering.
 `test_replacing_a_pending_row_renews_its_creation_time`
 
 **Rationale**: the whole-branch review's remaining findings.
+
+Emm's suite on `376b71c` (gate 2, environment 9, its adoption worktree
+unchanged): PostgreSQL 2 failed / 7406 passed, DynamoDB 3 failed / 54
+passed, the `master` baseline's failures by name. The Full tier on
+`376b71c`: DynamoDB 6063 passed, PostgreSQL 5860 passed, the docs build;
+the three `.subscriber` recordings the only wire change.

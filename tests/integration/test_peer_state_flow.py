@@ -3,8 +3,9 @@
 ``thoughts/plans/2026-11-06-peer-authorisation-fixes.md``, Phase 4: stale
 state planted through the library (a permission copy for a peer with no
 trust, a future-dated copy for the live peer, a pending row for a
-subscription never made) is removed by ``prune --apply``, and the pair's
-next callback and permission update apply as before.
+subscription never made) is removed by ``prune --apply`` (the live peer's
+copy rebuilt by a query), and the pair's next callback and permission
+update apply as before.
 """
 
 from __future__ import annotations
@@ -45,7 +46,14 @@ def test_prune_removes_the_stale_and_the_pair_still_works(wire_pair, monkeypatch
 
     assert peer_state.main(["prune", b.id, "--apply", "--rps", "0"]) == 1
     fresh = Attributes(actor_id=b.id, bucket=PEER_PERMISSIONS_BUCKET, config=config)
-    assert set(fresh.get_bucket() or {}) == set()
+    # The live peer's future-dated copy is removed and rebuilt at once by a
+    # query to A (reverify-2, Issue 5), stamped now; the copy for a peer with
+    # no trust is gone.
+    assert set(fresh.get_bucket() or {}) == {f"{b.id}:{a.id}"}
+    rebuilt = fresh.get_attr(name=f"{b.id}:{a.id}") or {}
+    raw = rebuilt.get("data") or {}
+    rebuilt_at = dict(json.loads(raw) if isinstance(raw, str) else raw)["fetched_at"]
+    assert datetime.fromisoformat(rebuilt_at) <= datetime.now(UTC)
     # The restart the command asks for: the wire apps run in this process,
     # and B's store still holds the copy it cached before the prune.
     from actingweb.peer_permissions import get_peer_permission_store

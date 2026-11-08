@@ -8,8 +8,9 @@ Tests the baseline fetch refactoring:
 - Resync callback handling
 """
 
+import asyncio
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -445,6 +446,40 @@ class TestRefreshPeerMetadata:
             # Verify capabilities were fetched and stored
             mock_fetch.assert_called_once()
             mock_store.store_capabilities.assert_called_once_with(mock_capabilities)
+
+    @pytest.mark.parametrize("failed", [True, False])
+    def test_a_failed_permission_query_keeps_the_stored_copy(
+        self, failed: bool
+    ) -> None:
+        """Verification reverify-2, Issue 5: an empty copy from a failed
+        fetch would leave nothing for the next revocation to compare with."""
+        from actingweb.peer_permissions import PeerPermissions
+
+        actor = FakeCoreActor()
+        actor.config.peer_permissions_caching = True
+        manager = SubscriptionManager(actor)  # type: ignore[arg-type]
+        fetched = PeerPermissions(
+            actor_id="a", peer_id="peer_1", fetch_error="down" if failed else None
+        )
+        for refresh in (
+            lambda: manager._refresh_peer_metadata("peer_1"),
+            lambda: asyncio.run(manager._refresh_peer_metadata_async("peer_1")),
+        ):
+            with (
+                patch(
+                    "actingweb.peer_permissions.fetch_peer_permissions",
+                    return_value=fetched,
+                ),
+                patch(
+                    "actingweb.peer_permissions.fetch_peer_permissions_async",
+                    new=AsyncMock(return_value=fetched),
+                ),
+                patch(
+                    "actingweb.peer_permissions.get_peer_permission_store"
+                ) as get_store,
+            ):
+                refresh()
+            assert get_store.return_value.store_permissions.called is not failed
 
     def test_refresh_peer_metadata_handles_errors_gracefully(self):
         """Test metadata refresh doesn't raise on errors."""

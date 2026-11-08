@@ -733,7 +733,9 @@ class TestALostAnswerIsProbed:
     def test_a_lost_answer_the_peer_confirms_stores_the_new_secret(self) -> None:
         w = Initiator()
         new = _new_secret()
-        confirmed = mock.Mock(status_code=200, json=lambda: {"approved": True})
+        confirmed = mock.Mock(
+            status_code=200, json=lambda: {"peerid": aid(w.b), "approved": True}
+        )
         with (
             mock.patch.object(w.b, "get_peer_info", return_value=w.peer_info),
             mock.patch(
@@ -772,6 +774,37 @@ class TestALostAnswerIsProbed:
             )
         assert _state(w.row()) == _state(before)
 
+    @pytest.mark.parametrize(
+        "answer",
+        [
+            mock.Mock(status_code=200, json=mock.Mock(side_effect=ValueError("html"))),
+            mock.Mock(status_code=200, json=lambda: {"peerid": "someone-else"}),
+            mock.Mock(status_code=202, json=lambda: ["not", "a", "row"]),
+        ],
+        ids=["not-json", "another-row", "not-an-object"],
+    )
+    def test_an_answer_that_is_not_our_trust_row_confirms_nothing(
+        self, answer: Any
+    ) -> None:
+        """Reverify-2, Issue 6: a proxy or catch-all page answering 200 does
+        not prove the peer holds the new secret."""
+        w = Initiator()
+        before = w.row()
+        with (
+            mock.patch.object(w.b, "get_peer_info", return_value=w.peer_info),
+            mock.patch(
+                "actingweb.actor.requests.post", side_effect=ConnectionError("lost")
+            ),
+            mock.patch("actingweb.actor.requests.get", return_value=answer),
+        ):
+            assert (
+                w.b.create_reciprocal_trust(
+                    url=w.url, secret=_new_secret(), relationship="friend"
+                )
+                is False
+            )
+        assert _state(w.row()) == _state(before)
+
     def test_the_async_twin_probes_too(self) -> None:
         w = Initiator()
         new = _new_secret()
@@ -780,7 +813,10 @@ class TestALostAnswerIsProbed:
             side_effect=httpx.ConnectError("lost")
         )
         client.__aenter__.return_value.get = mock.AsyncMock(
-            return_value=mock.Mock(status_code=200, json=lambda: {"approved": False})
+            return_value=mock.Mock(
+                status_code=200,
+                json=lambda: {"peerid": aid(w.b), "approved": False},
+            )
         )
         with (
             mock.patch.object(
@@ -872,7 +908,9 @@ class TestTheOwnPeerReadsItsPendingRow:
     def test_a_lost_202_is_confirmed_by_the_probe(self) -> None:
         w = Initiator()
         new = _new_secret()
-        pending = mock.Mock(status_code=202, json=lambda: {"approved": False})
+        pending = mock.Mock(
+            status_code=202, json=lambda: {"peerid": aid(w.b), "approved": False}
+        )
         with (
             mock.patch.object(w.b, "get_peer_info", return_value=w.peer_info),
             mock.patch(
@@ -898,3 +936,51 @@ class TestARefusedModifyKeepsTheCopy:
         assert Trust(actor_id=aid(w.a), peerid=w.b, config=w.config).delete()
         assert stale.modify(secret=_new_secret(), desc="never written") is False
         assert stale.trust == before
+
+
+# ---------------------------------------------------------------------------
+# Verification of 2026-11-08 (reverify-2)
+# ---------------------------------------------------------------------------
+
+
+class TestTheMetaCheckAndThePendingReplacement:
+    def test_the_meta_check_is_two_short_tries(self) -> None:
+        """Issue 8: an unauthenticated request chooses the host, so the
+        /meta check bounds how long it can hold a worker."""
+        import requests
+
+        from actingweb.actor import META_CHECK_TIMEOUT, META_CHECK_TRIES
+
+        w = Receiver()
+        peer = f"peer-m-{uuid.uuid4().hex[:8]}"
+        answers = _peer_answers(peer)
+        meta_calls: list[Any] = []
+
+        def get(url: str, **kw: Any) -> Any:
+            if url.rstrip("/").endswith("/meta"):
+                meta_calls.append(kw)
+                raise requests.exceptions.ConnectTimeout("slow host")
+            return answers(url, **kw)
+
+        with (
+            mock.patch("actingweb.actor.requests.get", side_effect=get),
+            mock.patch("time.sleep"),
+        ):
+            out = w.request(peer, _new_secret())
+        assert out.response.status_code == 202
+        assert w.row(peer)["verified"] is False
+        assert len(meta_calls) == META_CHECK_TRIES == 2
+        assert all(kw["timeout"] == META_CHECK_TIMEOUT for kw in meta_calls)
+
+    def test_replacing_a_pending_row_is_logged(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Issue 7: the previous requester's secret stops working here."""
+        import logging
+
+        w = Receiver()
+        peer = f"peer-r-{uuid.uuid4().hex[:8]}"
+        assert _create(w, peer, meta_id="the-squatter").response.status_code == 202
+        with caplog.at_level(logging.WARNING, logger="actingweb.actor"):
+            _create(w, peer)
+        assert any("replaces its pending row" in r.getMessage() for r in caplog.records)

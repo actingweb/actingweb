@@ -43,6 +43,10 @@ logger = logging.getLogger(__name__)
 # the fault is fixed, while still costing at most one line per window per
 # container.
 _SUSPENSION_ERROR_LOG_INTERVAL_SECONDS = 300.0
+# The /meta check of a trust request's base URI (create_verified_trust): two
+# short tries, since an unauthenticated request chooses the host.
+META_CHECK_TRIES = 2
+META_CHECK_TIMEOUT: tuple[float, float] = (3, 5)
 _suspension_check_error_logged_at: float | None = None
 
 
@@ -147,7 +151,11 @@ class Actor:
         self.get(actor_id=actor_id)
 
     def get_peer_info(
-        self, url: str, max_retries: int = 3, retry_delay: float = 0.5
+        self,
+        url: str,
+        max_retries: int = 3,
+        retry_delay: float = 0.5,
+        timeout: tuple[float, float] = (5, 10),
     ) -> dict[str, Any]:
         """Contacts another actor over http/s to retrieve meta information.
 
@@ -159,6 +167,7 @@ class Actor:
         :param url: Root URI of a remote actor
         :param max_retries: Maximum number of retry attempts (default: 3)
         :param retry_delay: Initial delay between retries in seconds (default: 0.5)
+        :param timeout: Connect and read timeout of each try, in seconds
         :rtype: dict
         :return: The json response from the /meta path in the data element and
             last_response_code/last_response_message set to the results of the https request
@@ -183,7 +192,7 @@ class Actor:
                 else:
                     logger.debug(f"Fetching peer info from {url}")
 
-                response = requests.get(url=url + "/meta", timeout=(5, 10))
+                response = requests.get(url=url + "/meta", timeout=timeout)
                 res = {
                     "last_response_code": response.status_code,
                     "last_response_message": response.content,
@@ -2048,11 +2057,14 @@ class Actor:
     ) -> dict[str, Any] | bool:
         """Finish a re-pair whose answer was lost, from the probe's result."""
         # 200 approved, 202 pending: either way the peer authenticated the
-        # new secret, so it holds it.
-        if status in (200, 202):
-            approved = (
-                isinstance(body, dict) and str(body.get("approved")).lower() == "true"
-            )
+        # new secret, so it holds it; only if the answer is our trust row
+        # there (a proxy or catch-all page answering 200 proves nothing).
+        if (
+            status in (200, 202)
+            and isinstance(body, dict)
+            and body.get("peerid") == self.id
+        ):
+            approved = str(body.get("approved")).lower() == "true"
             logger.info(
                 f"Re-pairing with {peerid}: the answer was lost ({why}), but the "
                 "peer holds the new secret"
@@ -2266,6 +2278,11 @@ class Actor:
                     "exists and the request did not verify"
                 )
                 return False
+            logger.warning(
+                f"Trust request for {peerid} replaces its pending row (base URI "
+                f"{existing.get('baseuri')} -> {baseuri}); the previous requester's "
+                "secret no longer works here"
+            )
             created = new_trust.create(
                 baseuri=baseuri,
                 secret=secret or "",
@@ -2306,7 +2323,11 @@ class Actor:
         requester answers this itself: it catches a wrong base URI, not a
         false id."""
         try:
-            res = self.get_peer_info(baseuri)
+            # Two short tries: an unauthenticated request names this host,
+            # so it bounds how long one request can hold a worker.
+            res = self.get_peer_info(
+                baseuri, max_retries=META_CHECK_TRIES, timeout=META_CHECK_TIMEOUT
+            )
         except Exception:  # folds DbError: peer HTTP only
             return False
         if not res or not 200 <= int(res.get("last_response_code") or 0) < 300:

@@ -2499,9 +2499,12 @@ class SubscriptionManager:
                     peer_id=peer_id,
                     config=actor_config,
                 )
-                store = get_peer_permission_store(actor_config)
-                store.store_permissions(permissions)
-                logger.debug(f"Refreshed peer permissions for {peer_id}")
+                # A failed fetch carries no permissions: it never replaces
+                # the stored copy (as in sync_peer).
+                if not permissions.fetch_error:
+                    store = get_peer_permission_store(actor_config)
+                    store.store_permissions(permissions)
+                    logger.debug(f"Refreshed peer permissions for {peer_id}")
             except Exception as e:  # folds DbError: cache warm after the subscription and baseline committed
                 logger.warning(f"Failed to refresh peer permissions: {e}")
 
@@ -2581,9 +2584,12 @@ class SubscriptionManager:
                     peer_id=peer_id,
                     config=actor_config,
                 )
-                store = get_peer_permission_store(actor_config)
-                store.store_permissions(permissions)
-                logger.debug(f"Refreshed peer permissions for {peer_id}")
+                # A failed fetch carries no permissions: it never replaces
+                # the stored copy (as in sync_peer).
+                if not permissions.fetch_error:
+                    store = get_peer_permission_store(actor_config)
+                    store.store_permissions(permissions)
+                    logger.debug(f"Refreshed peer permissions for {peer_id}")
             except Exception as e:  # folds DbError: cache warm after the subscription and baseline committed
                 logger.warning(f"Failed to refresh peer permissions: {e}")
 

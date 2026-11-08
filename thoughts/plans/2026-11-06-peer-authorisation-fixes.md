@@ -1,6 +1,6 @@
 ---
 status: done
-verified: thoughts/verifications/2026-11-08-peer-authorisation-fixes-reverify-1.md
+verified: thoughts/verifications/2026-11-08-peer-authorisation-fixes-reverify-2.md
 ---
 
 # Implementation Plan: callers reach only what is theirs on `/callbacks`, `/permissions` and `/subscriptions`
@@ -233,6 +233,15 @@ its T6 (a 409 on a repeated trust request), which the guard here replaces.
   peer's trust row** (owner, re-verification Issue 2 accepted): with it, it
   can re-create the row under that peer's id. Documented: grant `admin`
   only to a peer trusted as much as the owner.
+- [New 2026-11-08, iteration 18] **The permission sender resends a 503**
+  (owner, re-verification 2's Issue 1): up to twice, with the same body (its
+  timestamp orders it), waiting `Retry-After` up to 2 s (1 s on the
+  synchronous sender, which cannot read the header). The synchronous path
+  blocks the owner's permission change by at most that.
+- [New 2026-11-08, iteration 22] **The `/meta` check is two short tries**
+  (owner, re-verification 2's Issue 8): `(3, 5)` s each, instead of
+  `get_peer_info`'s three tries of `(5, 10)`, since an unauthenticated
+  request chooses the host.
 - [Updated 2026-11-07] **One central peer binding, keyed on the call site**
   (owner). `check_authorisation` gains a keyword `path_peer`: when it is
   set and the caller is authenticated as a peer, the caller's peer id must
@@ -2064,3 +2073,155 @@ exception from `gather`; the docstring says `callback_url` is ignored.
 
 **Rationale**: the verification's low finding; Issue 7's remaining parts
 (default retries, the async probe's catch) are in iterations 11 and 13.
+
+### 2026-11-08, after verification thoughts/verifications/2026-11-08-peer-authorisation-fixes-reverify-2.md
+
+Emm's suite on `a8007e5` (gate 2) matched its `master` baseline on both
+backends before this batch (recorded in that verification).
+
+#### 18. The permission sender resends a 503
+
+**Category**: Verification fix (Issue 1); Decision (owner)
+
+**What changed**: `TrustPermissionStore._notify_peer` and
+`_notify_peer_async` resend a callback answered 503 up to twice with the
+same body; the async sender waits the receiver's `Retry-After` (capped at
+2 s, `_retry_after`), the sync one 1 s (`AwProxy` keeps no headers). The
+spec says a receiver MAY answer 503 and the sender SHOULD resend.
+
+**Files affected**:
+- `actingweb/trust_permissions.py` - the two senders, `_retry_after`, the
+  three constants
+- `docs/protocol/actingweb-spec.rst` - Receiver Behavior
+- `tests/test_trust_permissions_unit.py` - `TestThePermissionSenderResendsA503`
+
+**Rationale**: the receiver's 503 asked for a resend nobody made; the
+update was lost until the next callback or query.
+
+#### 19. Data a losing callback deleted is fetched again
+
+**Category**: Verification fix (Issue 2)
+
+**What changed**: the callback keeps deleting revoked data before its
+conditional write (so a fault still leaves the old copy and the resend
+finishes the deletion), and records what each attempt deleted. When the
+loop ends, ignored as older or stored, what was deleted and the outcome no
+longer revokes is fetched from the granting peer with the incremental sync,
+together with newly granted patterns. The sync moved into
+`_sync_permitted_patterns`.
+
+**Files affected**:
+- `actingweb/handlers/callbacks.py` - the permission branch,
+  `_sync_permitted_patterns`
+- `tests/test_peer_binding.py` -
+  `test_a_revocation_that_loses_to_a_regrant_restores_what_it_deleted`
+
+**Rationale**: a revocation that lost to a newer re-grant left the copy
+granting a pattern whose replica data it had deleted, with no error.
+Moving the deletion after the write would have lost the fault property, so
+the losing side restores instead; the peer answers by its current
+permissions, so the sync fetches nothing it no longer grants.
+
+#### 20. Every writer of the stored copy is conditional; a fault is not a lost race
+
+**Category**: Verification fix (Issues 3 and 4)
+
+**What changed**: `PeerPermissionStore.store_permissions` (the query path,
+`RemotePeerStore`'s permission update, the rebuild) reads the stored row
+from the database, refuses a copy whose `fetched_at` is older (stamped
+before the fetch began, so a query that began before a callback was stored
+loses in any process), and stores through `replace_permissions`, five
+attempts. `replace_permissions` re-reads after a refused conditional
+update: a row still equal to what was read means a fault, and it raises
+`DbError` (the callback answers 503 through the integration). The
+callback's log names lost races only.
+
+**Files affected**:
+- `actingweb/peer_permissions.py` - `store_permissions`,
+  `replace_permissions`, `STORE_ATTEMPTS`
+- `actingweb/handlers/callbacks.py` - the 503 log line
+- `tests/test_peer_binding.py` -
+  `test_a_query_older_than_the_stored_copy_is_not_stored`,
+  `test_a_fault_on_the_conditional_write_raises`
+
+**Rationale**: the query path wrote unconditionally and ordered by the
+process's cache only, so a stale query in another worker could overwrite a
+revocation; and a DynamoDB throttle was logged as concurrency.
+
+#### 21. A trusted peer's copy is rebuilt right after its removal; a failed query keeps the copy
+
+**Category**: Verification fix (Issue 5)
+
+**What changed**: `prune --apply` rebuilds each removed copy of a trusted
+peer (`permissions-copy`, and now `future-permissions`) before the next
+removal (`_rebuild_copy`, `REBUILT_KINDS`); a store fault prints `not
+rebuilt ... store fault`. `_refresh_peer_metadata` and its async twin no
+longer store a failed permission fetch over a good copy, as `sync_peer`
+already did not.
+
+**Files affected**:
+- `actingweb/maintenance/peer_state.py` - `prune`, `_rebuild_copy`, the
+  docstring
+- `actingweb/interface/subscription_manager.py` - the two refreshes
+- `docs/guides/database-maintenance.rst`
+- `tests/test_peer_state_command.py` -
+  `test_each_copy_is_rebuilt_before_the_next_is_removed`, the prune test
+  patched (it queried a real host)
+- `tests/test_subscription_baseline_fetch.py` -
+  `test_a_failed_permission_query_keeps_the_stored_copy`
+- `tests/integration/test_peer_state_flow.py` - expects the live peer's
+  future-dated copy rebuilt (it expected an empty bucket; the Full tier
+  failed it on both backends until updated)
+
+**Rationale**: a copy stayed missing for the whole run, a partial run
+rebuilt nothing, a future-stamped copy was never rebuilt, and a failed
+metadata refresh reached the same "no copy" state without any prune.
+
+#### 22. The lost-answer probe needs our trust row; the `/meta` check is bounded
+
+**Category**: Verification fix (Issues 6 and 8)
+
+**What changed**: the probe confirms a re-pair only on a JSON object whose
+`peerid` is this actor's id. `get_peer_info` gains a keyword `timeout`
+(default unchanged); `_base_uri_serves` uses `META_CHECK_TRIES = 2` and
+`META_CHECK_TIMEOUT = (3, 5)`.
+
+**Files affected**:
+- `actingweb/actor.py` - `_re_pair_probed`, `get_peer_info`,
+  `_base_uri_serves`, the constants
+- `tests/test_trust_re_pair.py` - the probe mocks carry `peerid`;
+  `test_an_answer_that_is_not_our_trust_row_confirms_nothing` (three
+  cases); `test_the_meta_check_is_two_short_tries`
+
+**Rationale**: a proxy answering 200 split the initiator's pairing; one
+unauthenticated request could hold a worker for about a minute.
+
+#### 23. A replaced pending row is logged and documented
+
+**Category**: Verification fix (Issue 7)
+
+**What changed**: a WARNING when a verified request replaces a pending row,
+naming both base URIs; the security reference says an honest peer whose
+verification failed once is pending too, and can be displaced.
+
+**Files affected**: `actingweb/actor.py` - `create_verified_trust`;
+`docs/reference/security.rst`; `tests/test_trust_re_pair.py` -
+`test_replacing_a_pending_row_is_logged`
+
+**Rationale**: the displacement was silent and undocumented.
+
+#### 24. The security reference names every re-pair case
+
+**Category**: Verification fix (Issue 9)
+
+**What changed**: "a re-pair when the request proves the row's current
+secret, or when the row is verified or approved".
+
+**Files affected**: `docs/reference/security.rst`
+
+**Rationale**: it said "a verified row" only.
+
+The CHANGELOG's SECURITY entry and the migration guide now state what holds
+for the stored copy (every writer conditional, the restore, the 503 and the
+resend, `store_permissions` reading the database and raising `DbError`),
+and the ADDED entry the per-copy rebuild.

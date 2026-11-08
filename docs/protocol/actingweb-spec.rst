@@ -3101,6 +3101,11 @@ On receiving a permission callback, the receiver SHOULD:
 4. Clean up local data for revoked permissions (OPTIONAL)
 5. Respond with ``204 No Content``
 
+A receiver that cannot store the callback for a transient reason (a
+concurrent update it lost, a storage fault) MAY answer ``503`` with
+``Retry-After``; the sender SHOULD then resend the same body, timestamp
+included, a bounded number of times.
+
 **Timestamp-Based Ordering**
 
 Because permission callbacks use full replacement semantics without sequence numbers,

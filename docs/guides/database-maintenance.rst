@@ -160,9 +160,9 @@ What it lists, per actor (names compared whole; a peer id may contain
 
 - ``peer-permissions``: a stored copy of permissions for a peer the actor has
   no trust with;
-- ``future-permissions``: a stored copy whose timestamp is more than five
-  minutes ahead (or does not parse), which made every later update look
-  older; the peer's next permission callback stores a current one;
+- ``future-permissions``: a trusted peer's stored copy whose timestamp is
+  more than five minutes ahead (or does not parse), which made every later
+  update look older; with ``--apply`` it is rebuilt as below;
 - ``callback-state``: sequence or pending state for a subscription the actor
   never made;
 - ``remote-data``: peer data (``remote:<peer>``) for a peer with no trust,
@@ -172,8 +172,9 @@ What it lists, per actor (names compared whole; a peer id may contain
 - ``permissions-copy``, only with ``--all-permissions``: every other stored
   permission copy. A forged copy for a peer the actor trusts (a pre-3.16
   unauthenticated callback with a current timestamp) looks like a real one.
-  With ``--apply`` the command rebuilds each removed copy at once by a
-  permission query to its peer and prints ``rebuilt`` or ``not rebuilt``.
+  With ``--apply`` the command rebuilds each removed copy right after
+  removing it, before the next removal, by a permission query to its peer,
+  and prints ``rebuilt`` or ``not rebuilt``.
   Without a copy, the peer's next permission callback is taken for its first
   and a pattern revoked in it deletes no stored peer data; for a peer listed
   as ``not rebuilt``, run the query again once it answers (``fetch_peer_permissions``

@@ -12,8 +12,11 @@ automatically notify the affected peer via a callback to their
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import math
+import time
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -28,6 +31,24 @@ logger = logging.getLogger(__name__)
 
 # Timeout for peer notification HTTP requests (seconds)
 PEER_NOTIFICATION_TIMEOUT = 10.0
+# A permission callback answered 503 is resent this many times, with the same
+# body, waiting the receiver's Retry-After (at most the cap; the sync sender,
+# which cannot read the header, waits the default).
+PERMISSION_CALLBACK_RESENDS = 2
+PERMISSION_CALLBACK_RESEND_WAIT = 1.0
+PERMISSION_CALLBACK_RESEND_WAIT_CAP = 2.0
+
+
+def _retry_after(value: str | None) -> float:
+    """Seconds to wait before a resend: the receiver's ``Retry-After`` in
+    seconds, capped; the default when absent or not a number."""
+    try:
+        seconds = float(value) if value is not None else PERMISSION_CALLBACK_RESEND_WAIT
+    except ValueError:
+        return PERMISSION_CALLBACK_RESEND_WAIT
+    if not math.isfinite(seconds):
+        return PERMISSION_CALLBACK_RESEND_WAIT
+    return min(max(seconds, 0.0), PERMISSION_CALLBACK_RESEND_WAIT_CAP)
 
 
 @dataclass
@@ -246,7 +267,6 @@ class TrustPermissionStore:
 
         if success and self._should_notify_peer(notify_peer):
             # Fire-and-forget: schedule notification as background task
-            import asyncio
 
             async def _notify_with_error_handling():
                 try:
@@ -301,11 +321,21 @@ class TrustPermissionStore:
 
             callback_data = self._build_callback_data(permissions)
 
-            # POST to peer's /callbacks/permissions/{our_actor_id}
+            # POST to peer's /callbacks/permissions/{our_actor_id}. A 503 (the
+            # receiver lost concurrent writes, or faulted) is resent with the
+            # same body, so the same timestamp orders it.
             response = proxy.create_resource(
                 path=f"callbacks/permissions/{actor_id}",
                 params=callback_data,
             )
+            for _resend in range(PERMISSION_CALLBACK_RESENDS):
+                if proxy.last_response_code != 503:
+                    break
+                time.sleep(PERMISSION_CALLBACK_RESEND_WAIT)
+                response = proxy.create_resource(
+                    path=f"callbacks/permissions/{actor_id}",
+                    params=callback_data,
+                )
 
             # A 204 answers with no body ({}): that is a success too.
             if response is not None and "error" not in response:
@@ -389,6 +419,18 @@ class TrustPermissionStore:
                     json=callback_data,
                     headers=headers,
                 )
+                # A 503 is resent with the same body (same timestamp).
+                for _resend in range(PERMISSION_CALLBACK_RESENDS):
+                    if response.status_code != 503:
+                        break
+                    await asyncio.sleep(
+                        _retry_after(response.headers.get("Retry-After"))
+                    )
+                    response = await client.post(
+                        callback_url,
+                        json=callback_data,
+                        headers=headers,
+                    )
 
                 if response.status_code in (200, 201, 202, 204):
                     logger.debug(

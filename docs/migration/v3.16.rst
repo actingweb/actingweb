@@ -1319,7 +1319,14 @@ downgrade (which sends a resource URL) is not fetchable by a 3.16
 subscriber. A permission callback's timestamp may be at most five minutes
 ahead of the receiver's clock (400 beyond, and for one that does not
 parse): check the sender's clock if you see ``Refused a permission
-callback``. On the generic branch, ``/callbacks/<name>``, any authenticated
+callback``. A stored permission copy is written conditionally on the row
+read, by a callback and by a permission query alike; a callback that keeps
+losing to concurrent writers answers 503 with ``Retry-After``, and the
+library's sender resends a 503 up to twice with the same body (a sender of
+your own should do the same). ``PeerPermissionStore.store_permissions``
+compares ``fetched_at`` with the stored row, not the process's cache, and
+raises ``DbError`` on a fault; a failed permission query no longer
+replaces a stored copy. On the generic branch, ``/callbacks/<name>``, any authenticated
 caller reaches the application's hook as before, except for the library's
 own names (``permissions``, ``subscription``, ``subscriptions``, ``www``,
 ``resource_*``), which answer 403: only a direct request to such a name is

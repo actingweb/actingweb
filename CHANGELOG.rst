@@ -101,10 +101,20 @@ SECURITY
   nothing (no deletion of revoked data, no sync, no hook); a stored copy
   carries the receiver's clock in ``fetched_at`` and the sender's timestamp
   in ``extra_attributes["sender_timestamp"]``, so a copy fetched by query
-  never makes a slow sender's callback look older. Two callbacks handled at
-  once never both win: the copy is stored with a conditional write over the
-  row the callback read, and the loser decides again against the winner's
-  (503 with ``Retry-After`` after five lost races in a row).
+  never makes a slow sender's callback look older. Every write of a stored
+  copy, a callback's or a query's, is a conditional write over the row it
+  read, so two writers handled at once never both win: a losing callback
+  decides again against the winner's row, and a query result older (by
+  ``fetched_at``, stamped before its fetch began) than the stored copy is
+  not stored. Peer data a losing callback deleted and the stored
+  permissions no longer revoke is fetched again from the granting peer.
+  **Behavior change:** after five lost races in a row a callback answers
+  503 with ``Retry-After``, and the library's sender resends a 503 up to
+  twice with the same body (``Retry-After`` honoured up to 2 seconds; the
+  synchronous sender waits 1 second); a failed permission query no longer
+  replaces the stored copy. ``PeerPermissionStore.store_permissions``
+  compares against the database, not the process's cache, and raises
+  ``DbError`` on a fault.
 - **Peer and client views listed every peer's subscriptions.**
   **Behavior change:** ``view.subscriptions.all_subscriptions``,
   ``outbound_subscriptions`` and ``inbound_subscriptions`` list the
@@ -1377,8 +1387,9 @@ ADDED
   copies for peers with no trust or stamped in the future, callback state
   for subscriptions the actor never made, and peer data for peers with no
   trust or subscription; ``--all-permissions`` also every live peer's copy
-  (a forged one for a trusted peer looks real), each rebuilt at once by a
-  permission query to its peer. Strict reads; exit 0
+  (a forged one for a trusted peer looks real). A trusted peer's removed
+  copy (a live one, or one stamped in the future) is rebuilt right after
+  its removal by a permission query to its peer. Strict reads; exit 0
   nothing found, 1 found or removed, 2 a store could not be read. See the
   maintenance guide.
 - **``DELETE /<actor>/trust/<relationship>/<peer>?notify=false``**, creator

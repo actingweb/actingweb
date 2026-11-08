@@ -190,11 +190,21 @@ class TestPrune:
     def test_apply_removes_the_stale_and_keeps_the_live(
         self, config: Any, capsys: Any
     ) -> None:
+        from actingweb.peer_permissions import PeerPermissions
+
         w = World(config)
         w.plant_stale()
-        code, out = _run(capsys, "prune", w.id, "--apply")
+        unanswered = PeerPermissions(actor_id=w.id, peer_id="x", fetch_error="down")
+        with patch(
+            "actingweb.peer_permissions.fetch_peer_permissions",
+            return_value=unanswered,
+        ):
+            code, out = _run(capsys, "prune", w.id, "--apply")
         assert code == 1
         assert "Restart the application's processes" in out
+        # The live peer's future copy is removed and, its peer not answering,
+        # listed as not rebuilt.
+        assert f"not rebuilt\t{w.id}\t{w.live_hex}\tdown" in out
         assert w.permission_names() == {f"{w.id}:{w.live}"}
         assert w.state_names() == {
             f"state:{w.live}:sub-{w.live[-4:]}",
@@ -269,6 +279,44 @@ class TestAllPermissions:
         assert code == 1 and "permissions-copy" in out
         assert f"not rebuilt\t{w.id}\t{w.live}\tdown" in out
         assert w.permission_names() == set()
+
+    def test_each_copy_is_rebuilt_before_the_next_is_removed(
+        self, config: Any, capsys: Any
+    ) -> None:
+        """Reverify-2, Issue 5: a copy is missing only while its own peer is
+        queried, and a future-stamped copy of a trusted peer is rebuilt too."""
+        from actingweb.peer_permissions import PeerPermissions
+
+        w = World(config)
+        w.plant_stale()
+
+        def answer(actor_id: str, peer_id: str, _config: Any) -> PeerPermissions:
+            return PeerPermissions(
+                actor_id=actor_id,
+                peer_id=peer_id,
+                properties={"patterns": ["fresh/*"], "operations": ["read"]},
+                fetched_at=datetime.now(UTC).isoformat(),
+            )
+
+        with patch(
+            "actingweb.peer_permissions.fetch_peer_permissions", side_effect=answer
+        ):
+            code, out = _run(capsys, "prune", w.id, "--all-permissions", "--apply")
+        assert code == 1
+        lines = [
+            line
+            for line in out.splitlines()
+            if line.startswith(("removed\t", "rebuilt\t"))
+            and PEER_PERMISSIONS_BUCKET in line
+            or line.startswith("rebuilt\t")
+        ]
+        # Every rebuild follows its own removal at once.
+        for i, line in enumerate(lines):
+            if line.startswith("rebuilt\t"):
+                peer = line.split("\t")[2]
+                assert lines[i - 1].endswith(f"{w.id}:{peer}")
+        assert f"rebuilt\t{w.id}\t{w.live_hex}" in out
+        assert w.permission_names() == {f"{w.id}:{w.live}", f"{w.id}:{w.live_hex}"}
 
     def test_a_removed_copy_is_rebuilt_from_the_peer(
         self, config: Any, capsys: Any

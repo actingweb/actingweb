@@ -374,7 +374,10 @@ class CallbacksHandler(base_handler.BaseHandler):
                 # Read, decide, delete, then store only if the row is still
                 # the one read: two callbacks handled at once (a grant and its
                 # revocation, say) never both win, and the loser decides again
-                # against the winner's row.
+                # against the winner's row. What a losing attempt deleted and
+                # the outcome no longer revokes is fetched again from the
+                # granting peer, which answers by its current permissions.
+                deleted: list[str] = []
                 for _attempt in range(PERMISSION_STORE_ATTEMPTS):
                     expected, old_permissions = store.read_stored_permissions(
                         actor_id, granting_actor_id
@@ -402,6 +405,9 @@ class CallbacksHandler(base_handler.BaseHandler):
                             f"Ignored a permission callback from {granting_actor_id} "
                             f"older than its last one ({current} < {previous})"
                         )
+                        self._sync_permitted_patterns(
+                            myself, actor_interface, granting_actor_id, deleted
+                        )
                         self.response.set_status(204, "No Content")
                         return
 
@@ -416,20 +422,24 @@ class CallbacksHandler(base_handler.BaseHandler):
                     if permission_changes.get("has_revocations") and getattr(
                         myself.config, "auto_delete_on_revocation", False
                     ):
+                        revoked = permission_changes.get("revoked_patterns", [])
                         self._delete_revoked_peer_data(
-                            actor_interface,
-                            granting_actor_id,
-                            permission_changes.get("revoked_patterns", []),
+                            actor_interface, granting_actor_id, revoked
                         )
+                        deleted.extend(revoked)
 
                     success = store.replace_permissions(peer_perms, expected)
                     if success:
                         break
                 else:
+                    # A fault raises DbError in replace_permissions; this is
+                    # only concurrent writers winning every time. The revoked
+                    # data stays deleted: the sender resends (503) and the
+                    # resend decides again.
                     logger.warning(
                         f"A permission callback from {granting_actor_id} lost "
                         f"{PERMISSION_STORE_ATTEMPTS} concurrent writes in a row; "
-                        "answered 503 for the sender to retry"
+                        "answered 503 for the sender to resend"
                     )
                     self.response.set_status(503, "Service Unavailable")
                     self.response.headers["Retry-After"] = "1"
@@ -441,45 +451,21 @@ class CallbacksHandler(base_handler.BaseHandler):
                     f"has_properties={peer_perms.properties is not None}"
                 )
 
-                # Auto-sync when new permissions are granted
-                # This fetches the newly accessible data immediately using
-                # incremental sync (only the newly granted properties, not full baseline)
-                subscription_config = getattr(
-                    myself.config, "_subscription_config", None
+                # Fetch what was newly granted, and what an earlier, losing
+                # attempt deleted that the stored permissions no longer
+                # revoke, with an incremental sync (only those patterns).
+                final_revoked = set(permission_changes.get("revoked_patterns", []))
+                to_sync = list(
+                    dict.fromkeys(
+                        [
+                            *permission_changes.get("granted_patterns", []),
+                            *(p for p in deleted if p not in final_revoked),
+                        ]
+                    )
                 )
-                if (
-                    success
-                    and permission_changes.get("granted_patterns")
-                    and subscription_config
-                    and subscription_config.enabled
-                    and subscription_config.auto_storage
-                ):
-                    granted_patterns = permission_changes["granted_patterns"]
-                    logger.info(
-                        f"Incremental sync for peer {granting_actor_id} after permissions granted: "
-                        f"{granted_patterns}"
-                    )
-                    try:
-                        self._incremental_sync_granted_properties(
-                            actor_interface=actor_interface,
-                            peer_id=granting_actor_id,
-                            granted_patterns=granted_patterns,
-                        )
-                        logger.info(
-                            f"Incremental sync completed for {granting_actor_id}: "
-                            f"{len(granted_patterns)} pattern(s) synced"
-                        )
-                    except Exception as sync_error:  # folds DbError: sync after the permissions were stored; a retried callback sees no new grant
-                        logger.error(
-                            f"Error during incremental sync for {granting_actor_id}: {sync_error}",
-                            exc_info=True,
-                        )
-                        # Don't fail the callback - sync is not critical
-                elif permission_changes.get("granted_patterns"):
-                    logger.debug(
-                        f"Skipping auto-sync for {granting_actor_id} "
-                        f"(subscription processing not enabled or auto_storage disabled)"
-                    )
+                self._sync_permitted_patterns(
+                    myself, actor_interface, granting_actor_id, to_sync
+                )
 
             except DbError:
                 raise
@@ -1125,6 +1111,47 @@ class CallbacksHandler(base_handler.BaseHandler):
                 exc_info=True,
             )
             return False
+
+    def _sync_permitted_patterns(
+        self,
+        myself: Any,
+        actor_interface: "ActorInterface",
+        peer_id: str,
+        patterns: list[str],
+    ) -> None:
+        """Fetch ``patterns`` from the granting peer (an incremental sync),
+        when subscription processing stores peer data. The peer answers by
+        its current permissions, so a pattern it no longer grants fetches
+        nothing. A failure is logged: the callback is already stored."""
+        if not patterns:
+            return
+        subscription_config = getattr(myself.config, "_subscription_config", None)
+        if not (
+            subscription_config
+            and subscription_config.enabled
+            and subscription_config.auto_storage
+        ):
+            logger.debug(
+                f"Skipping auto-sync for {peer_id} "
+                f"(subscription processing not enabled or auto_storage disabled)"
+            )
+            return
+        logger.info(f"Incremental sync for peer {peer_id}: {patterns}")
+        try:
+            self._incremental_sync_granted_properties(
+                actor_interface=actor_interface,
+                peer_id=peer_id,
+                granted_patterns=patterns,
+            )
+            logger.info(
+                f"Incremental sync completed for {peer_id}: "
+                f"{len(patterns)} pattern(s) synced"
+            )
+        except Exception as sync_error:  # folds DbError: sync after the permissions were stored; a retried callback sees no new grant
+            logger.error(
+                f"Error during incremental sync for {peer_id}: {sync_error}",
+                exc_info=True,
+            )
 
     def _incremental_sync_granted_properties(
         self,

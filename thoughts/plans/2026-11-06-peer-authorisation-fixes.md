@@ -126,6 +126,17 @@ status: active
   answer. No verification round trip for a swap. A moved peer is re-pointed
   by the owner, as decided; a peer that lost its secret deletes and pairs
   again.
+- **2026-11-08, Phase 3 review (owner)**: an unverified trust row (never
+  proven: an unauthenticated request that failed verification leaves one)
+  is replaced by a later request that verifies; a verified row is still
+  only re-paired with its secret. Folded with it, as mechanical: the
+  initiator re-pairs only toward the stored base URI and the stored
+  relationship (it sent the current secret to any URL whose `/meta`
+  claimed the peer's id); a creation writes conditionally on both backends
+  (`only_if_absent`), so a request racing another never replaces its row;
+  a bearer for a peer with no row answers 403 instead of creating one;
+  `peer_approved` follows the answer (201 or 202); the log for a
+  half-finished re-pair names the remedy.
 - **2026-11-07, Phase 1 review (owner)**: the outside voice on the Phase 1
   commit found that clamping a future permission timestamp loses the
   sender's order; the clamp is replaced by a 5-minute skew window and 400
@@ -1079,6 +1090,26 @@ token or an id introduced mid-row under a numbered name (`trust:A-B#2`):
 - Release impact: no new route (a query flag on an existing one, recorded
   for the changelog's `ADDED`); a creation request for an existing peer is
   a behaviour change.
+- **Outside voice on the Phase 3 commit** (codex and a fresh-context
+  reviewer), folded in its own commit:
+  - [critical] the initiator decided "re-pair" from the peer id the target
+    URL's `/meta` claimed and sent the current secret there: it now
+    re-pairs only toward the stored base URI (`_re_pair_refusal`), and
+    posts there;
+  - a creation request whose verification is slow could still overwrite a
+    row created meanwhile (both backends upsert): a new row is written
+    conditionally (`Trust.create(only_if_absent=True)`, DynamoDB
+    `attribute_not_exists`, PostgreSQL `ON CONFLICT DO NOTHING`), and its
+    stale grants are cleared only after the write wins;
+  - a re-pair to a peer that lost its row made that peer store an
+    unverified row: a bearer for a peer with no row answers 403;
+  - an unverified row blocked the real peer for good (owner decision: a
+    request that verifies replaces it, without the squatter's grants);
+  - `peer_approved` follows 201 or 202; the initiator refuses a different
+    relationship before sending (`WT4` re-recorded); the half-finished
+    re-pair's log names the remedy.
+  Recorded, not changed: the initiator's `trust_initiated` hook runs for a
+  re-pair, as for any pairing its owner starts.
 
 ### Implementation Status: Complete
 
@@ -1147,10 +1178,33 @@ Unchanged; the command is not on the wire.
 
 ### Verification
 
-- [ ] Run the contract's `### Checks` fast tier verbatim
-- [ ] Run the contract's `### Checks` full tier before the phase commit
+- [x] Run the contract's `### Checks` fast tier verbatim
+- [x] Run the contract's `### Checks` full tier before the phase commit
 
-### Implementation Status: Not Started
+### Notes
+
+- `actingweb/maintenance/peer_state.py`, entry `actingweb-peer-state`;
+  `docs/guides/database-maintenance.rst`, "Peer State Written Before 3.16";
+  the dependency row in `thoughts/todo/INDEX.md` is now hard.
+- Kinds as planned, named `peer-permissions`, `future-permissions` (more
+  than five minutes ahead or unparsable: the receiver's skew window from
+  Phase 1's review, not "any future"), `callback-state`, `remote-data`
+  and `remote-unknown` (never removed). The whitelist is a bucket that
+  `get_remote_bucket()` builds for an id matching its permissive peer-id
+  pattern; anything else under `remote:` is `remote-unknown`.
+- Reads per actor (trust rows, subscriptions, attribute bucket names, the
+  two buckets), strict; `--rps` default 10, as `actingweb-verify-orphans`;
+  a read fault or a failed delete exits 2.
+- **Found while writing the integration test, fixed:** the synchronous
+  permission sender (`trust_permissions.py`) read a 204 (an empty answer)
+  as a failure and logged `Failed to notify peer … {}` at WARNING for every
+  successful callback; it is a success now (tested).
+- The integration test shows the "restart" the command asks for: the wire
+  apps run in the test process, so the store's cached copy is cleared as a
+  restart would.
+- Release impact: a new console script (the changelog's `ADDED`).
+
+### Implementation Status: Complete
 
 ---
 

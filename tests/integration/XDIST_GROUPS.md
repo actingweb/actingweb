@@ -35,7 +35,7 @@ Feature-specific tests that logically belong together.
 | `subscription_processing` | Subscription callback processing | test_subscription_processing_flow.py |
 | `subscription_suspension` | Subscription suspension mechanics | test_subscription_suspension_flow.py |
 | `subscription_callback_flows` | Subscription callback flow variations | test_subscription_callback_flows.py |
-| `wire_peer_paths` | Wire recordings over the peer paths (`wire/rows.toml`) | test_wire_peer_paths.py, test_wire_access.py, test_wire_trust.py, test_wire_harness.py |
+| `wire_peer_paths` | Wire recordings over the peer paths (`wire/rows.toml`) | test_wire_peer_paths.py, test_wire_access.py, test_wire_trust.py, test_wire_harness.py, test_peer_state_flow.py |
 | `subscription_sync_dataclasses` | Subscription sync data structures | test_subscription_sync_dataclasses.py |
 | `subscription_with_peer_capabilities` | Subscriptions with peer capability discovery | test_subscription_with_peer_capabilities.py |
 | `circuit_breaker` | Circuit breaker failure handling | test_circuit_breaker_flow.py |

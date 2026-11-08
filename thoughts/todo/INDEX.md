@@ -69,7 +69,7 @@ and [DynamoDB known-next](dynamodb-known-next.md) (plan 2);
 | `email-as-creator-at-write-time` | `subs-list-cache-lifetime` | Hard as written | It removes the `rewrite_email` keyword that plan adds. Open: whether that plan needs the keyword at all |
 | `subs-list-cache-lifetime`, `attribute-list-v2-port`, `spec-1-5` | `subscription-wire-baseline` | Hard, for regression safety | Their phases name the recordings they re-record and the ones that must stay identical |
 | `subs-list-cache-lifetime` | `peer-authorisation-fixes` | Soft | One verification case (the accessor through a peer view) needs that plan's filter |
-| `attribute-list-v2-port` | `peer-authorisation-fixes` | Soft | No phase uses anything that plan adds |
+| `attribute-list-v2-port` | `peer-authorisation-fixes` | Hard | Its `remote:<peer>$aux` side bucket must be added to `actingweb-peer-state`'s whitelist (`maintenance/peer_state.py`, `_remote_peer`), or the command reports it as `remote-unknown` |
 | `email-as-creator-at-write-time` | `subscription-wire-baseline` | Soft | It re-records nothing; the recordings confirm it changed nothing between two actors |
 
 `attribute-list-v2-port` and `email-as-creator-at-write-time` need nothing

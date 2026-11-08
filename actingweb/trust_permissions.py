@@ -307,7 +307,8 @@ class TrustPermissionStore:
                 params=callback_data,
             )
 
-            if response and "error" not in response:
+            # A 204 answers with no body ({}): that is a success too.
+            if response is not None and "error" not in response:
                 logger.debug(
                     f"Successfully notified peer {peer_id} of permission change "
                     f"from actor {actor_id}"

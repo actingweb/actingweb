@@ -50,6 +50,12 @@ def register_callback_hooks(app):
         containing a token. When the user clicks the link, this callback is
         triggered to verify their email address.
 
+        Every /callbacks request is authenticated (ActingWeb 3.16): the link
+        works for a user signed in to the web UI, whose session authenticates
+        it, or for an API call with the actor's credentials. An anonymous
+        click answers 401; a link that must work without a session belongs
+        on an application route, not under /callbacks.
+
         Parameters:
             token: Verification token from the email link
             method: HTTP method used (GET for link clicks, POST for API calls)

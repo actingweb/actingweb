@@ -108,7 +108,9 @@ Subscriptions require an established trust relationship:
    * - Trust State
      - Subscription Behavior
    * - Pending (not approved)
-     - Subscriptions can be created but callbacks may be rejected
+     - The peer is refused (403) on subscriptions and callbacks until the
+       trust is approved; it may only report its own approval or delete
+       its own row
    * - Approved
      - Full subscription functionality, callbacks delivered
    * - Deleted

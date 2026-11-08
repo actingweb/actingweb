@@ -226,3 +226,71 @@ codex and a fresh-context reviewer, on `3d0ae38..7254b1b`:
   `cur.rowcount` for `ON CONFLICT DO NOTHING`; whole-name comparisons with
   `:` in peer ids; the callback-state names; a `validate_peer_id=False`
   bucket is never removed; the consumer only reads `RemotePeerStore`.
+
+## Phase 5: documentation, records, and Emm
+
+### Emm's adoption items (for Emm's inbound note when the PR opens)
+
+From this plan, for `../actingweb_mcp` when it moves its pin to 3.16:
+
+1. **The two rows on its `subscriber` type** (`application.py`, the
+   `acl_rules` of `subscriber`): `("subscriptions/<id>/<subid>", "PUT",
+   "a")` and `("subscriptions/<id>/<subid>", "DELETE", "a")`. Without them
+   a subscriber's queue clear and the publisher's unsubscribe answer 403
+   once both sides run 3.16 (`WQ3.subscriber`, `WC4.subscriber`). Added in
+   the adoption worktree for the run below, not committed.
+2. **Re-pairing:** `create_relationship` against a peer Emm already
+   trusts is a re-pair (current secret as bearer, only toward the stored
+   base URI, the relationship unchanged); a moved peer is re-pointed with
+   `PUT /trust/<rel>/<peer>` (`baseuri`); a change of relationship is a
+   delete and a new pairing; a dead peer is removed with
+   `DELETE /trust/<rel>/<peer>?notify=false`. Where one side removed its
+   row locally, the other side's owner removes its own before pairing
+   again.
+3. **A fixed preview domain:** a development tunnel whose address changes
+   on every start is a moved peer each time.
+4. **After every instance runs 3.16:** `actingweb-peer-state report`, then
+   `prune --apply`, then a restart. Emm only reads `RemotePeerStore`, so the
+   command removes nothing Emm writes itself.
+5. Anonymous `/callbacks/<name>` requests answer 401. Emm registers
+   callback hooks `ping`, `status` and `permissions`
+   (`hooks/actingweb/callback_hooks.py:170-202`); nothing in its repository
+   calls `/callbacks/ping` or `/callbacks/status` (a health check
+   configured outside it, the plan's unverified note, would now get 401).
+   `permissions` is a reserved name: a direct `/callbacks/permissions`
+   request answers 403, and the hook receives only what the library's
+   permission branch builds. `status` answers any authenticated caller,
+   any peer included, with the actor's creator and counts: Emm's to judge.
+6. **A re-pair through Emm's "connect" flow subscribes a second time.**
+   `api/trust.py:286-298` calls `on_trust_approved_async` (which subscribes
+   to the peer's `properties`) whenever `create_relationship` returns a
+   peer-approved row. Emm checks for no existing trust first. With 3.16 a
+   connect to a peer Emm already trusts is a re-pair, and a peer that had
+   approved answers 201, so Emm creates a second subscription to the same
+   target (before, the replaced row answered 202 and nothing subscribed).
+   The library does not deduplicate (`subscribe_to_peer_async`). Remedy on
+   Emm's side: skip the auto-subscribe when
+   `actor.subscriptions.get_subscriptions_to_peer(peer)` already holds one
+   for `properties`, or refuse a connect to a peer already trusted.
+
+### Emm's suite on this branch
+
+Run 2026-11-08 as `thoughts/research/2026-11-07-emm-suite-against-master.md`
+describes: the library worktree re-pointed at `0ce0112`, Emm's adoption
+worktree (`emm-3-16`) with the two rows of item 1 added (uncommitted, owner
+decision), a fresh environment 9 (`actingweb_mcp_9`, created, migrated and
+`actingweb-unique-creators enable --apply` before the server started).
+
+| Line | This branch | `master` baseline |
+| --- | --- | --- |
+| `scripts/with-preview-env.sh 9 poetry run pytest --timeout=180 --deselect tests/test_dependency_pin_guard.py` (PostgreSQL) | 2 failed, 7406 passed, 14 skipped, 179 deselected | 2 failed, 7406 passed, 14 skipped, 179 deselected |
+| `scripts/test-backends.sh 9` (DynamoDB Local) | 3 failed, 54 passed | 3 failed, 54 passed |
+
+The failures are the baseline's, by name: PostgreSQL
+`test_dynamodb_iam_coverage.py::test_role_grants_every_dynamodb_action_the_backend_uses`
+and `test_stripe_integration.py::...::test_create_subscription_proceeds_with_expired_apple_subscription`;
+DynamoDB the two `test_dynamodb_operation_profile.py` constructions and
+`test_restore_actor_dynamodb.py::...::test_full_force_import_caps_and_confirms_the_wipe`.
+No failure the `master` run did not have. Emm's suite exercises no
+subscription PUT or DELETE between two actors, so the run does not show
+the two rows' effect; `WD6`, `WQ3` and `WC4` in both subscriber variants do.

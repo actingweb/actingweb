@@ -1158,6 +1158,17 @@ return 401 Authentication required, regardless of the callback URI
 exists or not. Requests for non-existent /callbacks URIs with
 authentication data SHOULD always return 403 Forbidden.
 
+.. note::
+
+   The ActingWeb library (3.16 and later) authenticates every /callbacks
+   request: one without credentials answers 401, including an anonymous
+   POST from a non-ActingWeb application. The callbacks the protocol defines
+   for a peer, ``/callbacks/subscriptions/<peerid>/…`` and
+   ``/callbacks/permissions/<peerid>``, MUST be accepted only from the peer
+   the path names, authenticated with that trust's secret; anyone else,
+   the actor's creator included, receives 403. A callback for a
+   subscription the actor did not make answers 403.
+
 Differentiating between various types of callbacks and authentication
 SHOULD be done be adding a path to callbacks/, e.g.
 callbacks/{callback\_type}.
@@ -1205,6 +1216,10 @@ The exposure of resources MUST follow the following rules:
    where the path identifies the part of the resource that the request
    targets
 -  GET requests MUST not change state
+
+
+   (The ActingWeb library's ``GET /subscriptions/<peerid>/<subid>/<seq>``
+   still clears the diff it returns; changing that is planned separately.)
 -  Any http method MAY be supported
 -  Non-GET/POST methods MAY be implemented using POST with the form
    variable \_method set to the real method requested
@@ -1576,6 +1591,15 @@ the URL of the newly created relationship MUST be returned in the
 Location header in the response. The URL MUST be formatted the following
 way: /<baseuri-with-actor-id>/trust/<trustlevel>/<requesting-actor-id>.
 
+If actor B already holds a relationship with the requesting actor, the
+request MUST NOT replace it. B MUST accept it only as a re-pair from the
+requesting actor itself, authenticated with the current shared secret as
+bearer token, and then only replace the secret; the relationship, its
+approval and the base URI stay, and the response follows the stored
+approval (201 or 202). Otherwise B MUST answer 403 Forbidden and change
+nothing. (A relationship B stored without verifying it, and has not
+approved, MAY be replaced by a request that verifies.)
+
 If the requested actor wants to do a verification of the requesting
 actor, it MUST use baseuri, id, secret, and verify attributes to do a
 GET request to <baseuri>/trust/<trustlevel>/<requested-actor-id> using
@@ -1749,6 +1773,8 @@ sending a PUT request to the relationship URI with a application/json
 body with attribute/value pairs of the attributes that are to be
 changed. Normally, only baseuri, desc, and approved are the attributes
 that can be changed.
+The owning actor is its creator (or trustee). A peer MUST NOT change the
+approval of its relationship or the permissions granted to it.
 
 **Reading Trust Relationship Data**
 
@@ -2040,6 +2066,9 @@ push mechanism.
   - Requires trust relationship between ``{actorid}`` and ``{peerid}``
   - The requesting peer must authenticate as ``{peerid}``
   - Only the peer can query their own granted permissions
+  - The actor's creator and an ``admin`` peer may also query any peer's
+    permissions; any other caller, and a query for an unknown peer, receives
+    403
 
 **Request:**
 
@@ -2859,6 +2888,11 @@ The data element is here replaced by a url attribute identifying where
 the subscribing actor can retrieve a specific diff. It is RECOMMENDED
 that the URL is composed of the subscription URL with the sequence
 number trailing at the end.
+
+The subscribing actor MUST fetch the diff under the base URI stored for
+the trust relationship (the subscription URL at the publisher with the
+sequence number appended), and MUST NOT send its credentials to a URL taken
+from the callback body.
 
 The response content on this URL MUST be similar to a GET on the
 subscription following this example:

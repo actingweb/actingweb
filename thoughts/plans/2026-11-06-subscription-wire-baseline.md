@@ -62,6 +62,14 @@ status: proposed
   phase, checked by `verify_groups.py`; the old Phase 2 is split into
   Phases 2 (retire), 3 (tighten) and 4 (documentation and records) in the
   same PR. Row expectations and owners corrected; `WP5` merged into `WD20`.
+- **2026-11-08, from the security plan's implementation**: "What Already
+  Exists" points at `rows.toml` instead of listing rows. Landed beyond this
+  plan's text there: the snapshot already holds both sides' trust rows, the
+  publisher's grant and the subscriber's peer permissions (this plan's
+  Phase 1 first commit needs only the `WD18` hook and the async steps);
+  `WIRE_RECORD` takes row ids; the registry check covers `[reserved]`
+  owners and ranges, but not the `Wire-Phase` trailer, which stays this
+  plan's.
 
 ## Overview
 
@@ -196,10 +204,11 @@ lands the harness (from the spike, `spike/subscription-wire-harness`),
   `wire_import` method, the `subscriber` and `subscriber_adopted` types.
 - `tests/integration/conftest.py` - `wire_app` 5561, `wire_peer_app` 5562,
   `wire_other_app` 5563 (the same worker's tables), `wire_pair`.
-- `tests/integration/wire/` with `rows.toml` and the rows `WS1.target`,
-  `WL11.target`, `WD6`, `WD8`, `WD10`, `WD10.import`, `WD12`, `WQ1` to
-  `WQ3`, `WC1` to `WC4`, `WP1`, the `.subscriber` and `.subscriber_adopted`
-  variants of `WD6`, `WQ3`, `WC4`, `WA1` to `WA18`, `WT1` to `WT5`.
+- `tests/integration/wire/` with `rows.toml`, the list of rows and their
+  owners (the only copy; read it rather than a list here). The security
+  plan's rows are its Phase 0 flows, `WA1` to `WA18` and `WT1` to `WT5`;
+  the schema has a `topologies` key (one file per topology) beside
+  `second`, and `WIRE_RECORD` takes row ids.
 - The `wire` marker and its CI step (no reruns, its own junit file; the wire
   step fits the 30-minute job at about 3.5 minutes per backend with this
   plan's rows).

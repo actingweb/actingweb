@@ -1,5 +1,5 @@
 ---
-status: active
+status: done
 ---
 
 # Implementation Plan: callers reach only what is theirs on `/callbacks`, `/permissions` and `/subscriptions`
@@ -1320,16 +1320,40 @@ Unchanged; the command is not on the wire.
 
 ### Verification
 
-- [ ] Run the contract's `### Checks` full tier verbatim (docs build included)
-- [ ] `grep -rln '"subscriptions/<id>/<subid>", "DELETE"' docs/guides/access-control.rst docs/guides/access-control-simple.rst`
+- [x] Run the contract's `### Checks` full tier verbatim (docs build included)
+- [x] `grep -rln '"subscriptions/<id>/<subid>", "DELETE"' docs/guides/access-control.rst docs/guides/access-control-simple.rst`
       lists both files
-- [ ] Emm's suite on this branch, as `thoughts/todo/emm-suite-against-master.md`
+- [x] Emm's suite on this branch, as `thoughts/todo/emm-suite-against-master.md`
       describes, with the two rows added on Emm's adoption branch: no failure
       the `master` run did not have; also checked: a re-pair that answers 201
       does not create a second subscription (`../actingweb_mcp/api/trust.py:286-298`);
       the result in the verification document
 
-### Implementation Status: Not Started
+### Notes
+
+- The changelog, migration guide, specification and guides describe what
+  landed, not the first text above: the permission timestamp's five-minute
+  window and 400 (not a clamp); the re-pair with the current secret, toward
+  the stored base URI only, no verification round trip; a pending row
+  replaceable by a verifying request; the one-sided local delete that
+  needs the other owner; a peer that cannot approve its own row or write
+  its own permissions; the root POST, the client view and the proxy's
+  refusal (`FIXED`); the permission sender's 204 (`FIXED`).
+- The access-control guides also corrected a statement that was wrong
+  before this plan: an access row with `r` does not refuse (any matching
+  row admits); the guides say to leave a method out instead.
+- `docs/guides/trust-relationships.rst`: a pending peer is refused (403) on
+  subscriptions and callbacks, as `p2p-quickstart.rst` already said.
+- Emm's suite on this branch (owner decision: the two rows added in the
+  adoption worktree only): no failure the `master` run did not have, on
+  both backends. The plan's extra check found that Emm's connect flow
+  subscribes a second time after a re-pair answering 201: an adoption item
+  for Emm (verification, item 6), not a library change.
+- The Full tier last ran on `0ce0112` (both backends); this phase changes
+  documentation, plans and a demo docstring only: `ruff`, `pyright` and the
+  docs build ran on it.
+
+### Implementation Status: Complete
 
 ---
 
@@ -1637,3 +1661,54 @@ stays replaceable unless a guard lands with it.
   reading the code, about a dozen of them wrongly. It became
   `thoughts/plans/2026-11-06-subscription-wire-baseline.md`, with recordings
   in place of expectations; this plan keeps the harness and fourteen rows.
+
+## Implementation Summary
+
+**Completed:** 2026-11-08
+**All phases:** Complete (0 to 5), each followed by a commit folding the
+outside voice on it
+**Test status:** Full tier green on both backends at `0ce0112`; the wire
+rows identical over five sequential runs per backend at Phase 0 and on
+every later run; Emm's suite on this branch matches its `master` baseline.
+
+### Deviations from Plan
+
+- Re-pairing (owner, 2026-11-08): the plan's receiver verified with the new
+  secret while its initiator wrote nothing first, which could not both
+  hold. A re-pair carries the current secret as bearer instead; no
+  verification round trip; the initiator re-pairs only toward the stored
+  base URI and relationship.
+- Pending rows (owner, 2026-11-08, twice): an unverified row blocked the
+  real peer; first any verifying request could replace it, then, after the
+  review showed a verification proves only control of a base URI and a
+  squatter could promote its own row, only a pending row (neither verified
+  nor approved) is replaceable, by a conditional write; a re-pair never
+  marks a row verified.
+- Permission timestamps (owner, Phase 1 review): a five-minute skew window
+  and 400, not a clamp.
+- Conditional trust creates on both backends (`only_if_absent`,
+  `only_if_pending`), not in the plan, after a race the Phase 3 review
+  found.
+- Hardening the reviews found, not in the plan: a peer cannot approve its
+  own trust row or write its own permissions; the subscription root's
+  POST binds the peer; a client view lists what it creates; `AwProxy` no
+  longer reads a refusal with no body as success; a refused remote
+  unsubscribe is logged with its status.
+- `rows.toml` gained a `topologies` key; `WIRE_RECORD` takes row ids; the
+  snapshot includes trust rows and permissions from Phase 0.
+
+### Learnings
+
+- Every hole the plan described was open, confirmed by the pre-fix runs
+  (verification document), and two it did not predict: an unauthenticated
+  trust request rewrote a row's base URI and secret even though its
+  verification failed (`WT2`), and a peer with an application GET row read
+  another peer's trust row, secret included (`WA16`).
+- A trust row's peer id is only a claim and a verification only proves
+  control of the requester's base URI: identity is the stored base URI and
+  the secret, which is what the re-pair rules now rest on.
+- `create_resource`/`change_resource` callers test for `error`, so a
+  refusal without a body read as success; the subscriber-type migration
+  failure would have been silent without it.
+- One-sided local deletes now need the other owner's help to re-pair
+  (migration guide).

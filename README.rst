@@ -253,7 +253,8 @@ Each actor exposes a set of standard endpoints under its root URL
 - ``/subscriptions`` — establish and manage subscriptions to another actor's paths
   once a trust relationship exists.
 - ``/callbacks`` — verification during trust/subscription setup, subscription
-  delivery, and a hook for 3rd-party webhooks.
+  delivery, and authenticated application callbacks (a peer's callbacks are
+  accepted only from that peer).
 - ``/resources`` — a skeleton for exposing arbitrary resources where
   ``/properties`` does not fit.
 - ``/actions`` and ``/methods`` — application-defined operations (also surfaced as

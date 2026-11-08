@@ -51,6 +51,12 @@ Signature: ``func(actor, name: str, data: dict) -> bool | dict``
 
 - Return ``True`` when processed; optionally return a ``dict`` as response payload
 - Used for custom endpoints registered by the framework (e.g., ``bot``, ``www``)
+- ``/callbacks/<name>`` requests are authenticated (3.16): without
+  credentials they answer 401, and any authenticated caller reaches the
+  hook. The library's own names (``permissions``, ``subscription``,
+  ``subscriptions``, ``www`` and any ``resource_*``) answer 403 on a direct
+  ``/callbacks/<name>`` request, so their hooks only receive data the
+  library built (the web UI still dispatches ``www``)
 
 Template Rendering for WWW Hooks
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

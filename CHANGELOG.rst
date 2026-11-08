@@ -8,6 +8,82 @@ Unreleased
 SECURITY
 ~~~~~~~~
 
+- **Callbacks were accepted without authentication, and a low-granularity
+  callback made the receiver send the trust's secret to a URL of the
+  sender's choosing.** ``/callbacks`` let any request through and checked
+  the caller only after the subscription or permission it named was found;
+  with a subscription id, anyone could inject diffs, store a peer's
+  permission copy for any peer id, delete a subscription, or post a
+  low-granularity callback whose ``url`` the receiver fetched with the
+  trust's bearer. **Behavior change:** every ``/callbacks`` request is
+  authenticated (401 with a challenge without credentials, 403 for
+  credentials that match nobody); ``/callbacks/subscriptions/<peer>/<subid>``
+  and ``/callbacks/permissions/<peer>`` admit only the peer they name (403
+  for anyone else, the actor's creator and an ``admin`` peer included),
+  before anything is looked up; a callback is accepted only for a
+  subscription the actor made; a low-granularity diff is fetched from the
+  trust's stored base URI, never from the callback's ``url``; only ``diff``
+  and ``resync`` are accepted on the subscription branch (400); and the
+  library's own hook names (``permissions``, ``subscription``,
+  ``subscriptions``, ``www``, ``resource_*``) answer 403 on the generic
+  branch. **Check:** a third party pointed at ``/callbacks/<name>`` without
+  credentials now receives 401; ``FanOutManager``'s granularity downgrade is
+  not fetchable by a 3.16 subscriber; a peer trustee's Basic retry after a
+  refused bearer cannot succeed on the two peer branches.
+- **A peer could reach another peer's subscriptions, permissions and trust
+  row through any access row that admitted it, application ``acl_rules``
+  included.** Rows are matched by relationship and path prefix, and ``<id>``
+  in a row is a literal, so a ``friend`` row on ``subscriptions/<id>`` (or a
+  consumer's GET row on ``trust/<type>/<id>``) admitted a peer to every
+  peer's rows: listing, reading, consuming, clearing and deleting another
+  peer's subscription, reading another peer's permissions, and reading
+  another peer's trust row with its secret. **Behavior change:** one rule
+  binds a peer caller to the peer its path names on ``/subscriptions``,
+  ``/permissions`` and ``/trust/<type>/<id>``, whichever row admitted it (an
+  ``admin`` peer is exempt there); ``GET /permissions/<peer>`` authorises
+  before the lookup, so an unknown id and another peer's answer the same
+  403, and the creator and an ``admin`` peer may query any; ``GET
+  /subscriptions?peerid=`` lists a peer's own rows; a peer on its own trust
+  row cannot approve it or write its own permissions.
+- **A trust request for an existing peer replaced its trust row.** ``POST
+  /<actor>/trust/<relationship>`` upserted the row from the request,
+  unauthenticated: a re-sent request reset the owner's approval and could
+  change the relationship, and a request for a peer's id naming another base
+  URI took over the row (base URI and secret) even when its verification
+  failed. **Behavior change:** a request for a peer that already has a
+  verified row is accepted only with the trust's current secret as its
+  bearer, and then swaps only the secret (relationship, approval, base URI
+  and grants stay; the answer follows the stored approval; no
+  ``trust_request_received``); anything else answers 403 and changes
+  nothing. A pending row (stored unverified and not yet approved) is
+  replaced only by a request that verifies; a re-pair never marks a row
+  verified.
+  A new row is written conditionally, so a request racing another never
+  replaces its row. The library's initiator re-pairs a peer it already
+  trusts with its current secret, only toward the stored base URI, and
+  stores the new secret only after the peer accepts. **Check:** a peer that
+  moved is re-pointed by its owner (``PUT /trust/<rel>/<peer>`` with
+  ``baseuri``); when one side removed its row locally, the other side's
+  owner removes its own before they pair again (migration guide).
+- **A subscriber could post callbacks to its publisher under its own
+  subscription id.** The receiver looked the subscription up by peer and
+  id without checking which side made it. **Behavior change:** 403.
+- **A permission callback with a far-future timestamp blocked every later
+  permission update.** Later updates looked older and were ignored.
+  **Behavior change:** a timestamp more than five minutes ahead of the
+  receiver's clock, or one that does not parse, answers 400; an update
+  older than the stored one changes nothing (no deletion of revoked data,
+  no sync, no hook).
+- **Peer and client views listed every peer's subscriptions.**
+  **Behavior change:** ``view.subscriptions.all_subscriptions``,
+  ``outbound_subscriptions`` and ``inbound_subscriptions`` list the
+  accessor's own; owner mode is unchanged.
+- **State written before 3.16 survives the upgrade, and trust rows replaced
+  before it cannot be detected.** **Check:** after every instance runs 3.16,
+  run ``actingweb-peer-state report`` and ``prune --apply``, then restart
+  (``ADDED``); a deployment that suspects a replaced trust deletes it and
+  pairs again, which rotates the secret.
+
 - **PyJWT 2.15 is the minimum, and the lock moves past every open advisory.**
   The SPA ``jwt_bearer`` grant decodes the unverified assertion
   (``verify_signature=False``) to check its issuer before validating it.
@@ -505,6 +581,28 @@ REMOVED
 
 CHANGED
 ~~~~~~~
+
+- **Breaking: an access row authorises the method a request performs; a PUT
+  or DELETE is no longer admitted by a GET row.** The subscription handler
+  authorised ``PUT`` and ``DELETE`` on ``subscriptions/<id>/<subid>`` (and
+  ``GET ?_method=PUT|DELETE``) as GET, so a row granting GET there let a
+  peer clear queues and delete subscriptions. **Check:** an application
+  trust type whose peers clear their queue or are unsubscribed by their
+  publisher through ``("subscriptions/<id>/<subid>", "GET", "a")`` adds
+  ``("subscriptions/<id>/<subid>", "PUT", "a")`` and
+  ``("subscriptions/<id>/<subid>", "DELETE", "a")`` on the publisher, or the
+  gap-resync clear, the low-granularity acknowledgement and the publisher's
+  unsubscribe answer 403 (logged once per process and relationship at
+  WARNING by the publisher, at ERROR by the subscriber). ``friend`` is
+  unaffected. A ``PUT`` to ``/callbacks/<name>`` is authorised as PUT and
+  reaches the hook as ``PUT``.
+- **A peer of any relationship type reads its own granted permissions**
+  (``GET /permissions/<peer>``), through the ``owner`` row; the creator and
+  an ``admin`` peer read any. Before, only ``associate``, ``friend``,
+  ``partner`` and ``admin`` could, and the creator could not.
+- **A subscription callback for an unknown subscription id, from the peer
+  the path names, answers 403** (was 404), as the specification says for a
+  callback URI that does not exist with authentication data.
 
 - **A create with the default creator loaded every actor left with it.**
   With ``force_email_prop_as_creator`` and ``with_unique_creator()`` on, each
@@ -1243,6 +1341,16 @@ CHANGED
 ADDED
 ~~~~~
 
+- **``actingweb-peer-state``** (``report | prune [--apply] [ACTOR_ID]
+  --rps``) finds and removes peer state written before 3.16: permission
+  copies for peers with no trust or stamped in the future, callback state
+  for subscriptions the actor never made, and peer data for peers with no
+  trust or subscription. Strict reads; exit 0 nothing found, 1 found or
+  removed, 2 a store could not be read. See the maintenance guide.
+- **``DELETE /<actor>/trust/<relationship>/<peer>?notify=false``**, creator
+  only: removes the row and its cascade without contacting the peer (a dead
+  or unreachable peer).
+
 - **Python 3.14 is tested and listed as supported.** CI runs the test suite on
   both backends with Python 3.11, the oldest version ``python = "^3.11"``
   allows, and with 3.14, the newest. The package lists the 3.14 classifier.
@@ -1569,6 +1677,16 @@ ADDED
 
 FIXED
 ~~~~~
+
+- **A refusal with no body was read as success.** ``AwProxy.change_resource``
+  and its async twin answered ``{}`` for a non-2xx response without a JSON
+  object body, and callers test for ``error``, so a 403 on a subscriber's
+  queue clear or acknowledgement was logged as success. Any non-2xx answer
+  now carries an ``error`` with its status, and the subscriber's warnings
+  name it (ERROR for a 403).
+- **Every successful permission callback was logged as a failure.** The
+  synchronous permission sender read a 204 (an empty answer) as a failure
+  and logged ``Failed to notify peer … {}`` at WARNING.
 
 - **A subscription ``callback`` that was not a bool was stored as ``True``
   on DynamoDB and failed as a store fault on PostgreSQL.** The column is a

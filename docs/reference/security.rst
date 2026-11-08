@@ -107,7 +107,10 @@ OAuth2
 Trust API and client-supplied text
 ----------------------------------
 
-- ``GET /{actor_id}/trust`` never returns ``secret`` or ``verification_token``; the per-relationship GET returns them to creator and admin only.
+- ``GET /{actor_id}/trust`` never returns ``secret`` or ``verification_token``; the per-relationship GET returns them to the creator, an ``admin`` peer, and a peer reading its own row.
+- **Peers reach only their own paths** (3.16). On ``/subscriptions/<peer>…``, ``/permissions/<peer>`` and ``/trust/<type>/<peer>`` a peer is admitted only when the path names it, whichever access row matched, application ``acl_rules`` included; an ``admin`` peer is exempt there, and only there. A peer may read and delete its own trust row, never approve it or write its own permissions. An access row admits only the HTTP method a request performs.
+- **Callbacks are authenticated** (3.16). ``/callbacks`` answers 401 without credentials; ``/callbacks/subscriptions/<peer>/…`` and ``/callbacks/permissions/<peer>`` admit only the peer they name (not the creator, not an ``admin`` peer); a low-granularity diff is fetched from the trust's stored base URI, never from a URL in the callback; the library's own hook names answer 403 on ``/callbacks/<name>``.
+- **A trust request never replaces a trust row** (3.16). For a peer that already has a verified row it is a re-pair, accepted only with the current secret as bearer, and it swaps only the secret; a pending row (unverified and not approved) is replaced only by a request that verifies, and a re-pair never marks a row verified; a new row is written conditionally. The initiator re-pairs only toward the stored base URI. ``DELETE /trust/<rel>/<peer>?notify=false`` (creator only) removes a dead peer's row without contacting it.
 - MCP ``clientInfo``, registration ``client_name`` and User-Agents are client-supplied and unauthenticated. ActingWeb sanitises them (``actingweb.client_text``) before storing, logging or returning them, and the trust GET routes sanitise ``desc`` too. Treat them as untrusted text anyway when you render them, especially into LLM context.
 
 Logging

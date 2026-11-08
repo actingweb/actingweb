@@ -149,3 +149,37 @@ Answered with nothing found: every `change_resource` caller treats `error`
 as failure or ignores the result; no code reads `.subscriptions` through a
 view; `acl["rights"]` is never read, so the method rule's second probe
 changes nothing later in the request.
+
+## Phase 3: a trust request for an existing peer
+
+### Pre-fix runs
+
+The scenarios of `tests/integration/test_wire_trust.py`, run on the tree at
+`a53efb8` with the Phase 3 library changes set aside, DynamoDB, both
+topologies (identical outcomes):
+
+| Row | Before the fix | After the fix (recorded) |
+| --- | --- | --- |
+| WT1 | B re-initiates: A verifies with the new secret and **replaces its row: `approved` reset to false** (the owner's approval lost), 202, `trust_request_received` ran; B's row loses `peer_approved` | B proves its current secret: 201, the secret swapped, `approved` kept, no hook; the next callback carries the new secret |
+| WT2 | A request with no credentials for B's id naming `wire_other_app`: the verification went to `wire_other_app` (403), and **A's row was replaced anyway: base URI `wire_other_app`, the planted secret, `verified` false, `approved` false**, 202, hook ran | 403; A's row unchanged; nothing contacted |
+| WT3 | A new peer: 202, verified, hook ran | The same |
+| WT4 | B re-initiates asking for `admin`: **A's row becomes `admin`** (approval reset), 202; B's row becomes `admin` | 403; both rows unchanged |
+| WT5 | B, `?notify=false` (ignored then): **B deleted A's row** (a peer may delete its own row; the flag did nothing); A's creator then 404 | B's bearer 403 (the flag is the creator's); A's creator 204, the row and cascade gone, B contacted by nothing |
+
+Expected from reading: A's row overwritten and `approved` reset (`WT1`),
+B's row deleted on the refusal. Confirmed for A; B kept its row in `WT1`
+and `WT4` because the request succeeded (202), so the refusal path did not
+run. Not predicted: the unauthenticated request of `WT2` rewrote the base
+URI and secret even though its verification failed (`verified` false is
+stored, nothing refuses it).
+
+### Existing tests changed, and why
+
+- `tests/test_trust_verification_token_missing.py` (three tests) and
+  `tests/test_actor_logging_redaction.py::test_async_trust_request_logs_no_secret`:
+  the patched `Trust.get()` returns `None` before the request (a creation
+  request for an existing peer is now a re-pair), then the created row.
+- `tests/integration/test_trust_flow.py::test_021`: after `test_018`
+  removed actor1's row only, actor2's stale row is removed by its owner
+  (`?notify=false`) before actor1 initiates again; without that the
+  request is a re-pair actor1 cannot prove (403, then 408 from actor1).

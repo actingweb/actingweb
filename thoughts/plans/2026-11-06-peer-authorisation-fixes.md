@@ -938,39 +938,39 @@ New rows:
 
 ### Changes
 
-Receiver side:
+Receiver side ([Updated 2026-11-08] to the owner's re-pair decision; the
+first text verified the swap with a GET using the request's new secret,
+which the initiator rule below made impossible):
 
-- `actingweb/actor.py:1913-2005` (`create_verified_trust`) - read the row
-  for the peer id once, and pass it on (no second read in `Trust.create`).
-  When it exists: verify with a GET to `<stored baseuri>/trust/<stored
-  relationship>/<own id>` carrying the request's `secret` as bearer,
-  comparing the request's `verify` with the returned `verification_token`,
-  as today but against the stored row. On a match, check the new secret
-  with `is_token_in_db` (a hit on any row, the peer's own included, is a
-  refusal, as creation does today), then `Trust.modify(secret=<new>,
-  verification_token=<fresh>, verified=True, peer_approved=True)` and
-  nothing else, and return the row marked as replaced. On anything else
-  (unreachable, wrong token, non-JSON, secret in use): return False, row
-  untouched. A row that does not exist is created as today.
-- `actingweb/handlers/trust.py:370-495` - the status comes from the stored
-  row's `approved` (201 or 202), not from the configuration (today
-  `:427-433`, `:492-495`); a replacement fires no `trust_request_received`
-  and is logged at INFO (actor, peer id); a refused replacement answers 403
-  with the reason phrase `Existing trust not verified` and is logged at
-  WARNING (actor, peer id; never the base URI from the body).
-- `actingweb/trust.py:391-482` (`Trust.create`) - takes the row already
-  read, so the creation path reads it once.
+- `actingweb/handlers/trust.py` (`TrustRelationshipHandler.post`) - read the
+  row for the peer id once. When it exists, the request is a re-pair
+  (`_re_pair`): accepted only when it is authenticated as that peer with
+  the trust's current secret as its bearer; then
+  `Actor.replace_trust_secret` checks the relationship is the stored one
+  (else refusal: delete and pair again), that a new secret is given and is
+  not in use on any of the actor's rows (`is_token_in_db`, the peer's own
+  included, as creation refuses), and swaps `secret`, a fresh
+  `verification_token`, `verified=True` and `peer_approved=True`, nothing
+  else. No verification round trip. The status follows the stored
+  `approved` (201 or 202); no `trust_request_received`; INFO log. A refused
+  re-pair answers 403 `Existing trust not verified`, WARNING (actor, peer
+  id, reason; never the body's base URI), row unchanged.
+- `actingweb/actor.py` (`create_verified_trust`) - a creation request never
+  replaces a row: it refuses when one exists (an SDK caller or a race), and
+  creates with `Trust.create(..., known_absent=True)` otherwise.
+- `actingweb/trust.py` (`Trust.create`) - `known_absent` skips the second
+  read.
 
 Initiator side:
 
-- `actingweb/actor.py:1647-1775` (`create_reciprocal_trust`) and its async
-  twin (`:1776-1911`) - when a row for the peer already exists: write
-  nothing before the request; after a 201 or 202, `Trust.modify` the new
-  secret and token (and `peer_approved` on 201); on anything else, leave the
-  existing row as it was and return False, logging a WARNING with the
-  status and the reason phrase it already stores (`:1745-1750`). A row
-  that did not exist before the call is created and deleted on failure, as
-  today.
+- `actingweb/actor.py` (`create_reciprocal_trust` and its async twin) - when
+  a row for the peer already exists: write nothing before the request; send
+  it with the existing row's secret as the bearer (`_re_pair_request`), the
+  new secret in the body; after a 201 or 202 store the new secret (and
+  `peer_approved` on 201, `_finish_re_pair`); on anything else leave the
+  row as it was and return False with a WARNING naming the status, the
+  reason phrase and the remedies. A row that did not exist before the call
+  is created and deleted on failure, as today.
 
 The remedies:
 
@@ -990,8 +990,8 @@ token or an id introduced mid-row under a numbered name (`trust:A-B#2`):
 
 | Row | Steps | Recorded |
 | --- | --- | --- |
-| WT1 | B re-initiates its trust to A (`create_relationship`, as the consumer does), then A writes | A's row keeps `approved` and relationship; 201 from the stored row; B's row `peer_approved`; the next callback carries the new secret; the replica updates; no `trust_request_received` |
-| WT2 | A creation request for B's id naming `wire_other_app` as base URI | 403; A's row unchanged; the verification goes to B's stored base URI; `wire_other_app` receives nothing |
+| WT1 | B re-initiates its trust to A (`create_relationship`, as the consumer does), then A writes | B's request carries its current secret; A's row keeps `approved` and relationship; 201 from the stored row; B's row `peer_approved`; the next callback carries the new secret; the replica updates; no `trust_request_received` |
+| WT2 | A creation request for B's id naming `wire_other_app` as base URI, without B's secret | 403; A's row unchanged; nothing is contacted |
 | WT3 | A creation request for a new peer id | As today (201 or 202) |
 | WT4 | B re-initiates asking for a different relationship type | 403; both rows unchanged; B's subscriptions intact |
 | WT5 | A's creator: `DELETE /trust/<rel>/<B>?notify=false` with B unreachable; then the same as B's bearer | 204 and A's row and cascade gone, B contacted by nothing; B's bearer 403 |
@@ -1037,12 +1037,50 @@ token or an id introduced mid-row under a numbered name (`trust:A-B#2`):
 
 ### Verification
 
-- [ ] Run the contract's `### Checks` fast tier verbatim
-- [ ] Run the contract's `### Checks` full tier before the phase commit
-- [ ] `git show --stat HEAD -- tests/integration/wire` shows `WT1` to `WT5`
+- [x] Run the contract's `### Checks` fast tier verbatim
+- [x] Run the contract's `### Checks` full tier before the phase commit
+- [x] `git show --stat HEAD -- tests/integration/wire` shows `WT1` to `WT5`
       added and nothing else
 
-### Implementation Status: Not Started
+### Notes
+
+- **The re-pair rule changed at implementation** (owner, 2026-11-08,
+  Update Log): the plan's receiver verified with the request's new secret
+  while its initiator wrote nothing before the answer, so every re-pair
+  would have failed. A fallback to the stored secret and the initiator's
+  verification token was dropped (anyone holding that token, leaked before
+  this fix, could take the trust over). A re-pair now proves the current
+  secret; no verification GET.
+- The receiver's swap is `Actor.replace_trust_secret` (returns the row or
+  the reason); the handler's `_re_pair` decides from the authentication.
+- The initiator's request and its completion are shared by the sync and
+  async paths (`_re_pair_request`, `_finish_re_pair`).
+- `?notify=false` runs `delete_reciprocal_trust(notify_peers=False)` for the
+  creator; the hook `trust_deleted` runs as for any delete.
+- Tests compare a row's authorisation state, not its usage stamps
+  (`last_accessed` and `last_connected_*` move whenever a bearer
+  authenticates).
+- The wire apps record `trust_request_received`; the trust rows name both
+  rows' verification tokens (a trust request and a trust row read back
+  carry them).
+- Pre-fix runs: verification document, "Phase 3".
+- **A consequence for Phase 5's migration guide:** when one side removed
+  its row locally (`?peer=true`, `?notify=false`) and the other kept its
+  own, the side without a row can no longer pair again by itself (it cannot
+  prove the old secret): the other side's owner removes its stale row first
+  (`DELETE …?notify=false`), then they pair. `test_trust_flow.py::test_021`
+  does exactly that now.
+- The swapped row is read back through a fresh `Trust` (after `modify()` a
+  cached DynamoDB row holds its flags as strings; `WT1` showed the
+  difference between the backends).
+- The wire normaliser keeps only the wire apps' trust types in a listing of
+  them (`/meta`'s `aw_trust_types`): every app in a test worker shares the
+  registry, and other tests add theirs.
+- Release impact: no new route (a query flag on an existing one, recorded
+  for the changelog's `ADDED`); a creation request for an existing peer is
+  a behaviour change.
+
+### Implementation Status: Complete
 
 ---
 

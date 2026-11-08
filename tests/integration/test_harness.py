@@ -288,6 +288,15 @@ def _add_recording_hooks(aw_app: ActingWebApp) -> None:
             initiated_by_peer=kwargs.get("initiated_by_peer"),
         )
 
+    @aw_app.lifecycle_hook("trust_request_received")
+    def record_trust_request_received(actor, **kwargs):
+        record_event(
+            "trust_request_received",
+            actor=actor.id,
+            peer=kwargs.get("peer_id"),
+            relationship=kwargs.get("relationship"),
+        )
+
     @aw_app.callback_hook("permissions")
     def record_permissions(actor, name, data):
         record_event(

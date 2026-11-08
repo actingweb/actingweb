@@ -365,3 +365,48 @@ owners = []
 exposure = false
 expected = "C listing A's subscriptions with ?peerid=<B>, and with no query: 403 (no built-in row admits a friend on the root; with one, a peer sees only its own rows, unit tests)."
 reason = ["2026-11-07 first recording (peer-authorisation-fixes:2)"]
+
+# ---------------------------------------------------------------------------
+# peer-authorisation-fixes, Phase 3: a trust request for a peer that already
+# has a row (recorded with the fix; the pre-fix runs are in the verification)
+# ---------------------------------------------------------------------------
+
+[rows."WT1"]
+test = "test_wire_trust.py::test_wt1_re_pair"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "B re-initiates through the SDK: its request carries the current secret as bearer, A answers 201 from its stored approval and swaps the secret only (approved, relationship and base URI kept, no trust_request_received), B stores the new secret; A's next callback carries it."
+reason = ["2026-11-08 first recording (peer-authorisation-fixes:3)"]
+
+[rows."WT2"]
+test = "test_wire_trust.py::test_wt2_request_naming_another_host"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "A creation request for B's id with no credentials and wire_other_app as its base URI: 403; A's row unchanged; nothing reaches wire_other_app or B."
+reason = ["2026-11-08 first recording (peer-authorisation-fixes:3)"]
+
+[rows."WT3"]
+test = "test_wire_trust.py::test_wt3_new_peer"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "A new peer N asks A for a trust: as before the fix (the verification GET to N with the new secret, 202, trust_request_received)."
+reason = ["2026-11-08 first recording (peer-authorisation-fixes:3)"]
+
+[rows."WT4"]
+test = "test_wire_trust.py::test_wt4_re_pair_with_another_relationship"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "B re-initiates asking for admin, with its current secret: 403; both rows unchanged; B's subscription intact."
+reason = ["2026-11-08 first recording (peer-authorisation-fixes:3)"]
+
+[rows."WT5"]
+test = "test_wire_trust.py::test_wt5_local_delete"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "DELETE /trust/friend/<B>?notify=false: by B's bearer 403 (the creator's); by A's creator 204, A's row and subscription gone, trust_deleted ran, B contacted by nothing."
+reason = ["2026-11-08 first recording (peer-authorisation-fixes:3)"]

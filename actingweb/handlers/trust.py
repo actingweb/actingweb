@@ -436,6 +436,13 @@ class TrustRelationshipHandler(base_handler.BaseHandler):
             # and plainly a base URL.
             self.response.set_status(400, "Invalid id or baseuri")
             return
+        # A peer that already has a row re-pairs: a credential swap, never a
+        # replacement of the row (read once here).
+        existing = myself.get_trust_relationship(peerid=peerid)
+        if existing:
+            self._re_pair(myself, auth_result, peerid, relationship, secret)
+            return
+
         if (
             self.config.auto_accept_default_relationship
             and self.config.default_relationship == relationship
@@ -502,6 +509,58 @@ class TrustRelationshipHandler(base_handler.BaseHandler):
         self.response.write(out)
         self.response.headers["Content-Type"] = "application/json"
         if approved:
+            self.response.set_status(201, "Created")
+        else:
+            self.response.set_status(202, "Accepted")
+
+    def _re_pair(
+        self,
+        myself: Any,
+        auth_result: Any,
+        peerid: str,
+        relationship: str,
+        secret: str,
+    ) -> None:
+        """A trust request for a peer that already has a row.
+
+        Accepted only from the peer itself, authenticated with the trust's
+        current secret; then only the secret is swapped
+        (``Actor.replace_trust_secret``). The answer follows the stored
+        approval (201 or 202) and no ``trust_request_received`` hook runs: no
+        new relationship was requested. Anything else answers 403 and
+        changes nothing."""
+        acl = getattr(auth_result.auth_obj, "acl", None)
+        proven = (
+            isinstance(acl, dict)
+            and bool(acl.get("authenticated"))
+            and acl.get("peerid") == peerid
+        )
+        reason = "the request did not carry the trust's current secret"
+        new_trust = None
+        if proven:
+            new_trust, reason = myself.replace_trust_secret(
+                peerid=peerid, relationship=relationship, secret=secret
+            )
+        if not new_trust:
+            # Never the body's base URI in the log: it is the requester's.
+            logger.warning(
+                f"Refused a re-pair for {peerid} at {myself.id}: {reason}; the "
+                "trust is unchanged"
+            )
+            self.response.set_status(403, "Existing trust not verified")
+            return
+        logger.info(f"Re-paired {myself.id} with {peerid}: the secret was replaced")
+        self.response.headers["Location"] = str(
+            self.config.root
+            + (myself.id or "")
+            + "/trust/"
+            + new_trust["relationship"]
+            + "/"
+            + new_trust["peerid"]
+        )
+        self.response.write(json.dumps(new_trust))
+        self.response.headers["Content-Type"] = "application/json"
+        if new_trust.get("approved"):
             self.response.set_status(201, "Created")
         else:
             self.response.set_status(202, "Accepted")
@@ -1009,6 +1068,15 @@ class TrustPeerHandler(base_handler.BaseHandler):
                     400, "Cannot delete trust relationship with self"
                 )
             return
+        # ?notify=false: the creator removes the local row and its cascade
+        # without contacting the peer (a dead or unreachable peer).
+        local_only = (self.request.get("notify") or "").lower() == "false"
+        if local_only and (
+            str(auth_result.auth_obj.acl.get("relationship") or "").lower() != "creator"
+        ):
+            if self.response:
+                self.response.set_status(403, "Forbidden")
+            return
         is_peer = False
         if (
             auth_result.auth_obj
@@ -1057,7 +1125,9 @@ class TrustPeerHandler(base_handler.BaseHandler):
                 logger.error(f"Error triggering trust_deleted hook: {e}")
 
         # Delete trust relationship with appropriate peer notification setting
-        if is_peer:
+        if local_only:
+            deleted = myself.delete_reciprocal_trust(peerid=peerid, notify_peers=False)
+        elif is_peer:
             deleted = actor_interface.trust.delete_peer_trust(
                 peer_id=peerid, notify_peer=False
             )

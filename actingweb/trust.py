@@ -404,8 +404,14 @@ class Trust:
         created_at: str | None = None,
         last_accessed: str | None = None,
         last_connected_via: str | None = None,
+        *,
+        known_absent: bool = False,
     ) -> bool:
-        """Create a new trust relationship"""
+        """Create a new trust relationship.
+
+        ``known_absent``: the caller has just read that no row exists for the
+        peer, so the read that decides whether stale custom permissions are
+        cleared is skipped (one read per creation)."""
         self.trust = {"baseuri": baseuri, "type": peer_type}
         if not relationship or len(relationship) == 0:
             self.trust["relationship"] = (
@@ -454,7 +460,10 @@ class Trust:
             self.config
             and self.actor_id
             and self.peerid
-            and self.handle.get(actor_id=self.actor_id, peerid=self.peerid) is None
+            and (
+                known_absent
+                or self.handle.get(actor_id=self.actor_id, peerid=self.peerid) is None
+            )
         ):
             from .trust_permissions import get_trust_permission_store
 

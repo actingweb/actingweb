@@ -39,7 +39,9 @@ async def test_async_trust_request_logs_no_secret(
     }
     dbtrust = mock.Mock()
     dbtrust.create.return_value = True
-    dbtrust.get.return_value = {"verification_token": VERIFY}
+    # No row for the peer yet (3.16: a peer with a row re-pairs instead),
+    # then the row just created.
+    dbtrust.get.side_effect = [None, {"verification_token": VERIFY}]
 
     class _FailingClient:
         def __init__(self, *args: Any, **kwargs: Any) -> None:

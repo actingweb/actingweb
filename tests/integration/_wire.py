@@ -509,6 +509,19 @@ _EPOCH_KEYS = {
     "capabilities_fetched_at",
     "permissions_fetched_at",
 }
+# The trust types the wire apps register: a listing of trust types (an
+# actor's /meta) keeps only these, since every app in a test worker shares
+# the registry's rows and other tests add their own.
+WIRE_TRUST_TYPES = {
+    "admin",
+    "associate",
+    "friend",
+    "mcp_client",
+    "partner",
+    "subscriber",
+    "subscriber_adopted",
+    "viewer",
+}
 _SECRET_KEYS = {
     "secret",
     "passphrase",
@@ -615,6 +628,8 @@ class Normaliser:
                     out[nk] = f"<secret:{self.secrets.get(v, '?unnamed')}>"
                 elif nk in _EPOCH_KEYS and isinstance(v, int | float | str):
                     out[nk] = self._epoch(v)
+                elif nk == "aw_trust_types" and isinstance(v, list):
+                    out[nk] = [t for t in v if t in WIRE_TRUST_TYPES]
                 else:
                     out[nk] = self.walk(v, nk)
             return out

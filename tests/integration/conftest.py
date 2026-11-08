@@ -1207,8 +1207,19 @@ def wire_pair(wire_app, wire_peer_app, worker_info):
         scenario.name(secret, f"trust:{name}-{to}", secret=True)
         return peer, secret
 
+    def add_actor(scenario: Scenario, name: str) -> WireActor:
+        actor = create(name, wire_app)
+        scenario.name(actor.id, name)
+        scenario.name(actor.creator, f"{name}.creator")
+        scenario.name(actor.passphrase, f"{name}.passphrase", secret=True)
+        return actor
+
     class WirePairFactory:
-        """``wire_pair``'s value: call it for a pair; ``add_peer`` for more."""
+        """``wire_pair``'s value: call it for a pair; ``add_peer`` for a third
+        actor with a trust, ``add_actor`` for one without."""
+
+        def add_actor(self, scenario: Scenario, name: str) -> WireActor:
+            return add_actor(scenario, name)
 
         def __call__(self, *args: Any, **kwargs: Any) -> Scenario:
             return make(*args, **kwargs)

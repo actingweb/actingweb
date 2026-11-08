@@ -30,6 +30,9 @@ class TestVerificationTokenMissingFromPeerResponse:
 
         mock_trust = MagicMock()
         mock_trust.create.return_value = True
+        # No row before the request (3.16: a creation request never replaces
+        # one), then the row it created.
+        mock_trust.get.side_effect = [None, {"peerid": "peer-1"}]
 
         with (
             patch("actingweb.actor.requests.get", return_value=peer_response),
@@ -56,6 +59,9 @@ class TestVerificationTokenMissingFromPeerResponse:
 
         mock_trust = MagicMock()
         mock_trust.create.return_value = True
+        # No row before the request (3.16: a creation request never replaces
+        # one), then the row it created.
+        mock_trust.get.side_effect = [None, {"peerid": "peer-1"}]
 
         with (
             patch("actingweb.actor.requests.get", return_value=peer_response),
@@ -81,6 +87,9 @@ class TestVerificationTokenMissingFromPeerResponse:
 
         mock_trust = MagicMock()
         mock_trust.create.return_value = True
+        # No row before the request (3.16: a creation request never replaces
+        # one), then the row it created.
+        mock_trust.get.side_effect = [None, {"peerid": "peer-1"}]
 
         with (
             patch("actingweb.actor.requests.get", return_value=peer_response),

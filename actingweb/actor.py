@@ -13,7 +13,12 @@ from actingweb import attribute, deletion, peertrustee, property, subscription, 
 from actingweb.constants import (
     DEFAULT_CREATOR,
 )
-from actingweb.db import get_actor, get_actor_list, get_subscription_suspension
+from actingweb.db import (
+    get_actor,
+    get_actor_list,
+    get_subscription_suspension,
+    get_trust,
+)
 from actingweb.log_summary import summarize_payload
 from actingweb.permission_evaluator import PermissionResult, get_permission_evaluator
 from actingweb.property_list import ListCorruptionError
@@ -1698,6 +1703,28 @@ class Actor:
                 return False
         if not relationship or len(relationship) == 0:
             relationship = self.config.default_relationship if self.config else ""
+        existing = trust.Trust(
+            actor_id=self.id, peerid=peer["id"], config=self.config
+        ).get()
+        if existing:
+            # A re-pair: our row stays as it is until the peer accepts.
+            request = self._re_pair_request(url, existing, secret, desc, relationship)
+            try:
+                response = requests.post(
+                    url=request["url"],
+                    data=request["data"],
+                    timeout=(5, 10),
+                    headers=request["headers"],
+                )
+            except Exception as e:  # folds DbError: peer HTTP only
+                logger.warning(
+                    f"Re-pairing with {peer['id']} failed: no answer ({e}); "
+                    "the existing trust is unchanged"
+                )
+                return False
+            return self._finish_re_pair(
+                peer["id"], secret, response.status_code, response.reason
+            )
         # Create trust, so that peer can do a verify on the relationship (using
         # verification_token) when we request the relationship
         dbtrust = trust.Trust(actor_id=self.id, peerid=peer["id"], config=self.config)
@@ -1828,6 +1855,31 @@ class Actor:
         if not relationship or len(relationship) == 0:
             relationship = self.config.default_relationship if self.config else ""
 
+        import httpx
+
+        existing = trust.Trust(
+            actor_id=self.id, peerid=peer["id"], config=self.config
+        ).get()
+        if existing:
+            # A re-pair: our row stays as it is until the peer accepts.
+            request = self._re_pair_request(url, existing, secret, desc, relationship)
+            try:
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    response = await client.post(
+                        request["url"],
+                        content=request["data"],
+                        headers=request["headers"],
+                    )
+            except httpx.HTTPError as e:
+                logger.warning(
+                    f"Re-pairing with {peer['id']} failed: no answer ({e}); "
+                    "the existing trust is unchanged"
+                )
+                return False
+            return self._finish_re_pair(
+                peer["id"], secret, response.status_code, response.reason_phrase
+            )
+
         # Create trust locally (synchronous DB operation)
         dbtrust = trust.Trust(actor_id=self.id, peerid=peer["id"], config=self.config)
         if not dbtrust.create(
@@ -1855,8 +1907,6 @@ class Actor:
             "desc": desc,
             "verify": new_trust["verification_token"] if new_trust else "",
         }
-
-        import httpx
 
         requrl = url + "/trust/" + relationship
         data = json.dumps(params)
@@ -1910,6 +1960,64 @@ class Actor:
             dbtrust.delete()
             return False
 
+    def _re_pair_request(
+        self,
+        url: str,
+        existing: dict[str, Any],
+        secret: str,
+        desc: str,
+        relationship: str,
+    ) -> dict[str, Any]:
+        """The trust request for a peer this actor already trusts: the new
+        secret in the body, the current one as the bearer (the peer accepts a
+        re-pair only from the holder of the current secret)."""
+        params = {
+            "baseuri": (self.config.root if self.config else "") + (self.id or ""),
+            "id": self.id,
+            "type": self.config.aw_type if self.config else "",
+            "secret": secret,
+            "desc": desc,
+            "verify": existing.get("verification_token") or "",
+        }
+        return {
+            "url": url + "/trust/" + relationship,
+            "data": json.dumps(params),
+            "headers": {
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {existing.get('secret') or ''}",
+            },
+        }
+
+    def _finish_re_pair(
+        self, peerid: str, secret: str, status: int, reason: str
+    ) -> dict[str, Any] | bool:
+        """Store the new secret once the peer accepted the re-pair (201 or
+        202); on anything else leave the existing row as it was."""
+        self.last_response_code = status
+        if status not in (201, 202):
+            logger.warning(
+                f"Re-pairing with {peerid} was refused: {status} {reason}; the "
+                "existing trust is unchanged (a moved peer is re-pointed by "
+                "updating its base URI; a new relationship is a delete and a "
+                "new pairing)"
+            )
+            return False
+        current = trust.Trust(actor_id=self.id, peerid=peerid, config=self.config)
+        changes: dict[str, Any] = {"secret": secret}
+        if status == 201:
+            changes["peer_approved"] = True
+        if not current.modify(**changes):
+            logger.error(
+                f"Re-pairing with {peerid}: the peer accepted the new secret but "
+                "storing it failed; re-pair again"
+            )
+            return False
+        logger.info(f"Re-paired with {peerid}: the trust's secret was replaced")
+        return (
+            trust.Trust(actor_id=self.id, peerid=peerid, config=self.config).get()
+            or False
+        )
+
     def create_verified_trust(
         self,
         baseuri="",
@@ -1935,6 +2043,14 @@ class Actor:
         if not is_valid_peer_id(peerid) or not is_valid_peer_baseuri(baseuri):
             # Both come from the requesting peer and reach the owner's UI.
             logger.warning("Refused a trust request with an invalid peer id or baseuri")
+            return False
+        # A creation request never replaces a row: a peer that already has
+        # one re-pairs with ``replace_trust_secret`` (proving its current
+        # secret), and its row is otherwise left as it is.
+        if trust.Trust(actor_id=self.id, peerid=peerid, config=self.config).get():
+            logger.warning(
+                f"Refused a trust creation request for {peerid}: a trust row exists"
+            )
             return False
         requrl = baseuri + "/trust/" + relationship + "/" + self.id
         if not secret or len(secret) == 0:
@@ -1999,10 +2115,49 @@ class Actor:
             verified=verified,
             desc=desc,
             established_via="trust",
+            known_absent=True,
         ):
             return False
         else:
             return new_trust.get()
+
+    def replace_trust_secret(
+        self, peerid: str, relationship: str, secret: str
+    ) -> tuple[dict[str, Any] | None, str]:
+        """Swap the credentials of an existing trust: a re-pair.
+
+        The caller has authenticated the request as ``peerid`` with the
+        trust's current secret (``handlers/trust.py``). Only the secret
+        changes, with a fresh verification token, ``verified`` and
+        ``peer_approved``; the relationship, ``approved``, base URI,
+        description, creation time and grants stay. Returns the updated row,
+        or None and the reason it was refused (the row is then unchanged):
+        a different relationship (delete and pair again), no new secret, or
+        a new secret already in use on any of this actor's rows, the peer's
+        own included, as creation refuses."""
+        current = trust.Trust(actor_id=self.id, peerid=peerid, config=self.config)
+        row = current.get()
+        if not row:
+            return None, "no trust row"
+        if (row.get("relationship") or "") != (relationship or ""):
+            return None, "a different relationship"
+        if not secret:
+            return None, "no new secret"
+        if self.config and get_trust(self.config).is_token_in_db(
+            actor_id=self.id, token=secret
+        ):
+            return None, "the new secret is already in use"
+        if not current.modify(
+            secret=secret,
+            verification_token=self.config.new_token() if self.config else "",
+            verified=True,
+            peer_approved=True,
+        ):
+            return None, "the row was not modified"
+        # Read back through a fresh object: after modify() the cached row
+        # holds the flags as the strings the backends were given.
+        updated = trust.Trust(actor_id=self.id, peerid=peerid, config=self.config).get()
+        return (updated or None), "" if updated else "the row could not be read back"
 
     def delete_reciprocal_trust(
         self,

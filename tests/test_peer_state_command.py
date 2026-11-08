@@ -255,9 +255,45 @@ class TestAllPermissions:
     def test_a_live_copy_is_listed_and_removed_only_on_request(
         self, config: Any, capsys: Any
     ) -> None:
+        from actingweb.peer_permissions import PeerPermissions
+
         w = World(config)
         code, out = _run(capsys, "report", w.id)
         assert code == 0 and "permissions-copy" not in out
-        code, out = _run(capsys, "prune", w.id, "--all-permissions", "--apply")
+        unanswered = PeerPermissions(actor_id=w.id, peer_id="x", fetch_error="down")
+        with patch(
+            "actingweb.peer_permissions.fetch_peer_permissions",
+            return_value=unanswered,
+        ):
+            code, out = _run(capsys, "prune", w.id, "--all-permissions", "--apply")
         assert code == 1 and "permissions-copy" in out
+        assert f"not rebuilt\t{w.id}\t{w.live}\tdown" in out
         assert w.permission_names() == set()
+
+    def test_a_removed_copy_is_rebuilt_from_the_peer(
+        self, config: Any, capsys: Any
+    ) -> None:
+        """Reverify-1, Issue 5: without a copy, the peer's next callback is
+        taken for its first and a revocation in it deletes nothing."""
+        from actingweb.peer_permissions import PeerPermissions
+
+        w = World(config)
+
+        def answer(actor_id: str, peer_id: str, _config: Any) -> PeerPermissions:
+            return PeerPermissions(
+                actor_id=actor_id,
+                peer_id=peer_id,
+                properties={"patterns": ["fresh/*"], "operations": ["read"]},
+                fetched_at=datetime.now(UTC).isoformat(),
+            )
+
+        with patch(
+            "actingweb.peer_permissions.fetch_peer_permissions", side_effect=answer
+        ) as fetch:
+            code, out = _run(capsys, "prune", w.id, "--all-permissions", "--apply")
+        assert code == 1
+        assert {c.args[1] for c in fetch.call_args_list} == {w.live, w.live_hex}
+        assert f"rebuilt\t{w.id}\t{w.live}" in out
+        assert w.permission_names() == {f"{w.id}:{w.live}", f"{w.id}:{w.live_hex}"}
+        fresh = Attributes(actor_id=w.id, bucket=PEER_PERMISSIONS_BUCKET, config=config)
+        assert "fresh/*" in str(fresh.get_attr(name=f"{w.id}:{w.live}"))

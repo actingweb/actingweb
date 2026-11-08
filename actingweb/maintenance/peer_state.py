@@ -37,8 +37,10 @@ Kinds, per actor (names are compared whole: a peer id may contain ``:``):
 ``permissions-copy`` (only with ``--all-permissions``)
     Every other ``_peer_permissions`` row: a forged copy for a peer the actor
     does trust (a pre-3.16 unauthenticated callback with a current timestamp)
-    looks like a real one. Removed, it is rebuilt from the peer's next
-    permission callback or the next query.
+    looks like a real one. With ``--apply`` each removed copy is rebuilt at
+    once by a permission query to its peer (``rebuilt`` / ``not rebuilt``):
+    without a copy, the peer's next callback would be taken for its first,
+    and a pattern revoked in it would delete no stored data.
 ``remote-data``
     A ``remote:<peer>`` bucket (``RemotePeerStore``) for a peer with no trust
     row, or with no subscription this actor made to it. Only bucket names
@@ -323,11 +325,39 @@ def cmd_prune(args: argparse.Namespace) -> int:
         print(f"Dry run: would remove {count}. Re-run with --apply.")
         return 1
     removed = prune(config, findings, limiter)
+    rebuild_copies(config, findings, limiter)
     print(
         f"Removed {removed}. Restart the application's processes: they keep "
         "permissions they cached until then."
     )
     return 1
+
+
+def rebuild_copies(config: Any, findings: list[Finding], limiter: RateLimiter) -> None:
+    """Query each peer whose live copy was removed (``permissions-copy``) and
+    store its answer: without a copy, the peer's next callback is taken for
+    its first, and a pattern revoked in it would delete no stored data. A
+    peer that does not answer is listed; its next callback or query
+    rebuilds the copy."""
+    from actingweb.peer_permissions import (
+        fetch_peer_permissions,
+        get_peer_permission_store,
+    )
+
+    store = get_peer_permission_store(config)
+    for f in findings:
+        if f.kind != PERMISSIONS_COPY or not f.name:
+            continue
+        peer_id = f.name[len(f.actor_id) + 1 :]
+        limiter.wait()
+        perms = fetch_peer_permissions(f.actor_id, peer_id, config)
+        if perms.fetch_error or not store.store_permissions(perms):
+            print(
+                f"not rebuilt\t{f.actor_id}\t{peer_id}\t"
+                f"{perms.fetch_error or 'store refused'}"
+            )
+        else:
+            print(f"rebuilt\t{f.actor_id}\t{peer_id}")
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -348,8 +378,8 @@ def _build_parser() -> argparse.ArgumentParser:
         p.add_argument(
             "--all-permissions",
             action="store_true",
-            help="also every live peer's stored permission copy (rebuilt from "
-            "its next permission callback or query)",
+            help="also every live peer's stored permission copy; with --apply, "
+            "each is rebuilt at once by a permission query to the peer",
         )
 
     common(sub.add_parser("report", help="list stale peer state"))

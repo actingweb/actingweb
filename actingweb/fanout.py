@@ -476,9 +476,20 @@ class FanOutManager:
         (``<baseuri>/callbacks/subscriptions/<own id>/<subid>``): a 3.16
         receiver refuses an unauthenticated callback, and the bearer must go
         to the host the trust was made with, not to a stored ``callback_url``.
+        ``callback_url`` is therefore ignored (kept for the signature).
         """
         cb = self._get_circuit_breaker(peer_id)
-        trust = self._actor.trust.get_trust(peer_id)
+        try:
+            trust = self._actor.trust.get_trust(peer_id)
+        except DbError:  # folds DbError: delivery skipped, reported for this peer
+            # (not as an anonymous gather exception).
+            logger.warning(f"Callback to {peer_id} not sent: the trust read failed")
+            return DeliveryResult(
+                peer_id=peer_id,
+                subscription_id=subscription_id,
+                success=False,
+                error="trust read failed",
+            )
         secret = str((trust or {}).get("secret") or "")
         baseuri = str((trust or {}).get("baseuri") or "").rstrip("/")
         if not secret or not baseuri:

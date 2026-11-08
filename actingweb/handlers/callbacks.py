@@ -29,6 +29,9 @@ RESERVED_CALLBACK_NAMES = frozenset(
 # How far ahead of the receiver's clock a permission callback's timestamp may
 # be: ordinary clock skew. Further ahead answers 400.
 PERMISSION_TIMESTAMP_SKEW = timedelta(minutes=5)
+# How often a permission callback reads and tries its conditional write
+# again when concurrent callbacks from the same peer keep winning.
+PERMISSION_STORE_ATTEMPTS = 5
 
 # The callback types the subscription path accepts; an absent type is a diff.
 ACCEPTED_SUBSCRIPTION_CALLBACK_TYPES = frozenset({"diff", "resync"})
@@ -366,53 +369,71 @@ class CallbacksHandler(base_handler.BaseHandler):
                 )
 
                 store = get_peer_permission_store(myself.config)
-
-                # Get old permissions before storing new ones (for comparison)
-                old_permissions = store.get_permissions(actor_id, granting_actor_id)
-
-                # A callback older, by the sender's clock, than the sender's
-                # last stored callback changes nothing: no deletion of revoked
-                # data, no sync, no hook. Only callbacks are compared, each by
-                # its sender's own clock: a copy fetched by query carries none,
-                # so a slow sender's next callback is never taken for older.
-                previous = (
-                    (old_permissions.extra_attributes or {}).get(SENDER_TIMESTAMP_KEY)
-                    if old_permissions
-                    else None
-                )
                 current = peer_perms.extra_attributes.get(SENDER_TIMESTAMP_KEY)
-                if (
-                    isinstance(previous, str)
-                    and isinstance(current, str)
-                    and _parsed_time(current) < _parsed_time(previous)
-                ):
-                    logger.info(
-                        f"Ignored a permission callback from {granting_actor_id} "
-                        f"older than its last one ({current} < {previous})"
+
+                # Read, decide, delete, then store only if the row is still
+                # the one read: two callbacks handled at once (a grant and its
+                # revocation, say) never both win, and the loser decides again
+                # against the winner's row.
+                for _attempt in range(PERMISSION_STORE_ATTEMPTS):
+                    expected, old_permissions = store.read_stored_permissions(
+                        actor_id, granting_actor_id
                     )
-                    self.response.set_status(204, "No Content")
+
+                    # A callback older, by the sender's clock, than the
+                    # sender's last stored callback changes nothing: no
+                    # deletion of revoked data, no sync, no hook. Only
+                    # callbacks are compared, each by its sender's own clock:
+                    # a copy fetched by query carries none, so a slow sender's
+                    # next callback is never taken for older.
+                    previous = (
+                        (old_permissions.extra_attributes or {}).get(
+                            SENDER_TIMESTAMP_KEY
+                        )
+                        if old_permissions
+                        else None
+                    )
+                    if (
+                        isinstance(previous, str)
+                        and isinstance(current, str)
+                        and _parsed_time(current) < _parsed_time(previous)
+                    ):
+                        logger.info(
+                            f"Ignored a permission callback from {granting_actor_id} "
+                            f"older than its last one ({current} < {previous})"
+                        )
+                        self.response.set_status(204, "No Content")
+                        return
+
+                    permission_changes = detect_permission_changes(
+                        old_permissions, peer_perms
+                    )
+
+                    # Delete the revoked peer data first, strictly, then store
+                    # the new permissions: a fault answers 503 with the old
+                    # permissions still stored, so the retried callback sees
+                    # the revocation again and finishes the deletion.
+                    if permission_changes.get("has_revocations") and getattr(
+                        myself.config, "auto_delete_on_revocation", False
+                    ):
+                        self._delete_revoked_peer_data(
+                            actor_interface,
+                            granting_actor_id,
+                            permission_changes.get("revoked_patterns", []),
+                        )
+
+                    success = store.replace_permissions(peer_perms, expected)
+                    if success:
+                        break
+                else:
+                    logger.warning(
+                        f"A permission callback from {granting_actor_id} lost "
+                        f"{PERMISSION_STORE_ATTEMPTS} concurrent writes in a row; "
+                        "answered 503 for the sender to retry"
+                    )
+                    self.response.set_status(503, "Service Unavailable")
+                    self.response.headers["Retry-After"] = "1"
                     return
-
-                # Detect what changed
-                permission_changes = detect_permission_changes(
-                    old_permissions, peer_perms
-                )
-
-                # Delete the revoked peer data first, strictly, then store the
-                # new permissions: a fault answers 503 with the old
-                # permissions still stored, so the retried callback sees the
-                # revocation again and finishes the deletion.
-                if permission_changes.get("has_revocations") and getattr(
-                    myself.config, "auto_delete_on_revocation", False
-                ):
-                    self._delete_revoked_peer_data(
-                        actor_interface,
-                        granting_actor_id,
-                        permission_changes.get("revoked_patterns", []),
-                    )
-
-                # Store new permissions
-                success = store.store_permissions(peer_perms)
 
                 logger.debug(
                     f"Stored permission callback from {granting_actor_id} "

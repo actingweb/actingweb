@@ -342,6 +342,7 @@ class Trust:
             logger.debug("Attempted modifcation of trust without handle")
             return False
         assert self.trust is not None  # Always initialized in __init__
+        before = dict(self.trust)
         if baseuri:
             self.trust["baseuri"] = baseuri
         if secret:
@@ -363,7 +364,7 @@ class Trust:
             self.trust["aw_version"] = aw_version
         if capabilities_fetched_at is not None:
             self.trust["capabilities_fetched_at"] = capabilities_fetched_at
-        return self.handle.modify(
+        modified = self.handle.modify(
             baseuri=baseuri,
             secret=secret,
             desc=desc,
@@ -387,6 +388,11 @@ class Trust:
             aw_version=aw_version,
             capabilities_fetched_at=capabilities_fetched_at,
         )
+        if not modified:
+            # Not written (the row is gone): keep the copy as it was.
+            self.trust.clear()
+            self.trust.update(before)
+        return bool(modified)
 
     def create(
         self,

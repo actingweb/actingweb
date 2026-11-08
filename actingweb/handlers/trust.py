@@ -530,7 +530,10 @@ class TrustRelationshipHandler(base_handler.BaseHandler):
         out = json.dumps(new_trust)
         self.response.write(out)
         self.response.headers["Content-Type"] = "application/json"
-        if approved:
+        # The stored approval: auto-accept approves only a request that
+        # verified (create_verified_trust). The created row's copy carries its
+        # flags as the strings "true"/"false" (Trust.create).
+        if str(new_trust.get("approved")).lower() == "true":
             self.response.set_status(201, "Created")
         else:
             self.response.set_status(202, "Accepted")
@@ -681,11 +684,19 @@ class TrustPeerHandler(base_handler.BaseHandler):
             else:
                 my_trust["permissions"] = None
 
+        caller_peer = ""
+        if isinstance(auth_result.auth_obj.acl, dict):
+            caller_peer = auth_result.auth_obj.acl.get("peerid") or ""
         if not my_trust["approved"] and is_peer_token:
-            # Peer with token but unapproved trust - deny access
-            if self.response:
-                self.response.set_status(403, "Trust relationship not approved")
-            return
+            if caller_peer != peerid:
+                # Another peer (an ``admin`` one) on an unapproved row.
+                if self.response:
+                    self.response.set_status(403, "Trust relationship not approved")
+                return
+            # The row's own peer reads its status while the owner has not
+            # approved it ("approved, pending", the spec's trust GET); an
+            # initiator whose re-pair answer was lost reads it with the new
+            # secret to learn that the swap happened (3.16).
 
         # Unlike the list route, this response keeps ``secret`` and
         # ``verification_token`` for the creator, the trustee and the peer the
@@ -696,8 +707,7 @@ class TrustPeerHandler(base_handler.BaseHandler):
         # out (3.16). Client-supplied text is sanitised as on the list route.
         if isinstance(my_trust, dict):
             my_trust = _sanitize_trust_text(dict(my_trust))
-            caller = auth_result.auth_obj.acl.get("peerid") or ""
-            if caller and caller != peerid:
+            if caller_peer and caller_peer != peerid:
                 my_trust.pop("secret", None)
                 my_trust.pop("verification_token", None)
         out = json.dumps(my_trust)

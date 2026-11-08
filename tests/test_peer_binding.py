@@ -763,3 +763,83 @@ class TestThePermissionBranchEdges:
         out = w.request("POST", f"permissions/{w.a}", body, as_peer=w.a)
         assert out.response.status_code == 400
         assert w.stored_permissions(w.a) is None
+
+
+class TestConcurrentPermissionCallbacks:
+    """Verification of 2026-11-08 (reverify-1), Issue 4: a callback stores
+    only over the row it read; one that loses the race decides again against
+    the winner's row."""
+
+    def test_an_older_callback_that_loses_the_race_is_ignored(self) -> None:
+        from actingweb.peer_permissions import PeerPermissionStore
+
+        w = World()
+        now = datetime.now(UTC)
+        first = w.request(
+            "POST",
+            f"permissions/{w.a}",
+            _permission_body((now - timedelta(seconds=30)).isoformat(), "first"),
+            as_peer=w.a,
+        )
+        assert first.response.status_code == 204
+        real = PeerPermissionStore.replace_permissions
+        raced: list[int] = []
+
+        def racing(store: Any, perms: Any, expected: Any) -> bool:
+            if not raced:
+                raced.append(1)
+                # Another worker stores the peer's newer callback meanwhile.
+                newer = w.request(
+                    "POST",
+                    f"permissions/{w.a}",
+                    _permission_body(
+                        (now - timedelta(seconds=10)).isoformat(), "newer"
+                    ),
+                    as_peer=w.a,
+                )
+                assert newer.response.status_code == 204
+            return real(store, perms, expected)
+
+        with mock.patch.object(PeerPermissionStore, "replace_permissions", racing):
+            out = w.request(
+                "POST",
+                f"permissions/{w.a}",
+                _permission_body((now - timedelta(seconds=20)).isoformat(), "older"),
+                as_peer=w.a,
+            )
+        assert out.response.status_code == 204
+        stored = w.stored_permissions(w.a)
+        assert stored and stored["properties"]["excluded_patterns"] == ["newer"]
+
+    def test_a_newer_callback_that_loses_the_race_is_stored(self) -> None:
+        from actingweb.peer_permissions import PeerPermissionStore
+
+        w = World()
+        now = datetime.now(UTC)
+        real = PeerPermissionStore.replace_permissions
+        raced: list[int] = []
+
+        def racing(store: Any, perms: Any, expected: Any) -> bool:
+            if not raced:
+                raced.append(1)
+                older = w.request(
+                    "POST",
+                    f"permissions/{w.a}",
+                    _permission_body(
+                        (now - timedelta(seconds=20)).isoformat(), "older"
+                    ),
+                    as_peer=w.a,
+                )
+                assert older.response.status_code == 204
+            return real(store, perms, expected)
+
+        with mock.patch.object(PeerPermissionStore, "replace_permissions", racing):
+            out = w.request(
+                "POST",
+                f"permissions/{w.a}",
+                _permission_body((now - timedelta(seconds=10)).isoformat(), "newer"),
+                as_peer=w.a,
+            )
+        assert out.response.status_code == 204
+        stored = w.stored_permissions(w.a)
+        assert stored and stored["properties"]["excluded_patterns"] == ["newer"]

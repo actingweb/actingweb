@@ -51,7 +51,9 @@ SECURITY
   ``GET`` returns ``secret`` and ``verification_token`` only to the creator,
   the trustee and the peer the row belongs to (an ``admin`` peer no longer
   receives another peer's secret), and no peer changes another peer's base
-  URI.
+  URI. An ``admin`` peer may still delete any peer's trust row, after which
+  it can request a new one under that peer's id: grant ``admin`` only to a
+  peer trusted as much as the owner (``docs/reference/security.rst``).
 - **A trust request for an existing peer replaced its trust row.** ``POST
   /<actor>/trust/<relationship>`` upserted the row from the request,
   unauthenticated: a re-sent request reset the owner's approval and could
@@ -62,20 +64,30 @@ SECURITY
   bearer, and then swaps only the secret (relationship, approval, base URI
   and grants stay; the answer follows the stored approval; no
   ``trust_request_received``); anything else answers 403 and changes
-  nothing. A creation request is verified only when the requester answers
-  with its token and its base URI's ``/meta`` names the peer id it claims. A
-  pending row (stored unverified and not yet approved) is replaced only by
-  a request that verifies; a re-pair never marks a row verified. A trust
-  modification writes only the attributes it changes, on a row that still
-  exists (DynamoDB saved the whole loaded row, so a request authenticated
-  just before a re-pair could write the old secret back). An initiator whose
-  re-pair answer is lost asks the peer with the new secret before giving
-  up.
+  nothing. A creation request is verified when the requester answers with
+  its token and its base URI's ``/meta`` names the peer id it claims; this
+  proves control of the base URI, not of the id, since the requester answers
+  both. **Behavior change:** with ``auto_accept_default_relationship``, only
+  a request that verified is approved automatically; any other waits for the
+  owner (202). A pending row (stored unverified and not yet approved) is
+  replaced only by a request that verifies; a re-pair never marks a row
+  verified. A trust modification writes only the attributes it changes, on
+  a row that still exists (DynamoDB saved the whole loaded row, so a request
+  authenticated just before a re-pair could write the old secret back). An
+  initiator whose re-pair answer is lost asks the peer with the new secret
+  before giving up; the per-peer trust ``GET`` answers the row's own peer
+  while the owner has not approved it (202 with the row, as the spec's
+  "pending"), where it answered 403.
   A new row is written conditionally, so a request racing another never
   replaces its row. The library's initiator re-pairs a peer it already
   trusts with its current secret, only toward the stored base URI, and
-  stores the new secret only after the peer accepts. **Check:** a peer that
-  moved is re-pointed by its owner (``PUT /trust/<rel>/<peer>`` with
+  stores the new secret only after the peer accepts. **Check:** an actor id
+  is self-asserted, so a host running its own server can still be verified
+  (and, with auto-accept, approved) under another actor's id, which then
+  blocks the real peer; its owner removes the row with ``DELETE
+  /trust/<rel>/<peer>?notify=false``, and an application that cannot
+  afford that leaves auto-accept off. A peer that moved is re-pointed by
+  its owner (``PUT /trust/<rel>/<peer>`` with
   ``baseuri``); when one side removed its row locally, the other side's
   owner removes its own before they pair again (migration guide).
 - **A subscriber could post callbacks to its publisher under its own
@@ -89,7 +101,10 @@ SECURITY
   nothing (no deletion of revoked data, no sync, no hook); a stored copy
   carries the receiver's clock in ``fetched_at`` and the sender's timestamp
   in ``extra_attributes["sender_timestamp"]``, so a copy fetched by query
-  never makes a slow sender's callback look older.
+  never makes a slow sender's callback look older. Two callbacks handled at
+  once never both win: the copy is stored with a conditional write over the
+  row the callback read, and the loser decides again against the winner's
+  (503 with ``Retry-After`` after five lost races in a row).
 - **Peer and client views listed every peer's subscriptions.**
   **Behavior change:** ``view.subscriptions.all_subscriptions``,
   ``outbound_subscriptions`` and ``inbound_subscriptions`` list the
@@ -1362,7 +1377,8 @@ ADDED
   copies for peers with no trust or stamped in the future, callback state
   for subscriptions the actor never made, and peer data for peers with no
   trust or subscription; ``--all-permissions`` also every live peer's copy
-  (a forged one for a trusted peer looks real). Strict reads; exit 0
+  (a forged one for a trusted peer looks real), each rebuilt at once by a
+  permission query to its peer. Strict reads; exit 0
   nothing found, 1 found or removed, 2 a store could not be read. See the
   maintenance guide.
 - **``DELETE /<actor>/trust/<relationship>/<peer>?notify=false``**, creator

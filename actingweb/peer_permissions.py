@@ -322,6 +322,51 @@ class PeerPermissionStore:
             )
             return False
 
+    def read_stored_permissions(
+        self, actor_id: str, peer_id: str
+    ) -> tuple[Any, PeerPermissions | None]:
+        """The stored row as written (the value ``replace_permissions`` must
+        be given back) and its parsed copy, read from the database, never
+        the cache; ``(None, None)`` when there is none. A fault raises
+        ``DbError``."""
+        bucket = attribute.Attributes(
+            actor_id=actor_id, bucket=PEER_PERMISSIONS_BUCKET, config=self.config
+        )
+        row = bucket.get_attr(name=f"{actor_id}:{peer_id}")
+        if not row or row.get("data") is None:
+            return None, None
+        raw = row["data"]
+        try:
+            parsed = json.loads(raw) if isinstance(raw, str) else raw
+            return raw, PeerPermissions.from_dict(dict(parsed))
+        except (TypeError, ValueError):
+            # Unreadable: replaced like any other row, compared as absent.
+            return raw, None
+
+    def replace_permissions(self, permissions: PeerPermissions, expected: Any) -> bool:
+        """Store ``permissions`` only if the stored row is still ``expected``
+        (as ``read_stored_permissions`` returned it; ``None``: no row). One
+        conditional write on both backends: False when another writer got
+        there first, so the caller reads again and decides again."""
+        if not permissions.validate():
+            return False
+        bucket = attribute.Attributes(
+            actor_id=permissions.actor_id,
+            bucket=PEER_PERMISSIONS_BUCKET,
+            config=self.config,
+        )
+        name = permissions.get_permissions_key()
+        data = json.dumps(permissions.to_dict())
+        if expected is None:
+            won = bucket.create_attr_if_absent(name=name, data=data)
+        else:
+            won = bucket.conditional_update_attr(
+                name=name, old_data=expected, new_data=data
+            )
+        if won:
+            self._cache[f"{permissions.actor_id}:{permissions.peer_id}"] = permissions
+        return bool(won)
+
     def get_permissions(self, actor_id: str, peer_id: str) -> PeerPermissions | None:
         """Get cached peer permissions."""
         cache_key = f"{actor_id}:{peer_id}"

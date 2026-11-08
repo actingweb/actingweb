@@ -171,9 +171,13 @@ What it lists, per actor (names compared whole; a peer id may contain
   build for a peer id; reported, never removed;
 - ``permissions-copy``, only with ``--all-permissions``: every other stored
   permission copy. A forged copy for a peer the actor trusts (a pre-3.16
-  unauthenticated callback with a current timestamp) looks like a real one;
-  each removed copy is rebuilt from the peer's next permission callback or
-  query.
+  unauthenticated callback with a current timestamp) looks like a real one.
+  With ``--apply`` the command rebuilds each removed copy at once by a
+  permission query to its peer and prints ``rebuilt`` or ``not rebuilt``.
+  Without a copy, the peer's next permission callback is taken for its first
+  and a pattern revoked in it deletes no stored peer data; for a peer listed
+  as ``not rebuilt``, run the query again once it answers (``fetch_peer_permissions``
+  and ``PeerPermissionStore.store_permissions``).
 
 ``remote-data`` covers data an application stored for a trusted peer through
 ``RemotePeerStore`` without a subscription the actor made to it: the library

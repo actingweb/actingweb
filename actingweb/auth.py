@@ -199,8 +199,10 @@ class Auth:
             db_trust = trust.Trust(
                 actor_id=self.actor.id, peerid=peer_id, config=self.config
             )
-            db_trust.modify(**modify_kwargs)  # type: ignore[arg-type]
-
+            if not db_trust.modify(**modify_kwargs):  # type: ignore[arg-type]
+                # The row was deleted during this request: nothing recorded.
+                logger.debug(f"Trust usage not recorded for {peer_id}: no row")
+                return
             trust_record["last_accessed"] = usage_time
             trust_record["last_connected_at"] = usage_time
             if "last_connected_via" in modify_kwargs:

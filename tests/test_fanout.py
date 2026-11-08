@@ -720,6 +720,32 @@ class TestFanOutManager:
             mock_client.post.assert_not_called()
             assert result.failed == 1
 
+    @pytest.mark.asyncio
+    async def test_a_trust_read_fault_is_reported_for_its_peer(self) -> None:
+        """Reverify-1, Issue 8: a fault reading the trust is a failed delivery
+        for that peer, not an anonymous exception."""
+        from actingweb.db.exceptions import DbError
+
+        self.mock_actor.trust.get_trust.side_effect = DbError("trust get", "a1")
+        subscriptions = [
+            {
+                "peerid": "peer1",
+                "subid": "sub1",
+                "callback_url": "https://peer1.example.com/callback",
+                "granularity": "high",
+            }
+        ]
+        with patch("httpx.AsyncClient") as mock_client_class:
+            mock_client = AsyncMock()
+            mock_client_class.return_value = mock_client
+            result = await self.manager.deliver_to_subscribers(
+                subscriptions, {"data": "test"}, "properties", 1
+            )
+            mock_client.post.assert_not_called()
+        assert result.failed == 1
+        assert result.results[0].peer_id == "peer1"
+        assert "trust read failed" in (result.results[0].error or "")
+
 
 class TestFanOutResult:
     """Tests for FanOutResult dataclass."""

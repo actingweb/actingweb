@@ -537,10 +537,14 @@ class TrustManager:
                         if client_name and normalized_desc == default_desc:
                             modify_kwargs["desc"] = f"OAuth2 client: {client_name}"
 
-                    db.modify(**modify_kwargs)
-                    logger.debug(
-                        f"Updated existing OAuth trust: peer_id={peer_id}, established_via={source}"
-                    )
+                    if db.modify(**modify_kwargs):
+                        logger.debug(
+                            f"Updated existing OAuth trust: peer_id={peer_id}, established_via={source}"
+                        )
+                    else:
+                        logger.warning(
+                            f"OAuth trust for {peer_id} was deleted while being updated"
+                        )
             except DbError:
                 raise
             except Exception as e:

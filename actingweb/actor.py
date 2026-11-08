@@ -2047,8 +2047,12 @@ class Actor:
         self, peerid: str, secret: str, status: int | None, body: Any, why: str
     ) -> dict[str, Any] | bool:
         """Finish a re-pair whose answer was lost, from the probe's result."""
-        if status == 200:
-            approved = isinstance(body, dict) and bool(body.get("approved"))
+        # 200 approved, 202 pending: either way the peer authenticated the
+        # new secret, so it holds it.
+        if status in (200, 202):
+            approved = (
+                isinstance(body, dict) and str(body.get("approved")).lower() == "true"
+            )
             logger.info(
                 f"Re-pairing with {peerid}: the answer was lost ({why}), but the "
                 "peer holds the new secret"
@@ -2058,9 +2062,10 @@ class Actor:
             )
         logger.warning(
             f"Re-pairing with {peerid}: no answer ({why}), and the peer did not "
-            "confirm the new secret; the existing trust is unchanged here. If "
-            "requests to the peer now answer 403, the peer accepted it: delete the "
-            "trust on both sides (?notify=false) and pair again"
+            f"confirm the new secret (probe: {status}); the existing trust is "
+            "unchanged here. If requests to the peer now answer 401 or 403 with "
+            "the existing secret, the peer accepted it: delete the trust on both "
+            "sides (?notify=false) and pair again"
         )
         return False
 
@@ -2079,7 +2084,7 @@ class Actor:
             probe = requests.get(url=url, headers=headers, timeout=(5, 10))
             status: int | None = probe.status_code
             try:
-                body: Any = probe.json() if status == 200 else None
+                body: Any = probe.json() if status in (200, 202) else None
             except ValueError:
                 body = None
         except Exception:  # folds DbError: peer HTTP only
@@ -2103,10 +2108,10 @@ class Actor:
                 probe = await client.get(url, headers=headers)
             status: int | None = probe.status_code
             try:
-                body: Any = probe.json() if status == 200 else None
+                body: Any = probe.json() if status in (200, 202) else None
             except ValueError:
                 body = None
-        except httpx.HTTPError:
+        except Exception:  # folds DbError: peer HTTP only (InvalidURL too)
             status, body = None, None
         return self._re_pair_probed(peerid, secret, status, body, why)
 
@@ -2233,13 +2238,23 @@ class Actor:
                 verified = False
         if verified and not self._base_uri_serves(baseuri, peerid):
             # The verification proves only that the requester controls the
-            # base URI it sent; the row is verified only if that base URI is
-            # the actor it claims to be (its /meta names the peer id).
+            # base URI it sent. Its /meta must also name the peer id, which
+            # catches a peer sending the wrong base URI; a hostile host
+            # answers its own /meta, so this proves nothing about the id.
             logger.warning(
                 f"Trust request for {peerid}: its base URI does not serve that "
                 "actor; stored as unverified"
             )
             verified = False
+        if approved and not verified:
+            # Auto-accept approves only a request that verified (owner,
+            # 2026-11-08): an approved row is never replaced, so an
+            # unverified one would block the real peer until the owner
+            # deletes it. It waits for the owner's approval instead.
+            logger.warning(
+                f"Trust request for {peerid} did not verify; not approved automatically"
+            )
+            approved = False
         new_trust = trust.Trust(actor_id=self.id, peerid=peerid, config=self.config)
         if existing:
             # A pending row: replaced only by a request that verified, in one
@@ -2287,9 +2302,11 @@ class Actor:
         return new_trust.get()
 
     def _base_uri_serves(self, baseuri: str, peerid: str) -> bool:
-        """Whether ``<baseuri>/meta`` names ``peerid`` as its id (one try)."""
+        """Whether ``<baseuri>/meta`` names ``peerid`` as its id. The
+        requester answers this itself: it catches a wrong base URI, not a
+        false id."""
         try:
-            res = self.get_peer_info(baseuri, max_retries=1)
+            res = self.get_peer_info(baseuri)
         except Exception:  # folds DbError: peer HTTP only
             return False
         if not res or not 200 <= int(res.get("last_response_code") or 0) < 300:

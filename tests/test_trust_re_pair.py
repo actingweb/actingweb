@@ -795,3 +795,106 @@ class TestALostAnswerIsProbed:
             )
         row = w.row()
         assert row["secret"] == new and row["peer_approved"] is False
+
+
+# ---------------------------------------------------------------------------
+# Verification of 2026-11-08 (reverify-1)
+# ---------------------------------------------------------------------------
+
+
+def _create(w: Receiver, peer: str, meta_id: str | None = None) -> AWWebObj:
+    with mock.patch(
+        "actingweb.actor.requests.get",
+        side_effect=_peer_answers(peer, meta_id=meta_id),
+    ):
+        return w.request(peer, _new_secret())
+
+
+class TestAutoAcceptNeedsAVerifiedRequest:
+    """Issue 1: auto-accept approves only a creation that verified (owner),
+    so an unverified squat stays pending and the real peer replaces it."""
+
+    def _auto(self) -> Receiver:
+        w = Receiver()
+        w.config.auto_accept_default_relationship = True
+        w.config.default_relationship = "friend"
+        return w
+
+    def test_a_verified_creation_is_approved(self) -> None:
+        w = self._auto()
+        peer = f"peer-v-{uuid.uuid4().hex[:8]}"
+        out = _create(w, peer)
+        assert out.response.status_code == 201
+        assert w.row(peer)["approved"] is True
+
+    def test_an_unverified_creation_waits_for_the_owner(self) -> None:
+        w = self._auto()
+        peer = f"peer-u-{uuid.uuid4().hex[:8]}"
+        out = _create(w, peer, meta_id="someone-else")
+        assert out.response.status_code == 202
+        row = w.row(peer)
+        assert row["approved"] is False and row["verified"] is False
+
+    def test_the_real_peer_then_replaces_the_squat(self) -> None:
+        w = self._auto()
+        peer = f"peer-s-{uuid.uuid4().hex[:8]}"
+        assert _create(w, peer, meta_id="the-squatter").response.status_code == 202
+        out = _create(w, peer)
+        assert out.response.status_code == 201
+        row = w.row(peer)
+        assert row["approved"] is True and row["verified"] is True
+
+
+class TestTheOwnPeerReadsItsPendingRow:
+    """Issue 3: the trust GET answers the row's own peer while the owner has
+    not approved it (the spec's "approved, pending"), so a lost re-pair
+    answer can be confirmed; another peer still gets 403."""
+
+    def _get(self, w: Receiver, bearer: str) -> AWWebObj:
+        webobj = AWWebObj(
+            url=f"https://test.example.com/{aid(w.a)}/trust/friend/{w.b}",
+            headers={"Authorization": f"Bearer {bearer}"},
+        )
+        TrustPeerHandler(webobj, w.config).get(aid(w.a), "friend", w.b)
+        return webobj
+
+    def test_the_own_peer_gets_the_status(self) -> None:
+        w = Receiver(approved=False)
+        out = self._get(w, w.secrets[w.b])
+        assert out.response.status_code == 202  # pending, as the creator sees it
+        assert json.loads(out.response.body)["approved"] is False
+
+    def test_another_peer_does_not(self) -> None:
+        w = Receiver(approved=False)
+        out = self._get(w, w.secrets[w.c])
+        assert out.response.status_code == 403
+
+    def test_a_lost_202_is_confirmed_by_the_probe(self) -> None:
+        w = Initiator()
+        new = _new_secret()
+        pending = mock.Mock(status_code=202, json=lambda: {"approved": False})
+        with (
+            mock.patch.object(w.b, "get_peer_info", return_value=w.peer_info),
+            mock.patch(
+                "actingweb.actor.requests.post", side_effect=ConnectionError("lost")
+            ),
+            mock.patch("actingweb.actor.requests.get", return_value=pending),
+        ):
+            assert w.b.create_reciprocal_trust(
+                url=w.url, secret=new, relationship="friend"
+            )
+        row = w.row()
+        assert row["secret"] == new and row["peer_approved"] is False
+
+
+class TestARefusedModifyKeepsTheCopy:
+    """Issue 6: a modify that finds the row gone leaves the object as it
+    was, not showing values that were never written."""
+
+    def test_the_local_copy_is_unchanged(self) -> None:
+        w = Receiver()
+        stale = Trust(actor_id=aid(w.a), peerid=w.b, config=w.config)
+        before = dict(stale.get() or {})
+        assert Trust(actor_id=aid(w.a), peerid=w.b, config=w.config).delete()
+        assert stale.modify(secret=_new_secret(), desc="never written") is False
+        assert stale.trust == before

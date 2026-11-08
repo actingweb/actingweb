@@ -328,6 +328,10 @@ class DbTrust:
             self.handle.update(actions=actions, condition=Trust.id.exists())
         except UpdateError as e:
             if e.cause_response_code == "ConditionalCheckFailedException":
+                # The row is gone: this handle keeps what is known, not what
+                # was never written.
+                self.handle.attribute_values.clear()
+                self.handle.attribute_values.update(before)
                 return False
             raise DbError("trust modify") from e
         except Exception as e:

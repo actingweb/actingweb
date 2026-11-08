@@ -1,6 +1,6 @@
 ---
 status: done
-verified: thoughts/verifications/2026-11-08-peer-authorisation-fixes.md
+verified: thoughts/verifications/2026-11-08-peer-authorisation-fixes-reverify-1.md
 ---
 
 # Implementation Plan: callers reach only what is theirs on `/callbacks`, `/permissions` and `/subscriptions`
@@ -220,6 +220,19 @@ its T6 (a 409 on a repeated trust request), which the guard here replaces.
 - [Updated 2026-11-08, iteration 2] **A verification binds the claimed id**
   (owner): a creation is verified only when the requester's base URI serves
   the claimed peer id (`/meta`).
+- [Updated 2026-11-08, iteration 11] **Auto-accept approves only a verified
+  request; the id stays self-asserted** (owner, option (a) of the
+  re-verification's Issue 1): the `/meta` check is answered by the requester,
+  so it catches a wrong base URI, not a false id. An unverified creation is
+  never approved automatically and stays pending, so the real peer's
+  verified request replaces it. A host running its own server can still
+  verify under another actor's id and, with auto-accept, be approved; that
+  row blocks the real peer until the owner deletes it. Documented as a
+  limitation (changelog, security reference, migration guide, spec note).
+- [Updated 2026-11-08, iteration 12] **An `admin` peer keeps DELETE on any
+  peer's trust row** (owner, re-verification Issue 2 accepted): with it, it
+  can re-create the row under that peer's id. Documented: grant `admin`
+  only to a peer trusted as much as the owner.
 - [Updated 2026-11-07] **One central peer binding, keyed on the call site**
   (owner). `check_authorisation` gains a keyword `path_peer`: when it is
   set and the caller is authenticated as a peer, the caller's peer id must
@@ -1910,3 +1923,144 @@ the docs build.
 
 **Rationale**: the iteration changed library code; gate 2 asks for the run
 before the PR.
+
+### 2026-11-08, after verification thoughts/verifications/2026-11-08-peer-authorisation-fixes-reverify-1.md
+
+#### 11. Auto-accept approves only a request that verified
+
+**Category**: Verification fix (Issue 1); Decision changed (owner, option (a))
+
+**What changed**: `create_verified_trust` stores an unverified creation
+unapproved whatever `approved` it was given (a WARNING says so); the
+creation answer follows the stored approval (`201`/`202`, parsed from the
+created row's string flags). `_base_uri_serves` uses `get_peer_info`'s
+default retries, and its docstring and the comment say it catches a wrong
+base URI, not a false id.
+
+**Files affected**:
+- `actingweb/actor.py` - `create_verified_trust`, `_base_uri_serves`
+- `actingweb/handlers/trust.py` - `TrustRelationshipHandler.post` status
+- `tests/test_trust_re_pair.py` - `TestAutoAcceptNeedsAVerifiedRequest`
+- `CHANGELOG.rst`, `docs/reference/security.rst`, `docs/migration/v3.16.rst`,
+  `docs/protocol/actingweb-spec.rst` - the limitation stated
+
+**Rationale**: the `/meta` check is answered by the squatter, and
+auto-accept approved a creation that never verified; an approved row is
+never replaced, so the real peer was blocked. An actor id is self-asserted;
+no check closes a squat by a host that verifies, which is now documented.
+
+#### 12. An `admin` peer's DELETE of another peer's row: accepted
+
+**Category**: Decision changed (owner, Issue 2 accepted)
+
+**What changed**: nothing in code. The security reference, the changelog
+and the migration guide say an `admin` peer can delete any peer's row and
+re-create it under that peer's id, and to grant `admin` accordingly.
+
+**Files affected**: `CHANGELOG.rst`, `docs/reference/security.rst`,
+`docs/migration/v3.16.rst`
+
+**Rationale**: owner decision; `admin` is the owner-equivalent peer.
+
+#### 13. A lost re-pair answer into a pending trust is confirmed
+
+**Category**: Verification fix (Issue 3)
+
+**What changed**: the per-peer trust `GET` answers the row's own peer while
+the row is unapproved (202 with the row, as the creator already got),
+where it answered 403; another peer still gets 403. The probe accepts 200
+or 202 (the peer authenticated the new secret either way) and sets
+`peer_approved` from the answer's `approved`, parsed as `"true"`. The
+warning names the probe's status and says 401 or 403 with the existing
+secret means the peer accepted. The async probe catches every exception, as
+the sync one does (an invalid stored URL raised `httpx.InvalidURL`).
+
+**Files affected**:
+- `actingweb/handlers/trust.py` - `TrustPeerHandler.get`
+- `actingweb/actor.py` - `_re_pair_probed`, `_re_pair_unknown`,
+  `_re_pair_unknown_async`
+- `tests/test_trust_re_pair.py` - `TestTheOwnPeerReadsItsPendingRow`
+
+**Rationale**: an unapproved trust answered the probe 403, so an accepted
+re-pair (202) whose answer was lost split the pairing. The spec's trust GET
+gives "status information about the relationship (ex. approved, pending
+etc)".
+
+#### 14. Concurrent permission callbacks: a conditional write
+
+**Category**: Verification fix (Issue 4)
+
+**What changed**: the permission branch reads the stored row from the
+database (`PeerPermissionStore.read_stored_permissions`), decides (older by
+the sender's clock: ignored), deletes revoked data, and stores with
+`replace_permissions`: `conditional_update_attr` over the row it read, or
+`create_attr_if_absent` when there was none. A callback that loses the
+race reads again and decides against the winner's row; after five lost
+races in a row it answers 503 with `Retry-After: 1`.
+
+**Files affected**:
+- `actingweb/peer_permissions.py` - `read_stored_permissions`,
+  `replace_permissions`
+- `actingweb/handlers/callbacks.py` - the permission branch,
+  `PERMISSION_STORE_ATTEMPTS`
+- `tests/test_peer_binding.py` - `TestConcurrentPermissionCallbacks`
+  (older loser ignored, newer loser stored; both fail without the change)
+
+**Rationale**: a grant and its revocation handled at once both read the
+same row, and the later write won whatever its timestamp, bringing revoked
+data back. A sync after the winner's revocation fetches from the granting
+peer, which answers with its current permissions, so it cannot restore
+revoked data.
+
+#### 15. `--all-permissions` rebuilds each copy it removes
+
+**Category**: Verification fix (Issue 5)
+
+**What changed**: after `prune --all-permissions --apply` removes a live
+peer's copy, the command queries that peer (`fetch_peer_permissions`) and
+stores the answer, printing `rebuilt` or `not rebuilt` with the reason.
+The help, the module docstring, the guide, the migration guide and the
+changelog's `ADDED` entry say so.
+
+**Files affected**:
+- `actingweb/maintenance/peer_state.py` - `rebuild_copies`
+- `docs/guides/database-maintenance.rst`
+- `tests/test_peer_state_command.py` - `TestAllPermissions`
+
+**Rationale**: without a copy the peer's next callback is taken for its
+first, and a pattern revoked in it deletes no stored data.
+
+#### 16. A refused trust modify keeps the object as it was
+
+**Category**: Verification fix (Issue 6)
+
+**What changed**: DynamoDB's and PostgreSQL's `DbTrust.modify` restore the
+handle when the row is gone (False), and `Trust.modify` restores its copy.
+`_record_trust_usage` records nothing when the row is gone; the OAuth
+trust update logs a WARNING instead of "Updated". Accepted, not changed: a
+modify whose values equal the stored ones returns True on DynamoDB without
+a request, while PostgreSQL's `UPDATE` reports a deleted row as False.
+
+**Files affected**:
+- `actingweb/db/dynamodb/trust.py`, `actingweb/db/postgresql/trust.py`,
+  `actingweb/trust.py` - `modify`
+- `actingweb/auth.py` - `_record_trust_usage`
+- `actingweb/interface/trust_manager.py` - the OAuth trust update
+- `tests/test_trust_re_pair.py` - `TestARefusedModifyKeepsTheCopy`
+
+**Rationale**: a modify on a deleted row reported values that were never
+written, and two callers took False for success.
+
+#### 17. `FanOutManager` reports a trust read fault for its peer
+
+**Category**: Verification fix (Issue 8)
+
+**What changed**: a `DbError` reading the trust is a failed delivery for
+that peer (`trust read failed`, logged at WARNING), not an anonymous
+exception from `gather`; the docstring says `callback_url` is ignored.
+
+**Files affected**: `actingweb/fanout.py` - `_deliver_single`;
+`tests/test_fanout.py` - `test_a_trust_read_fault_is_reported_for_its_peer`
+
+**Rationale**: the verification's low finding; Issue 7's remaining parts
+(default retries, the async probe's catch) are in iterations 11 and 13.

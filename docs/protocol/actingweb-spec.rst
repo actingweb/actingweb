@@ -1600,7 +1600,11 @@ approval (201 or 202). Otherwise B MUST answer 403 Forbidden and change
 nothing. B MUST treat a new relationship as verified only when the
 verification succeeds and the requesting actor's base URI serves its claimed
 id (its ``/meta`` ``id``). (A relationship B stored without verifying it, and has not
-approved, MAY be replaced by a request that verifies.)
+approved, MAY be replaced by a request that verifies.) B MUST NOT approve a
+relationship automatically unless it verified. A verification proves that
+the requesting actor controls its base URI, not that it is the actor whose
+id it claims: actor ids are self-asserted, and the requesting actor answers
+its own ``/meta``.
 
 If the requested actor wants to do a verification of the requesting
 actor, it MUST use baseuri, id, secret, and verify attributes to do a

@@ -466,7 +466,9 @@ class DbTrust:
             oauth_client_id: OAuth2 client ID
 
         Returns:
-            True on success, False only for missing arguments or handle
+            True on success; False for missing arguments or handle, or when
+            the row is gone (deleted meanwhile: not modified, not recreated,
+            and this handle keeps what it had)
 
         Raises:
             DbError: on a backend fault
@@ -474,6 +476,7 @@ class DbTrust:
         if not self.handle:
             logger.debug("Attempted modification of DbTrust without db handle")
             return False
+        before = dict(self.handle)
 
         actor_id = self.handle.get("id")
         peerid = self.handle.get("peerid")
@@ -618,7 +621,11 @@ class DbTrust:
                     updated = cur.rowcount
                 conn.commit()
             # A row deleted meanwhile is not modified (and not recreated).
-            return updated > 0
+            if updated > 0:
+                return True
+            self.handle.clear()
+            self.handle.update(before)
+            return False
 
         except Exception as e:
             raise DbError("trust modify") from e

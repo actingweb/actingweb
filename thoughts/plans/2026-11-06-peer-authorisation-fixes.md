@@ -1,6 +1,6 @@
 ---
 status: done
-verified: thoughts/verifications/2026-11-08-peer-authorisation-fixes-reverify-2.md
+verified: thoughts/verifications/2026-11-08-peer-authorisation-fixes-reverify-3.md
 ---
 
 # Implementation Plan: callers reach only what is theirs on `/callbacks`, `/permissions` and `/subscriptions`
@@ -242,6 +242,16 @@ its T6 (a 409 on a repeated trust request), which the guard here replaces.
   (owner, re-verification 2's Issue 8): `(3, 5)` s each, instead of
   `get_peer_info`'s three tries of `(5, 10)`, since an unauthenticated
   request chooses the host.
+- [New 2026-11-08, iteration 25] **One whole-branch review before the PR**
+  (owner, after re-verification 3): the last review of
+  `master...HEAD` as a whole ran at `63bed00`; three iterations since (about
+  680 lines in auth and the permission copy) were reviewed per delta, and
+  two of the last rounds found defects in older code next to the newest
+  fix. Once re-verification 3's issues are fixed, `/security-review`,
+  `/code-review` (high) and codex run once on the whole branch with no
+  earlier findings in the brief; their findings and this batch make the
+  next verification. A repository-wide `/cso` audit was judged more than
+  the question needs.
 - [Updated 2026-11-07] **One central peer binding, keyed on the call site**
   (owner). `check_authorisation` gains a keyword `path_peer`: when it is
   set and the caller is authenticated as a peer, the caller's peer id must
@@ -2225,3 +2235,111 @@ The CHANGELOG's SECURITY entry and the migration guide now state what holds
 for the stored copy (every writer conditional, the restore, the 503 and the
 resend, `store_permissions` reading the database and raising `DbError`),
 and the ADDED entry the per-copy rebuild.
+
+### 2026-11-08, after verification thoughts/verifications/2026-11-08-peer-authorisation-fixes-reverify-3.md
+
+Emm's suite on `dca966f` matched its `master` baseline on both backends
+(recorded in that verification).
+
+#### 25. Whether to audit: one whole-branch review, after this batch
+
+**Category**: Decision (owner)
+
+**What changed**: nothing in code. Evaluated whether the branch needs an
+audit (owner's request): the issue counts per round went 11, 8, 9, 7, the
+severities from takeovers to replica consistency, and the reviews since
+`63bed00` saw only their own delta. Decision recorded under Decisions Made.
+
+**Files affected**: this plan.
+
+**Rationale**: delta reviews stopped converging on the permission-copy
+path; a fresh read of the whole branch is cheaper than more rounds.
+
+#### 26. The restore follows the stored copy, on every exit
+
+**Category**: Verification fix (Issues 1 and 6)
+
+**What changed**: `_still_granted(permissions, patterns)` keeps only
+deleted patterns the final stored copy lists. The stored path filters by
+`peer_perms`, the ignored-as-older path by the row read, and the 503 exit
+(five lost races) re-reads the stored row and restores what it grants
+before answering. A `DbError` from the write leaves the read row stored, so
+the resend repeats the same revocation; nothing is restored there.
+
+**Files affected**:
+- `actingweb/handlers/callbacks.py` - `_still_granted`, the permission branch
+- `tests/test_peer_binding.py` -
+  `test_a_revocation_that_loses_to_another_revocation_restores_nothing`,
+  `test_the_503_exit_restores_what_the_stored_copy_grants`
+
+**Rationale**: the filter was the last diff, which re-fetched data a
+winning revocation had also removed, resting on the granting peer's cache.
+
+#### 27. The sync sender decides success by status
+
+**Category**: Verification fix (Issue 2)
+
+**What changed**: `_notify_peer` treats only a 2xx `last_response_code` as
+delivered and logs anything else at WARNING with the status.
+
+**Files affected**: `actingweb/trust_permissions.py`;
+`tests/test_trust_permissions_unit.py` (the give-up test now answers `{}`
+and expects the WARNING); `tests/test_peer_state_command.py` (the 204 test
+sets the status).
+
+**Rationale**: the receiver's 503 has no body, which the proxy returns as
+`{}`, so the final failure was logged at DEBUG as delivered.
+
+#### 28. A fault while the rebuild queries the peer is listed
+
+**Category**: Verification fix (Issue 3)
+
+**What changed**: `_rebuild_copy` wraps the query and the store in one
+`except DbError`: `not rebuilt ... store fault`.
+
+**Files affected**: `actingweb/maintenance/peer_state.py`;
+`tests/test_peer_state_command.py` -
+`test_a_fault_while_querying_the_peer_is_listed`
+
+**Rationale**: the query's strict trust read could raise after the copy was
+deleted, ending the command in a traceback.
+
+#### 29. A query copy keeps the last callback's sender timestamp
+
+**Category**: Verification fix (Issue 4)
+
+**What changed**: `store_permissions` copies the stored row's
+`sender_timestamp` into a copy that has none before the conditional write.
+
+**Files affected**: `actingweb/peer_permissions.py`;
+`actingweb/handlers/callbacks.py` (the ordering comment);
+`tests/test_peer_binding.py` -
+`test_a_query_copy_keeps_the_last_callbacks_timestamp`
+
+**Rationale**: after a query write, an older callback (a resend after a
+503) was accepted again.
+
+#### 30. The replacement WARNING follows the write
+
+**Category**: Verification fix (Issue 5)
+
+**What changed**: logged once the conditional write won ("replaced its
+pending row").
+
+**Files affected**: `actingweb/actor.py`; `tests/test_trust_re_pair.py` -
+`test_a_replacement_that_loses_is_not_logged_as_one`, the existing test's
+wording
+
+**Rationale**: a replacement that lost was logged as made.
+
+#### 31. The 503's causes and the restore's limits are documented
+
+**Category**: Verification fix (Issue 7)
+
+**What changed**: CHANGELOG and migration guide name a storage fault as a
+cause of the 503, say the restore is best effort and that a query copy keeps
+the sender timestamp, and the sync sender's WARNING.
+
+**Files affected**: `CHANGELOG.rst`, `docs/migration/v3.16.rst`
+
+**Rationale**: they named lost races only, and the restore as certain.

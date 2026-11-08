@@ -11,6 +11,8 @@ References:
 
 from typing import Any
 
+import pytest
+
 
 class TestTrustPermissionsPatternMatching:
     """Test pattern matching with wildcards."""
@@ -734,7 +736,12 @@ class TestThePermissionSenderResendsA503:
         assert bodies == [self.BODY, self.BODY]
         sleep.assert_called_once()
 
-    def test_the_sync_sender_gives_up_after_two_resends(self) -> None:
+    def test_the_sync_sender_gives_up_after_two_resends(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Reverify-3, Issue 2: the receiver's 503 has no body, which the
+        proxy returns as {}; the final failure is still a WARNING."""
+        import logging
         from unittest.mock import patch
 
         store = self._store()
@@ -742,13 +749,18 @@ class TestThePermissionSenderResendsA503:
             patch("actingweb.aw_proxy.AwProxy") as proxy_class,
             patch.object(store, "_build_callback_data", return_value=dict(self.BODY)),
             patch("actingweb.trust_permissions.time.sleep"),
+            caplog.at_level(logging.WARNING, logger="actingweb.trust_permissions"),
         ):
             proxy = proxy_class.return_value
             proxy.trust = {"baseuri": "https://p.example.test/p"}
             proxy.last_response_code = 503
-            proxy.create_resource.return_value = {"error": {"code": 503}}
+            proxy.create_resource.return_value = {}
             store._notify_peer(self._permissions())  # noqa: SLF001
         assert proxy.create_resource.call_count == 3
+        assert any(
+            "Failed to notify" in r.getMessage() and "status=503" in r.getMessage()
+            for r in caplog.records
+        )
 
     async def test_the_async_sender_resends_after_retry_after(self) -> None:
         from unittest.mock import AsyncMock, Mock, patch

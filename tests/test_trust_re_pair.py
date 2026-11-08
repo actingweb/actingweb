@@ -983,4 +983,24 @@ class TestTheMetaCheckAndThePendingReplacement:
         assert _create(w, peer, meta_id="the-squatter").response.status_code == 202
         with caplog.at_level(logging.WARNING, logger="actingweb.actor"):
             _create(w, peer)
-        assert any("replaces its pending row" in r.getMessage() for r in caplog.records)
+        assert any("replaced its pending row" in r.getMessage() for r in caplog.records)
+
+    def test_a_replacement_that_loses_is_not_logged_as_one(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Reverify-3, Issue 5: the WARNING follows the conditional write."""
+        import logging
+
+        from actingweb.trust import Trust as TrustRow
+
+        w = Receiver()
+        peer = f"peer-l-{uuid.uuid4().hex[:8]}"
+        assert _create(w, peer, meta_id="the-squatter").response.status_code == 202
+        with (
+            mock.patch.object(TrustRow, "create", return_value=False),
+            caplog.at_level(logging.WARNING, logger="actingweb.actor"),
+        ):
+            _create(w, peer)
+        messages = [r.getMessage() for r in caplog.records]
+        assert not any("its pending row (base URI" in m for m in messages)
+        assert any("a row was created meanwhile" in m for m in messages)

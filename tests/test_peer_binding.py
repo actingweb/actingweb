@@ -909,6 +909,116 @@ class TestEveryWriterOfTheCopyIsConditional:
         stored = w.stored_permissions(w.a)
         assert stored and stored["properties"]["patterns"] == ["p/*"]
 
+    def test_a_revocation_that_loses_to_another_revocation_restores_nothing(
+        self,
+    ) -> None:
+        """Reverify-3, Issue 1: what is restored is what the stored copy
+        grants, not what the last diff happens not to revoke."""
+        from actingweb.peer_permissions import PeerPermissionStore
+
+        w = World()
+        w.config.auto_delete_on_revocation = True  # type: ignore[attr-defined]
+        now = datetime.now(UTC)
+
+        def at(seconds: int) -> str:
+            return (now - timedelta(seconds=seconds)).isoformat()
+
+        first = w.request(
+            "POST", f"permissions/{w.a}", _grant_body(at(30), ["p/*"]), as_peer=w.a
+        )
+        assert first.response.status_code == 204
+        real = PeerPermissionStore.replace_permissions
+        raced: list[int] = []
+
+        def racing(store: Any, perms: Any, expected: Any) -> bool:
+            if not raced:
+                raced.append(1)
+                # Another worker stores the peer's earlier revocation of P.
+                other = w.request(
+                    "POST", f"permissions/{w.a}", _grant_body(at(20), []), as_peer=w.a
+                )
+                assert other.response.status_code == 204
+            return real(store, perms, expected)
+
+        with (
+            mock.patch.object(PeerPermissionStore, "replace_permissions", racing),
+            mock.patch.object(CallbacksHandler, "_delete_revoked_peer_data"),
+            mock.patch.object(
+                CallbacksHandler, "_incremental_sync_granted_properties"
+            ) as sync,
+        ):
+            out = w.request(
+                "POST", f"permissions/{w.a}", _grant_body(at(10), []), as_peer=w.a
+            )
+        assert out.response.status_code == 204
+        sync.assert_not_called()
+        stored = w.stored_permissions(w.a)
+        assert stored and stored["properties"]["patterns"] == []
+
+    def test_the_503_exit_restores_what_the_stored_copy_grants(self) -> None:
+        """Reverify-3, Issue 6: a revocation that never wins leaves the copy
+        granting P; what it deleted of P is fetched again."""
+        from actingweb.peer_permissions import PeerPermissionStore
+
+        w = World()
+        w.config.auto_delete_on_revocation = True  # type: ignore[attr-defined]
+        now = datetime.now(UTC)
+        first = w.request(
+            "POST",
+            f"permissions/{w.a}",
+            _grant_body((now - timedelta(seconds=30)).isoformat(), ["p/*"]),
+            as_peer=w.a,
+        )
+        assert first.response.status_code == 204
+        with (
+            mock.patch.object(
+                PeerPermissionStore, "replace_permissions", return_value=False
+            ),
+            mock.patch.object(CallbacksHandler, "_delete_revoked_peer_data"),
+            mock.patch.object(
+                CallbacksHandler, "_incremental_sync_granted_properties"
+            ) as sync,
+        ):
+            out = w.request(
+                "POST",
+                f"permissions/{w.a}",
+                _grant_body((now - timedelta(seconds=10)).isoformat(), []),
+                as_peer=w.a,
+            )
+        assert out.response.status_code == 503
+        assert sync.call_args.kwargs["granted_patterns"] == ["p/*"]
+
+    def test_a_query_copy_keeps_the_last_callbacks_timestamp(self) -> None:
+        """Reverify-3, Issue 4: after a query write, an older callback (a
+        resend after a 503) is still recognised as older."""
+        from actingweb.peer_permissions import PeerPermissions, PeerPermissionStore
+
+        w = World()
+        now = datetime.now(UTC)
+        newer = w.request(
+            "POST",
+            f"permissions/{w.a}",
+            _grant_body((now - timedelta(seconds=10)).isoformat(), ["new/*"]),
+            as_peer=w.a,
+        )
+        assert newer.response.status_code == 204
+        queried = PeerPermissions(
+            actor_id=aid(w.b),
+            peer_id=w.a,
+            properties={"patterns": ["new/*"], "operations": ["read"]},
+            fetched_at=datetime.now(UTC).isoformat(),
+        )
+        assert PeerPermissionStore(w.config).store_permissions(queried) is True
+        resent = w.request(
+            "POST",
+            f"permissions/{w.a}",
+            _grant_body((now - timedelta(seconds=20)).isoformat(), ["old/*"]),
+            as_peer=w.a,
+        )
+        assert resent.response.status_code == 204
+        stored = w.stored_permissions(w.a)
+        assert stored and stored["properties"]["patterns"] == ["new/*"]
+
     def test_a_query_older_than_the_stored_copy_is_not_stored(self) -> None:
         from actingweb.peer_permissions import PeerPermissions, PeerPermissionStore
 

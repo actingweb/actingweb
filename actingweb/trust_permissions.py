@@ -337,15 +337,18 @@ class TrustPermissionStore:
                     params=callback_data,
                 )
 
-            # A 204 answers with no body ({}): that is a success too.
-            if response is not None and "error" not in response:
+            # Decided by the status: a 204 answers with no body ({}), and so
+            # does a 503 whose body does not parse.
+            code = proxy.last_response_code
+            if response is not None and isinstance(code, int) and 200 <= code < 300:
                 logger.debug(
                     f"Successfully notified peer {peer_id} of permission change "
                     f"from actor {actor_id}"
                 )
             else:
                 logger.warning(
-                    f"Failed to notify peer {peer_id} from actor {actor_id}: {response}"
+                    f"Failed to notify peer {peer_id} from actor {actor_id}: "
+                    f"status={code} {response}"
                 )
 
         except Exception as e:  # folds DbError: notify after the store

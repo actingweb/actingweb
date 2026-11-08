@@ -63,6 +63,16 @@ def _has_wildcard(pattern: str) -> bool:
     return glob_has_wildcard(pattern) or "\\" in pattern
 
 
+def _still_granted(permissions: Any, patterns: list[str]) -> list[str]:
+    """The ``patterns`` that ``permissions`` (a stored copy, or None) still
+    grants, compared as ``detect_permission_changes`` compares them: by the
+    property patterns it lists."""
+    if not patterns or permissions is None:
+        return []
+    granted = set((getattr(permissions, "properties", None) or {}).get("patterns", []))
+    return list(dict.fromkeys(p for p in patterns if p in granted))
+
+
 class CallbacksHandler(base_handler.BaseHandler):
     """``/<actor>/callbacks/<name>``.
 
@@ -375,8 +385,8 @@ class CallbacksHandler(base_handler.BaseHandler):
                 # the one read: two callbacks handled at once (a grant and its
                 # revocation, say) never both win, and the loser decides again
                 # against the winner's row. What a losing attempt deleted and
-                # the outcome no longer revokes is fetched again from the
-                # granting peer, which answers by its current permissions.
+                # the copy finally stored still grants is fetched again from
+                # the granting peer (best effort; a failure is logged).
                 deleted: list[str] = []
                 for _attempt in range(PERMISSION_STORE_ATTEMPTS):
                     expected, old_permissions = store.read_stored_permissions(
@@ -386,9 +396,9 @@ class CallbacksHandler(base_handler.BaseHandler):
                     # A callback older, by the sender's clock, than the
                     # sender's last stored callback changes nothing: no
                     # deletion of revoked data, no sync, no hook. Only
-                    # callbacks are compared, each by its sender's own clock:
-                    # a copy fetched by query carries none, so a slow sender's
-                    # next callback is never taken for older.
+                    # callbacks are compared, each by its sender's own clock
+                    # (a copy fetched by query keeps the last callback's), so
+                    # a slow sender's next callback is never taken for older.
                     previous = (
                         (old_permissions.extra_attributes or {}).get(
                             SENDER_TIMESTAMP_KEY
@@ -406,7 +416,10 @@ class CallbacksHandler(base_handler.BaseHandler):
                             f"older than its last one ({current} < {previous})"
                         )
                         self._sync_permitted_patterns(
-                            myself, actor_interface, granting_actor_id, deleted
+                            myself,
+                            actor_interface,
+                            granting_actor_id,
+                            _still_granted(old_permissions, deleted),
                         )
                         self.response.set_status(204, "No Content")
                         return
@@ -432,10 +445,20 @@ class CallbacksHandler(base_handler.BaseHandler):
                     if success:
                         break
                 else:
-                    # A fault raises DbError in replace_permissions; this is
-                    # only concurrent writers winning every time. The revoked
-                    # data stays deleted: the sender resends (503) and the
-                    # resend decides again.
+                    # Concurrent writers won every time (a fault raises
+                    # DbError in replace_permissions, with the row read still
+                    # stored, so the resend repeats this revocation). The
+                    # sender resends (503) and decides again; what was deleted
+                    # and the copy now stored grants is fetched meanwhile.
+                    _, stored_now = store.read_stored_permissions(
+                        actor_id, granting_actor_id
+                    )
+                    self._sync_permitted_patterns(
+                        myself,
+                        actor_interface,
+                        granting_actor_id,
+                        _still_granted(stored_now, deleted),
+                    )
                     logger.warning(
                         f"A permission callback from {granting_actor_id} lost "
                         f"{PERMISSION_STORE_ATTEMPTS} concurrent writes in a row; "
@@ -452,14 +475,13 @@ class CallbacksHandler(base_handler.BaseHandler):
                 )
 
                 # Fetch what was newly granted, and what an earlier, losing
-                # attempt deleted that the stored permissions no longer
-                # revoke, with an incremental sync (only those patterns).
-                final_revoked = set(permission_changes.get("revoked_patterns", []))
+                # attempt deleted that the stored copy grants, with an
+                # incremental sync (only those patterns).
                 to_sync = list(
                     dict.fromkeys(
                         [
                             *permission_changes.get("granted_patterns", []),
-                            *(p for p in deleted if p not in final_revoked),
+                            *_still_granted(peer_perms, deleted),
                         ]
                     )
                 )

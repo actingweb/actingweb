@@ -11,7 +11,7 @@ PeerPermissions stores what PEERS grant to us (the cached received permissions).
 
 import json
 import logging
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Any
 
@@ -300,7 +300,26 @@ class PeerPermissionStore:
                     f"{permissions.fetched_at} < {stored.fetched_at}"
                 )
                 return False
-            if self.replace_permissions(permissions, expected):
+            # Keep the last callback's sender timestamp: a query carries
+            # none, and without it an older callback (a resend after a 503)
+            # would no longer be recognised as older.
+            to_store = permissions
+            last = (
+                (stored.extra_attributes or {}).get(SENDER_TIMESTAMP_KEY)
+                if stored
+                else None
+            )
+            if last and SENDER_TIMESTAMP_KEY not in (
+                permissions.extra_attributes or {}
+            ):
+                to_store = replace(
+                    permissions,
+                    extra_attributes={
+                        **(permissions.extra_attributes or {}),
+                        SENDER_TIMESTAMP_KEY: last,
+                    },
+                )
+            if self.replace_permissions(to_store, expected):
                 logger.debug(
                     f"Stored peer permissions: {key}, "
                     f"has_properties={permissions.properties is not None}"

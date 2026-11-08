@@ -106,12 +106,15 @@ SECURITY
   read, so two writers handled at once never both win: a losing callback
   decides again against the winner's row, and a query result older (by
   ``fetched_at``, stamped before its fetch began) than the stored copy is
-  not stored. Peer data a losing callback deleted and the stored
-  permissions no longer revoke is fetched again from the granting peer.
-  **Behavior change:** after five lost races in a row a callback answers
-  503 with ``Retry-After``, and the library's sender resends a 503 up to
-  twice with the same body (``Retry-After`` honoured up to 2 seconds; the
-  synchronous sender waits 1 second); a failed permission query no longer
+  not stored; a copy stored from a query keeps the last callback's sender
+  timestamp, so an older callback stays older. Peer data a losing callback
+  deleted and the stored copy grants is fetched again from the granting
+  peer (best effort; a failure is logged).
+  **Behavior change:** after five lost races in a row, or on a storage
+  fault, a callback answers 503 with ``Retry-After``, and the library's
+  sender resends a 503 up to twice with the same body (``Retry-After``
+  honoured up to 2 seconds; the synchronous sender waits 1 second, and
+  logs a final failure at WARNING); a failed permission query no longer
   replaces the stored copy. ``PeerPermissionStore.store_permissions``
   compares against the database, not the process's cache, and raises
   ``DbError`` on a fault.

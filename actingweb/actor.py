@@ -2278,11 +2278,6 @@ class Actor:
                     "exists and the request did not verify"
                 )
                 return False
-            logger.warning(
-                f"Trust request for {peerid} replaces its pending row (base URI "
-                f"{existing.get('baseuri')} -> {baseuri}); the previous requester's "
-                "secret no longer works here"
-            )
             created = new_trust.create(
                 baseuri=baseuri,
                 secret=secret or "",
@@ -2316,6 +2311,13 @@ class Actor:
                 "meanwhile"
             )
             return False
+        if existing:
+            # Logged once the conditional write won, not before it.
+            logger.warning(
+                f"Trust request for {peerid} replaced its pending row (base URI "
+                f"{existing.get('baseuri')} -> {baseuri}); the previous requester's "
+                "secret no longer works here"
+            )
         return new_trust.get()
 
     def _base_uri_serves(self, baseuri: str, peerid: str) -> bool:

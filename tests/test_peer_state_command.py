@@ -249,6 +249,7 @@ class TestThePermissionSenderLogsSuccess:
         try:
             proxy.return_value.trust = {"baseuri": "https://p.example.test/p"}
             proxy.return_value.create_resource.return_value = {}
+            proxy.return_value.last_response_code = 204
             with caplog.at_level(logging.WARNING, logger="actingweb.trust_permissions"):
                 store._notify_peer(  # noqa: SLF001
                     TrustPermissions(actor_id="a", peer_id="p", trust_type="friend")
@@ -317,6 +318,23 @@ class TestAllPermissions:
                 assert lines[i - 1].endswith(f"{w.id}:{peer}")
         assert f"rebuilt\t{w.id}\t{w.live_hex}" in out
         assert w.permission_names() == {f"{w.id}:{w.live}", f"{w.id}:{w.live_hex}"}
+
+    def test_a_fault_while_querying_the_peer_is_listed(
+        self, config: Any, capsys: Any
+    ) -> None:
+        """Reverify-3, Issue 3: the query reads the trust row strictly; a
+        fault there is a 'not rebuilt' line, not a traceback."""
+        from actingweb.db.exceptions import DbError
+
+        w = World(config)
+        with patch(
+            "actingweb.peer_permissions.fetch_peer_permissions",
+            side_effect=DbError("trust read", w.id),
+        ):
+            code, out = _run(capsys, "prune", w.id, "--all-permissions", "--apply")
+        assert code == 1
+        assert f"not rebuilt\t{w.id}\t{w.live}\tstore fault" in out
+        assert f"not rebuilt\t{w.id}\t{w.live_hex}\tstore fault" in out
 
     def test_a_removed_copy_is_rebuilt_from_the_peer(
         self, config: Any, capsys: Any

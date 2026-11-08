@@ -1321,7 +1321,8 @@ ahead of the receiver's clock (400 beyond, and for one that does not
 parse): check the sender's clock if you see ``Refused a permission
 callback``. A stored permission copy is written conditionally on the row
 read, by a callback and by a permission query alike; a callback that keeps
-losing to concurrent writers answers 503 with ``Retry-After``, and the
+losing to concurrent writers, or meets a storage fault, answers 503 with
+``Retry-After``, and the
 library's sender resends a 503 up to twice with the same body (a sender of
 your own should do the same). ``PeerPermissionStore.store_permissions``
 compares ``fetched_at`` with the stored row, not the process's cache, and

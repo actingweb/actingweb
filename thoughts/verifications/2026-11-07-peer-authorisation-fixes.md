@@ -202,3 +202,27 @@ disposition (folded in their own commit):
 - `peer_approved` after a 202, a different relationship (refused before
   sending; `WT4` re-recorded), the half-finished re-pair's log: fixed.
 - Recorded: `trust_initiated` runs at the initiator for a re-pair.
+
+## Phase 4: `actingweb-peer-state`
+
+### Outside voice on the Phase 4 commit and the Phase 3 fold
+
+codex and a fresh-context reviewer, on `3d0ae38..7254b1b`:
+
+- **[critical]** A squatter could re-pair its own unverified row with the
+  secret it chose and have it marked verified; **[high]** a verifying
+  request could replace an approved (live) unverified row, since
+  verification proves only control of the requester's base URI; **[high]**
+  the replacement was an unconditional write. Owner decision: only a
+  pending row (neither verified nor approved) is replaceable, by a
+  conditional write on both backends with its grants cleared afterwards; a
+  re-pair never marks a row verified. Tested on both backends: a squatter's
+  re-pair leaves its row unverified and the real peer replaces it; an
+  approved unverified row is refused (no verification sent); the
+  conditional write refuses a row no longer pending.
+- `report` exited 1 for ever on a `remote-unknown` bucket it never removes:
+  only removable rows count now.
+- Checked with nothing found: the DynamoDB condition on the composite key;
+  `cur.rowcount` for `ON CONFLICT DO NOTHING`; whole-name comparisons with
+  `:` in peer ids; the callback-state names; a `validate_peer_id=False`
+  bucket is never removed; the consumer only reads `RemotePeerStore`.

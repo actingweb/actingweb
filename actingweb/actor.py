@@ -2075,17 +2075,18 @@ class Actor:
             # Both come from the requesting peer and reach the owner's UI.
             logger.warning("Refused a trust request with an invalid peer id or baseuri")
             return False
-        # A creation request never replaces a verified row: that peer
-        # re-pairs with ``replace_trust_secret`` (proving its current
-        # secret). An unverified row (never proven: anyone may have created
-        # it) is replaced only by a request that verifies (owner, 2026-11-08).
+        # A creation request never replaces a verified or approved row: that
+        # peer re-pairs with ``replace_trust_secret`` (proving its current
+        # secret). A pending row (neither verified nor approved: a request
+        # nobody proved or accepted) is replaced only by a request that
+        # verifies (owner, 2026-11-08).
         existing = trust.Trust(
             actor_id=self.id, peerid=peerid, config=self.config
         ).get()
-        if existing and existing.get("verified"):
+        if existing and (existing.get("verified") or existing.get("approved")):
             logger.warning(
-                f"Refused a trust creation request for {peerid}: a verified trust "
-                "row exists"
+                f"Refused a trust creation request for {peerid}: a verified or "
+                "approved trust row exists"
             )
             return False
         requrl = baseuri + "/trust/" + relationship + "/" + self.id
@@ -2142,19 +2143,15 @@ class Actor:
                 verified = False
         new_trust = trust.Trust(actor_id=self.id, peerid=peerid, config=self.config)
         if existing:
-            # An unverified row: replaced only by a request that verified.
+            # A pending row: replaced only by a request that verified, in one
+            # conditional write (it must still be pending), its custom
+            # permissions cleared after the write wins.
             if not verified:
                 logger.warning(
-                    f"Refused a trust creation request for {peerid}: an unverified "
-                    "row exists and the request did not verify"
+                    f"Refused a trust creation request for {peerid}: a pending row "
+                    "exists and the request did not verify"
                 )
                 return False
-            from .trust_permissions import get_trust_permission_store
-
-            if self.config and not get_trust_permission_store(
-                self.config
-            ).delete_permissions(self.id or "", peerid):
-                raise DbError("trust permissions delete", self.id)
             created = new_trust.create(
                 baseuri=baseuri,
                 secret=secret or "",
@@ -2165,7 +2162,7 @@ class Actor:
                 verified=verified,
                 desc=desc,
                 established_via="trust",
-                known_absent=True,
+                only_if_pending=True,
             )
         else:
             # One conditional write: a row created since the read above (a
@@ -2197,8 +2194,8 @@ class Actor:
 
         The caller has authenticated the request as ``peerid`` with the
         trust's current secret (``handlers/trust.py``). Only the secret
-        changes, with a fresh verification token, ``verified`` and
-        ``peer_approved``; the relationship, ``approved``, base URI,
+        changes, with a fresh verification token and ``peer_approved``
+        (``verified`` stays as it was); the relationship, ``approved``, base URI,
         description, creation time and grants stay. Returns the updated row,
         or None and the reason it was refused (the row is then unchanged):
         a different relationship (delete and pair again), no new secret, or
@@ -2219,7 +2216,8 @@ class Actor:
         if not current.modify(
             secret=secret,
             verification_token=self.config.new_token() if self.config else "",
-            verified=True,
+            # ``verified`` stays as it was: proving a secret the requester
+            # may have chosen itself (a pending row) is not a verification.
             peer_approved=True,
         ):
             return None, "the row was not modified"

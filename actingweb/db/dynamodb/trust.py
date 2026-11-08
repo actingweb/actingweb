@@ -347,6 +347,7 @@ class DbTrust:
         capabilities_fetched_at=None,
         *,
         only_if_absent=False,
+        only_if_pending=False,
     ):
         """Create a new trust (an upsert; ``only_if_absent`` writes only when
         no row exists for the actor and peer, and answers False when one
@@ -427,10 +428,15 @@ class DbTrust:
         try:
             if only_if_absent:
                 self.handle.save(condition=Trust.id.does_not_exist())
+            elif only_if_pending:
+                self.handle.save(
+                    condition=Trust.id.does_not_exist()
+                    | ((Trust.verified == False) & (Trust.approved == False))  # noqa: E712
+                )
             else:
                 self.handle.save()
         except PutError as e:
-            if only_if_absent and e.cause_response_code == (
+            if (only_if_absent or only_if_pending) and e.cause_response_code == (
                 "ConditionalCheckFailedException"
             ):
                 return False

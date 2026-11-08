@@ -13,8 +13,9 @@ subscription callback or sync.
 Subcommands (both required to name one; dry run unless ``--apply``):
 
 ``report [ACTOR_ID]``
-    List, per actor, every row of the kinds below. Exit 0 when nothing is
-    found, 1 when something is, 2 when a store could not be read.
+    List, per actor, every row of the kinds below. Exit 0 when nothing
+    removable is found (``remote-unknown`` rows are information), 1 when
+    something is, 2 when a store could not be read.
 ``prune [ACTOR_ID] [--apply]``
     The same rows; with ``--apply`` they are deleted. Exit 0 when nothing is
     found, 1 when rows were found (dry run) or removed, 2 when a store could
@@ -281,7 +282,8 @@ def _print(findings: list[Finding]) -> None:
 def cmd_report(args: argparse.Namespace) -> int:
     findings = scan(make_config(), args.actor_id, RateLimiter(args.rps))
     _print(findings)
-    return 1 if findings else 0
+    # Only what prune would remove counts: an unknown bucket is information.
+    return 1 if any(f.prunable for f in findings) else 0
 
 
 def cmd_prune(args: argparse.Namespace) -> int:
@@ -289,7 +291,7 @@ def cmd_prune(args: argparse.Namespace) -> int:
     limiter = RateLimiter(args.rps)
     findings = scan(config, args.actor_id, limiter)
     _print(findings)
-    if not findings:
+    if not any(f.prunable for f in findings):
         return 0
     if not args.apply:
         count = sum(1 for f in findings if f.prunable)

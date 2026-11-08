@@ -245,6 +245,7 @@ class DbTrust:
         capabilities_fetched_at: str | datetime | None = None,
         *,
         only_if_absent: bool = False,
+        only_if_pending: bool = False,
     ) -> bool:
         """
         Create a new trust.
@@ -312,11 +313,16 @@ class DbTrust:
                 with conn.cursor() as cur:
                     # Use upsert to match DynamoDB behavior (PutItem overwrites);
                     # only_if_absent keeps an existing row and reports it.
-                    conflict = (
-                        "ON CONFLICT (id, peerid) DO NOTHING"
-                        if only_if_absent
-                        else _TRUST_UPSERT
-                    )
+                    if only_if_absent:
+                        conflict = "ON CONFLICT (id, peerid) DO NOTHING"
+                    elif only_if_pending:
+                        conflict = (
+                            _TRUST_UPSERT
+                            + " WHERE trusts.verified = false"
+                            + " AND trusts.approved = false"
+                        )
+                    else:
+                        conflict = _TRUST_UPSERT
                     cur.execute(
                         """
                         INSERT INTO trusts (
@@ -359,7 +365,7 @@ class DbTrust:
                     )
                     inserted = cur.rowcount
                 conn.commit()
-            if only_if_absent and inserted == 0:
+            if (only_if_absent or only_if_pending) and inserted == 0:
                 return False
 
             # Build handle

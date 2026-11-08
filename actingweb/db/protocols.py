@@ -813,6 +813,7 @@ class DbTrustProtocol(Protocol):
         capabilities_fetched_at: str | datetime | None = None,
         *,
         only_if_absent: bool = False,
+        only_if_pending: bool = False,
     ) -> bool:
         """
         Create new trust.
@@ -823,6 +824,8 @@ class DbTrustProtocol(Protocol):
 
         ``only_if_absent``: write only when no row exists for (actor, peer);
         False when one does (a creation request never replaces a row).
+        ``only_if_pending``: write only when no row exists or the existing
+        one is neither verified nor approved; False otherwise.
         """
         ...
 

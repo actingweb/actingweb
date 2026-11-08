@@ -437,9 +437,9 @@ class TrustRelationshipHandler(base_handler.BaseHandler):
             self.response.set_status(400, "Invalid id or baseuri")
             return
         # A peer that already has a row re-pairs: a credential swap, never a
-        # replacement of the row (read once here). An unverified row (never
-        # proven) is left to the creation path, which replaces it only with
-        # a request that verifies.
+        # replacement of the row (read once here). A pending row (neither
+        # verified nor approved) is left to the creation path, which replaces
+        # it only with a request that verifies.
         existing = myself.get_trust_relationship(peerid=peerid)
         acl = getattr(auth_result.auth_obj, "acl", None)
         proven = (
@@ -447,7 +447,9 @@ class TrustRelationshipHandler(base_handler.BaseHandler):
             and bool(acl.get("authenticated"))
             and acl.get("peerid") == peerid
         )
-        if existing and (proven or existing.get("verified")):
+        if existing and (
+            proven or existing.get("verified") or existing.get("approved")
+        ):
             self._re_pair(myself, auth_result, peerid, relationship, secret)
             return
         headers = getattr(self.request, "headers", None) or {}

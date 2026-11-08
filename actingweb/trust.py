@@ -407,6 +407,7 @@ class Trust:
         *,
         known_absent: bool = False,
         only_if_absent: bool = False,
+        only_if_pending: bool = False,
     ) -> bool:
         """Create a new trust relationship.
 
@@ -418,7 +419,11 @@ class Trust:
         conditional write; False when one does (a creation request never
         replaces a row, even one created since the caller's read). Stale
         custom permissions are cleared after the write succeeds, so a lost
-        race never touches the winner's."""
+        race never touches the winner's.
+
+        ``only_if_pending``: the same, but the write also replaces a row that
+        is neither verified nor approved (a pending request nobody proved or
+        accepted); a lost condition answers False."""
         self.trust = {"baseuri": baseuri, "type": peer_type}
         if not relationship or len(relationship) == 0:
             self.trust["relationship"] = (
@@ -456,7 +461,7 @@ class Trust:
             )
         if not self.handle:
             return False
-        if only_if_absent:
+        if only_if_absent or only_if_pending:
             if not self._create_row(
                 approved,
                 verified,
@@ -466,7 +471,8 @@ class Trust:
                 created_at,
                 last_accessed,
                 last_connected_via,
-                only_if_absent=True,
+                only_if_absent=only_if_absent,
+                only_if_pending=only_if_pending and not only_if_absent,
             ):
                 return False
             if self.config and self.actor_id and self.peerid:
@@ -521,6 +527,7 @@ class Trust:
         last_connected_via: str | None,
         *,
         only_if_absent: bool = False,
+        only_if_pending: bool = False,
     ) -> bool:
         assert self.handle is not None and self.trust is not None
         return self.handle.create(
@@ -541,6 +548,7 @@ class Trust:
             last_accessed=last_accessed,
             last_connected_via=last_connected_via,
             only_if_absent=only_if_absent,
+            only_if_pending=only_if_pending,
         )
 
     def __init__(

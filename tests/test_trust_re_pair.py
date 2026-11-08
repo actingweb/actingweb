@@ -571,3 +571,68 @@ class TestTheConditionalCreate:
             only_if_absent=True,
         )
         assert w.row(peer)["baseuri"] == "https://n.example.test/n"
+
+
+class TestOnlyAPendingRowIsReplaceable:
+    """The outside voice on Phase 4 and the owner's narrowed rule: a
+    verifying request replaces only a row that is neither verified nor
+    approved, and a re-pair never marks a row verified."""
+
+    def _pending(self, w: Receiver, *, approved: bool = False) -> tuple[str, str]:
+        peer = f"peer-p-{uuid.uuid4().hex[:8]}"
+        secret = uuid.uuid4().hex
+        assert Trust(actor_id=aid(w.a), peerid=peer, config=w.config).create(
+            baseuri="https://squatter.example.test/x",
+            peer_type="urn:test",
+            relationship="friend",
+            secret=secret,
+            verified=False,
+            approved=approved,
+        )
+        return peer, secret
+
+    def test_a_squatter_cannot_promote_its_own_row(self) -> None:
+        w = Receiver()
+        peer, secret = self._pending(w)
+        out = w.request(peer, _new_secret(), bearer=secret)
+        assert out.response.status_code in (201, 202)
+        assert w.row(peer)["verified"] is False
+        # The real peer's verifying request still replaces it.
+        verified = mock.Mock(
+            status_code=200, content=b'{"verification_token": "whatever"}'
+        )
+        with mock.patch("actingweb.actor.requests.get", return_value=verified):
+            out = w.request(peer, _new_secret())
+        assert out.response.status_code in (201, 202)
+        row = w.row(peer)
+        assert row["verified"] is True
+        assert row["baseuri"] == f"https://{peer}.example.test/{peer}"
+
+    def test_an_approved_unverified_row_is_not_replaced(self) -> None:
+        w = Receiver()
+        peer, _secret = self._pending(w, approved=True)
+        before = w.row(peer)
+        verified = mock.Mock(
+            status_code=200, content=b'{"verification_token": "whatever"}'
+        )
+        with mock.patch("actingweb.actor.requests.get", return_value=verified) as get:
+            out = w.request(peer, _new_secret())
+        assert out.response.status_code == 403
+        get.assert_not_called()
+        assert _state(w.row(peer)) == _state(before)
+
+    def test_the_conditional_replace_refuses_a_row_no_longer_pending(self) -> None:
+        w = Receiver()
+        peer, _secret = self._pending(w, approved=True)
+        before = w.row(peer)
+        assert (
+            Trust(actor_id=aid(w.a), peerid=peer, config=w.config).create(
+                baseuri="https://elsewhere.example.test/x",
+                relationship="friend",
+                secret=_new_secret(),
+                verified=True,
+                only_if_pending=True,
+            )
+            is False
+        )
+        assert _state(w.row(peer)) == _state(before)

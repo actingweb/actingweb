@@ -126,6 +126,15 @@ status: active
   answer. No verification round trip for a swap. A moved peer is re-pointed
   by the owner, as decided; a peer that lost its secret deletes and pairs
   again.
+- **2026-11-08, Phase 4 review (owner)**: the replacement rule above was
+  too broad: a verification proves only that the requester controls the
+  base URI it sent, and a squatter could re-pair its own row with the
+  secret it chose and have it marked verified. Narrowed: a verifying
+  request replaces only a *pending* row (neither verified nor approved), in
+  one conditional write on both backends (`only_if_pending`), its grants
+  cleared after the write wins; an approved row is the owner's and changes
+  only through a re-pair with its secret; a re-pair never marks a row
+  verified.
 - **2026-11-08, Phase 3 review (owner)**: an unverified trust row (never
   proven: an unauthenticated request that failed verification leaves one)
   is replaced by a later request that verifies; a verified row is still
@@ -1203,6 +1212,15 @@ Unchanged; the command is not on the wire.
   apps run in the test process, so the store's cached copy is cleared as a
   restart would.
 - Release impact: a new console script (the changelog's `ADDED`).
+- **Outside voice on the Phase 4 commit and the Phase 3 fold** (codex and
+  a fresh-context reviewer), folded in its own commit: the replacement rule
+  narrowed to pending rows (owner, Update Log), conditional on both
+  backends, a re-pair keeping `verified` as it was; `report` and a dry run
+  exit 0 when only `remote-unknown` rows remain. Checked, nothing found:
+  the DynamoDB condition on the composite key, `cur.rowcount` for `ON
+  CONFLICT DO NOTHING`, whole-name comparisons, the callback-state names,
+  that a `validate_peer_id=False` bucket is never removed. The consumer only
+  reads `RemotePeerStore`, so `prune` removes nothing it writes itself.
 
 ### Implementation Status: Complete
 

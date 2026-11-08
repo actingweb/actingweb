@@ -205,7 +205,8 @@ class TestPrune:
         assert w.has_bucket("remote:not-a-peer-id")
         # A second run finds only what it never removes.
         code, out = _run(capsys, "report", w.id)
-        assert code == 1 and "remote-unknown" in out and "remote-data" not in out
+        # Only an unknown bucket remains: information, not a finding.
+        assert code == 0 and "remote-unknown" in out and "remote-data" not in out
 
     def test_a_delete_fault_exits_2(self, config: Any, capsys: Any) -> None:
         from actingweb.db import get_attribute

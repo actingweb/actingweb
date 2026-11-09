@@ -42,7 +42,7 @@ kept because the run confirmed both points.
   Recorded in `verifications/2026-11-07-peer-authorisation-fixes.md`, with
   Emm's adoption items (one new: Emm's connect flow subscribes twice after
   a re-pair answering 201). Re-run on 2026-11-08 after that plan's
-  iteration (`d836bd0`), on `a8007e5` after the second, on `dca966f` after the third, on `376b71c` after the whole-branch review's fixes, on `d3fd713` after the audit's fixes on `244ccb9` after reverify-7's on `20abc3a` after reverify-8's on `16f5972` after reverify-9's on `09890b6` after reverify-10's and on `03a0d8c` after reverify-11's (environment 9): the same counts and failures.
+  iteration (`d836bd0`), on `a8007e5` after the second, on `dca966f` after the third, on `376b71c` after the whole-branch review's fixes, on `d3fd713` after the audit's fixes on `244ccb9` after reverify-7's on `20abc3a` after reverify-8's on `16f5972` after reverify-9's on `09890b6` after reverify-10's on `03a0d8c` after reverify-11's and on `ad95c79` after reverify-12's (environment 9): the same counts and failures.
 
 ## What was known before the first run
 

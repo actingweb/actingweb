@@ -2633,3 +2633,9 @@ CHANGED entry for the pull filter.
 Every new test above failed with the library at `5cabc26` (14 of 21; the
 other seven are controls or behaviour this iteration keeps).
 
+The Full tier on `325370f`: DynamoDB 6086 passed, PostgreSQL 5883 passed,
+lint, format and types clean, the docs build, no recording changed (the
+three `.subscriber` rows included). Emm's suite on `325370f` (gate 2,
+environment 9, its adoption worktree unchanged): PostgreSQL 2 failed / 7406
+passed, DynamoDB 3 failed / 54 passed, the `master` baseline's failures by
+name.

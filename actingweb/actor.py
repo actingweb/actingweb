@@ -1544,6 +1544,19 @@ class Actor:
         if not relationships:
             return False
         this_trust = relationships[0]
+        if (
+            approved is True
+            and not this_trust.get("verified")
+            and not self.reverify_pending_trust(peerid)
+        ):
+            # Only a verified row is approved (3.16): its secret is whatever
+            # the requester chose, and anyone can file a request under a
+            # peer's id (Trust.modify refuses the write as well).
+            logger.warning(
+                f"Refused to approve the trust with {peerid}: the request is "
+                "not verified (create the trust toward the peer's URL instead)"
+            )
+            return False
 
         # IMPORTANT: Save approval to database BEFORE notifying peer
         # This prevents race condition where peer tries to subscribe back
@@ -1676,6 +1689,9 @@ class Actor:
             relationship: The trust type/permission level to request (friend, admin, etc.)
             trust_type: Expected peer mini-app type for validation (optional)
         """
+        # Whether this call approved a waiting request instead of sending
+        # one: set by _approve_on_create, read by TrustManager for its hook.
+        self.last_trust_approved_on_create = None
         if len(url) == 0:
             return False
         from .trust import is_valid_peer_baseuri
@@ -1719,6 +1735,15 @@ class Actor:
         existing = trust.Trust(
             actor_id=self.id, peerid=peer["id"], config=self.config
         ).get()
+        if self._is_unproven_pending(existing) and self.reverify_pending_trust(
+            peer["id"]
+        ):
+            # A genuine request whose first verification failed (a timeout,
+            # say) verifies now: it is approved below, not replaced, so the
+            # peer's own row still matches ours.
+            existing = trust.Trust(
+                actor_id=self.id, peerid=peer["id"], config=self.config
+            ).get()
         replace_pending = self._is_unproven_pending(existing)
         if existing and replace_pending:
             # A request nobody proved (unverified, unapproved): anyone can
@@ -1851,6 +1876,9 @@ class Actor:
 
         Creates a new reciprocal trust relationship locally and by requesting a relationship from a peer actor.
         """
+        # Whether this call approved a waiting request instead of sending
+        # one: set by _approve_on_create, read by TrustManager for its hook.
+        self.last_trust_approved_on_create = None
         if len(url) == 0:
             return False
         from .trust import is_valid_peer_baseuri
@@ -1898,6 +1926,14 @@ class Actor:
         existing = trust.Trust(
             actor_id=self.id, peerid=peer["id"], config=self.config
         ).get()
+        if self._is_unproven_pending(existing) and await asyncio.to_thread(
+            self.reverify_pending_trust, peer["id"]
+        ):
+            # See create_reciprocal_trust(): a request that verifies now is
+            # approved, not replaced.
+            existing = trust.Trust(
+                actor_id=self.id, peerid=peer["id"], config=self.config
+            ).get()
         replace_pending = self._is_unproven_pending(existing)
         if existing and replace_pending:
             # See create_reciprocal_trust(): an unproven request is replaced.
@@ -2022,6 +2058,61 @@ class Actor:
             logger.debug("Not able to create trust with peer async, deleting my trust.")
             self._drop_failed_attempt(peer["id"], secret)
             return False
+
+    def reverify_pending_trust(self, peerid: str) -> bool:
+        """Whether the trust row for ``peerid`` is verified, re-running the
+        creation's verification for one that is not (3.16).
+
+        A row stored unverified holds the secret its requester chose. Before
+        anything approves it, ask the host at its base URI for our own trust
+        row there with that secret as bearer (as the lost-answer probe does):
+        only a host holding the secret answers with a row naming us, so a
+        request filed under another actor's id, with that actor's base URI,
+        never passes. The base URI's ``/meta`` must name the peer too, as at
+        creation. A pass marks the row verified, conditioned on its secret
+        being unchanged."""
+        current = trust.Trust(actor_id=self.id, peerid=peerid, config=self.config)
+        row = current.get()
+        if not row:
+            return False
+        if row.get("verified"):
+            return True
+        secret = str(row.get("secret") or "")
+        if not secret:
+            return False
+        url, headers = self._re_pair_probe_request(
+            row, secret, str(row.get("relationship") or "")
+        )
+        try:
+            answer = requests.get(url=url, headers=headers, timeout=(5, 10))
+            status = answer.status_code
+            try:
+                body: Any = answer.json() if 200 <= status < 300 else None
+            except ValueError:
+                body = None
+        except Exception:  # folds DbError: peer HTTP only
+            status, body = None, None
+        if not (
+            isinstance(status, int)
+            and 200 <= status < 300
+            and isinstance(body, dict)
+            and body.get("peerid") == self.id
+        ):
+            logger.warning(
+                f"The trust request from {peerid} did not verify on a second "
+                f"check (status {status})"
+            )
+            return False
+        if not self._base_uri_serves(str(row.get("baseuri") or ""), peerid):
+            logger.warning(
+                f"The trust request from {peerid} verified, but its base URI "
+                "does not serve that actor"
+            )
+            return False
+        if not current.modify(verified=True, only_if_secret=secret):
+            return False
+        logger.info(f"The trust request from {peerid} verified on a second check")
+        return True
 
     def _drop_failed_attempt(self, peerid: str, attempt_secret: str) -> None:
         """Delete this call's own row after the peer refused or did not
@@ -2422,7 +2513,12 @@ class Actor:
         return isinstance(data, dict) and data.get("id") == peerid
 
     def replace_trust_secret(
-        self, peerid: str, relationship: str, secret: str
+        self,
+        peerid: str,
+        relationship: str,
+        secret: str,
+        *,
+        proven_secret: str | None = None,
     ) -> tuple[dict[str, Any] | None, str]:
         """Swap the credentials of an existing trust: a re-pair.
 
@@ -2434,13 +2530,20 @@ class Actor:
         or None and the reason it was refused (the row is then unchanged):
         a different relationship (delete and pair again), no new secret, or
         a new secret already in use on any of this actor's rows, the peer's
-        own included, as creation refuses."""
+        own included, as creation refuses; a row neither verified nor approved
+        (a pending request is replaced only by a request that verifies); or a
+        row whose secret is no longer ``proven_secret``, the bearer the
+        request authenticated with (the swap is one write conditioned on it,
+        so a row replaced since the request authenticated never takes the
+        new secret; without it, the secret read here)."""
         current = trust.Trust(actor_id=self.id, peerid=peerid, config=self.config)
         row = current.get()
         if not row:
             return None, "no trust row"
         if (row.get("relationship") or "") != (relationship or ""):
             return None, "a different relationship"
+        if not (row.get("verified") or row.get("approved")):
+            return None, "a pending request (it is replaced only by one that verifies)"
         if not secret:
             return None, "no new secret"
         if self.config and get_trust(self.config).is_token_in_db(
@@ -2453,8 +2556,9 @@ class Actor:
             # ``verified`` stays as it was: proving a secret the requester
             # may have chosen itself (a pending row) is not a verification.
             peer_approved=True,
+            only_if_secret=proven_secret or str(row.get("secret") or ""),
         ):
-            return None, "the row was not modified"
+            return None, "the row changed since the request authenticated"
         # Read back through a fresh object: after modify() the cached row
         # holds the flags as the strings the backends were given.
         updated = trust.Trust(actor_id=self.id, peerid=peerid, config=self.config).get()
@@ -3094,12 +3198,9 @@ class Actor:
             return
 
         # Filter blob based on peer permissions for property subscriptions
+        # (the one filter the pull paths use too).
         if sub.get("target") == "properties":
-            filtered_blob = self._filter_subscription_data_by_permissions(
-                peerid=peerid,
-                blob=blob,
-                subtarget=sub.get("subtarget"),
-            )
+            filtered_blob = self.filter_subscription_blob(peerid, sub, blob)
             if filtered_blob is None:
                 return  # Nothing to send after filtering
             blob = filtered_blob
@@ -3333,6 +3434,60 @@ class Actor:
             diff=diff,
             blob=blob,
         )
+
+    def filter_subscription_blob(
+        self, peerid: str, sub: dict[str, Any], blob: Any
+    ) -> str | None:
+        """A subscription diff as ``peerid`` may read it, or None when it may
+        read none of it (3.16). The one filter for the pushed callback
+        (``callback_subscription``) and the pulled diffs
+        (``GET /subscriptions/<peer>/<subid>`` and ``/<seq>``).
+
+        Only a ``properties`` subscription is filtered (other targets are the
+        application's, served as their callbacks are). A subscription to one
+        property (a subtarget, and a resource under it) carries that
+        property's value, whatever its shape: it is sent whole when the peer
+        may read ``<subtarget>`` (``<subtarget>/<resource>`` with a resource),
+        as a direct read of that path checks, else not at all. A subscription
+        to the whole target carries an object keyed by property: each key is
+        checked on its own. Fail closed: no evaluator, a value that is not an
+        object for a whole-target subscription, or an error yields None."""
+        as_text = (
+            blob
+            if isinstance(blob, str)
+            else blob.decode("utf-8", "ignore")
+            if isinstance(blob, bytes)
+            else json.dumps(blob)
+        )
+        if sub.get("target") != "properties":
+            return as_text
+        subtarget = str(sub.get("subtarget") or "")
+        if not subtarget:
+            try:
+                parsed = json.loads(as_text)
+            except (TypeError, ValueError):
+                return None
+            if not isinstance(parsed, dict):
+                return None
+            return self._filter_subscription_data_by_permissions(
+                peerid=peerid, blob=as_text
+            )
+        resource = str(sub.get("resource") or "")
+        path = f"{subtarget}/{resource}" if resource else subtarget
+        try:
+            evaluator = get_permission_evaluator(self.config) if self.config else None
+            allowed = bool(evaluator) and (
+                evaluator.evaluate_property_access(
+                    str(self.id), peerid, path, operation="read"
+                )
+                == PermissionResult.ALLOWED
+            )
+        except DbError:
+            raise
+        except Exception as e:
+            logger.error(f"Permission check failed for a diff to {peerid}: {e}")
+            return None
+        return as_text if allowed else None
 
     def _filter_subscription_data_by_permissions(
         self, peerid: str, blob: str | bytes, subtarget: str | None = None

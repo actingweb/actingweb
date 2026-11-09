@@ -336,6 +336,8 @@ class Config:
             # A peer reads, clears and ends its own subscription (owner: the
             # caller is the peer the path names). Creating one is its
             # relationship's rows' (3.16: this row never admitted creation).
+            # Listing its own (GET subscriptions/<id>), as before 3.16.
+            ("owner", "subscriptions/<id>", "GET", "a"),
             ("owner", "subscriptions/<id>/<subid>", "GET,PUT,DELETE", "a"),
             # Owner can create subscriptions
             ("friend", "subscriptions/<id>", "", "a"),

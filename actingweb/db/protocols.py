@@ -773,12 +773,18 @@ class DbTrustProtocol(Protocol):
         aw_supported: str | None = None,
         aw_version: str | None = None,
         capabilities_fetched_at: str | datetime | None = None,
+        *,
+        only_if_verified: bool = False,
+        only_if_secret: str | None = None,
     ) -> bool:
         """
-        Modify trust using self.handle.
+        Modify trust using self.handle, in one write conditioned on the row
+        existing (and, with ``only_if_verified``, being verified; with
+        ``only_if_secret``, holding that secret).
 
         Returns:
-            True on success; False only without a handle or arguments.
+            True on success; False without a handle or arguments, or when the
+            row is gone or a condition fails (nothing written).
             A fault raises ``DbError``.
         """
         ...

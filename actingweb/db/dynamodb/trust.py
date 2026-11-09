@@ -241,6 +241,9 @@ class DbTrust:
         aw_supported=None,
         aw_version=None,
         capabilities_fetched_at=None,
+        *,
+        only_if_verified: bool = False,
+        only_if_secret: str | None = None,
     ):
         """Modify a trust
 
@@ -248,7 +251,9 @@ class DbTrust:
         are written, in one update conditioned on the row still existing: a
         concurrent change to another attribute (a re-pair's secret swap, say)
         is never written back over, and a row deleted meanwhile is not
-        recreated (False).
+        recreated (False). ``only_if_verified`` also requires the stored row
+        to be verified, ``only_if_secret`` its secret to be that value: a
+        condition that fails answers False and writes nothing.
         """
         if not self.handle:
             logger.debug("Attempted modification of DbTrust without db handle")
@@ -325,22 +330,23 @@ class DbTrust:
         for name, value in given.items():
             setattr(self.handle, name, value)
         actions = [getattr(Trust, name).set(value) for name, value in given.items()]
+        condition = Trust.id.exists()
+        if only_if_verified:
+            condition = condition & (Trust.verified == True)  # noqa: E712
+        if only_if_secret is not None:
+            condition = condition & (Trust.secret == only_if_secret)
         try:
-            self.handle.update(actions=actions, condition=Trust.id.exists())
-        except UpdateError as e:
-            if e.cause_response_code == "ConditionalCheckFailedException":
-                # The row is gone: this handle keeps what is known, not what
-                # was never written.
-                self.handle.attribute_values.clear()
-                self.handle.attribute_values.update(before)
-                return False
-            self.handle.attribute_values.clear()
-            self.handle.attribute_values.update(before)
-            raise DbError("trust modify") from e
+            self.handle.update(actions=actions, condition=condition)
         except Exception as e:
             # Nothing is known to be written: the handle keeps what it read.
             self.handle.attribute_values.clear()
             self.handle.attribute_values.update(before)
+            if (
+                isinstance(e, UpdateError)
+                and e.cause_response_code == "ConditionalCheckFailedException"
+            ):
+                # The row is gone, or a condition failed.
+                return False
             raise DbError("trust modify") from e
         return True
 

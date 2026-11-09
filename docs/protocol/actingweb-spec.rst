@@ -1591,17 +1591,26 @@ the URL of the newly created relationship MUST be returned in the
 Location header in the response. The URL MUST be formatted the following
 way: /<baseuri-with-actor-id>/trust/<trustlevel>/<requesting-actor-id>.
 
-If actor B already holds a relationship with the requesting actor, the
-request MUST NOT replace it. B MUST accept it only as a re-pair from the
-requesting actor itself, authenticated with the current shared secret as
-bearer token, and then only replace the secret; the relationship, its
+If actor B already holds a verified or approved relationship with the
+requesting actor, the request MUST NOT replace it. B MUST accept it only as
+a re-pair from the requesting actor itself, authenticated with the current
+shared secret as bearer token, and then only replace the secret (an
+implementation SHOULD make the replacement conditional on the relationship
+still holding the secret the request authenticated with); the relationship, its
 approval and the base URI stay, and the response follows the stored
 approval (201 or 202). Otherwise B MUST answer 403 Forbidden and change
 nothing. B MUST treat a new relationship as verified only when the
 verification succeeds and the requesting actor's base URI serves its claimed
 id (its ``/meta`` ``id``). (A relationship B stored without verifying it, and has not
-approved, MAY be replaced by a request that verifies.) B MUST NOT approve a
-relationship automatically unless it verified. A verification proves that
+approved, MAY be replaced by a request that verifies, and is not re-paired.)
+B MUST NOT approve a relationship automatically unless it verified. B MAY
+also refuse a manual approval of a relationship it has not verified, after
+repeating the verification (a request filed under another actor's id and
+base URI holds a secret only its requester knows). Until B approves a
+relationship, B SHOULD grant the requesting actor no access beyond the
+relationship's own URL (its status and its deletion), unless the
+relationship type is one B allows unapproved (see the associate
+relationship). A verification proves that
 the requesting actor controls its base URI, not that it is the actor whose
 id it claims: actor ids are self-asserted, and the requesting actor answers
 its own ``/meta``.
@@ -3102,7 +3111,8 @@ On receiving a permission callback, the receiver SHOULD:
 5. Respond with ``204 No Content``
 
 A receiver that cannot store the callback for a transient reason (a
-concurrent update it lost, a storage fault) MAY answer ``503`` with
+concurrent update it lost, a storage fault, a failed cleanup of data the
+callback revokes) MAY answer ``503`` with
 ``Retry-After``; the sender SHOULD then resend the same body, timestamp
 included, a bounded number of times.
 

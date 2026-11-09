@@ -382,7 +382,7 @@ and the next sign-in retries.
 
     **Use Cases**: UI notification "You approved! Relationship established", analytics, triggering subscriptions
 
-    **Note**: Fires when this actor's approval completes the mutual trust (peer had already approved).
+    **Note**: Fires when this actor's approval completes the mutual trust (peer had already approved): an approval through ``PUT /trust/<rel>/<peer>`` or the web UI, and (3.16) creating the trust toward a peer whose verified request was waiting (``POST /trust``, the web form, ``TrustManager.create_relationship``). ``TrustManager.approve_relationship`` fires ``trust_approved`` instead; the trustee path (``create_peer_trustee``) fires neither. A pending request replaced by a request that verifies, or by the owner's own, fires no ``trust_deleted``.
 
     **Built-in Behavior**: If peer profile caching is enabled (``with_peer_profile()``), the peer's profile is automatically fetched and cached when this hook fires.
 

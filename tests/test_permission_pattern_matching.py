@@ -29,6 +29,8 @@ def _evaluator() -> PermissionEvaluator:
     store (a database), which these pure-function tests do not need.
     """
     ev = object.__new__(PermissionEvaluator)
+    # No database: the approval gate (``_is_unapproved``) reads no row.
+    ev.config = None  # type: ignore[assignment]
     _compile_glob.cache_clear()
     return ev
 

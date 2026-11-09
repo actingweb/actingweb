@@ -2,63 +2,25 @@ import json
 import logging
 from typing import Any
 
-from actingweb.db.exceptions import DbError
 from actingweb.handlers import base_handler
 
 logger = logging.getLogger(__name__)
 
 
 def _as_permitted(myself: Any, peerid: str, sub_dict: dict[str, Any], raw: Any) -> Any:
-    """A stored diff as the subscriber may read it. A ``properties``
-    subscription's diff is stored whole and filtered through the peer's
-    permissions here, as the pushed callback is (``Actor.callback_subscription``):
-    a peer polling its subscription never reads more than a callback would
-    carry. Nothing permitted reads as ``{}``, the sequence kept."""
-    try:
-        parsed = json.loads(raw)
-    except (TypeError, ValueError):
-        parsed = raw
-    if sub_dict.get("target") != "properties":
-        return parsed
-    if not isinstance(parsed, dict):
-        # A subtarget's diff is the property's value itself: the peer must
-        # be allowed to read that property. Nothing else is a property diff.
-        subtarget = sub_dict.get("subtarget") or ""
-        if subtarget and _may_read(myself, peerid, subtarget):
-            return parsed
-        return {}
-    filtered = myself._filter_subscription_data_by_permissions(
-        peerid=peerid, blob=raw, subtarget=sub_dict.get("subtarget") or None
-    )
+    """A stored diff as the subscriber may read it: diffs are stored whole,
+    and a pulled one passes the same filter as the pushed callback
+    (``Actor.filter_subscription_blob``). A diff the peer may read none of
+    reads as ``{}``, a change that changes nothing (the library's
+    subscriber merges it as a no-op), its sequence kept; the push sends
+    nothing for it."""
+    filtered = myself.filter_subscription_blob(peerid, sub_dict, raw)
     if filtered is None:
         return {}
     try:
         return json.loads(filtered)
     except (TypeError, ValueError):
         return filtered
-
-
-def _may_read(myself: Any, peerid: str, property_path: str) -> bool:
-    """Whether ``peerid`` may read ``property_path`` (fail closed)."""
-    from actingweb.permission_evaluator import (
-        PermissionResult,
-        get_permission_evaluator,
-    )
-
-    try:
-        evaluator = get_permission_evaluator(myself.config)
-        return (
-            bool(evaluator)
-            and evaluator.evaluate_property_access(
-                myself.id, peerid, property_path, operation="read"
-            )
-            == PermissionResult.ALLOWED
-        )
-    except DbError:
-        raise
-    except Exception as e:
-        logger.error(f"Permission check failed for a polled diff: {e}")
-        return False
 
 
 def _authorize_subscription_write(

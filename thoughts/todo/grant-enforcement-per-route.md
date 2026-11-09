@@ -6,15 +6,12 @@ peer-authorisation records: never push this file before its fix.
 The second security plan the owner decided on 2026-11-09, after
 `verifications/2026-11-09-peer-authorisation-fixes-audit.md`. The
 peer-authorisation PR closes identity and approval (audit A1 to A3, A9).
-This plan closes how a granted peer's access is enforced. Every item below
+This plan closes how a granted peer's access is enforced. A4 (push of a
+subtarget's single value) closed with reverify-6 Issues 4 to 6 in the PR's
+iteration 50. Every item below
 is on `master` (except A19, which the branch introduced); the audit has the
 evidence (`file:line`) for each.
 
-- **A4.** Push sends a subtarget's non-object value unfiltered
-  (`actor.py:3365-3367`).
-  - Fix together with reverify-6 Issues 4 to 6 (resource ignored, per-key
-    filtering under a subtarget, `{}` placeholder) if the PR does not: push
-    and pull need one filter.
 - **A5.** Permission patterns have no hierarchy (`permission_evaluator.py:114-134`):
   - a parent (`private` vs `private/*`) is readable and writable whole;
   - `/properties/<list>/<x>` returns the whole list past an exact-name

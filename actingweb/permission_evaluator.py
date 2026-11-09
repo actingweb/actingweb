@@ -201,6 +201,9 @@ class PermissionEvaluator:
                 )
                 return PermissionResult.DENIED
 
+            if self._is_unapproved(actor_id, peer_id):
+                return PermissionResult.DENIED
+
             # Get the effective permissions for this trust relationship
             effective_perms = self._get_effective_permissions(actor_id, peer_id)
             if not effective_perms:
@@ -299,6 +302,10 @@ class PermissionEvaluator:
             )
 
         try:
+            if self._is_unapproved(actor_id, peer_id):
+                results.update(dict.fromkeys(clean_paths, PermissionResult.DENIED))
+                return results
+
             # Get the effective permissions once for all properties
             effective_perms = self._get_effective_permissions(actor_id, peer_id)
             if not effective_perms:
@@ -494,6 +501,8 @@ class PermissionEvaluator:
             List of allowed patterns/items
         """
         try:
+            if self._is_unapproved(actor_id, peer_id):
+                return []
             effective_perms = self._get_effective_permissions(actor_id, peer_id)
             if not effective_perms:
                 return []
@@ -526,6 +535,30 @@ class PermissionEvaluator:
                 f"Error getting allowed items for {actor_id}:{peer_id} -> {permission_type.value}: {e}"
             )
             return []
+
+    def _is_unapproved(self, actor_id: str, peer_id: str) -> bool:
+        """Whether the peer's trust row exists and this actor has not
+        approved it. Such a peer is granted nothing here (3.16): its secret
+        authenticates it (``auth.py``), and anyone can file a trust request
+        with a relationship of its choice, so a grant may only follow an
+        approval. The access table refuses it the same way
+        (``Auth._match_access_row``); its own trust row stays reachable there.
+        A storage fault raises ``DbError``."""
+        if not self.config or not hasattr(self.config, "DbTrust"):
+            return False
+        db_trust = get_trust(self.config)
+        if not db_trust:
+            return False
+        row = db_trust.get(actor_id=actor_id, peerid=peer_id)
+        approved = (
+            row.get("approved")
+            if isinstance(row, dict)
+            else getattr(row, "approved", None)
+        )
+        if row and approved is False:
+            logger.warning(f"Permission denied: {actor_id}:{peer_id} is not approved")
+            return True
+        return False
 
     def _get_effective_permissions(
         self, actor_id: str, peer_id: str

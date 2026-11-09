@@ -521,8 +521,13 @@ class CallbacksHandler(base_handler.BaseHandler):
             except DbError:
                 raise
             except Exception as e:
+                # A 503, not a 500: the sender resends only a 503, and a
+                # failed deletion of revoked data must be retried (the
+                # permissions were not stored, so the resend sees the
+                # revocation again).
                 logger.error(f"Error storing permission callback: {e}")
-                self.response.set_status(500, "Internal error")
+                self.response.set_status(503, "Service Unavailable")
+                self.response.headers["Retry-After"] = "1"
                 return
 
             # Execute permission callback hook for app-specific handling, only
@@ -1179,6 +1184,7 @@ class CallbacksHandler(base_handler.BaseHandler):
         meanwhile wins, and what it still grants of the deleted data is
         fetched again. A peer that does not answer is logged."""
         from actingweb.peer_permissions import (
+            _parsed_time,
             detect_permission_changes,
             fetch_peer_permissions,
             get_peer_permission_store,
@@ -1212,9 +1218,26 @@ class CallbacksHandler(base_handler.BaseHandler):
             self._delete_revoked_peer_data(actor_interface, peer_id, revoked)
         if store.store_permissions(fetched):
             return
+        _, now = store.read_stored_permissions(actor_id, peer_id)
+        try:
+            newer = bool(
+                now
+                and now.fetched_at
+                and fetched.fetched_at
+                and _parsed_time(now.fetched_at) > _parsed_time(fetched.fetched_at)
+            )
+        except (TypeError, ValueError):
+            newer = False
+        if not newer:
+            # Refused for another reason (the answer did not validate, or
+            # every attempt lost): the deletion stands, nothing is restored.
+            logger.warning(
+                f"The permissions {peer_id} answered were not stored; the "
+                "revoked data stays deleted"
+            )
+            return
         # A newer copy was stored meanwhile: it decides, and what it still
         # grants of the data just deleted is fetched again.
-        _, now = store.read_stored_permissions(actor_id, peer_id)
         logger.info(
             f"A newer permission copy for {peer_id} was stored during the "
             "reconcile; it is kept"

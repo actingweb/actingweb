@@ -449,10 +449,14 @@ class TrustRelationshipHandler(base_handler.BaseHandler):
             and bool(acl.get("authenticated"))
             and acl.get("peerid") == peerid
         )
-        if existing and (
-            proven or existing.get("verified") or existing.get("approved")
-        ):
-            self._re_pair(myself, proven, peerid, relationship, secret)
+        if existing and (existing.get("verified") or existing.get("approved")):
+            # A re-pair applies to a verified or approved row only (audit A2):
+            # a pending row's holder proves only the secret it chose, and the
+            # row is replaced only by a request that verifies (below).
+            bearer = getattr(auth_result.auth_obj, "token", None) if proven else None
+            self._re_pair(
+                myself, proven, peerid, relationship, secret, str(bearer or "")
+            )
             return
         headers = getattr(self.request, "headers", None) or {}
         if not existing and str(headers.get("Authorization", "")).lower().startswith(
@@ -547,6 +551,7 @@ class TrustRelationshipHandler(base_handler.BaseHandler):
         peerid: str,
         relationship: str,
         secret: str,
+        bearer: str = "",
     ) -> None:
         """A trust request for a peer that already has a row.
 
@@ -561,7 +566,10 @@ class TrustRelationshipHandler(base_handler.BaseHandler):
         new_trust = None
         if proven:
             new_trust, reason = myself.replace_trust_secret(
-                peerid=peerid, relationship=relationship, secret=secret
+                peerid=peerid,
+                relationship=relationship,
+                secret=secret,
+                proven_secret=bearer or None,
             )
         if not new_trust:
             # Never the body's base URI in the log: it is the requester's.
@@ -895,6 +903,20 @@ class TrustPeerHandler(base_handler.BaseHandler):
             )
             if self.response:
                 self.response.set_status(403, "Forbidden")
+            return
+        if approved is True and not myself.reverify_pending_trust(peerid):
+            # Only a verified request is approved (3.16): an unverified row's
+            # secret is whatever its requester chose, and anyone can file a
+            # request under a peer's id. Pair by creating the trust toward
+            # the peer's URL instead.
+            logger.warning(
+                f"Refused to approve the trust with {peerid} at {actor_id}: the "
+                "request is not verified"
+            )
+            if self.response:
+                self.response.set_status(
+                    403, "The trust request is not verified; it cannot be approved"
+                )
             return
         if baseuri and not is_valid_peer_baseuri(baseuri):
             # The peer may PUT its own row: the base URI it moves to must be

@@ -8,6 +8,20 @@ Unreleased
 SECURITY
 ~~~~~~~~
 
+- **Anyone who requested a trust was granted its relationship's
+  permissions before the owner approved it.** ``POST
+  /<actor>/trust/<relationship>`` is unauthenticated and stores a pending
+  row with the relationship the request names (``admin`` included), and the
+  row's secret authenticates as that peer. The access table refused an
+  unapproved row, but the permission evaluator, which decides properties,
+  list items, metadata, methods, actions and MCP tools, resources and
+  prompts, never read ``approved``: a stranger could read and write
+  properties, call methods and actions, and as ``admin`` clear every
+  property. **Behavior change:** the evaluator grants nothing to a row this
+  actor has not approved (``PermissionResult.DENIED``); a pending peer
+  reaches only its own trust row (its status and its deletion). **Check:**
+  an application that served data to unapproved peers on purpose (the
+  specification allows an unapproved ``associate``) approves them instead.
 - **Callbacks were accepted without authentication, and a low-granularity
   callback made the receiver send the trust's secret to a URL of the
   sender's choosing.** ``/callbacks`` let any request through and checked
@@ -62,16 +76,29 @@ SECURITY
   change the relationship, and a request for a peer's id naming another base
   URI took over the row (base URI and secret) even when its verification
   failed. **Behavior change:** a request for a peer that already has a
-  verified row is accepted only with the trust's current secret as its
-  bearer, and then swaps only the secret (relationship, approval, base URI
-  and grants stay; the answer follows the stored approval; no
-  ``trust_request_received``); anything else answers 403 and changes
-  nothing. A creation request is verified when the requester answers with
+  verified or approved row is accepted only with the trust's current secret
+  as its bearer, and then swaps only the secret, in one write conditioned on
+  the row still holding the secret the request authenticated with
+  (relationship, approval, base URI and grants stay; the answer follows the
+  stored approval; no ``trust_request_received``); anything else answers
+  403 and changes nothing. A pending row is never re-paired: its holder's
+  request is a creation request, which replaces it only if it verifies. A creation request is verified when the requester answers with
   its token and its base URI's ``/meta`` names the peer id it claims; this
   proves control of the base URI, not of the id, since the requester answers
   both. **Behavior change:** with ``auto_accept_default_relationship``, only
   a request that verified is approved automatically; any other waits for the
-  owner (202). A pending row (stored unverified and not yet approved) is
+  owner (202). **Behavior change:** an owner approves only a verified
+  request, on every route (``PUT /trust/<rel>/<peer>`` and the web UI's
+  Approve, ``TrustManager.approve_relationship``,
+  ``modify_trust_and_notify``, ``TrustManager.modify_trust``):
+  ``approved=True`` is written only to a row stored verified. Approving an
+  unverified request first repeats the verification (a GET to our own
+  trust row at the requester's base URI with the request's secret, which
+  only a host holding that secret answers, and its ``/meta``); one that
+  fails is refused (403 on the PUT). A stranger's request under a real
+  peer's id and base URI could otherwise be approved by one click. A peer
+  that does not support verification is paired by the owner creating the
+  trust toward its URL. A pending row (stored unverified and not yet approved) is
   replaced only by a request that verifies; a re-pair never marks a row
   verified. A trust modification writes the attributes it is given, and
   only those, on a row that still exists (DynamoDB saved the whole loaded
@@ -92,8 +119,10 @@ SECURITY
   ``trust_fully_approved_local``, not ``trust_initiated``, where before
   3.16 it overwrote the row with the owner's secret and sent a new request;
   a pending request that never verified (anyone can file one under a
-  peer's id) is replaced by the owner's own request, with the owner's
-  secret, never approved as it is. A replaced pending row takes the
+  peer's id) is verified again first (a genuine request whose first check
+  timed out is then approved), and otherwise replaced by the owner's own
+  request, with the owner's secret, never approved as it is. The trustee
+  path (``create_peer_trustee``) and a replaced request run no hook. A replaced pending row takes the
   replacement's creation time on both backends. **Check:** an actor id
   is self-asserted, so a host running its own server can still be verified
   (and, with auto-accept, approved) under another actor's id, which then
@@ -133,7 +162,9 @@ SECURITY
   sender resends a 503 up to twice with the same body (``Retry-After``
   honoured up to 2 seconds; the synchronous sender waits 1 second, and
   logs a final failure at WARNING); a failed permission query no longer
-  replaces the stored copy. ``PeerPermissionStore.store_permissions``
+  replaces the stored copy. Any other failure while handling a permission
+  callback (a deletion of revoked data that fails) answers 503 too, so the
+  sender resends it. ``PeerPermissionStore.store_permissions``
   compares against the database, not the process's cache, and raises
   ``DbError`` on a fault.
 - **Peer and client views listed every peer's subscriptions.**
@@ -612,18 +643,21 @@ SECURITY
   refuses an id whose tombstone says deleted (401, as an unknown actor), and
   an unreadable tombstone answers 503.
 
-- **A subscriber polling a ``properties`` subscription read every stored
-  change, whatever its permissions.** Diffs are stored whole and only the
-  pushed callback was filtered by the peer's property permissions; the
-  pull paths (``GET /subscriptions/<peer>/<subid>`` and its ``/<seq>``)
-  returned them as stored, so a ``friend`` peer with a narrowed grant read
-  past it. **Behavior change:** both pull paths filter a ``properties``
-  diff by the permissions of the peer the path names, as the callback
-  does, whoever reads it (the creator or a trustee reading a peer's
-  subscription sees what that peer may read); a diff with nothing
-  permitted reads as ``{}`` with its sequence kept, and a subtarget's
-  value is returned only when the peer may read the subtarget. Other
-  targets are served as stored, as their callbacks are.
+- **A subscriber read changes its permissions exclude.** Diffs are stored
+  whole. The pull paths (``GET /subscriptions/<peer>/<subid>`` and its
+  ``/<seq>``) returned them unfiltered, so a ``friend`` peer with a narrowed
+  grant read past it; the pushed callback filtered a whole-target diff per
+  key but sent a subscription's single value (a subtarget's) unfiltered,
+  and neither checked a subscription's resource. **Behavior change:** one
+  filter for both paths: a subscription to one property (a subtarget, and
+  a resource under it) carries its value only when the peer may read
+  ``<subtarget>`` (``<subtarget>/<resource>``), the path a direct read
+  checks; a whole-target diff is filtered per key. A diff the peer may read
+  none of is not pushed and is pulled as ``{}`` (a no-op change, its
+  sequence kept). The filter follows the peer the path names, whoever
+  reads (the creator or a trustee reading a peer's subscription sees what
+  that peer may read). Other targets are served as stored, as their
+  callbacks are.
 
 REMOVED
 ~~~~~~~
@@ -666,12 +700,12 @@ CHANGED
   with the peer the path names (they never matched on these handlers
   before), so a subscriber type with only a GET row needs no new rows: it
   clears its own queue and is unsubscribed as before, and no other peer
-  reaches it. The ``owner`` row on subscriptions is now
-  ``("owner", "subscriptions/<id>/<subid>", "GET,PUT,DELETE", "a")``: it
-  admits a peer to poll (``GET /subscriptions/<peer>/<subid>`` and its
-  ``/<seq>``), clear and end its own subscription, never to list or create
-  one (``GET`` and ``POST /subscriptions/<peer>`` stay with the
-  relationship's own rows, as before). **Behavior change:** through the ``owner`` rows a peer of any
+  reaches it. The ``owner`` rows on subscriptions are now
+  ``("owner", "subscriptions/<id>", "GET", "a")`` and
+  ``("owner", "subscriptions/<id>/<subid>", "GET,PUT,DELETE", "a")``: a
+  peer lists, polls, clears and ends its own subscriptions, as before, and
+  never creates one through them (``POST /subscriptions/<peer>`` stays with
+  the relationship's own rows). **Behavior change:** through the ``owner`` rows a peer of any
   relationship type also reads its own trust's permissions
   (``GET /trust/<rel>/<peer>/permissions``) and may ``PUT`` its own trust
   row (its description, and a base URI whose ``/meta`` names it; approving
@@ -1765,6 +1799,15 @@ ADDED
 FIXED
 ~~~~~
 
+- **A subscriber deleted a live trust when its peer deleted its
+  subscriptions.** When every subscription to a peer answered 404,
+  ``sync_peer`` asked the peer for ``trust/<our id>``, a path that always
+  answers 404, and deleted its trust locally; since 3.16 the peer's approved
+  row then refuses a fresh request, so the pair could not form again.
+  **Behavior change:** it asks for its own trust row at the peer
+  (``trust/<relationship>/<our id>``) and decides by the status: 2xx keeps
+  the trust, 401, 403 or 404 deletes it locally, no answer or a server error
+  keeps it until the next sync.
 - **A refusal with no body was read as success.** ``AwProxy.change_resource``
   and its async twin answered ``{}`` for a non-2xx response without a JSON
   object body, and callers test for ``error``, so a 403 on a subscriber's

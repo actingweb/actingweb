@@ -1235,3 +1235,59 @@ class TestTheReconcileAfterReverify5:
         stored = w.stored_permissions(w.a)
         assert stored and stored["properties"]["patterns"] == ["p/*"]
         assert ["p/*"] in [c.args[3] for c in sync.call_args_list]
+
+
+class TestTheReconcileAfterReverify6:
+    """Reverify-6 Issues 7 and 8."""
+
+    def test_a_refused_answer_restores_nothing(self) -> None:
+        """Issue 7: a store refused for another reason than a newer copy (the
+        peer's answer did not validate) leaves the deletion as it is."""
+        from actingweb.peer_permissions import PeerPermissions, PeerPermissionStore
+
+        w = World()
+        w.config.auto_delete_on_revocation = True  # type: ignore[attr-defined]
+        now = datetime.now(UTC)
+        TestTheReconcileAfterReverify5._granted(w, now)
+        current = PeerPermissions(
+            actor_id=aid(w.b),
+            peer_id=w.a,
+            properties={"patterns": [], "operations": ["read"]},
+            fetched_at=datetime.now(UTC).isoformat(),
+        )
+        with (
+            mock.patch(
+                "actingweb.peer_permissions.fetch_peer_permissions",
+                return_value=current,
+            ),
+            mock.patch.object(CallbacksHandler, "_delete_revoked_peer_data"),
+            mock.patch.object(
+                PeerPermissionStore, "store_permissions", return_value=False
+            ),
+            mock.patch.object(CallbacksHandler, "_sync_permitted_patterns") as sync,
+        ):
+            out = TestTheReconcileAfterReverify5()._older_revocation(w, now)
+        assert out.response.status_code == 204
+        assert ["p/*"] not in [c.args[3] for c in sync.call_args_list]
+
+    def test_a_failed_deletion_answers_503_for_a_resend(self) -> None:
+        """Issue 8: the sender resends only a 503; a deletion that failed
+        must run again."""
+        w = World()
+        w.config.auto_delete_on_revocation = True  # type: ignore[attr-defined]
+        now = datetime.now(UTC)
+        TestTheReconcileAfterReverify5._granted(w, now)
+        with mock.patch.object(
+            CallbacksHandler,
+            "_delete_revoked_peer_data",
+            side_effect=ValueError("a bad list name"),
+        ):
+            out = w.request(
+                "POST",
+                f"permissions/{w.a}",
+                _grant_body(datetime.now(UTC).isoformat(), []),
+                as_peer=w.a,
+            )
+        assert out.response.status_code == 503
+        stored = w.stored_permissions(w.a)
+        assert stored and stored["properties"]["patterns"] == ["p/*"]

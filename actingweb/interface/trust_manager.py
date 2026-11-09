@@ -228,7 +228,6 @@ class TrustManager:
                 self._core_actor.config.new_token() if self._core_actor.config else ""
             )
 
-        self._core_actor.last_trust_approved_on_create = None
         rel_data = self._core_actor.create_reciprocal_trust(
             url=peer_url, secret=secret, desc=description, relationship=relationship
         )
@@ -255,11 +254,13 @@ class TrustManager:
                 self._core_actor.config.new_token() if self._core_actor.config else ""
             )
 
-        self._core_actor.last_trust_approved_on_create = None
         rel_data = await self._core_actor.create_reciprocal_trust_async(
             url=peer_url, secret=secret, desc=description, relationship=relationship
         )
-        self._fire_approved_on_create(rel_data)
+        # The application's hook may do peer HTTP: off the event loop.
+        import asyncio
+
+        await asyncio.to_thread(self._fire_approved_on_create, rel_data)
 
         if rel_data and isinstance(rel_data, dict):
             return TrustRelationship(rel_data)

@@ -619,9 +619,13 @@ class TestOnlyAPendingRowIsReplaceable:
     def test_a_squatter_cannot_promote_its_own_row(self) -> None:
         w = Receiver()
         peer, secret = self._pending(w)
+        # Audit A2: a pending row is never re-paired; its holder's request is
+        # a creation request, refused unless it verifies.
+        before = w.row(peer)
         out = w.request(peer, _new_secret(), bearer=secret)
-        assert out.response.status_code in (201, 202)
-        assert w.row(peer)["verified"] is False
+        assert out.response.status_code not in (201, 202)
+        assert _state(w.row(peer)) == _state(before)
+        assert w.row(peer)["secret"] == secret
         # The real peer's verifying request still replaces it.
         with mock.patch(
             "actingweb.actor.requests.get", side_effect=_peer_answers(peer)
@@ -1393,3 +1397,202 @@ class TestTheCreateRoutesAfterReverify5:
         assert webobj.response.status_code == 302
         approved.assert_called_once()
         assert w.row()["approved"] is True
+
+
+def _reverse_answers(answer_peerid: str | None, meta_id: str) -> Any:
+    """``requests.get`` for a second verification: the reverse URL answers
+    our trust row there (``peerid``) when the host holds the secret, else
+    404; ``/meta`` names ``meta_id``."""
+
+    def get(url: str, **_kw: Any) -> Any:
+        if url.rstrip("/").endswith("/meta"):
+            body = json.dumps({"id": meta_id, "type": "urn:test"})
+        elif answer_peerid:
+            body = json.dumps({"peerid": answer_peerid, "approved": True})
+        else:
+            return mock.Mock(status_code=404, content=b"", json=lambda: {})
+        return mock.Mock(
+            status_code=200, content=body.encode(), json=lambda: json.loads(body)
+        )
+
+    return get
+
+
+class TestIdentityAfterTheAudit:
+    """Audit A2 and A3, reverify-6 Issues 1 and 2: a secret an unproven
+    requester chose never becomes usable, whatever the route."""
+
+    @staticmethod
+    def _unverified(w: Receiver) -> tuple[str, str]:
+        """A stranger's request under a peer's id, with that peer's real base
+        URI and the stranger's secret."""
+        peer = f"peer-q-{uuid.uuid4().hex[:8]}"
+        secret = uuid.uuid4().hex
+        assert Trust(actor_id=aid(w.a), peerid=peer, config=w.config).create(
+            baseuri=f"https://{peer}.example.test/{peer}",
+            peer_type="urn:test",
+            relationship="friend",
+            secret=secret,
+            verified=False,
+            approved=False,
+            peer_approved=True,
+        )
+        return peer, secret
+
+    def test_the_swap_is_conditioned_on_the_authenticating_secret(self) -> None:
+        w = Receiver()
+        before = w.row(w.b)
+        swapped, reason = w.a.replace_trust_secret(
+            peerid=w.b,
+            relationship="friend",
+            secret=_new_secret(),
+            proven_secret="a secret the row no longer holds",
+        )
+        assert swapped is None and "changed" in reason
+        assert _state(w.row(w.b)) == _state(before)
+        swapped, reason = w.a.replace_trust_secret(
+            peerid=w.b,
+            relationship="friend",
+            secret=_new_secret(),
+            proven_secret=w.secrets[w.b],
+        )
+        assert swapped, reason
+
+    def test_a_pending_row_is_never_re_paired(self) -> None:
+        w = Receiver()
+        peer, secret = self._unverified(w)
+        swapped, reason = w.a.replace_trust_secret(
+            peerid=peer, relationship="friend", secret=_new_secret()
+        )
+        assert swapped is None and "pending" in reason
+        assert w.row(peer)["secret"] == secret
+
+    def test_a_row_replaced_after_the_bearer_authenticated_keeps_its_secret(
+        self,
+    ) -> None:
+        """A2: the holder of a pending row authenticates, the owner's own
+        request replaces the row, then the re-pair is decided: it must not
+        land the holder's new secret on the owner's row."""
+        from actingweb.actor import Actor
+
+        w = Receiver()
+        peer, secret = self._unverified(w)
+        owners = uuid.uuid4().hex
+        real_read = Actor.get_trust_relationship
+
+        def replaced_first(self: Actor, peerid: str | None = None) -> Any:
+            assert Trust(actor_id=aid(w.a), peerid=peer, config=w.config).create(
+                baseuri=f"https://{peer}.example.test/{peer}",
+                peer_type="urn:test",
+                relationship="friend",
+                secret=owners,
+                approved=True,
+                verified=True,
+                only_if_pending=True,
+            )
+            return real_read(self, peerid=peerid)
+
+        with mock.patch.object(Actor, "get_trust_relationship", replaced_first):
+            out = w.request(peer, _new_secret(), bearer=secret)
+        assert out.response.status_code == 403
+        assert w.row(peer)["secret"] == owners
+
+    def test_every_approval_route_refuses_an_unverified_row(self) -> None:
+        """A3, reverify-6 Issue 1: the stranger's secret is not held at the
+        base URI, so the second verification fails on every route."""
+        from actingweb.interface.trust_manager import TrustManager
+
+        w = Receiver()
+        peer, secret = self._unverified(w)
+        token = base64.b64encode(f"{w.a.creator}:{PASSPHRASE}".encode()).decode()
+        put = AWWebObj(
+            url=f"https://test.example.com/{aid(w.a)}/trust/friend/{peer}",
+            body=json.dumps({"approved": True}),
+            headers={"Authorization": f"Basic {token}"},
+        )
+        with (
+            mock.patch(
+                "actingweb.actor.requests.get", side_effect=_reverse_answers(None, peer)
+            ),
+            mock.patch("actingweb.actor.requests.post") as notify,
+        ):
+            TrustPeerHandler(put, w.config).put(aid(w.a), "friend", peer)
+            assert put.response.status_code == 403
+            assert not TrustManager(w.a).approve_relationship(peer)
+            assert not w.a.modify_trust_and_notify(
+                relationship="friend", peerid=peer, approved=True
+            )
+            assert not TrustManager(w.a).modify_trust(peer, approved=True)
+            assert not Trust(actor_id=aid(w.a), peerid=peer, config=w.config).modify(
+                approved=True
+            )
+        notify.assert_not_called()
+        row = w.row(peer)
+        assert row["approved"] is False and row["secret"] == secret
+
+    def test_a_request_that_verifies_on_a_second_check_is_approved(self) -> None:
+        from actingweb.interface.trust_manager import TrustManager
+
+        w = Receiver()
+        peer, secret = self._unverified(w)
+        told = mock.Mock(status_code=204, reason="No Content", content=b"")
+        with (
+            mock.patch(
+                "actingweb.actor.requests.get",
+                side_effect=_reverse_answers(aid(w.a), peer),
+            ),
+            mock.patch("actingweb.actor.requests.post", return_value=told),
+        ):
+            assert TrustManager(w.a).approve_relationship(peer)
+        row = w.row(peer)
+        assert row["approved"] is True and row["verified"] is True
+        assert row["secret"] == secret
+
+    def test_a_meta_that_names_another_id_fails_the_second_check(self) -> None:
+        w = Receiver()
+        peer, _ = self._unverified(w)
+        with mock.patch(
+            "actingweb.actor.requests.get",
+            side_effect=_reverse_answers(aid(w.a), "someone-else"),
+        ):
+            assert w.a.reverify_pending_trust(peer) is False
+        assert w.row(peer)["verified"] is False
+
+    def test_the_owners_create_approves_a_request_that_verifies_now(self) -> None:
+        """Reverify-6 Issue 2: a genuine request whose first verification
+        failed is approved in place, not replaced, so both sides still hold
+        the same secret."""
+        w = Initiator()
+        assert Trust(actor_id=aid(w.b), peerid=w.a, config=w.config).modify(
+            approved=False, verified=False, peer_approved=True
+        )
+        told = mock.Mock(status_code=204, reason="No Content", content=b"")
+        with (
+            mock.patch.object(w.b, "get_peer_info", return_value=w.peer_info),
+            mock.patch(
+                "actingweb.actor.requests.get",
+                side_effect=_reverse_answers(aid(w.b), w.a),
+            ),
+            mock.patch("actingweb.actor.requests.post", return_value=told) as post,
+        ):
+            assert w.b.create_reciprocal_trust(
+                url=w.url, secret=_new_secret(), relationship="friend"
+            )
+        row = w.row()
+        assert row["approved"] is True and row["verified"] is True
+        assert row["secret"] == w.secret  # not replaced
+        # The approval notification, not a new creation request.
+        assert post.call_args.kwargs["url"].endswith(f"/trust/friend/{aid(w.b)}")
+
+
+class TestTheApprovalFlagAfterReverify6:
+    def test_each_create_starts_with_the_flag_cleared(self) -> None:
+        """Reverify-6 Issue 9: the flag the hook reads belongs to one call,
+        whichever route made it (not only TrustManager's)."""
+        w = Initiator()
+        w.b.last_trust_approved_on_create = "a stale peer"
+        with mock.patch.object(w.b, "get_peer_info", return_value=None):
+            assert not w.b.create_reciprocal_trust(
+                url=w.url, secret=_new_secret(), relationship="friend"
+            )
+        assert w.b.last_trust_approved_on_create is None

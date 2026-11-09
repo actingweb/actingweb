@@ -337,7 +337,16 @@ class Trust:
         aw_supported: str | None = None,
         aw_version: str | None = None,
         capabilities_fetched_at: str | None = None,
+        *,
+        only_if_secret: str | None = None,
     ) -> bool:
+        """Write the attributes given, in one write conditioned on the row
+        existing. ``approved=True`` is written only to a row stored verified
+        (3.16): a row whose secret an unproven requester chose is never
+        approved, whatever route asks (``Actor.reverify_pending_trust`` first
+        re-runs the verification). ``only_if_secret`` writes only while the
+        row holds that secret (a re-pair's swap). False when nothing was
+        written; a fault raises ``DbError``."""
         if not self.handle:
             logger.debug("Attempted modifcation of trust without handle")
             return False
@@ -387,9 +396,12 @@ class Trust:
             aw_supported=aw_supported,
             aw_version=aw_version,
             capabilities_fetched_at=capabilities_fetched_at,
+            only_if_verified=approved is True,
+            only_if_secret=only_if_secret,
         )
         if not modified:
-            # Not written (the row is gone): keep the copy as it was.
+            # Not written (the row is gone, or a condition failed): keep the
+            # copy as it was.
             self.trust.clear()
             self.trust.update(before)
         return bool(modified)

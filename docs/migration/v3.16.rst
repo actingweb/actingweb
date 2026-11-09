@@ -1288,22 +1288,36 @@ a trust type whose ``acl_rules`` grant only GET on its subscription (the
 pattern ``actingweb_mcp``'s ``subscriber`` type used) needs nothing new: its
 subscribers clear their queue and are unsubscribed as before, and another
 peer's PUT or DELETE answers 403. PUT and DELETE rows an application added
-are harmless. The ``owner`` row on subscriptions is now ``("owner",
-"subscriptions/<id>/<subid>", "GET,PUT,DELETE", "a")``: it never admits
+are harmless. The ``owner`` rows on subscriptions are now ``("owner",
+"subscriptions/<id>", "GET", "a")`` (a peer lists its own) and ``("owner",
+"subscriptions/<id>/<subid>", "GET,PUT,DELETE", "a")``: they never admit
 creating a subscription, which stays with the relationship's own rows. An
 application that reads ``config.access`` for the old ``("owner",
-"subscriptions", "", "a")`` row finds the new one. Through the ``owner``
+"subscriptions", "", "a")`` row finds the new ones. Through the ``owner``
 rows a peer also reads its own trust's permissions and may ``PUT`` its own
 trust row (description, and a base URI whose ``/meta`` names it, 400
 otherwise; approval and permissions stay the owner's). What a peer polls of
 a ``properties`` subscription is filtered by its property permissions, as
 its callbacks are; a change it may not read polls as ``{}``.
 
+**Unapproved peers get nothing, and only a verified request is approved.**
+A trust row this actor has not approved is granted nothing by the
+permission evaluator (properties, methods, actions, MCP); it reaches only
+its own trust row. An owner's approval (``PUT /trust/<rel>/<peer>``, the web
+UI, ``TrustManager.approve_relationship``, ``modify_trust_and_notify``,
+``TrustManager.modify_trust``) lands only on a verified row: approving an
+unverified request repeats its verification and answers 403 when that
+fails. An application that relied on unapproved peers reading data
+approves them; to pair with a peer that does not support verification, the
+owner creates the trust toward the peer's URL. A re-pair applies only to a
+verified or approved row.
+
 **Creating a trust toward a peer whose request waits.** A verified pending
 request is approved (the peer is told and ``trust_fully_approved_local``
 runs, not ``trust_initiated``, from ``POST /trust``, the web form and
-``TrustManager``); a pending request that never verified is
-replaced by the owner's own request, with the owner's secret.
+``TrustManager``); a pending request that never verified is verified
+again first, approved if that passes, and otherwise replaced by the owner's
+own request, with the owner's secret.
 
 **Callbacks are authenticated.** Every ``/callbacks`` request without
 credentials answers 401 with a challenge. The two library branches,

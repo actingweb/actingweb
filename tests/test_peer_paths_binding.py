@@ -807,3 +807,222 @@ class TestAPeersOwnTrustRowAfterReverify5:
             TrustPeerHandler, "PUT", "friend", c, as_peer="c", body={"approved": False}
         )
         assert out.response.status_code != 500
+
+
+class TestAnUnapprovedRowGetsNothingAfterTheAudit:
+    """Audit A1: anyone can file a trust request with a relationship of its
+    choice and its secret then authenticates; the permission evaluator
+    granted such a row its type's permissions. Only an approved row is
+    granted anything."""
+
+    @staticmethod
+    def _unapproved(world: Publisher, name: str, relationship: str) -> None:
+        peer = f"peer-{name}-{uuid.uuid4().hex[:8]}"
+        world.peers[name] = peer
+        world.secrets[name] = uuid.uuid4().hex
+        assert Trust(actor_id=aid(world.a), peerid=peer, config=world.config).create(
+            baseuri=f"https://{peer}.example.test/{peer}",
+            peer_type="urn:test",
+            relationship=relationship,
+            secret=world.secrets[name],
+            approved=False,
+            verified=False,
+        )
+
+    @pytest.mark.parametrize("relationship", ["friend", "admin"])
+    def test_properties_methods_and_actions_refuse_it(
+        self, world: Publisher, relationship: str
+    ) -> None:
+        from actingweb.handlers.actions import ActionsHandler
+        from actingweb.handlers.methods import MethodsHandler
+        from actingweb.handlers.properties import PropertiesHandler
+
+        store = world.a.property
+        assert store is not None
+        store.note = "private to approved peers"
+        self._unapproved(world, "s", relationship)
+        for handler, method, args, body in (
+            (PropertiesHandler, "GET", ("",), None),
+            (PropertiesHandler, "GET", ("note",), None),
+            (PropertiesHandler, "PUT", ("note",), "overwritten"),
+            (PropertiesHandler, "DELETE", ("",), None),
+            (MethodsHandler, "POST", ("anything",), {"x": 1}),
+            (ActionsHandler, "POST", ("anything",), {"x": 1}),
+        ):
+            out = world.call(handler, method, *args, as_peer="s", body=body)
+            assert out.response.status_code in (401, 403), (handler.__name__, method)
+        assert store.note == "private to approved peers"
+
+    def test_an_approved_peer_still_reads(self, world: Publisher) -> None:
+        from actingweb.handlers.properties import PropertiesHandler
+
+        store = world.a.property
+        assert store is not None
+        store.note = "shared"
+        out = world.call(PropertiesHandler, "GET", "note", as_peer="b")
+        assert out.response.status_code == 200
+
+    def test_the_evaluator_denies_every_kind(self, world: Publisher) -> None:
+        from actingweb.permission_evaluator import (
+            PermissionResult,
+            PermissionType,
+            get_permission_evaluator,
+        )
+
+        self._unapproved(world, "s", "admin")
+        ev = get_permission_evaluator(world.config)
+        a, s = aid(world.a), world.peers["s"]
+        assert ev.evaluate_property_access(a, s, "note", "read") == (
+            PermissionResult.DENIED
+        )
+        assert ev.evaluate_method_access(a, s, "m") == PermissionResult.DENIED
+        assert ev.evaluate_action_access(a, s, "x") == PermissionResult.DENIED
+        assert ev.evaluate_tool_access(a, s, "t") == PermissionResult.DENIED
+        assert set(
+            ev.evaluate_bulk_property_access(a, s, ["note", "x"], "read").values()
+        ) == {PermissionResult.DENIED}
+        assert ev.get_allowed_items(a, s, PermissionType.TOOLS) == []
+
+
+class TestOneFilterForPushAndPull:
+    """Reverify-6 Issues 4 to 6 and audit A4: the pushed callback and the
+    pulled diffs pass one filter, which checks the path a direct read of the
+    same property checks: the subtarget, and the resource under it."""
+
+    @staticmethod
+    def _sub(
+        world: Publisher, name: str, subid: str, subtarget: str, resource: str = ""
+    ) -> Subscription:
+        sub = Subscription(
+            actor_id=aid(world.a),
+            peerid=world.peers[name],
+            subid=subid,
+            callback=False,
+            config=world.config,
+        )
+        assert sub.create(
+            target="properties",
+            subtarget=subtarget,
+            resource=resource,
+            granularity="high",
+        )
+        return sub
+
+    @staticmethod
+    def _grant(world: Publisher, name: str, trust_type: str, rules: Any) -> None:
+        from actingweb.trust_permissions import (
+            create_permission_override,
+            get_trust_permission_store,
+        )
+
+        assert get_trust_permission_store(world.config).store_permissions(
+            create_permission_override(
+                actor_id=aid(world.a),
+                peer_id=world.peers[name],
+                trust_type=trust_type,
+                permission_updates={"properties": rules},
+            )
+        )
+
+    def _pull(self, world: Publisher, name: str, subid: str) -> Any:
+        out = world.call(
+            SubscriptionHandler, "GET", world.peers[name], subid, as_peer=name
+        )
+        assert out.response.status_code == 200
+        return json.loads(out.response.body)["data"][0]["data"]
+
+    @pytest.mark.parametrize(
+        ("resource", "readable"), [("private", False), ("open", True)]
+    )
+    def test_a_resource_is_checked_on_both_paths(
+        self, world: Publisher, resource: str, readable: bool
+    ) -> None:
+        """Issue 4: a friend excluded from ``settings/private`` subscribes to
+        ``settings`` with that resource."""
+        self._grant(world, "b", "friend", {"excluded_patterns": ["settings/private"]})
+        sub = self._sub(world, "b", f"sub-r-{resource}", "settings", resource)
+        assert sub.add_diff(blob=json.dumps({"v": 1}))
+        assert self._pull(world, "b", f"sub-r-{resource}") == (
+            {"v": 1} if readable else {}
+        )
+        with mock.patch("actingweb.actor.requests.post") as post:
+            post.return_value = mock.Mock(status_code=204)
+            world.a.callback_subscription(
+                peerid=world.peers["b"],
+                sub_obj=sub,
+                sub=sub.get(),
+                diff={"sequence": 2, "timestamp": "2026-11-09T00:00:00Z"},
+                blob=json.dumps({"v": 1}),
+            )
+        assert post.called is readable
+
+    def test_an_object_value_under_a_subtarget_follows_the_property(
+        self, world: Publisher
+    ) -> None:
+        """Issue 5: a grant of exactly ``settings`` reads the whole object,
+        as ``GET /properties/settings`` does; checking ``settings/<key>``
+        pulled ``{}``."""
+        # The associate type grants public/*; this override adds exactly
+        # "settings".
+        peer = f"peer-s-{uuid.uuid4().hex[:8]}"
+        world.peers["s"] = peer
+        world.secrets["s"] = uuid.uuid4().hex
+        assert Trust(actor_id=aid(world.a), peerid=peer, config=world.config).create(
+            baseuri=f"https://{peer}.example.test/{peer}",
+            peer_type="urn:test",
+            relationship="associate",
+            secret=world.secrets["s"],
+            approved=True,
+            verified=True,
+            peer_approved=True,
+        )
+        self._grant(
+            world, "s", "associate", {"patterns": ["settings"], "operations": ["read"]}
+        )
+        sub = self._sub(world, "s", "sub-s", "settings")
+        assert sub.add_diff(blob=json.dumps({"a": 1}))
+        assert self._pull(world, "s", "sub-s") == {"a": 1}
+
+    def test_a_single_value_is_not_pushed_past_an_exclusion(
+        self, world: Publisher
+    ) -> None:
+        """Audit A4: a subtarget's value that is not an object went out
+        unfiltered on the push."""
+        self._grant(world, "b", "friend", {"excluded_patterns": ["secret"]})
+        sub = self._sub(world, "b", "sub-v", "secret")
+        with mock.patch("actingweb.actor.requests.post") as post:
+            world.a.callback_subscription(
+                peerid=world.peers["b"],
+                sub_obj=sub,
+                sub=sub.get(),
+                diff={"sequence": 1, "timestamp": "2026-11-09T00:00:00Z"},
+                blob=json.dumps("the secret value"),
+            )
+        post.assert_not_called()
+
+
+class TestAPeerListsItsOwnSubscriptions:
+    """Reverify-6 Issue 3: the ``owner`` row admits a peer's listing of its
+    own subscriptions, as on ``master``; never another peer's, never a
+    creation."""
+
+    def test_a_peer_with_no_listing_row_lists_its_own(self, world: Publisher) -> None:
+        g = world.peers["g"]
+        out = world.call(SubscriptionRelationshipHandler, "GET", g, as_peer="g")
+        assert out.response.status_code == 200
+
+    def test_it_lists_no_other_peers(self, world: Publisher) -> None:
+        b = world.peers["b"]
+        out = world.call(SubscriptionRelationshipHandler, "GET", b, as_peer="g")
+        assert out.response.status_code == 403
+
+    def test_it_still_creates_none(self, world: Publisher) -> None:
+        g = world.peers["g"]
+        out = world.call(
+            SubscriptionRelationshipHandler,
+            "POST",
+            g,
+            as_peer="g",
+            body={"target": "properties"},
+        )
+        assert out.response.status_code == 403

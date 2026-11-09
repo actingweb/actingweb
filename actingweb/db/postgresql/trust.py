@@ -442,11 +442,17 @@ class DbTrust:
         aw_supported: str | None = None,
         aw_version: str | None = None,
         capabilities_fetched_at: str | datetime | None = None,
+        *,
+        only_if_verified: bool = False,
+        only_if_secret: str | None = None,
     ) -> bool:
         """
         Modify a trust.
 
-        If bools are None, they will not be changed.
+        If bools are None, they will not be changed. ``only_if_verified``
+        also requires the stored row to be verified, ``only_if_secret`` its
+        secret to be that value: a condition that fails answers False and
+        writes nothing.
 
         Args:
             baseuri: New base URI
@@ -607,6 +613,12 @@ class DbTrust:
 
         # Add WHERE clause parameters
         params.extend([actor_id, peerid])
+        conditions = ["id = %s", "peerid = %s"]
+        if only_if_verified:
+            conditions.append("verified = true")
+        if only_if_secret is not None:
+            conditions.append("secret = %s")
+            params.append(only_if_secret)
 
         try:
             with get_connection() as conn:
@@ -615,13 +627,14 @@ class DbTrust:
                         f"""
                         UPDATE trusts
                         SET {", ".join(updates)}
-                        WHERE id = %s AND peerid = %s
+                        WHERE {" AND ".join(conditions)}
                         """,
                         tuple(params),
                     )
                     updated = cur.rowcount
                 conn.commit()
-            # A row deleted meanwhile is not modified (and not recreated).
+            # A row deleted meanwhile, or one a condition refuses, is not
+            # modified (and not recreated).
             if updated > 0:
                 return True
             self.handle.clear()

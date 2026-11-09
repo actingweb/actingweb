@@ -4,12 +4,16 @@ import datetime
 import json
 import logging
 import os
+import socket
 import threading
 import time
 from collections.abc import Callable
 from typing import Any
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.connection import HTTPConnection, HTTPSConnection
+from urllib3.connectionpool import HTTPConnectionPool, HTTPSConnectionPool
 
 from actingweb import attribute, deletion, peertrustee, property, subscription, trust
 from actingweb.constants import (
@@ -49,20 +53,44 @@ def _answered_by_approved_row(body: dict[str, Any]) -> bool:
     return str(body.get("approved")).lower() == "true"
 
 
+def _has_peer_endpoint(trust_rel: dict[str, Any], actor_id: str | None) -> bool:
+    """Whether a trust row's peer has ActingWeb endpoints to push to: not a
+    row an OAuth2 flow wrote (``established_via``, or for a row from before
+    that field its peer id and a base URI that is none or this actor's own),
+    and a base URI to send to."""
+    from .oauth2_server.trust_lookup import OAUTH2_SOURCES, legacy_oauth2_row
+
+    via = trust_rel.get("established_via")
+    if via in OAUTH2_SOURCES:
+        return False
+    if not via and legacy_oauth2_row(
+        trust_rel.get("peerid"), trust_rel.get("baseuri"), actor_id
+    ):
+        return False
+    return bool(str(trust_rel.get("baseuri") or "").strip())
+
+
 # A verification's GETs (our trust row there, then its /meta) go to a base
 # URI the requester chose. The caller waits at most one deadline for both,
 # whatever the peer does (headers, body, a TLS handshake sent slowly); no
 # redirect is followed and at most the cap is read. The GETs run on a small
-# pool of their own, on sockets the caller can reach: when the deadline
-# passes, the caller shuts the socket down, so the worker's blocked read
-# fails at once and the worker is free again. Once the pool is busy, a
-# verification fails closed instead of waiting.
+# pool of their own. Each socket a GET opens (to the peer, or to the
+# environment's HTTP(S) proxy) is recorded as a duplicate descriptor, which
+# the TLS wrap does not detach: when the deadline passes, the caller shuts it
+# down, so the worker's blocked read or handshake fails at once and the
+# worker is free again; a socket that connects after that is shut down as it
+# arrives. Only a name lookup cannot be cut short; it holds its worker for the
+# resolver's own timeout. When every worker is busy, a verification fails
+# closed at once instead of queueing. A SOCKS proxy is refused.
 _REVERIFY_DEADLINE_SECONDS = 15.0
 _REVERIFY_MAX_BYTES = 64 * 1024
 _VERIFY_WORKERS = 8
 _VERIFY_READ_TIMEOUT: tuple[float, float] = (5, 5)
 _verify_pool: Any = None
 _verify_pool_lock = threading.Lock()
+_verify_slots = threading.BoundedSemaphore(_VERIFY_WORKERS)
+# The sockets of the fetch a pool worker is running (set by ``_fetch_json``).
+_verify_local = threading.local()
 
 
 def _verification_pool() -> Any:
@@ -77,56 +105,131 @@ def _verification_pool() -> Any:
         return _verify_pool
 
 
-def _socket_tracking_session(sockets: list[Any]) -> requests.Session:
-    """A session whose connections record each socket they open in
-    ``sockets`` (before a TLS handshake), so another thread can shut it
-    down. No retries; the environment's proxy settings still apply."""
-    from requests.adapters import HTTPAdapter
-    from urllib3.connection import HTTPConnection, HTTPSConnection
-    from urllib3.connectionpool import HTTPConnectionPool, HTTPSConnectionPool
+class _FetchSockets:
+    """The sockets one verification fetch opened, as duplicate descriptors:
+    shutting a duplicate down ends the connection for the TLS layer above
+    the original too. ``cancel`` (the caller, at the deadline) shuts them
+    down; ``release`` (the worker, when done) only closes the duplicates.
+    After either, a socket that arrives is shut down at once."""
 
-    class _Http(HTTPConnection):
-        def _new_conn(self) -> Any:
-            sock = super()._new_conn()
-            sockets.append(sock)
-            return sock
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._dups: list[socket.socket] = []
+        self._done = False
+        self.session: requests.Session | None = None
 
-    class _Https(HTTPSConnection):
-        def _new_conn(self) -> Any:
-            sock = super()._new_conn()
-            sockets.append(sock)
-            return sock
+    def given_up(self) -> bool:
+        return self._done
 
-    class _HttpPool(HTTPConnectionPool):
-        ConnectionCls = _Http  # type: ignore[assignment]
+    def opened(self, sock: socket.socket) -> None:
+        try:
+            dup = sock.dup()
+        except OSError:
+            dup = None
+        with self._lock:
+            if not self._done and dup is not None:
+                self._dups.append(dup)
+                return
+        # The caller has gone (or the socket cannot be tracked): end it now.
+        for each in (sock, dup):
+            _end_socket(each, shut=True)
+        raise ConnectionAbortedError("the verification was given up")
 
-    class _HttpsPool(HTTPSConnectionPool):
-        ConnectionCls = _Https  # type: ignore[assignment]
+    def cancel(self) -> None:
+        self._finish(shut=True)
 
-    class _Adapter(HTTPAdapter):
-        def init_poolmanager(self, *args: Any, **kwargs: Any) -> None:
-            super().init_poolmanager(*args, **kwargs)
-            self.poolmanager.pool_classes_by_scheme = {  # type: ignore[attr-defined]
-                "http": _HttpPool,
-                "https": _HttpsPool,
-            }
+    def release(self) -> None:
+        self._finish(shut=False)
+        session, self.session = self.session, None
+        if session is not None:
+            try:
+                session.close()
+            except Exception:  # folds DbError: closing a session
+                pass
 
-    session = requests.Session()
-    adapter = _Adapter(max_retries=0)
-    session.mount("http://", adapter)
-    session.mount("https://", adapter)
-    return session
+    def _finish(self, shut: bool) -> None:
+        with self._lock:
+            self._done = True
+            dups, self._dups = self._dups, []
+        for dup in dups:
+            _end_socket(dup, shut=shut)
+
+
+def _end_socket(sock: socket.socket | None, shut: bool) -> None:
+    if sock is None:
+        return
+    if shut:
+        try:
+            sock.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+    try:
+        sock.close()
+    except OSError:
+        pass
+
+
+def _record_socket(sock: Any) -> Any:
+    tracked = getattr(_verify_local, "sockets", None)
+    if tracked is not None:
+        tracked.opened(sock)
+    return sock
+
+
+class _TrackedHttp(HTTPConnection):
+    def _new_conn(self) -> Any:
+        return _record_socket(super()._new_conn())
+
+
+class _TrackedHttps(HTTPSConnection):
+    def _new_conn(self) -> Any:
+        return _record_socket(super()._new_conn())
+
+
+class _TrackedHttpPool(HTTPConnectionPool):
+    ConnectionCls = _TrackedHttp  # type: ignore[assignment]
+
+
+class _TrackedHttpsPool(HTTPSConnectionPool):
+    ConnectionCls = _TrackedHttps  # type: ignore[assignment]
+
+
+def _tracked_pools() -> dict[str, Any]:
+    return {"http": _TrackedHttpPool, "https": _TrackedHttpsPool}
+
+
+class _TrackedAdapter(HTTPAdapter):
+    """Every connection it opens, direct or through the environment's
+    HTTP(S) proxy, is recorded (``_FetchSockets``). No retries."""
+
+    def init_poolmanager(self, *args: Any, **kwargs: Any) -> None:
+        super().init_poolmanager(*args, **kwargs)
+        self.poolmanager.pool_classes_by_scheme = _tracked_pools()  # type: ignore[attr-defined]
+
+    def proxy_manager_for(self, proxy: str, **proxy_kwargs: Any) -> Any:
+        if proxy.lower().startswith("socks"):
+            # Its connections are not ours to record.
+            raise requests.exceptions.InvalidSchema(
+                "A verification does not go through a SOCKS proxy"
+            )
+        manager = super().proxy_manager_for(proxy, **proxy_kwargs)
+        manager.pool_classes_by_scheme = _tracked_pools()
+        return manager
 
 
 def _verification_get(
     url: str,
     headers: dict[str, str],
-    sockets: list[Any],
+    sockets: _FetchSockets,
     timeout: tuple[float, float],
 ) -> Any:
-    """The streamed, redirect-free GET of a verification, on a session
-    whose sockets ``sockets`` collects."""
-    session = _socket_tracking_session(sockets)
+    """The streamed, redirect-free GET of a verification, on a session whose
+    connections ``sockets`` records (the session is closed with it)."""
+    session = requests.Session()
+    sockets.session = session
+    adapter = _TrackedAdapter(max_retries=0)
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
     return session.get(
         url,
         headers=headers,
@@ -136,32 +239,32 @@ def _verification_get(
     )
 
 
-def _shut_down(sockets: list[Any]) -> None:
-    """Shut down every socket a verification opened: a read blocked on one
-    fails at once."""
-    import socket as socket_module
-
-    for sock in list(sockets):
-        try:
-            sock.shutdown(socket_module.SHUT_RDWR)
-        except OSError:
-            pass
-        try:
-            sock.close()
-        except OSError:
-            pass
-
-
 def _fetch_json(
     url: str,
     headers: dict[str, str],
     deadline: float,
-    sockets: list[Any],
+    sockets: _FetchSockets,
     timeout: tuple[float, float],
 ) -> tuple[int | None, Any]:
     """The verification GET itself, on a pool worker (see
     ``_bounded_get_json``)."""
-    if time.monotonic() > deadline:
+    _verify_local.sockets = sockets
+    try:
+        return _read_json(url, headers, deadline, sockets, timeout)
+    finally:
+        _verify_local.sockets = None
+        sockets.release()
+        _verify_slots.release()
+
+
+def _read_json(
+    url: str,
+    headers: dict[str, str],
+    deadline: float,
+    sockets: _FetchSockets,
+    timeout: tuple[float, float],
+) -> tuple[int | None, Any]:
+    if sockets.given_up() or time.monotonic() > deadline:
         return None, None
     try:
         answer = _verification_get(url, headers, sockets, timeout)
@@ -215,20 +318,29 @@ def _bounded_get_json(
     budget = deadline - time.monotonic()
     if budget <= 0:
         return None, None
-    sockets: list[Any] = []
+    if not _verify_slots.acquire(blocking=False):
+        # Every worker is busy: fail closed now rather than queue.
+        logger.warning(
+            f"A verification at {url} was refused: every verification worker is busy"
+        )
+        return None, None
+    sockets = _FetchSockets()
     try:
         future = _verification_pool().submit(
             _fetch_json, url, headers, deadline, sockets, timeout
         )
     except RuntimeError:  # the pool is shut down (interpreter exit)
+        _verify_slots.release()
         return None, None
     try:
         return future.result(timeout=budget)
     except FutureTimeout:
-        future.cancel()
+        if future.cancel():  # it never started: its slot is ours to free
+            _verify_slots.release()
         # The worker may be blocked on the peer's socket (a trickle, a
-        # stalled handshake): shutting it down ends the read now.
-        _shut_down(sockets)
+        # stalled handshake): shutting it down ends the read now, and a
+        # socket it connects later is shut down as it arrives.
+        sockets.cancel()
         logger.warning(f"A verification at {url} gave no answer in time")
         return None, None
     except Exception:  # folds DbError: peer HTTP only
@@ -1735,7 +1847,15 @@ class Actor:
         last_accessed=None,
         last_connected_via=None,
     ):
-        """Changes a trust relationship and noties the peer if approval is changed."""
+        """Changes a trust relationship and notifies the peer if approval is
+        changed. ``approved``, ``verified`` and ``peer_approved`` are a bool
+        or ``"true"``/``"false"``; anything else raises ``ValueError``
+        (3.16), before anything is read or written."""
+        # Text is a flag here too: "true" meets the approval gate, the
+        # binding to the row read and the peer's notification below.
+        approved = trust.as_flag(approved)
+        verified = trust.as_flag(verified)
+        peer_approved = trust.as_flag(peer_approved)
         if not relationship or not peerid:
             return False
         relationships = self.get_trust_relationships(
@@ -3413,6 +3533,11 @@ class Actor:
         trust_rel = self.get_trust_relationship(peerid)
         if not trust_rel:
             return
+        if not _has_peer_endpoint(trust_rel, self.id):
+            # An OAuth2 client's row (its subscriptions are kept under it
+            # since 3.16): the client reads its diffs, nothing is pushed to
+            # it. Its base URI is empty or this actor's own.
+            return
 
         # Filter blob based on peer permissions for property subscriptions
         # (the one filter the pull paths use too).
@@ -3705,10 +3830,17 @@ class Actor:
                 parsed = json.loads(as_text)
             except (TypeError, ValueError):
                 parsed = None
-        children: dict[str, str] = {}
+        children: dict[str, tuple[str, ...]] = {}
         if isinstance(parsed, dict):
+            # A ``list:<name>`` key is checked at both paths it can name: the
+            # list's own (a top-level property, as the whole-target filter
+            # and the list store check it) and the key's own under the
+            # subtarget, as it would be were it plain data. Either excluded
+            # drops it.
             children = {
-                key: key[5:] if key.startswith("list:") else f"{subtarget}/{key}"
+                key: (f"{subtarget}/{key}", key[5:])
+                if key.startswith("list:")
+                else (f"{subtarget}/{key}",)
                 for key in parsed
             }
         try:
@@ -3716,7 +3848,10 @@ class Actor:
             if not evaluator:
                 return None
             result, excluded = evaluator.evaluate_property_with_exclusions(
-                str(self.id), peerid, path, list(children.values())
+                str(self.id),
+                peerid,
+                path,
+                [child for paths in children.values() for child in paths],
             )
         except DbError:
             raise
@@ -3729,7 +3864,9 @@ class Actor:
             return as_text
         assert isinstance(parsed, dict)
         kept = {
-            key: value for key, value in parsed.items() if children[key] not in excluded
+            key: value
+            for key, value in parsed.items()
+            if not any(child in excluded for child in children[key])
         }
         return json.dumps(kept) if kept else None
 

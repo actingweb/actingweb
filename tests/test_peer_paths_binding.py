@@ -419,9 +419,16 @@ class TestTheViewFilter:
         assert view.subscriptions.outbound_subscriptions == []
 
     def test_a_client_view_sees_its_trusts_own(self, world: Publisher) -> None:
+        """A client view lists the subscriptions of the trust row its client
+        resolves to (since reverify-10, never one a passed dict names)."""
+        from actingweb.trust import Trust
+
         actor = self._views(world)
         g = world.peers["g"]
-        view = actor.as_client("client-1", {"peerid": g})
+        assert Trust(actor_id=world.a.id, peerid=g, config=world.config).modify(
+            oauth_client_id="client-1"
+        )
+        view = actor.as_client("client-1")
         assert {s.peer_id for s in view.subscriptions.all_subscriptions} == {g}
 
     def test_a_client_view_with_no_trust_sees_nothing(self, world: Publisher) -> None:
@@ -1049,6 +1056,27 @@ class TestOneFilterForPushAndPull:
         sent = post.call_args.kwargs["data"].decode()
         assert "list:notes" not in sent and '"open"' in sent
 
+    def test_a_list_key_excluded_under_its_subtarget_is_dropped(
+        self, world: Publisher
+    ) -> None:
+        """Reverify-10 Issue 10: a ``list:`` key in a subtarget object is
+        also checked at ``<subtarget>/<key>``, as plain data would be."""
+        self._grant(
+            world, "b", "friend", {"excluded_patterns": ["settings/list:private"]}
+        )
+        sub = self._sub(world, "b", "sub-k", "settings")
+        with mock.patch("actingweb.actor.requests.post") as post:
+            post.return_value = mock.Mock(status_code=204)
+            world.a.callback_subscription(
+                peerid=world.peers["b"],
+                sub_obj=sub,
+                sub=sub.get(),
+                diff={"sequence": 1, "timestamp": "2026-11-09T00:00:00Z"},
+                blob=json.dumps({"list:private": 1, "open": 1}),
+            )
+        sent = post.call_args.kwargs["data"].decode()
+        assert "list:private" not in sent and '"open"' in sent
+
     def test_a_refused_diff_is_logged(
         self, world: Publisher, caplog: pytest.LogCaptureFixture
     ) -> None:
@@ -1057,7 +1085,7 @@ class TestOneFilterForPushAndPull:
         self._grant(world, "b", "friend", {"excluded_patterns": ["secret"]})
         sub = self._sub(world, "b", "sub-d", "secret")
         with (
-            caplog.at_level("WARNING", logger="actingweb.permission_evaluator"),
+            caplog.at_level("DEBUG", logger="actingweb.permission_evaluator"),
             mock.patch("actingweb.actor.requests.post") as post,
         ):
             world.a.callback_subscription(
@@ -1068,10 +1096,13 @@ class TestOneFilterForPushAndPull:
                 blob=json.dumps("the secret value"),
             )
         post.assert_not_called()
-        assert any(
-            "Permission denied" in r.getMessage() and "'secret'" in r.getMessage()
+        denials = [
+            r
             for r in caplog.records
-        )
+            if "Permission denied" in r.getMessage() and "'secret'" in r.getMessage()
+        ]
+        # At debug (reverify-10 Issue 9): this runs per subscriber per write.
+        assert denials and all(r.levelname == "DEBUG" for r in denials)
 
 
 class TestAPeerListsItsOwnSubscriptions:

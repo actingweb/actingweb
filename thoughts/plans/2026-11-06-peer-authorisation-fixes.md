@@ -3675,3 +3675,160 @@ Emm's suite on `16f5972` (environment 9, its adoption worktree unchanged):
 PostgreSQL 2 failed / 7406 passed, DynamoDB 3 failed / 54 passed, the
 `master` baseline's failures by name. The environment 9 server was stopped
 afterwards.
+
+### 2026-11-09, after verification thoughts/verifications/2026-11-09-peer-authorisation-fixes-reverify-10.md
+
+Scope (owner, 2026-11-09): reverify-10 Issues 1 to 10, all in this PR. The
+owner noted that plain HTTP is for development only, never production, so
+the fetch must free its worker over HTTPS. Decision: finish the shutdown and
+keep the environment's proxy, tracking its sockets too; a SOCKS proxy is
+refused for a verification.
+
+#### 81. The verification fetch frees its worker over TLS, through a proxy, and on a late connect; a full pool refuses at once
+
+**Category**: Bug fix (reverify-10 Issues 1 to 4)
+
+**What changed**:
+- **What is recorded.** Each socket a verification GET opens is recorded
+  as a duplicate descriptor (`sock.dup()`), which the TLS wrap does not
+  detach. Shutting the duplicate down ends the connection for the TLS
+  layer too: in the handshake, the headers or the body.
+- **Proxies.** The tracking adapter installs its pool classes on the proxy
+  manager as well (`proxy_manager_for`), so the socket to an HTTP(S) proxy
+  is recorded. A SOCKS proxy raises `InvalidSchema`, so the verification
+  fails closed.
+- **A late socket.** `_FetchSockets` tracks one fetch.
+  - `cancel` (the caller, at the deadline) and `release` (the worker, when
+    done) both mark the fetch finished.
+  - A socket that connects afterwards is shut down as it arrives, and its
+    connect fails.
+  - The worker checks the mark before it starts.
+- **Admission.** A non-blocking semaphore of `_VERIFY_WORKERS` slots:
+  - with every worker busy, a verification fails closed at once, with a
+    warning, instead of queueing;
+  - the worker frees its slot when it ends;
+  - the caller frees it for work that never started.
+- **Cost.** The connection, pool and adapter classes are defined once, at
+  module level; the per-fetch socket list is reached through a thread
+  local. The session is closed with the fetch.
+- **The comment** says what holds, including the one thing that cannot be
+  cut short: a name lookup, which holds its worker for the resolver's own
+  timeout.
+
+**Files affected**: `actingweb/actor.py`; `tests/_verification_fakes.py`
+(signature, docstring pointer); `tests/test_verification_fetch.py`:
+- `TestOverTls`: a trickled handshake, and trickled headers after the
+  handshake, each on every worker, then an honest HTTPS peer is answered.
+  The client trusts a self-signed certificate through `REQUESTS_CA_BUNDLE`.
+- `TestThroughAProxy`: `http` and `https` targets through a trickling
+  proxy, then an honest direct peer is answered. `test_a_socks_proxy_is_refused`
+  passed before too, because requests lacks PySocks here; it is a control.
+- `TestLateAndFull`: a connect delayed past the deadline, on every worker,
+  is shut down as it arrives; a ninth verification with every worker busy
+  is refused in under 0.5 s.
+
+The six new tests other than the SOCKS control failed on the code before.
+The honest-peer helper waits 0.3 s before its fetch: a worker frees itself
+once its read fails, just after its caller returned.
+
+**Rationale**: reverify-10. Production peers are HTTPS, and there the
+shutdown reached no socket, so iteration 76 freed no worker in production.
+Proxies were not tracked, a late connect escaped, and the comment's "fails
+closed instead of waiting" was false.
+
+#### 82. Nothing is pushed to a client's trust row
+
+**Category**: Bug fix (reverify-10 Issue 5; a side effect of iteration 79)
+
+**What changed**: `callback_subscription` returns without sending when the
+subscriber's trust row has no ActingWeb endpoint (`_has_peer_endpoint`):
+- a row an OAuth2 flow wrote (`established_via` in `OAUTH2_SOURCES`);
+- a row from before that field which `legacy_oauth2_row` recognises;
+- a row with no base URI.
+
+The client reads its diffs, as before.
+
+**Files affected**: `actingweb/actor.py`; `tests/test_trust_re_pair.py` -
+`TestTheClientViewAfterReverify10::test_a_clients_subscription_gets_no_push`
+(failed before: the write POSTed to the client row's empty base URI), and
+`test_a_peers_subscription_is_still_pushed` (the control).
+
+**Rationale**: since iteration 79 a client's subscription is kept under its
+trust row. Every write then pushed to that row's base URI: empty, or this
+actor's own on a legacy row, carrying the client's secret. With sync
+callbacks each push blocked the write. Before, the subscription sat under
+the client id, which has no row, so nothing was sent.
+
+#### 83. A client's listing and its row's resolution
+
+**Category**: Bug fix (reverify-10 Issues 6 and 7)
+
+**What changed**:
+- **The listing.** `_own_rows` lists a client's rows by its trust's peer id
+  and its client id, where subscriptions were filed before 3.16. A peer id
+  named in a passed trust dict no longer counts, matching iteration 79's
+  rule for permissions.
+- **The resolution.** `AuthContext.permission_id` drops the resolver only
+  after it answered. A `DbError` propagates, and the next check tries
+  again instead of staying on the bare client id.
+
+**Files affected**: `actingweb/interface/authenticated_views.py`;
+`tests/test_trust_re_pair.py` - `test_a_listing_ignores_a_peer_id_passed_in`
+and `test_a_fault_while_resolving_is_retried` (both failed before).
+`tests/test_peer_paths_binding.py::TestTheViewFilter::test_a_client_view_sees_its_trusts_own`
+built its view from a passed peer id. It now tags the row with the client's
+`oauth_client_id` and lets the view resolve it, as MCP authentication does.
+
+**Rationale**: as reverify-10 found.
+
+#### 84. Flags in `modify_trust_and_notify`, the denial log's level, list keys at both paths, the changelog
+
+**Category**: Verification fix (reverify-10 Issues 8, 9 and 10)
+
+**What changed**:
+- **Flags.** `Actor.modify_trust_and_notify` parses `approved`, `verified`
+  and `peer_approved` with `trust.as_flag` before anything else.
+  - Text `"true"` now meets its re-verify gate, the binding to the row
+    read, and the peer's notification.
+  - Anything else raises `ValueError` instead of being folded into False
+    by the write's `except Exception`.
+  - `TrustManager.modify_trust` documents the `Raises:`.
+- **The denial log** is at debug. It runs for every subscriber on every
+  write.
+- **List keys.** A `list:<name>` key under a subtarget is checked at both
+  paths it can name: the list's (`<name>`) and the key's own
+  (`<subtarget>/list:<name>`). Either excluded drops it.
+- **Changelog.**
+  - The fetch sentence names TLS, the proxy, SOCKS and the refusal of a
+    full pool.
+  - The client-view sentence says nothing is pushed to a client's row.
+  - `modify_trust_and_notify` joins the `ValueError` behaviour change.
+
+**Files affected**: `actingweb/actor.py`,
+`actingweb/interface/trust_manager.py`, `actingweb/permission_evaluator.py`,
+`CHANGELOG.rst`. Tests:
+- `tests/test_trust_re_pair.py` - `TestFlagsAfterReverify10`: text
+  `"true"` reaches the gate; `1` and `"yes"` raise and leave the row
+  approved.
+- `tests/test_peer_paths_binding.py` -
+  `test_a_list_key_excluded_under_its_subtarget_is_dropped` (new), and
+  `test_a_refused_diff_is_logged`, now asserting DEBUG.
+
+All five failed on the code before.
+
+**Rationale**: as reverify-10 found. Its Issue 10 is the other half of
+reverify-9 Issue 7: under a subtarget, a `list:` key is plain data, which
+the bare-name check alone let escape `<subtarget>/...` exclusions.
+
+The Full tier on the code of iterations 81 to 84:
+- **Checks:** ruff, format and pyright are clean; `verify_groups` OK.
+- **DynamoDB:** 6168 passed.
+- **PostgreSQL:** 5965 passed.
+- **Docs:** the build passes.
+- **Wire:** no recording changed.
+
+Its first run failed on three tests:
+- **Two were mine.** A `sed` for iteration 84's new test had rewritten
+  the exclusion of two neighbouring tests as well. I restored them.
+- **One is noted in iteration 83:** the client-view listing test that
+  passed a peer id.

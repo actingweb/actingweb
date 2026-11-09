@@ -5,7 +5,7 @@ A verification reads its peer through ``actingweb.actor._verification_get``
 peer's answers patch ``actingweb.actor.requests.get``; this fixture routes
 the verification there, with the same arguments, so those fakes see every
 verification GET. The real path is tested on its own, against a real slow
-socket (``tests/test_trust_re_pair.py``, ``TestTheSocketIsShutDown``).
+socket, over TLS and through a proxy (``tests/test_verification_fetch.py``).
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ def verification_through_requests_get(
     from actingweb import actor as actor_module
 
     def through_requests_get(
-        url: str, headers: dict[str, str], sockets: list[Any], timeout: Any
+        url: str, headers: dict[str, str], sockets: Any, timeout: Any
     ) -> Any:
         return actor_module.requests.get(
             url=url,

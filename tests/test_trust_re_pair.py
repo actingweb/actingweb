@@ -2209,6 +2209,73 @@ class TestTheClientViewAfterReverify9:
             lookup.assert_called_once()
 
 
+class TestTheClientViewAfterReverify10:
+    """Reverify-10 Issues 5 to 7."""
+
+    def test_a_clients_subscription_gets_no_push(self) -> None:
+        """Issue 5: a client's subscription is kept under its trust row, which
+        has no endpoint to push to; a write sends nothing."""
+        from actingweb.interface.actor_interface import ActorInterface
+
+        w = Receiver()
+        client_id = f"mcp_{uuid.uuid4().hex[:8]}"
+        TestTheClientViewAfterReverify8._client(w, client_id)
+        view = ActorInterface(w.a).as_client(client_id)
+        with mock.patch(
+            "actingweb.interface.authenticated_views.AuthenticatedSubscriptionManager._check_subscription_permission"
+        ):
+            assert view.subscriptions.create_local_subscription("properties")
+        with (
+            mock.patch("actingweb.actor.requests.post") as post,
+            mock.patch("httpx.AsyncClient.post") as async_post,
+        ):
+            ActorInterface(w.a).properties["notes"] = "changed"
+        post.assert_not_called()
+        async_post.assert_not_called()
+
+    def test_a_peers_subscription_is_still_pushed(self) -> None:
+        """The control: a peer with an endpoint is pushed to."""
+        w = Receiver()
+        assert w.a.create_subscription(
+            peerid=w.b, target="properties", granularity="high"
+        )
+        with mock.patch("actingweb.actor.requests.post") as post:
+            w.a.register_diffs(target="properties", subtarget="kept", blob='{"x": 1}')
+        assert post.called
+
+    def test_a_listing_ignores_a_peer_id_passed_in(self) -> None:
+        """Issue 6: a trust dict naming another peer does not list that
+        peer's subscriptions."""
+        from actingweb.interface.actor_interface import ActorInterface
+
+        w = Receiver()
+        assert w.a.create_subscription(
+            peerid=w.b, target="properties", granularity="high"
+        )
+        view = ActorInterface(w.a).as_client("mcp_stranger", {"peerid": w.b})
+        assert view.subscriptions.all_subscriptions == []
+
+    def test_a_fault_while_resolving_is_retried(self) -> None:
+        """Issue 7: a DbError on the first lookup leaves the view able to
+        resolve its row on the next check."""
+        from actingweb.db.exceptions import DbError
+        from actingweb.interface.actor_interface import ActorInterface
+
+        w = Receiver()
+        client_id = f"mcp_{uuid.uuid4().hex[:8]}"
+        peer = TestTheClientViewAfterReverify8._client(w, client_id)
+        view = ActorInterface(w.a).as_client(client_id)
+        with (
+            mock.patch(
+                "actingweb.oauth2_server.trust_lookup.find_client_trust",
+                side_effect=DbError("down"),
+            ),
+            pytest.raises(DbError),
+        ):
+            _ = view._auth_context.permission_id
+        assert view._auth_context.permission_id == peer
+
+
 class TestTheRePairAnswerAfterReverify9:
     def test_a_re_pair_of_an_unapproved_row_answers_without_its_token(
         self,
@@ -2220,3 +2287,31 @@ class TestTheRePairAnswerAfterReverify9:
         assert out.response.status_code == 202
         body = json.loads(out.response.body)
         assert "verification_token" not in body and "secret" not in body
+
+
+class TestFlagsAfterReverify10:
+    """Reverify-10 Issue 8: ``modify_trust_and_notify`` parses its flags as
+    the other routes do."""
+
+    def test_text_true_meets_the_gate(self) -> None:
+        w = Receiver()
+        peer, _ = TestIdentityAfterTheAudit._unverified(w)
+        with mock.patch.object(
+            type(w.a), "reverify_pending_trust", return_value=False
+        ) as gate:
+            assert (
+                w.a.modify_trust_and_notify(
+                    relationship="friend", peerid=peer, approved="true"
+                )
+                is False
+            )
+        gate.assert_called_once_with(peer)
+
+    @pytest.mark.parametrize("value", [1, "yes"])
+    def test_anything_else_raises(self, value: Any) -> None:
+        w = Receiver()
+        with pytest.raises(ValueError):
+            w.a.modify_trust_and_notify(
+                relationship="friend", peerid=w.b, approved=value
+            )
+        assert w.row(w.b)["approved"] is True

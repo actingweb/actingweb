@@ -82,8 +82,10 @@ class AuthContext:
         if self.peer_id:
             return self.peer_id
         if self.client_id and not self.client_peer_id and self._client_resolver:
-            resolver, self._client_resolver = self._client_resolver, None
-            self.client_peer_id = resolver()
+            # The resolver is dropped only once it answered: a fault (a
+            # DbError, which propagates) leaves the next check to try again.
+            self.client_peer_id = self._client_resolver()
+            self._client_resolver = None
         return self.client_peer_id or self.client_id
 
     @property
@@ -733,22 +735,16 @@ class AuthenticatedSubscriptionManager:
 
         Owner mode (no accessor) sees every row. A peer view sees the rows
         whose peer is the peer itself; a client view the rows whose peer is
-        its trust's peer id, its client id or the peer id its trust dict
-        names."""
+        its trust's peer id or its client id (where subscriptions were filed
+        before 3.16), never a peer id a passed trust dict names."""
         if not self._auth_context.accessor_id:
             return subscriptions
         if self._auth_context.is_peer:
             own = {self._auth_context.peer_id}
         else:
-            # A client's rows: its resolved trust's peer id (the one
-            # ``create_local_subscription`` files under), and, as before, its
-            # client id and the peer id a passed trust dict names.
-            trust = self._auth_context.trust_relationship
-            given = trust.get("peerid") or trust.get("peer_id") if trust else ""
             own = {
                 self._auth_context.permission_id,
                 self._auth_context.accessor_id,
-                str(given or ""),
             }
         own.discard("")
         return [sub for sub in subscriptions if getattr(sub, "peer_id", None) in own]

@@ -564,8 +564,9 @@ class PermissionEvaluator:
                 rules, property_path, operation, suppress_logging=True
             )
             if result == PermissionResult.DENIED:
-                # As evaluate_permission logs a denial.
-                logger.warning(
+                # A trace of the refusal (debug: this runs for every
+                # subscriber on every write, where a denial is routine).
+                logger.debug(
                     f"Permission denied: {actor_id}:{peer_id} -> "
                     f"properties:{property_path!r}:{operation}"
                 )

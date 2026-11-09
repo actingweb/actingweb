@@ -879,6 +879,10 @@ class TrustManager:
 
         Returns:
             True if modification succeeded, False otherwise
+
+        Raises:
+            ValueError: ``approved``, ``verified`` or ``peer_approved`` is
+                not a bool, ``"true"`` or ``"false"`` (3.16).
         """
         from ..trust import as_flag
 

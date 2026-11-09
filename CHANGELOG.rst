@@ -25,7 +25,8 @@ SECURITY
   is evaluated as the client's trust row (the one MCP authentication
   resolves, never a peer id the caller passes), so a client with no trust
   row gets nothing; a subscription such a view creates is kept under that
-  trust's peer id. **Check:**
+  trust's peer id, and nothing is pushed to it (a client's trust row has no
+  endpoint: the client reads its diffs). **Check:**
   an application that served data to unapproved peers on purpose (the
   specification allows an unapproved ``associate``) approves them instead.
 - **Callbacks were accepted without authentication, and a low-granularity
@@ -110,13 +111,16 @@ SECURITY
   the requester's base URI with the request's secret, answered by a row
   the host approved, and its ``/meta``; each verification, its GET and its
   ``/meta`` together, follows no redirect, reads at most 64 KB per answer
-  and gives up after 15 seconds in all, the socket shut down then); one that fails is refused (403 on the PUT, with a
+  and gives up after 15 seconds in all, its connection, over TLS or through
+  the environment's HTTP(S) proxy, shut down then; a SOCKS proxy is not
+  used, and with all eight verification workers busy a verification is
+  refused at once); one that fails is refused (403 on the PUT, with a
   JSON ``error``, or a page with a way back for the web UI's form, whose
   trust page marks such a request "unverified" and offers no Approve). A
   PUT for a missing row answers 404, and one that approves a pending row
   and changes its base URI answers 400. An approval lands only on the row
-  it was decided for, and the peer is told only when it landed. **Behavior change:** ``Trust.modify`` and
-  ``TrustManager.modify_trust`` take ``approved``, ``verified`` and
+  it was decided for, and the peer is told only when it landed. **Behavior change:** ``Trust.modify``,
+  ``TrustManager.modify_trust`` and ``Actor.modify_trust_and_notify`` take ``approved``, ``verified`` and
   ``peer_approved`` as a bool or ``"true"``/``"false"``; any other value
   (``1``, ``"yes"``) raises ``ValueError`` instead of being stored as
   True. A stranger's request under a real

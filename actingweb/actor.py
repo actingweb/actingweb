@@ -71,6 +71,37 @@ def _has_peer_endpoint(trust_rel: dict[str, Any], actor_id: str | None) -> bool:
     return bool(str(trust_rel.get("baseuri") or "").strip())
 
 
+def _resync_url(config: Any, actor_id: str | None, target: str, subtarget: Any) -> str:
+    """The URL a resync points at: the subscription's target (and subtarget)
+    on this actor."""
+    url = f"{config.proto}{config.fqdn}/{actor_id}/{target}"
+    return f"{url}/{subtarget}" if subtarget else url
+
+
+def resync_marker(url: str) -> dict[str, str]:
+    """A client's resync, stored as its next diff (it has no endpoint to
+    send a resync callback to): the client re-reads ``url`` under its own
+    grant, as on a resync callback. No data is stored."""
+    return {"type": "resync", "url": url}
+
+
+def resync_marker_url(raw: Any, own_root: str) -> str | None:
+    """The URL of a stored resync marker, or None for any other diff. Only
+    a marker pointing under this actor (``own_root``, ending in ``/``)
+    counts; an owner's data that happens to look like one only makes the
+    client re-read."""
+    try:
+        parsed = json.loads(raw) if isinstance(raw, str | bytes) else raw
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(parsed, dict) or set(parsed) != {"type", "url"}:
+        return None
+    url = parsed.get("url")
+    if parsed.get("type") != "resync" or not isinstance(url, str):
+        return None
+    return url if url.startswith(own_root) else None
+
+
 # A verification's GETs (our trust row there, then its /meta) go to a base
 # URI the requester chose. The caller waits at most one deadline for both,
 # whatever the peer does (headers, body, a TLS handshake sent slowly); no
@@ -4095,7 +4126,8 @@ class Actor:
 
         Sends a resync callback to ALL subscriptions on this target/subtarget,
         telling them to do a full GET to re-sync their state. An OAuth2
-        client's subscription gets the full state as its next diff instead.
+        client's subscription gets a resync marker as its next diff instead
+        (it re-reads the target under its own grant).
 
         Args:
             target: Target resource (e.g., "properties")
@@ -4175,8 +4207,8 @@ class Actor:
         (an HTTP failure or a permanent store error), for the record a later
         :meth:`resume_subscriptions` re-sends to. A subscription kept under
         an OAuth2 client's trust row is sent nothing (a client reads its
-        diffs): its resync is the full state stored as its next diff, counted
-        when stored and missed when not.
+        diffs): its resync is a marker stored as its next diff (it re-reads the
+        target under its own grant), counted when stored and missed when not.
 
         Every subscriber gets its attempt. If any hit a transient fault, the
         suspension is put back (when ``suspension`` is given) and the first
@@ -4428,8 +4460,8 @@ class Actor:
 
         Returns:
             True if callback was sent/scheduled successfully, or, for an
-            OAuth2 client's trust row (nothing is pushed to it), the full
-            state was stored as its next diff
+            OAuth2 client's trust row (nothing is pushed to it), a resync
+            marker was stored as its next diff (``resync_marker``)
         """
         from datetime import UTC, datetime
 
@@ -4455,8 +4487,12 @@ class Actor:
         if not _has_peer_endpoint(trust_data, self.id):
             # An OAuth2 client's row (as in callback_subscription): nothing is
             # pushed to it, it reads its diffs. The changes made while
-            # suspended stored none, so its resync is the full state stored as
-            # its next diff.
+            # suspended stored none, so its next diff is a resync marker:
+            # the client re-reads the URL under its own grant. No data is
+            # stored, so nothing escapes its grant, and a second marker (a
+            # retried resume) only repeats the re-read.
+            if not self.config:
+                return False
             new_seq = self._increment_subscription_sequence(peer_id, sub_id)
             if not new_seq:
                 logger.warning(
@@ -4464,8 +4500,13 @@ class Actor:
                 )
                 return False
             return bool(
-                self._store_full_state_diff(
-                    peer_id, sub_id, new_seq, target, sub_subtarget
+                self._store_subscription_diff(
+                    peer_id,
+                    sub_id,
+                    new_seq,
+                    resync_marker(
+                        _resync_url(self.config, self.id, target, sub_subtarget)
+                    ),
                 )
             )
 
@@ -4545,9 +4586,7 @@ class Actor:
         if not self.config:
             logger.warning("No config available for building resource URL")
             return False
-        resource_url = f"{self.config.proto}{self.config.fqdn}/{self.id}/{target}"
-        if sub_subtarget:
-            resource_url += f"/{sub_subtarget}"
+        resource_url = _resync_url(self.config, self.id, target, sub_subtarget)
 
         # Build callback payload - use resync type only if peer supports it
         if supports_resync:
@@ -4566,8 +4605,23 @@ class Actor:
             logger.debug(f"Sending resync callback to peer {peer_id} (supports resync)")
         else:
             # Fallback: create a full-state diff and send low-granularity callback
-            diff_url = self._store_full_state_diff(
-                peer_id, sub_id, new_seq, target, sub_subtarget
+            # Get the full current state
+            list_keys: set[str] = set()
+            full_state = self._get_full_state_for_subscription(
+                target, sub_subtarget, list_keys
+            )
+            # A list's full state is an "extend" diff nested under the list
+            # name. Over the span threshold, list diffs become references
+            # (the subscriber re-reads), per list and then largest first
+            # until the whole blob fits the diff row, so the store does not
+            # fail on the row cap.
+            from .property_list import fit_full_state
+
+            full_state = fit_full_state(full_state, self.config, list_keys=list_keys)
+
+            # Store as a subscription diff
+            diff_url = self._store_subscription_diff(
+                peer_id, sub_id, new_seq, full_state
             )
             if not diff_url:
                 return False
@@ -4604,28 +4658,6 @@ class Actor:
             # Local mode: async fire-and-forget
             self._send_resync_callback_async(callback_url, payload, secret, peer_id)
             return True  # Scheduled (not confirmed)
-
-    def _store_full_state_diff(
-        self,
-        peer_id: str,
-        sub_id: str,
-        sequence: int,
-        target: str,
-        subtarget: str | None,
-    ) -> str:
-        """Store the target's full current state as the subscription's diff
-        at ``sequence``; its URL, or "" when it was not stored."""
-        list_keys: set[str] = set()
-        full_state = self._get_full_state_for_subscription(target, subtarget, list_keys)
-        # A list's full state is an "extend" diff nested under the list
-        # name. Over the span threshold, list diffs become references
-        # (the subscriber re-reads), per list and then largest first
-        # until the whole blob fits the diff row, so the store does not
-        # fail on the row cap.
-        from .property_list import fit_full_state
-
-        full_state = fit_full_state(full_state, self.config, list_keys=list_keys)
-        return self._store_subscription_diff(peer_id, sub_id, sequence, full_state)
 
     def _get_full_state_for_subscription(
         self,

@@ -3988,3 +3988,59 @@ Emm's suite on `ad95c79` (environment 9, its adoption worktree unchanged):
 PostgreSQL 2 failed / 7406 passed, DynamoDB 3 failed / 54 passed, the
 `master` baseline's failures by name. The environment 9 server was stopped
 afterwards.
+
+### 2026-11-09, after verification thoughts/verifications/2026-11-09-peer-authorisation-fixes-reverify-13.md
+
+Scope (owner, 2026-11-09: option 1 of Issue 1): a client's resync is a
+marker, not the state. That closes Issues 1 to 4, 7 and 8 at once; Issue 5
+becomes moot for clients (a used number with no row only makes a gap the
+next marker covers). Issues 6, 9, 10 and 11 are left by the owner's rule.
+
+#### 90. A client's resync is a marker; it re-reads under its own grant
+
+**Category**: Decision changed (reverify-13 Issue 1, owner option 1);
+replaces iteration 88's stored full state
+
+**What changed**:
+- `_callback_subscription_resync`, for a client's trust row, stores
+  `resync_marker(url)` (`{"type": "resync", "url": <target[/subtarget]> on
+  this actor}`) as the subscription's next diff, instead of the full state.
+  No data is stored, so nothing can escape the client's grant, a retried
+  resume only repeats the re-read, an unbuildable state cannot be counted,
+  and nothing is rebuilt per subscription.
+- `GET /subscriptions/<peer>/<sub>` and `/<seq>` serve a marker (only one
+  pointing under this actor: `resync_marker_url`) as `"type": "resync"`, its
+  `url` and `"data": {}`, the fields a resync callback carries; a reader that
+  does not know the type merges `{}`, a no-op.
+- The fallback's full-state build is inline again (iteration 88's helper had
+  one caller left); the resync URL is one helper for both branches.
+- Spec ("Resync Callback"): a subscriber that polls MAY find its resync as a
+  diff and SHOULD act on it as on the callback. Changelog and
+  `docs/guides/subscriptions.rst` say the same.
+
+**Files affected**:
+- `actingweb/actor.py`: `_resync_url`, `resync_marker`, `resync_marker_url`,
+  the client branch, the docstrings.
+- `actingweb/handlers/subscription.py`: `_served`, both read paths.
+- `tests/test_trust_re_pair.py`: `test_a_clients_row_gets_a_resync_marker`
+  (both row kinds; the stored diff is the marker) and
+  `test_the_marker_carries_nothing_the_grant_excludes` (a client subscribed
+  to `notes` with `notes/private` excluded, read through both handler
+  paths with its own bearer: `type` resync, the URL, empty data, the
+  excluded value nowhere in the body). Both failed on the code before.
+- `CHANGELOG.rst`, `docs/guides/subscriptions.rst`,
+  `docs/protocol/actingweb-spec.rst`.
+- `thoughts/todo/full-state-fallback-replica.md`: two more items for the
+  peer fallback found here (a scalar subtarget's full state raises "not JSON
+  serializable" and the resume returns 0 after removing the suspension; the
+  wrapped shape would escape the grant's exclusions).
+
+**Rationale**: storing the state as an ordinary diff sent clients data
+their grant excludes (a subscription to one property) and corrupted a
+merging client's copy (deleted properties kept, list items appended twice,
+again on a retry). A re-read under the client's own grant has none of
+that, and matches the resync callback the spec already defines.
+
+The Full tier on the code of iteration 90: ruff, format and pyright clean;
+`verify_groups` OK; DynamoDB 6176 passed; PostgreSQL 5973 passed; the docs
+build passes; no recording changed.

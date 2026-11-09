@@ -260,7 +260,10 @@ Full state replacement, triggered when:
 
 An OAuth2 client's subscription (one an ``as_client`` view created) is sent
 no callback: the client reads its diffs. On ``resume_subscriptions()`` its
-resync is the full state, stored as its next diff.
+next diff is a resync marker: ``GET /subscriptions/<peerid>/<subid>`` (and
+``/<seq>``) serves it with ``"type": "resync"``, the ``url`` to re-read and
+empty ``data``. The client discards its cached state for the target and
+GETs the URL, under its own grant, as on a resync callback.
 
 Resync callbacks include a ``type`` field and a ``url`` to fetch the full state:
 

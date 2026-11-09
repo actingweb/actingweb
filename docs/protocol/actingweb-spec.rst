@@ -3005,6 +3005,13 @@ On receiving a resync callback, the peer SHOULD:
 3. Update local sequence tracking to the callback's sequence number
 4. Respond with ``204 No Content``
 
+A subscriber with no callback endpoint (it reads its diffs by polling) MAY
+find its resync as a diff: a GET on the subscription (or on the diff's own
+URL) then shows that sequence with ``"type": "resync"``, the ``url`` and an
+empty ``data`` object. The subscriber SHOULD act on it as on a resync
+callback (steps 1 to 3); one that does not know the type merges ``{}``, a
+change that changes nothing.
+
 Permission Callback (OPTIONAL)
 ------------------------------
 

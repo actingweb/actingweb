@@ -2278,41 +2278,40 @@ class TestTheClientViewAfterReverify10:
 
 class TestTheResyncAfterReverify11:
     """Reverify-11 Issue 1: a resume sends nothing to a client's trust row
-    and records no miss for it. Reverify-12 Issue 1: its resync is the full
-    state, stored as its next diff (the changes made while suspended stored
-    none), and counted."""
+    and records no miss for it. Reverify-12 Issue 1 and reverify-13 Issue 1
+    (owner: option 1): its resync is a marker stored as its next diff, and
+    the client re-reads the target under its own grant; no data is stored,
+    so nothing escapes the grant."""
 
     @staticmethod
-    def _client_sub(w: Receiver, via: str, baseuri: str) -> str:
+    def _client_sub(
+        w: Receiver, via: str, baseuri: str, subtarget: str = ""
+    ) -> tuple[str, str, str]:
+        """A client's trust row and its subscription: (peer, subid, secret)."""
         peer = f"{via}:user@example.test:{uuid.uuid4().hex[:8]}"
+        secret = uuid.uuid4().hex
         trust = Trust(actor_id=aid(w.a), peerid=peer, config=w.config)
         assert trust.create(
             baseuri=baseuri,
             peer_type="mcp",
             relationship="friend",
-            secret=uuid.uuid4().hex,
+            secret=secret,
             approved=True,
             verified=True,
             peer_approved=True,
             established_via=via,
         )
         assert w.a.create_subscription(
-            peerid=peer, target="properties", granularity="high"
+            peerid=peer, target="properties", subtarget=subtarget, granularity="high"
         )
-        return peer
+        subs = w.a.get_subscriptions(peerid=peer, target="properties")
+        assert subs
+        return peer, str(subs[0]["subscriptionid"]), secret
 
-    @pytest.mark.parametrize(
-        "via,own_uri",
-        [("oauth2_client", False), ("oauth2_interactive", True)],
-    )
-    def test_a_clients_row_gets_its_resync_as_a_diff(
-        self, via: str, own_uri: bool
-    ) -> None:
-        w = Receiver()
-        baseuri = f"{w.config.root}{aid(w.a)}" if own_uri else ""
-        peer = self._client_sub(w, via, baseuri)
+    @staticmethod
+    def _resume_after_a_write(w: Receiver, name: str, value: str) -> int:
         assert w.a.suspend_subscriptions("properties")
-        w.a.set_property("during", "the suspension")
+        w.a.set_property(name, value)
         with (
             mock.patch("actingweb.actor.requests.post") as post,
             mock.patch("httpx.AsyncClient.post") as async_post,
@@ -2320,16 +2319,82 @@ class TestTheResyncAfterReverify11:
             count = w.a.resume_subscriptions("properties")
         post.assert_not_called()
         async_post.assert_not_called()
-        assert count == 1
-        subs = w.a.get_subscriptions(peerid=peer, target="properties")
-        assert subs
-        [sub] = subs
-        sub_obj = w.a.get_subscription_obj(peerid=peer, subid=sub["subscriptionid"])
+        return count
+
+    @pytest.mark.parametrize(
+        "via,own_uri",
+        [("oauth2_client", False), ("oauth2_interactive", True)],
+    )
+    def test_a_clients_row_gets_a_resync_marker(self, via: str, own_uri: bool) -> None:
+        w = Receiver()
+        baseuri = f"{w.config.root}{aid(w.a)}" if own_uri else ""
+        peer, subid, _ = self._client_sub(w, via, baseuri)
+        assert self._resume_after_a_write(w, "during", "the suspension") == 1
+        sub_obj = w.a.get_subscription_obj(peerid=peer, subid=subid)
         assert sub_obj
         diffs = sub_obj.get_diffs()
         assert len(diffs) == 1
-        assert json.loads(diffs[0]["diff"]).get("during") == "the suspension"
+        assert json.loads(diffs[0]["diff"]) == {
+            "type": "resync",
+            "url": f"{w.config.proto}{w.config.fqdn}/{aid(w.a)}/properties",
+        }
         assert w.a._resync_pending("properties", None) is None
+
+    def _client_reads(
+        self, w: Receiver, peer: str, subid: str, secret: str, seq: int | None
+    ) -> Any:
+        from actingweb.handlers.subscription import (
+            SubscriptionDiffHandler,
+            SubscriptionHandler,
+        )
+
+        webobj = AWWebObj(
+            url=f"https://test.example.com/{aid(w.a)}/x",
+            params={},
+            body=None,
+            headers={"Authorization": f"Bearer {secret}"},
+        )
+        if seq is None:
+            SubscriptionHandler(webobj, w.config).get(aid(w.a), peer, subid)
+        else:
+            SubscriptionDiffHandler(webobj, w.config).get(aid(w.a), peer, subid, seq)
+        assert webobj.response.status_code == 200, webobj.response.status_code
+        return webobj.response.body
+
+    @pytest.mark.parametrize("by_sequence", [False, True])
+    def test_the_marker_carries_nothing_the_grant_excludes(
+        self, by_sequence: bool
+    ) -> None:
+        """Reverify-13 Issue 1: a client subscribed to one property, its
+        grant excluding a key of it. The resync as the client reads it
+        (``GET /subscriptions/<peer>/<sub>`` and ``/<seq>``): the marker,
+        empty data, and the excluded value nowhere."""
+        from actingweb.trust_permissions import (
+            create_permission_override,
+            get_trust_permission_store,
+        )
+
+        w = Receiver()
+        peer, subid, secret = self._client_sub(w, "oauth2_client", "", "notes")
+        assert get_trust_permission_store(w.config).store_permissions(
+            create_permission_override(
+                actor_id=aid(w.a),
+                peer_id=peer,
+                trust_type="friend",
+                permission_updates={
+                    "properties": {"excluded_patterns": ["notes/private"]}
+                },
+            )
+        )
+        value = json.dumps({"public": "open", "private": "hidden-value"})
+        assert self._resume_after_a_write(w, "notes", value) == 1
+        body = self._client_reads(w, peer, subid, secret, 1 if by_sequence else None)
+        assert "hidden-value" not in body
+        answer = json.loads(body)
+        served = answer if by_sequence else answer["data"][0]
+        assert served["type"] == "resync"
+        assert served["url"].endswith(f"/{aid(w.a)}/properties/notes")
+        assert served["data"] == {}
 
     def test_a_peer_still_gets_its_resync(self) -> None:
         """The control: a peer's subscription is resynced."""

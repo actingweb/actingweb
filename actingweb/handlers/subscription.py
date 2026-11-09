@@ -2,6 +2,7 @@ import json
 import logging
 from typing import Any
 
+from actingweb.actor import resync_marker_url
 from actingweb.handlers import base_handler
 
 logger = logging.getLogger(__name__)
@@ -21,6 +22,23 @@ def _as_permitted(myself: Any, peerid: str, sub_dict: dict[str, Any], raw: Any) 
         return json.loads(filtered)
     except (TypeError, ValueError):
         return filtered
+
+
+def _served(
+    myself: Any, peerid: str, sub_dict: dict[str, Any], raw: Any
+) -> dict[str, Any]:
+    """A stored diff's served fields: ``data`` as the subscriber may read
+    it, or, for a client's resync marker (``Actor.resync_marker``), ``type``
+    ``"resync"`` and the ``url`` to re-read under its own grant, as a resync
+    callback carries them. Its ``data`` is ``{}``, a no-op change for a
+    reader that does not know the type."""
+    config = getattr(myself, "config", None)
+    if config:
+        own_root = f"{config.proto}{config.fqdn}/{myself.id}/"
+        url = resync_marker_url(raw, own_root)
+        if url:
+            return {"type": "resync", "url": url, "data": {}}
+    return {"data": _as_permitted(myself, peerid, sub_dict, raw)}
 
 
 def _authorize_subscription_write(
@@ -397,12 +415,11 @@ class SubscriptionHandler(base_handler.BaseHandler):
         sub_dict = sub_info.to_dict()
         pairs = []
         for diff in diffs:
-            d = _as_permitted(myself, peerid, sub_dict, diff.get("diff"))
             pairs.append(
                 {
                     "sequence": diff["sequence"],
                     "timestamp": diff["timestamp"].strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
-                    "data": d,
+                    **_served(myself, peerid, sub_dict, diff.get("diff")),
                 }
             )
 
@@ -638,7 +655,7 @@ class SubscriptionDiffHandler(base_handler.BaseHandler):
             return
 
         sub_dict = sub_info.to_dict()
-        d = _as_permitted(myself, peerid, sub_dict, diff.get("data"))
+        served = _served(myself, peerid, sub_dict, diff.get("data"))
         pairs = {
             "id": myself.id,
             "peerid": peerid,
@@ -648,7 +665,7 @@ class SubscriptionDiffHandler(base_handler.BaseHandler):
             "subtarget": sub_dict["subtarget"],
             "resource": sub_dict["resource"],
             "sequence": seqnr,
-            "data": d,
+            **served,
         }
         sub_with_diffs.clear_diff(seqnr)
         out = json.dumps(pairs)

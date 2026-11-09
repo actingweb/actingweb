@@ -27,7 +27,9 @@ SECURITY
   row gets nothing; a subscription such a view creates is kept under that
   trust's peer id, and nothing is pushed to it (a client's trust row has no
   endpoint: the client reads its diffs). On ``resume_subscriptions`` its
-  resync is the full state, stored as its next diff. **Check:**
+  next diff is a resync marker, served by ``GET /subscriptions/...`` with
+  ``"type": "resync"``, the ``url`` to re-read and empty ``data``: the
+  client re-reads the target under its own grant. **Check:**
   an application that served data to unapproved peers on purpose (the
   specification allows an unapproved ``associate``) approves them instead.
 - **Callbacks were accepted without authentication, and a low-granularity

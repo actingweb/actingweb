@@ -42,3 +42,30 @@ Whichever is chosen, `WD12`'s recording changes; `rows.toml` must name the
 phase that owns it. The `ListAttribute` plan
 (`thoughts/plans/2026-11-06-attribute-list-v2-port.md`) rewrites the replica's
 list application and is the natural owner of the list half.
+
+## Two more, found 2026-11-09 (reverify-13 of `peer-authorisation-fixes`)
+
+Both are in the fallback for a subscription to one property (a subtarget),
+which no test exercised; the client's resync no longer uses this path
+(iteration 90 stores a marker instead).
+
+- **It crashes.** `_get_full_state_for_subscription` returns
+  `{subtarget: self.get_property(subtarget)}`, and `get_property` returns a
+  `DummyPropertyClass` (`actor.py`, "DEPRECATED"), which `json.dumps` cannot
+  serialise. `resume_subscriptions` catches the error and returns 0, after the
+  suspension marker was already removed: the subscribers get nothing and the
+  resume is not retried. Seen in
+  `tests/test_trust_re_pair.py::TestTheResyncAfterReverify11::test_the_marker_carries_nothing_the_grant_excludes`
+  on the code before iteration 90 ("Object of type DummyPropertyClass is not
+  JSON serializable").
+- **Its shape escapes the grant's exclusions.** The state is wrapped as
+  `{subtarget: value}`, where `register_diffs` stores such a subscription's
+  diffs unwrapped. The pull filter checks each key at `<subtarget>/<key>`, so
+  it checks `notes/notes` and never an excluded `notes/private`; with a
+  resource it returns the whole blob (`filter_subscription_blob`). A peer
+  without `subscriptionresync` that pulls the fallback's diff would read
+  fields its grant excludes, once the crash above is fixed.
+
+The fix for all of this file's items may be the same as the client's: send a
+resync (or store a marker) and let the subscriber re-read, rather than a
+full-state diff.

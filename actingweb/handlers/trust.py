@@ -840,7 +840,7 @@ class TrustPeerHandler(base_handler.BaseHandler):
             else:
                 desc = ""
             if "approved" in params:
-                if params["approved"] is True or params["approved"].lower() == "true":
+                if str(params["approved"]).lower() == "true":
                     approved = True
 
             # Handle permission updates
@@ -900,6 +900,28 @@ class TrustPeerHandler(base_handler.BaseHandler):
             # shown).
             if self.response:
                 self.response.set_status(400, "Invalid baseuri")
+            return
+        if (
+            isinstance(put_caller, str)
+            and put_caller
+            and put_caller == peerid
+            and baseuri
+            and baseuri.rstrip("/")
+            != str(
+                (myself.get_trust_relationship(peerid=peerid) or {}).get("baseuri")
+                or ""
+            ).rstrip("/")
+            and not myself._base_uri_serves(baseuri, peerid)
+        ):
+            # A peer moving its own row: the new base URI must name it on
+            # /meta, as a creation's must (Actor.create_verified_trust), or
+            # the trust's traffic would go to a host nobody checked.
+            logger.warning(
+                f"Refused a base URI move for {peerid} at {actor_id}: its /meta "
+                "does not name the peer"
+            )
+            if self.response:
+                self.response.set_status(400, "The base URI does not serve this peer")
             return
         # Use developer API - ActorInterface with TrustManager
         if actor_interface is None:

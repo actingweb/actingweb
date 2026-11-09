@@ -645,3 +645,165 @@ class TestNoPeerReadsAnothersSecret:
         assert out.response.status_code == 403
         row = Trust(actor_id=aid(world.a), peerid=b, config=world.config).get()
         assert row and row["baseuri"] == f"https://{b}.example.test/{b}"
+
+
+class TestAPeersOwnSubscriptionAfterReverify5:
+    """reverify-5 Issue 2: the ``owner`` row admits a peer to its own
+    subscription (read, clear, end), never to creating one; and what a peer
+    pulls of a ``properties`` subscription is filtered by its permissions,
+    as a pushed callback is."""
+
+    def test_the_owner_row_admits_no_subscription_creation(
+        self, world: Publisher
+    ) -> None:
+        g = world.peers["g"]
+        out = world.call(
+            SubscriptionRelationshipHandler,
+            "POST",
+            g,
+            as_peer="g",
+            body={"target": "properties", "granularity": "high"},
+        )
+        assert out.response.status_code == 403
+
+    def test_a_relationship_row_still_admits_creation(self, world: Publisher) -> None:
+        b = world.peers["b"]
+        out = world.call(
+            SubscriptionRelationshipHandler,
+            "POST",
+            b,
+            as_peer="b",
+            body={"target": "properties", "granularity": "high"},
+        )
+        assert out.response.status_code == 201
+
+    @staticmethod
+    def _narrow(world: Publisher, name: str) -> None:
+        from actingweb.trust_permissions import (
+            create_permission_override,
+            get_trust_permission_store,
+        )
+
+        assert get_trust_permission_store(world.config).store_permissions(
+            create_permission_override(
+                actor_id=aid(world.a),
+                peer_id=world.peers[name],
+                trust_type="friend",
+                permission_updates={
+                    # Overrides add to the type's grant: an exclusion
+                    # narrows it.
+                    "properties": {"excluded_patterns": ["x", "x/*"]}
+                },
+            )
+        )
+
+    def test_a_pulled_diff_carries_only_what_the_peer_may_read(
+        self, world: Publisher
+    ) -> None:
+        b = world.peers["b"]
+        self._narrow(world, "b")
+        out = world.call(SubscriptionHandler, "GET", b, "sub-b", as_peer="b")
+        assert out.response.status_code == 200
+        pairs = json.loads(out.response.body)["data"]
+        assert [p["sequence"] for p in pairs] == [1]
+        assert pairs[0]["data"] == {}
+        out = world.call(SubscriptionDiffHandler, "GET", b, "sub-b", "1", as_peer="b")
+        assert out.response.status_code == 200
+        assert json.loads(out.response.body)["data"] == {}
+
+    @pytest.mark.parametrize("narrowed", [False, True])
+    def test_a_subtargets_value_is_pulled_only_when_readable(
+        self, world: Publisher, narrowed: bool
+    ) -> None:
+        """A subtarget subscription's diff is the property's value itself."""
+        b = world.peers["b"]
+        sub = Subscription(
+            actor_id=aid(world.a),
+            peerid=b,
+            subid="sub-bx",
+            callback=False,
+            config=world.config,
+        )
+        assert sub.create(target="properties", subtarget="x", granularity="high")
+        assert sub.add_diff(blob="change2")
+        if narrowed:
+            self._narrow(world, "b")
+        out = world.call(SubscriptionHandler, "GET", b, "sub-bx", as_peer="b")
+        assert out.response.status_code == 200
+        data = json.loads(out.response.body)["data"][0]["data"]
+        assert data == ({} if narrowed else "change2")
+
+    def test_a_permitted_diff_is_pulled_whole(self, world: Publisher) -> None:
+        b = world.peers["b"]
+        out = world.call(SubscriptionHandler, "GET", b, "sub-b", as_peer="b")
+        assert json.loads(out.response.body)["data"][0]["data"] == {"x": {"v": 1}}
+
+
+class TestAPeersOwnTrustRowAfterReverify5:
+    """reverify-5 Issues 3, 7 and 13: the built-in ``owner`` row alone (no
+    application row) admits a peer to its own trust row; a base URI it moves
+    to must name it on ``/meta``, as a creation's must."""
+
+    @staticmethod
+    def _meta(peer_id: str) -> Any:
+        return mock.patch(
+            "actingweb.actor.Actor.get_peer_info",
+            return_value={"last_response_code": 200, "data": {"id": peer_id}},
+        )
+
+    def test_a_move_to_a_base_uri_that_names_another_id_is_refused(
+        self, world: Publisher
+    ) -> None:
+        c = world.peers["c"]
+        before = Trust(actor_id=aid(world.a), peerid=c, config=world.config).get()
+        with self._meta("someone-else"):
+            out = world.call(
+                TrustPeerHandler,
+                "PUT",
+                "friend",
+                c,
+                as_peer="c",
+                body={"baseuri": "http://169.254.169.254/latest"},
+            )
+        assert out.response.status_code == 400
+        after = Trust(actor_id=aid(world.a), peerid=c, config=world.config).get()
+        assert (after or {}).get("baseuri") == (before or {}).get("baseuri")
+
+    def test_a_move_to_a_base_uri_that_names_the_peer_is_stored(
+        self, world: Publisher
+    ) -> None:
+        c = world.peers["c"]
+        moved = f"https://moved.example.test/{c}"
+        with self._meta(c):
+            out = world.call(
+                TrustPeerHandler,
+                "PUT",
+                "friend",
+                c,
+                as_peer="c",
+                body={"baseuri": moved},
+            )
+        assert out.response.status_code == 204
+        row = Trust(actor_id=aid(world.a), peerid=c, config=world.config).get()
+        assert (row or {}).get("baseuri") == moved
+
+    def test_the_owner_row_admits_a_description(self, world: Publisher) -> None:
+        c = world.peers["c"]
+        out = world.call(
+            TrustPeerHandler, "PUT", "friend", c, as_peer="c", body={"desc": "mine"}
+        )
+        assert out.response.status_code == 204
+
+    def test_the_owner_row_admits_no_approval(self, world: Publisher) -> None:
+        c = world.peers["c"]
+        out = world.call(
+            TrustPeerHandler, "PUT", "friend", c, as_peer="c", body={"approved": True}
+        )
+        assert out.response.status_code == 403
+
+    def test_a_json_false_approval_is_not_a_500(self, world: Publisher) -> None:
+        c = world.peers["c"]
+        out = world.call(
+            TrustPeerHandler, "PUT", "friend", c, as_peer="c", body={"approved": False}
+        )
+        assert out.response.status_code != 500

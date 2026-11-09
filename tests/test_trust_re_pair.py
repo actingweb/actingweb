@@ -1148,6 +1148,27 @@ class TestTheTrustStoreAfterTheWholeBranchReview:
         assert stale.modify(approved=True) is True
         assert w.row()["approved"] is True
 
+    def test_a_failed_write_leaves_the_handle_as_it_was(self) -> None:
+        """Reverify-5, Issue 8: a fault that is not the row-exists condition
+        leaves the object holding what it read, not what was never written."""
+        from actingweb.db.exceptions import DbError
+
+        w = Initiator()
+        handle = Trust(actor_id=aid(w.b), peerid=w.a, config=w.config)
+        assert (handle.get() or {})["approved"] is True
+        db: Any = handle.handle
+        model: Any = getattr(db, "handle", None)
+        if model is None or not hasattr(model, "update"):
+            pytest.skip("DynamoDB's handle only")
+        with (
+            mock.patch.object(
+                type(model), "update", side_effect=RuntimeError("throttled")
+            ),
+            pytest.raises(DbError),
+        ):
+            db.modify(approved=False)
+        assert model.approved is True
+
     def test_replacing_a_pending_row_renews_its_creation_time(self) -> None:
         """Issue 12: both backends write the replacement's created_at."""
         w = Receiver()
@@ -1159,3 +1180,154 @@ class TestTheTrustStoreAfterTheWholeBranchReview:
         time.sleep(1.1)
         _create(w, peer)
         assert w.row(peer).get("created_at") != first
+
+
+class TestTheInitiatorAfterReverify5:
+    """reverify-5 Issues 1, 5 and 6."""
+
+    @staticmethod
+    def _pending(w: Initiator, *, verified: bool) -> None:
+        assert Trust(actor_id=aid(w.b), peerid=w.a, config=w.config).modify(
+            approved=False, verified=verified, peer_approved=True
+        )
+
+    def test_an_unverified_pending_row_is_replaced_by_the_owners_request(
+        self,
+    ) -> None:
+        """Issue 1: a request nobody proved is never approved as it is; the
+        owner's own request, with the owner's secret, replaces it."""
+        w = Initiator()
+        self._pending(w, verified=False)
+        new = _new_secret()
+        accepted = mock.Mock(status_code=202, reason="Accepted", content=b"{}")
+        with (
+            mock.patch.object(w.b, "get_peer_info", return_value=w.peer_info),
+            mock.patch("actingweb.actor.requests.post", return_value=accepted) as post,
+        ):
+            result = w.b.create_reciprocal_trust(
+                url=w.url, secret=new, relationship="friend"
+            )
+        assert result
+        row = w.row()
+        assert row["secret"] == new  # the requester's secret no longer works
+        assert row["approved"] is True and row["verified"] is True
+        sent = post.call_args.kwargs
+        assert "Authorization" not in sent["headers"]  # a creation, not a re-pair
+        assert json.loads(sent["data"])["secret"] == new
+
+    def test_the_async_twin_replaces_it_too(self) -> None:
+        w = Initiator()
+        self._pending(w, verified=False)
+        new = _new_secret()
+        client = mock.MagicMock()
+        client.__aenter__.return_value.post = mock.AsyncMock(
+            return_value=mock.Mock(status_code=202, content=b"{}")
+        )
+        with (
+            mock.patch.object(
+                w.b, "get_peer_info_async", mock.AsyncMock(return_value=w.peer_info)
+            ),
+            mock.patch("httpx.AsyncClient", return_value=client),
+        ):
+            assert asyncio.run(
+                w.b.create_reciprocal_trust_async(
+                    url=w.url, secret=new, relationship="friend"
+                )
+            )
+        row = w.row()
+        assert row["secret"] == new and row["approved"] is True
+
+    def test_a_verified_pending_row_is_approved_and_the_peer_told(self) -> None:
+        w = Initiator()
+        self._pending(w, verified=True)
+        told = mock.Mock(status_code=204, reason="No Content", content=b"")
+        with (
+            mock.patch.object(w.b, "get_peer_info", return_value=w.peer_info),
+            mock.patch("actingweb.actor.requests.post", return_value=told) as post,
+        ):
+            assert w.b.create_reciprocal_trust(
+                url=w.url, secret=_new_secret(), relationship="friend"
+            )
+        post.assert_called_once()
+        row = w.row()
+        assert row["approved"] is True and row["secret"] == w.secret
+
+    @pytest.mark.parametrize("asynchronous", [False, True])
+    def test_approving_on_create_runs_the_local_approval_hook(
+        self, asynchronous: bool
+    ) -> None:
+        """Issue 5: the same hook an approval through PUT runs."""
+        from actingweb.interface.trust_manager import TrustManager
+
+        w = Initiator()
+        self._pending(w, verified=True)
+        hooks = HookRegistry()
+        approved = mock.Mock()
+        hooks.register_lifecycle_hook("trust_fully_approved_local", approved)
+        manager = TrustManager(w.b, hooks=hooks)
+        told = mock.Mock(status_code=204, reason="No Content", content=b"")
+        with (
+            mock.patch.object(w.b, "get_peer_info", return_value=w.peer_info),
+            mock.patch.object(
+                w.b, "get_peer_info_async", mock.AsyncMock(return_value=w.peer_info)
+            ),
+            mock.patch("actingweb.actor.requests.post", return_value=told),
+        ):
+            if asynchronous:
+                rel = asyncio.run(
+                    manager.create_relationship_async(
+                        peer_url=w.url, relationship="friend"
+                    )
+                )
+            else:
+                rel = manager.create_relationship(peer_url=w.url, relationship="friend")
+        assert rel is not None
+        approved.assert_called_once()
+        assert approved.call_args.kwargs["peer_id"] == w.a
+
+    def test_a_plain_creation_runs_no_approval_hook(self) -> None:
+        from actingweb.interface.trust_manager import TrustManager
+
+        config = make_config()
+        b = create_core_actor(config, uuid_email(), passphrase=PASSPHRASE)
+        peer = f"peer-p-{uuid.uuid4().hex[:8]}"
+        info = {"last_response_code": 200, "data": {"id": peer, "type": "urn:test"}}
+        hooks = HookRegistry()
+        approved = mock.Mock()
+        hooks.register_lifecycle_hook("trust_fully_approved_local", approved)
+        accepted = mock.Mock(status_code=201, reason="Created", content=b"{}")
+        with (
+            mock.patch.object(b, "get_peer_info", return_value=info),
+            mock.patch("actingweb.actor.requests.post", return_value=accepted),
+        ):
+            assert TrustManager(b, hooks=hooks).create_relationship(
+                peer_url=f"https://{peer}.example.test/{peer}", relationship="friend"
+            )
+        approved.assert_not_called()
+
+    def test_a_failed_attempt_keeps_a_row_the_peer_approved(self) -> None:
+        """Issue 6: the peer approved (its answer was lost): the row stays."""
+        config = make_config()
+        b = create_core_actor(config, uuid_email(), passphrase=PASSPHRASE)
+        peer = f"peer-l-{uuid.uuid4().hex[:8]}"
+        info = {"last_response_code": 200, "data": {"id": peer, "type": "urn:test"}}
+
+        def approved_then_lost(**_kwargs: Any) -> Any:
+            assert Trust(actor_id=aid(b), peerid=peer, config=config).modify(
+                peer_approved=True
+            )
+            raise ConnectionError("answer lost")
+
+        with (
+            mock.patch.object(b, "get_peer_info", return_value=info),
+            mock.patch("actingweb.actor.requests.post", side_effect=approved_then_lost),
+        ):
+            assert (
+                b.create_reciprocal_trust(
+                    url=f"https://{peer}.example.test/{peer}",
+                    secret=_new_secret(),
+                    relationship="friend",
+                )
+                is False
+            )
+        assert Trust(actor_id=aid(b), peerid=peer, config=config).get()

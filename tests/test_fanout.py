@@ -522,6 +522,43 @@ class TestFanOutManager:
         assert result.results[0].granularity_downgraded is False
 
     @pytest.mark.asyncio
+    async def test_the_size_warning_is_logged_once_per_fan_out(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Reverify-5, Issue 9: one WARNING for the payload, not one per
+        subscriber."""
+        import logging
+
+        manager = FanOutManager(
+            actor=self.mock_actor, max_payload_for_high_granularity=10
+        )
+        subscriptions = [
+            {
+                "peerid": f"peer{i}",
+                "subid": f"sub{i}",
+                "callback_url": f"https://peer{i}.example.com/callback",
+                "granularity": "high",
+            }
+            for i in range(3)
+        ]
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        with (
+            patch("httpx.AsyncClient") as mock_client_class,
+            caplog.at_level(logging.WARNING, logger="actingweb.fanout"),
+        ):
+            mock_client = AsyncMock()
+            mock_client.post.return_value = mock_response
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=None)
+            mock_client_class.return_value = mock_client
+            await manager.deliver_to_subscribers(
+                subscriptions, {"data": "x" * 100}, "properties", 1
+            )
+        sized = [r for r in caplog.records if "sent in full" in r.getMessage()]
+        assert len(sized) == 1
+
+    @pytest.mark.asyncio
     async def test_no_downgrade_for_low_granularity(self) -> None:
         """Low granularity subscriptions are not downgraded."""
         manager = FanOutManager(

@@ -338,6 +338,41 @@ class TestAllPermissions:
         assert f"not rebuilt\t{w.id}\t{w.live}\tstore fault" in out
         assert f"not rebuilt\t{w.id}\t{w.live_hex}\tstore fault" in out
 
+    def test_a_newer_copy_stored_meanwhile_counts_as_rebuilt(
+        self, config: Any, capsys: Any
+    ) -> None:
+        """Reverify-5, Issue 10: the store refuses the query's answer because
+        a callback stored a newer copy meanwhile; that copy is the rebuild."""
+        from actingweb.peer_permissions import PeerPermissions, PeerPermissionStore
+
+        w = World(config)
+        began = (datetime.now(UTC) - timedelta(minutes=1)).isoformat()
+
+        def answer(actor_id: str, peer_id: str, _config: Any) -> PeerPermissions:
+            # A callback lands while the peer is queried.
+            assert PeerPermissionStore(config).store_permissions(
+                PeerPermissions(
+                    actor_id=actor_id,
+                    peer_id=peer_id,
+                    properties={"patterns": ["new/*"], "operations": ["read"]},
+                    fetched_at=datetime.now(UTC).isoformat(),
+                )
+            )
+            return PeerPermissions(
+                actor_id=actor_id,
+                peer_id=peer_id,
+                properties={"patterns": ["old/*"], "operations": ["read"]},
+                fetched_at=began,
+            )
+
+        with patch(
+            "actingweb.peer_permissions.fetch_peer_permissions", side_effect=answer
+        ):
+            code, out = _run(capsys, "prune", w.id, "--all-permissions", "--apply")
+        assert code == 1
+        assert "not rebuilt" not in out
+        assert f"rebuilt\t{w.id}\t{w.live}" in out
+
     def test_a_removed_copy_is_rebuilt_from_the_peer(
         self, config: Any, capsys: Any
     ) -> None:

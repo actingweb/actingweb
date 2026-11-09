@@ -334,8 +334,13 @@ class DbTrust:
                 self.handle.attribute_values.clear()
                 self.handle.attribute_values.update(before)
                 return False
+            self.handle.attribute_values.clear()
+            self.handle.attribute_values.update(before)
             raise DbError("trust modify") from e
         except Exception as e:
+            # Nothing is known to be written: the handle keeps what it read.
+            self.handle.attribute_values.clear()
+            self.handle.attribute_values.update(before)
             raise DbError("trust modify") from e
         return True
 

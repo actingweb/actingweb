@@ -259,6 +259,20 @@ its T6 (a 409 on a repeated trust request), which the guard here replaces.
   adoption rows (they stay harmless); a peer also reads its own trust's
   permissions and may PUT its own trust row (approval and permissions stay
   the owner's). Supersedes the "add PUT and DELETE rows" migration step.
+  [Updated 2026-11-09, iteration 39] The `owner` row on subscriptions is
+  `("owner", "subscriptions/<id>/<subid>", "GET,PUT,DELETE", "a")`: it admits
+  a peer to read, clear and end its own subscription, never to create one
+  (owner, reverify-5 Issue 2); and both pull paths filter a `properties`
+  diff by the peer's permissions, as the callback does (owner, both).
+- [New 2026-11-09, iteration 38] **Creating a trust replaces an unverified
+  pending request** (owner, reverify-5 Issue 1): a pending row nobody proved
+  (neither verified nor approved) is replaced by the owner's own request,
+  with the owner's secret, in one conditional write (`only_if_pending`); a
+  verified pending row is approved in place, and `TrustManager` runs
+  `trust_fully_approved_local`.
+- [New 2026-11-09, iteration 40] **A peer's own base-URI move must name it
+  on `/meta`** (owner, reverify-5 Issue 3): 400 otherwise, the row
+  unchanged; the same check a creation's base URI gets.
 - [New 2026-11-08, iteration 33] **`FanOutManager` sends a large payload in
   full** (owner, reverify-4 Issue 4), with a WARNING above
   `max_payload_for_high_granularity`; the downgrade to an unfetchable URL is
@@ -2486,3 +2500,136 @@ unchanged): PostgreSQL 2 failed / 7406 passed, DynamoDB 3 failed / 54
 passed, the `master` baseline's failures by name. The Full tier on
 `376b71c`: DynamoDB 6063 passed, PostgreSQL 5860 passed, the docs build;
 the three `.subscriber` recordings the only wire change.
+
+### 2026-11-09, after verification thoughts/verifications/2026-11-09-peer-authorisation-fixes-reverify-5.md
+
+Two of iterations 32 to 37's fixes opened holes (reverify-5 Issues 1 and 2,
+found by the security review, the code review and the outside voice); three
+owner decisions (Decisions Made, iterations 38 to 40).
+
+#### 38. Creating a trust replaces an unverified pending request
+
+**Category**: Bug fix (security; reverify-5 Issues 1 and 5); Decision (owner)
+
+**What changed**: `create_reciprocal_trust` and its async twin treat a row
+neither verified nor approved (`_is_unproven_pending`) as a request nobody
+proved: it is replaced by the owner's own request (`only_if_pending=True`,
+the owner's secret, the normal creation request to the peer), whatever base
+URI or relationship it claimed. Only a verified pending row is approved in
+place (`_approve_on_create`), which records the peer in
+`Actor.last_trust_approved_on_create`; `TrustManager.create_relationship`
+(and async) then runs `trust_fully_approved_local` when the row ends approved
+and peer-approved, as the approval PUT does.
+
+**Files affected**: `actingweb/actor.py`,
+`actingweb/interface/trust_manager.py`; `tests/test_trust_re_pair.py` -
+`TestTheInitiatorAfterReverify5` (the replacement, sync and async; the
+verified approval tells the peer; the hook, sync and async; no hook on a
+plain creation)
+
+**Rationale**: iteration 34 approved whatever pending row matched the URL,
+so a stranger's failed request under a real peer's id, with the real base
+URI, became that peer with the stranger's secret once the owner paired
+with it. Bearer authentication never reads `verified`.
+
+#### 39. The `owner` row admits no subscription creation; pulled diffs are filtered
+
+**Category**: Bug fix (security; reverify-5 Issue 2); Decision (owner)
+
+**What changed**: the built-in row is `("owner",
+"subscriptions/<id>/<subid>", "GET,PUT,DELETE", "a")` (was `("owner",
+"subscriptions", "", "a")`, which with iteration 32 admitted `POST
+/subscriptions/<own id>` for every relationship). `GET
+/subscriptions/<peer>/<subid>` and `/<seq>` pass a `properties` diff through
+`_filter_subscription_data_by_permissions` (`_as_permitted`), as
+`callback_subscription` does; nothing permitted reads as `{}`, the sequence
+kept. A subtarget subscription's diff is the property's value itself (not an
+object): it is returned only when the peer may read the subtarget
+(`_may_read`); the first Full-tier run caught this (`test_033` of the
+subscription flow read `{}` for `"change2"`). The orphaned refusal-log
+comment is gone (Issue 11).
+
+**Files affected**: `actingweb/config.py`, `actingweb/handlers/subscription.py`;
+`tests/test_peer_paths_binding.py` - `TestAPeersOwnSubscriptionAfterReverify5`
+(creation refused through the `owner` row; a narrowed grant pulls `{}`; a
+subtarget's value pulled only when readable);
+`CHANGELOG.rst` (CHANGED entry; a new one for the pull filter),
+`docs/migration/v3.16.rst`, `docs/guides/access-control.rst`
+
+**Rationale**: an `associate` limited to `public/*` could subscribe and poll
+every property change. The pull filter also closes the same path for a
+`friend` with a narrowed grant, which `master` already had.
+
+#### 40. A peer's own base-URI move must name it on `/meta`
+
+**Category**: Bug fix (security; reverify-5 Issue 3); Decision (owner)
+
+**What changed**: the trust PUT handler, for a peer on its own row moving
+its base URI (to a different one), runs `Actor._base_uri_serves` (two short
+tries) and answers 400 when `/meta` does not name the peer.
+
+**Files affected**: `actingweb/handlers/trust.py`;
+`tests/test_peer_paths_binding.py` - `TestAPeersOwnTrustRowAfterReverify5`
+(refused and accepted moves; with the built-in rows only, a description
+admitted and an approval refused, Issue 13)
+
+**Rationale**: the move kept `verified` and could point the actor's
+authenticated traffic at any host.
+
+#### 41. The reconcile deletes and stores in the callback's order
+
+**Category**: Bug fix (reverify-5 Issue 4)
+
+**What changed**: `_reconcile_with_granting_peer` deletes the revoked data,
+then stores; a `DbError` propagates (the callback answers 503 and its resend
+repeats); a peer that does not answer is logged; a store refused because a
+newer copy won re-fetches what that copy still grants of the deleted data.
+The ignored path restores against the copy the reconcile left. Docstring
+says the fetch is synchronous.
+
+**Files affected**: `actingweb/handlers/callbacks.py`;
+`tests/test_peer_binding.py` - `TestTheReconcileAfterReverify5`
+
+**Rationale**: a fault was swallowed into a 204 (revoked data kept) and a
+concurrent newer grant lost its data with nothing logged.
+
+#### 42. Smaller fixes from reverify-5
+
+**Category**: Verification fix (Issues 6 to 10)
+
+**What changed**:
+- `_drop_failed_attempt` compares with the secret this attempt wrote (the
+  `secret` argument) and keeps a row the peer approved (its answer lost);
+  the read-then-delete window is documented (Issue 6).
+- A JSON `false` for `approved` on the trust PUT no longer raises (Issue 7).
+- DynamoDB `modify` restores the handle on any failed write (Issue 8).
+- `FanOutManager` logs the size WARNING once per fan-out;
+  `granularity_downgraded` documented as always False (Issue 9).
+- `prune`'s rebuild counts a newer copy stored meanwhile as rebuilt
+  (Issue 10).
+
+**Files affected**: `actingweb/actor.py`, `actingweb/handlers/trust.py`,
+`actingweb/db/dynamodb/trust.py`, `actingweb/fanout.py`,
+`actingweb/maintenance/peer_state.py`; `tests/test_trust_re_pair.py` -
+`test_a_failed_attempt_keeps_a_row_the_peer_approved`,
+`test_a_failed_write_leaves_the_handle_as_it_was`;
+`tests/test_fanout.py` - `test_the_size_warning_is_logged_once_per_fan_out`;
+`tests/test_peer_state_command.py` -
+`test_a_newer_copy_stored_meanwhile_counts_as_rebuilt`
+
+**Rationale**: reverify-5's low findings.
+
+#### 43. The changelog says what changed, exactly
+
+**Category**: Verification fix (Issue 12)
+
+**What changed**: the SECURITY entry's "as before" replaced by what
+creating a trust now does (with a **Behavior change:** sentence) and the
+base-URI move's check; the CHANGED entry names the new `owner` row; a new
+CHANGED entry for the pull filter.
+
+**Files affected**: `CHANGELOG.rst`
+
+Every new test above failed with the library at `5cabc26` (14 of 21; the
+other seven are controls or behaviour this iteration keeps).
+

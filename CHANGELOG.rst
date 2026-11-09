@@ -85,9 +85,14 @@ SECURITY
   another never replaces its row, and an initiator whose request failed
   removes only the row it wrote. The library's initiator re-pairs a peer it
   already trusts with its current secret, only toward the stored base URI,
-  and stores the new secret only after the peer accepts; toward a peer
-  whose own request waits for approval, creating the trust approves it (and
-  tells the peer), as before. A replaced pending row takes the
+  and stores the new secret only after the peer accepts. **Behavior
+  change:** toward a peer whose verified request waits for approval,
+  creating the trust approves it, tells the peer and runs
+  ``trust_fully_approved_local`` (through ``TrustManager``), where before
+  3.16 it overwrote the row with the owner's secret and sent a new request;
+  a pending request that never verified (anyone can file one under a
+  peer's id) is replaced by the owner's own request, with the owner's
+  secret, never approved as it is. A replaced pending row takes the
   replacement's creation time on both backends. **Check:** an actor id
   is self-asserted, so a host running its own server can still be verified
   (and, with auto-accept, approved) under another actor's id, which then
@@ -95,7 +100,8 @@ SECURITY
   /trust/<rel>/<peer>?notify=false``, and an application that cannot
   afford that leaves auto-accept off. A peer that moved is re-pointed by
   its owner (``PUT /trust/<rel>/<peer>`` with
-  ``baseuri``); when one side removed its row locally, the other side's
+  ``baseuri``), or moves its own row the same way, accepted only when the
+  new base URI's ``/meta`` names it (400 otherwise); when one side removed its row locally, the other side's
   owner removes its own before they pair again (migration guide).
 - **A subscriber could post callbacks to its publisher under its own
   subscription id.** The receiver looked the subscription up by peer and
@@ -646,12 +652,25 @@ CHANGED
   with the peer the path names (they never matched on these handlers
   before), so a subscriber type with only a GET row needs no new rows: it
   clears its own queue and is unsubscribed as before, and no other peer
-  reaches it. **Behavior change:** through the ``owner`` rows a peer of any
+  reaches it. The ``owner`` row on subscriptions is now
+  ``("owner", "subscriptions/<id>/<subid>", "GET,PUT,DELETE", "a")``: it
+  admits a peer to read, clear and end its own subscription, never to
+  create one (creating one stays with the relationship's own rows, as
+  before). **Behavior change:** through the ``owner`` rows a peer of any
   relationship type also reads its own trust's permissions
   (``GET /trust/<rel>/<peer>/permissions``) and may ``PUT`` its own trust
-  row (its description and base URI; approving it and writing its
-  permissions stay the owner's, 403). A ``PUT`` to ``/callbacks/<name>`` is
-  authorised as PUT and reaches the hook as ``PUT``.
+  row (its description, and a base URI whose ``/meta`` names it; approving
+  it and writing its permissions stay the owner's, 403). A ``PUT`` to
+  ``/callbacks/<name>`` is authorised as PUT and reaches the hook as
+  ``PUT``.
+- **A subscriber polling a ``properties`` subscription read every stored
+  change, whatever its permissions.** Diffs are stored whole and only the
+  pushed callback was filtered by the peer's property permissions; the
+  pull paths (``GET /subscriptions/<peer>/<subid>`` and its ``/<seq>``)
+  returned them as stored. **Behavior change:** both pull paths filter a
+  ``properties`` diff as the callback does; a diff with nothing permitted
+  reads as ``{}`` with its sequence kept. Other targets are served as
+  stored, as their callbacks are.
 - **A peer of any relationship type reads its own granted permissions**
   (``GET /permissions/<peer>``), through the ``owner`` row; the creator and
   an ``admin`` peer read any. Before, only ``associate``, ``friend``,

@@ -2,14 +2,65 @@ import json
 import logging
 from typing import Any
 
+from actingweb.db.exceptions import DbError
 from actingweb.handlers import base_handler
 
 logger = logging.getLogger(__name__)
 
 
-# (relationship, path) pairs whose GET-row refusal of a PUT or DELETE has been
-# logged at WARNING in this process: once each, so a deployment that must add
-# the rows sees it without a line per gap resync.
+def _as_permitted(myself: Any, peerid: str, sub_dict: dict[str, Any], raw: Any) -> Any:
+    """A stored diff as the subscriber may read it. A ``properties``
+    subscription's diff is stored whole and filtered through the peer's
+    permissions here, as the pushed callback is (``Actor.callback_subscription``):
+    a peer polling its subscription never reads more than a callback would
+    carry. Nothing permitted reads as ``{}``, the sequence kept."""
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError):
+        parsed = raw
+    if sub_dict.get("target") != "properties":
+        return parsed
+    if not isinstance(parsed, dict):
+        # A subtarget's diff is the property's value itself: the peer must
+        # be allowed to read that property. Nothing else is a property diff.
+        subtarget = sub_dict.get("subtarget") or ""
+        if subtarget and _may_read(myself, peerid, subtarget):
+            return parsed
+        return {}
+    filtered = myself._filter_subscription_data_by_permissions(
+        peerid=peerid, blob=raw, subtarget=sub_dict.get("subtarget") or None
+    )
+    if filtered is None:
+        return {}
+    try:
+        return json.loads(filtered)
+    except (TypeError, ValueError):
+        return filtered
+
+
+def _may_read(myself: Any, peerid: str, property_path: str) -> bool:
+    """Whether ``peerid`` may read ``property_path`` (fail closed)."""
+    from actingweb.permission_evaluator import (
+        PermissionResult,
+        get_permission_evaluator,
+    )
+
+    try:
+        evaluator = get_permission_evaluator(myself.config)
+        return (
+            bool(evaluator)
+            and evaluator.evaluate_property_access(
+                myself.id, peerid, property_path, operation="read"
+            )
+            == PermissionResult.ALLOWED
+        )
+    except DbError:
+        raise
+    except Exception as e:
+        logger.error(f"Permission check failed for a polled diff: {e}")
+        return False
+
+
 def _authorize_subscription_write(
     auth_result: "base_handler.AuthResult", method: str, peerid: str
 ) -> bool:
@@ -381,12 +432,10 @@ class SubscriptionHandler(base_handler.BaseHandler):
             return
 
         diffs = sub_with_diffs.get_diffs()
+        sub_dict = sub_info.to_dict()
         pairs = []
         for diff in diffs:
-            try:
-                d = json.loads(diff["diff"])
-            except (TypeError, ValueError, KeyError):
-                d = diff["diff"]
+            d = _as_permitted(myself, peerid, sub_dict, diff.get("diff"))
             pairs.append(
                 {
                     "sequence": diff["sequence"],
@@ -398,7 +447,6 @@ class SubscriptionHandler(base_handler.BaseHandler):
         # Always return subscription metadata with current sequence,
         # even when there are no new diffs. This allows subscribers
         # to synchronize their sequence number with the publisher.
-        sub_dict = sub_info.to_dict()
         data = {
             "id": myself.id,
             "peerid": peerid,
@@ -627,12 +675,8 @@ class SubscriptionDiffHandler(base_handler.BaseHandler):
             self.response.set_status(404, "No diffs available")
             return
 
-        try:
-            d = json.loads(diff["data"])
-        except (TypeError, ValueError, KeyError):
-            d = diff["data"]
-
         sub_dict = sub_info.to_dict()
+        d = _as_permitted(myself, peerid, sub_dict, diff.get("data"))
         pairs = {
             "id": myself.id,
             "peerid": peerid,

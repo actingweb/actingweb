@@ -189,6 +189,8 @@ class DeliveryResult:
     status_code: int | None = None
     error: str | None = None
     retry_after: int | None = None
+    # Always False since 3.16: a large payload is sent in full (kept for
+    # callers that read it).
     granularity_downgraded: bool = False
 
 
@@ -372,6 +374,13 @@ class FanOutManager:
         payload_json = json.dumps(payload)
         payload_size = len(payload_json.encode("utf-8"))
         needs_downgrade = payload_size > self._max_payload_size
+        if needs_downgrade:
+            # Once per fan-out: every subscriber gets the payload in full.
+            logger.warning(
+                f"Callback payload for {target} is {payload_size} bytes, over "
+                f"{self._max_payload_size}; sent in full to "
+                f"{len(subscriptions)} subscriber(s)"
+            )
 
         # Create semaphore for bounded concurrency
         semaphore = asyncio.Semaphore(self._max_concurrent)
@@ -520,13 +529,9 @@ class FanOutManager:
             }
 
             # Always the data: a downgrade to a URL is not fetchable by a 3.16
-            # subscriber (module docstring).
+            # subscriber (module docstring); the size is logged in deliver().
+            # ``granularity_downgraded`` stays in the result, always False.
             granularity_downgraded = False
-            if needs_downgrade and granularity == "high":
-                logger.warning(
-                    f"Callback to {peer_id} for {target} exceeds "
-                    f"{self._max_payload_size} bytes; sent in full"
-                )
             callback_wrapper["data"] = payload
 
             body = json.dumps(callback_wrapper)

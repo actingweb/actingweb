@@ -429,6 +429,10 @@ class CallbacksHandler(base_handler.BaseHandler):
                             self._reconcile_with_granting_peer(
                                 myself, actor_interface, actor_id, granting_actor_id
                             )
+                            # Restore against the copy the reconcile left.
+                            _, old_permissions = store.read_stored_permissions(
+                                actor_id, granting_actor_id
+                            )
                         self._sync_permitted_patterns(
                             myself,
                             actor_interface,
@@ -1167,9 +1171,13 @@ class CallbacksHandler(base_handler.BaseHandler):
         peer_id: str,
     ) -> None:
         """An ignored callback would have revoked part of the stored copy:
-        ask the peer for its current permissions, delete what they revoke
-        (when ``auto_delete_on_revocation`` is on) and store them. Best
-        effort: a failure is logged, the callback is already answered."""
+        ask the peer for its current permissions (synchronously, before the
+        callback is answered), delete what they revoke (when
+        ``auto_delete_on_revocation`` is on), then store them, in the order
+        the callback's own path uses. A storage fault raises ``DbError`` (the
+        callback answers 503 and its resend repeats this); a newer copy stored
+        meanwhile wins, and what it still grants of the deleted data is
+        fetched again. A peer that does not answer is logged."""
         from actingweb.peer_permissions import (
             detect_permission_changes,
             fetch_peer_permissions,
@@ -1183,23 +1191,37 @@ class CallbacksHandler(base_handler.BaseHandler):
         )
         try:
             fetched = fetch_peer_permissions(actor_id, peer_id, myself.config)
-            if fetched.fetch_error:
-                logger.warning(
-                    f"Could not ask {peer_id} for its permissions: {fetched.fetch_error}"
-                )
-                return
-            store = get_peer_permission_store(myself.config)
-            _, stored = store.read_stored_permissions(actor_id, peer_id)
-            changes = detect_permission_changes(stored, fetched)
-            if changes.get("has_revocations") and getattr(
-                myself.config, "auto_delete_on_revocation", False
-            ):
-                self._delete_revoked_peer_data(
-                    actor_interface, peer_id, changes.get("revoked_patterns", [])
-                )
-            store.store_permissions(fetched)
-        except Exception as e:  # folds DbError: best effort, answer decided
-            logger.warning(f"Could not reconcile permissions with {peer_id}: {e}")
+        except DbError:
+            raise
+        except Exception as e:
+            logger.warning(f"Could not ask {peer_id} for its permissions: {e}")
+            return
+        if fetched.fetch_error:
+            logger.warning(
+                f"Could not ask {peer_id} for its permissions: {fetched.fetch_error}"
+            )
+            return
+        store = get_peer_permission_store(myself.config)
+        _, stored = store.read_stored_permissions(actor_id, peer_id)
+        revoked: list[str] = []
+        changes = detect_permission_changes(stored, fetched)
+        if changes.get("has_revocations") and getattr(
+            myself.config, "auto_delete_on_revocation", False
+        ):
+            revoked = list(changes.get("revoked_patterns", []))
+            self._delete_revoked_peer_data(actor_interface, peer_id, revoked)
+        if store.store_permissions(fetched):
+            return
+        # A newer copy was stored meanwhile: it decides, and what it still
+        # grants of the data just deleted is fetched again.
+        _, now = store.read_stored_permissions(actor_id, peer_id)
+        logger.info(
+            f"A newer permission copy for {peer_id} was stored during the "
+            "reconcile; it is kept"
+        )
+        self._sync_permitted_patterns(
+            myself, actor_interface, peer_id, _still_granted(now, revoked)
+        )
 
     def _sync_permitted_patterns(
         self,

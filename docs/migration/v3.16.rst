@@ -1288,9 +1288,21 @@ a trust type whose ``acl_rules`` grant only GET on its subscription (the
 pattern ``actingweb_mcp``'s ``subscriber`` type used) needs nothing new: its
 subscribers clear their queue and are unsubscribed as before, and another
 peer's PUT or DELETE answers 403. PUT and DELETE rows an application added
-are harmless. Through the ``owner`` rows a peer also reads its own trust's
-permissions and may ``PUT`` its own trust row (description and base URI;
-approval and permissions stay the owner's).
+are harmless. The ``owner`` row on subscriptions is now ``("owner",
+"subscriptions/<id>/<subid>", "GET,PUT,DELETE", "a")``: it never admits
+creating a subscription, which stays with the relationship's own rows. An
+application that reads ``config.access`` for the old ``("owner",
+"subscriptions", "", "a")`` row finds the new one. Through the ``owner``
+rows a peer also reads its own trust's permissions and may ``PUT`` its own
+trust row (description, and a base URI whose ``/meta`` names it, 400
+otherwise; approval and permissions stay the owner's). What a peer polls of
+a ``properties`` subscription is filtered by its property permissions, as
+its callbacks are; a change it may not read polls as ``{}``.
+
+**Creating a trust toward a peer whose request waits.** A verified pending
+request is approved (the peer is told and ``trust_fully_approved_local``
+runs, through ``TrustManager``); a pending request that never verified is
+replaced by the owner's own request, with the owner's secret.
 
 **Callbacks are authenticated.** Every ``/callbacks`` request without
 credentials answers 401 with a challenge. The two library branches,

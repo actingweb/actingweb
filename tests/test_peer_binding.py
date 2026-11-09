@@ -1150,3 +1150,88 @@ class TestEveryWriterOfTheCopyIsConditional:
             pytest.raises(DbError),
         ):
             store.replace_permissions(newer, expected)
+
+
+class TestTheReconcileAfterReverify5:
+    """reverify-5 Issue 4: the check against the granting peer deletes and
+    stores in the callback's own order, lets a storage fault through (the
+    callback answers 503 and its resend repeats it), and a newer copy stored
+    meanwhile wins, with what it still grants fetched again."""
+
+    @staticmethod
+    def _granted(w: World, now: datetime) -> None:
+        grant = w.request(
+            "POST",
+            f"permissions/{w.a}",
+            _grant_body((now - timedelta(seconds=10)).isoformat(), ["p/*"]),
+            as_peer=w.a,
+        )
+        assert grant.response.status_code == 204
+
+    def _older_revocation(self, w: World, now: datetime) -> AWWebObj:
+        return w.request(
+            "POST",
+            f"permissions/{w.a}",
+            _grant_body((now - timedelta(seconds=20)).isoformat(), []),
+            as_peer=w.a,
+        )
+
+    def test_a_fault_while_deleting_reaches_the_sender(self) -> None:
+        from actingweb.db.exceptions import DbError
+        from actingweb.peer_permissions import PeerPermissions
+
+        w = World()
+        w.config.auto_delete_on_revocation = True  # type: ignore[attr-defined]
+        now = datetime.now(UTC)
+        self._granted(w, now)
+        current = PeerPermissions(
+            actor_id=aid(w.b),
+            peer_id=w.a,
+            properties={"patterns": [], "operations": ["read"]},
+            fetched_at=datetime.now(UTC).isoformat(),
+        )
+        with (
+            mock.patch(
+                "actingweb.peer_permissions.fetch_peer_permissions",
+                return_value=current,
+            ),
+            mock.patch.object(
+                CallbacksHandler,
+                "_delete_revoked_peer_data",
+                side_effect=DbError("delete", aid(w.b)),
+            ),
+            pytest.raises(DbError),
+        ):
+            self._older_revocation(w, now)
+        # Nothing stored: the resend sees the revocation again.
+        stored = w.stored_permissions(w.a)
+        assert stored and stored["properties"]["patterns"] == ["p/*"]
+
+    def test_a_newer_copy_stored_meanwhile_wins(self) -> None:
+        from actingweb.peer_permissions import PeerPermissions
+
+        w = World()
+        w.config.auto_delete_on_revocation = True  # type: ignore[attr-defined]
+        now = datetime.now(UTC)
+        self._granted(w, now)
+        # The peer's answer was fetched before the copy now stored (a newer
+        # grant landed meanwhile): it loses on fetched_at.
+        stale = PeerPermissions(
+            actor_id=aid(w.b),
+            peer_id=w.a,
+            properties={"patterns": [], "operations": ["read"]},
+            fetched_at=(now - timedelta(minutes=1)).isoformat(),
+        )
+        with (
+            mock.patch(
+                "actingweb.peer_permissions.fetch_peer_permissions",
+                return_value=stale,
+            ),
+            mock.patch.object(CallbacksHandler, "_delete_revoked_peer_data"),
+            mock.patch.object(CallbacksHandler, "_sync_permitted_patterns") as sync,
+        ):
+            out = self._older_revocation(w, now)
+        assert out.response.status_code == 204
+        stored = w.stored_permissions(w.a)
+        assert stored and stored["properties"]["patterns"] == ["p/*"]
+        assert ["p/*"] in [c.args[3] for c in sync.call_args_list]

@@ -376,8 +376,13 @@ def _rebuild_copy(config: Any, f: Finding, limiter: RateLimiter) -> bool:
         # The query reads the trust row first (strict), then stores.
         perms = fetch_peer_permissions(f.actor_id, peer_id, config)
         why = perms.fetch_error
-        if not why and not get_peer_permission_store(config).store_permissions(perms):
-            why = "store refused"
+        store = get_peer_permission_store(config)
+        if not why and not store.store_permissions(perms):
+            # Refused when a newer copy was stored meanwhile (a callback):
+            # that copy is the rebuild.
+            _, stored = store.read_stored_permissions(f.actor_id, peer_id)
+            if stored is None:
+                why = "store refused"
     except DbError:  # folds DbError: listed, the next query rebuilds it
         why = "store fault"
     if why:

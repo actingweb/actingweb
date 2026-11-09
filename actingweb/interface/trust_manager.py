@@ -228,9 +228,11 @@ class TrustManager:
                 self._core_actor.config.new_token() if self._core_actor.config else ""
             )
 
+        self._core_actor.last_trust_approved_on_create = None
         rel_data = self._core_actor.create_reciprocal_trust(
             url=peer_url, secret=secret, desc=description, relationship=relationship
         )
+        self._fire_approved_on_create(rel_data)
 
         if rel_data and isinstance(rel_data, dict):
             return TrustRelationship(rel_data)
@@ -253,13 +255,38 @@ class TrustManager:
                 self._core_actor.config.new_token() if self._core_actor.config else ""
             )
 
+        self._core_actor.last_trust_approved_on_create = None
         rel_data = await self._core_actor.create_reciprocal_trust_async(
             url=peer_url, secret=secret, desc=description, relationship=relationship
         )
+        self._fire_approved_on_create(rel_data)
 
         if rel_data and isinstance(rel_data, dict):
             return TrustRelationship(rel_data)
         return None
+
+    def _fire_approved_on_create(self, rel_data: Any) -> None:
+        """Creating a trust toward a peer whose verified request waited
+        approved it: this actor's approval completed the mutual trust, as an
+        approval through ``PUT /trust/<rel>/<peer>`` does, so the same
+        ``trust_fully_approved_local`` hook runs."""
+        peer_id = self._core_actor.last_trust_approved_on_create
+        if not peer_id or not isinstance(rel_data, dict):
+            return
+        if not (rel_data.get("approved") and rel_data.get("peer_approved")):
+            return
+        try:
+            self._execute_lifecycle_hook(
+                "trust_fully_approved_local",
+                peer_id=peer_id,
+                relationship=str(rel_data.get("relationship") or ""),
+                trust_data=rel_data,
+            )
+        except DbError as e:  # folds DbError: hook after the approval committed
+            logger.error(
+                f"trust_fully_approved_local for {peer_id} skipped on a store "
+                f"fault after the approval committed: {e}"
+            )
 
     def approve_relationship(self, peer_id: str) -> bool:
         """Approve a trust relationship with lifecycle hook execution."""

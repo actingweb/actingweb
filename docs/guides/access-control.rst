@@ -238,9 +238,12 @@ For actor-to-actor subscription scenarios, you need to specify ACL rules:
 
 A row admits only the method a request performs. A peer's PUT and DELETE
 on its own subscription (clearing its queue, being unsubscribed by its
-publisher) are admitted by the built-in ``("owner", "subscriptions", "",
-"a")`` row, which compares with the peer the path names; no other peer
-reaches that subscription.
+publisher) are admitted by the built-in ``("owner",
+"subscriptions/<id>/<subid>", "GET,PUT,DELETE", "a")`` row, which compares
+with the peer the path names; no other peer reaches that subscription.
+The row never admits creating a subscription: that is the relationship's
+own rows'. What a peer polls of a ``properties`` subscription is filtered by
+its property permissions, as its callbacks are.
 
 Architecture
 ============

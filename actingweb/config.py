@@ -333,8 +333,10 @@ class Config:
             # creator/trustee/admin
             ("trustee", "trust", "", "a"),
             ("admin", "trust", "", "a"),
-            # Owner can create++ own subscriptions
-            ("owner", "subscriptions", "", "a"),
+            # A peer reads, clears and ends its own subscription (owner: the
+            # caller is the peer the path names). Creating one is its
+            # relationship's rows' (3.16: this row never admitted creation).
+            ("owner", "subscriptions/<id>/<subid>", "GET,PUT,DELETE", "a"),
             # Owner can create subscriptions
             ("friend", "subscriptions/<id>", "", "a"),
             # Creator can do everything

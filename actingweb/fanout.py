@@ -500,6 +500,17 @@ class FanOutManager:
                 success=False,
                 error="trust read failed",
             )
+        from .actor import _has_peer_endpoint
+
+        if trust and not _has_peer_endpoint(trust, self._actor.id):
+            # An OAuth2 client's trust row (its subscriptions are kept under
+            # it since 3.16): the client reads its diffs, nothing is pushed.
+            return DeliveryResult(
+                peer_id=peer_id,
+                subscription_id=subscription_id,
+                success=False,
+                error="the subscriber is an OAuth2 client; it reads its diffs",
+            )
         secret = str((trust or {}).get("secret") or "")
         baseuri = str((trust or {}).get("baseuri") or "").rstrip("/")
         if not secret or not baseuri:

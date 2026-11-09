@@ -762,6 +762,39 @@ class TestFanOutManager:
             assert result.failed == 1
 
     @pytest.mark.asyncio
+    async def test_nothing_is_pushed_to_an_oauth2_clients_row(self) -> None:
+        """Reverify-11 Issue 1: an interactive OAuth2 client's row has a
+        secret and this actor's own URL as base URI; nothing is pushed to it
+        (the client reads its diffs)."""
+        self.mock_actor.trust.get_trust.return_value = {
+            "peerid": "oauth2_interactive:user@example.test:c1",
+            "secret": "client_secret",
+            "baseuri": "https://example.com/actor123",
+            "established_via": "oauth2_interactive",
+        }
+        subscriptions = [
+            {
+                "peerid": "oauth2_interactive:user@example.test:c1",
+                "subid": "sub1",
+                "granularity": "high",
+            }
+        ]
+
+        with patch("httpx.AsyncClient") as mock_client_class:
+            mock_client = AsyncMock()
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=None)
+            mock_client_class.return_value = mock_client
+
+            result = await self.manager.deliver_to_subscribers(
+                subscriptions, {"data": "test"}, "properties", 1
+            )
+
+            mock_client.post.assert_not_called()
+            assert result.results[0].error is not None
+            assert "OAuth2 client" in result.results[0].error
+
+    @pytest.mark.asyncio
     async def test_a_trust_read_fault_is_reported_for_its_peer(self) -> None:
         """Reverify-1, Issue 8: a fault reading the trust is a failed delivery
         for that peer, not an anonymous exception."""

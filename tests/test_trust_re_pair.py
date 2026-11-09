@@ -2276,6 +2276,65 @@ class TestTheClientViewAfterReverify10:
         assert view._auth_context.permission_id == peer
 
 
+class TestTheResyncAfterReverify11:
+    """Reverify-11 Issue 1: a resume sends no resync to a client's trust row
+    and records no miss for it."""
+
+    @staticmethod
+    def _client_sub(w: Receiver, via: str, baseuri: str) -> str:
+        peer = f"{via}:user@example.test:{uuid.uuid4().hex[:8]}"
+        trust = Trust(actor_id=aid(w.a), peerid=peer, config=w.config)
+        assert trust.create(
+            baseuri=baseuri,
+            peer_type="mcp",
+            relationship="friend",
+            secret=uuid.uuid4().hex,
+            approved=True,
+            verified=True,
+            peer_approved=True,
+            established_via=via,
+        )
+        assert w.a.create_subscription(
+            peerid=peer, target="properties", granularity="high"
+        )
+        return peer
+
+    @pytest.mark.parametrize(
+        "via,own_uri",
+        [("oauth2_client", False), ("oauth2_interactive", True)],
+    )
+    def test_a_clients_row_gets_no_resync_and_no_miss(
+        self, via: str, own_uri: bool
+    ) -> None:
+        w = Receiver()
+        baseuri = f"{w.config.root}{aid(w.a)}" if own_uri else ""
+        self._client_sub(w, via, baseuri)
+        missed: list[str] = []
+        with (
+            mock.patch("actingweb.actor.requests.post") as post,
+            mock.patch("httpx.AsyncClient.post") as async_post,
+        ):
+            count = w.a._send_resync_callbacks("properties", None, missed=missed)
+        post.assert_not_called()
+        async_post.assert_not_called()
+        assert count == 0
+        assert missed == []
+
+    def test_a_peer_still_gets_its_resync(self) -> None:
+        """The control: a peer's subscription is resynced."""
+        w = Receiver()
+        assert w.a.create_subscription(
+            peerid=w.b, target="properties", granularity="high"
+        )
+        missed: list[str] = []
+        with mock.patch.object(
+            w.a, "_send_resync_callback_sync", return_value=True
+        ) as send:
+            count = w.a._send_resync_callbacks("properties", None, missed=missed)
+        assert send.called
+        assert count == 1
+
+
 class TestTheRePairAnswerAfterReverify9:
     def test_a_re_pair_of_an_unapproved_row_answers_without_its_token(
         self,

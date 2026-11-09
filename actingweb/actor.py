@@ -75,13 +75,15 @@ def _has_peer_endpoint(trust_rel: dict[str, Any], actor_id: str | None) -> bool:
 # whatever the peer does (headers, body, a TLS handshake sent slowly); no
 # redirect is followed and at most the cap is read. The GETs run on a small
 # pool of their own. Each socket a GET opens (to the peer, or to the
-# environment's HTTP(S) proxy) is recorded as a duplicate descriptor, which
-# the TLS wrap does not detach: when the deadline passes, the caller shuts it
-# down, so the worker's blocked read or handshake fails at once and the
-# worker is free again; a socket that connects after that is shut down as it
-# arrives. Only a name lookup cannot be cut short; it holds its worker for the
-# resolver's own timeout. When every worker is busy, a verification fails
-# closed at once instead of queueing. A SOCKS proxy is refused.
+# environment's HTTP(S) proxy) is recorded, before its connect, as a
+# duplicate descriptor, which the TLS wrap does not detach: when the deadline
+# passes, the caller shuts it down, so the worker's blocked read or handshake
+# fails at once and the worker is free again. A connect waits at most what is
+# left of the deadline, and no further address of the name is tried after it
+# (``_connect``). Only a name lookup cannot be cut short; it holds its worker
+# for the resolver's own timeout, and no connect follows it once the deadline
+# has passed. When every worker is busy, a verification fails closed at once
+# instead of queueing. A SOCKS proxy is refused.
 _REVERIFY_DEADLINE_SECONDS = 15.0
 _REVERIFY_MAX_BYTES = 64 * 1024
 _VERIFY_WORKERS = 8
@@ -169,21 +171,56 @@ def _end_socket(sock: socket.socket | None, shut: bool) -> None:
         pass
 
 
-def _record_socket(sock: Any) -> Any:
-    tracked = getattr(_verify_local, "sockets", None)
-    if tracked is not None:
-        tracked.opened(sock)
-    return sock
+def _connect(conn: Any) -> socket.socket:
+    """urllib3's ``create_connection`` for a verification's connection,
+    bounded by the fetch's deadline: each address's socket is recorded
+    before its connect, the connect waits at most what is left of the
+    deadline, and no further address is tried once the fetch was given up or
+    the deadline passed (a name with many unreachable addresses would
+    otherwise hold the worker for a connect timeout per address)."""
+    tracked: _FetchSockets | None = getattr(_verify_local, "sockets", None)
+    deadline: float | None = getattr(_verify_local, "deadline", None)
+    host = str(conn._dns_host)
+    if host.startswith("["):
+        host = host.strip("[]")
+    limit = conn.timeout if isinstance(conn.timeout, int | float) else None
+    error: OSError | None = None
+    for family, kind, proto, _name, address in socket.getaddrinfo(
+        host, conn.port, 0, socket.SOCK_STREAM
+    ):
+        left = None if deadline is None else deadline - time.monotonic()
+        if (tracked is not None and tracked.given_up()) or (
+            left is not None and left <= 0
+        ):
+            break
+        sock = socket.socket(family, kind, proto)
+        try:
+            if tracked is not None:
+                tracked.opened(sock)  # raises (the socket ended) when given up
+            for option in conn.socket_options or ():
+                sock.setsockopt(*option)
+            wait = (
+                limit if left is None else left if limit is None else min(limit, left)
+            )
+            sock.settimeout(wait)
+            if conn.source_address:
+                sock.bind(conn.source_address)
+            sock.connect(address)
+            return sock
+        except OSError as e:
+            error = e
+            sock.close()
+    raise error or TimeoutError(f"no connect to {host} before the deadline")
 
 
 class _TrackedHttp(HTTPConnection):
     def _new_conn(self) -> Any:
-        return _record_socket(super()._new_conn())
+        return _connect(self)
 
 
 class _TrackedHttps(HTTPSConnection):
     def _new_conn(self) -> Any:
-        return _record_socket(super()._new_conn())
+        return _connect(self)
 
 
 class _TrackedHttpPool(HTTPConnectionPool):
@@ -208,7 +245,14 @@ class _TrackedAdapter(HTTPAdapter):
 
     def proxy_manager_for(self, proxy: str, **proxy_kwargs: Any) -> Any:
         if proxy.lower().startswith("socks"):
-            # Its connections are not ours to record.
+            # Its connections are not ours to record. Said at WARNING: the
+            # verification fails, and nothing else would name the cause (the
+            # scheme only; the URL may carry credentials).
+            logger.warning(
+                "A verification was not sent: it does not go through the "
+                f"environment's {proxy.split(':', 1)[0]} proxy (set an HTTP(S) "
+                "proxy, or NO_PROXY for the peer)"
+            )
             raise requests.exceptions.InvalidSchema(
                 "A verification does not go through a SOCKS proxy"
             )
@@ -249,10 +293,12 @@ def _fetch_json(
     """The verification GET itself, on a pool worker (see
     ``_bounded_get_json``)."""
     _verify_local.sockets = sockets
+    _verify_local.deadline = deadline
     try:
         return _read_json(url, headers, deadline, sockets, timeout)
     finally:
         _verify_local.sockets = None
+        _verify_local.deadline = None
         sockets.release()
         _verify_slots.release()
 
@@ -4120,7 +4166,9 @@ class Actor:
 
         ``missed`` collects the subscription ids whose resync did not land
         (an HTTP failure or a permanent store error), for the record a later
-        :meth:`resume_subscriptions` re-sends to.
+        :meth:`resume_subscriptions` re-sends to. A subscription kept under
+        an OAuth2 client's trust row gets no resync (nothing is pushed to a
+        client: it reads its diffs); it is neither counted nor missed.
 
         Every subscriber gets its attempt. If any hit a transient fault, the
         suspension is put back (when ``suspension`` is given) and the first
@@ -4167,9 +4215,10 @@ class Actor:
             # (even if the subscription itself has no subtarget or a different one)
             resync_subtarget = subtarget if subtarget else sub_subtarget
             try:
-                if self._callback_subscription_resync(sub, resync_subtarget):
+                sent = self._callback_subscription_resync(sub, resync_subtarget)
+                if sent:
                     count += 1
-                elif missed is not None:
+                elif sent is False and missed is not None:
                     missed.append(_resync_id(sub))
             except DbError as e:  # folds DbError: transient ones raised after the loop
                 from .interface.integrations._errors import is_permanent
@@ -4355,7 +4404,7 @@ class Actor:
 
     def _callback_subscription_resync(
         self, subscription: dict, override_subtarget: str | None = None
-    ) -> bool:
+    ) -> bool | None:
         """Send a resync callback to a single subscription.
 
         Checks peer capability before sending resync. If peer doesn't support
@@ -4371,7 +4420,8 @@ class Actor:
                               (used when resuming a specific subtarget on a broader subscription)
 
         Returns:
-            True if callback was sent/scheduled successfully
+            True if callback was sent/scheduled successfully; None when the
+            subscriber is an OAuth2 client's trust row (nothing to push to)
         """
         from datetime import UTC, datetime
 
@@ -4394,6 +4444,10 @@ class Actor:
         if not trust_data:
             logger.warning(f"No trust found for peer {peer_id}")
             return False
+        if not _has_peer_endpoint(trust_data, self.id):
+            # An OAuth2 client's row (as in callback_subscription): the client
+            # reads its diffs, nothing is pushed to it.
+            return None
 
         # Construct callback URL from trust relationship (same as callback_subscription)
         callback_url = (

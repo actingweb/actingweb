@@ -1,5 +1,5 @@
 """The verification fetch against real sockets (reverify-9 Issues 1 and 2,
-reverify-10 Issues 1 to 4).
+reverify-10 Issues 1 to 4, reverify-11 Issues 2 and 3).
 
 A verification GET goes to a base URI the requester chose. The caller must
 get its answer by the deadline whatever the peer does, and a peer that
@@ -310,38 +310,46 @@ class TestThroughAProxy:
         assert status == 200 and body == {"id": "fast", "approved": True}
         assert took < 2.0
 
-    def test_a_socks_proxy_is_refused(
-        self, monkeypatch: pytest.MonkeyPatch, no_proxy: None
+    def test_a_socks_proxy_is_refused_and_said(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        no_proxy: None,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
-        monkeypatch.setenv("HTTPS_PROXY", "socks5://127.0.0.1:9")
+        """Reverify-11 Issue 3: the refusal is the guard's (requests alone
+        would also fail without PySocks, silently), and it names the cause
+        without the proxy's URL."""
+        monkeypatch.setenv("HTTPS_PROXY", "socks5://user:pw@127.0.0.1:9")
         started = time.monotonic()
-        assert actor_module._bounded_get_json(
-            "https://peer.example.test/meta", {}, time.monotonic() + 3
-        ) == (None, None)
+        with caplog.at_level("WARNING", logger="actingweb.actor"):
+            assert actor_module._bounded_get_json(
+                "https://peer.example.test/meta", {}, time.monotonic() + 3
+            ) == (None, None)
         assert time.monotonic() - started < 1.0
+        said = [
+            r.getMessage() for r in caplog.records if "socks5 proxy" in r.getMessage()
+        ]
+        assert said and "pw" not in said[0]
 
 
 class TestLateAndFull:
     """Reverify-10 Issues 2 and 3."""
 
-    def test_a_socket_connected_after_the_deadline_is_shut_down(
+    def test_a_dns_answer_after_the_deadline_connects_nothing(
         self, tls: ssl.SSLContext, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A connect (or a DNS answer) slower than the time left: the socket
-        arrives after the caller has gone, and is shut down at once."""
-        # urllib3.connection calls it as ``connection.create_connection``,
-        # through this module.
-        import urllib3.util.connection as connection_util
-
+        """A name lookup slower than the time left (it cannot be cut short):
+        once it answers, the caller has gone, no connect is made and the
+        worker is free."""
         slow, fast = _Server("trickle", tls), _Server("fast", tls)
-        real = connection_util.create_connection
+        real = socket.getaddrinfo
 
-        def late(address: Any, *args: Any, **kwargs: Any) -> Any:
-            if address[1] == slow.port:
+        def late(host: Any, port: Any, *args: Any, **kwargs: Any) -> Any:
+            if port == slow.port:
                 time.sleep(1.0)
-            return real(address, *args, **kwargs)
+            return real(host, port, *args, **kwargs)
 
-        monkeypatch.setattr(connection_util, "create_connection", late)
+        monkeypatch.setattr(socket, "getaddrinfo", late)
         try:
             (status, body), took = _all_workers_then_honest(
                 slow.url + "/meta", fast.url + "/meta", deadline=0.3, settle=1.5
@@ -349,6 +357,33 @@ class TestLateAndFull:
         finally:
             slow.close()
             fast.close()
+        assert status == 200 and body == {"id": "fast", "approved": True}
+        assert took < 2.0
+
+    def test_a_name_with_many_dead_addresses_frees_its_worker(
+        self, servers: tuple[_Server, _Server], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Reverify-11 Issue 2: a base URI whose name resolves to several
+        unreachable addresses. Each connect waits at most what is left of
+        the deadline and no further address is tried after it, so the
+        worker is free by the deadline, not a connect timeout per address
+        later. (192.0.2.0/24 is reserved for documentation: a connect there
+        hangs, or fails at once where the network refuses it.)"""
+        _, fast = servers
+        real = socket.getaddrinfo
+
+        def many(host: Any, port: Any, *args: Any, **kwargs: Any) -> Any:
+            if host == "dead.example.test":
+                return [
+                    (socket.AF_INET, socket.SOCK_STREAM, 6, "", (f"192.0.2.{i}", 80))
+                    for i in range(1, 9)
+                ]
+            return real(host, port, *args, **kwargs)
+
+        monkeypatch.setattr(socket, "getaddrinfo", many)
+        (status, body), took = _all_workers_then_honest(
+            "http://dead.example.test/meta", fast.url + "/meta", settle=0.5
+        )
         assert status == 200 and body == {"id": "fast", "approved": True}
         assert took < 2.0
 

@@ -3837,3 +3837,88 @@ Emm's suite on `09890b6` (environment 9, its adoption worktree unchanged):
 PostgreSQL 2 failed / 7406 passed, DynamoDB 3 failed / 54 passed, the
 `master` baseline's failures by name. The environment 9 server was stopped
 afterwards.
+
+### 2026-11-09, after verification thoughts/verifications/2026-11-09-peer-authorisation-fixes-reverify-11.md
+
+Scope (owner, 2026-11-09): "only those that result in actual user facing
+issues". Taken: Issue 1 (a resume reports a miss for a client's
+subscription that never clears, and pushes a client row's secret to this
+actor's own URL), Issue 2 (one requester can refuse every verification in
+the process for minutes, so nobody can pair), and Issue 3's silent failure
+(an operator with a SOCKS proxy sees every verification fail with nothing
+naming why). Left as they are, by that rule: Issue 3's test half (folded
+into the new test), Issue 4 (a `list:`-named key inside an object value
+under a subtarget: no ordinary data has one), Issue 5 (a second log
+line), Issue 6 (only when the interpreter cannot start a thread), Issues 7
+to 9 (changelog markup, a comment, a duplicated rule).
+
+#### 85. No resync and no fan-out push to a client's trust row
+
+**Category**: Verification fix (reverify-11 Issue 1)
+
+**What changed**: `_callback_subscription_resync` returns None for a row
+`_has_peer_endpoint` refuses, and `_send_resync_callbacks` neither counts
+nor records it as missed. `FanOutManager._deliver_single` returns a failed
+`DeliveryResult` naming the OAuth2 client for such a row instead of
+posting to it.
+
+**Files affected**:
+- `actingweb/actor.py`: the resync check and the loop's tri-state.
+- `actingweb/fanout.py`: the same check before the delivery.
+- `tests/test_trust_re_pair.py`: `TestTheResyncAfterReverify11`
+  (`oauth2_client` with no base URI, `oauth2_interactive` with this
+  actor's own: no POST, count 0, `missed == []`; a peer's control).
+- `tests/test_fanout.py`: `test_nothing_is_pushed_to_an_oauth2_clients_row`.
+
+The three new client tests failed on the code before.
+
+**Rationale**: iteration 82 closed the diff callback only; the resync and
+the fan-out read the same rows.
+
+#### 86. A verification's connect is bounded by its deadline
+
+**Category**: Verification fix (reverify-11 Issue 2)
+
+**What changed**: the tracked connections open their socket through
+`_connect` instead of urllib3's `create_connection`: per address of the
+name, the socket is recorded before its connect, the connect waits at most
+what is left of the deadline (`_verify_local.deadline`, set by
+`_fetch_json`), and no further address is tried once the fetch was given
+up or the deadline passed. The name lookup is still not interruptible; no
+connect follows it after the deadline. Comment above the constants
+corrected.
+
+**Files affected**:
+- `actingweb/actor.py`: `_connect`, `_TrackedHttp`/`_TrackedHttps`,
+  `_fetch_json`, the comment.
+- `tests/test_verification_fetch.py`:
+  `test_a_name_with_many_dead_addresses_frees_its_worker` (eight
+  192.0.2.x addresses; eight such fetches, then an honest one answered in
+  under 2 s; failed on the code before); the late-connect test now delays
+  the DNS answer (`test_a_dns_answer_after_the_deadline_connects_nothing`),
+  since the connect no longer goes through `create_connection`.
+
+**Rationale**: urllib3 tries every address with its own connect timeout
+before the socket can be recorded, so an unauthenticated trust request
+naming such a host held its worker for minutes, and eight held them all.
+
+#### 87. A SOCKS refusal says so
+
+**Category**: Verification fix (reverify-11 Issue 3)
+
+**What changed**: `_TrackedAdapter.proxy_manager_for` logs a WARNING naming
+the proxy's scheme (not its URL, which may carry credentials) before it
+refuses. `test_a_socks_proxy_is_refused_and_said` asserts the line and
+that the password is not in it, so it fails without the guard (it did on
+the code before).
+
+**Files affected**:
+- `actingweb/actor.py`: the log line.
+- `tests/test_verification_fetch.py`: the test.
+
+**Rationale**: the refusal was folded into "no answer", so an environment
+with a SOCKS proxy failed every verification with nothing in the logs.
+
+The Full tier on the code of iterations 85 to 87: ruff, format and pyright
+clean; `verify_groups` OK; DynamoDB 6173 passed; PostgreSQL 5970 passed;
+the docs build passes; no recording changed.

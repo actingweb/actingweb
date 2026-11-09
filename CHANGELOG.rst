@@ -18,8 +18,10 @@ SECURITY
   prompts, never read ``approved``: a stranger could read and write
   properties, call methods and actions, and as ``admin`` clear every
   property. **Behavior change:** the evaluator grants nothing to a row this
-  actor has not approved (``PermissionResult.DENIED``); a pending peer
-  reaches only its own trust row (its status and its deletion). **Check:**
+  actor has not approved, nor to a peer id with no trust row at all (a
+  permission override left behind grants nothing;
+  ``PermissionResult.DENIED``); a pending peer reaches only its own trust
+  row (its status and its deletion). **Check:**
   an application that served data to unapproved peers on purpose (the
   specification allows an unapproved ``associate``) approves them instead.
 - **Callbacks were accepted without authentication, and a low-granularity
@@ -82,20 +84,32 @@ SECURITY
   (relationship, approval, base URI and grants stay; the answer follows the
   stored approval; no ``trust_request_received``); anything else answers
   403 and changes nothing. A pending row is never re-paired: its holder's
-  request is a creation request, which replaces it only if it verifies. A creation request is verified when the requester answers with
-  its token and its base URI's ``/meta`` names the peer id it claims; this
+  request is a creation request, which replaces it only if it verifies. A
+  creation request is verified when the requester answers with its token
+  from a relationship it approved (the one it created before sending the
+  request) and its base URI's ``/meta`` names the peer id it claims; this
   proves control of the base URI, not of the id, since the requester answers
-  both. **Behavior change:** with ``auto_accept_default_relationship``, only
+  both. **Behavior change:** a verification answered by a relationship the
+  requester has not approved fails, and a pending row's own peer reads its
+  status without its verification token: a third party could otherwise
+  file a request at each of two actors under the other's id, with one
+  secret, and each verification read the row filed at the other. **Behavior change:** with ``auto_accept_default_relationship``, only
   a request that verified is approved automatically; any other waits for the
   owner (202). **Behavior change:** an owner approves only a verified
   request, on every route (``PUT /trust/<rel>/<peer>`` and the web UI's
   Approve, ``TrustManager.approve_relationship``,
   ``modify_trust_and_notify``, ``TrustManager.modify_trust``):
-  ``approved=True`` is written only to a row stored verified. Approving an
-  unverified request first repeats the verification (a GET to our own
-  trust row at the requester's base URI with the request's secret, which
-  only a host holding that secret answers, and its ``/meta``); one that
-  fails is refused (403 on the PUT). A stranger's request under a real
+  ``approved=True`` is written only to a row stored verified (or approved
+  already, so approving it again changes nothing). Approving an unverified
+  request first repeats the verification (a GET to our own trust row at
+  the requester's base URI with the request's secret, answered by a row
+  the host approved, without following a redirect and within 15 seconds,
+  and its ``/meta``); one that fails is refused (403 on the PUT, with a
+  JSON ``error``, or a page with a way back for the web UI's form, whose
+  trust page marks such a request "unverified" and offers no Approve). A
+  PUT for a missing row answers 404, and one that approves a pending row
+  and changes its base URI answers 400. An approval lands only on the row
+  it was decided for, and the peer is told only when it landed. A stranger's request under a real
   peer's id and base URI could otherwise be approved by one click. A peer
   that does not support verification is paired by the owner creating the
   trust toward its URL. A pending row (stored unverified and not yet approved) is
@@ -164,7 +178,10 @@ SECURITY
   logs a final failure at WARNING); a failed permission query no longer
   replaces the stored copy. Any other failure while handling a permission
   callback (a deletion of revoked data that fails) answers 503 too, so the
-  sender resends it. ``PeerPermissionStore.store_permissions``
+  sender resends it, at most twice, also when the failure would repeat. A
+  copy stored without ``fetched_at`` (written before 3.16) is not read as
+  newer: data a refused callback deleted stays deleted until the next
+  permission change or query. ``PeerPermissionStore.store_permissions``
   compares against the database, not the process's cache, and raises
   ``DbError`` on a fault.
 - **Peer and client views listed every peer's subscriptions.**
@@ -652,7 +669,10 @@ SECURITY
   filter for both paths: a subscription to one property (a subtarget, and
   a resource under it) carries its value only when the peer may read
   ``<subtarget>`` (``<subtarget>/<resource>``), the path a direct read
-  checks; a whole-target diff is filtered per key. A diff the peer may read
+  checks, and without a resource it drops each key of an object that an
+  exclusion names as ``<subtarget>/<key>`` (a resource-level write reaches
+  such a subscription as ``{resource: value}``); a whole-target diff is
+  filtered per key. A diff the peer may read
   none of is not pushed and is pulled as ``{}`` (a no-op change, its
   sequence kept). The filter follows the peer the path names, whoever
   reads (the creator or a trustee reading a peer's subscription sees what
@@ -1807,7 +1827,9 @@ FIXED
   **Behavior change:** it asks for its own trust row at the peer
   (``trust/<relationship>/<our id>``) and decides by the status: 2xx keeps
   the trust, 401, 403 or 404 deletes it locally, no answer or a server error
-  keeps it until the next sync.
+  keeps it until the next sync. A 401, 403 or 404 that a gateway in front of
+  the peer answers (during a deploy, say) reads as a revocation too; the
+  probe runs only when every subscription to the peer already answered 404.
 - **A refusal with no body was read as success.** ``AwProxy.change_resource``
   and its async twin answered ``{}`` for a non-2xx response without a JSON
   object body, and callers test for ``error``, so a 403 on a subscriber's

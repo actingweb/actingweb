@@ -415,6 +415,17 @@ Confirmed by the owner at approval (2026-11-07):
   rows to add. The publisher is the deployment that must add them, and its
   access check logs only at DEBUG today (`auth.py:774-785`).
 
+- [Updated 2026-11-09] **Reverify-7 is fixed in this PR, all of it** (owner,
+  "include all"). Accepted with documentation, not code (iteration 67):
+  - the revocation probe reads a gateway's 401/403/404 as a revocation;
+  - a failed permission callback answers 503 even when the failure repeats;
+  - the reconcile restores nothing from a copy without `fetched_at`.
+- [Updated 2026-11-09] **A diff for a target other than `properties` is the
+  application's** (reverify-7 note). It passes the library's filter
+  unfiltered on push and pull, as on `master`: the library knows no
+  permission model for application targets. `FanOutManager`'s unfiltered
+  payload is the deferred A11.
+
 ## What We're NOT Doing
 
 - **The full baseline** - `2026-11-06-subscription-wire-baseline.md`, next.
@@ -2992,3 +3003,324 @@ PostgreSQL 2 failed / 7406 passed, DynamoDB 3 failed / 54 passed, the
 UI's Approve on an unverified request now answers 403 (for the next
 verification's browser walk).
 
+### 2026-11-09, after verification thoughts/verifications/2026-11-09-peer-authorisation-fixes-reverify-7.md
+
+Scope (owner, 2026-11-09: "include all"): reverify-7 Issues 1 to 12 and the
+note on non-`properties` targets, in this PR.
+
+#### 56. A verification is answered only by a row its host approved
+
+**Category**: Bug fix (security; reverify-7 Issue 1, introduced by the
+branch in `a8007e5`)
+
+**What changed**:
+- `create_verified_trust` and `reverify_pending_trust` accept a peer's
+  answer only when the answering row is approved there
+  (`_answered_by_approved_row`, compared as text: a POST answer carries
+  `"true"`, a GET `true`). An initiator creates its own row approved before
+  it sends the request, on `master` too (`master:actingweb/actor.py:1709`,
+  `:1838`), so released peers still pair.
+- The trust GET no longer gives a pending row's own peer its
+  `verification_token`; the status is still answered.
+
+**Files affected**: `actingweb/actor.py`, `actingweb/handlers/trust.py`;
+`tests/test_trust_re_pair.py` - `TestTheMirroredRequestAfterReverify7`.
+- Two actors on one config, verifying each other through the real handlers:
+  the mirrored request at B is neither verified nor approved, and A's second
+  check and `modify_trust_and_notify` refuse the planted row. Both failed
+  before, with B's row verified and A's second check passing.
+- A pending row's own peer reads no token, while an approved row's peer
+  still does.
+- An unapproved answer does not verify a creation.
+
+Four of the five failed before; the approved-row control passed.
+`_peer_answers` now answers as an initiator's approved row.
+
+**Rationale**:
+- **The hole.** A pending row's own peer could read the row, token
+  included (`a8007e5`). A third party filed a request at A under B's id,
+  read A's token with its own secret, then filed a request at B under A's
+  id with that token. Each side's verification read the row planted at the
+  other side.
+- **Effect.** It was reproduced live: B auto-accepted, and the third party
+  read B's properties. Without auto-accept, one Approve click or the
+  owner's create toward B did the same.
+- **Spec.** The requested actor verifies by asking the requester for the
+  relationship; the requester's side of a genuine request is its approved
+  relationship (see iteration 68 for the spec text).
+
+#### 57. A subscription to a property gets no resource an exclusion names
+
+**Category**: Bug fix (security; reverify-7 Issue 2, introduced by
+iteration 50; `master` filtered this case per key)
+
+**What changed**:
+- **The rule.** `filter_subscription_blob`, for a subscription with a
+  subtarget and no resource, still sends a readable property's object
+  whole. It now drops each key whose `<subtarget>/<key>` an exclusion names.
+- **Why the shape matters.** A resource-level write reaches such a
+  subscription as `{resource: value}` (`register_diffs`).
+- **New evaluator method.** `PermissionEvaluator.excluded_property_paths`
+  names the paths a `denied` or `excluded_patterns` entry matches. It is
+  not the DENIED result, because a path the grant merely does not name is
+  also DENIED.
+
+**Files affected**: `actingweb/permission_evaluator.py`, `actingweb/actor.py`;
+`tests/test_peer_paths_binding.py` -
+`test_a_subtarget_subscription_gets_no_excluded_resource` (pull and push;
+failed before with `{"private": "hidden"}` pulled)
+
+**Rationale**:
+- **The leak.** A friend excluded from `settings/private` subscribed to
+  `settings` and received `settings/private`.
+- **Why not filter on DENIED.** Dropping DENIED keys would undo reverify-6
+  Issue 5: an exact grant of `settings` reads the whole object
+  (`test_an_object_value_under_a_subtarget_follows_the_property`). Only an
+  exclusion names a key the peer may not read under a property it may.
+- **Scope.** The parent read beside it (`GET /properties/settings` returns
+  the object whole) is the deferred A5.
+
+#### 58. The whole-target filter evaluates a diff once
+
+**Category**: Verification fix (reverify-7 Issue 11)
+
+**What changed**: `_filter_subscription_data_by_permissions` makes one
+`evaluate_bulk_property_access` call per diff, instead of one
+`evaluate_property_access` per key. The approval and the grant are read
+once, and the results are the same (both go through `_evaluate_rules`).
+
+**Files affected**: `actingweb/actor.py`
+
+**Rationale**: `_is_unapproved` added a trust read to each evaluation, so
+an N-key diff cost about 2N reads per subscriber.
+
+#### 59. An approval lands on the row read, and a failed write tells the peer nothing
+
+**Category**: Bug fix (reverify-7 Issue 3)
+
+**What changed**: `modify_trust_and_notify` conditions an approval write on
+the secret of the row it read (`only_if_secret`). It returns False, with no
+notification, when the write did not land: the row is gone, has been
+replaced since, or is not verified.
+
+**Files affected**: `actingweb/actor.py`; `tests/test_trust_re_pair.py` -
+`test_a_failed_approval_write_tells_the_peer_nothing` (failed before)
+
+**Rationale**: the result of `dbtrust.modify` was never checked, so a
+refused write still POSTed "approved" to the peer. A row replaced between
+the read and the write was approved without the owner seeing it, while the
+notification went to the old row's base URI.
+
+#### 60. A repeated approval of an approved row changes nothing
+
+**Category**: Bug fix (reverify-7 Issue 4; a behaviour change for rows
+approved before 3.16 without a verification)
+
+**What changed**:
+- `only_if_verified` now accepts a row that is verified or already
+  approved, on both backends (DynamoDB `verified == True | approved ==
+  True`; PostgreSQL `(verified = true OR approved = true)`).
+- `modify_trust_and_notify` and the PUT re-verify only a row that is not
+  approved yet.
+
+**Files affected**: `actingweb/db/dynamodb/trust.py`,
+`actingweb/db/postgresql/trust.py`, `actingweb/db/protocols.py`,
+`actingweb/trust.py`, `actingweb/actor.py`, `actingweb/handlers/trust.py`;
+`tests/test_trust_re_pair.py` -
+`test_an_approved_unverified_row_takes_a_repeated_approval` (failed before;
+no probe, 204, the description written)
+
+**Rationale**:
+- **What broke.** An idempotent `{"approved": true, "desc": ...}` on such a
+  row probed the peer, then answered 403, and the description change was
+  lost.
+- **Why this is safe.** Approving an approved row grants nothing new.
+
+#### 61. A refused Approve says why, and the trust page does not offer it
+
+**Category**: UX refinement (reverify-7 Issue 5)
+
+**What changed**:
+- **The refusal.** `TrustPeerHandler._refuse_unverified_approval` answers
+  the 403 with a body that says why.
+  - The web UI's Approve form (`_method=PUT`) gets a short page with a link
+    back to `/www/trust`.
+  - An API client gets `{"error": ...}`.
+- **The trust page.** The library's template and the demo's mark a pending
+  request as "unverified". They show a hint ("create the trust toward the
+  peer's URL") instead of Approve. The demo's legend explains the badge.
+
+**Files affected**: `actingweb/handlers/trust.py`,
+`actingweb/templates/aw-actor-www-trust.html`,
+`examples/demo/templates/aw-actor-www-trust.html`;
+`tests/test_trust_re_pair.py` - `test_the_refusal_says_why` (failed
+before)
+
+**Rationale**: the browser walk found a blank 403 page with no way back,
+and an Approve button that always fails.
+
+**Browser walk** (gstack browse, demo in local QA mode on `:5055`,
+throwaway actors deleted afterwards):
+- **The trust page.** The planted unverified request shows Pending and
+  Unverified (red), a legend entry, no Approve control, and the hint
+  "Cannot approve: pair from your side". The hint is shortened and wraps,
+  so it and Delete are readable at 1280 px and 375 px; the first version
+  was cut off.
+- **The old Approve URL, followed from the app.** It answers 403 with the
+  explanation and a working link back. The page is unstyled (low,
+  accepted).
+- **The same URL pasted into the address bar.** It meets the cross-site
+  guard first ("Cross-site request refused"), as designed for a
+  state-changing GET.
+- **By API.** The PUT answers 403 with the JSON `error`, and a pending
+  row's own peer reads its row without `verification_token`.
+
+#### 62. `TrustManager.modify_trust` repeats the verification before approving
+
+**Category**: Bug fix (reverify-7 Issue 6)
+
+**What changed**: `modify_trust(approved=True)` runs `reverify_pending_trust`
+on a row that is neither approved nor verified, as every other approval
+route does, so the security reference's list is now true.
+
+**Files affected**: `actingweb/interface/trust_manager.py`;
+`tests/test_trust_re_pair.py` - `test_modify_trust_repeats_the_verification`
+(failed before)
+
+**Rationale**: it refused silently, with no second check. The docs said it
+repeated the verification.
+
+#### 63. The owner's create re-verifies only a request it would approve
+
+**Category**: Bug fix (reverify-7 Issue 7)
+
+**What changed**: both twins of `create_reciprocal_trust` run the second
+check only when the pending request has the create's relationship and URL
+(`_re_pair_refusal` is empty). Any other pending request is replaced by the
+owner's request, as before iteration 48.
+
+**Files affected**: `actingweb/actor.py`; `tests/test_trust_re_pair.py` -
+`test_another_relationship_replaces_the_request_unprobed` (failed before)
+
+**Rationale**: a request that verified on the second check took the
+re-pair branch, which refused a different relationship or URL, so the
+owner's create failed (408) where it used to replace the request.
+
+#### 64. The approving PUT answers 404 for a missing row and 400 for a move with an approval
+
+**Category**: Bug fix (reverify-7 Issue 8)
+
+**What changed**: `TrustPeerHandler.put` reads the row first.
+- A missing row answers 404, not 403 "not verified".
+- An approval of a pending row that also changes the base URI answers 400
+  ("Approve and change the base URI in two requests"). The second check
+  asks the stored base URI.
+
+**Files affected**: `actingweb/handlers/trust.py`;
+`tests/test_trust_re_pair.py` -
+`test_a_missing_row_is_404_and_a_move_with_an_approval_400` (failed before)
+
+**Rationale**: a client could not tell a deleted row from an unverified
+one, and an approval with a move was checked against the old host.
+
+#### 65. A peer with no trust row is granted nothing
+
+**Category**: Bug fix (reverify-7 Issue 9)
+
+**What changed**: `_is_unapproved` also answers True when the peer has no
+trust row, so a permission override that a faulted delete left behind
+grants nothing.
+
+**Files affected**: `actingweb/permission_evaluator.py`;
+`tests/test_trust_re_pair.py` - `test_a_peer_with_no_trust_row_gets_nothing`
+(failed before); `tests/test_db_fault_permissions.py` (its evaluator test
+stubs the gate: its subject is the store fault, not the row)
+
+**Rationale**: "no row" counted as approved, and the override was read
+before the trust row.
+
+#### 66. The second verification is bounded in total
+
+**Category**: Bug fix (reverify-7 Issue 10)
+
+**What changed**: `reverify_pending_trust` reads its answer through
+`_bounded_get_json`:
+- no redirect is followed;
+- at most 64 KB is read, within 15 s in all;
+- a larger or slower answer does not verify.
+
+**Files affected**: `actingweb/actor.py`; `tests/test_trust_re_pair.py` -
+`TestTheSecondCheckIsBounded` (failed before: no `allow_redirects`); the
+fakes in `_reverse_answers` and the mirror test give `iter_content`
+
+**Rationale**: the base URI is the requester's choice. `requests` followed
+redirects, and its read timeout is per read, so a trickling host held the
+owner's PUT or create.
+
+#### 67. The probe, the 503 and the reconcile residue: decided and documented
+
+**Category**: Decision changed (reverify-7 Issue 12, and its note on
+non-`properties` targets)
+
+**What changed**: no code. The changelog now states the three accepted
+behaviours, and Decisions Made records them with the target decision:
+- **The revocation probe.** It reads a gateway's 401, 403 or 404 as a
+  revocation. It runs only after every subscription to the peer answered
+  404, and it is narrower than `master`, which read any error as revoked.
+- **The 503 on a failed permission callback.** It is also answered for a
+  failure that would repeat. The resend is bounded at two, and a resend of
+  an already stored copy is refused as not newer.
+- **The reconcile.** It reads a copy without `fetched_at` (written before
+  3.16) as not newer, so it restores nothing.
+
+**Files affected**: `CHANGELOG.rst`; this plan (Decisions Made)
+
+**Rationale**:
+- Telling a gateway's 404 from the peer's own needs a second probe and a
+  wait in `sync_peer`; deleting is what the peer's real 404 means.
+- A deterministic failure costs two extra requests.
+- Every 3.16 writer stamps `fetched_at`.
+
+#### 68. Spec, changelog, security reference and migration guide for iterations 56 to 67
+
+**Category**: Verification fix (documentation; reverify-7 Issues 1 and 6)
+
+**What changed**:
+- **`docs/protocol/actingweb-spec.rst`**:
+  - the relationship that answers a verification is the requester's own,
+    approved relationship (the spec's step 1, "200 OK");
+  - A MUST NOT return the verification token from a relationship it has
+    not approved, and B MUST NOT accept a verification answered by one;
+  - the pending row's status read excludes the token;
+  - the sentence about the requester's secret is corrected.
+- **`CHANGELOG.rst`**:
+  - the trust entry: verification by an approved relationship, no token for
+    a pending row's peer, the bounded second check, re-approval of an
+    approved row, the 403 bodies and the trust page, the 404 and 400, an
+    approval landing on the row it was decided for;
+  - the SECURITY entry: a peer with no trust row;
+  - the filter entry: exclusions under a subtarget.
+- **`docs/reference/security.rst`**: the false "only a host holding that
+  secret answers" replaced, and the mirror and missing-row cases added.
+- **`docs/migration/v3.16.rst`**: the same, plus the create path's
+  relationship and URL condition.
+
+**Files affected**: as listed.
+
+**Rationale**: reverify-7 found the guarantee these pages claimed false
+(Issue 1), and the security reference's list wrong (Issue 6). The spec
+already asked the requester's verification URL to answer 200 OK, which is
+its approved relationship. The rule is stated now, within the spec's own
+step 1.
+
+The Full tier on the code of iterations 56 to 68:
+- DynamoDB: 6127 passed;
+- PostgreSQL: 5924 passed;
+- ruff, format and pyright are clean;
+- `verify_groups` OK, the docs build, and no wire recording changed.
+
+The template-only change after that run (iteration 61's hint and badge)
+re-ran the web and trust unit tests: 566 passed.
+
+Not yet run: Emm's suite on this iteration. Iteration 56 changes what a
+verification accepts, so it gates the PR.

@@ -1307,17 +1307,32 @@ its own trust row. An owner's approval (``PUT /trust/<rel>/<peer>``, the web
 UI, ``TrustManager.approve_relationship``, ``modify_trust_and_notify``,
 ``TrustManager.modify_trust``) lands only on a verified row: approving an
 unverified request repeats its verification and answers 403 when that
-fails. An application that relied on unapproved peers reading data
-approves them; to pair with a peer that does not support verification, the
-owner creates the trust toward the peer's URL. A re-pair applies only to a
-verified or approved row.
+fails (a JSON ``error``; the web UI's trust page marks such a request
+"unverified" and offers no Approve). Approving a row that is already
+approved changes nothing and needs no verification, so rows approved
+before 3.16 without one keep working. A PUT for a missing row answers 404,
+and one that approves a pending row and moves its base URI answers 400 (two
+requests). A peer id with no trust row is granted nothing, whatever
+permission override exists for it. An application that relied on
+unapproved peers reading data approves them; to pair with a peer that does
+not support verification, the owner creates the trust toward the peer's
+URL. A re-pair applies only to a verified or approved row.
+
+**A verification is answered by an approved relationship.** A trust
+request verifies only when the requester answers with its token from the
+relationship it created, approved, before sending the request; every
+released library creates it so. A pending row's own peer reads its status
+(202) without its verification token. A third party could otherwise file a
+request at each of two actors under the other's id with one secret, and
+each verification read the row filed at the other.
 
 **Creating a trust toward a peer whose request waits.** A verified pending
 request is approved (the peer is told and ``trust_fully_approved_local``
 runs, not ``trust_initiated``, from ``POST /trust``, the web form and
-``TrustManager``); a pending request that never verified is verified
-again first, approved if that passes, and otherwise replaced by the owner's
-own request, with the owner's secret.
+``TrustManager``); a pending request that never verified, for the same
+relationship at the same URL, is verified again first and approved if that
+passes; any other is replaced by the owner's own request, with the owner's
+secret.
 
 **Callbacks are authenticated.** Every ``/callbacks`` request without
 credentials answers 401 with a challenge. The two library branches,

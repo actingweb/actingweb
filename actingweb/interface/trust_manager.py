@@ -894,8 +894,22 @@ class TrustManager:
                 peerid=peer_id,
                 config=self._core_actor.config,
             )
-            if not trust.get():
+            row = trust.get()
+            if not row:
                 logger.warning(f"Trust not found for peer {peer_id}")
+                return False
+            if (
+                kwargs.get("approved") is True
+                and not row.get("approved")
+                and not row.get("verified")
+                and not self._core_actor.reverify_pending_trust(peer_id)
+            ):
+                # As every approval route (3.16): an unverified request is
+                # approved only after its verification repeats and passes.
+                logger.warning(
+                    f"Refused to approve the trust with {peer_id}: the request "
+                    "is not verified"
+                )
                 return False
 
             return trust.modify(

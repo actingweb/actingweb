@@ -342,8 +342,8 @@ class Trust:
     ) -> bool:
         """Write the attributes given, in one write conditioned on the row
         existing. ``approved=True`` is written only to a row stored verified
-        (3.16): a row whose secret an unproven requester chose is never
-        approved, whatever route asks (``Actor.reverify_pending_trust`` first
+        or approved already (3.16): a row whose secret an unproven requester
+        chose is never approved, whatever route asks (``Actor.reverify_pending_trust`` first
         re-runs the verification). ``only_if_secret`` writes only while the
         row holds that secret (a re-pair's swap). False when nothing was
         written; a fault raises ``DbError``."""

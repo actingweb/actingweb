@@ -1000,6 +1000,34 @@ class TestOneFilterForPushAndPull:
             )
         post.assert_not_called()
 
+    def test_a_subtarget_subscription_gets_no_excluded_resource(
+        self, world: Publisher
+    ) -> None:
+        """Reverify-7 Issue 2: a subscription to ``settings`` without a
+        resource receives a write to ``settings/private`` as
+        ``{"private": ...}``; checking ``settings`` alone sent it past the
+        exclusion on both paths."""
+        self._grant(world, "b", "friend", {"excluded_patterns": ["settings/private"]})
+        sub = self._sub(world, "b", "sub-n", "settings")
+        world.a.register_diffs(
+            target="properties",
+            subtarget="settings",
+            resource="private",
+            blob=json.dumps("hidden"),
+        )
+        assert self._pull(world, "b", "sub-n") == {}
+        with mock.patch("actingweb.actor.requests.post") as post:
+            post.return_value = mock.Mock(status_code=204)
+            world.a.callback_subscription(
+                peerid=world.peers["b"],
+                sub_obj=sub,
+                sub=sub.get(),
+                diff={"sequence": 2, "timestamp": "2026-11-09T00:00:00Z"},
+                blob=json.dumps({"private": "hidden", "open": 1}),
+            )
+        sent = post.call_args.kwargs["data"].decode()
+        assert "hidden" not in sent and '"open"' in sent
+
 
 class TestAPeerListsItsOwnSubscriptions:
     """Reverify-6 Issue 3: the ``owner`` row admits a peer's listing of its

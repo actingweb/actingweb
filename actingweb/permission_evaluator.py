@@ -536,9 +536,33 @@ class PermissionEvaluator:
             )
             return []
 
+    def excluded_property_paths(
+        self, actor_id: str, peer_id: str, property_paths: list[str]
+    ) -> set[str]:
+        """The paths among ``property_paths`` the peer's grant explicitly
+        excludes: a ``denied`` or ``excluded_patterns`` entry matches them
+        (or they hold a control character). A path the grant merely does not
+        name is not in the set. Used under a property the peer may read,
+        whose value is sent whole except what an exclusion names (3.16). An
+        unapproved peer is excluded from everything; a storage fault raises
+        ``DbError``."""
+        if self._is_unapproved(actor_id, peer_id):
+            return set(property_paths)
+        effective_perms = self._get_effective_permissions(actor_id, peer_id) or {}
+        rules = effective_perms.get(PermissionType.PROPERTIES.value) or {}
+        denied = list(rules.get("denied") or []) + list(
+            rules.get("excluded_patterns") or []
+        )
+        return {
+            path
+            for path in property_paths
+            if has_control_characters(path)
+            or (denied and self._matches_any_pattern(path, denied))
+        }
+
     def _is_unapproved(self, actor_id: str, peer_id: str) -> bool:
-        """Whether the peer's trust row exists and this actor has not
-        approved it. Such a peer is granted nothing here (3.16): its secret
+        """Whether the peer has no trust row, or one this actor has not
+        approved. Such a peer is granted nothing here (3.16): its secret
         authenticates it (``auth.py``), and anyone can file a trust request
         with a relationship of its choice, so a grant may only follow an
         approval. The access table refuses it the same way
@@ -555,7 +579,12 @@ class PermissionEvaluator:
             if isinstance(row, dict)
             else getattr(row, "approved", None)
         )
-        if row and approved is False:
+        if not row:
+            # No trust at all: nothing it holds can grant (a permission
+            # override a failed delete left behind grants nothing either).
+            logger.warning(f"Permission denied: {actor_id}:{peer_id} has no trust")
+            return True
+        if approved is False:
             logger.warning(f"Permission denied: {actor_id}:{peer_id} is not approved")
             return True
         return False

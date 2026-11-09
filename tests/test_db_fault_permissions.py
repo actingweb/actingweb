@@ -114,6 +114,9 @@ def test_evaluator_raises_on_a_store_fault_against_a_deny_override(
     initialize_trust_permission_store(config)
     evaluator = PermissionEvaluator(config)
     with (
+        # An approved peer: a peer with no trust row is denied before the
+        # store is read (3.16), and the fault is what this test is about.
+        mock.patch.object(evaluator, "_is_unapproved", return_value=False),
         mock.patch.object(
             evaluator.permission_store,
             "get_permissions",

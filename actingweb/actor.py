@@ -35,6 +35,67 @@ from .db.exceptions import CreatorTaken, DbError
 
 logger = logging.getLogger(__name__)
 
+
+def _answered_by_approved_row(body: dict[str, Any]) -> bool:
+    """Whether a peer's answer for our trust row there is a row it approved.
+
+    A verification asks the requester for our own row with the secret (or
+    token) the request carried. A genuine initiator created that row
+    approved before it sent the request; a pending row that whoever filed
+    the request also filed at the requester's host, under our id, holds the
+    same secret and is not approved there. The flag is compared as text: a
+    trust POST answer carries it as ``"true"``, a GET as ``true``."""
+    return str(body.get("approved")).lower() == "true"
+
+
+# The second verification's GET goes to a base URI the requester chose:
+# bounded in total, not per read, and never redirected elsewhere.
+_REVERIFY_DEADLINE_SECONDS = 15.0
+_REVERIFY_MAX_BYTES = 64 * 1024
+
+
+def _bounded_get_json(url: str, headers: dict[str, str]) -> tuple[int | None, Any]:
+    """GET ``url`` without following a redirect, reading at most
+    ``_REVERIFY_MAX_BYTES`` within ``_REVERIFY_DEADLINE_SECONDS`` in all.
+    Returns the status and the parsed JSON body (None when the answer is not
+    2xx JSON, too large or too slow; status None when there was no answer)."""
+    import time
+
+    deadline = time.monotonic() + _REVERIFY_DEADLINE_SECONDS
+    try:
+        answer = requests.get(
+            url=url,
+            headers=headers,
+            timeout=(5, 5),
+            allow_redirects=False,
+            stream=True,
+        )
+    except Exception:  # folds DbError: peer HTTP only
+        return None, None
+    try:
+        status = int(answer.status_code)
+        if not 200 <= status < 300:
+            return status, None
+        chunks: list[bytes] = []
+        size = 0
+        for chunk in answer.iter_content(chunk_size=4096):
+            size += len(chunk)
+            if size > _REVERIFY_MAX_BYTES or time.monotonic() > deadline:
+                return status, None
+            chunks.append(chunk)
+        try:
+            return status, json.loads(b"".join(chunks).decode("utf-8", "ignore"))
+        except ValueError:
+            return status, None
+    except Exception:  # folds DbError: peer HTTP only
+        return None, None
+    finally:
+        try:
+            answer.close()
+        except Exception:  # folds DbError: closing a response
+            pass
+
+
 # Rate limit for the suspension-check failure ERROR (see
 # is_subscription_suspended()). Time-windowed rather than once-per-process:
 # a warm serverless container — or any long-lived one — can outlive the
@@ -1546,6 +1607,7 @@ class Actor:
         this_trust = relationships[0]
         if (
             approved is True
+            and not this_trust.get("approved")
             and not this_trust.get("verified")
             and not self.reverify_pending_trust(peerid)
         ):
@@ -1577,11 +1639,24 @@ class Actor:
                 oauth_client_id=oauth_client_id,
                 last_accessed=last_accessed,
                 last_connected_via=last_connected_via,
+                # An approval lands on the row read above, or not at all: a
+                # row replaced meanwhile (another request) is not approved
+                # unseen, and the peer is told with the secret it holds.
+                only_if_secret=(
+                    str(this_trust.get("secret") or "") or None
+                    if approved is True
+                    else None
+                ),
             )
         except DbError:
             raise
         except Exception as e:
             logger.error(f"Exception in dbtrust.modify: {e}", exc_info=True)
+            return False
+        if not result:
+            # Not written (the row is gone, replaced, or not verified): the
+            # peer is not told anything changed.
+            logger.warning(f"The trust with {peerid} was not modified")
             return False
 
         # Now that approval is saved, notify peer so their auto-subscribe will succeed
@@ -1735,12 +1810,16 @@ class Actor:
         existing = trust.Trust(
             actor_id=self.id, peerid=peer["id"], config=self.config
         ).get()
-        if self._is_unproven_pending(existing) and self.reverify_pending_trust(
-            peer["id"]
+        if (
+            self._is_unproven_pending(existing)
+            and existing
+            and not self._re_pair_refusal(url, existing, relationship)
+            and self.reverify_pending_trust(peer["id"])
         ):
             # A genuine request whose first verification failed (a timeout,
             # say) verifies now: it is approved below, not replaced, so the
-            # peer's own row still matches ours.
+            # peer's own row still matches ours. Only one for this
+            # relationship at this URL: any other is replaced as before.
             existing = trust.Trust(
                 actor_id=self.id, peerid=peer["id"], config=self.config
             ).get()
@@ -1926,8 +2005,11 @@ class Actor:
         existing = trust.Trust(
             actor_id=self.id, peerid=peer["id"], config=self.config
         ).get()
-        if self._is_unproven_pending(existing) and await asyncio.to_thread(
-            self.reverify_pending_trust, peer["id"]
+        if (
+            self._is_unproven_pending(existing)
+            and existing
+            and not self._re_pair_refusal(url, existing, relationship)
+            and await asyncio.to_thread(self.reverify_pending_trust, peer["id"])
         ):
             # See create_reciprocal_trust(): a request that verifies now is
             # approved, not replaced.
@@ -2066,11 +2148,12 @@ class Actor:
         A row stored unverified holds the secret its requester chose. Before
         anything approves it, ask the host at its base URI for our own trust
         row there with that secret as bearer (as the lost-answer probe does):
-        only a host holding the secret answers with a row naming us, so a
-        request filed under another actor's id, with that actor's base URI,
-        never passes. The base URI's ``/meta`` must name the peer too, as at
-        creation. A pass marks the row verified, conditioned on its secret
-        being unchanged."""
+        only a host holding the secret answers with a row naming us, and the
+        row must be one that host approved (an initiator's own row is). A
+        pending row filed there under our id by whoever filed this one holds
+        the same secret, so an unapproved answer proves nothing. The base
+        URI's ``/meta`` must name the peer too, as at creation. A pass marks
+        the row verified, conditioned on its secret being unchanged."""
         current = trust.Trust(actor_id=self.id, peerid=peerid, config=self.config)
         row = current.get()
         if not row:
@@ -2083,20 +2166,13 @@ class Actor:
         url, headers = self._re_pair_probe_request(
             row, secret, str(row.get("relationship") or "")
         )
-        try:
-            answer = requests.get(url=url, headers=headers, timeout=(5, 10))
-            status = answer.status_code
-            try:
-                body: Any = answer.json() if 200 <= status < 300 else None
-            except ValueError:
-                body = None
-        except Exception:  # folds DbError: peer HTTP only
-            status, body = None, None
+        status, body = _bounded_get_json(url, headers)
         if not (
             isinstance(status, int)
             and 200 <= status < 300
             and isinstance(body, dict)
             and body.get("peerid") == self.id
+            and _answered_by_approved_row(body)
         ):
             logger.warning(
                 f"The trust request from {peerid} did not verify on a second "
@@ -2407,12 +2483,18 @@ class Actor:
                         f"Verifying trust response: verified={data.get('verified', False)}, "
                         f"approved={data.get('approved', False)}, peer_approved={data.get('peer_approved', False)}"
                     )
-                    if secret_digest_equals(
-                        data.get("verification_token"), verification_token
-                    ):
-                        verified = True
-                    else:
-                        verified = False
+                    # The requester's own row must be approved: an
+                    # initiator creates its row approved before it sends the
+                    # request, and a pending row anyone filed under the
+                    # requester's id answers with whatever token its filer
+                    # chose (3.16, the mirrored-request hole).
+                    verified = bool(
+                        isinstance(data, dict)
+                        and _answered_by_approved_row(data)
+                        and secret_digest_equals(
+                            data.get("verification_token"), verification_token
+                        )
+                    )
                 except ValueError:
                     logger.debug(
                         "No json body in response when verifying trust at url("
@@ -3448,7 +3530,9 @@ class Actor:
         property (a subtarget, and a resource under it) carries that
         property's value, whatever its shape: it is sent whole when the peer
         may read ``<subtarget>`` (``<subtarget>/<resource>`` with a resource),
-        as a direct read of that path checks, else not at all. A subscription
+        as a direct read of that path checks, else not at all. Without a
+        resource, an object's keys whose ``<subtarget>/<key>`` an exclusion
+        names are dropped (a resource-level write arrives as ``{resource: value}``). A subscription
         to the whole target carries an object keyed by property: each key is
         checked on its own. Fail closed: no evaluator, a value that is not an
         object for a whole-target subscription, or an error yields None."""
@@ -3482,12 +3566,38 @@ class Actor:
                 )
                 == PermissionResult.ALLOWED
             )
+            if not allowed:
+                return None
+            if resource or not evaluator:
+                return as_text
+            # A subscription to a property without a resource also receives
+            # its resource-level writes as ``{resource: value}``
+            # (``register_diffs``): the value stays whole, but a key whose
+            # own path ``<subtarget>/<key>`` an exclusion names is dropped,
+            # as a direct read of that path is refused.
+            try:
+                parsed = json.loads(as_text)
+            except (TypeError, ValueError):
+                return as_text
+            if not isinstance(parsed, dict) or not parsed:
+                return as_text
+            paths = {key: f"{subtarget}/{key}" for key in parsed}
+            excluded = evaluator.excluded_property_paths(
+                str(self.id), peerid, list(paths.values())
+            )
+            kept = {
+                key: value
+                for key, value in parsed.items()
+                if paths[key] not in excluded
+            }
+            if len(kept) == len(parsed):
+                return as_text
+            return json.dumps(kept) if kept else None
         except DbError:
             raise
         except Exception as e:
             logger.error(f"Permission check failed for a diff to {peerid}: {e}")
             return None
-        return as_text if allowed else None
 
     def _filter_subscription_data_by_permissions(
         self, peerid: str, blob: str | bytes, subtarget: str | None = None
@@ -3521,8 +3631,10 @@ class Actor:
                 logger.debug(f"Cannot filter non-dict subscription data: {type(data)}")
                 return blob if isinstance(blob, str) else json.dumps(blob)
 
-            filtered_data = {}
-            for property_name, value in data.items():
+            # One evaluation for the whole diff (the approval and the grant
+            # are read once, not once per key).
+            paths: dict[str, str] = {}
+            for property_name in data:
                 # Normalize property list keys: strip 'list:' prefix for permission checks
                 # Property lists use 'list:name' internally but permissions use 'name'
                 normalized_name = (
@@ -3530,15 +3642,16 @@ class Actor:
                     if property_name.startswith("list:")
                     else property_name
                 )
-
-                # Build full property path for permission check
-                property_path = (
+                paths[property_name] = (
                     f"{subtarget}/{normalized_name}" if subtarget else normalized_name
                 )
-                result = evaluator.evaluate_property_access(
-                    self.id, peerid, property_path, operation="read"
-                )
-                if result == PermissionResult.ALLOWED:
+            results = evaluator.evaluate_bulk_property_access(
+                self.id, peerid, list(paths.values()), "read"
+            )
+            filtered_data = {}
+            for property_name, value in data.items():
+                property_path = paths[property_name]
+                if results.get(property_path) == PermissionResult.ALLOWED:
                     filtered_data[property_name] = value
                 else:
                     logger.debug(

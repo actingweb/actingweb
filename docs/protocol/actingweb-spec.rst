@@ -1605,10 +1605,11 @@ id (its ``/meta`` ``id``). (A relationship B stored without verifying it, and ha
 approved, MAY be replaced by a request that verifies, and is not re-paired.)
 B MUST NOT approve a relationship automatically unless it verified. B MAY
 also refuse a manual approval of a relationship it has not verified, after
-repeating the verification (a request filed under another actor's id and
-base URI holds a secret only its requester knows). Until B approves a
-relationship, B SHOULD grant the requesting actor no access beyond the
-relationship's own URL (its status and its deletion), unless the
+repeating the verification (a request filed under another actor's id, with
+that actor's base URI, holds a secret only its requester knows, which the
+real actor's host does not answer to). Until B approves a relationship, B
+SHOULD grant the requesting actor no access beyond the relationship's own
+URL (its status and its deletion; never its verification token), unless the
 relationship type is one B allows unapproved (see the associate
 relationship). A verification proves that
 the requesting actor controls its base URI, not that it is the actor whose
@@ -1625,6 +1626,16 @@ secret as sent in "verify" as part of the trust relationship request, in
 the "verificationToken" attribute. If verification is not supported, the
 regular trust relationship attributes should be returned in
 application/json content.
+
+The relationship that answers a verification is the one the requesting
+actor created, approved, before it sent its request (a ``200 OK``, see
+Verification below). A MUST NOT return the verification token from a
+relationship it has not approved, and B MUST NOT treat a verification as
+successful when the answering relationship is not approved (a ``202``, or
+``approved`` false). Otherwise a third party could file a request at B
+under A's id and a second request at A under B's id with the same secret:
+each actor's verification would read the relationship the third party
+filed at the other.
 
 B will later try to notify A about an approved trust relationship at the
 reverse URI /<requestor-id>/trust/<trustlevel/<requested-actor-id>, or a

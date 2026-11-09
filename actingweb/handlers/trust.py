@@ -1,3 +1,4 @@
+import html
 import json
 import logging
 from typing import Any
@@ -715,6 +716,13 @@ class TrustPeerHandler(base_handler.BaseHandler):
             if caller_peer and caller_peer != peerid:
                 my_trust.pop("secret", None)
                 my_trust.pop("verification_token", None)
+            elif caller_peer and not my_trust.get("approved"):
+                # A pending row's own peer reads its status, never its token:
+                # whoever filed the row chose its secret, and the token would
+                # let it answer another actor's verification of a request it
+                # filed there under our id (3.16). A verification reads an
+                # initiator's own row, which is approved.
+                my_trust.pop("verification_token", None)
         out = json.dumps(my_trust)
         self.response.write(out)
         self.response.headers["Content-Type"] = "application/json"
@@ -824,6 +832,32 @@ class TrustPeerHandler(base_handler.BaseHandler):
         else:
             self.response.set_status(500, "Not modified")
 
+    def _refuse_unverified_approval(self, actor_id: str) -> None:
+        """403 for an approval of an unverified request, with a body that
+        says why: the web UI's Approve form (``_method=PUT``) gets a page
+        with a way back to the trust list, an API client a JSON error."""
+        if not self.response:
+            return
+        message = (
+            "The trust request is not verified, so it cannot be approved. "
+            "To pair with this peer, create the trust toward its URL."
+        )
+        self.response.set_status(
+            403, "The trust request is not verified; it cannot be approved"
+        )
+        if self.request.get("_method") == "PUT":
+            back = html.escape(self._www_path(actor_id, "/trust"), quote=True)
+            self.response.headers["Content-Type"] = "text/html; charset=utf-8"
+            self.response.write(
+                f"<!doctype html><html><head><title>Not approved</title></head>"
+                f"<body><p>{html.escape(message)}</p>"
+                f'<p><a href="{back}">Back to trust relationships</a></p>'
+                f"</body></html>"
+            )
+        else:
+            self.response.headers["Content-Type"] = "application/json"
+            self.response.write(json.dumps({"error": message}))
+
     def put(self, actor_id, relationship, peerid):
         auth_result = self.authenticate_actor(actor_id, "trust", subpath=relationship)
         if not auth_result.success:
@@ -904,20 +938,33 @@ class TrustPeerHandler(base_handler.BaseHandler):
             if self.response:
                 self.response.set_status(403, "Forbidden")
             return
-        if approved is True and not myself.reverify_pending_trust(peerid):
-            # Only a verified request is approved (3.16): an unverified row's
-            # secret is whatever its requester chose, and anyone can file a
-            # request under a peer's id. Pair by creating the trust toward
-            # the peer's URL instead.
-            logger.warning(
-                f"Refused to approve the trust with {peerid} at {actor_id}: the "
-                "request is not verified"
-            )
+        current = myself.get_trust_relationship(peerid=peerid)
+        if not current:
             if self.response:
-                self.response.set_status(
-                    403, "The trust request is not verified; it cannot be approved"
-                )
+                self.response.set_status(404, "Trust relationship not found")
             return
+        if approved is True and not current.get("approved"):
+            if baseuri and baseuri.rstrip("/") != str(
+                current.get("baseuri") or ""
+            ).rstrip("/"):
+                # The second verification asks the stored base URI; a move in
+                # the same request would approve a row checked elsewhere.
+                if self.response:
+                    self.response.set_status(
+                        400, "Approve and change the base URI in two requests"
+                    )
+                return
+            if not myself.reverify_pending_trust(peerid):
+                # Only a verified request is approved (3.16): an unverified
+                # row's secret is whatever its requester chose, and anyone can
+                # file a request under a peer's id. Pair by creating the
+                # trust toward the peer's URL instead.
+                logger.warning(
+                    f"Refused to approve the trust with {peerid} at {actor_id}: "
+                    "the request is not verified"
+                )
+                self._refuse_unverified_approval(actor_id)
+                return
         if baseuri and not is_valid_peer_baseuri(baseuri):
             # The peer may PUT its own row: the base URI it moves to must be
             # as plain as the one it was admitted with (it is fetched and

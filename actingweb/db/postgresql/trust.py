@@ -450,7 +450,7 @@ class DbTrust:
         Modify a trust.
 
         If bools are None, they will not be changed. ``only_if_verified``
-        also requires the stored row to be verified, ``only_if_secret`` its
+        also requires the stored row to be verified (or approved already), ``only_if_secret`` its
         secret to be that value: a condition that fails answers False and
         writes nothing.
 
@@ -615,7 +615,9 @@ class DbTrust:
         params.extend([actor_id, peerid])
         conditions = ["id = %s", "peerid = %s"]
         if only_if_verified:
-            conditions.append("verified = true")
+            # Verified, or approved already (a row approved before 3.16
+            # without a verification: approving it again changes nothing).
+            conditions.append("(verified = true OR approved = true)")
         if only_if_secret is not None:
             conditions.append("secret = %s")
             params.append(only_if_secret)

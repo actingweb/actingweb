@@ -125,7 +125,10 @@ def _new_secret() -> str:
 
 
 def _peer_answers(
-    peer: str, token: str = "whatever", meta_id: str | None = None
+    peer: str,
+    token: str = "whatever",
+    meta_id: str | None = None,
+    approved: bool = True,
 ) -> Any:
     """``requests.get`` as a peer at its base URI answers: its trust row with
     ``token`` on the verification GET, and its ``/meta`` naming ``meta_id``
@@ -137,8 +140,12 @@ def _peer_answers(
             return mock.Mock(
                 status_code=200, content=body.encode(), json=lambda: json.loads(body)
             )
+        # The initiator's own row: created approved before it sent the request.
         return mock.Mock(
-            status_code=200, content=json.dumps({"verification_token": token}).encode()
+            status_code=200,
+            content=json.dumps(
+                {"verification_token": token, "approved": approved}
+            ).encode(),
         )
 
     return get
@@ -1410,9 +1417,17 @@ def _reverse_answers(answer_peerid: str | None, meta_id: str) -> Any:
         elif answer_peerid:
             body = json.dumps({"peerid": answer_peerid, "approved": True})
         else:
-            return mock.Mock(status_code=404, content=b"", json=lambda: {})
+            return mock.Mock(
+                status_code=404,
+                content=b"",
+                json=lambda: {},
+                iter_content=lambda chunk_size=1: iter([b""]),
+            )
         return mock.Mock(
-            status_code=200, content=body.encode(), json=lambda: json.loads(body)
+            status_code=200,
+            content=body.encode(),
+            json=lambda: json.loads(body),
+            iter_content=lambda chunk_size=1: iter([body.encode()]),
         )
 
     return get
@@ -1596,3 +1611,311 @@ class TestTheApprovalFlagAfterReverify6:
                 url=w.url, secret=_new_secret(), relationship="friend"
             )
         assert w.b.last_trust_approved_on_create is None
+
+
+class TestTheMirroredRequestAfterReverify7:
+    """Reverify-7 Issue 1: a third party files a pending request at A under
+    B's id, reads A's token with its own secret, then files a request at B
+    under A's id with that token. B's verification (and A's second check)
+    read the planted row at the other side, which answered with the secret
+    the third party chose. A verification is answered only by a row its host
+    approved, and a pending row's own peer never reads its token."""
+
+    @staticmethod
+    def _route(config: Any) -> Any:
+        """``requests.get`` answered by this process's handlers, so two
+        actors on one config verify each other for real."""
+        from actingweb.handlers.trust import TrustPeerHandler
+
+        def get(url: str, headers: dict[str, str] | None = None, **_kw: Any) -> Any:
+            path = url.split("https://test.example.com/", 1)[1].strip("/")
+            parts = path.split("/")
+            if parts[-1] == "meta":
+                body = json.dumps({"id": parts[0], "type": "urn:test"})
+                return mock.Mock(
+                    status_code=200,
+                    content=body.encode(),
+                    json=lambda: json.loads(body),
+                )
+            actor_id, _, rel, peer = parts[:4]
+            webobj = AWWebObj(url=url, headers=dict(headers or {}))
+            TrustPeerHandler(webobj, config).get(actor_id, rel, peer)
+            raw = webobj.response.body or b""
+            text = raw.decode() if isinstance(raw, bytes) else str(raw)
+            code = webobj.response.status_code
+            return mock.Mock(
+                status_code=code,
+                content=text.encode(),
+                json=lambda: json.loads(text),
+                iter_content=lambda chunk_size=1: iter([text.encode()]),
+            )
+
+        return get
+
+    @staticmethod
+    def _file(config: Any, at: str, as_peer: str, secret: str, verify: str) -> int:
+        webobj = AWWebObj(
+            url=f"https://test.example.com/{at}/trust/friend",
+            body=json.dumps(
+                {
+                    "baseuri": f"https://test.example.com/{as_peer}",
+                    "id": as_peer,
+                    "type": "urn:test",
+                    "secret": secret,
+                    "verify": verify,
+                }
+            ),
+            headers={},
+        )
+        TrustRelationshipHandler(webobj, config).post(at, "friend")
+        return webobj.response.status_code
+
+    def _mirror(self) -> tuple[Any, Any, Any, str]:
+        """Both planted requests; returns (config, A, B, the third party's
+        secret). B auto-accepts ``friend``, as the demo does."""
+        config = make_config()
+        initialize_trust_permission_store(config)
+        config.auto_accept_default_relationship = True
+        config.default_relationship = "friend"
+        a = create_core_actor(config, uuid_email(), passphrase=PASSPHRASE)
+        b = create_core_actor(config, uuid_email(), passphrase=PASSPHRASE)
+        secret = uuid.uuid4().hex
+        with mock.patch(
+            "actingweb.actor.requests.get", side_effect=self._route(config)
+        ):
+            self._file(config, aid(a), aid(b), secret, "chosen")
+            read = self._route(config)(
+                f"https://test.example.com/{aid(a)}/trust/friend/{aid(b)}",
+                headers={"Authorization": f"Bearer {secret}"},
+            )
+            token = json.loads(read.content.decode()).get("verification_token", "")
+            self._file(config, aid(b), aid(a), secret, token)
+        return config, a, b, secret
+
+    def test_the_mirrored_request_is_not_verified_or_approved(self) -> None:
+        config, a, b, secret = self._mirror()
+        at_b = Trust(actor_id=aid(b), peerid=aid(a), config=config).get() or {}
+        assert at_b.get("secret") == secret
+        assert at_b.get("verified") is False and at_b.get("approved") is False
+
+    def test_the_second_check_refuses_the_planted_request(self) -> None:
+        config, a, b, _ = self._mirror()
+        with (
+            mock.patch("actingweb.actor.requests.get", side_effect=self._route(config)),
+            mock.patch("actingweb.actor.requests.post") as notify,
+        ):
+            assert a.reverify_pending_trust(aid(b)) is False
+            assert not a.modify_trust_and_notify(
+                relationship="friend", peerid=aid(b), approved=True
+            )
+        notify.assert_not_called()
+        at_a = Trust(actor_id=aid(a), peerid=aid(b), config=config).get() or {}
+        assert at_a.get("verified") is False and at_a.get("approved") is False
+
+    def test_a_pending_rows_own_peer_reads_no_token(self) -> None:
+        w = Receiver(approved=False)
+        webobj = AWWebObj(
+            url=f"https://test.example.com/{aid(w.a)}/trust/friend/{w.b}",
+            headers={"Authorization": f"Bearer {w.secrets[w.b]}"},
+        )
+        TrustPeerHandler(webobj, w.config).get(aid(w.a), "friend", w.b)
+        assert webobj.response.status_code == 202
+        assert "verification_token" not in json.loads(webobj.response.body)
+
+    def test_an_approved_rows_own_peer_still_reads_it(self) -> None:
+        w = Receiver(approved=True)
+        webobj = AWWebObj(
+            url=f"https://test.example.com/{aid(w.a)}/trust/friend/{w.b}",
+            headers={"Authorization": f"Bearer {w.secrets[w.b]}"},
+        )
+        TrustPeerHandler(webobj, w.config).get(aid(w.a), "friend", w.b)
+        assert webobj.response.status_code == 200
+        assert "verification_token" in json.loads(webobj.response.body)
+
+    def test_an_unapproved_answer_does_not_verify_a_creation(self) -> None:
+        w = Receiver()
+        peer = f"peer-m-{uuid.uuid4().hex[:8]}"
+        with mock.patch(
+            "actingweb.actor.requests.get",
+            side_effect=_peer_answers(peer, approved=False),
+        ):
+            out = w.request(peer, _new_secret())
+        assert out.response.status_code == 202
+        assert w.row(peer)["verified"] is False
+
+
+class TestTheApprovalPathAfterReverify7:
+    """Reverify-7 Issues 3 to 9 on the approval path."""
+
+    @staticmethod
+    def _basic(w: Receiver) -> dict[str, str]:
+        token = base64.b64encode(f"{w.a.creator}:{PASSPHRASE}".encode()).decode()
+        return {"Authorization": f"Basic {token}"}
+
+    def _put(
+        self, w: Receiver, peer: str, body: dict[str, Any] | None, **params: str
+    ) -> AWWebObj:
+        webobj = AWWebObj(
+            url=f"https://test.example.com/{aid(w.a)}/trust/friend/{peer}",
+            # A browser form sends no JSON body: the handler then reads the
+            # query parameters.
+            body=json.dumps(body) if body is not None else "",
+            params=params or None,
+            headers=self._basic(w),
+        )
+        TrustPeerHandler(webobj, w.config).put(aid(w.a), "friend", peer)
+        return webobj
+
+    def test_a_failed_approval_write_tells_the_peer_nothing(self) -> None:
+        """Issue 3: the write is conditioned on the row read, and a write
+        that did not land notifies nobody."""
+        from actingweb.actor import Actor
+
+        w = Receiver(approved=False)
+        stale = dict(w.row(w.b), secret="the secret of a row since replaced")
+        with (
+            mock.patch.object(Actor, "get_trust_relationships", return_value=[stale]),
+            mock.patch("actingweb.actor.requests.post") as notify,
+        ):
+            assert not w.a.modify_trust_and_notify(
+                relationship="friend", peerid=w.b, approved=True
+            )
+        notify.assert_not_called()
+        assert w.row(w.b)["approved"] is False
+
+    def test_an_approved_unverified_row_takes_a_repeated_approval(self) -> None:
+        """Issue 4: a row approved before 3.16 without a verification: an
+        idempotent approval with another change neither probes nor fails."""
+        w = Receiver()
+        assert Trust(actor_id=aid(w.a), peerid=w.b, config=w.config).modify(
+            verified=False
+        )
+        with mock.patch("actingweb.actor.requests.get") as probe:
+            assert w.a.modify_trust_and_notify(
+                relationship="friend", peerid=w.b, approved=True, desc="changed"
+            )
+            out = self._put(w, w.b, {"approved": True, "desc": "again"})
+        probe.assert_not_called()
+        assert out.response.status_code == 204
+        assert w.row(w.b)["desc"] == "again"
+
+    def test_the_refusal_says_why(self) -> None:
+        """Issue 5: the web UI's Approve form gets a page with a way back, an
+        API client a JSON error."""
+        w = Receiver()
+        peer, _ = TestIdentityAfterTheAudit._unverified(w)
+        with mock.patch(
+            "actingweb.actor.requests.get", side_effect=_reverse_answers(None, peer)
+        ):
+            form = self._put(w, peer, None, _method="PUT", approved="true")
+            api = self._put(w, peer, {"approved": True})
+        assert form.response.status_code == 403
+        page = form.response.body
+        page = page.decode() if isinstance(page, bytes) else str(page)
+        assert "not verified" in page and f"/{aid(w.a)}/www/trust" in page
+        assert api.response.status_code == 403
+        assert "not verified" in json.loads(api.response.body)["error"]
+
+    def test_modify_trust_repeats_the_verification(self) -> None:
+        """Issue 6: ``TrustManager.modify_trust(approved=True)`` approves a
+        request that verifies on a second check, as the other routes do."""
+        from actingweb.interface.trust_manager import TrustManager
+
+        w = Receiver()
+        peer, _ = TestIdentityAfterTheAudit._unverified(w)
+        with mock.patch(
+            "actingweb.actor.requests.get",
+            side_effect=_reverse_answers(aid(w.a), peer),
+        ):
+            assert TrustManager(w.a).modify_trust(peer, approved=True)
+        assert w.row(peer)["approved"] is True
+
+    def test_another_relationship_replaces_the_request_unprobed(self) -> None:
+        """Issue 7: the owner's create for another relationship than the
+        pending request's replaces it; it is not verified and then
+        refused."""
+        w = Initiator()
+        TestTheInitiatorAfterReverify5._pending(w, verified=False)
+        new = _new_secret()
+        accepted = mock.Mock(status_code=202, reason="Accepted", content=b"{}")
+        with (
+            mock.patch.object(w.b, "get_peer_info", return_value=w.peer_info),
+            mock.patch("actingweb.actor.requests.get") as probe,
+            mock.patch("actingweb.actor.requests.post", return_value=accepted),
+        ):
+            assert w.b.create_reciprocal_trust(
+                url=w.url, secret=new, relationship="associate"
+            )
+        probe.assert_not_called()
+        row = w.row()
+        assert row["secret"] == new and row["relationship"] == "associate"
+
+    def test_a_missing_row_is_404_and_a_move_with_an_approval_400(self) -> None:
+        """Issue 8."""
+        w = Receiver()
+        assert self._put(w, "peer-gone", {"approved": True}).response.status_code == (
+            404
+        )
+        peer, _ = TestIdentityAfterTheAudit._unverified(w)
+        with mock.patch("actingweb.actor.requests.get") as probe:
+            out = self._put(
+                w,
+                peer,
+                {"approved": True, "baseuri": "https://moved.example.test/x"},
+            )
+        probe.assert_not_called()
+        assert out.response.status_code == 400
+        assert w.row(peer)["approved"] is False
+
+    def test_a_peer_with_no_trust_row_gets_nothing(self) -> None:
+        """Issue 9: a permission override with no trust row (a delete that
+        faulted half way) grants nothing."""
+        from actingweb.permission_evaluator import (
+            PermissionResult,
+            PermissionType,
+            get_permission_evaluator,
+        )
+        from actingweb.trust_permissions import create_permission_override
+
+        w = Receiver()
+        ghost = f"peer-g-{uuid.uuid4().hex[:8]}"
+        assert get_trust_permission_store(w.config).store_permissions(
+            create_permission_override(
+                actor_id=aid(w.a),
+                peer_id=ghost,
+                trust_type="friend",
+                permission_updates={
+                    "properties": {"patterns": ["*"], "operations": ["read"]}
+                },
+            )
+        )
+        result = get_permission_evaluator(w.config).evaluate_permission(
+            aid(w.a), ghost, PermissionType.PROPERTIES, "anything", "read"
+        )
+        assert result == PermissionResult.DENIED
+
+
+class TestTheSecondCheckIsBounded:
+    """Reverify-7 Issue 10: the second verification's GET goes to a base
+    URI the requester chose: no redirect is followed, and an answer larger
+    than the cap does not verify."""
+
+    def test_no_redirect_and_a_capped_answer(self) -> None:
+        from actingweb import actor as actor_module
+
+        w = Receiver()
+        peer, _ = TestIdentityAfterTheAudit._unverified(w)
+        body = json.dumps(
+            {"peerid": aid(w.a), "approved": True, "pad": "x" * (70 * 1024)}
+        ).encode()
+        big = mock.Mock(
+            status_code=200,
+            iter_content=lambda chunk_size=1: iter(
+                [body[i : i + 4096] for i in range(0, len(body), 4096)]
+            ),
+        )
+        with mock.patch("actingweb.actor.requests.get", return_value=big) as get:
+            assert w.a.reverify_pending_trust(peer) is False
+        assert get.call_args.kwargs["allow_redirects"] is False
+        assert len(body) > actor_module._REVERIFY_MAX_BYTES
+        assert w.row(peer)["verified"] is False

@@ -61,6 +61,8 @@
                                         {% endif %}
                                         {% if trust.verified %}
                                         <span class="badge badge-success">Verified</span>
+                                        {% elif not trust.approved %}
+                                        <span class="badge badge-danger">Unverified</span>
                                         {% endif %}
                                     </div>
                                 </td>
@@ -73,7 +75,9 @@
                                                 <line x1="10" y1="14" x2="21" y2="3"/>
                                             </svg>
                                         </a>{% endif %}
-                                        {% if not trust.approved and trust.approveuri %}
+                                        {% if not trust.approved and trust.approveuri and not trust.verified %}
+                                        <span class="text-sm text-muted" style="white-space: normal; max-width: 12rem; text-align: right;" title="Anyone can send a request under this id; only a verified one can be approved. To pair, create the trust toward the peer's URL.">Cannot approve: pair from your side</span>
+                                        {% elif not trust.approved and trust.approveuri %}
                                         <a href="{{ trust.approveuri }}?_method=PUT&approved=true" class="btn btn-sm btn-success">
                                             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                                 <polyline points="20 6 9 17 4 12"/>
@@ -122,6 +126,7 @@
                                 <li><span class="badge badge-success">Approved</span> - You've approved this relationship</li>
                                 <li><span class="badge badge-warning">Pending</span> - Awaiting your approval</li>
                                 <li><span class="badge badge-success">Verified</span> - Cryptographically verified</li>
+                                <li><span class="badge badge-danger">Unverified</span> - The request did not verify, so it cannot be approved: create the trust toward the peer's URL to pair</li>
                             </ul>
                         </div>
                         <div>

@@ -7,6 +7,16 @@ from actingweb.actor import Actor
 from actingweb.permission_evaluator import PermissionResult
 
 
+def _bulk(decide):
+    """``evaluate_bulk_property_access`` from a per-path decision: the
+    filter evaluates a diff in one call (3.16)."""
+
+    def bulk(actor_id, peer_id, property_paths, operation):
+        return {path: decide(path) for path in property_paths}
+
+    return bulk
+
+
 class TestSubscriptionPermissionFiltering:
     """Test suite for _filter_subscription_data_by_permissions method."""
 
@@ -34,12 +44,13 @@ class TestSubscriptionPermissionFiltering:
             mock_get_eval.return_value = mock_evaluator
 
             # data_public and data_work allowed, data_private denied
-            def side_effect(actor_id, peer_id, property_path, operation):
-                if "private" in property_path:
-                    return PermissionResult.DENIED
-                return PermissionResult.ALLOWED
-
-            mock_evaluator.evaluate_property_access.side_effect = side_effect
+            mock_evaluator.evaluate_bulk_property_access.side_effect = _bulk(
+                lambda path: (
+                    PermissionResult.DENIED
+                    if "private" in path
+                    else PermissionResult.ALLOWED
+                )
+            )
 
             result = actor._filter_subscription_data_by_permissions(
                 peerid="peer-123",
@@ -63,8 +74,8 @@ class TestSubscriptionPermissionFiltering:
         with patch("actingweb.actor.get_permission_evaluator") as mock_get_eval:
             mock_evaluator = Mock()
             mock_get_eval.return_value = mock_evaluator
-            mock_evaluator.evaluate_property_access.return_value = (
-                PermissionResult.DENIED
+            mock_evaluator.evaluate_bulk_property_access.side_effect = _bulk(
+                lambda path: PermissionResult.DENIED
             )
 
             result = actor._filter_subscription_data_by_permissions(
@@ -84,7 +95,9 @@ class TestSubscriptionPermissionFiltering:
         with patch("actingweb.actor.get_permission_evaluator") as mock_get_eval:
             mock_evaluator = Mock()
             mock_get_eval.return_value = mock_evaluator
-            mock_evaluator.evaluate_property_access.side_effect = Exception("DB error")
+            mock_evaluator.evaluate_bulk_property_access.side_effect = Exception(
+                "DB error"
+            )
 
             result = actor._filter_subscription_data_by_permissions(
                 peerid="peer-123",
@@ -120,8 +133,8 @@ class TestSubscriptionPermissionFiltering:
         with patch("actingweb.actor.get_permission_evaluator") as mock_get_eval:
             mock_evaluator = Mock()
             mock_get_eval.return_value = mock_evaluator
-            mock_evaluator.evaluate_property_access.return_value = (
-                PermissionResult.ALLOWED
+            mock_evaluator.evaluate_bulk_property_access.side_effect = _bulk(
+                lambda path: PermissionResult.ALLOWED
             )
 
             actor._filter_subscription_data_by_permissions(
@@ -131,11 +144,8 @@ class TestSubscriptionPermissionFiltering:
             )
 
             # Verify the property path includes subtarget
-            mock_evaluator.evaluate_property_access.assert_called_with(
-                "test-actor-id",
-                "peer-123",
-                "data_public/item1",
-                operation="read",
+            mock_evaluator.evaluate_bulk_property_access.assert_called_once_with(
+                "test-actor-id", "peer-123", ["data_public/item1"], "read"
             )
 
     def test_filter_fails_closed_when_no_actor_id(self):
@@ -196,16 +206,15 @@ class TestSubscriptionPermissionFiltering:
             mock_evaluator = Mock()
             mock_get_eval.return_value = mock_evaluator
 
-            # Permission check should be called with 'memory_news', not 'list:memory_news'
-            # Note: operation is passed as a keyword argument
-            def check_property_path(_actor_id, _peer_id, property_path, operation=None):
-                # Verify the 'list:' prefix was stripped
-                if property_path == "memory_news":
-                    return PermissionResult.ALLOWED
-                # If called with 'list:memory_news', deny to make test fail
-                return PermissionResult.DENIED
-
-            mock_evaluator.evaluate_property_access.side_effect = check_property_path
+            # Permission check should be called with 'memory_news', not
+            # 'list:memory_news' (deny the prefixed name to make the test fail)
+            mock_evaluator.evaluate_bulk_property_access.side_effect = _bulk(
+                lambda path: (
+                    PermissionResult.ALLOWED
+                    if path == "memory_news"
+                    else PermissionResult.DENIED
+                )
+            )
 
             result = actor._filter_subscription_data_by_permissions(
                 peerid="peer-123",
@@ -220,11 +229,11 @@ class TestSubscriptionPermissionFiltering:
             assert "list:memory_news" in result_data
 
             # Verify permission was checked with stripped name
-            mock_evaluator.evaluate_property_access.assert_called_once_with(
+            mock_evaluator.evaluate_bulk_property_access.assert_called_once_with(
                 "test-actor-id",
                 "peer-123",
-                "memory_news",  # Not 'list:memory_news'
-                operation="read",
+                ["memory_news"],  # Not 'list:memory_news'
+                "read",
             )
 
 

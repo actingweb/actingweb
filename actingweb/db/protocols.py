@@ -779,7 +779,7 @@ class DbTrustProtocol(Protocol):
     ) -> bool:
         """
         Modify trust using self.handle, in one write conditioned on the row
-        existing (and, with ``only_if_verified``, being verified; with
+        existing (and, with ``only_if_verified``, being verified or approved; with
         ``only_if_secret``, holding that secret).
 
         Returns:

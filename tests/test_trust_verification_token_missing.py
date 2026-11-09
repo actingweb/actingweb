@@ -55,7 +55,11 @@ class TestVerificationTokenMissingFromPeerResponse:
 
         peer_response = MagicMock()
         peer_response.status_code = 200
-        peer_response.content = b'{"verification_token": "expected-token"}'
+        # The initiator's own row, approved before it sent the request
+        # (3.16: an unapproved answering row does not verify).
+        peer_response.content = (
+            b'{"verification_token": "expected-token", "approved": true}'
+        )
 
         mock_trust = MagicMock()
         mock_trust.create.return_value = True

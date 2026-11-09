@@ -252,7 +252,7 @@ class DbTrust:
         concurrent change to another attribute (a re-pair's secret swap, say)
         is never written back over, and a row deleted meanwhile is not
         recreated (False). ``only_if_verified`` also requires the stored row
-        to be verified, ``only_if_secret`` its secret to be that value: a
+        to be verified (or approved already), ``only_if_secret`` its secret to be that value: a
         condition that fails answers False and writes nothing.
         """
         if not self.handle:
@@ -332,7 +332,11 @@ class DbTrust:
         actions = [getattr(Trust, name).set(value) for name, value in given.items()]
         condition = Trust.id.exists()
         if only_if_verified:
-            condition = condition & (Trust.verified == True)  # noqa: E712
+            # Verified, or approved already (a row approved before 3.16
+            # without a verification: approving it again changes nothing).
+            condition = condition & (
+                (Trust.verified == True) | (Trust.approved == True)  # noqa: E712
+            )
         if only_if_secret is not None:
             condition = condition & (Trust.secret == only_if_secret)
         try:

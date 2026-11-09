@@ -37,16 +37,18 @@
             </td>
             <td>
               {% if approved %}<span class="aw-badge">approved</span>{% else %}<span class="aw-badge">pending</span>{% endif %}
-              {% if verified %}<span class="aw-badge">verified</span>{% endif %}
+              {% if verified %}<span class="aw-badge">verified</span>{% elif not approved %}<span class="aw-badge">unverified</span>{% endif %}
             </td>
             <td>
               <div class="aw-actions">
-                {% if not approved and approveuri %}
+                {% if not approved and approveuri and verified %}
                   <form class="aw-inline" method="get" action="{{ approveuri }}">
                     <input type="hidden" name="_method" value="PUT">
                     <input type="hidden" name="approved" value="true">
                     <button type="submit" class="aw-btn">Approve</button>
                   </form>
+                {% elif not approved and approveuri %}
+                  <span class="aw-muted" style="white-space: normal;" title="Anyone can send a request under this id; only a verified one can be approved. To pair, create the trust toward the peer's URL.">Cannot approve: pair from your side</span>
                 {% endif %}
                 {% if approveuri %}
                   <form class="aw-inline" method="get" action="{{ approveuri }}"

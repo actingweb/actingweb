@@ -117,6 +117,13 @@ def canonical_connection_method(method: str | None) -> str | None:
     return method
 
 
+def _as_flag(value: Any) -> bool | None:
+    """A boolean flag from a bool, or from its text form; None stays None."""
+    if value is None or isinstance(value, bool):
+        return value
+    return str(value).strip().lower() == "true"
+
+
 class Trust:
     def get(self) -> dict[str, Any] | None:
         """Retrieve a trust relationship with either peerid or token"""
@@ -351,6 +358,12 @@ class Trust:
             logger.debug("Attempted modifcation of trust without handle")
             return False
         assert self.trust is not None  # Always initialized in __init__
+        # Flags given as text ("true"/"false", as this object caches them)
+        # are flags: a string would skip the approval condition below and be
+        # stored as True whatever it says (3.16).
+        approved = _as_flag(approved)
+        verified = _as_flag(verified)
+        peer_approved = _as_flag(peer_approved)
         before = dict(self.trust)
         if baseuri:
             self.trust["baseuri"] = baseuri

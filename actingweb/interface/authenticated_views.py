@@ -30,6 +30,30 @@ class PermissionError(Exception):
 logger = logging.getLogger(__name__)
 
 
+def _client_trust_peer_id(
+    actor: "ActorInterface", client_id: str, trust_relationship: dict[str, Any]
+) -> str:
+    """The peer id of the trust row that authorises ``client_id`` (3.16):
+    the one the caller passed, else the row ``find_client_trust`` resolves,
+    as MCP authentication does. "" when the client has no trust row."""
+    given = trust_relationship.get("peerid") or trust_relationship.get("peer_id")
+    if given:
+        return str(given)
+    if not client_id or not getattr(actor, "id", None):
+        return ""
+    from ..oauth2_server.trust_lookup import find_client_trust
+
+    try:
+        trust = find_client_trust(actor.trust.relationships, client_id, actor.id)
+    except DbError:
+        raise
+    except Exception as e:
+        # Fails closed: evaluated as the client id, which has no trust row.
+        logger.debug(f"Could not resolve the trust row of client {client_id}: {e}")
+        return ""
+    return str(getattr(trust, "peerid", "") or "") if trust is not None else ""
+
+
 class AuthContext:
     """Authentication context for permission evaluation."""
 
@@ -42,11 +66,22 @@ class AuthContext:
         self.peer_id = peer_id
         self.client_id = client_id
         self.trust_relationship = trust_relationship or {}
+        # The peer id of the client's trust row, which permissions are kept
+        # under (``oauth2_client:<email>:<client>``, not the client id).
+        # ``AuthenticatedActorView`` resolves it.
+        self.client_peer_id = ""
 
     @property
     def accessor_id(self) -> str:
         """Get the accessor identifier (peer_id or client_id)."""
         return self.peer_id or self.client_id
+
+    @property
+    def permission_id(self) -> str:
+        """The id permissions are evaluated for: the peer id, or for a
+        client the peer id of its trust row (the client id when it has none,
+        which is then granted nothing)."""
+        return self.peer_id or self.client_peer_id or self.client_id
 
     @property
     def is_peer(self) -> bool:
@@ -91,7 +126,7 @@ class AuthenticatedPropertyStore:
             evaluator = get_permission_evaluator(self._config)
             result = evaluator.evaluate_property_access(
                 self._actor_id,
-                self._auth_context.accessor_id,
+                self._auth_context.permission_id,
                 key,
                 operation,
             )
@@ -433,7 +468,7 @@ class AuthenticatedPropertyListStore:
             # No "list:" prefix - that's an internal storage detail only
             result = evaluator.evaluate_property_access(
                 self._actor_id,
-                self._auth_context.accessor_id,
+                self._auth_context.permission_id,
                 list_name,
                 operation,
             )
@@ -515,7 +550,7 @@ class AuthenticatedPropertyListStore:
             evaluator = get_permission_evaluator(self._config)
             results = evaluator.evaluate_bulk_property_access(
                 self._actor_id,
-                self._auth_context.accessor_id,
+                self._auth_context.permission_id,
                 list(names),
                 "read",
             )
@@ -646,7 +681,7 @@ class AuthenticatedSubscriptionManager:
             property_path = f"{target}/{subtarget}" if subtarget else target
             result = evaluator.evaluate_property_access(
                 self._actor_id,
-                self._auth_context.accessor_id,
+                self._auth_context.permission_id,
                 property_path,
                 "read",
             )
@@ -757,6 +792,10 @@ class AuthenticatedActorView:
         self._auth_context = auth_context
         self._hooks = hooks
         self._config = getattr(actor._core_actor, "config", None)
+        if auth_context.is_client and not auth_context.client_peer_id:
+            auth_context.client_peer_id = _client_trust_peer_id(
+                actor, auth_context.client_id, auth_context.trust_relationship
+            )
 
         # Cached authenticated stores
         self._properties: AuthenticatedPropertyStore | None = None

@@ -515,6 +515,7 @@ reason = [
   "2026-11-08 first recording (peer-authorisation-fixes:3)",
   "2026-11-08 the receiver binds the claimed id to the base URI through /meta (verification Issue 4) (peer-authorisation-fixes:3)",
   "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
+  "2026-11-09 the 202 answer to a request that waits carries no secret or verification_token (reverify-8 Issue 7, iteration 73) (peer-authorisation-fixes:3)",
 ]
 
 [rows."WT4"]

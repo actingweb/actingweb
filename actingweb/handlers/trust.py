@@ -534,7 +534,15 @@ class TrustRelationshipHandler(base_handler.BaseHandler):
             + "/"
             + new_trust["peerid"]
         )
-        out = json.dumps(new_trust)
+        answer = dict(new_trust)
+        if str(answer.get("approved")).lower() != "true":
+            # A relationship this actor has not approved never hands out its
+            # verification token (the spec, 3.16): whoever filed the request
+            # under another actor's id could answer that actor's
+            # verification with it. The secret is the requester's own.
+            answer.pop("verification_token", None)
+            answer.pop("secret", None)
+        out = json.dumps(answer)
         self.response.write(out)
         self.response.headers["Content-Type"] = "application/json"
         # The stored approval: auto-accept approves only a request that
@@ -706,8 +714,10 @@ class TrustPeerHandler(base_handler.BaseHandler):
 
         # Unlike the list route, this response keeps ``secret`` and
         # ``verification_token`` for the creator, the trustee and the peer the
-        # row belongs to: peer verification reads ``verification_token`` from
-        # this route (Actor.create_verified_trust, actor.py). Any other peer,
+        # row belongs to, the token to that peer only while the row is
+        # approved: peer verification reads ``verification_token`` from this
+        # route (Actor.create_verified_trust, actor.py), and only from an
+        # approved row (3.16, the mirrored request). Any other peer,
         # an ``admin`` one included, never receives them: with another peer's
         # secret it could act as that peer, re-pair its trust and lock it
         # out (3.16). Client-supplied text is sanitised as on the list route.
@@ -938,8 +948,19 @@ class TrustPeerHandler(base_handler.BaseHandler):
             if self.response:
                 self.response.set_status(403, "Forbidden")
             return
+        if baseuri and not is_valid_peer_baseuri(baseuri):
+            # The peer may PUT its own row: the base URI it moves to must be
+            # as plain as the one it was admitted with (it is fetched and
+            # shown). Checked before the row is read, compared or fetched.
+            if self.response:
+                self.response.set_status(400, "Invalid baseuri")
+            return
         current = myself.get_trust_relationship(peerid=peerid)
-        if not current:
+        if not current or str(current.get("relationship") or "") != str(
+            relationship or ""
+        ):
+            # The relationship in the path must be the row's: nothing is
+            # verified or written for a PUT that names another.
             if self.response:
                 self.response.set_status(404, "Trust relationship not found")
             return
@@ -965,13 +986,6 @@ class TrustPeerHandler(base_handler.BaseHandler):
                 )
                 self._refuse_unverified_approval(actor_id)
                 return
-        if baseuri and not is_valid_peer_baseuri(baseuri):
-            # The peer may PUT its own row: the base URI it moves to must be
-            # as plain as the one it was admitted with (it is fetched and
-            # shown).
-            if self.response:
-                self.response.set_status(400, "Invalid baseuri")
-            return
         if (
             isinstance(put_caller, str)
             and put_caller

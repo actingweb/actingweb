@@ -141,11 +141,11 @@ def _peer_answers(
                 status_code=200, content=body.encode(), json=lambda: json.loads(body)
             )
         # The initiator's own row: created approved before it sent the request.
+        answer = json.dumps({"verification_token": token, "approved": approved})
         return mock.Mock(
             status_code=200,
-            content=json.dumps(
-                {"verification_token": token, "approved": approved}
-            ).encode(),
+            content=answer.encode(),
+            iter_content=lambda chunk_size=1: iter([answer.encode()]),
         )
 
     return get
@@ -1919,3 +1919,207 @@ class TestTheSecondCheckIsBounded:
         assert get.call_args.kwargs["allow_redirects"] is False
         assert len(body) > actor_module._REVERIFY_MAX_BYTES
         assert w.row(peer)["verified"] is False
+
+
+class TestTheClientViewAfterReverify8:
+    """Reverify-8 Issue 2: ``as_client(client_id)`` evaluates as the
+    client's trust row (``oauth2_client:<email>:<client>``), not as the raw
+    client id, which has no row and so is granted nothing."""
+
+    @staticmethod
+    def _client(w: Receiver, client_id: str) -> str:
+        peer = f"oauth2_client:user@example.test:{client_id}"
+        trust = Trust(actor_id=aid(w.a), peerid=peer, config=w.config)
+        assert trust.create(
+            baseuri="",
+            peer_type="mcp",
+            relationship="friend",
+            secret=uuid.uuid4().hex,
+            approved=True,
+            verified=True,
+            peer_approved=True,
+            established_via="oauth2_client",
+        )
+        assert trust.modify(oauth_client_id=client_id)
+        from actingweb.trust_permissions import create_permission_override
+
+        assert get_trust_permission_store(w.config).store_permissions(
+            create_permission_override(
+                actor_id=aid(w.a),
+                peer_id=peer,
+                trust_type="friend",
+                permission_updates={
+                    "properties": {
+                        "patterns": ["notes"],
+                        "operations": ["read", "write"],
+                        # Overrides add to the friend grant: exclude to narrow.
+                        "excluded_patterns": ["secret"],
+                    }
+                },
+            )
+        )
+        return peer
+
+    def test_a_client_view_reads_and_writes_what_its_trust_grants(self) -> None:
+        from actingweb.interface.actor_interface import ActorInterface
+        from actingweb.interface.authenticated_views import PermissionError
+
+        w = Receiver()
+        client_id = f"mcp_{uuid.uuid4().hex[:8]}"
+        self._client(w, client_id)
+        view = ActorInterface(w.a).as_client(client_id)
+        view.properties["notes"] = "from the client"
+        assert view.properties["notes"] == "from the client"
+        with pytest.raises(PermissionError):
+            view.properties["secret"] = "not granted"
+
+    def test_a_client_with_no_trust_row_gets_nothing(self) -> None:
+        from actingweb.interface.actor_interface import ActorInterface
+        from actingweb.interface.authenticated_views import PermissionError
+
+        w = Receiver()
+        view = ActorInterface(w.a).as_client("mcp_unknown_client")
+        with pytest.raises(PermissionError):
+            view.properties["notes"] = "x"
+
+
+class TestTheDeadlineHoldsAfterReverify8:
+    """Reverify-8 Issues 1 and 3: both verifications return within their
+    deadline whatever the peer does (a body trickled, an answer that never
+    starts), and the first verification, which an unauthenticated request
+    triggers, goes through the same bounded read."""
+
+    def _timed(self, w: Receiver, peer: str, get: Any) -> float:
+        import time
+
+        with (
+            mock.patch("actingweb.actor._REVERIFY_DEADLINE_SECONDS", 0.5),
+            mock.patch("actingweb.actor.requests.get", side_effect=get),
+        ):
+            started = time.monotonic()
+            assert w.a.reverify_pending_trust(peer) is False
+            return time.monotonic() - started
+
+    def test_a_trickled_body_is_cut_at_the_deadline(self) -> None:
+        import time
+
+        w = Receiver()
+        peer, _ = TestIdentityAfterTheAudit._unverified(w)
+
+        def trickle(chunk_size: int = 1) -> Any:
+            # As a socket read does: a chunk is handed over only once it is
+            # full (or the body ends), however slowly its bytes arrive.
+            buffered = b""
+            for _ in range(60):
+                time.sleep(0.1)
+                buffered += b" "
+                if len(buffered) >= chunk_size:
+                    yield buffered
+                    buffered = b""
+            if buffered:
+                yield buffered
+
+        slow = mock.Mock(status_code=200, iter_content=trickle)
+        assert self._timed(w, peer, lambda *a, **k: slow) < 2.0
+        assert w.row(peer)["verified"] is False
+
+    def test_an_answer_that_never_starts_is_cut_at_the_deadline(self) -> None:
+        import time
+
+        w = Receiver()
+        peer, _ = TestIdentityAfterTheAudit._unverified(w)
+
+        def stalled(*_a: Any, **_k: Any) -> Any:
+            time.sleep(3)
+            raise ConnectionError("too late")
+
+        assert self._timed(w, peer, stalled) < 2.0
+
+    def test_the_first_verification_is_bounded_too(self) -> None:
+        w = Receiver()
+        peer = f"peer-f-{uuid.uuid4().hex[:8]}"
+        with mock.patch(
+            "actingweb.actor.requests.get", side_effect=_peer_answers(peer)
+        ) as get:
+            w.request(peer, _new_secret())
+        verify_calls = [
+            c for c in get.call_args_list if not str(c.kwargs["url"]).endswith("/meta")
+        ]
+        assert verify_calls
+        assert all(c.kwargs["allow_redirects"] is False for c in verify_calls)
+        assert all(c.kwargs["stream"] is True for c in verify_calls)
+
+
+class TestTheEdgesAfterReverify8:
+    """Reverify-8 Issues 4 to 7."""
+
+    def test_modify_trust_approves_only_the_row_it_re_verified(self) -> None:
+        """Issue 4: a row replaced between the second check and the write is
+        not approved unseen."""
+        from actingweb.actor import Actor
+        from actingweb.interface.trust_manager import TrustManager
+
+        w = Receiver()
+        peer, _ = TestIdentityAfterTheAudit._unverified(w)
+
+        def replaced_meanwhile(self: Actor, peerid: str) -> bool:
+            # A verified request replaced the row after it was read.
+            assert Trust(actor_id=aid(w.a), peerid=peer, config=w.config).modify(
+                secret="the replacing request's secret", verified=True
+            )
+            return True
+
+        with mock.patch.object(Actor, "reverify_pending_trust", replaced_meanwhile):
+            assert not TrustManager(w.a).modify_trust(peer, approved=True)
+        assert w.row(peer)["approved"] is False
+
+    def test_a_string_approval_meets_the_same_gates(self) -> None:
+        """Issue 5: ``approved="true"`` is an approval, gated as one."""
+        from actingweb.interface.trust_manager import TrustManager
+
+        w = Receiver()
+        peer, _ = TestIdentityAfterTheAudit._unverified(w)
+        with mock.patch(
+            "actingweb.actor.requests.get", side_effect=_reverse_answers(None, peer)
+        ):
+            assert not TrustManager(w.a).modify_trust(peer, approved="true")
+        assert not Trust(actor_id=aid(w.a), peerid=peer, config=w.config).modify(
+            approved="true"  # type: ignore[arg-type]
+        )
+        assert w.row(peer)["approved"] is False
+
+    def _put(self, w: Receiver, rel: str, peer: str, body: Any) -> AWWebObj:
+        token = base64.b64encode(f"{w.a.creator}:{PASSPHRASE}".encode()).decode()
+        webobj = AWWebObj(
+            url=f"https://test.example.com/{aid(w.a)}/trust/{rel}/{peer}",
+            body=json.dumps(body),
+            headers={"Authorization": f"Basic {token}"},
+        )
+        TrustPeerHandler(webobj, w.config).put(aid(w.a), rel, peer)
+        return webobj
+
+    def test_a_put_for_another_relationship_is_404_and_checks_nothing(self) -> None:
+        """Issue 6."""
+        w = Receiver()
+        peer, _ = TestIdentityAfterTheAudit._unverified(w)
+        with mock.patch("actingweb.actor.requests.get") as probe:
+            out = self._put(w, "admin", peer, {"approved": True})
+        assert out.response.status_code == 404
+        probe.assert_not_called()
+        assert w.row(peer)["verified"] is False
+
+    def test_a_base_uri_that_is_not_text_is_400(self) -> None:
+        """Issue 6."""
+        w = Receiver()
+        peer, _ = TestIdentityAfterTheAudit._unverified(w)
+        out = self._put(w, "friend", peer, {"approved": True, "baseuri": 5})
+        assert out.response.status_code == 400
+
+    def test_a_pending_requests_answer_carries_no_token(self) -> None:
+        """Issue 7: the 202 answer to a trust request that waits."""
+        w = Receiver()
+        peer = f"peer-p-{uuid.uuid4().hex[:8]}"
+        out = _create(w, peer, meta_id="someone-else")
+        assert out.response.status_code == 202
+        body = json.loads(out.response.body)
+        assert "verification_token" not in body and "secret" not in body

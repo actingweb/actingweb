@@ -4,6 +4,7 @@ import datetime
 import json
 import logging
 import os
+import threading
 import time
 from collections.abc import Callable
 from typing import Any
@@ -48,20 +49,38 @@ def _answered_by_approved_row(body: dict[str, Any]) -> bool:
     return str(body.get("approved")).lower() == "true"
 
 
-# The second verification's GET goes to a base URI the requester chose:
-# bounded in total, not per read, and never redirected elsewhere.
+# A verification's GET goes to a base URI the requester chose: the caller
+# waits at most the deadline in all (headers, body, a slow peer), never
+# follows a redirect, and reads at most the cap. The GET runs on a small
+# pool of its own: a peer that holds a worker past the deadline holds only
+# that worker (until its socket times out), and once the pool is busy a
+# verification fails closed instead of waiting.
 _REVERIFY_DEADLINE_SECONDS = 15.0
 _REVERIFY_MAX_BYTES = 64 * 1024
+_VERIFY_WORKERS = 8
+_verify_pool: Any = None
+_verify_pool_lock = threading.Lock()
 
 
-def _bounded_get_json(url: str, headers: dict[str, str]) -> tuple[int | None, Any]:
-    """GET ``url`` without following a redirect, reading at most
-    ``_REVERIFY_MAX_BYTES`` within ``_REVERIFY_DEADLINE_SECONDS`` in all.
-    Returns the status and the parsed JSON body (None when the answer is not
-    2xx JSON, too large or too slow; status None when there was no answer)."""
-    import time
+def _verification_pool() -> Any:
+    global _verify_pool
+    with _verify_pool_lock:
+        if _verify_pool is None:
+            from concurrent.futures import ThreadPoolExecutor
 
-    deadline = time.monotonic() + _REVERIFY_DEADLINE_SECONDS
+            _verify_pool = ThreadPoolExecutor(
+                max_workers=_VERIFY_WORKERS, thread_name_prefix="aw-verify"
+            )
+        return _verify_pool
+
+
+def _fetch_json(
+    url: str, headers: dict[str, str], deadline: float, cancelled: threading.Event
+) -> tuple[int | None, Any]:
+    """The verification GET itself, on a pool worker (see
+    ``_bounded_get_json``)."""
+    if cancelled.is_set() or time.monotonic() > deadline:
+        return None, None
     try:
         answer = requests.get(
             url=url,
@@ -78,9 +97,13 @@ def _bounded_get_json(url: str, headers: dict[str, str]) -> tuple[int | None, An
             return status, None
         chunks: list[bytes] = []
         size = 0
-        for chunk in answer.iter_content(chunk_size=4096):
+        for chunk in answer.iter_content(chunk_size=1024):
             size += len(chunk)
-            if size > _REVERIFY_MAX_BYTES or time.monotonic() > deadline:
+            if (
+                size > _REVERIFY_MAX_BYTES
+                or cancelled.is_set()
+                or time.monotonic() > deadline
+            ):
                 return status, None
             chunks.append(chunk)
         try:
@@ -94,6 +117,34 @@ def _bounded_get_json(url: str, headers: dict[str, str]) -> tuple[int | None, An
             answer.close()
         except Exception:  # folds DbError: closing a response
             pass
+
+
+def _bounded_get_json(url: str, headers: dict[str, str]) -> tuple[int | None, Any]:
+    """GET ``url`` for a verification: without following a redirect,
+    reading at most ``_REVERIFY_MAX_BYTES``, and returning within
+    ``_REVERIFY_DEADLINE_SECONDS`` whatever the peer does. Returns the status
+    and the parsed JSON body (None when the answer is not 2xx JSON, too large
+    or too slow; status None when there was no answer in time)."""
+    from concurrent.futures import TimeoutError as FutureTimeout
+
+    budget = _REVERIFY_DEADLINE_SECONDS
+    deadline = time.monotonic() + budget
+    cancelled = threading.Event()
+    try:
+        future = _verification_pool().submit(
+            _fetch_json, url, headers, deadline, cancelled
+        )
+    except RuntimeError:  # the pool is shut down (interpreter exit)
+        return None, None
+    try:
+        return future.result(timeout=budget)
+    except FutureTimeout:
+        cancelled.set()
+        future.cancel()
+        logger.warning(f"A verification at {url} gave no answer within {budget:g}s")
+        return None, None
+    except Exception:  # folds DbError: peer HTTP only
+        return None, None
 
 
 # Rate limit for the suspension-check failure ERROR (see
@@ -1811,8 +1862,8 @@ class Actor:
             actor_id=self.id, peerid=peer["id"], config=self.config
         ).get()
         if (
-            self._is_unproven_pending(existing)
-            and existing
+            existing
+            and self._is_unproven_pending(existing)
             and not self._re_pair_refusal(url, existing, relationship)
             and self.reverify_pending_trust(peer["id"])
         ):
@@ -2006,8 +2057,8 @@ class Actor:
             actor_id=self.id, peerid=peer["id"], config=self.config
         ).get()
         if (
-            self._is_unproven_pending(existing)
-            and existing
+            existing
+            and self._is_unproven_pending(existing)
             and not self._re_pair_refusal(url, existing, relationship)
             and await asyncio.to_thread(self.reverify_pending_trust, peer["id"])
         ):
@@ -2464,47 +2515,33 @@ class Actor:
             logger.debug(
                 f"Verifying trust at requesting peer({peerid}) at url ({requrl})"
             )
-            try:
-                response = requests.get(url=requrl, headers=headers, timeout=(5, 10))
-                self.last_response_code = response.status_code
-                self.last_response_message = (
-                    response.content.decode("utf-8", "ignore")
-                    if isinstance(response.content, bytes)
-                    else str(response.content)
+            # Bounded: an unauthenticated request names this URL (3.16).
+            status, data = _bounded_get_json(requrl, headers)
+            self.last_response_code = status if status is not None else 408
+            self.last_response_message = ""
+            if not isinstance(data, dict):
+                logger.debug(
+                    f"No usable answer when verifying trust at url ({requrl}): "
+                    f"status {status}"
                 )
-                try:
-                    content_str = (
-                        response.content.decode("utf-8", "ignore")
-                        if isinstance(response.content, bytes)
-                        else str(response.content)
-                    )
-                    data = json.loads(content_str)
-                    logger.debug(
-                        f"Verifying trust response: verified={data.get('verified', False)}, "
-                        f"approved={data.get('approved', False)}, peer_approved={data.get('peer_approved', False)}"
-                    )
-                    # The requester's own row must be approved: an
-                    # initiator creates its row approved before it sends the
-                    # request, and a pending row anyone filed under the
-                    # requester's id answers with whatever token its filer
-                    # chose (3.16, the mirrored-request hole).
-                    verified = bool(
-                        isinstance(data, dict)
-                        and _answered_by_approved_row(data)
-                        and secret_digest_equals(
-                            data.get("verification_token"), verification_token
-                        )
-                    )
-                except ValueError:
-                    logger.debug(
-                        "No json body in response when verifying trust at url("
-                        + requrl
-                        + ")"
-                    )
-                    verified = False
-            except Exception:  # folds DbError: peer HTTP only
-                logger.debug("No response when verifying trust at url" + requrl + ")")
                 verified = False
+            else:
+                logger.debug(
+                    f"Verifying trust response: verified={data.get('verified', False)}, "
+                    f"approved={data.get('approved', False)}, "
+                    f"peer_approved={data.get('peer_approved', False)}"
+                )
+                # The requester's own row must be approved: an initiator
+                # creates its row approved before it sends the request, and
+                # a pending row anyone filed under the requester's id answers
+                # with whatever token its filer chose (3.16, the
+                # mirrored-request hole). A 2xx: the spec's "200 OK".
+                verified = bool(
+                    _answered_by_approved_row(data)
+                    and secret_digest_equals(
+                        data.get("verification_token"), verification_token
+                    )
+                )
         if verified and not self._base_uri_serves(baseuri, peerid):
             # The verification proves only that the requester controls the
             # base URI it sent. Its /meta must also name the peer id, which
@@ -3558,46 +3595,44 @@ class Actor:
             )
         resource = str(sub.get("resource") or "")
         path = f"{subtarget}/{resource}" if resource else subtarget
-        try:
-            evaluator = get_permission_evaluator(self.config) if self.config else None
-            allowed = bool(evaluator) and (
-                evaluator.evaluate_property_access(
-                    str(self.id), peerid, path, operation="read"
-                )
-                == PermissionResult.ALLOWED
-            )
-            if not allowed:
-                return None
-            if resource or not evaluator:
-                return as_text
-            # A subscription to a property without a resource also receives
-            # its resource-level writes as ``{resource: value}``
-            # (``register_diffs``): the value stays whole, but a key whose
-            # own path ``<subtarget>/<key>`` an exclusion names is dropped,
-            # as a direct read of that path is refused.
+        # A subscription to a property without a resource also receives its
+        # resource-level writes as ``{resource: value}`` (``register_diffs``):
+        # the value stays whole, but a key whose own path ``<subtarget>/<key>``
+        # an exclusion names is dropped, as a direct read of that path is
+        # refused. A ``list:`` key is checked by its list name.
+        parsed: Any = None
+        if not resource:
             try:
                 parsed = json.loads(as_text)
             except (TypeError, ValueError):
-                return as_text
-            if not isinstance(parsed, dict) or not parsed:
-                return as_text
-            paths = {key: f"{subtarget}/{key}" for key in parsed}
-            excluded = evaluator.excluded_property_paths(
-                str(self.id), peerid, list(paths.values())
-            )
-            kept = {
-                key: value
-                for key, value in parsed.items()
-                if paths[key] not in excluded
+                parsed = None
+        children: dict[str, str] = {}
+        if isinstance(parsed, dict):
+            children = {
+                key: f"{subtarget}/{key[5:] if key.startswith('list:') else key}"
+                for key in parsed
             }
-            if len(kept) == len(parsed):
-                return as_text
-            return json.dumps(kept) if kept else None
+        try:
+            evaluator = get_permission_evaluator(self.config) if self.config else None
+            if not evaluator:
+                return None
+            result, excluded = evaluator.evaluate_property_with_exclusions(
+                str(self.id), peerid, path, list(children.values())
+            )
         except DbError:
             raise
         except Exception as e:
             logger.error(f"Permission check failed for a diff to {peerid}: {e}")
             return None
+        if result != PermissionResult.ALLOWED:
+            return None
+        if not children or not excluded:
+            return as_text
+        assert isinstance(parsed, dict)
+        kept = {
+            key: value for key, value in parsed.items() if children[key] not in excluded
+        }
+        return json.dumps(kept) if kept else None
 
     def _filter_subscription_data_by_permissions(
         self, peerid: str, blob: str | bytes, subtarget: str | None = None

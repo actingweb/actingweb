@@ -21,7 +21,9 @@ SECURITY
   actor has not approved, nor to a peer id with no trust row at all (a
   permission override left behind grants nothing;
   ``PermissionResult.DENIED``); a pending peer reaches only its own trust
-  row (its status and its deletion). **Check:**
+  row (its status and its deletion). An ``actor.as_client(client_id)`` view
+  is evaluated as the client's trust row (the one MCP authentication
+  resolves), so a client with no trust row gets nothing. **Check:**
   an application that served data to unapproved peers on purpose (the
   specification allows an unapproved ``associate``) approves them instead.
 - **Callbacks were accepted without authentication, and a low-granularity
@@ -90,8 +92,9 @@ SECURITY
   request) and its base URI's ``/meta`` names the peer id it claims; this
   proves control of the base URI, not of the id, since the requester answers
   both. **Behavior change:** a verification answered by a relationship the
-  requester has not approved fails, and a pending row's own peer reads its
-  status without its verification token: a third party could otherwise
+  requester has not approved fails, and neither a pending row's own peer
+  reading its status nor a trust request's 202 answer carries its
+  verification token: a third party could otherwise
   file a request at each of two actors under the other's id, with one
   secret, and each verification read the row filed at the other. **Behavior change:** with ``auto_accept_default_relationship``, only
   a request that verified is approved automatically; any other waits for the
@@ -103,8 +106,8 @@ SECURITY
   already, so approving it again changes nothing). Approving an unverified
   request first repeats the verification (a GET to our own trust row at
   the requester's base URI with the request's secret, answered by a row
-  the host approved, without following a redirect and within 15 seconds,
-  and its ``/meta``); one that fails is refused (403 on the PUT, with a
+  the host approved, and its ``/meta``; both verifications follow no
+  redirect, read at most 64 KB and give up after 15 seconds in all); one that fails is refused (403 on the PUT, with a
   JSON ``error``, or a page with a way back for the web UI's form, whose
   trust page marks such a request "unverified" and offers no Approve). A
   PUT for a missing row answers 404, and one that approves a pending row

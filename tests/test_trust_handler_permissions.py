@@ -48,6 +48,11 @@ class TestTrustHandlerPermissions(unittest.TestCase):
                 }
             ]
         )
+        # The PUT reads the row first (3.16: 404 for a missing row or another
+        # relationship).
+        self.actor.get_trust_relationship = Mock(
+            return_value=self.actor.get_trust_relationships.return_value[0]
+        )
         self.actor.modify_trust_and_notify = Mock(return_value=True)
 
         # Mock permission store

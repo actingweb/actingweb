@@ -12,6 +12,13 @@ from unittest.mock import MagicMock, patch
 from actingweb.actor import Actor
 
 
+def _streamed(response: MagicMock) -> MagicMock:
+    """The verification reads its answer streamed (3.16)."""
+    body = response.content
+    response.iter_content = lambda chunk_size=1: iter([body])
+    return response
+
+
 def _actor_for_verify() -> Actor:
     actor = Actor.__new__(Actor)
     actor.id = "actor-1"
@@ -35,7 +42,9 @@ class TestVerificationTokenMissingFromPeerResponse:
         mock_trust.get.side_effect = [None, {"peerid": "peer-1"}]
 
         with (
-            patch("actingweb.actor.requests.get", return_value=peer_response),
+            patch(
+                "actingweb.actor.requests.get", return_value=_streamed(peer_response)
+            ),
             patch("actingweb.actor.trust.Trust", return_value=mock_trust),
         ):
             result = actor.create_verified_trust(
@@ -68,7 +77,9 @@ class TestVerificationTokenMissingFromPeerResponse:
         mock_trust.get.side_effect = [None, {"peerid": "peer-1"}]
 
         with (
-            patch("actingweb.actor.requests.get", return_value=peer_response),
+            patch(
+                "actingweb.actor.requests.get", return_value=_streamed(peer_response)
+            ),
             patch("actingweb.actor.trust.Trust", return_value=mock_trust),
             # The base URI serves the claimed id (3.16 binds the two).
             patch.object(Actor, "_base_uri_serves", return_value=True),
@@ -98,7 +109,9 @@ class TestVerificationTokenMissingFromPeerResponse:
         mock_trust.get.side_effect = [None, {"peerid": "peer-1"}]
 
         with (
-            patch("actingweb.actor.requests.get", return_value=peer_response),
+            patch(
+                "actingweb.actor.requests.get", return_value=_streamed(peer_response)
+            ),
             patch("actingweb.actor.trust.Trust", return_value=mock_trust),
         ):
             actor.create_verified_trust(

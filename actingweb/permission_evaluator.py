@@ -536,29 +536,51 @@ class PermissionEvaluator:
             )
             return []
 
-    def excluded_property_paths(
-        self, actor_id: str, peer_id: str, property_paths: list[str]
-    ) -> set[str]:
-        """The paths among ``property_paths`` the peer's grant explicitly
-        excludes: a ``denied`` or ``excluded_patterns`` entry matches them
-        (or they hold a control character). A path the grant merely does not
-        name is not in the set. Used under a property the peer may read,
-        whose value is sent whole except what an exclusion names (3.16). An
-        unapproved peer is excluded from everything; a storage fault raises
-        ``DbError``."""
-        if self._is_unapproved(actor_id, peer_id):
-            return set(property_paths)
-        effective_perms = self._get_effective_permissions(actor_id, peer_id) or {}
-        rules = effective_perms.get(PermissionType.PROPERTIES.value) or {}
-        denied = list(rules.get("denied") or []) + list(
-            rules.get("excluded_patterns") or []
-        )
-        return {
-            path
-            for path in property_paths
-            if has_control_characters(path)
-            or (denied and self._matches_any_pattern(path, denied))
-        }
+    def evaluate_property_with_exclusions(
+        self,
+        actor_id: str,
+        peer_id: str,
+        property_path: str,
+        child_paths: list[str],
+        operation: str = "read",
+    ) -> tuple[PermissionResult, set[str]]:
+        """``property_path`` evaluated as ``evaluate_property_access`` does,
+        and the ``child_paths`` the peer's grant explicitly excludes (a
+        ``denied`` or ``excluded_patterns`` entry matches them, or they hold
+        a control character), from one read of the approval and the grant
+        (3.16). A child the grant merely does not name is not excluded: it is
+        part of a property the peer may read whole. A storage fault raises
+        ``DbError``; any other error denies."""
+        try:
+            if has_control_characters(property_path) or self._is_unapproved(
+                actor_id, peer_id
+            ):
+                return PermissionResult.DENIED, set(child_paths)
+            effective_perms = self._get_effective_permissions(actor_id, peer_id)
+            rules = (effective_perms or {}).get(PermissionType.PROPERTIES.value)
+            if not rules:
+                return PermissionResult.NOT_FOUND, set()
+            result = self._evaluate_rules(
+                rules, property_path, operation, suppress_logging=True
+            )
+            denied = list(rules.get("denied") or []) + list(
+                rules.get("excluded_patterns") or []
+            )
+            excluded = {
+                path
+                for path in child_paths
+                if has_control_characters(path)
+                or (denied and self._matches_any_pattern(path, denied))
+            }
+            return result, excluded
+        except DbError:
+            raise
+        except Exception as e:
+            logger.error(
+                f"Error evaluating {actor_id}:{peer_id} -> properties:"
+                f"{property_path!r}:{operation}: {e}"
+            )
+            return PermissionResult.DENIED, set(child_paths)
 
     def _is_unapproved(self, actor_id: str, peer_id: str) -> bool:
         """Whether the peer has no trust row, or one this actor has not

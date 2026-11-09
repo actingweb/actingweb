@@ -309,9 +309,7 @@
       "peer_approved": "true",
       "peerid": "<N>",
       "relationship": "friend",
-      "secret": "<secret:trust:N-A>",
       "type": "urn:actingweb:test:integration",
-      "verification_token": "<secret:token:A-N#1>",
       "verified": "true"
      },
      "status": 202

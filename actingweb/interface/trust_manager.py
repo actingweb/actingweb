@@ -898,6 +898,9 @@ class TrustManager:
             if not row:
                 logger.warning(f"Trust not found for peer {peer_id}")
                 return False
+            if "approved" in kwargs and kwargs["approved"] is not None:
+                # Text ("true") is a flag too: it must meet the same gate.
+                kwargs["approved"] = str(kwargs["approved"]).strip().lower() == "true"
             if (
                 kwargs.get("approved") is True
                 and not row.get("approved")
@@ -912,6 +915,13 @@ class TrustManager:
                 )
                 return False
 
+            if kwargs.get("approved") is True and not row.get("approved"):
+                # The approval lands on the row read and re-verified above,
+                # or not at all (a row replaced meanwhile is not approved
+                # unseen).
+                kwargs.setdefault(
+                    "only_if_secret", str(row.get("secret") or "") or None
+                )
             return trust.modify(
                 aw_supported=aw_supported,
                 aw_version=aw_version,

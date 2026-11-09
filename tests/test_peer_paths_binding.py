@@ -1028,6 +1028,25 @@ class TestOneFilterForPushAndPull:
         sent = post.call_args.kwargs["data"].decode()
         assert "hidden" not in sent and '"open"' in sent
 
+    def test_an_excluded_list_under_a_subtarget_is_dropped(
+        self, world: Publisher
+    ) -> None:
+        """Reverify-8 Issue 9: a ``list:`` key is checked by its list name,
+        as the whole-target filter checks it."""
+        self._grant(world, "b", "friend", {"excluded_patterns": ["settings/notes"]})
+        sub = self._sub(world, "b", "sub-l", "settings")
+        with mock.patch("actingweb.actor.requests.post") as post:
+            post.return_value = mock.Mock(status_code=204)
+            world.a.callback_subscription(
+                peerid=world.peers["b"],
+                sub_obj=sub,
+                sub=sub.get(),
+                diff={"sequence": 1, "timestamp": "2026-11-09T00:00:00Z"},
+                blob=json.dumps({"list:notes": {"op": "append"}, "open": 1}),
+            )
+        sent = post.call_args.kwargs["data"].decode()
+        assert "list:notes" not in sent and '"open"' in sent
+
 
 class TestAPeerListsItsOwnSubscriptions:
     """Reverify-6 Issue 3: the ``owner`` row admits a peer's listing of its

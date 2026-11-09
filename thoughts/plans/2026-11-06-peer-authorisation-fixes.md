@@ -3324,3 +3324,188 @@ re-ran the web and trust unit tests: 566 passed.
 
 Not yet run: Emm's suite on this iteration. Iteration 56 changes what a
 verification accepts, so it gates the PR.
+
+### 2026-11-09, after verification thoughts/verifications/2026-11-09-peer-authorisation-fixes-reverify-8.md
+
+Scope (owner, 2026-11-09): reverify-8 Issues 1 to 9, all in this PR. On
+Issue 2, a client view resolves to its trust row (owner: "Resolve to trust
+row").
+
+#### 69. A client view is evaluated as its trust row
+
+**Category**: Bug fix (reverify-8 Issue 2, introduced by iteration 65)
+
+**What changed**:
+- **The new id.** `AuthContext` gains `client_peer_id`, and a
+  `permission_id` property: the peer id, or the client's trust row's peer
+  id, or the raw client id. `AuthenticatedActorView` resolves
+  `client_peer_id` on construction: the `peerid` (or `peer_id`) of the
+  trust passed in, else the row `find_client_trust` resolves, as MCP
+  authentication does.
+- **Where it is used.** Every permission check of the authenticated
+  stores (properties, lists, the bulk listing, subscriptions) evaluates
+  `permission_id`. `accessor_id` is unchanged, so the rows a client
+  creates and lists stay where they were.
+- **A failed lookup.** Other than a `DbError`, it leaves the raw client id,
+  which has no row and so is granted nothing.
+
+**Files affected**: `actingweb/interface/authenticated_views.py`;
+`tests/test_trust_re_pair.py` - `TestTheClientViewAfterReverify8` (a client
+view reads and writes what its OAuth trust grants and is refused an
+exclusion; failed before with "Access denied: write on 'notes'"; a client
+with no trust row gets nothing)
+
+**Rationale**: OAuth trust rows are stored under
+`oauth2_client:<email>:<client>`. Iteration 65's "no trust row, no grant"
+therefore denied the documented `actor.as_client(client_id="mcp_chatgpt")`
+everything, where it used to fall through as NOT_FOUND.
+
+#### 70. Both verifications return within their deadline
+
+**Category**: Bug fix (reverify-8 Issues 1 and 3; Issue 3 pre-existing on
+`master`)
+
+**What changed**:
+- **The bounded read.** `_bounded_get_json` runs the GET on a pool of its
+  own (`aw-verify`, eight workers), and the caller waits at most
+  `_REVERIFY_DEADLINE_SECONDS` in all:
+  - headers and body, however slowly they arrive;
+  - no redirect is followed;
+  - at most 64 KB is read.
+  A worker held by a slow peer is cut at its next read; once the pool is
+  busy, a verification fails closed instead of waiting.
+- **Both verifications use it.** The creation verification (an
+  unauthenticated `POST /trust` names its URL) reads through it too, and
+  needs a 2xx (the spec's "200 OK"). Its debug line no longer runs before
+  the dict check.
+
+**Files affected**: `actingweb/actor.py`; `tests/test_trust_re_pair.py` -
+`TestTheDeadlineHoldsAfterReverify8`:
+- a body trickled into full chunks;
+- an answer that never starts;
+- the first verification bounded (no redirect, streamed).
+
+All three failed before; the trickle fake fills a chunk before handing it
+over, as a socket read does. The creation fakes (`_peer_answers`,
+`tests/test_trust_verification_token_missing.py`) now stream.
+
+**Rationale**:
+- **The old deadline did not hold.** It was checked only between 4 KB
+  reads, and `timeout=(5, 5)` is per socket read, so a peer sending a byte
+  every few seconds held the owner's request for hours.
+- **The first verification was not bounded at all.** Any anonymous
+  requester triggers it.
+
+#### 71. `modify_trust` ties its approval to the row it re-verified, and flags given as text are flags
+
+**Category**: Bug fix (reverify-8 Issues 4 and 5)
+
+**What changed**:
+- **The row read.** `TrustManager.modify_trust` writes an approval
+  conditioned on the secret of the row it read (`only_if_secret`).
+- **Flags as text.** `Trust.modify` and `modify_trust` convert `approved`,
+  `verified` and `peer_approved` given as text (`"true"`/`"false"`) to
+  booleans (`_as_flag`) before any gate. A string had skipped the approval
+  condition and was stored as True, even `"false"`.
+
+**Files affected**: `actingweb/trust.py`,
+`actingweb/interface/trust_manager.py`; `tests/test_trust_re_pair.py` -
+`test_modify_trust_approves_only_the_row_it_re_verified`,
+`test_a_string_approval_meets_the_same_gates` (both failed before)
+
+**Rationale**: as reverify-8 found. `modify_trust_and_notify` already had
+the row condition (iteration 59).
+
+#### 72. The approving PUT checks the relationship and the base URI first
+
+**Category**: Bug fix (reverify-8 Issue 6)
+
+**What changed**: `TrustPeerHandler.put` answers 404 when the row's
+relationship is not the one in the path, before anything is verified or
+written. It validates a base URI (400) before comparing or fetching it.
+
+**Files affected**: `actingweb/handlers/trust.py`;
+`tests/test_trust_re_pair.py` -
+`test_a_put_for_another_relationship_is_404_and_checks_nothing`,
+`test_a_base_uri_that_is_not_text_is_400` (both failed before)
+
+**Rationale**:
+- A PUT to `/trust/admin/<peer>` on a `friend` row re-verified the row
+  (an outbound GET, and possibly `verified=True`), then failed to modify
+  it.
+- A body with `"baseuri": 5` answered 500.
+
+#### 73. A trust request's 202 answer carries no token
+
+**Category**: Bug fix (reverify-8 Issue 7; Issue 8's docs with it)
+
+**What changed**:
+- **The answer.** `POST /trust/<rel>` answers a request that waits (not
+  approved) without `verification_token` or `secret`, as the spec sentence
+  of iteration 68 requires.
+- **The two stale passages.** The handler comment and
+  `docs/reference/security.rst` say the token goes to the row's own peer
+  only once the row is approved.
+
+**Files affected**: `actingweb/handlers/trust.py`,
+`docs/reference/security.rst`, `CHANGELOG.rst`;
+`tests/test_trust_re_pair.py` - `test_a_pending_requests_answer_carries_no_token`
+(failed before)
+
+**Rationale**:
+- **The mirror.** It was already closed on two counts (iteration 56), but
+  the answer handed the filer the token the spec now forbids returning.
+- **The passages.** They described the read the mirror used.
+- **Callers.** No initiator reads the answer's token: the library's
+  `create_reciprocal_trust` does not, on `master` either.
+
+**Wire**: WT3 is re-recorded (`WIRE_RECORD=WT3`, both topologies, a dated
+`reason` in `rows.toml`). The only difference is the 202 body losing
+`secret` and `verification_token`.
+
+#### 74. One evaluation per subtarget diff, and a list is checked by its name
+
+**Category**: Verification fix (reverify-8 Issue 9)
+
+**What changed**:
+- **One evaluation.** `PermissionEvaluator.evaluate_property_with_exclusions`
+  returns a property's result and the children an exclusion names, from one
+  read of the approval and the grant. It replaces
+  `excluded_property_paths`, and `filter_subscription_blob` uses it, so a
+  subtarget diff costs one evaluation.
+- **List keys.** A `list:` key is checked by its list name.
+- **Tidying.** The dead `or not evaluator` is gone. The create twins test
+  `existing` first (pyright narrowing), then `_is_unproven_pending`.
+
+**Files affected**: `actingweb/permission_evaluator.py`, `actingweb/actor.py`;
+`tests/test_peer_paths_binding.py` -
+`test_an_excluded_list_under_a_subtarget_is_dropped` (failed before)
+
+**Rationale**: reverify-8's hygiene and cost items. The misleading debug
+line, and the missing deadline test, closed with iteration 70.
+
+#### 75. Changelog for iterations 69 to 74
+
+**Category**: Verification fix (documentation)
+
+**What changed**: the SECURITY entry names the `as_client` resolution. The
+trust entry:
+- says both verifications follow no redirect, read at most 64 KB and give
+  up after 15 seconds in all (now true);
+- says the 202 answer carries no token.
+
+**Files affected**: `CHANGELOG.rst`
+
+**Rationale**: the "within 15 seconds" claim was false until iteration 70.
+
+The Full tier on the code of iterations 69 to 75:
+- **Checks:** ruff, format and pyright are clean; `verify_groups` OK.
+- **DynamoDB:** 6138 passed.
+- **PostgreSQL:** 5935 passed.
+- **Docs:** the build passes.
+- **Wire:** WT3 re-recorded (iteration 73); no other recording changed.
+
+Two existing tests now give their mocks what the PUT reads first:
+`tests/test_trust_handler_permissions.py` gets a `get_trust_relationship`
+row. `tests/test_cross_site_and_peer_inputs.py` passes unchanged, since the
+base-URI check now runs before the row is read.

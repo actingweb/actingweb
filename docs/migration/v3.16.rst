@@ -1301,7 +1301,8 @@ its callbacks are; a change it may not read polls as ``{}``.
 
 **Creating a trust toward a peer whose request waits.** A verified pending
 request is approved (the peer is told and ``trust_fully_approved_local``
-runs, through ``TrustManager``); a pending request that never verified is
+runs, not ``trust_initiated``, from ``POST /trust``, the web form and
+``TrustManager``); a pending request that never verified is
 replaced by the owner's own request, with the owner's secret.
 
 **Callbacks are authenticated.** Every ``/callbacks`` request without

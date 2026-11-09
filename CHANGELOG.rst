@@ -87,8 +87,9 @@ SECURITY
   already trusts with its current secret, only toward the stored base URI,
   and stores the new secret only after the peer accepts. **Behavior
   change:** toward a peer whose verified request waits for approval,
-  creating the trust approves it, tells the peer and runs
-  ``trust_fully_approved_local`` (through ``TrustManager``), where before
+  creating the trust (``POST /trust``, the web form or
+  ``TrustManager.create_relationship``) approves it, tells the peer and runs
+  ``trust_fully_approved_local``, not ``trust_initiated``, where before
   3.16 it overwrote the row with the owner's secret and sent a new request;
   a pending request that never verified (anyone can file one under a
   peer's id) is replaced by the owner's own request, with the owner's
@@ -611,6 +612,19 @@ SECURITY
   refuses an id whose tombstone says deleted (401, as an unknown actor), and
   an unreadable tombstone answers 503.
 
+- **A subscriber polling a ``properties`` subscription read every stored
+  change, whatever its permissions.** Diffs are stored whole and only the
+  pushed callback was filtered by the peer's property permissions; the
+  pull paths (``GET /subscriptions/<peer>/<subid>`` and its ``/<seq>``)
+  returned them as stored, so a ``friend`` peer with a narrowed grant read
+  past it. **Behavior change:** both pull paths filter a ``properties``
+  diff by the permissions of the peer the path names, as the callback
+  does, whoever reads it (the creator or a trustee reading a peer's
+  subscription sees what that peer may read); a diff with nothing
+  permitted reads as ``{}`` with its sequence kept, and a subtarget's
+  value is returned only when the peer may read the subtarget. Other
+  targets are served as stored, as their callbacks are.
+
 REMOVED
 ~~~~~~~
 
@@ -654,23 +668,16 @@ CHANGED
   clears its own queue and is unsubscribed as before, and no other peer
   reaches it. The ``owner`` row on subscriptions is now
   ``("owner", "subscriptions/<id>/<subid>", "GET,PUT,DELETE", "a")``: it
-  admits a peer to read, clear and end its own subscription, never to
-  create one (creating one stays with the relationship's own rows, as
-  before). **Behavior change:** through the ``owner`` rows a peer of any
+  admits a peer to poll (``GET /subscriptions/<peer>/<subid>`` and its
+  ``/<seq>``), clear and end its own subscription, never to list or create
+  one (``GET`` and ``POST /subscriptions/<peer>`` stay with the
+  relationship's own rows, as before). **Behavior change:** through the ``owner`` rows a peer of any
   relationship type also reads its own trust's permissions
   (``GET /trust/<rel>/<peer>/permissions``) and may ``PUT`` its own trust
   row (its description, and a base URI whose ``/meta`` names it; approving
   it and writing its permissions stay the owner's, 403). A ``PUT`` to
   ``/callbacks/<name>`` is authorised as PUT and reaches the hook as
   ``PUT``.
-- **A subscriber polling a ``properties`` subscription read every stored
-  change, whatever its permissions.** Diffs are stored whole and only the
-  pushed callback was filtered by the peer's property permissions; the
-  pull paths (``GET /subscriptions/<peer>/<subid>`` and its ``/<seq>``)
-  returned them as stored. **Behavior change:** both pull paths filter a
-  ``properties`` diff as the callback does; a diff with nothing permitted
-  reads as ``{}`` with its sequence kept. Other targets are served as
-  stored, as their callbacks are.
 - **A peer of any relationship type reads its own granted permissions**
   (``GET /permissions/<peer>``), through the ``owner`` row; the creator and
   an ``admin`` peer read any. Before, only ``associate``, ``friend``,

@@ -2639,3 +2639,30 @@ three `.subscriber` rows included). Emm's suite on `325370f` (gate 2,
 environment 9, its adoption worktree unchanged): PostgreSQL 2 failed / 7406
 passed, DynamoDB 3 failed / 54 passed, the `master` baseline's failures by
 name.
+
+#### 44. Every create route approves with the same hooks
+
+**Category**: Verification fix (follow-up to iteration 38)
+
+**What changed**: the web form's create (`www.py`) goes through
+`TrustManager.create_relationship`, so an approve-on-create there runs
+`trust_fully_approved_local` too (it ran no hook before). `POST /trust` (sync
+and async) skips `trust_initiated` when the create approved the peer's
+waiting request (`Actor.last_trust_approved_on_create`): no request went
+out. The changelog moves the pull filter to SECURITY (it closes a `friend`
+case `master` had), says it filters by the path's peer whoever reads, and
+that the `owner` row admits polling, not listing or creating.
+
+**Files affected**: `actingweb/handlers/www.py`, `actingweb/handlers/trust.py`,
+`actingweb/handlers/async_trust.py`, `CHANGELOG.rst`,
+`docs/migration/v3.16.rst`; `tests/test_trust_re_pair.py` -
+`TestTheCreateRoutesAfterReverify5` (both failed without the change)
+
+**Rationale**: an approval through the web form ran no hook, and an app's
+"request sent" handler ran for an approval.
+
+The Full tier after iteration 44: DynamoDB 6088 passed, PostgreSQL 5885
+passed, the docs build, no recording changed. Emm's suite last ran on
+`325370f` (the baseline); iteration 44 changes only which hooks the trust
+create routes run.
+

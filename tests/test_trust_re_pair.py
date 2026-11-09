@@ -1331,3 +1331,65 @@ class TestTheInitiatorAfterReverify5:
                 is False
             )
         assert Trust(actor_id=aid(b), peerid=peer, config=config).get()
+
+
+class TestTheCreateRoutesAfterReverify5:
+    """The HTTP create and the web form approve a verified pending request
+    with the same hooks as the API: ``trust_fully_approved_local``, and no
+    ``trust_initiated`` (no request went out)."""
+
+    @staticmethod
+    def _world() -> tuple[Initiator, HookRegistry, mock.Mock, mock.Mock]:
+        w = Initiator()
+        assert Trust(actor_id=aid(w.b), peerid=w.a, config=w.config).modify(
+            approved=False, verified=True, peer_approved=True
+        )
+        hooks = HookRegistry()
+        approved, initiated = mock.Mock(), mock.Mock()
+        hooks.register_lifecycle_hook("trust_fully_approved_local", approved)
+        hooks.register_lifecycle_hook("trust_initiated", initiated)
+        return w, hooks, approved, initiated
+
+    @staticmethod
+    def _patched(w: Initiator) -> Any:
+        told = mock.Mock(status_code=204, reason="No Content", content=b"")
+        stack = mock.patch.multiple(
+            "actingweb.actor.Actor",
+            get_peer_info=mock.Mock(return_value=w.peer_info),
+        )
+        return stack, mock.patch("actingweb.actor.requests.post", return_value=told)
+
+    def test_the_http_create(self) -> None:
+        from actingweb.handlers.trust import TrustHandler
+
+        w, hooks, approved, initiated = self._world()
+        token = base64.b64encode(f"{w.b.creator}:{PASSPHRASE}".encode()).decode()
+        webobj = AWWebObj(
+            url=f"https://test.example.com/{aid(w.b)}/trust",
+            body=json.dumps({"url": w.url, "relationship": "friend"}),
+            headers={"Authorization": f"Basic {token}"},
+        )
+        info, post = self._patched(w)
+        with info, post:
+            TrustHandler(webobj, w.config, hooks=hooks).post(aid(w.b))
+        assert webobj.response.status_code == 201
+        approved.assert_called_once()
+        initiated.assert_not_called()
+
+    def test_the_web_form(self) -> None:
+        from actingweb.handlers.www import WwwHandler
+
+        w, hooks, approved, _ = self._world()
+        webobj = AWWebObj(
+            url=f"https://test.example.com/{aid(w.b)}/www/trust/new",
+            params={"peer_url": w.url, "trust_type": "friend"},
+            headers={},
+        )
+        info, post = self._patched(w)
+        with info, post:
+            WwwHandler(webobj, w.config, hooks=hooks)._handle_new_trust_relationship(
+                w.b, aid(w.b)
+            )
+        assert webobj.response.status_code == 302
+        approved.assert_called_once()
+        assert w.row()["approved"] is True

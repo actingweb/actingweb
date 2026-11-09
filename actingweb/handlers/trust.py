@@ -188,7 +188,9 @@ class TrustHandler(base_handler.BaseHandler):
         new_trust = new_trust_rel.to_dict()
 
         # Trigger trust_initiated lifecycle hook to notify application of outgoing trust request
-        if self.hooks:
+        # (none when the create approved the peer's waiting request instead:
+        # no request went out, and trust_fully_approved_local ran)
+        if self.hooks and not actor_interface.core_actor.last_trust_approved_on_create:
             try:
                 peerid = new_trust.get("peerid", "")
                 logger.debug(

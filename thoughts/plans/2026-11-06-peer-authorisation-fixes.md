@@ -3927,3 +3927,59 @@ Emm's suite on `03a0d8c` (environment 9, its adoption worktree unchanged):
 PostgreSQL 2 failed / 7406 passed, DynamoDB 3 failed / 54 passed, the
 `master` baseline's failures by name. The environment 9 server was stopped
 afterwards.
+
+### 2026-11-09, after verification thoughts/verifications/2026-11-09-peer-authorisation-fixes-reverify-12.md
+
+Scope (owner, the same rule: only what users would meet): Issue 1 (and with
+it Issue 5) and Issue 3. Issue 2 is superseded: `spec-1-5` Phase 4 removes
+`FanOutManager` with `fanout.py`, so its failure count goes with it (owner,
+2026-11-09). Issues 4 and 6 to 10 are left as they are.
+
+#### 88. A client's resync is the full state, stored as its next diff
+
+**Category**: Verification fix (reverify-12 Issues 1 and 5)
+
+**What changed**: `_callback_subscription_resync`, for an OAuth2 client's
+trust row, moves the subscription's sequence and stores the target's full
+state as its diff (no POST), and answers True when it was stored, False
+when not (a miss, re-sent by the next resume). The fallback's full-state
+build is now `_store_full_state_diff`, shared by both. The return type is
+`bool` again, so the resume's count holds: below the number of subscribers
+means some missed. Changelog and `docs/guides/subscriptions.rst` say how a
+client's resync reaches it.
+
+**Files affected**:
+- `actingweb/actor.py`: the client branch, `_store_full_state_diff`, the
+  loop and the docstrings.
+- `tests/test_trust_re_pair.py`: `test_a_clients_row_gets_its_resync_as_a_diff`
+  (both row kinds: suspend, set a property, resume; no POST, count 1, one
+  diff carrying the property, no pending record). It failed on the code
+  before.
+- `CHANGELOG.rst`, `docs/guides/subscriptions.rst`.
+
+**Rationale**: a change made under a suspension stores no diff, so a client
+that reads its diffs never learnt about it, and since iteration 85 nothing
+recorded that.
+
+#### 89. An address whose socket cannot be made is skipped
+
+**Category**: Verification fix (reverify-12 Issue 3)
+
+**What changed**: `_connect` creates each address's socket inside its
+`try`, and asks `getaddrinfo` for urllib3's `allowed_gai_family()` (IPv4
+only where IPv6 is unusable), as urllib3's `create_connection` does.
+
+**Files affected**:
+- `actingweb/actor.py`: `_connect`.
+- `tests/test_verification_fetch.py`:
+  `test_an_address_whose_socket_cannot_be_made_is_skipped` (an IPv6 address
+  first whose socket raises EAFNOSUPPORT, then the IPv4 one answers). It
+  failed on the code before.
+
+**Rationale**: on a host with IPv6 disabled in the kernel every
+verification to a dual-stack peer failed.
+
+The Full tier on the code of iterations 88 and 89: ruff, format clean;
+pyright clean (after narrowing two optional returns in the new test);
+`verify_groups` OK; DynamoDB 6174 passed; PostgreSQL 5971 passed; the docs
+build passes; no recording changed.

@@ -258,6 +258,10 @@ Full state replacement, triggered when:
 - The publisher calls ``resume_subscriptions()``
 - Initial sync after subscription creation
 
+An OAuth2 client's subscription (one an ``as_client`` view created) is sent
+no callback: the client reads its diffs. On ``resume_subscriptions()`` its
+resync is the full state, stored as its next diff.
+
 Resync callbacks include a ``type`` field and a ``url`` to fetch the full state:
 
 .. code-block:: json

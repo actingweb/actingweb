@@ -13,6 +13,7 @@ show a read that blocks; production peers are HTTPS, so most run over TLS.
 from __future__ import annotations
 
 import datetime
+import errno
 import ipaddress
 import json
 import socket
@@ -386,6 +387,41 @@ class TestLateAndFull:
         )
         assert status == 200 and body == {"id": "fast", "approved": True}
         assert took < 2.0
+
+    def test_an_address_whose_socket_cannot_be_made_is_skipped(
+        self, servers: tuple[_Server, _Server], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Reverify-12 Issue 3: a name whose first address is IPv6 on a host
+        where IPv6 sockets cannot be made (``ipv6.disable=1``). The next
+        address, IPv4, is tried and answers."""
+        _, fast = servers
+        real_lookup, real_socket = socket.getaddrinfo, socket.socket
+
+        def v6_first(host: Any, port: Any, *args: Any, **kwargs: Any) -> Any:
+            if host == "dual.example.test":
+                return [
+                    (socket.AF_INET6, socket.SOCK_STREAM, 6, "", ("2001:db8::1", 80)),
+                    (
+                        socket.AF_INET,
+                        socket.SOCK_STREAM,
+                        6,
+                        "",
+                        ("127.0.0.1", fast.port),
+                    ),
+                ]
+            return real_lookup(host, port, *args, **kwargs)
+
+        def no_v6(family: Any = -1, *args: Any, **kwargs: Any) -> Any:
+            if family == socket.AF_INET6:
+                raise OSError(errno.EAFNOSUPPORT, "Address family not supported")
+            return real_socket(family, *args, **kwargs)
+
+        monkeypatch.setattr(socket, "getaddrinfo", v6_first)
+        monkeypatch.setattr(socket, "socket", no_v6)
+        status, body = actor_module._bounded_get_json(
+            "http://dual.example.test/meta", {}, time.monotonic() + 2
+        )
+        assert status == 200 and body == {"id": "fast", "approved": True}
 
     def test_a_full_pool_refuses_at_once(self, tls: ssl.SSLContext) -> None:
         """Every worker busy: a further verification fails closed now, not

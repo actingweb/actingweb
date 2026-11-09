@@ -26,7 +26,8 @@ SECURITY
   resolves, never a peer id the caller passes), so a client with no trust
   row gets nothing; a subscription such a view creates is kept under that
   trust's peer id, and nothing is pushed to it (a client's trust row has no
-  endpoint: the client reads its diffs). **Check:**
+  endpoint: the client reads its diffs). On ``resume_subscriptions`` its
+  resync is the full state, stored as its next diff. **Check:**
   an application that served data to unapproved peers on purpose (the
   specification allows an unapproved ``associate``) approves them instead.
 - **Callbacks were accepted without authentication, and a low-granularity

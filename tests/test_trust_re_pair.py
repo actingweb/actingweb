@@ -2277,8 +2277,10 @@ class TestTheClientViewAfterReverify10:
 
 
 class TestTheResyncAfterReverify11:
-    """Reverify-11 Issue 1: a resume sends no resync to a client's trust row
-    and records no miss for it."""
+    """Reverify-11 Issue 1: a resume sends nothing to a client's trust row
+    and records no miss for it. Reverify-12 Issue 1: its resync is the full
+    state, stored as its next diff (the changes made while suspended stored
+    none), and counted."""
 
     @staticmethod
     def _client_sub(w: Receiver, via: str, baseuri: str) -> str:
@@ -2303,22 +2305,31 @@ class TestTheResyncAfterReverify11:
         "via,own_uri",
         [("oauth2_client", False), ("oauth2_interactive", True)],
     )
-    def test_a_clients_row_gets_no_resync_and_no_miss(
+    def test_a_clients_row_gets_its_resync_as_a_diff(
         self, via: str, own_uri: bool
     ) -> None:
         w = Receiver()
         baseuri = f"{w.config.root}{aid(w.a)}" if own_uri else ""
-        self._client_sub(w, via, baseuri)
-        missed: list[str] = []
+        peer = self._client_sub(w, via, baseuri)
+        assert w.a.suspend_subscriptions("properties")
+        w.a.set_property("during", "the suspension")
         with (
             mock.patch("actingweb.actor.requests.post") as post,
             mock.patch("httpx.AsyncClient.post") as async_post,
         ):
-            count = w.a._send_resync_callbacks("properties", None, missed=missed)
+            count = w.a.resume_subscriptions("properties")
         post.assert_not_called()
         async_post.assert_not_called()
-        assert count == 0
-        assert missed == []
+        assert count == 1
+        subs = w.a.get_subscriptions(peerid=peer, target="properties")
+        assert subs
+        [sub] = subs
+        sub_obj = w.a.get_subscription_obj(peerid=peer, subid=sub["subscriptionid"])
+        assert sub_obj
+        diffs = sub_obj.get_diffs()
+        assert len(diffs) == 1
+        assert json.loads(diffs[0]["diff"]).get("during") == "the suspension"
+        assert w.a._resync_pending("properties", None) is None
 
     def test_a_peer_still_gets_its_resync(self) -> None:
         """The control: a peer's subscription is resynced."""

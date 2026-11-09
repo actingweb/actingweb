@@ -14,6 +14,7 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.connection import HTTPConnection, HTTPSConnection
 from urllib3.connectionpool import HTTPConnectionPool, HTTPSConnectionPool
+from urllib3.util.connection import allowed_gai_family
 
 from actingweb import attribute, deletion, peertrustee, property, subscription, trust
 from actingweb.constants import (
@@ -185,16 +186,20 @@ def _connect(conn: Any) -> socket.socket:
         host = host.strip("[]")
     limit = conn.timeout if isinstance(conn.timeout, int | float) else None
     error: OSError | None = None
+    # The family as urllib3 asks for it: IPv4 only where IPv6 is unusable.
     for family, kind, proto, _name, address in socket.getaddrinfo(
-        host, conn.port, 0, socket.SOCK_STREAM
+        host, conn.port, allowed_gai_family(), socket.SOCK_STREAM
     ):
         left = None if deadline is None else deadline - time.monotonic()
         if (tracked is not None and tracked.given_up()) or (
             left is not None and left <= 0
         ):
             break
-        sock = socket.socket(family, kind, proto)
+        sock: socket.socket | None = None
         try:
+            # Inside the try: an address whose socket cannot be made (its
+            # family disabled, no descriptor left) is skipped, not fatal.
+            sock = socket.socket(family, kind, proto)
             if tracked is not None:
                 tracked.opened(sock)  # raises (the socket ended) when given up
             for option in conn.socket_options or ():
@@ -209,7 +214,8 @@ def _connect(conn: Any) -> socket.socket:
             return sock
         except OSError as e:
             error = e
-            sock.close()
+            if sock is not None:
+                sock.close()
     raise error or TimeoutError(f"no connect to {host} before the deadline")
 
 
@@ -4088,7 +4094,8 @@ class Actor:
         """Resume diff registration and send resync callbacks.
 
         Sends a resync callback to ALL subscriptions on this target/subtarget,
-        telling them to do a full GET to re-sync their state.
+        telling them to do a full GET to re-sync their state. An OAuth2
+        client's subscription gets the full state as its next diff instead.
 
         Args:
             target: Target resource (e.g., "properties")
@@ -4167,8 +4174,9 @@ class Actor:
         ``missed`` collects the subscription ids whose resync did not land
         (an HTTP failure or a permanent store error), for the record a later
         :meth:`resume_subscriptions` re-sends to. A subscription kept under
-        an OAuth2 client's trust row gets no resync (nothing is pushed to a
-        client: it reads its diffs); it is neither counted nor missed.
+        an OAuth2 client's trust row is sent nothing (a client reads its
+        diffs): its resync is the full state stored as its next diff, counted
+        when stored and missed when not.
 
         Every subscriber gets its attempt. If any hit a transient fault, the
         suspension is put back (when ``suspension`` is given) and the first
@@ -4215,10 +4223,9 @@ class Actor:
             # (even if the subscription itself has no subtarget or a different one)
             resync_subtarget = subtarget if subtarget else sub_subtarget
             try:
-                sent = self._callback_subscription_resync(sub, resync_subtarget)
-                if sent:
+                if self._callback_subscription_resync(sub, resync_subtarget):
                     count += 1
-                elif sent is False and missed is not None:
+                elif missed is not None:
                     missed.append(_resync_id(sub))
             except DbError as e:  # folds DbError: transient ones raised after the loop
                 from .interface.integrations._errors import is_permanent
@@ -4404,7 +4411,7 @@ class Actor:
 
     def _callback_subscription_resync(
         self, subscription: dict, override_subtarget: str | None = None
-    ) -> bool | None:
+    ) -> bool:
         """Send a resync callback to a single subscription.
 
         Checks peer capability before sending resync. If peer doesn't support
@@ -4420,8 +4427,9 @@ class Actor:
                               (used when resuming a specific subtarget on a broader subscription)
 
         Returns:
-            True if callback was sent/scheduled successfully; None when the
-            subscriber is an OAuth2 client's trust row (nothing to push to)
+            True if callback was sent/scheduled successfully, or, for an
+            OAuth2 client's trust row (nothing is pushed to it), the full
+            state was stored as its next diff
         """
         from datetime import UTC, datetime
 
@@ -4445,9 +4453,21 @@ class Actor:
             logger.warning(f"No trust found for peer {peer_id}")
             return False
         if not _has_peer_endpoint(trust_data, self.id):
-            # An OAuth2 client's row (as in callback_subscription): the client
-            # reads its diffs, nothing is pushed to it.
-            return None
+            # An OAuth2 client's row (as in callback_subscription): nothing is
+            # pushed to it, it reads its diffs. The changes made while
+            # suspended stored none, so its resync is the full state stored as
+            # its next diff.
+            new_seq = self._increment_subscription_sequence(peer_id, sub_id)
+            if not new_seq:
+                logger.warning(
+                    f"Subscription {sub_id} for {peer_id} is gone; no resync stored"
+                )
+                return False
+            return bool(
+                self._store_full_state_diff(
+                    peer_id, sub_id, new_seq, target, sub_subtarget
+                )
+            )
 
         # Construct callback URL from trust relationship (same as callback_subscription)
         callback_url = (
@@ -4546,23 +4566,8 @@ class Actor:
             logger.debug(f"Sending resync callback to peer {peer_id} (supports resync)")
         else:
             # Fallback: create a full-state diff and send low-granularity callback
-            # Get the full current state
-            list_keys: set[str] = set()
-            full_state = self._get_full_state_for_subscription(
-                target, sub_subtarget, list_keys
-            )
-            # A list's full state is an "extend" diff nested under the list
-            # name. Over the span threshold, list diffs become references
-            # (the subscriber re-reads), per list and then largest first
-            # until the whole blob fits the diff row, so the store does not
-            # fail on the row cap.
-            from .property_list import fit_full_state
-
-            full_state = fit_full_state(full_state, self.config, list_keys=list_keys)
-
-            # Store as a subscription diff
-            diff_url = self._store_subscription_diff(
-                peer_id, sub_id, new_seq, full_state
+            diff_url = self._store_full_state_diff(
+                peer_id, sub_id, new_seq, target, sub_subtarget
             )
             if not diff_url:
                 return False
@@ -4599,6 +4604,28 @@ class Actor:
             # Local mode: async fire-and-forget
             self._send_resync_callback_async(callback_url, payload, secret, peer_id)
             return True  # Scheduled (not confirmed)
+
+    def _store_full_state_diff(
+        self,
+        peer_id: str,
+        sub_id: str,
+        sequence: int,
+        target: str,
+        subtarget: str | None,
+    ) -> str:
+        """Store the target's full current state as the subscription's diff
+        at ``sequence``; its URL, or "" when it was not stored."""
+        list_keys: set[str] = set()
+        full_state = self._get_full_state_for_subscription(target, subtarget, list_keys)
+        # A list's full state is an "extend" diff nested under the list
+        # name. Over the span threshold, list diffs become references
+        # (the subscriber re-reads), per list and then largest first
+        # until the whole blob fits the diff row, so the store does not
+        # fail on the row cap.
+        from .property_list import fit_full_state
+
+        full_state = fit_full_state(full_state, self.config, list_keys=list_keys)
+        return self._store_subscription_diff(peer_id, sub_id, sequence, full_state)
 
     def _get_full_state_for_subscription(
         self,

@@ -31,6 +31,11 @@ from actingweb.trust_permissions import (
     initialize_trust_permission_store,
 )
 from tests._adoption_helpers import aid, create_core_actor, make_config, uuid_email
+from tests._verification_fakes import (
+    verification_through_requests_get as verification_through_requests_get,
+)
+
+pytestmark = pytest.mark.usefixtures("verification_through_requests_get")
 
 PASSPHRASE = "re-pair-test-passphrase"
 KEPT = ("relationship", "approved", "baseuri", "desc", "created_at", "type")
@@ -138,7 +143,10 @@ def _peer_answers(
         if url.rstrip("/").endswith("/meta"):
             body = json.dumps({"id": meta_id or peer, "type": "urn:test"})
             return mock.Mock(
-                status_code=200, content=body.encode(), json=lambda: json.loads(body)
+                status_code=200,
+                content=body.encode(),
+                json=lambda: json.loads(body),
+                iter_content=lambda chunk_size=1: iter([body.encode()]),
             )
         # The initiator's own row: created approved before it sent the request.
         answer = json.dumps({"verification_token": token, "approved": approved})
@@ -1636,6 +1644,7 @@ class TestTheMirroredRequestAfterReverify7:
                     status_code=200,
                     content=body.encode(),
                     json=lambda: json.loads(body),
+                    iter_content=lambda chunk_size=1: iter([body.encode()]),
                 )
             actor_id, _, rel, peer = parts[:4]
             webobj = AWWebObj(url=url, headers=dict(headers or {}))
@@ -2120,6 +2129,94 @@ class TestTheEdgesAfterReverify8:
         w = Receiver()
         peer = f"peer-p-{uuid.uuid4().hex[:8]}"
         out = _create(w, peer, meta_id="someone-else")
+        assert out.response.status_code == 202
+        body = json.loads(out.response.body)
+        assert "verification_token" not in body and "secret" not in body
+
+
+class TestFlagsAfterReverify9:
+    """Reverify-9 Issue 3: a trust flag is a bool, ``"true"`` or
+    ``"false"``; anything else raises instead of being read as False, which
+    revoked an approval."""
+
+    @pytest.mark.parametrize("value", [1, 0, "1", "yes", "", "on"])
+    def test_anything_else_raises_and_writes_nothing(self, value: Any) -> None:
+        from actingweb.interface.trust_manager import TrustManager
+
+        w = Receiver()
+        before = _state(w.row(w.b))
+        with pytest.raises(ValueError):
+            TrustManager(w.a).modify_trust(w.b, approved=value)
+        with pytest.raises(ValueError):
+            Trust(actor_id=aid(w.a), peerid=w.b, config=w.config).modify(approved=value)
+        assert _state(w.row(w.b)) == before
+
+    def test_text_true_and_false_are_flags(self) -> None:
+        w = Receiver()
+        assert Trust(actor_id=aid(w.a), peerid=w.b, config=w.config).modify(
+            peer_approved="FALSE "  # type: ignore[arg-type]
+        )
+        assert w.row(w.b)["peer_approved"] is False
+        assert Trust(actor_id=aid(w.a), peerid=w.b, config=w.config).modify(
+            peer_approved="True"  # type: ignore[arg-type]
+        )
+        assert w.row(w.b)["peer_approved"] is True
+
+
+class TestTheClientViewAfterReverify9:
+    """Reverify-9 Issue 5: a client view's identity is its own trust row,
+    resolved on first use."""
+
+    def test_a_peer_id_passed_in_grants_nothing(self) -> None:
+        """A trust dict naming another peer's row does not make the client
+        that peer."""
+        from actingweb.interface.actor_interface import ActorInterface
+        from actingweb.interface.authenticated_views import PermissionError
+
+        w = Receiver()  # B is an approved friend that may read kept/*
+        as_b = ActorInterface(w.a).as_peer(w.b, {"peerid": w.b})
+        assert as_b.properties["kept/x"] is None  # B may read it
+        view = ActorInterface(w.a).as_client("mcp_stranger", {"peerid": w.b})
+        with pytest.raises(PermissionError):
+            _ = view.properties["kept/x"]
+
+    def test_a_clients_subscription_is_kept_under_its_trust(self) -> None:
+        from actingweb.interface.actor_interface import ActorInterface
+
+        w = Receiver()
+        client_id = f"mcp_{uuid.uuid4().hex[:8]}"
+        peer = TestTheClientViewAfterReverify8._client(w, client_id)
+        view = ActorInterface(w.a).as_client(client_id)
+        with mock.patch(
+            "actingweb.interface.authenticated_views.AuthenticatedSubscriptionManager._check_subscription_permission"
+        ):
+            assert view.subscriptions.create_local_subscription("properties")
+        assert {s.peer_id for s in view.subscriptions.all_subscriptions} == {peer}
+
+    def test_building_a_view_reads_no_trust(self) -> None:
+        from actingweb.interface.actor_interface import ActorInterface
+        from actingweb.interface.authenticated_views import PermissionError
+
+        w = Receiver()
+        with mock.patch(
+            "actingweb.oauth2_server.trust_lookup.find_client_trust",
+            return_value=None,
+        ) as lookup:
+            view = ActorInterface(w.a).as_client("mcp_lazy")
+            lookup.assert_not_called()
+            with pytest.raises(PermissionError):
+                view.properties["notes"] = "x"
+            lookup.assert_called_once()
+
+
+class TestTheRePairAnswerAfterReverify9:
+    def test_a_re_pair_of_an_unapproved_row_answers_without_its_token(
+        self,
+    ) -> None:
+        """Reverify-9 Issue 4: the re-pair's 202 follows the same rule as a
+        creation's (one answer body for both)."""
+        w = Receiver(approved=False)  # verified, not approved
+        out = w.request(w.b, _new_secret(), bearer=w.secrets[w.b])
         assert out.response.status_code == 202
         body = json.loads(out.response.body)
         assert "verification_token" not in body and "secret" not in body

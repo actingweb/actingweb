@@ -23,7 +23,9 @@ SECURITY
   ``PermissionResult.DENIED``); a pending peer reaches only its own trust
   row (its status and its deletion). An ``actor.as_client(client_id)`` view
   is evaluated as the client's trust row (the one MCP authentication
-  resolves), so a client with no trust row gets nothing. **Check:**
+  resolves, never a peer id the caller passes), so a client with no trust
+  row gets nothing; a subscription such a view creates is kept under that
+  trust's peer id. **Check:**
   an application that served data to unapproved peers on purpose (the
   specification allows an unapproved ``associate``) approves them instead.
 - **Callbacks were accepted without authentication, and a low-granularity
@@ -93,8 +95,8 @@ SECURITY
   proves control of the base URI, not of the id, since the requester answers
   both. **Behavior change:** a verification answered by a relationship the
   requester has not approved fails, and neither a pending row's own peer
-  reading its status nor a trust request's 202 answer carries its
-  verification token: a third party could otherwise
+  reading its status nor a 202 answer to a trust request or a re-pair
+  carries its verification token: a third party could otherwise
   file a request at each of two actors under the other's id, with one
   secret, and each verification read the row filed at the other. **Behavior change:** with ``auto_accept_default_relationship``, only
   a request that verified is approved automatically; any other waits for the
@@ -106,13 +108,18 @@ SECURITY
   already, so approving it again changes nothing). Approving an unverified
   request first repeats the verification (a GET to our own trust row at
   the requester's base URI with the request's secret, answered by a row
-  the host approved, and its ``/meta``; both verifications follow no
-  redirect, read at most 64 KB and give up after 15 seconds in all); one that fails is refused (403 on the PUT, with a
+  the host approved, and its ``/meta``; each verification, its GET and its
+  ``/meta`` together, follows no redirect, reads at most 64 KB per answer
+  and gives up after 15 seconds in all, the socket shut down then); one that fails is refused (403 on the PUT, with a
   JSON ``error``, or a page with a way back for the web UI's form, whose
   trust page marks such a request "unverified" and offers no Approve). A
   PUT for a missing row answers 404, and one that approves a pending row
   and changes its base URI answers 400. An approval lands only on the row
-  it was decided for, and the peer is told only when it landed. A stranger's request under a real
+  it was decided for, and the peer is told only when it landed. **Behavior change:** ``Trust.modify`` and
+  ``TrustManager.modify_trust`` take ``approved``, ``verified`` and
+  ``peer_approved`` as a bool or ``"true"``/``"false"``; any other value
+  (``1``, ``"yes"``) raises ``ValueError`` instead of being stored as
+  True. A stranger's request under a real
   peer's id and base URI could otherwise be approved by one click. A peer
   that does not support verification is paired by the owner creating the
   trust toward its URL. A pending row (stored unverified and not yet approved) is

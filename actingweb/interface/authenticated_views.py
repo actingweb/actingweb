@@ -30,15 +30,11 @@ class PermissionError(Exception):
 logger = logging.getLogger(__name__)
 
 
-def _client_trust_peer_id(
-    actor: "ActorInterface", client_id: str, trust_relationship: dict[str, Any]
-) -> str:
-    """The peer id of the trust row that authorises ``client_id`` (3.16):
-    the one the caller passed, else the row ``find_client_trust`` resolves,
-    as MCP authentication does. "" when the client has no trust row."""
-    given = trust_relationship.get("peerid") or trust_relationship.get("peer_id")
-    if given:
-        return str(given)
+def _client_trust_peer_id(actor: "ActorInterface", client_id: str) -> str:
+    """The peer id of the trust row that authorises ``client_id`` (3.16),
+    as MCP authentication resolves it (``find_client_trust``); never a peer
+    id the caller passed, which could name another row. "" when the client
+    has no trust row."""
     if not client_id or not getattr(actor, "id", None):
         return ""
     from ..oauth2_server.trust_lookup import find_client_trust
@@ -68,8 +64,10 @@ class AuthContext:
         self.trust_relationship = trust_relationship or {}
         # The peer id of the client's trust row, which permissions are kept
         # under (``oauth2_client:<email>:<client>``, not the client id).
-        # ``AuthenticatedActorView`` resolves it.
+        # Resolved on first use, by the resolver ``AuthenticatedActorView``
+        # sets: a view nobody checks a permission on reads no trust.
         self.client_peer_id = ""
+        self._client_resolver: Any = None
 
     @property
     def accessor_id(self) -> str:
@@ -81,7 +79,12 @@ class AuthContext:
         """The id permissions are evaluated for: the peer id, or for a
         client the peer id of its trust row (the client id when it has none,
         which is then granted nothing)."""
-        return self.peer_id or self.client_peer_id or self.client_id
+        if self.peer_id:
+            return self.peer_id
+        if self.client_id and not self.client_peer_id and self._client_resolver:
+            resolver, self._client_resolver = self._client_resolver, None
+            self.client_peer_id = resolver()
+        return self.client_peer_id or self.client_id
 
     @property
     def is_peer(self) -> bool:
@@ -716,7 +719,9 @@ class AuthenticatedSubscriptionManager:
 
         # Create subscription with the accessor as the peer
         return self._manager._core_actor.create_subscription(
-            peerid=self._auth_context.accessor_id,
+            # A client's subscription is kept under its trust's peer id, the
+            # id its diffs are filtered for (3.16).
+            peerid=self._auth_context.permission_id,
             target=target,
             subtarget=subtarget or None,
             resource=resource or None,
@@ -728,19 +733,22 @@ class AuthenticatedSubscriptionManager:
 
         Owner mode (no accessor) sees every row. A peer view sees the rows
         whose peer is the peer itself; a client view the rows whose peer is
-        its own accessor id or its trust's peer id."""
+        its trust's peer id, its client id or the peer id its trust dict
+        names."""
         if not self._auth_context.accessor_id:
             return subscriptions
         if self._auth_context.is_peer:
             own = {self._auth_context.peer_id}
         else:
-            # A client's rows: the ones it creates (under its accessor id,
-            # ``create_local_subscription``) and its trust's peer id, under
-            # either key a trust dict carries.
+            # A client's rows: its resolved trust's peer id (the one
+            # ``create_local_subscription`` files under), and, as before, its
+            # client id and the peer id a passed trust dict names.
             trust = self._auth_context.trust_relationship
+            given = trust.get("peerid") or trust.get("peer_id") if trust else ""
             own = {
+                self._auth_context.permission_id,
                 self._auth_context.accessor_id,
-                str(trust.get("peerid") or trust.get("peer_id") or ""),
+                str(given or ""),
             }
         own.discard("")
         return [sub for sub in subscriptions if getattr(sub, "peer_id", None) in own]
@@ -793,8 +801,8 @@ class AuthenticatedActorView:
         self._hooks = hooks
         self._config = getattr(actor._core_actor, "config", None)
         if auth_context.is_client and not auth_context.client_peer_id:
-            auth_context.client_peer_id = _client_trust_peer_id(
-                actor, auth_context.client_id, auth_context.trust_relationship
+            auth_context._client_resolver = lambda: _client_trust_peer_id(
+                actor, auth_context.client_id
             )
 
         # Cached authenticated stores

@@ -13,6 +13,11 @@ import httpx
 import pytest
 
 from actingweb.actor import Actor
+from tests._verification_fakes import (
+    verification_through_requests_get as verification_through_requests_get,
+)
+
+pytestmark = pytest.mark.usefixtures("verification_through_requests_get")
 
 SECRET = "s3cr3t-trust-secret"
 VERIFY = "v3rify-token"

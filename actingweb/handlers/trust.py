@@ -225,6 +225,19 @@ class TrustHandler(base_handler.BaseHandler):
         self.response.set_status(201, "Created")
 
 
+def _trust_request_answer(row: dict[str, Any]) -> dict[str, Any]:
+    """The body of the answer to a trust request (a creation or a re-pair):
+    the row, without its verification token and secret while this actor
+    has not approved it (3.16). Whoever filed a request under another
+    actor's id could otherwise answer that actor's verification with the
+    token; the secret is the requester's own."""
+    answer = dict(row)
+    if str(answer.get("approved")).lower() != "true":
+        answer.pop("verification_token", None)
+        answer.pop("secret", None)
+    return answer
+
+
 # Handling requests to /trust/*, e.g. /trust/friend
 class TrustRelationshipHandler(base_handler.BaseHandler):
     def get(self, actor_id, relationship):
@@ -534,15 +547,7 @@ class TrustRelationshipHandler(base_handler.BaseHandler):
             + "/"
             + new_trust["peerid"]
         )
-        answer = dict(new_trust)
-        if str(answer.get("approved")).lower() != "true":
-            # A relationship this actor has not approved never hands out its
-            # verification token (the spec, 3.16): whoever filed the request
-            # under another actor's id could answer that actor's
-            # verification with it. The secret is the requester's own.
-            answer.pop("verification_token", None)
-            answer.pop("secret", None)
-        out = json.dumps(answer)
+        out = json.dumps(_trust_request_answer(new_trust))
         self.response.write(out)
         self.response.headers["Content-Type"] = "application/json"
         # The stored approval: auto-accept approves only a request that
@@ -597,7 +602,7 @@ class TrustRelationshipHandler(base_handler.BaseHandler):
             + "/"
             + new_trust["peerid"]
         )
-        self.response.write(json.dumps(new_trust))
+        self.response.write(json.dumps(_trust_request_answer(new_trust)))
         self.response.headers["Content-Type"] = "application/json"
         if new_trust.get("approved"):
             self.response.set_status(201, "Created")

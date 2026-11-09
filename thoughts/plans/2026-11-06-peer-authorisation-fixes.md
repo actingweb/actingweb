@@ -3514,3 +3514,159 @@ Emm's suite on `20abc3a` (environment 9, its adoption worktree unchanged):
 PostgreSQL 2 failed / 7406 passed, DynamoDB 3 failed / 54 passed, the
 `master` baseline's failures by name. The environment 9 server was stopped
 afterwards.
+
+### 2026-11-09, after verification thoughts/verifications/2026-11-09-peer-authorisation-fixes-reverify-9.md
+
+Scope (owner, 2026-11-09): reverify-9 Issues 1 to 7, all in this PR. A flag
+given as anything but a bool, `"true"` or `"false"` raises `ValueError`
+(owner).
+
+#### 76. A verification's deadline reaches the socket, and covers its `/meta`
+
+**Category**: Bug fix (reverify-9 Issues 1 and 2; the `/meta` fetch
+pre-existing on `master`)
+
+**What changed**:
+- **Sockets the caller can reach.** `_bounded_get_json` takes an absolute
+  deadline and a per-read timeout. Its GET goes through `_verification_get`,
+  a session whose connections record each socket they open, before any TLS
+  handshake (`_socket_tracking_session`). When the deadline passes, the
+  caller shuts those sockets down (`_shut_down`): the worker's blocked read
+  fails at once, whether in headers, body or handshake, and the worker is
+  free again.
+- **`/meta` is bounded too.** `_base_uri_serves` fetches `/meta` through the
+  same helper: two tries, the second only when the first got no answer.
+- **One deadline per verification.** Both verifications pass one deadline
+  to their GET and to their `/meta`, so a verification takes at most 15 s
+  in all.
+- **The comment** says what the pool now does.
+
+**Files affected**: `actingweb/actor.py`;
+`tests/test_verification_fetch.py` (new, real local sockets):
+- the caller returns by the deadline against a peer that trickles its
+  headers;
+- after as many trickling peers as the pool has workers, an honest peer is
+  answered at once;
+- a 302 is the answer, not a hop.
+
+On the code before, the honest peer timed out (checked with the old helper
+against the same servers). `tests/_verification_fakes.py` (new) routes
+`_verification_get` to `requests.get` in the three modules whose fakes patch
+it. The `/meta` fakes stream.
+
+**Rationale**:
+- **`/meta` was unbounded.** After the bounded GET, it was a plain
+  `requests.get` that followed redirects and read the whole body, so an
+  anonymous requester held the request thread there instead.
+- **Workers were pinned.** The pool freed the caller but not the worker:
+  a trickling peer pinned it for an hour or more. Eight of them stopped
+  every verification in the process and could hang shutdown.
+
+#### 77. A trust flag is a bool, "true" or "false"; anything else raises
+
+**Category**: Bug fix (reverify-9 Issue 3; owner: raise `ValueError`)
+
+**What changed**:
+- **The parser.** `trust.as_flag`, the one parser, accepts a bool or
+  `"true"`/`"false"` in any case and raises `ValueError` for anything else.
+- **Where it runs.** `Trust.modify` parses `approved`, `verified` and
+  `peer_approved` with it. `TrustManager.modify_trust` parses the same three
+  before it reads anything, outside its `except Exception`, so the error
+  reaches the caller.
+- **No library caller is affected:** every one passes a real bool.
+
+**Files affected**: `actingweb/trust.py`,
+`actingweb/interface/trust_manager.py`, `CHANGELOG.rst`;
+`tests/test_trust_re_pair.py` - `TestFlagsAfterReverify9`:
+- `1`, `0`, `"1"`, `"yes"`, `""` and `"on"` raise on both routes and write
+  nothing; the six failed before;
+- `"FALSE "` and `"True"` are flags (the control).
+
+**Rationale**: iteration 71's parser read everything but `"true"` as
+False, so `approved=1` from application code revoked an approved row,
+where it used to be stored as True.
+
+#### 78. One answer body for a creation and a re-pair
+
+**Category**: Bug fix (reverify-9 Issue 4)
+
+**What changed**: `_trust_request_answer` (`handlers/trust.py`) is the body
+of the answer to a trust request. It drops `verification_token` and
+`secret` while the row is not approved. Both the creation's and the
+re-pair's answer use it.
+
+**Files affected**: `actingweb/handlers/trust.py`, `CHANGELOG.rst`;
+`tests/test_trust_re_pair.py` -
+`test_a_re_pair_of_an_unapproved_row_answers_without_its_token` (failed
+before)
+
+**Rationale**: iteration 73 stripped only the creation's 202, while the
+spec, the changelog and the security reference say a 202 never carries the
+token.
+
+#### 79. A client view is its own trust row, resolved on first use
+
+**Category**: Bug fix (reverify-9 Issue 5)
+
+**What changed**:
+- **Resolved lazily.** `AuthContext.permission_id` resolves the client's
+  trust row on first use, through a resolver the view sets: building a
+  view reads no trust.
+- **Only the client's own row.** `_client_trust_peer_id` resolves only
+  through `find_client_trust`. A `peerid` in a trust dict the caller
+  passes no longer picks the row permissions are evaluated for.
+- **Subscriptions.** `create_local_subscription` keeps a client's
+  subscription under that peer id, the id its diffs are filtered for. A
+  client's listing includes it, and still the client id and the dict's
+  peer id.
+
+**Files affected**: `actingweb/interface/authenticated_views.py`,
+`CHANGELOG.rst`; `tests/test_trust_re_pair.py` -
+`TestTheClientViewAfterReverify9`:
+- a peer id passed in grants nothing (B may read `kept/x`; a stranger
+  naming B may not);
+- a client's subscription is kept under its trust;
+- building a view reads no trust.
+
+All three failed before.
+
+**Rationale**:
+- **Different ids.** Permissions, storage and listing used different ids,
+  so a client's diffs were filtered for an id with no trust.
+- **An unchecked peer id.** A passed peer id was trusted without a check.
+- **Cost.** Every client view listed the actor's trusts when it was built.
+
+#### 80. The subtarget filter logs a denial, and a list is checked by its bare name
+
+**Category**: Verification fix (reverify-9 Issues 6 and 7)
+
+**What changed**:
+- **The denial log.** `evaluate_property_with_exclusions` logs a DENIED
+  result as `evaluate_permission` does ("Permission denied: …").
+- **List keys.** Under a subtarget, a `list:<name>` key is checked as
+  `<name>`, a top-level property, as the whole-target filter and the list
+  store check it. Iteration 74 checked `<subtarget>/<name>`.
+- **One flag parser.** `trust.as_flag` is shared (iteration 77).
+
+**Files affected**: `actingweb/permission_evaluator.py`, `actingweb/actor.py`;
+`tests/test_peer_paths_binding.py`:
+- `test_a_refused_diff_is_logged` (new; failed before);
+- `test_an_excluded_list_under_a_subtarget_is_dropped`, whose exclusion is
+  now the top-level list `notes`, as a direct read checks it. It failed
+  before.
+
+The `/meta` fake of `TestAPeersOwnTrustRowAfterReverify5` patches the
+bounded helper, since `_base_uri_serves` no longer calls `get_peer_info`.
+
+**Rationale**: as reverify-9 found.
+
+The Full tier on the code of iterations 76 to 80:
+- **Checks:** ruff, format and pyright are clean; `verify_groups` OK.
+- **DynamoDB:** 6153 passed.
+- **PostgreSQL:** 5950 passed.
+- **Docs:** the build passes.
+- **Wire:** no recording changed.
+
+One parallel failure in the fast tier
+(`test_property_lookup_command::test_a_marked_name_exits_zero`) passed when
+re-run sequentially; it is outside this change.

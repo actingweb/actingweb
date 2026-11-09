@@ -49,15 +49,18 @@ def _answered_by_approved_row(body: dict[str, Any]) -> bool:
     return str(body.get("approved")).lower() == "true"
 
 
-# A verification's GET goes to a base URI the requester chose: the caller
-# waits at most the deadline in all (headers, body, a slow peer), never
-# follows a redirect, and reads at most the cap. The GET runs on a small
-# pool of its own: a peer that holds a worker past the deadline holds only
-# that worker (until its socket times out), and once the pool is busy a
+# A verification's GETs (our trust row there, then its /meta) go to a base
+# URI the requester chose. The caller waits at most one deadline for both,
+# whatever the peer does (headers, body, a TLS handshake sent slowly); no
+# redirect is followed and at most the cap is read. The GETs run on a small
+# pool of their own, on sockets the caller can reach: when the deadline
+# passes, the caller shuts the socket down, so the worker's blocked read
+# fails at once and the worker is free again. Once the pool is busy, a
 # verification fails closed instead of waiting.
 _REVERIFY_DEADLINE_SECONDS = 15.0
 _REVERIFY_MAX_BYTES = 64 * 1024
 _VERIFY_WORKERS = 8
+_VERIFY_READ_TIMEOUT: tuple[float, float] = (5, 5)
 _verify_pool: Any = None
 _verify_pool_lock = threading.Lock()
 
@@ -74,21 +77,94 @@ def _verification_pool() -> Any:
         return _verify_pool
 
 
+def _socket_tracking_session(sockets: list[Any]) -> requests.Session:
+    """A session whose connections record each socket they open in
+    ``sockets`` (before a TLS handshake), so another thread can shut it
+    down. No retries; the environment's proxy settings still apply."""
+    from requests.adapters import HTTPAdapter
+    from urllib3.connection import HTTPConnection, HTTPSConnection
+    from urllib3.connectionpool import HTTPConnectionPool, HTTPSConnectionPool
+
+    class _Http(HTTPConnection):
+        def _new_conn(self) -> Any:
+            sock = super()._new_conn()
+            sockets.append(sock)
+            return sock
+
+    class _Https(HTTPSConnection):
+        def _new_conn(self) -> Any:
+            sock = super()._new_conn()
+            sockets.append(sock)
+            return sock
+
+    class _HttpPool(HTTPConnectionPool):
+        ConnectionCls = _Http  # type: ignore[assignment]
+
+    class _HttpsPool(HTTPSConnectionPool):
+        ConnectionCls = _Https  # type: ignore[assignment]
+
+    class _Adapter(HTTPAdapter):
+        def init_poolmanager(self, *args: Any, **kwargs: Any) -> None:
+            super().init_poolmanager(*args, **kwargs)
+            self.poolmanager.pool_classes_by_scheme = {  # type: ignore[attr-defined]
+                "http": _HttpPool,
+                "https": _HttpsPool,
+            }
+
+    session = requests.Session()
+    adapter = _Adapter(max_retries=0)
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    return session
+
+
+def _verification_get(
+    url: str,
+    headers: dict[str, str],
+    sockets: list[Any],
+    timeout: tuple[float, float],
+) -> Any:
+    """The streamed, redirect-free GET of a verification, on a session
+    whose sockets ``sockets`` collects."""
+    session = _socket_tracking_session(sockets)
+    return session.get(
+        url,
+        headers=headers,
+        timeout=timeout,
+        allow_redirects=False,
+        stream=True,
+    )
+
+
+def _shut_down(sockets: list[Any]) -> None:
+    """Shut down every socket a verification opened: a read blocked on one
+    fails at once."""
+    import socket as socket_module
+
+    for sock in list(sockets):
+        try:
+            sock.shutdown(socket_module.SHUT_RDWR)
+        except OSError:
+            pass
+        try:
+            sock.close()
+        except OSError:
+            pass
+
+
 def _fetch_json(
-    url: str, headers: dict[str, str], deadline: float, cancelled: threading.Event
+    url: str,
+    headers: dict[str, str],
+    deadline: float,
+    sockets: list[Any],
+    timeout: tuple[float, float],
 ) -> tuple[int | None, Any]:
     """The verification GET itself, on a pool worker (see
     ``_bounded_get_json``)."""
-    if cancelled.is_set() or time.monotonic() > deadline:
+    if time.monotonic() > deadline:
         return None, None
     try:
-        answer = requests.get(
-            url=url,
-            headers=headers,
-            timeout=(5, 5),
-            allow_redirects=False,
-            stream=True,
-        )
+        answer = _verification_get(url, headers, sockets, timeout)
     except Exception:  # folds DbError: peer HTTP only
         return None, None
     try:
@@ -99,11 +175,7 @@ def _fetch_json(
         size = 0
         for chunk in answer.iter_content(chunk_size=1024):
             size += len(chunk)
-            if (
-                size > _REVERIFY_MAX_BYTES
-                or cancelled.is_set()
-                or time.monotonic() > deadline
-            ):
+            if size > _REVERIFY_MAX_BYTES or time.monotonic() > deadline:
                 return status, None
             chunks.append(chunk)
         try:
@@ -119,29 +191,45 @@ def _fetch_json(
             pass
 
 
-def _bounded_get_json(url: str, headers: dict[str, str]) -> tuple[int | None, Any]:
+def _verification_deadline() -> float:
+    """The deadline of one verification (its GET and its /meta)."""
+    return time.monotonic() + _REVERIFY_DEADLINE_SECONDS
+
+
+def _bounded_get_json(
+    url: str,
+    headers: dict[str, str],
+    deadline: float | None = None,
+    timeout: tuple[float, float] = _VERIFY_READ_TIMEOUT,
+) -> tuple[int | None, Any]:
     """GET ``url`` for a verification: without following a redirect,
-    reading at most ``_REVERIFY_MAX_BYTES``, and returning within
-    ``_REVERIFY_DEADLINE_SECONDS`` whatever the peer does. Returns the status
-    and the parsed JSON body (None when the answer is not 2xx JSON, too large
-    or too slow; status None when there was no answer in time)."""
+    reading at most ``_REVERIFY_MAX_BYTES``, and returning by ``deadline``
+    (a ``time.monotonic()`` value; one ``_REVERIFY_DEADLINE_SECONDS`` from
+    now when not given) whatever the peer does. Returns the status and the
+    parsed JSON body (None when the answer is not 2xx JSON, too large or too
+    slow; status None when there was no answer in time)."""
     from concurrent.futures import TimeoutError as FutureTimeout
 
-    budget = _REVERIFY_DEADLINE_SECONDS
-    deadline = time.monotonic() + budget
-    cancelled = threading.Event()
+    if deadline is None:
+        deadline = _verification_deadline()
+    budget = deadline - time.monotonic()
+    if budget <= 0:
+        return None, None
+    sockets: list[Any] = []
     try:
         future = _verification_pool().submit(
-            _fetch_json, url, headers, deadline, cancelled
+            _fetch_json, url, headers, deadline, sockets, timeout
         )
     except RuntimeError:  # the pool is shut down (interpreter exit)
         return None, None
     try:
         return future.result(timeout=budget)
     except FutureTimeout:
-        cancelled.set()
         future.cancel()
-        logger.warning(f"A verification at {url} gave no answer within {budget:g}s")
+        # The worker may be blocked on the peer's socket (a trickle, a
+        # stalled handshake): shutting it down ends the read now.
+        _shut_down(sockets)
+        logger.warning(f"A verification at {url} gave no answer in time")
         return None, None
     except Exception:  # folds DbError: peer HTTP only
         return None, None
@@ -2217,7 +2305,8 @@ class Actor:
         url, headers = self._re_pair_probe_request(
             row, secret, str(row.get("relationship") or "")
         )
-        status, body = _bounded_get_json(url, headers)
+        deadline = _verification_deadline()
+        status, body = _bounded_get_json(url, headers, deadline)
         if not (
             isinstance(status, int)
             and 200 <= status < 300
@@ -2230,7 +2319,7 @@ class Actor:
                 f"check (status {status})"
             )
             return False
-        if not self._base_uri_serves(str(row.get("baseuri") or ""), peerid):
+        if not self._base_uri_serves(str(row.get("baseuri") or ""), peerid, deadline):
             logger.warning(
                 f"The trust request from {peerid} verified, but its base URI "
                 "does not serve that actor"
@@ -2499,6 +2588,7 @@ class Actor:
             )
             return False
         requrl = baseuri + "/trust/" + relationship + "/" + self.id
+        verify_deadline: float | None = None
         if not secret or len(secret) == 0:
             logger.debug(
                 "No secret received from requesting peer("
@@ -2516,7 +2606,8 @@ class Actor:
                 f"Verifying trust at requesting peer({peerid}) at url ({requrl})"
             )
             # Bounded: an unauthenticated request names this URL (3.16).
-            status, data = _bounded_get_json(requrl, headers)
+            verify_deadline = _verification_deadline()
+            status, data = _bounded_get_json(requrl, headers, verify_deadline)
             self.last_response_code = status if status is not None else 408
             self.last_response_message = ""
             if not isinstance(data, dict):
@@ -2542,7 +2633,7 @@ class Actor:
                         data.get("verification_token"), verification_token
                     )
                 )
-        if verified and not self._base_uri_serves(baseuri, peerid):
+        if verified and not self._base_uri_serves(baseuri, peerid, verify_deadline):
             # The verification proves only that the requester controls the
             # base URI it sent. Its /meta must also name the peer id, which
             # catches a peer sending the wrong base URI; a hostile host
@@ -2614,22 +2705,29 @@ class Actor:
             )
         return new_trust.get()
 
-    def _base_uri_serves(self, baseuri: str, peerid: str) -> bool:
+    def _base_uri_serves(
+        self, baseuri: str, peerid: str, deadline: float | None = None
+    ) -> bool:
         """Whether ``<baseuri>/meta`` names ``peerid`` as its id. The
         requester answers this itself: it catches a wrong base URI, not a
-        false id."""
-        try:
-            # Two short tries: an unauthenticated request names this host,
-            # so it bounds how long one request can hold a worker.
-            res = self.get_peer_info(
-                baseuri, max_retries=META_CHECK_TRIES, timeout=META_CHECK_TIMEOUT
-            )
-        except Exception:  # folds DbError: peer HTTP only
-            return False
-        if not res or not 200 <= int(res.get("last_response_code") or 0) < 300:
-            return False
-        data = res.get("data")
-        return isinstance(data, dict) and data.get("id") == peerid
+        false id. Two short tries (a second only when the first got no
+        answer), through the bounded verification GET and within
+        ``deadline`` (one of its own when not given): an unauthenticated
+        request names this host."""
+        if deadline is None:
+            deadline = _verification_deadline()
+        url = baseuri.rstrip("/") + "/meta"
+        for _ in range(META_CHECK_TRIES):
+            status, data = _bounded_get_json(url, {}, deadline, META_CHECK_TIMEOUT)
+            if status is not None:
+                return (
+                    200 <= status < 300
+                    and isinstance(data, dict)
+                    and data.get("id") == peerid
+                )
+            if time.monotonic() >= deadline:
+                break
+        return False
 
     def replace_trust_secret(
         self,
@@ -3599,7 +3697,8 @@ class Actor:
         # resource-level writes as ``{resource: value}`` (``register_diffs``):
         # the value stays whole, but a key whose own path ``<subtarget>/<key>``
         # an exclusion names is dropped, as a direct read of that path is
-        # refused. A ``list:`` key is checked by its list name.
+        # refused. A ``list:`` key is a list, a top-level property: checked by
+        # its bare name, as the whole-target filter and the list store do.
         parsed: Any = None
         if not resource:
             try:
@@ -3609,7 +3708,7 @@ class Actor:
         children: dict[str, str] = {}
         if isinstance(parsed, dict):
             children = {
-                key: f"{subtarget}/{key[5:] if key.startswith('list:') else key}"
+                key: key[5:] if key.startswith("list:") else f"{subtarget}/{key}"
                 for key in parsed
             }
         try:

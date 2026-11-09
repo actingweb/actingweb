@@ -563,6 +563,12 @@ class PermissionEvaluator:
             result = self._evaluate_rules(
                 rules, property_path, operation, suppress_logging=True
             )
+            if result == PermissionResult.DENIED:
+                # As evaluate_permission logs a denial.
+                logger.warning(
+                    f"Permission denied: {actor_id}:{peer_id} -> "
+                    f"properties:{property_path!r}:{operation}"
+                )
             denied = list(rules.get("denied") or []) + list(
                 rules.get("excluded_patterns") or []
             )

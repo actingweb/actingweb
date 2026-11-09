@@ -880,6 +880,14 @@ class TrustManager:
         Returns:
             True if modification succeeded, False otherwise
         """
+        from ..trust import as_flag
+
+        # Flags given as text are flags, and must meet the approval gate
+        # below; anything but a bool, "true" or "false" raises ValueError
+        # (3.16), before anything is read or written.
+        for flag in ("approved", "verified", "peer_approved"):
+            if flag in kwargs:
+                kwargs[flag] = as_flag(kwargs[flag])
         if not self._core_actor.config or not hasattr(
             self._core_actor.config, "DbTrust"
         ):
@@ -898,9 +906,6 @@ class TrustManager:
             if not row:
                 logger.warning(f"Trust not found for peer {peer_id}")
                 return False
-            if "approved" in kwargs and kwargs["approved"] is not None:
-                # Text ("true") is a flag too: it must meet the same gate.
-                kwargs["approved"] = str(kwargs["approved"]).strip().lower() == "true"
             if (
                 kwargs.get("approved") is True
                 and not row.get("approved")

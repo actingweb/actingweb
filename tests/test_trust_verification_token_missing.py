@@ -9,7 +9,14 @@ verified", not a crash.
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from actingweb.actor import Actor
+from tests._verification_fakes import (
+    verification_through_requests_get as verification_through_requests_get,
+)
+
+pytestmark = pytest.mark.usefixtures("verification_through_requests_get")
 
 
 def _streamed(response: MagicMock) -> MagicMock:

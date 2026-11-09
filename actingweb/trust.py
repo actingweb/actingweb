@@ -117,11 +117,16 @@ def canonical_connection_method(method: str | None) -> str | None:
     return method
 
 
-def _as_flag(value: Any) -> bool | None:
-    """A boolean flag from a bool, or from its text form; None stays None."""
+def as_flag(value: Any) -> bool | None:
+    """A trust flag (``approved``, ``verified``, ``peer_approved``) from a
+    bool or its text form, ``"true"`` or ``"false"`` in any case; None stays
+    None. Anything else raises ``ValueError`` (3.16): ``1`` or ``"yes"`` was
+    stored as True, and reading it as False would revoke an approval."""
     if value is None or isinstance(value, bool):
         return value
-    return str(value).strip().lower() == "true"
+    if isinstance(value, str) and value.strip().lower() in ("true", "false"):
+        return value.strip().lower() == "true"
+    raise ValueError(f"A trust flag must be a bool, 'true' or 'false', not {value!r}")
 
 
 class Trust:
@@ -360,10 +365,10 @@ class Trust:
         assert self.trust is not None  # Always initialized in __init__
         # Flags given as text ("true"/"false", as this object caches them)
         # are flags: a string would skip the approval condition below and be
-        # stored as True whatever it says (3.16).
-        approved = _as_flag(approved)
-        verified = _as_flag(verified)
-        peer_approved = _as_flag(peer_approved)
+        # stored as True whatever it says. Anything else raises (3.16).
+        approved = as_flag(approved)
+        verified = as_flag(verified)
+        peer_approved = as_flag(peer_approved)
         before = dict(self.trust)
         if baseuri:
             self.trust["baseuri"] = baseuri

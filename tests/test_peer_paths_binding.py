@@ -746,9 +746,10 @@ class TestAPeersOwnTrustRowAfterReverify5:
 
     @staticmethod
     def _meta(peer_id: str) -> Any:
+        # The /meta check reads through the bounded verification GET (3.16).
         return mock.patch(
-            "actingweb.actor.Actor.get_peer_info",
-            return_value={"last_response_code": 200, "data": {"id": peer_id}},
+            "actingweb.actor._bounded_get_json",
+            return_value=(200, {"id": peer_id}),
         )
 
     def test_a_move_to_a_base_uri_that_names_another_id_is_refused(
@@ -1031,9 +1032,10 @@ class TestOneFilterForPushAndPull:
     def test_an_excluded_list_under_a_subtarget_is_dropped(
         self, world: Publisher
     ) -> None:
-        """Reverify-8 Issue 9: a ``list:`` key is checked by its list name,
-        as the whole-target filter checks it."""
-        self._grant(world, "b", "friend", {"excluded_patterns": ["settings/notes"]})
+        """Reverify-8 Issue 9 and reverify-9 Issue 7: a ``list:`` key is a
+        list, a top-level property, checked by its bare name as the
+        whole-target filter and the list store check it."""
+        self._grant(world, "b", "friend", {"excluded_patterns": ["notes"]})
         sub = self._sub(world, "b", "sub-l", "settings")
         with mock.patch("actingweb.actor.requests.post") as post:
             post.return_value = mock.Mock(status_code=204)
@@ -1046,6 +1048,30 @@ class TestOneFilterForPushAndPull:
             )
         sent = post.call_args.kwargs["data"].decode()
         assert "list:notes" not in sent and '"open"' in sent
+
+    def test_a_refused_diff_is_logged(
+        self, world: Publisher, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Reverify-9 Issue 6: the subtarget path logs a denial as
+        ``evaluate_permission`` does."""
+        self._grant(world, "b", "friend", {"excluded_patterns": ["secret"]})
+        sub = self._sub(world, "b", "sub-d", "secret")
+        with (
+            caplog.at_level("WARNING", logger="actingweb.permission_evaluator"),
+            mock.patch("actingweb.actor.requests.post") as post,
+        ):
+            world.a.callback_subscription(
+                peerid=world.peers["b"],
+                sub_obj=sub,
+                sub=sub.get(),
+                diff={"sequence": 1, "timestamp": "2026-11-09T00:00:00Z"},
+                blob=json.dumps("the secret value"),
+            )
+        post.assert_not_called()
+        assert any(
+            "Permission denied" in r.getMessage() and "'secret'" in r.getMessage()
+            for r in caplog.records
+        )
 
 
 class TestAPeerListsItsOwnSubscriptions:

@@ -2983,3 +2983,12 @@ callback section's resend guidance).
 **Rationale**: the owner's decision asks every fix to be checked against the
 specification; the spec now states the rules the library enforces, within
 what it already allowed (MAY/SHOULD, the associate option kept).
+
+The Full tier on `d3fd713`: DynamoDB 6113 passed, PostgreSQL 5910 passed,
+lint, format and types clean, the docs build, no recording changed. Emm's
+suite on `d3fd713` (gate 2, environment 9, its adoption worktree unchanged):
+PostgreSQL 2 failed / 7406 passed, DynamoDB 3 failed / 54 passed, the
+`master` baseline's failures by name. Not yet exercised in a browser: the web
+UI's Approve on an unverified request now answers 403 (for the next
+verification's browser walk).
+

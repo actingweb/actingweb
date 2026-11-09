@@ -367,7 +367,7 @@ single place Issue 2's fix lands.
 - **Approve-on-create, sync.**
   `test_creating_the_trust_approves_a_pending_request`
   (`tests/test_trust_re_pair.py:1015`) uses a verified row. Its `all(...)`
-  assertion is vacuous, and it never checks that the peer was notified.
+  assertion is weak (it passes when nothing is posted), and it never checks that the peer was notified.
 - **Approve-on-create, async.** The async path has no test.
 - **Subscription POST.** No test covers a subscription POST through the
   `owner` row.

@@ -273,6 +273,38 @@ its T6 (a 409 on a repeated trust request), which the guard here replaces.
 - [New 2026-11-09, iteration 40] **A peer's own base-URI move must name it
   on `/meta`** (owner, reverify-5 Issue 3): 400 otherwise, the row
   unchanged; the same check a creation's base URI gets.
+- [New 2026-11-09, after the audit] **This PR closes identity and approval;
+  grant enforcement is a second local security plan** (owner, after
+  `verifications/2026-11-09-peer-authorisation-fixes-audit.md`): this PR
+  closes audit A1 (one approval gate under the permission evaluator), A2
+  (re-pair only on a verified or approved row, the swap conditional on the
+  old secret), A3 with reverify-6 Issues 1 and 2 (one conditional
+  approve-where-verified; re-verify a pending row before approving it), A9
+  (the revocation probe), and reverify-6 Issues 3 to 11. A4 to A8, A10, A11
+  and the Lows go to a second security plan, fixed before anything is
+  pushed. Every fix is checked against `docs/protocol/actingweb-spec.rst`
+  (owner). What the spec already fixes for these:
+  - Approval: "B MUST NOT approve a relationship automatically unless it
+    verified" (spec ~1603); manual approval "through a trustee or a human"
+    (~1853) does not require verification, and verification is optional for
+    the requester (~1739). Refusing an owner's approval of an unverified row
+    is therefore a stricter local rule the spec allows; the owner's own
+    create toward the peer's URL stays the way to pair with a peer that does
+    not support verification. The spec gets a sentence that an actor MAY
+    refuse to approve an unverified relationship.
+  - Unapproved access: an associate relationship "MAY be allowed ...
+    unapproved" (~1949). A1's gate refuses an unapproved row everywhere
+    except its own trust row (status GET ~1671 and delete), as the access
+    table already does; allowing unapproved associates stays a deliberate
+    option, not a default.
+  - Re-pair: B "MUST accept it only as a re-pair from the requesting actor
+    itself, authenticated with the current shared secret" and "Otherwise
+    ... 403" (~1595-1600); a pending row may be "replaced by a request that
+    verifies" (~1602). Refusing a re-pair on a pending row is within this;
+    the conditional swap is internal.
+  - A peer "MUST NOT change the approval of its relationship or the
+    permissions granted to it" (~1782); MCP access "identically to REST
+    access control" (~1370), so the A1 gate covers MCP.
 - [New 2026-11-08, iteration 33] **`FanOutManager` sends a large payload in
   full** (owner, reverify-4 Issue 4), with a WARNING above
   `max_payload_for_high_granularity`; the downgrade to an unfetchable URL is

@@ -3832,3 +3832,8 @@ Its first run failed on three tests:
   the exclusion of two neighbouring tests as well. I restored them.
 - **One is noted in iteration 83:** the client-view listing test that
   passed a peer id.
+
+Emm's suite on `09890b6` (environment 9, its adoption worktree unchanged):
+PostgreSQL 2 failed / 7406 passed, DynamoDB 3 failed / 54 passed, the
+`master` baseline's failures by name. The environment 9 server was stopped
+afterwards.

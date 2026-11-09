@@ -1,6 +1,6 @@
 ---
 status: done
-verified: thoughts/verifications/2026-11-09-peer-authorisation-fixes-reverify-6.md
+verified: thoughts/verifications/2026-11-09-peer-authorisation-fixes-reverify-7.md
 ---
 
 # Implementation Plan: callers reach only what is theirs on `/callbacks`, `/permissions` and `/subscriptions`

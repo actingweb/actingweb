@@ -36,6 +36,7 @@ def create_test_app(
     peer_permissions: bool = False,
     peer_profile: bool = False,
     record: str | None = None,
+    oauth_stub: str | None = None,
 ) -> tuple[FastAPI, ActingWebApp]:
     """
     Create a minimal ActingWeb test harness.
@@ -57,6 +58,10 @@ def create_test_app(
         record: when set, the name of this app in the wire recorder: every
             request it serves and every hook it runs is recorded
             (``tests/integration/_wire.py``)
+        oauth_stub: when set (an EC private key in PEM), OAuth2 is configured
+            for Google and Apple with every provider endpoint on this app's
+            own stand-in (``tests/integration/_oauth_stub.py``), and MCP is on
+            with one tool: the ``wire_oauth`` app
 
     Returns:
         Tuple of (fastapi_app, actingweb_app)
@@ -95,6 +100,11 @@ def create_test_app(
             token_uri="https://oauth2.googleapis.com/token",
             redirect_uri=f"{proto}{fqdn}/oauth/callback",
         )
+
+    if oauth_stub:
+        from ._oauth_stub import configure_stub_providers
+
+        aw_app = configure_stub_providers(aw_app, proto, fqdn, oauth_stub)
 
     # Optional: Enable MCP for MCP tests
     if enable_mcp:
@@ -166,15 +176,27 @@ def create_test_app(
     if record:
         _add_recording_hooks(aw_app)
         _add_subscriber_trust_type(aw_app)
+        _add_grant_rows_types(aw_app)
+    if oauth_stub:
+        _add_wire_mcp_tool(aw_app)
 
     # Create FastAPI app
     fastapi_app = FastAPI(title="ActingWeb Test Harness")
 
-    # Get templates directory for FastAPI
-    template_dir = os.path.join(os.path.dirname(__file__), "templates")
+    # Get templates directory for FastAPI. The wire_oauth app renders the
+    # library's own templates, as a consumer that overrides none: the harness
+    # copy of the authorize form has no provider buttons.
+    template_dir = (
+        None if oauth_stub else os.path.join(os.path.dirname(__file__), "templates")
+    )
 
     # Integrate with FastAPI (this will automatically initialize system actors)
     aw_app.integrate_fastapi(fastapi_app, templates_dir=template_dir)
+
+    if oauth_stub:
+        from ._oauth_stub import add_stub_routes
+
+        add_stub_routes(fastapi_app)
 
     if record:
         from ._wire import RecordingMiddleware, register_wire_host
@@ -246,6 +268,96 @@ def _add_subscriber_trust_type(aw_app: ActingWebApp) -> None:
         )
 
 
+# The rows of ``test_wire_grants.py``
+# (``thoughts/plans/2026-11-10-grant-enforcement-per-route.md``, Phase 0).
+# ``wire_legacy`` is a relationship no trust type registers: only access rows
+# speak for it, so its peers reach the "category not mentioned" path.
+WIRE_LEGACY_ACL_RULES: list[tuple[str, str, str]] = [
+    ("properties", "GET", "a"),
+    ("subscriptions/<id>", "POST", "a"),
+    ("subscriptions/<id>/<subid>", "GET,PUT,DELETE", "a"),
+    ("callbacks", "", "a"),
+    ("methods", "GET,POST", "a"),
+]
+# Rows the two registered grant-row types share: they may read properties
+# and subscribe.
+WIRE_GRANT_TYPE_ACL_RULES: list[tuple[str, str, str]] = [
+    ("properties", "GET", "a"),
+    ("subscriptions/<id>", "POST", "a"),
+    ("subscriptions/<id>/<subid>", "GET,PUT,DELETE", "a"),
+    ("callbacks", "", "a"),
+]
+
+
+def _add_grant_rows_types(aw_app: ActingWebApp) -> None:
+    """The grant rows' relationships beside the built-in types.
+
+    ``wire_allowed``: a base rule in the ``allowed`` shape naming one list,
+    ``notes``, while the access table admits every property GET.
+    ``wire_named``: a named-pattern rule (``color``), the consumer's
+    subscriber shape with another name. ``wire_legacy``: access rows only.
+    """
+    from actingweb.permission_integration import AccessControlConfig
+
+    access = AccessControlConfig(aw_app.get_config())
+    access.add_trust_type(
+        name="wire_allowed",
+        display_name="Wire allowed-shape",
+        description="A property rule in the allowed/denied shape (wire harness).",
+        permissions={"properties": {"allowed": ["notes"]}},
+        oauth_scope=None,
+        acl_rules=list(WIRE_GRANT_TYPE_ACL_RULES),
+    )
+    access.add_trust_type(
+        name="wire_named",
+        display_name="Wire named pattern",
+        description="A property rule naming one property (wire harness).",
+        permissions={
+            "properties": {
+                "patterns": ["color"],
+                "operations": ["read"],
+                "excluded_patterns": [],
+            },
+            "methods": [],
+            "tools": [],
+            "resources": [],
+            "prompts": [],
+        },
+        oauth_scope=None,
+        acl_rules=list(WIRE_GRANT_TYPE_ACL_RULES),
+    )
+    config = aw_app.get_config()
+    for path, methods, rights in WIRE_LEGACY_ACL_RULES:
+        row = ("wire_legacy", path, methods, rights)
+        if row not in config.access:
+            config.access.insert(0, row)
+
+
+# The resources the wire app answers through ``resource_<name>`` callback
+# hooks (the grant rows' ``/resources`` cases).
+WIRE_RESOURCES = ("x", "private/x", "public/x", "private")
+
+
+def _add_wire_mcp_tool(aw_app: ActingWebApp) -> None:
+    """One MCP tool, named so the ``mcp_client`` type may call it; and the
+    client list: the wire apps' types, ``admin`` among them, no default (a
+    consumer that lists its types; the form then preselects the first,
+    whatever else a test worker's registry holds)."""
+    from actingweb.mcp import mcp_tool
+    from actingweb.permission_integration import AccessControlConfig
+
+    from ._wire import WIRE_TRUST_TYPES
+
+    AccessControlConfig(aw_app.get_config()).configure_oauth2_trust_types(
+        allowed_trust_types=sorted(WIRE_TRUST_TYPES | {"wire_allowed", "wire_named"})
+    )
+
+    @aw_app.action_hook("search")
+    @mcp_tool(description="Search (wire harness).")
+    def wire_search(actor, action_name, data):
+        return {"results": []}
+
+
 def _add_recording_hooks(aw_app: ActingWebApp) -> None:
     """Hooks a wire app runs: each records what it was called with.
 
@@ -313,6 +425,56 @@ def _add_recording_hooks(aw_app: ActingWebApp) -> None:
         """An application callback on the generic branch (``/callbacks/wire_ping``)."""
         record_event("callback", actor=actor.id, name=name, method=data.get("method"))
         return {"pong": True}
+
+    for resource in WIRE_RESOURCES:
+
+        def make_resource_hook(resource_name: str):
+            def resource_hook(actor, name, data):
+                record_event(
+                    "resource",
+                    actor=actor.id,
+                    name=resource_name,
+                    method=data.get("method"),
+                )
+                return {"resource": resource_name, "method": data.get("method")}
+
+            return resource_hook
+
+        aw_app.callback_hook(f"resource_{resource}")(make_resource_hook(resource))
+
+    @aw_app.property_hook("wire_hooked")
+    def wire_hooked(actor, operation, value, path):
+        """A property hook (the grant rows' hook route): records and passes."""
+        record_event("property_hook", actor=actor.id, operation=operation, path=path)
+        return value
+
+    @aw_app.method_hook("wire_ping")
+    def wire_ping_method(actor, method_name, data):
+        record_event("method", actor=actor.id, name=method_name)
+        return {"pong": True}
+
+    @aw_app.action_hook("wire_act")
+    def wire_act(actor, action_name, data):
+        record_event("action", actor=actor.id, name=action_name)
+        return {"done": True}
+
+    def make_trust_hook_recorder(event: str):
+        def trust_hook(actor, **kwargs):
+            from ._wire import TRUST_HOOKS
+
+            if TRUST_HOOKS["on"]:
+                record_event(
+                    "trust_hook",
+                    hook=event,
+                    actor=actor.id,
+                    peer=kwargs.get("peer_id"),
+                    arguments=sorted(kwargs),
+                )
+
+        return trust_hook
+
+    for event in ("trust_fully_approved_local", "trust_approved", "trust_deleted"):
+        aw_app.lifecycle_hook(event)(make_trust_hook_recorder(event))
 
     @aw_app.method_hook("wire_import")
     async def wire_import(actor, method_name, data):

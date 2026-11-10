@@ -1,0 +1,1414 @@
+---
+status: active
+---
+
+# Implementation Plan: a peer's grant is the answer on every route
+
+**Security, unpublished.** Keep local until fixed, under the same rule as the
+peer-authorisation records: never push this file before its fix.
+
+**Date:** 2026-11-10
+**Research:** thoughts/research/2026-11-10-grant-enforcement-per-route.md
+**Audit:** thoughts/verifications/2026-11-09-peer-authorisation-fixes-audit.md
+**Branch:** fix/3.16.0-grant-enforcement (to be created on top of
+fix/3.16.0-peer-authorisation; local until both security plans are verified)
+
+## Overview
+
+The peer-authorisation plan made sure a peer is one the owner accepted. This
+plan makes sure that what the owner granted that peer is what it gets, on
+every way in: each REST route, each level of a property, the pushed and
+pulled diffs, and the trust type an OAuth2/MCP client ends up with. It closes
+audit items A5 to A7, A10, A13 to A20 and the subscription-creation check the
+specification requires, takes two items over from `spec-1-5` (T22, C10),
+documents A11 and A12, and hands A8's cleanup to the attribute-list plan.
+Every fix is checked against `docs/protocol/actingweb-spec.rst`; the research
+note's "Calibration against the protocol's intent" has the reading each
+decision rests on.
+
+## Decisions Made
+
+- **Stacked branch, own PR** (owner, 2026-11-10): `fix/3.16.0-grant-enforcement`
+  on top of the peer-authorisation branch, one commit per phase; both PRs
+  open only when this plan is verified.
+- **A5, a deny holds on every path** (owner, 2026-11-10): an exclusion covers
+  its node and the node's descendants, and an exclusion ending in `/*` also
+  names the node before it. A read of a parent, the listing and diffs drop
+  excluded parts at any depth. A non-admin peer's write or delete of a parent
+  is 403 when the stored value or the request body holds an excluded
+  descendant. Allow patterns keep today's meaning (`public/*` does not grant
+  the node `public`). The same rule applies to the `resources` category.
+- **One access decision for every route** (spec `:201-205`, `:2297-2298`;
+  owner, 2026-11-10 for the unmatched case):
+  - the grant **mentions** the category (the key is present, even empty):
+    the rule answers, and a request it does not match is denied;
+  - the grant does **not mention** the category: the access table answers
+    (it is the application's per-trust-level rule and denies by default);
+  - the evaluator cannot be built, or raises: denied;
+  - an OAuth2/MCP client is never sent to the access table: no match is
+    denied, as `/mcp` already does.
+- **`POST /properties` is all or nothing** (spec `:936-949`): every name in
+  the body is validated and authorised before anything is changed; one
+  refusal is 403 with nothing applied.
+- **List paths are authorised on the list name; serving items by path stays
+  in `spec-1-5`** (owner, 2026-11-10): this plan closes the leak
+  (`/properties/<list>/<x>` is decided by the grant for `<list>`), not the
+  conformance gap, whose diffs belong with the attribute-list port.
+- **Taken over from `spec-1-5`** (owner, 2026-11-10): T22 (a name no pattern
+  covers is denied for a peer, on the listing and the views) and C10
+  (deleting a grant notifies the peer).
+- **The `resources` grant governs REST `/resources`** (spec `:1358-1370`):
+  GET is `read`, PUT and POST are `write`, DELETE is `delete`, on the same
+  decision as every other route. Friend and partner lose DELETE and their
+  excluded names; associate and viewer gain `GET` on `public/*`.
+- **Subscription creation validates read access** (spec `:2438-2442`): 403
+  for a `properties`, `resources`, `methods` or `actions` path the peer may
+  not read.
+- **A10, the library declines and binds; the consumer owns the view** (owner,
+  2026-11-10):
+  - the application's OAuth2 allow-list (`configure_oauth2_trust_types`)
+    is for clients: external parties that reach `/mcp` only. A type outside
+    it is declined wherever an OAuth2 sign-in would create a client's
+    trust: registration, the authorize POST, the callback, and the SPA
+    authorize route, whose `trust_type` is "for MCP authorization" and
+    which Emm's frontend never sends (checked 2026-11-10; owner: a separate
+    list only if that route were not for MCP clients). Trusts between
+    actors go through `/trust` with the user's session and are not
+    restricted by this list;
+  - with no list configured, every registered type except `admin`; `admin`
+    only when listed;
+  - the authorize form is bound to the browser by a cookie checked at the
+    callback; without a match (another browser, or the client skipped the
+    form) the library pauses and renders the confirmation template (client
+    name, redirect host, requested level, Approve and Decline) in the
+    browser where the user signed in, and creates the trust only on Approve;
+  - the confirmation view is a library template the consumer overrides; no
+    redirect-to-consumer option;
+  - a decision hook before the trust is created can decline or lower the
+    type, and fails closed;
+  - re-authorising an existing client row sets the row to the type this
+    authorisation approved, up or down, and removes its permission override
+    (owner, 2026-11-10);
+  - an anonymously registered client loses `client_credentials`; a client an
+    actor's owner created keeps it.
+- **A8's cleanup moves to the attribute-list plan** (owner, 2026-11-10,
+  after the outside voice): replica keys are property names only for
+  whole-target subscriptions, a replica list is deleted by its meta row, and
+  that plan rewrites the replica store next. Recorded in that plan's Update
+  Log. This plan keeps the grantor's half (C10). **The PRs are not held for
+  it** (owner, 2026-11-10): the cleanup is opt-in, off by default and
+  OPTIONAL in the specification, and access at the granting actor is not
+  affected; the records may be published describing it as a known limit,
+  and the changelog says what the cleanup does not cover yet.
+- **A trust delete's remaining race is accepted and documented** (owner,
+  2026-11-10): the secret is checked immediately before the cleanup and
+  again at the row delete; a re-pair landing in between keeps its row and
+  loses its subscriptions until the peer's next sync.
+- **Refusals say little** (evaluation, 2026-11-10): a 403 body is
+  `{"error": "forbidden"}`, or `{"error": "not_approved"}` for an
+  unapproved row; it does not say that an exclusion caused it. A refused
+  bulk POST lists the names refused, which the caller sent.
+- **Lows: all, hooks unified** (owner, 2026-11-10): A13, A15, A16, A17, A20
+  and the stale notification URL are fixed; A14 gets one firing path per
+  event with a migration note.
+- **Hook contracts consumers rely on stay** (evaluation, 2026-11-10; no
+  behaviour change, so no owner decision): the `path` a property hook
+  receives is unchanged (Emm's wildcard guard reads the name from it);
+  `trust_deleted` keeps firing before the delete (Emm reads the cached peer
+  profile there); `trust_approved` fires only where no
+  `trust_fully_approved_local` hook is registered.
+- **A11 stays with `spec-1-5`** (owner, 2026-11-09, unchanged): this plan
+  only adds the "unfiltered" warning to `FanOutManager`'s documentation.
+- **A12 is the owner's right** (spec `:1797-1801`): documented, not changed.
+- **A depth-3 PUT's diff gets its shape fixed here** (owner, 2026-11-10,
+  after Phase 0's `WG7`): Phase 1 registers the diff of a nested PUT or
+  DELETE at its true depth and the filter judges the true path; the
+  subscriber side and Emm's handling of nested diffs are read before the
+  change.
+- **The authorize form's provider buttons are fixed in Phase 3** (owner,
+  2026-11-10, after Phase 0's `WG16`): the Apple button's state is not
+  wrapped, and the preselected type is the safe client default, not the
+  first listed.
+- **Release shape:** part of the unreleased 3.16.0 minor. Entries under
+  `Unreleased` (`SECURITY`, `CHANGED`, `FIXED`), a section in
+  `docs/migration/v3.16.rst` for each behaviour change, no version bump.
+
+## What We're NOT Doing
+
+- The replica cleanup after a revocation (A8: exclusions, dropped `read`,
+  scalars, copies fetched by query) - moved to
+  `plans/2026-11-06-attribute-list-v2-port.md` Phase 4 by the owner; it is
+  OPTIONAL in the specification and off by default.
+- Serving list items by path (`GET`/`PUT`/`DELETE /properties/<list>/<n>`) -
+  `spec-1-5` P2 to P4, with the diffs the attribute-list port defines.
+- Always confirming after sign-in in place of the cookie - the outside
+  voice's simpler mechanism; the owner chose the cookie with the fallback
+  when both were offered (2026-11-10), so the honest flow has no extra step.
+- A consumer-hosted confirmation step (redirect plus pending-token
+  endpoints) - the owner chose the template; more surface to secure.
+- Widening allow patterns (`public/*` also granting the node `public`) - no
+  security gain; the owner chose the deny side only.
+- Filtering `FanOutManager`'s payload per subscriber - the class is removed
+  by `spec-1-5` Phase 4.
+- Filtering the *content* of diffs for targets other than `properties` - an
+  application registers those diffs itself and the specification leaves
+  their rights to it; this plan checks their creation and documents the
+  delivery.
+- A `/meta` check on the owner's own base-URI change (A12) - the
+  specification gives the owner that change; it is the recovery route for a
+  moved peer.
+- Changing the 404 a trust DELETE answers before authorising - a peer's
+  cleanup of a half-deleted pair depends on it (`actor.py:3054-3056`).
+- Firing per-trust hooks from `delete_all_relationships`, `Actor.delete` and
+  the purge - they are documented as the caller's job
+  (`trust_manager.py:826`); unifying covers the routes that fire today.
+- Changing what a property hook receives as `path`, or adding a
+  `property_name` argument - a compatible signature change belongs with a
+  hooks cleanup, not a security fix; the permission path is fixed without
+  it.
+- Making the writes of a bulk POST transactional across storage faults -
+  validation and authorisation become all-or-nothing; a storage fault on the
+  n-th write is the existing `DbError` contract.
+- Passing the caller to `resource_*` callback hooks - additive API, not
+  needed once the handler evaluates the grant.
+- Expiring anonymous registrations or their trust rows -
+  `todo/dcr-registrations-and-client-trust-rows-never-expire.md`.
+- Cross-process invalidation of MCP caches after a row's type changes -
+  `todo/mcp-cache-lifecycle-and-revocation.md`; the single-process eviction
+  (`actingweb/mcp/invalidation.py`) is called.
+- Any change in Emm's production code - Emm's worktree carries test-harness
+  changes only; what Emm should adopt is listed in the migration guide.
+- The SPA's login itself (sessions, cookies, tokens of `/oauth/spa/*`) -
+  separate from MCP client authorisation by the owner's rule; only the trust
+  type that route creates is checked.
+
+## What Already Exists
+
+- `actingweb/handlers/properties.py:160-221` `_check_property_permission` -
+  the one route that already implements "rule, else access table, else
+  deny"; stays as a thin wrapper around the shared decision so the existing
+  test patches on this module keep working.
+- `actingweb/auth.py:797-860` `_match_access_row` - the access-table lookup,
+  bound to an `Auth` object; its matching loop becomes a pure function both
+  it and the decision call.
+- `actingweb/permission_evaluator.py:265` `evaluate_bulk_property_access` -
+  many names on one grant read; reused by the bulk POST pre-check and the
+  listing.
+- `actingweb/permission_evaluator.py:539`
+  `evaluate_property_with_exclusions` - one caller (`actor.py:3944`), a
+  one-level walk; removed in Phase 1 in favour of the snapshot functions.
+- `actingweb/permission_evaluator.py:592` `_is_unapproved` - the approval
+  gate under every evaluation (peer-authorisation A1); stays first.
+- `actingweb/actor.py:3874-4020` `filter_subscription_blob` - the one filter
+  for push and pull since iteration 50; keeps its signature and its
+  full-path evaluation (`:3914`).
+- `actingweb/permission_evaluator.py:436` `evaluate_resource_access` - no
+  REST caller today.
+- `actingweb/permission_integration.py:460-514` `AccessControlConfig.
+  configure_oauth2_trust_types` / `get_oauth2_trust_types` - the allow-list
+  API, read today only by the form renderer and by Emm's password route;
+  extended, not replaced.
+- `actingweb/oauth2_server/token_manager.py:127-189`, `:689` - authorisation
+  codes with `expires_at` in the payload and a single-use `_consume`; the
+  pending authorisation copies this shape. `:2036-2046`
+  `purge_expired_tokens` - the PostgreSQL reaper's bucket list.
+- `actingweb/oauth2_server/state_manager.py` - encrypted, timestamped state
+  that already carries `trust_type`; the form nonce rides in it.
+- `actingweb/cross_site.py`, `handlers/base_handler.py:45-87` - cross-site
+  helpers; reused by the confirm POST.
+- `actingweb/db/*/trust.py` `modify(only_if_secret=)` - the conditional-write
+  shape the conditional delete copies on both backends.
+- `tests/integration/_wire.py`, `tests/integration/test_harness.py`,
+  `tests/integration/wire/rows.toml` - the recording harness, its apps and
+  its row registry.
+
+## Phase 0: today's behaviour, recorded
+
+No library change. The owner's rule: prove what happens today before
+changing it; later phases re-record explicitly, with the diff read.
+
+### Changes
+
+**Harness** (the wire apps cannot record half the rows as they are):
+
+- `tests/integration/test_harness.py`
+  - `resource_*` callback hooks on the wire app (`resource_x`,
+    `resource_private/x`, `resource_public/x`, answering a fixed body).
+  - A recording hook for `trust_fully_approved_local`, `trust_approved` and
+    `trust_deleted` that records the hook name and the sorted argument names
+    through `record_event` (`_wire.py:98-103`).
+  - A fourth recorded app `wire_oauth` with OAuth2 and MCP on, one MCP tool,
+    and its provider endpoints pointed at a local stub (token and userinfo)
+    served by the test; port chosen beside the existing three
+    (`conftest.py:982-984`).
+  - Access rows for a relationship name outside the registry (`wire_legacy`)
+    so the "category not mentioned" path can be recorded.
+- `tests/integration/_wire.py` - the normaliser names `client_id`
+  (`mcp_<hex>`), `client_secret`, `access_token`, `refresh_token`, `code`
+  and `state`; `set-cookie` is kept among the recorded headers with its
+  value normalised; the snapshot can include the system actor's and a
+  client's trust row.
+- `tests/integration/verify_groups.py` - a row with `exposure = true` must
+  name an owner; `tests/integration/test_wire_harness.py:303-310` gets the
+  parametrised case.
+- `tests/integration/XDIST_GROUPS.md:38` and the new test file - group
+  `wire_peer_paths`.
+- `tests/integration/wire/rows.toml` - reserve
+  `"grant-enforcement-per-route" = ["WG1-WG19"]`; one entry per row, with
+  `owners` naming the phase in the table below and `exposure = true` where
+  the row records data reaching a peer that may not read it. `WP1` and
+  `WA17` keep no owner: the `permission_changes` shape does not change
+  here.
+
+**Rows**, in `tests/integration/test_wire_grants.py` (new). Actors: A
+(owner), F (friend), S (associate), P (partner), an admin peer, an
+unapproved U, L (relationship `wire_legacy`). A holds `private = {"k": 1}`,
+`settings = {"theme": "x", "private": "s", "deep": {"private": "d"}}`, lists
+`notes` and `memory_personal`, and an override for F adding
+`excluded_patterns: ["memory_*", "settings/private", "*/deep/private"]`.
+The toggled flag for a scenario is set in the test with try/finally, as
+`tests/test_peer_binding.py:658` does.
+
+| Row | Scenario | Expected today (from reading; the recording decides) | Changed by |
+| --- | --- | --- | --- |
+| WG1 | F: `GET`/`PUT /properties/private`, `GET /properties`, `GET /properties?metadata=true` | whole object served and overwritten; listed (exposure) | Phase 1 |
+| WG2 | F: `GET /properties/settings`, `…/settings/private`, `PUT /properties/settings` | parent serves both excluded children; child 403; overwrite 201 (exposure) | Phase 1 |
+| WG3 | F: `GET /properties/memory_personal`, `…/memory_personal/x`, `PUT …/memory_personal/x?index=0` | 403; whole list; item written (exposure) | Phase 1 |
+| WG4 | F: `POST /properties` with (a) an allowed scalar plus `{"private/x": 1}`; (b) bulk `items` for `memory_personal`; (c) list creation `memory_new` alone; (d) a bare `{"private": {…}}` | (a) 201, denied key skipped; (b) 201 applied; (c) list created, then 403; (d) 201 (exposure) | Phase 1 |
+| WG5 | A peer of a registered type whose base rule is `{"properties": {"allowed": ["notes"]}}` and which the access table admits: `GET /properties/color`, the listing, a pull of a whole-target subscription | 200; `color` listed; pull `{}` (exposure) | Phase 1 |
+| WG6 | Flows that must not change: F `GET`/`PUT /properties/color`, `GET /properties/notes`, `POST /properties/notes/items`, `PUT /properties/settings/theme`; the admin peer's `PUT /properties/private` and `PUT /properties/settings`; L's `GET /properties/color`; F and P: `POST /methods/wire_ping`, `GET /methods`, one action `POST` and `GET /actions` | 200/201/204 as today | none |
+| WG7 | F: whole-target subscription; A writes `private`, `settings/private`, `settings/deep/private`, `color`; push and pull | excluded values sent inside their parents (exposure); `color` sent | Phase 1 |
+| WG8 | F: subtarget `memory_personal`, resource `item`; subtarget `settings`; subtarget `settings`, resource `private`; A writes | item sent (exposure); `private` dropped, `deep.private` sent (exposure); nothing | Phase 1 |
+| WG9 | L: pull of a `properties` subscription; S, F: a property hook route (`GET` of a hooked property) with a grant that does not mention the category | `{}`; served | Phase 2 |
+| WG10 | F, S, P, admin: `GET`/`PUT`/`DELETE /resources/x`, `/resources/private/x`, `/resources/public/x`, `/resources/private` | F, P, admin: all served; S: 403 (exposure for F on `private/x`) | Phase 2 |
+| WG11 | Emm's shape: a type with `"methods": []` and an access row `("methods", "POST", "a")`: `POST /methods/wire_import`, `GET /methods` | 403; listing as today | none |
+| WG12 | F: `POST /subscriptions/<F>` for `properties/memory_personal`, `properties/color`, `properties`; a named-pattern type (`patterns: ["color"]`) for `properties` | 201 each | Phase 2 |
+| WG13 | F: `GET /trust/friend/<F>/shared_properties`; U the same on its pending row; U: `GET /subscriptions/<U>` | every name in `excluded_properties`, for U too; 200 for U (exposure) | Phase 2 |
+| WG14 | `wire_oauth`: anonymous `POST /oauth/register` with `trust_type: admin`; a `client_credentials` token; `tools/list` on `/mcp` | registered as `admin`; token issued; session on the system actor (exposure) | Phase 3 |
+| WG15 | `wire_oauth`: a client's own `POST /oauth/authorize` with `trust_type=admin`, then the provider callback, no form rendered | `admin` trust on the user's actor (exposure) | Phase 3 |
+| WG16 | `wire_oauth`, the honest flows (form requested with `Accept: application/json`): POST with `mcp_client`, callback by GET; the provider-button link, callback by cross-site form POST (the Apple route); then token and `tools/list` | `mcp_client` trust, token works | Phase 3 (the form gains a nonce; the outcome must not change) |
+| WG17 | `wire_oauth`: an owner-created client (`OAuth2ClientManager.create_client`) using `client_credentials` | token bound to the owner's actor | none |
+| WG18 | A deletes F's permission override (REST); deletes it again | no permission callback either time; 204 twice | Phase 4 |
+| WG19 | Trust hooks: approve by REST PUT (twice), by `TrustManager.approve_relationship`; delete by REST, by `delete_relationship` | names and arguments differ per route; the repeat PUT fires again | Phase 4 |
+
+- `tests/integration/wire/WG*.json` - the recordings, both topologies where
+  the row crosses hosts. Recorded with
+  `WIRE_RECORD=WG1,WG2,…,WG19` (there is no "all", `_wire.py:689-695`), one
+  run at a time.
+
+### New Tests, both unit and integration tests
+
+- The nineteen rows, each on both backends by the existing parametrisation.
+- `tests/integration/test_wire_harness.py` - the exposure-needs-an-owner
+  case; the normaliser replaces each new OAuth secret and fails on an
+  unnamed `mcp_<hex>` id.
+
+### Failure Scenarios
+
+- A row's "expected today" is wrong - the recording is what the library
+  does; the row's `expected` is corrected to it and the difference written
+  into the verification before Phase 1 starts. Covered by the recording.
+- The stub provider does not match a real provider's callback - WG16
+  records both callback methods through the two real handlers
+  (`oauth2_endpoints.py:522`, `oauth2_callback.py:1469-1491`). Covered.
+- A parallel run corrupts a recording - sequential recording, explicit rows
+  (contract warning). Procedure.
+- The new app's port collides with another fixture - the fixture asserts
+  the port is free at start and fails with the port in the message. Test.
+
+### Verification
+
+- [x] Run the contract's `### Checks` fast tier verbatim (4835 passed)
+- [x] `poetry run python tests/integration/verify_groups.py`
+- [x] Full tier, both backends; a failure is re-run sequentially before it
+      is believed (DynamoDB 6210 passed, PostgreSQL 6007 passed, docs
+      clean; the one failure on the first DynamoDB run was `WG16` comparing
+      the registry's types, which other tests in a worker extend: the row
+      now keeps the wire apps' own types, re-recorded)
+- [ ] `git show --stat HEAD -- tests/integration/wire` shows only `WG*`
+      files and `rows.toml`; the commit carries its `Wire-Phase` trailer
+- [ ] Each recording read against its "expected today"; differences written
+      down
+
+### Implementation Status: Complete
+
+#### Phase 0 notes (2026-11-10)
+
+**Harness, as built** (deviations from the Changes above):
+
+- The provider stand-in is served by `wire_oauth` itself under `/_stub/`
+  (`tests/integration/_oauth_stub.py`): a worker has one free port of its
+  ten (5564), so no separate server. The recorder skips `/_stub/` (a real
+  provider is not part of what crosses the wire); the stand-in answers
+  fixed tokens and code, and signs Apple's `id_token` with a test RSA key
+  served as JWKS. The library's Google and Apple provider classes are
+  replaced in `oauth2._PROVIDER_REGISTRY` by subclasses that change the
+  endpoints only for an app whose `fqdn` registered the stand-in. The
+  authorization endpoint is a fixed `https://wire-provider.example.test/`
+  URL that nothing fetches (the library's OAuth2 client refuses an `http`
+  one); a row plays the browser and goes straight to the callback.
+- `wire_oauth` renders the library's own templates (the harness's copy of
+  the authorize form has no provider buttons).
+- `Scenario.extra_snapshot` (under `"extra"`, absent unless set) carries
+  what a row adds to the snapshot: A's properties for the REST rows, the
+  client trust rows for the OAuth2 rows.
+- Normaliser: `client_secret`, `access_token`, `refresh_token` are secret
+  keys (an unnamed value fails the guard); `mcp_<hex>` has its own guard;
+  `client_id_issued_at` is an epoch, and `created_at`, `expires_at`,
+  `issued_at` are epochs when numeric (they are timestamp strings
+  elsewhere); a host inside a percent-encoded URL is named; `set-cookie` is
+  kept as a list with each value replaced. `code` and `state` are named by
+  the rows (raw, percent-encoded, form-encoded, and a JSON-wrapped state's
+  nonce), not by key.
+- The trust hook recorder is off unless a row opens
+  `trust_hooks_recorded()`; the wire app also gains `resource_<name>`
+  callback hooks, a `wire_hooked` property hook, a `wire_ping` method, a
+  `wire_act` action, and the relationships `wire_allowed`, `wire_named`
+  (registered) and `wire_legacy` (access rows only).
+- The 82 existing recordings stay byte-identical with the harness changes
+  (all wire files green before any `WG` row existed). The `WG` rows were
+  compared twice on DynamoDB with fresh actors and once on PostgreSQL; two
+  unstable spots were fixed in the rows (the `shared_properties` lists come
+  in no fixed order; a JSON-wrapped state was form-encoded).
+- `WG16` gained a step: a POST choosing Apple and Apple's form-POST
+  callback (the honest Apple path), beside the Apple button's own link.
+- The `Wire-Phase` trailer is a convention, not a check (nothing in the
+  tree reads it).
+
+**What the recordings showed against "expected today"** (each row's
+`expected` in `rows.toml` now says what was recorded):
+
+- `WG3`: with the friend grant's `memory_*` the tail is 403 too (the glob
+  matches `memory_personal/x`); with an exclusion naming the list exactly
+  (peer E, added to the row) the tail serves the whole list and the
+  `?index=0` PUT writes item 0. A7 confirmed; Phase 1's tail test uses the
+  exact-name exclusion.
+- `WG4`: worse than expected. The bulk items for the excluded list answer
+  **403 and are applied**; the excluded list is created, then 403.
+- `WG5`: wider than expected. The access table serves `wire_allowed` the
+  whole listing, `private` and `memory_personal` included.
+- `WG7`: a depth-3 PUT (`settings/deep/private`) is stored correctly (the
+  row's snapshot of A) but its diff is registered with `resource` = the
+  second segment and the raw body: the subscriber gets
+  `{"settings": {"deep": "d2"}}` and its replica of `settings` is
+  overwritten. The filter evaluates `settings/deep`, which no exclusion
+  names, so a depth-3 private value is pushed whatever the grant says.
+  Owner, 2026-11-10: fixed in Phase 1, shape and filter.
+- `WG9`: the associate is already refused on the property hook route (the
+  rule is mentioned and does not match); F and L are served.
+- `WG13`: `shared_properties` is empty for a friend and every property,
+  `color` included, is in `excluded_properties`; the unapproved peer gets
+  the same.
+- `WG16`: `wire_oauth` lists its types (the wire types, `admin` among
+  them, no default), so the form's preselection does not depend on what a
+  test worker's registry holds; the form then preselects `admin` (the first
+  listed). Following the **Google button** with no type chosen creates an
+  **`admin`** trust for the client: the button's state carries the default
+  type. **The Apple button never completes:** the form mints a nonce (43
+  characters) for the link; the authorization URL wraps any state shorter
+  than 50 characters in JSON with the trust type; Apple posts that JSON
+  back and `/oauth/callback/apple` finds no nonce (400). The POST path
+  (provider chosen in the form) works for both providers. The row is now an
+  exposure (the Google button). Owner, 2026-11-10: fixed in Phase 3.
+- `WG8`: the A-side SDK append crosses no wire; each subscription's pull
+  holds what the filter left (empty for the excluded list and for
+  `settings` with resource `private`; `deep.private` without `private` for
+  `settings`); the pushes answer 403 at F, which holds no callback row
+  (the subscriptions were made at A directly).
+- `WG1`, `WG2`, `WG6`, `WG10` to `WG12`, `WG14`, `WG15`, `WG17` to `WG19`
+  match the table.
+
+
+---
+
+## Phase 1: one access decision, and the property tree
+
+A5, A7, T22, and the property half of A18 and A19.
+
+```mermaid
+flowchart TD
+    R[peer request: category, path, operation] --> U{trust row approved?}
+    U -- no --> D[deny]
+    U -- yes --> E{evaluator builds and runs?}
+    E -- no --> D
+    E -- yes --> X{path or an ancestor excluded? X of an X/* exclusion?}
+    X -- yes --> D
+    X -- no --> M{does the grant mention the category?}
+    M -- "yes: matches with the operation" --> A[allow]
+    M -- "yes: no match, or empty" --> D
+    M -- "no, and the caller is a client" --> D
+    M -- "no, a peer" --> T{access table admits the relationship for the method?}
+    T -- yes --> A
+    T -- no --> D
+    A --> F[reads: drop excluded descendants from the value]
+```
+
+One note the diagram cannot carry: an empty path (the listing, a
+whole-target subscription) is decided per name, never as a whole.
+
+### Changes
+
+- `actingweb/auth.py` - `access_table_admits(config, relationship, approved,
+  path, subpath, method) -> bool`: the matching loop of `_match_access_row`
+  (`:797-860`) as a pure function with no `Auth` state; `_match_access_row`
+  delegates to it.
+- `actingweb/permission_evaluator.py`
+  - `GrantSnapshot` (frozen dataclass): `approved`, `relationship`,
+    `is_client`, the effective rules per category, and a per-category
+    `mentioned` flag (`category in permissions`, replacing the falsy test at
+    `:217`). `snapshot(actor_id, peer_id)` builds it from one trust-row read
+    and the cached override and registry lookups (today an evaluation reads
+    the row twice, `:605` and `:701`).
+  - Pure functions over a snapshot:
+    - `path_excluded(rules, path)`: true when `path` or any ancestor prefix
+      matches an `excluded_patterns` or `denied` entry, or when a pattern
+      ends in an unescaped `/*` and its head (the pattern minus those two
+      characters) glob-matches `path` or an ancestor. Uses `glob_match`
+      unchanged, so `access-control.rst:329-331` ("one matcher") stays true.
+    - `drop_excluded(rules, path, value)`: for a JSON object, the value
+      without any descendant for which `path_excluded` is true, at any
+      depth; arrays are never descended (the grant's unit is the list
+      name); skipped entirely when the rules hold no exclusion.
+    - `holds_excluded(rules, path, *values)`: true when
+      `drop_excluded(v) != v` for any given value. Data-based, so it is
+      defined for every pattern (`*/secret`, `*private*`, `mem*/x`).
+  - `evaluate_permission` and `evaluate_bulk_property_access` call
+    `path_excluded` for `PROPERTIES` and `RESOURCES` before the allow match,
+    and for those two categories return DENIED, not NOT_FOUND, when the
+    category is mentioned and nothing matches (`:832-837`) or the mentioned
+    rule is empty. `METHODS` and `ACTIONS` get the same change in Phase 2,
+    with their handlers, so nothing about them moves in this commit. The
+    empty target keeps NOT_FOUND (`:820-825`); callers decide per name.
+    `/mcp` is unaffected (it denies anything but ALLOWED). "Mentioned" is
+    `category in effective_permissions`: a type's `base_permissions` is the
+    dict as declared (`trust_type_registry.py:54`), the six built-in types
+    declare every category, and the merge adds an override's category only
+    when it is not `None` (`permission_evaluator.py:660-669`).
+  - `evaluate_property_with_exclusions` (`:539-590`) is removed; its one
+    caller moves to the snapshot functions.
+- `actingweb/access_decision.py` (new) -
+  `decide(config, actor_id, peer_id, category, path, operation, *,
+  method=None, evaluator=None, snapshot=None) -> Decision` where `Decision`
+  has `allowed`, `reason` (`not_approved`, `excluded`, `not_granted`,
+  `no_table_row`, `unavailable`) and the snapshot for reuse. The flow in the
+  diagram. `method` defaults from the operation (read/write/delete →
+  GET/PUT/DELETE). Imports `permission_evaluator` and the pure table
+  function only; nothing from `actor` (`auth.py:9` imports `actor`, and
+  `actor.py:30` imports the evaluator). `DbError` propagates.
+- `actingweb/handlers/properties.py`
+  - `_check_property_permission` (three copies: properties, metadata, items)
+    keep their names and signatures, resolve the evaluator from their own
+    module (existing patches stay live) and call `decide`; they keep the
+    `Decision` on the handler for the rest of the request.
+  - Every refusal from `decide` answers 403 with `{"error": "forbidden"}`
+    (`"not_approved"` for an unapproved row); the `Decision.reason` goes to
+    the debug log only.
+  - GET of a value (`:476-517`) passes it through `drop_excluded` for a
+    peer; the listing (`:561-640`) filters names first, uses `decide` per
+    name (the NOT_FOUND includes at `:582-584` and `:634-637` go: T22), then
+    `drop_excluded` per value; `?metadata=true` (`:654`) computes sizes
+    after filtering.
+  - PUT (`:923`) and DELETE (`:1744`) answer 403 for a non-admin peer when `holds_excluded` is true for the stored value or the
+    request body. Root `DELETE /properties` (`:1759-1769`) by a peer needs
+    every stored name to pass `decide` for `delete`.
+  - List branch (`:330-457`, `:780-860`, DELETE's at `:1779`): a path whose
+    first segment is an existing list is decided on the bare list name. The
+    existence read happens only after the name itself is allowed; a refusal
+    is 403 whatever the name is. What a tail returns is unchanged
+    (`spec-1-5`).
+  - `post()`: `authorize("POST", …)` stays (`:1073`); the missing `return`
+    after the 400 at `:1077` is added. Then one validation-and-authorisation
+    pass over all three body shapes (JSON, form list, form arguments) builds
+    a prepared batch per key (list snapshot, pending updates and deletes, so
+    nothing is read twice), calls `evaluate_bulk_property_access` once for
+    every target name with `write`, and `holds_excluded` per name. A 400
+    (`:1250`, `:1310`, `:1695`) or a refusal ends the request with nothing
+    applied; the 403 body lists `refused` names. The apply pass consumes the
+    batch. A body with no names is decided by the table alone.
+  - Each `execute_property_hooks` call passes the handler's `Decision` in
+    the auth context and the true property path as
+    `auth_context["permission_path"]`; the `path` argument the hook sees is
+    not changed.
+- `actingweb/interface/hooks.py`
+  - `_check_hook_permission` (`:354-446`), for `hook_type == "property"`
+    only in this phase: uses the `Decision` from the context when present,
+    else `decide` on `permission_path` (else the path built at `:617`, for
+    callers outside the handlers). "Category not mentioned" goes to the
+    table; an error denies. The early allows for "no peer" stay; the two
+    for a peer with no actor id or no config (`:387-389`, `:394-395`)
+    become denials.
+  - `execute_property_hooks` (`:617-622`, async `:1056`): a permission
+    denial returns the module sentinel `PERMISSION_DENIED` on every
+    operation; handlers map it to 403. `None` keeps its meaning (the hook
+    hides the value: 404 on GET).
+- `actingweb/actor.py:3874-4020` - `filter_subscription_blob` and the
+  whole-target filter build one snapshot per call (accepting one from the
+  caller: push passes the row it read at `:3627`, the pull loop at
+  `handlers/subscription.py:422-428` builds one before the loop), keep the
+  full-path evaluation (`:3914`), apply `drop_excluded` to object values
+  rooted at the evaluated path, and unwrap the full-state fallback's extra
+  level (`:4734`) before filtering. The blob is parsed once. (These are the
+  functions Phase 1's evaluator change reaches anyway, so the rows change
+  here.)
+- **Decided by the owner after Phase 0 (`WG7`):**
+  `actingweb/handlers/properties.py` PUT (`:749-1000`) and DELETE of a
+  nested path deeper than two segments: first read how a subscriber applies
+  a diff with a `resource` (`callback_processor`, `remote_storage`) and how
+  Emm's data hook reads one; then the diff is
+  registered with `resource` = every segment after the property name
+  (`deep/private`) and the body nested under all but the last, so the
+  subscriber's replica is updated at the right depth and the filter
+  evaluates the true path (`settings/deep/private`). A two-segment path is
+  unchanged. Tests: a depth-3 PUT and DELETE pushed and pulled, allowed and
+  excluded, in `test_subscription_grants_flow.py`.
+- `actingweb/interface/authenticated_views.py:132-194`, `:474`,
+  `:537-577`, `:686` - `decide` with `is_client` from the context; reads go
+  through `drop_excluded`; the subscribe check (`:674-694`) evaluates
+  `subtarget` on the `properties` category instead of
+  `properties/<subtarget>`.
+- Docs: `docs/guides/access-control.rst` ("Exclusions and the property
+  tree"; "When no rule matches": mentioned vs not mentioned; `:385-389`,
+  `:565-581`, `:622`), `docs/guides/access-control-simple.rst:154`, `:266`,
+  `:452`, `docs/sdk/authenticated-views.rst`,
+  `docs/reference/routing-overview.rst` (the 403 body),
+  `docs/reference/hooks-reference.rst` (the `path` a property hook receives,
+  as it is; a bulk hook veto does not revert),
+  `docs/protocol/actingweb-spec.rst` (under "Permission Evaluation": an
+  exclusion of a path applies to its descendants and to data returned for
+  its ancestors), `CHANGELOG.rst` (`SECURITY`: the parent, the list tail,
+  the bulk POST, the unmatched rule; `CHANGED` with **Behavior change:** for
+  each), `docs/migration/v3.16.rst` ("Grants hold at every level", "A rule
+  that does not match denies").
+- `tests/integration/wire/` - `WG1` to `WG5`, `WG7`, `WG8` re-recorded;
+  `WG6` unchanged.
+
+### New Tests, both unit and integration tests
+
+- `tests/test_property_tree_grants.py` (new, unit, real evaluator):
+  `private/*` excludes `private`, `private/a`, `private/a/b`; exact
+  `settings/private` excludes itself and below, not `settings`;
+  `memory_personal` excludes `memory_personal/0`; `a\*` and a trailing
+  `/\*` are literals; `drop_excluded` at depth 1 to 3 including
+  `*/deep/private`, on a non-object, on an object left empty (`{}`), and not
+  into arrays; `holds_excluded` for stored and incoming values; no walk when
+  the rules hold no exclusion (asserted by a counting matcher); the same
+  table for `RESOURCES`.
+- `tests/test_access_decision.py` (new, unit): mentioned and matching;
+  mentioned and unmatched in both rule shapes; mentioned and empty
+  (`"properties": {}` with a table row: denied; the `methods` twin of this
+  case, Emm's shape, is Phase 2's); not mentioned with a
+  GET-only, a POST-only and no table row; a client with a category not
+  mentioned (denied); evaluator cannot be built; evaluator raises;
+  `DbError` propagates; unapproved row; a caller with no `Auth` object; one
+  trust-row read per request (counting store).
+- `tests/integration/test_property_grants_flow.py` (new, both backends,
+  FastAPI and Flask handlers): WG1 to WG5 with the new answers: parent GET
+  filtered at both depths; parent PUT and DELETE 403 for F, served for the
+  admin peer (spec `:802`); with an exclusion naming the list exactly
+  (`memory_personal`, which `WG3` showed the glob grant does not exercise),
+  `/memory_personal/x` and the `?index=` PUT 403;
+  a non-list name with a numeric key unchanged; mixed bulk POST 403 with
+  `refused`, and a following GET shows nothing changed (scalars, list
+  items, list creation, metadata), for the JSON and both form shapes; an
+  all-allowed bulk POST 201; a 400 in the last key leaves the first
+  unapplied; `POST /properties/x` (non-empty name) is 400 and changes
+  nothing; root DELETE by a non-admin type holding `delete` and an
+  exclusion is 403; the `allowed`-shape miss is 403 on GET, absent from the
+  listing, and not pushed.
+- `tests/integration/test_subscription_grants_flow.py` (new, both
+  backends): whole-target push and pull omit `private`, `settings.private`,
+  `settings.deep.private`; subtarget `settings` drops both; subtarget
+  `settings`, resource `private` delivers nothing; an excluded list with
+  each resource `item`, `items`, `value`, `old_item`, `index`, `action`
+  delivers nothing; the full-state fallback to a peer without
+  `subscriptionresync` omits the excluded child.
+- `tests/test_transparent_hook_permissions.py` - the error fallback flips
+  to deny; "not mentioned" goes to the table; a hook returning `None` is
+  404 and a denial is 403; a wildcard hook still receives the `path` it
+  receives today on every route (pins Emm's guard); method and action hooks
+  unchanged in this phase.
+- Updated, listed because their patch targets or assertions move:
+  `tests/test_handler_permission_integration.py` (the legacy case becomes
+  "category not mentioned"), `tests/test_subscription_permission_filtering.py`
+  (7 patches on `actor`), `tests/test_authenticated_views.py` (12),
+  `tests/test_authenticated_bulk_list_reads.py`,
+  `tests/integration/test_property_lists_advanced.py` (2),
+  `tests/test_db_fault_permissions.py:78`, `:95` (still `DbError`).
+- Pins that must stay green unchanged:
+  `tests/test_peer_paths_binding.py:943-1059`,
+  `tests/integration/test_property_path_control_chars.py:71-96`, wire rows
+  `WS*`, `WL*`, `WD*`, `WQ*`, `WP*`.
+
+### Failure Scenarios
+
+- Grant read faults mid-request (`DbError`) - 503 by the fault contract;
+  pinned in `test_db_fault_permissions.py` and `test_access_decision.py`.
+- A property value is not JSON - `drop_excluded` returns it untouched when
+  the node is allowed; unit test.
+- An application whose type excludes `foo/*` and whose peers write the whole
+  `foo` object - 403; **Behavior change:** in the changelog and the
+  migration section, and a debug log line on the owner's side naming the
+  exclusion. Test.
+- An application using `allowed`/`denied`-shaped property rules that served
+  unmatched names through the access table - those names are now 403.
+  **Behavior change:**, migration section with the fix (list them). Test.
+- A bulk POST whose pre-pass succeeds and whose third write faults - earlier
+  writes stay (NOT doing); the response is the 503 and `register_diffs`
+  runs for what was applied, where today it is skipped. Test with a
+  faulting store.
+- A wide exclusion pattern (`*token*`) on a large object - the walk visits
+  every node once per read; bounded by the value's size, skipped without
+  exclusions; a benchmark-free unit test asserts the visit count is linear.
+- A consumer's wildcard property hook that reads `path[0]` - unchanged; the
+  pin above fails if a later edit "cleans up" the doubled path.
+- The pull loop serves K stored diffs - one snapshot for the loop, asserted
+  by the counting store.
+
+### Verification
+
+- [ ] Run the contract's `### Checks` fast tier verbatim
+- [ ] Full tier on both backends before the commit; sequential re-run of
+      any failure
+- [ ] `git show --stat HEAD -- tests/integration/wire`: `WG1` to `WG5`,
+      `WG7`, `WG8` changed, nothing else; `Wire-Phase` trailer
+- [ ] Sphinx build with `-W`
+- [ ] `/verify_implementation` for the phase, then codex on the diff
+
+### Implementation Status: Not Started
+
+---
+
+## Phase 2: every other way in
+
+A6, A17, A18 (methods, actions), A19 (push and pull), A20, subscription
+creation.
+
+### Changes
+
+- `actingweb/handlers/resources.py` - each verb calls `decide(…,
+  "resources", name, op)` (GET `read`, PUT and POST `write`, DELETE
+  `delete`, with the request's method for the table) after authentication;
+  the bare `authorize()` call goes (the table is inside `decide`). The hook
+  is not run on a refusal.
+- `actingweb/permission_evaluator.py` - the Phase 1 "mentioned and
+  unmatched is DENIED" rule extends to `METHODS` and `ACTIONS`.
+- `actingweb/handlers/methods.py:27-78`, `actingweb/handlers/actions.py:27-78`
+  - `_check_method_permission` and `_check_action_permission` keep their
+  names and call `decide` with the request's method (today the fallback
+  hardcodes `GET`); with the Phase 1 rule a mentioned-but-empty category
+  (Emm's `"methods": []`) stays denied. `MethodsHandler.delete` (`:255-260`)
+  and `async_methods.py:181` use the check. The listing filters (`:141-160`
+  in both) answer an empty list when the evaluator cannot be built. The
+  JSON-RPC entry on bare `/methods` (sync, and
+  `async_methods.py:202-253`) checks `params["method"]` before dispatch.
+- `actingweb/interface/hooks.py` - `_check_hook_permission` for `method` and
+  `action` hooks moves to `decide` (the Phase 1 change, now with its
+  handlers).
+- `actingweb/handlers/subscription.py`
+  - creation (`:322-325`): for target `properties`, `resources`, `methods`
+    or `actions`, `decide(…, target, subtarget[/resource], "read")`; a
+    request without a subtarget is admitted when the grant's rule for the
+    category has at least one allow pattern with `read` (judged on the
+    rule, not on what is stored: Emm's subscriber subscribes before
+    `displayname` exists), or, when the grant does not mention the
+    category, when the table admits the relationship. 403 `{"error": "forbidden"}` otherwise. Other
+    targets: the table only, as today.
+  - listing (`:219-227`): `approved=False` removed; an unapproved peer gets
+    403.
+- `actingweb/interface/authenticated_views.py:659-720`
+  `AuthenticatedSubscriptionManager` - `_check_subscription_permission`
+  gains `resource` and uses the same check.
+- `actingweb/actor.py:3955`, `:4019` - the filter's "ALLOWED only" becomes
+  `decide`'s answer, so a grant that does not mention `properties` follows
+  the table on push and pull as on a direct read (A19).
+- `actingweb/handlers/trust.py:1529-1653` `shared_properties` - requires an
+  approved row; evaluates `read` through `decide`; answers
+  `shared_properties` only. `actingweb/interface/integrations/
+  fastapi_integration.py:1145` - the OpenAPI example loses
+  `excluded_properties`.
+- Docs: `docs/reference/routing-overview.rst:31` and the resources section,
+  `docs/guides/access-control.rst:74-75` ("Resources": one grant for REST
+  and MCP), `README.rst:258`, `docs/guides/subscriptions.rst` (creation
+  403; diffs of other targets are the application's to filter),
+  `docs/protocol/actingweb-spec.rst:2209` (the `resources` grant applies to
+  `/resources` and to MCP resources alike), `CHANGELOG.rst`,
+  `docs/migration/v3.16.rst` ("`/resources` follows the grant", "A
+  subscription needs read access", "A `*` callback hook now answers
+  lower-trust peers on `public/*`").
+- `tests/integration/wire/` - `WG9`, `WG10`, `WG12`, `WG13` re-recorded;
+  `WG11` unchanged.
+
+### New Tests, both unit and integration tests
+
+- `tests/integration/test_resources_grant.py` (new, both backends): F reads
+  and writes `x`, is 403 on `private/x`, on `private` (the `X/*` rule) and
+  on DELETE; P is 403 on `security/x`; S reads `public/x` and nothing else,
+  through a `*` callback hook too; an admin peer and the creator do
+  everything; a type that does not mention `resources` follows the table; a
+  type with `resources: []` is denied; the hook is not run on a refusal.
+- `tests/test_methods_actions_decision.py` (new, unit, sync and async
+  handlers): an evaluator that cannot be built denies the call and empties
+  both listings; "not mentioned" follows the table with the request's
+  method; Emm's shape is 403 on POST (WG11 asserted); the JSON-RPC name is
+  checked on both twins; DELETE on both twins.
+- `tests/integration/test_subscription_grants_flow.py` (extended): creation
+  403 for an excluded subtarget, 201 for an allowed one, for the whole
+  target with a friend and with a named-pattern type (Emm's subscriber
+  shape), 403 for a type with nothing readable; a `resources` subscription
+  to `private/x` is 403; L (not mentioned, table admits) pulls and is
+  pushed its data; an unapproved peer's listing is 403; an approved peer's
+  is unchanged; an old subscription to a now-excluded path delivers nothing.
+- `tests/test_shared_properties_endpoint.py` - rewritten against the real
+  evaluator: only readable names, no `excluded_properties`, 403 for a
+  pending row. `tests/test_v2_cost_library_callers.py` - its one patch.
+- Pins unchanged: `tests/test_peer_paths_binding.py`, the `WS`, `WL`, `WD`,
+  `WQ`, `WA`, `WT` wire rows.
+
+### Failure Scenarios
+
+- A per-trust `resources` override written for MCP URIs (`data://*`) now
+  denies every REST name for that peer - intended (one grant); migration
+  section with the fix. Test.
+- Friend applications that relied on DELETE of a resource - 403; the
+  migration section names the registry change (`delete` in the type's
+  `resources.operations`). Test for the override.
+- The evaluator cannot be built at startup - peers get 403 and empty
+  listings where they were served; one ERROR log per process. Test.
+- A subscriber whose whole-target subscription is refused at creation
+  because its type reads nothing - it gets a 403 where it got a silent
+  empty stream; the library's subscriber logs it
+  (`subscription_manager.py` create path). Test that Emm's shape is 201.
+- An application's own diffs for target `resources` reach a peer the grant
+  excludes - creation is refused for an excluded path; a broader
+  subscription still carries what the application registers. Documented in
+  the subscriptions guide (NOT doing).
+
+### Verification
+
+- [ ] Run the contract's `### Checks` fast tier verbatim
+- [ ] Full tier on both backends before the commit
+- [ ] `git show --stat HEAD -- tests/integration/wire`: `WG9`, `WG10`,
+      `WG12`, `WG13` changed, nothing else; `Wire-Phase` trailer
+- [ ] `grep -rn "excluded_properties" actingweb/` has no hit
+- [ ] Sphinx build with `-W`
+- [ ] `/verify_implementation` for the phase, then codex on the diff
+
+### Implementation Status: Not Started
+
+---
+
+## Phase 3: a client's trust type is the user's choice
+
+A10.
+
+```mermaid
+sequenceDiagram
+    participant C as MCP client
+    participant B as User's browser
+    participant L as Library (/oauth)
+    participant P as Provider
+    C->>B: open /oauth/authorize
+    B->>L: GET authorize
+    L-->>B: consumer's form + nonce cookie (nonce in the form and in each provider link's state)
+    B->>L: POST (trust_type, nonce) or follow a provider link
+    L->>L: type acceptable for clients? else access_denied
+    L-->>B: 302 provider (state: type, nonce)
+    B->>P: sign in
+    P-->>B: back to /oauth/callback (GET) or /oauth/callback/apple (POST)
+    B->>L: callback (state, cookie?)
+    L->>L: type acceptable? decision hook (fails closed) -> effective type
+    alt cookie nonce == state nonce
+        L->>L: set trust to effective type, then issue code
+        L-->>B: 302 client redirect_uri (+ client's state)
+    else no match
+        L->>L: store pending authorisation (single use, expires)
+        L-->>B: confirmation template (client, redirect host, level)
+        B->>L: POST /oauth/authorize/confirm (approve or decline)
+        L->>L: re-check client, actor, type; set trust, then issue code
+        L-->>B: 302 client redirect_uri (code, or access_denied)
+    end
+```
+
+### Changes
+
+- `actingweb/permission_integration.py:460-514` `AccessControlConfig`
+  - `configure_oauth2_trust_types` keeps its signature and meaning (the
+    list for OAuth2/MCP clients).
+  - `client_trust_type_acceptable(name)` and `default_client_trust_type()`
+    (new, public): a configured list answers; `None` or `{"allowed": None}`
+    means every registered type except `admin`; an unknown type is never
+    acceptable.
+- `actingweb/oauth2_server/oauth2_server.py`
+  - anonymous registration (`handle_client_registration`, `:96-101`): a
+    `trust_type` that is not acceptable, or a `grant_types` asking for
+    `client_credentials`, answers 400 `invalid_client_metadata` naming
+    `OAuth2ClientManager.create_client`. The trust row on the system actor
+    is always created with the default type (the requested type is kept as
+    client metadata). `MCPClientRegistry.register_client` is unchanged, so
+    the owner path still takes any registered type.
+  - authorize GET (`:195-203`): returns a fresh nonce with `show_form`.
+  - authorize POST (`:215-223`): an unacceptable `trust_type` answers
+    `access_denied`; the form's nonce goes into the state.
+  - `handle_oauth_callback(params, *, form_nonce_cookie=None,
+    decide_trust=None)` (`:340-455`): re-checks acceptability; calls
+    `decide_trust` (the hook, below) to get one effective type, used for
+    the trust, the pending record and the code (`:442`); compares the
+    state's nonce with the cookie's, consuming the nonce. On a match:
+    create or update the trust, and only when that succeeded issue the code
+    (`:425-446` today logs a failed trust and issues the code anyway). An
+    existing row for the client whose relationship differs is set to the
+    effective type and its permission override deleted
+    (`trust_manager.py:539-543` never rewrites it today); the MCP caches
+    for the actor are evicted. Without a match: store a pending
+    authorisation and answer `action: "confirm"`.
+  - `handle_confirmation(token, approve, cookie)` (new): consumes the
+    pending record; on decline redirects to the client with
+    `access_denied` and the client's `state`; on approve re-reads the
+    client (still enabled, same `session_generation`), the actor (still
+    exists) and acceptability, then trust, then code.
+  - `client_credentials` (`:640-679`): refused with `unauthorized_client`
+    when the client's `actor_id` is the OAuth2 system actor; any other
+    client keeps the grant. The metadata (`:713-717`) keeps advertising it
+    (owner-created clients use it).
+- `actingweb/oauth2_server/token_manager.py` - the pending authorisation,
+  beside `mcp_auth_codes`: stored under a hash of its token, `expires_at`
+  in the payload and checked after the consume (the TTL alone hides a row
+  only after the 3600 s skew buffer, `constants.py:264`), consumed through
+  `_consume` with a raising variant so a store fault is 503, not "already
+  used". Fields: client id, redirect URI, the client's `state`, PKCE
+  challenge and method, provider, actor id, email, the provider token data
+  the trust stores, effective type, client `session_generation`. The
+  bucket is added to `purge_expired_tokens` (`:2036-2046`).
+- `actingweb/oauth2_server/state_manager.py` - `create_mcp_state` and
+  `create_state` carry `form_nonce`.
+- `actingweb/handlers/oauth2_endpoints.py`
+  - form render (`:560-830`): sets the nonce cookie
+    (`__Host-aw_authz_nonce`, `HttpOnly`, `Secure`, `SameSite=None`,
+    `Path=/`, ten minutes; over `http://` the unprefixed name without
+    `Secure`, for development and the test apps); passes `form_nonce` to
+    the template and the JSON description; the provider-link states it
+    mints (`:750-759`) carry the nonce and the default client type; the
+    offered list is the acceptable types, still narrowed by the scope
+    filter (`:631-650`) and, now enforced at the POST too, the per-client
+    `allowed_trust_types` (`:654-668`). The variables `trust_types`,
+    `default_trust_type`, `oauth2_trust_control_enabled` stay.
+  - callback (`:522`): passes the cookie and the hook callable; renders
+    `confirm` by setting `response.template_name = "aw-oauth-confirm.html"`
+    with `client_name`, `redirect_host`, the type's display name and
+    description, and the pending token; for `Accept: application/json` the
+    same as JSON.
+  - **Decided by the owner after Phase 0 (`WG16`):** the provider links
+    the form mints (`:750-781`): an Apple link's state
+    is the bare nonce, never wrapped in JSON (`oauth2.py:681-695` wraps any
+    state under 50 characters when a trust type is passed, which `WG16`
+    showed breaks the Apple button today); the type rides in the nonce's
+    payload. The default selected type is `default_client_trust_type()`,
+    not the first in the registry (today `admin` is preselected).
+  - `POST /oauth/authorize/confirm` (new): cross-site refused with
+    evidence required (`_refuse_cross_site(require_evidence=True)`); the
+    pending token must also match a second `__Host-` cookie set with the
+    confirmation page.
+  - The form, the confirmation and their JSON variants send
+    `X-Frame-Options: DENY`, `Content-Security-Policy: frame-ancestors
+    'none'`, `Cache-Control: no-store`, `Referrer-Policy: no-referrer`.
+- `actingweb/handlers/oauth2_callback.py`
+  - the Apple MCP path (`:1469-1491`): passes the cookie and the hook, and
+    handles `confirm` as the GET callback does.
+  - the SPA route's trust creation (`:660-690`): a `trust_type` that is not
+    `client_trust_type_acceptable` creates no trust and the callback answers
+    its existing error shape with `access_denied`;
+    `handlers/oauth2_spa.py:532` refuses it at the authorize call already
+    (400). A request without `trust_type` (a user login) is untouched, as
+    is everything else on this route.
+- `actingweb/interface/integrations/flask_integration.py:1419-1469`,
+  `fastapi_integration.py:2261-2343`, `base_integration.py` - cookies on
+  the handler's response are applied on the template and redirect branches
+  (they are dropped there today); the template name comes from the handler
+  with the current default; the new route on both.
+- `actingweb/templates/aw-oauth-authorization-form.html` - the nonce as a
+  hidden input in every form. `actingweb/templates/aw-oauth-confirm.html`
+  (new, self-contained, no `base.html`): Approve and Decline.
+- `actingweb/interface/hooks.py` - `oauth2_trust_requested(actor, *,
+  client_id, client_name, redirect_uri, provider, email, trust_type,
+  confirmed, **kwargs)`: return `None` to accept, a type name to use it, or
+  `False` to decline. Its own dispatcher, not `execute_lifecycle_hooks`
+  (`:785-790` takes the last non-None result and swallows exceptions): any
+  `False` declines; an exception declines and is logged; differing type
+  names decline; a returned type that is not acceptable declines;
+  `DbError` propagates. Added to the event enum (`:234-235`).
+- `actingweb/oauth2_server/__init__.py` (or the server class) -
+  `complete_client_authorization(actor, client_id, redirect_uri, trust_type,
+  …)` (new, public): policy, hook, trust, code in one call, for a consumer
+  route that authenticates the user itself (Emm's
+  `/oauth/authorize/password` does these steps by hand and reads
+  `config._oauth2_trust_types` directly).
+- `examples/demo/` - configures its client list explicitly; its two form
+  templates gain the hidden input; `trust_hooks.py` unchanged here.
+- `tests/integration/utils/oauth2_helper.py:59-79`,
+  `tests/integration/conftest.py:808-826` - the `oauth2_client` fixture
+  creates an actor through the factory and its client through that actor's
+  authenticated client-creation route (the one `OAuth2ClientManager`
+  serves), then uses `client_credentials`. The thirteen files using the
+  fixture (`test_mcp_permission_filtering.py`, `test_mcp_integration.py`,
+  `test_mcp_tools.py`, `test_mcp_resources.py`, `test_mcp_prompts.py`,
+  `test_mcp_client_descriptions.py`, `test_mcp_basic.py`,
+  `test_mcp_resource_regression.py`,
+  `test_mcp_notification_integrations.py`, `test_oauth2_flows.py`,
+  `test_trust_oauth_integration.py`, `test_authenticated_access.py`,
+  `test_runtime_context_advanced.py`) then act on that actor, not the
+  system actor; assertions naming `_actingweb_oauth2` are updated.
+- Docs: `docs/guides/authentication.rst`, `docs/guides/oauth2-setup.rst`
+  (`:171`, `:179`), `docs/guides/spa-authentication.rst` (the client list applies
+  to `trust_type` on the SPA authorize call), `docs/guides/web-ui.rst:168`, `:274-282` (`form_nonce`, the
+  confirm template and its variables), `docs/guides/mcp-applications.rst:1186`
+  (the sample route uses the public helper), `docs/guides/hooks.rst:187`,
+  `docs/reference/hooks-reference.rst:134`, `docs/reference/routing-overview.rst`
+  (`/oauth/authorize/confirm`), `docs/reference/security.rst`,
+  `docs/quickstart/configuration.rst`, `CHANGELOG.rst` (`SECURITY`;
+  `CHANGED` with **Breaking:** for the registration 400 and the lost grant,
+  **Behavior change:** for the confirmation step, the re-typed row and the
+  default lists), `docs/migration/v3.16.rst` ("An MCP client's access
+  level": the list and its default, the hidden input, the confirmation template, the
+  helper for own routes, the grant, and the query for rows to review).
+- `tests/integration/wire/` - `WG14`, `WG15`, `WG16` re-recorded (`WG16`:
+  the nonce appears, the outcome is identical); `WG17` unchanged.
+
+### New Tests, both unit and integration tests
+
+- `tests/test_oauth2_trust_type_list.py` (new, unit): the list set, unset
+  and `{"allowed": None}`; `admin` only when listed; an unknown type.
+- `tests/integration/test_oauth2_trust_binding.py` (new, both backends, the
+  stub provider, FastAPI and Flask):
+  - honest flows: form POST with a GET callback; provider link with the
+    Apple form-POST callback (broken today, `WG16`): no confirmation, trust
+    of the chosen type, the token's `trust_type` equals the row's;
+  - the client posts the form itself: confirmation shown with the client's
+    name, redirect host and level; no trust and no code before Approve;
+    both after; Decline returns `access_denied` with the client's `state`
+    and creates nothing;
+  - a nonce from another browser's form, and a replayed nonce: confirmation;
+  - `trust_type=admin` with no list: declined at the POST; an old state
+    replayed at the callback: declined;
+  - the confirm POST cross-site, without the page cookie, with an expired
+    token (at 10 min and at 61 min), with a reused token (400), with a
+    store fault (503); a client disabled, an actor deleted, and a changed
+    `session_generation` between pause and confirm: no trust, no code;
+  - trust creation failing: no code issued (match path and confirm path);
+  - an existing `admin` row for the client re-authorised as `mcp_client`:
+    the row is `mcp_client`, its override gone, the next `tools/list`
+    reflects it; an existing `mcp_client` row re-authorised as a higher
+    listed type takes that type (the approval is followed both ways);
+  - the hook: lowers (row, pending record, code and token all carry the
+    lowered type), declines, raises (declined), two hooks disagreeing
+    (declined), returns an unacceptable type (declined);
+  - a custom template without the hidden input: confirmation path, one
+    warning logged per process;
+  - the response headers on the form and the confirmation; cookies present
+    on the template and redirect responses in both integrations;
+  - the PKCE challenge survives the confirmation
+    (`tests/test_oauth2_pkce_binding.py` extended).
+- `tests/integration/test_mcp_oauth2.py:159-300`,
+  `tests/integration/test_oauth2_public_clients.py:178-199`,
+  `test_oauth2_flows.py` - anonymous registration with `trust_type=admin`
+  or `grant_types: ["client_credentials"]` is 400; `client_credentials` for
+  a stored system-actor client is `unauthorized_client`; an owner-created
+  client (including one stored before this change, with the old
+  `grant_types`) works and its token is bound to the owner's actor; the
+  system actor's row for an anonymous registration is the default type.
+- `tests/integration/test_spa_trust_type.py` (new): the SPA route with a
+  type in the client list creates the trust; with `admin` (unlisted) the
+  authorize call is 400 and a hand-built state creates none at the
+  callback; a login without `trust_type` is unchanged; the SPA session, cookies and tokens are byte-identical
+  to a run before the change (the existing SPA tests stay green unchanged).
+- `tests/test_public_client_authorization_helper.py` (new):
+  `complete_client_authorization` applies the list and the hook.
+- Emm's suite (worktree, no production change) on this phase's commit:
+  expected the baseline.
+
+### Failure Scenarios
+
+- Cookies blocked, or the form and the sign-in in different browsers - the
+  confirmation path, by design. Test.
+- A provider returning by cross-site POST (Apple) - `SameSite=None; Secure`
+  carries the cookie, and the second handler reads it. Test through
+  `/oauth/callback/apple`.
+- A sibling subdomain plants a cookie - the `__Host-` prefix refuses a
+  `Domain=` cookie; the nonce is single-use. Test for the prefix on HTTPS
+  config.
+- A slow sign-in outlives the ten-minute cookie - the confirmation, not an
+  error. Test.
+- The pending record expires, is reused, or the store faults - 400 with
+  "start again from the client", or 503; no trust, no code. Tests above.
+  PostgreSQL reaps the bucket from the token endpoint's purge; an idle
+  deployment keeps an expired row (with provider tokens) until the next
+  token request - stated in the security reference; the row is unusable
+  after `expires_at`.
+- A consumer route that creates the trust itself bypasses the binding - it
+  authenticates the user on its own page; the migration section points it
+  to `complete_client_authorization`. Stated.
+- An app that offered every registry type, `admin` included - `admin` is
+  declined with a description and an ERROR log naming the configuration
+  call. **Behavior change:**.
+- A server-to-server integration that registered anonymously for
+  `client_credentials` - 400 at registration, `unauthorized_client` for an
+  already stored client. **Breaking:**.
+- Rows a client obtained before the fix - re-typed when the client next
+  authorises; until then they stand. The migration section gives the query
+  (trust rows with `established_via=oauth2_client` and a relationship
+  outside the client list); the verification runs it against the demo and
+  Emm's test data.
+- Another process still holds the old row in an MCP cache - up to the cache
+  TTL (`todo/mcp-cache-lifecycle-and-revocation.md`); stated in the
+  changelog entry.
+
+### Verification
+
+- [ ] Run the contract's `### Checks` fast tier verbatim
+- [ ] Full tier on both backends before the commit
+- [ ] `git show --stat HEAD -- tests/integration/wire`: `WG14` to `WG16`
+      changed, nothing else; `WG16`'s diff is the nonce only
+- [ ] Browser walk against the `wire_oauth` app with the stub provider on
+      `localhost` (the demo's QA mode has no provider): the honest flow,
+      the skipped-form flow ending in the confirmation, Decline, a declined
+      type. Through offstage or the Chrome extension, per the user's
+      instructions; the browser agent types no real credentials.
+- [ ] Emm's suite on the phase commit (worktree; baseline: PostgreSQL 2
+      failed / 7406 passed, DynamoDB 3 failed / 54 passed)
+- [ ] Sphinx build with `-W`
+- [ ] `/verify_implementation` for the phase with `/security-review`, then
+      codex on the diff
+
+### Implementation Status: Not Started
+
+---
+
+## Phase 4: the trust lifecycle, and the grant-delete callback
+
+A13 to A16, the stale notification URL, C10, and the documented items.
+
+### Changes
+
+- `actingweb/handlers/trust.py:1500-1520` (the permissions DELETE) - reads
+  the override first (strict); when one existed, deletes it and sends the
+  permission callback with the effective (now default) grant through the
+  sender the PUT uses; when none existed, answers 404 and sends nothing
+  (today the 404 branch never runs, `db/*/attribute.py` delete answers True
+  for an absent row). `TrustPermissionStore.delete_permissions`
+  (`trust_permissions.py:609-640`) itself sends nothing: its other callers
+  (`trust.py:256`, `:518`, `:541`, `trust_manager.py:656`) run where the
+  peer has no row or is getting a new one.
+- `actingweb/db/protocols.py:838`, `actingweb/db/dynamodb/trust.py:485-497`,
+  `actingweb/db/postgresql/trust.py:672-677` - `delete(only_if_secret=None)`:
+  True when the row is deleted or already absent; False when a row with
+  another secret remains; a fault raises `DbError`. DynamoDB: condition
+  `attribute_not_exists(id) | secret == s`; PostgreSQL: `AND secret = %s`,
+  and a re-read on rowcount 0 to tell absent from replaced.
+- `actingweb/trust.py:149-250` `Trust.delete(only_if_secret=None)` - the
+  secret is compared on a consistent read before the client disable and
+  token revocation (`:186-195`) and again by the row delete.
+- `actingweb/actor.py`
+  - `delete_reciprocal_trust` (`:3016-3216`) and
+    `delete_reciprocal_trust_async` (`:3821` on): `expected_secret=`; each
+    row from the consistent query is compared before the remote DELETE and
+    again immediately before the local cascade (`:3109-3197`); a row whose
+    secret differs is skipped. A final delete that reports "replaced"
+    (`:3203-3214`) is a lost race, not a fault. The window between the
+    second check and the cascade's first step is the remaining race; it is
+    written into the deletion-invariants reference.
+  - `create_reciprocal_trust_async` (`:2466-2475`): one `except Exception`
+    that drops the attempt, as the sync twin (`:2273`).
+  - `modify_trust_and_notify` (`:1981-2021`) and its async twin (`:2051`
+    on): on the branch that notifies (`:2018`), the URL is the `baseuri`
+    argument when given, else read again after the write.
+- `actingweb/handlers/trust.py`
+  - DELETE (`:1195-1300`): passes the secret it authorised against (the
+    bearer's row for a peer, the row as read for the creator); a lost race
+    answers 404.
+  - PUT (`:963-1132`): validate; snapshot the current override; write
+    permissions; modify and notify; hook. A failed permission write stops
+    before the modify (500, row unapproved, peer not told). A failed modify
+    restores the snapshot (or deletes the new override) and answers its
+    404/400.
+- `actingweb/interface/trust_manager.py`
+  - `_fire_approved(peer_id, row)`: every approving route (REST PUT and the
+    web UI through it, `approve_relationship`, `approve_relationship_async`
+    (`:359`), `modify_and_notify`, approve-on-create) fires
+    `trust_fully_approved_local` once, on the transition from unapproved to
+    both-approved only, with `trust_data=<row>`. `trust_approved` is fired
+    in its place only when no `trust_fully_approved_local` hook is
+    registered; registering `trust_approved` logs one deprecation warning.
+  - `_fire_deleted(row, initiated_by_peer)`: every route that fires today
+    (REST, `delete_relationship(_async)`, the client sweep, `sync_peer`)
+    passes `trust_data=<the row>` and `initiated_by_peer`, **before** the
+    delete, as documented and as today.
+- `examples/demo/shared_hooks/protocol/trust_hooks.py` - registers
+  `trust_fully_approved_local`; docstrings corrected.
+- `thoughts/reference/trust-row-deletion-invariants.md` - the conditional
+  delete, the two checks and the remaining window (its own rule: same
+  commit).
+- `actingweb/fanout.py` module docstring and
+  `docs/guides/subscriptions.rst:499` - "sends the payload as given to every
+  subscriber; it does not apply grants".
+- Docs: `docs/reference/hooks-reference.rst` (`trust_deleted`'s real
+  arguments at `:410`; `trust_approved` deprecated; the built-in notes at
+  `:387-419`), `docs/guides/trust-relationships.rst` (`:148`, `:219` gain
+  `**kwargs`; the owner's base-URI change is unchecked by design; the
+  DELETE's 404; a bearer on an unknown id is 403; a deleted grant notifies
+  the peer), `docs/guides/troubleshooting.rst:279`,
+  `docs/sdk/handler-architecture.rst:142`, `docs/guides/hooks.rst:181`,
+  `CHANGELOG.rst` (including the **Behavior change:** for the 403 on an
+  unknown id, which the peer-authorisation entries do not carry, and a note
+  under the revocation entry that `auto_delete_on_revocation` does not yet
+  act on exclusions, a dropped `read`, scalars or copies fetched by query),
+  `docs/quickstart/configuration.rst:996-1018` (the same limit),
+  `docs/migration/v3.16.rst` ("Trust hooks fire once, with the same
+  arguments").
+- Records, in this phase's commit: `thoughts/todo/grant-enforcement-per-route.md`
+  deleted and its `todo/INDEX.md` row removed; the order table's row for
+  this plan updated.
+- `tests/integration/wire/` - `WG18`, `WG19` re-recorded. `WG18` is the
+  recording for C10; the `WP3` row `spec-1-5` planned for it is dropped
+  there (that plan's Update Log).
+
+### New Tests, both unit and integration tests
+
+- `tests/test_grant_delete_callback.py` (new): the REST delete of an
+  existing override sends one permission callback with the default grant; a
+  second delete answers 404 and sends nothing; `Trust.delete`,
+  `Trust.create` and `create_or_update_oauth_trust` send nothing; a failed
+  send is resent as the PUT's sender does.
+- `tests/test_trust_conditional_delete.py` (new, both backends, sync and
+  async): `delete` with a matching secret, a non-matching one, and an
+  absent row; a row replaced between the handler's read and the delete
+  survives with its subscriptions, permissions and OAuth2 client; the
+  handler answers 404; a fault is `DbError`; a stale secret that still
+  authenticates through DynamoDB's index is refused by the consistent
+  check.
+- `tests/test_trust_re_pair.py` - the async create with a non-httpx
+  exception drops its row; a second attempt creates, not re-pairs.
+- `tests/test_trust_handler_permissions.py` - PUT order: a failing
+  permission write leaves the row unapproved and the peer un-notified; a
+  failing modify leaves the previous override (or none) in place.
+- `tests/test_trust_notify_url.py` (new, sync and async):
+  `approved=True, baseuri=new` notifies the new URL; a modify that does not
+  notify adds no read.
+- `tests/test_trust_manager_hooks.py` (`:52-54` rewritten),
+  `tests/integration/test_trust_lifecycle.py` - one table-driven test per
+  event: each approving route (sync and async) fires
+  `trust_fully_approved_local` exactly once with `trust_data`; a repeat PUT
+  fires nothing; with only a `trust_approved` hook registered it fires
+  instead, once; with both registered only the canonical one fires; each
+  deleting route passes the row and `initiated_by_peer`, before the delete
+  (the hook can still read the peer profile).
+- `tests/test_demo_example.py` - the demo's hook sees a web-UI approval.
+- Emm's suite on the final commit.
+
+### Failure Scenarios
+
+- A conditional delete loses to a concurrent re-pair - 404 to the caller,
+  the new row and its side data intact when the re-pair landed before the
+  second check; inside the remaining window the cascade has run and the new
+  row stands without subscriptions (documented; the peer's next sync
+  re-creates them). Test for both sides of the check.
+- A consumer hook written to the documented four parameters without
+  `**kwargs` - raises `TypeError` today on REST deletes (swallowed) and
+  keeps doing so; the reference is corrected and the dispatcher logs the
+  hook name at ERROR once per process. Test for the log.
+- An app registering both approval hook names - only the canonical one
+  runs; **Behavior change:** in the changelog. Test.
+- The permission callback for a deleted grant fails to send - bounded
+  resend; the delete stands. Test.
+- A PUT's permission write succeeds and the modify then faults (`DbError`)
+  - the restore runs in a `finally`; if the restore itself faults the
+  override stays on an unapproved row, which grants nothing (peer-
+  authorisation A1). Test with a faulting store.
+
+### Verification
+
+- [ ] Run the contract's `### Checks` fast tier verbatim
+- [ ] Full tier on both backends before the commit; PostgreSQL-only
+      failures are real
+- [ ] `git show --stat HEAD -- tests/integration/wire`: `WG18`, `WG19`
+      changed, nothing else; `WT5` unchanged (the hook order did not
+      move)
+- [ ] Sphinx build with `-W`
+- [ ] Emm's suite on the final commit (worktree; baseline as above; run on
+      `master` first if the baseline has moved)
+- [ ] `/verify_implementation` for the whole plan with `/security-review`,
+      then codex on the branch diff
+- [ ] `grep -n "approved=False" actingweb/handlers/subscription.py` has no
+      hit
+
+### Implementation Status: Not Started
+
+---
+
+## Evaluation Notes
+
+Five evaluators read the draft against the code on 2026-11-10; the outside
+voice ran afterwards with their findings. Every finding below quoted its
+line; the quotes are in the session, the plan text carries the fix.
+
+### Architecture
+
+- `decide(config, auth_obj, …)` had no `auth_obj` at the filter, the hook
+  check and the views, and an import cycle through `auth` - now a pure
+  `access_table_admits` in `auth.py` and a `decide` keyed on the peer id
+  (Phase 1).
+- `has_excluded_descendant` by "literal prefix" was undefined for `*/secret`
+  and `mem*/x` - replaced by the data-based `holds_excluded` (owner's
+  decision wording adjusted: "when the stored value or the request body
+  holds an excluded descendant").
+- "Evaluate on the bare subtarget name when a resource is set" would have
+  leaked `settings/private` - dropped; full-path evaluation kept.
+- A denied hook result of `None` collided with "the hook hides the value" -
+  a sentinel.
+- The cookie could not be set or read where the draft put it (both
+  integrations return before copying cookies; the template name is
+  hard-coded; the Apple MCP path is a second handler; the server has no
+  hooks) - Phase 3 names each site.
+- The pending record lacked what completion needs; the lifecycle dispatcher
+  fails open - full field list in `token_manager`, a dedicated fail-closed
+  dispatcher.
+- `Trust.delete` has its own pre-row cascade; the DB `delete` needed a
+  third meaning - Phase 4 specifies both and names the remaining window.
+- `trust_deleted` after the delete broke the documented contract and Emm -
+  kept before.
+- Overlap with `spec-1-5` (list items by path, the missing `return`, C10,
+  T22) - split by the owner; both queued plans carry an Update Log entry.
+
+### Security
+
+- A rule that is present but unmatched returned NOT_FOUND and would have
+  been sent to the table on push, pull and hooks - "mentioned" versus "not
+  mentioned" (owner decision); the listing's own NOT_FOUND include removed.
+- An existing client row is never re-typed on re-authorisation - re-typed
+  to the approved type in both directions (owner), override dropped, caches
+  evicted.
+- The form GET mints provider states itself - they carry the nonce and the
+  default type.
+- Root `DELETE /properties` and wildcard-led exclusions - covered.
+- The full-state fallback's extra wrapper level hid child exclusions -
+  unwrapped.
+- The exclusion rule was properties-only while `/resources` got the grant -
+  applies to `RESOURCES` too; creation checked for resources, methods,
+  actions.
+- Client views must not reach the access table - `is_client` denies.
+- Cookie hardening (`__Host-`, single use, frame and cache headers, the
+  confirm POST's evidence and page cookie) - folded in.
+- The SPA authorize route creates a trust from a caller-chosen type in a
+  cleartext state - the client list applies there (owner: a separate list
+  only if the route were not for MCP clients; it is, and Emm never sends
+  the field).
+- `{"allowed": None}` must mean "all but `admin`" - specified and tested.
+- Checked and sound: an anonymous registrant cannot set `actor_id`; `/mcp`
+  is unchanged by `decide`; nothing from A5 to A20 is dropped silently.
+
+### Scalability
+
+- Each new helper would have reloaded the grant (two trust-row reads per
+  evaluation today) - one `GrantSnapshot` per request, reused by the hook
+  check; push passes the row it already read; the pull loop builds one.
+- The bulk POST pre-pass would have read each list twice - a prepared
+  batch.
+- The descendant walk is skipped without exclusions and never enters
+  arrays; a wildcard-led exclusion walks the whole value (accepted, linear).
+- The pending bucket is added to the PostgreSQL purge list.
+- The notify re-read only on the notifying branch; the conditional delete
+  adds no read on success.
+- The replica cleanup's double bucket read and N+1 deletes - moved with A8.
+
+### Usability
+
+- The request's-method fallback would have let Emm's `subscriber` execute
+  methods - a mentioned-but-empty category denies; `WG11` pins it.
+- De-doubling the hook path would have disabled Emm's wildcard property
+  guard - the hook's `path` is unchanged; a pin test.
+- The new 403s carried no body - `forbidden` or `not_approved`, and
+  `refused` names on the bulk POST; no reason that would reveal an
+  exclusion.
+- Templates that never POST (provider links) would always confirm - the
+  nonce is in the link states; "every form", not "a hidden input".
+- Emm's password route reads `_oauth2_trust_types` and builds the trust by
+  hand - public list methods and `complete_client_authorization`.
+- A registration asking for `client_credentials` was silently downgraded -
+  400 at registration.
+- A whole-target subscription by a named-pattern type (Emm's subscriber)
+  must stay 201 - specified and tested.
+- Confirmation: Decline, the redirect host beside the client's self-chosen
+  name, a self-contained default template.
+- Docs the draft missed - named per phase.
+
+### Tests and code quality
+
+- The harness could not record the OAuth, resources, flag and hook rows - a
+  Harness block in Phase 0 (fourth app, stub provider, normaliser, hooks,
+  the owner rule in `verify_groups.py`, explicit `WIRE_RECORD` rows, the
+  xdist group).
+- Row ownership per phase was wrong (the filter's rows change with the
+  evaluator in Phase 1; `WG16` changes in Phase 3) - corrected; rows
+  reserved are the rows defined.
+- 45 patch sites target the modules where the checks live - the
+  `_check_*_permission` wrappers stay and resolve the evaluator in their
+  own module; the affected files are listed.
+- Phase 1 changed method and action hooks ahead of their handlers - scoped
+  to property hooks; the rest in Phase 2.
+- Async twins named: `async_methods.py:181`, `:202-253`, `actor.py:3821`,
+  `:2051`, `trust_manager.py:359`.
+- `client_credentials` had two rules - actor-based only; thirteen fixture
+  users listed.
+- Missing regression tests added: the list-diff resources, A19's push half,
+  the notify URL, Flask for the confirm route, the `allowed`-shape miss.
+- Duplication removed: no `trust_type_policy` module (methods on
+  `AccessControlConfig`), `evaluate_property_with_exclusions` deleted, the
+  pending store reuses the authorisation-code pattern.
+
+### Outside voice
+
+Providers: codex (`exec -s read-only`, outside the sandbox) and a
+fresh-context Claude reviewer; codex's citations were spot-checked.
+
+- The replica store was underweighted: its keys are property names only for
+  whole-target subscriptions, lists delete by a meta row, and the
+  attribute-list plan rewrites it next - **the owner moved A8's cleanup to
+  that plan** (its Update Log, 2026-11-10).
+- The grant-delete callback placed in the store function would fire on
+  every trust delete and create, and on a no-op delete - sent from the
+  handler only, after a strict read.
+- A code was issued even when trust creation failed; a hook-lowered type
+  was not what the code carried; the pending record's expiry, single use
+  and 503 did not follow from the primitives; confirmation re-checked too
+  little - all four fixed in Phase 3.
+- Anonymous registration still created a system-actor row of the requested
+  type - always the default type.
+- "Always confirm after sign-in" is simpler than cookie plus fallback - put
+  to the owner earlier as an option and not chosen; recorded under NOT
+  doing.
+- Split A10 into its own plan - the owner kept it as a phase.
+- Three plans rewrite the publish path - the Update Log entries name the
+  functions each must rebase on; `spec-1-5`, the last of the three, owns a
+  post-stack matrix (scalar, nested, list, delete, push, pull, resync).
+
+### Unverified notes
+
+- Browser handling of a `Secure`, `SameSite=None` cookie on
+  `http://localhost` was not checked; the plan uses an unprefixed,
+  non-`Secure` cookie over HTTP for that reason.
+- Whether real connector clients (claude.ai, ChatGPT) ever send
+  `trust_type` or `grant_types: ["client_credentials"]` at registration was
+  not checked (no outside calls); the library's fixtures send neither, so
+  the 400 looks harmless for them.
+- No code path was found that authenticates against the
+  `oauth2_interactive` rows the SPA route creates; its severity rests on
+  that.
+- `interface/subscription_manager.py`'s baseline fetch URL for a subtarget
+  plus resource was not read; this plan no longer changes what a list tail
+  returns, so nothing there should break.
+- Whether an application writes its own keys into `remote:{peer}` was not
+  checked; relevant to the cleanup the attribute-list plan now owns.
+- `spec-1-5` `:672` plans "MCP resources map to methods (O6)" while Phase 2
+  here writes that the `resources` grant covers `/resources` and MCP
+  resources; the two sentences must be reconciled when `spec-1-5` is next
+  drafted.
+- The MCP token bucket and the SPA token bucket being disjoint (an MCP
+  token cannot reach REST) is from the research trace, not re-read here.

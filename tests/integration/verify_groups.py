@@ -117,6 +117,10 @@ def check_wire_rows(
             problems.append(f"{row}: exposure must be true or false")
         elif entry["exposure"]:
             exposures.append(row)
+            # An exposure is a known hole: some phase must be the one that
+            # closes it.
+            if isinstance(owners, list) and not owners:
+                problems.append(f"{row}: an exposure row must name an owner")
         if not entry.get("expected"):
             problems.append(f"{row}: expected is empty")
         reason = entry.get("reason")

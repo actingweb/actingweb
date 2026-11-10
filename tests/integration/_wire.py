@@ -56,6 +56,31 @@ _state = {"recording": False}
 _INFLIGHT = {"count": 0}
 
 _HEADERS_KEPT = ("location", "content-type", "www-authenticate", "retry-after")
+# Paths a wire app serves that are not part of what crosses the wire: the
+# stand-in OAuth2 provider the ``wire_oauth`` app hosts for itself.
+_UNRECORDED_PREFIXES = ("/_stub/",)
+# Trust lifecycle hooks record their name and argument names only while a row
+# that asks for them runs (``trust_hooks_recorded``), so rows recorded before
+# the recorder existed keep their bytes.
+TRUST_HOOKS = {"on": False}
+
+
+@contextlib.contextmanager
+def trust_hooks_recorded() -> Any:
+    """Record the trust lifecycle hooks' names and argument names."""
+    TRUST_HOOKS["on"] = True
+    try:
+        yield
+    finally:
+        TRUST_HOOKS["on"] = False
+
+
+def _cookie(value: str) -> str:
+    """A ``Set-Cookie`` value with the cookie's own value replaced: its name
+    and attributes are what a row compares."""
+    head, sep, attributes = value.partition(";")
+    name, eq, _ = head.partition("=")
+    return f"{name.strip()}{eq}<cookie>{sep}{attributes}" if eq else value
 
 
 def start_recording() -> None:
@@ -131,7 +156,9 @@ class RecordingMiddleware:
         with _LOCK:
             _INFLIGHT["count"] += 1
         try:
-            if not _state["recording"]:
+            if not _state["recording"] or scope["path"].startswith(
+                _UNRECORDED_PREFIXES
+            ):
                 await self.app(scope, receive, send)
             else:
                 await self._record(scope, receive, send)
@@ -169,6 +196,11 @@ class RecordingMiddleware:
                     name = k.decode().lower()
                     if name in _HEADERS_KEPT:
                         entry["headers"][name] = v.decode()
+                    elif name == "set-cookie":
+                        # A response may set several: kept as a list.
+                        entry["headers"].setdefault(name, []).append(
+                            _cookie(v.decode())
+                        )
             elif message["type"] == "http.response.body":
                 resp_chunks.append(message.get("body", b""))
             await send(message)
@@ -431,6 +463,9 @@ class Scenario:
         self.names = names
         self.secrets = secrets
         self.steps: list[dict[str, Any]] = []
+        # Optional: what else a row snapshots after each step (the
+        # publisher's properties, an OAuth2 client's rows), under "extra".
+        self.extra_snapshot: Callable[[], Any] | None = None
         # Set by the ``wire_pair`` fixture.
         self.relationship: str = ""
         self.trust_secret: str = ""
@@ -460,12 +495,15 @@ class Scenario:
             wait_for_quiet()
         finally:
             wire = stop_recording()
+        after = snapshot(self.publisher, self.subscribers, self.names)
+        if self.extra_snapshot is not None:
+            after["extra"] = self.extra_snapshot()
         self.steps.append(
             {
                 "step": label,
                 "result": _describe_result(result),
                 "wire": wire,
-                "after": snapshot(self.publisher, self.subscribers, self.names),
+                "after": after,
             }
         )
         return result
@@ -490,6 +528,9 @@ def _describe_result(result: Any) -> Any:
 # ---------------------------------------------------------------------------
 
 _HEX32 = re.compile(r"\b[0-9a-f]{32}\b")
+# An OAuth2 client id (``mcp_`` and hex): ``_`` is a word character, so the
+# ``\b`` of ``_HEX32`` never fires on one.
+_MCP_CLIENT_ID = re.compile(r"mcp_[0-9a-f]{8,}")
 _PORT = re.compile(r"localhost:5[5-9]\d\d")
 # Timestamp shapes the library produces, each kept as its own class so a
 # format change shows as a diff and equal values stay equal.
@@ -508,7 +549,11 @@ _EPOCH_KEYS = {
     "suspended_at",
     "capabilities_fetched_at",
     "permissions_fetched_at",
+    "client_id_issued_at",
 }
+# Keys that are an epoch only when the value is a number: elsewhere the same
+# key holds a timestamp string, which the timestamp shapes name.
+_EPOCH_NUMBER_KEYS = {"created_at", "expires_at", "issued_at"}
 # The trust types the wire apps register: a listing of trust types (an
 # actor's /meta) keeps only these, since every app in a test worker shares
 # the registry's rows and other tests add their own.
@@ -529,6 +574,11 @@ _SECRET_KEYS = {
     "verify",
     "nonce",
     "token",
+    # OAuth2 (the ``wire_oauth`` rows): a value a row did not name fails the
+    # guard instead of passing as an unrecognised string.
+    "client_secret",
+    "access_token",
+    "refresh_token",
 }
 
 
@@ -592,6 +642,8 @@ class Normaliser:
             value = value.replace(subid, name)
         for port_host, name in self.hosts.items():
             value = value.replace(port_host, f"<{name}>")
+            # Inside a URL carried in a query (an OAuth2 redirect_uri).
+            value = value.replace(port_host.replace(":", "%3A"), f"<{name}>")
         for kind, pattern in _TS_SHAPES:
             match = pattern.fullmatch(value)
             if match:
@@ -628,6 +680,12 @@ class Normaliser:
                     out[nk] = f"<secret:{self.secrets.get(v, '?unnamed')}>"
                 elif nk in _EPOCH_KEYS and isinstance(v, int | float | str):
                     out[nk] = self._epoch(v)
+                elif (
+                    nk in _EPOCH_NUMBER_KEYS
+                    and isinstance(v, int | float)
+                    and not isinstance(v, bool)
+                ):
+                    out[nk] = self._epoch(v)
                 elif nk == "aw_trust_types" and isinstance(v, list):
                     out[nk] = [t for t in v if t in WIRE_TRUST_TYPES]
                 else:
@@ -656,7 +714,7 @@ def normalise(
     norm.collect_subids(recording)
     out = norm.walk(recording)
     text = json.dumps(out)
-    leaked = _HEX32.findall(text) + _PORT.findall(text)
+    leaked = _HEX32.findall(text) + _PORT.findall(text) + _MCP_CLIENT_ID.findall(text)
     for secret in secrets:
         if secret and secret in text:
             leaked.append("<a secret>")

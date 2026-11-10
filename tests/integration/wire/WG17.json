@@ -1,0 +1,171 @@
+{
+ "steps": [
+  {
+   "after": {
+    "extra": {
+     "owner_trusts": [
+      {
+       "approved": true,
+       "established_via": "oauth2_client",
+       "peer_approved": false,
+       "peerid": "oauth2_client:<client>:<client>",
+       "relationship": "mcp_client"
+      }
+     ],
+     "system_trusts": []
+    },
+    "publisher": {
+     "grants": {},
+     "queue": [],
+     "subscriptions": [],
+     "suspensions": [],
+     "trust": {}
+    },
+    "subscribers": {}
+   },
+   "result": {
+    "body": {
+     "access_token": "<secret:access_token>",
+     "expires_in": 3600,
+     "scope": "mcp",
+     "token_type": "Bearer"
+    },
+    "status": 200
+   },
+   "step": "client_credentials token",
+   "wire": [
+    {
+     "auth": null,
+     "children": [],
+     "headers": {
+      "content-type": "application/json"
+     },
+     "host": "wire_oauth",
+     "method": "POST",
+     "path": "/oauth/token",
+     "query": "",
+     "request": "grant_type=client_credentials&client_id=<client>&client_secret=<secret:client_secret>",
+     "response": {
+      "access_token": "<secret:access_token>",
+      "expires_in": 3600,
+      "scope": "mcp",
+      "token_type": "Bearer"
+     },
+     "status": 200
+    }
+   ]
+  },
+  {
+   "after": {
+    "extra": {
+     "owner_trusts": [
+      {
+       "approved": true,
+       "established_via": "oauth2_client",
+       "peer_approved": true,
+       "peerid": "oauth2_client:<client>:<client>",
+       "relationship": "mcp_client"
+      }
+     ],
+     "system_trusts": []
+    },
+    "publisher": {
+     "grants": {},
+     "queue": [],
+     "subscriptions": [],
+     "suspensions": [],
+     "trust": {}
+    },
+    "subscribers": {}
+   },
+   "result": {
+    "body": {
+     "id": 2,
+     "jsonrpc": "2.0",
+     "result": {
+      "tools": [
+       {
+        "description": "Search (wire harness).",
+        "name": "search"
+       }
+      ]
+     }
+    },
+    "status": 200
+   },
+   "step": "tools/list",
+   "wire": [
+    {
+     "auth": "bearer:access_token",
+     "children": [],
+     "headers": {
+      "content-type": "application/json"
+     },
+     "host": "wire_oauth",
+     "method": "POST",
+     "path": "/mcp",
+     "query": "",
+     "request": {
+      "id": 1,
+      "jsonrpc": "2.0",
+      "method": "initialize",
+      "params": {
+       "capabilities": {},
+       "clientInfo": {
+        "name": "Wire Client",
+        "version": "1.0.0"
+       },
+       "protocolVersion": "2025-06-18"
+      }
+     },
+     "response": {
+      "id": 1,
+      "jsonrpc": "2.0",
+      "result": {
+       "capabilities": {
+        "tools": {
+         "listChanged": true
+        }
+       },
+       "protocolVersion": "2025-06-18",
+       "serverInfo": {
+        "name": "actingweb",
+        "version": "3.15.1"
+       }
+      }
+     },
+     "status": 200
+    },
+    {
+     "auth": "bearer:access_token",
+     "children": [],
+     "headers": {
+      "content-type": "application/json"
+     },
+     "host": "wire_oauth",
+     "method": "POST",
+     "path": "/mcp",
+     "query": "",
+     "request": {
+      "id": 2,
+      "jsonrpc": "2.0",
+      "method": "tools/list"
+     },
+     "response": {
+      "id": 2,
+      "jsonrpc": "2.0",
+      "result": {
+       "tools": [
+        {
+         "description": "Search (wire harness).",
+         "name": "search"
+        }
+       ]
+      }
+     },
+     "status": 200
+    }
+   ]
+  }
+ ]
+}

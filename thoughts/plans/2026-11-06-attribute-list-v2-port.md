@@ -10,6 +10,44 @@ status: proposed
 
 ## Update Log
 
+- **2026-11-10, from `2026-11-10-grant-enforcement-per-route.md` (owner)**:
+  this plan's Phase 4 takes over audit item A8, the receiver's opt-in
+  cleanup after a revocation (`auto_delete_on_revocation`), to be built on
+  the rewritten replica store and worked into Phase 4 at the next draft
+  (`/update_plan`). What it has to deliver, from
+  `research/2026-11-10-grant-enforcement-per-route.md` ("A8") and that
+  plan's outside voice:
+  - the deletion is computed from the stored grant (delete what
+    `has_property_access(name, "read") is not True`), not from a diff of
+    pattern strings; `excluded_patterns` added and `read` dropped are
+    revocations; scalars are deleted as well as lists; a grant in a shape
+    the subscriber cannot evaluate (`allowed`/`denied`, `properties: None`,
+    an override-only copy) deletes nothing and says so;
+  - every writer of the stored copy runs it
+    (`interface/subscription_manager.py:2528`, `:2613`, `:2925`,
+    `remote_storage.py:677`, `maintenance/peer_state.py:380`), not only the
+    callback and its reconcile; the `has_revocations` gate at
+    `handlers/callbacks.py:453` goes, and the restore after a losing
+    callback becomes name-keyed (`_still_granted`, `callbacks.py:67-74`);
+  - replica keys are property names only for a whole-target `properties`
+    subscription (`remote_storage.py:350-376`, one bucket per peer, `:52`):
+    either the replica records the target with each key or the cleanup is
+    limited to such peers; a replica list is deleted by key prefix, not by
+    its meta row's length (`attribute_list.py:461-470`); an object replica
+    holding an excluded descendant is rewritten without it, with the path
+    rule that plan adds to the evaluator (`path_excluded`,
+    `drop_excluded`), mirrored in `peer_permissions.has_property_access`;
+  - one strict bucket read feeds both name sets; the flag stays off by
+    default; `permission_changes` keeps `granted_patterns` and
+    `revoked_patterns` (Emm reads them) and gains keys only additively.
+  That plan also changes code this one references:
+  `Actor.filter_subscription_blob` (`actor.py:3874` on) is the one filter
+  for push and pull and gains the any-depth exclusion walk and a grant
+  snapshot parameter; `evaluate_property_with_exclusions` is removed. This
+  plan's Phase 4 ("the permission filter ahead of the store") rebases on
+  those, and its line references into `actor.py` and `callbacks.py` are
+  refreshed at the next draft.
+
 - **2026-11-06**: The Implementation Order was still a four-plan order with
   the security-first PR "not yet decided". It is decided, and a sixth plan,
   the wire baseline (`2026-11-06-subscription-wire-baseline.md`), lands

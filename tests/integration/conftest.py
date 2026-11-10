@@ -982,10 +982,17 @@ def subscriber_app(docker_services, setup_database, worker_info):  # pylint: dis
 BASE_WIRE_PORT = 5561
 BASE_WIRE_PEER_PORT = 5562
 BASE_WIRE_OTHER_PORT = 5563
+# The fourth: OAuth2 and MCP on, its provider a stand-in it serves itself
+# (tests/integration/_oauth_stub.py). The last free port of a worker's ten.
+BASE_WIRE_OAUTH_PORT = 5564
 
 
-def _start_wire_app(name: str, port: int):
-    """Start one recording wire app on ``port``; return its ``WireHost``."""
+def _start_wire_app(name: str, port: int, *, oauth: bool = False):
+    """Start one recording wire app on ``port``; return its ``WireHost``.
+
+    ``oauth``: OAuth2 and MCP on, with the stand-in provider (``wire_oauth``).
+    """
+    import socket
     from threading import Thread
 
     import uvicorn
@@ -993,12 +1000,23 @@ def _start_wire_app(name: str, port: int):
     from ._wire import WireHost
     from .test_harness import create_test_app
 
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        if probe.connect_ex(("127.0.0.1", port)) == 0:
+            raise RuntimeError(f"{name}: port {port} is already in use")
+
+    oauth_stub = None
+    if oauth:
+        from ._oauth_stub import new_apple_signing_key_pem
+
+        oauth_stub = new_apple_signing_key_pem()
+
     url = f"http://{TEST_APP_HOST}:{port}"
     fastapi_app, aw_app = create_test_app(
         fqdn=f"{TEST_APP_HOST}:{port}",
         proto="http://",
         enable_oauth=False,
-        enable_mcp=False,
+        enable_mcp=oauth,
+        oauth_stub=oauth_stub,
         enable_devtest=True,
         enable_subscription_processing=True,
         subscription_config={
@@ -1051,6 +1069,15 @@ def wire_other_app(docker_services, setup_database, test_app, worker_info):  # p
     nothing (the security plan's access and trust rows)."""
     return _start_wire_app(
         "wire_other_app", BASE_WIRE_OTHER_PORT + worker_info["port_offset"]
+    )
+
+
+@pytest.fixture(scope="session")
+def wire_oauth(docker_services, setup_database, test_app, worker_info):  # pylint: disable=unused-argument
+    """The fourth wire app: OAuth2 (Google and Apple, both the stand-in) and
+    MCP on (the grant rows ``WG14`` to ``WG17``)."""
+    return _start_wire_app(
+        "wire_oauth", BASE_WIRE_OAUTH_PORT + worker_info["port_offset"], oauth=True
     )
 
 

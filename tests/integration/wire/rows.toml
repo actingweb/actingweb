@@ -34,6 +34,7 @@
 "spec-1-5" = ["WS10-WS19", "WL30-WL39", "WA19-WA29"]
 "subs-list-cache-lifetime" = ["WM2-WM9"]
 "email-as-creator-at-write-time" = ["WE1-WE9"]
+"grant-enforcement-per-route" = ["WG1-WG19"]
 
 # ---------------------------------------------------------------------------
 # peer-authorisation-fixes, Phase 0: the flows over the paths the fix changes
@@ -540,3 +541,143 @@ reason = [
   "2026-11-08 first recording (peer-authorisation-fixes:3)",
   "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
 ]
+
+# ---------------------------------------------------------------------------
+# grant-enforcement-per-route, Phase 0: what a peer's grant admits on each
+# route, recorded before the fix (test_wire_grants.py)
+# ---------------------------------------------------------------------------
+
+[rows."WG1"]
+test = "test_wire_grants.py::test_wg1_parent_of_an_excluded_tree"
+owners = ["grant-enforcement-per-route:1"]
+exposure = true
+expected = "F (friend, private/* excluded) reads private whole (200) and overwrites it (PUT 204); the listing serves private with its value and ?metadata=true names it."
+reason = ["2026-11-10 first recording (grant-enforcement-per-route:0)"]
+
+[rows."WG2"]
+test = "test_wire_grants.py::test_wg2_excluded_child"
+owners = ["grant-enforcement-per-route:1"]
+exposure = true
+expected = "F reads settings with its excluded child private and grandchild deep.private inside (200); settings/private itself 403; PUT settings 204 replaces both excluded children."
+reason = ["2026-11-10 first recording (grant-enforcement-per-route:0)"]
+
+[rows."WG3"]
+test = "test_wire_grants.py::test_wg3_excluded_list_tail"
+owners = ["grant-enforcement-per-route:1"]
+exposure = true
+expected = "F (memory_* excluded): the list, the tail /memory_personal/x and the PUT ?index=0 are 403 (the glob matches the tail). E (the list excluded by its exact name): the list 403, but the tail serves the whole list (200) and the PUT ?index=0 writes item 0 (204)."
+reason = ["2026-11-10 first recording (grant-enforcement-per-route:0)"]
+
+[rows."WG4"]
+test = "test_wire_grants.py::test_wg4_bulk_post"
+owners = ["grant-enforcement-per-route:1"]
+exposure = true
+expected = "F's POST /properties: the denied key private/x skipped beside the applied allowed mood (201); bulk items for the excluded list answer 403 but are applied (memory_personal[0] is m1b); the list memory_new is created, then 403; a bare private object written (201)."
+reason = ["2026-11-10 first recording (grant-enforcement-per-route:0)"]
+
+[rows."WG5"]
+test = "test_wire_grants.py::test_wg5_allowed_shape_miss"
+owners = ["grant-enforcement-per-route:1"]
+exposure = true
+expected = "W (base rule {\"allowed\": [\"notes\"]}, the access table admits property GETs): color served (200); the listing serves every property, private and memory_personal included; its pull carries an empty diff."
+reason = ["2026-11-10 first recording (grant-enforcement-per-route:0)"]
+
+[rows."WG6"]
+test = "test_wire_grants.py::test_wg6_flows_that_must_not_change"
+owners = []
+exposure = false
+expected = "F's reads and writes of allowed names and lists, D (admin) overwriting private and settings, L (wire_legacy) reading color, F and P calling a method and an action and listing both: the outcomes every phase keeps."
+reason = ["2026-11-10 first recording (grant-enforcement-per-route:0)"]
+
+[rows."WG7"]
+test = "test_wire_grants.py::test_wg7_whole_target_push_and_pull"
+topologies = ["same_host", "two_hosts"]
+owners = ["grant-enforcement-per-route:1"]
+exposure = true
+expected = "F subscribed to all of A's properties: the push and the pull carry private, settings.private and settings.deep.private inside their parents; color sent. A stores the depth-3 PUT correctly, but its diff is {\"settings\": {\"deep\": \"d2\"}} (resource is the second segment only), so F's replica of settings becomes {\"deep\": \"d2\"}."
+reason = ["2026-11-10 first recording (grant-enforcement-per-route:0)"]
+
+[rows."WG8"]
+test = "test_wire_grants.py::test_wg8_subtarget_push_and_pull"
+topologies = ["same_host", "two_hosts"]
+owners = ["grant-enforcement-per-route:1"]
+exposure = true
+expected = "F's subscriptions at A (made directly, so F holds no callback row and each push answers 403 at F): the A-side SDK append to memory_personal crosses no wire and the pull of memory_personal (resource item) holds one empty diff; the settings write pushes and queues deep.private with private dropped; the settings/private subscription's pull holds one empty diff."
+reason = ["2026-11-10 first recording (grant-enforcement-per-route:0)"]
+
+[rows."WG9"]
+test = "test_wire_grants.py::test_wg9_category_not_mentioned"
+owners = ["grant-enforcement-per-route:1", "grant-enforcement-per-route:2"]
+exposure = true
+expected = "L (no trust type, access rows only) pulls a properties subscription: an empty diff. wire_hooked through its property hook: S (associate, rule does not match) 403; F and L 200."
+reason = ["2026-11-10 first recording (grant-enforcement-per-route:0)"]
+
+[rows."WG10"]
+test = "test_wire_grants.py::test_wg10_resources"
+owners = ["grant-enforcement-per-route:2"]
+exposure = true
+expected = "F, S, P and D on /resources/x, private/x, public/x and private: the access table alone decides (F, P, D served including private/x; S 403)."
+reason = ["2026-11-10 first recording (grant-enforcement-per-route:0)"]
+
+[rows."WG11"]
+test = "test_wire_grants.py::test_wg11_empty_methods_rule"
+owners = []
+exposure = false
+expected = "R of the consumer's subscriber type (\"methods\": [] and a POST /methods access row): the method call refused, the listing as today."
+reason = ["2026-11-10 first recording (grant-enforcement-per-route:0)"]
+
+[rows."WG12"]
+test = "test_wire_grants.py::test_wg12_subscription_creation"
+owners = ["grant-enforcement-per-route:2"]
+exposure = true
+expected = "F subscribes to memory_personal (excluded), color and the whole target; N (patterns [color]) to the whole target: 201 each."
+reason = ["2026-11-10 first recording (grant-enforcement-per-route:0)"]
+
+[rows."WG13"]
+test = "test_wire_grants.py::test_wg13_shared_properties_and_unapproved_listing"
+owners = ["grant-enforcement-per-route:2"]
+exposure = true
+expected = "F's shared_properties is empty and names every property, color included, in excluded_properties; U (not approved) gets the same for its row and lists its subscriptions (200)."
+reason = ["2026-11-10 first recording (grant-enforcement-per-route:0)"]
+
+[rows."WG14"]
+test = "test_wire_grants.py::test_wg14_anonymous_registration"
+owners = ["grant-enforcement-per-route:3"]
+exposure = true
+expected = "An anonymous registration asking for admin and client_credentials is accepted as admin; the client_credentials token is issued; tools/list runs on the system actor."
+reason = ["2026-11-10 first recording (grant-enforcement-per-route:0)"]
+
+[rows."WG15"]
+test = "test_wire_grants.py::test_wg15_client_posts_the_form_itself"
+owners = ["grant-enforcement-per-route:3"]
+exposure = true
+expected = "A client POSTs the authorize form itself with trust_type admin, the provider callback follows: an admin trust on the user's actor, no form ever shown."
+reason = ["2026-11-10 first recording (grant-enforcement-per-route:0)"]
+
+[rows."WG16"]
+test = "test_wire_grants.py::test_wg16_honest_flows"
+owners = ["grant-enforcement-per-route:3"]
+exposure = true
+expected = "wire_oauth lists the wire types, admin among them, with no default: the form (asked for as JSON and as HTML, both answer HTML) offers them with admin preselected and both provider buttons. Client 1: a POST with mcp_client, the GET callback, the token (trust_type mcp_client) and tools/list; a POST choosing Apple and Apple's form-POST callback: the code. Client 2's buttons followed with no type chosen: Google's link creates an admin trust on the user's actor; Apple's link fails (400): its state, a 43-character nonce, is wrapped in JSON by the authorization URL and the Apple callback finds no nonce."
+reason = ["2026-11-10 first recording (grant-enforcement-per-route:0)"]
+
+[rows."WG17"]
+test = "test_wire_grants.py::test_wg17_owner_created_client"
+owners = []
+exposure = false
+expected = "A client the actor's owner created uses client_credentials: the token is bound to the owner's actor; tools/list."
+reason = ["2026-11-10 first recording (grant-enforcement-per-route:0)"]
+
+[rows."WG18"]
+test = "test_wire_grants.py::test_wg18_grant_delete"
+owners = ["grant-enforcement-per-route:4"]
+exposure = false
+expected = "A deletes F's permission override and deletes it again: no permission callback reaches F either time."
+reason = ["2026-11-10 first recording (grant-enforcement-per-route:0)"]
+
+[rows."WG19"]
+test = "test_wire_grants.py::test_wg19_trust_hooks"
+owners = ["grant-enforcement-per-route:4"]
+exposure = false
+expected = "The trust hooks each route fires and their argument names: REST approve (twice), TrustManager.approve_relationship, REST delete, TrustManager.delete_relationship."
+reason = ["2026-11-10 first recording (grant-enforcement-per-route:0)"]

@@ -1,0 +1,63 @@
+<!doctype html>
+{#
+  Confirm an MCP client's access (ActingWeb 3.16).
+
+  Shown when a sign-in could not be bound to the browser that showed the
+  authorization form: the client may have skipped the form, or the user
+  signed in from another browser. Nothing is granted until the user approves.
+
+  Variables: client_name (chosen by the client, not verified), client_id,
+  redirect_host (where the client receives the code: verified, show it),
+  trust_type, trust_type_display_name, trust_type_description,
+  confirm_token, form_action.
+
+  An application overrides this template by placing its own
+  aw-oauth-confirm.html in its templates directory. It must post
+  `token` (confirm_token) and `decision` ("approve" or "decline") to
+  form_action, from the same site.
+#}
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Confirm access - ActingWeb</title>
+  <style>
+    :root { --fg: #1f2933; --muted: #6b7280; --border: #e2e5e9; --bg: #f6f7f9;
+            --card: #ffffff; --accent: #2563eb; --danger: #b91c1c; }
+    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI",
+           Roboto, Helvetica, Arial, sans-serif; line-height: 1.5; color: var(--fg);
+           background: var(--bg); }
+    .card { max-width: 560px; margin: 48px auto; background: var(--card);
+            border: 1px solid var(--border); border-radius: 8px; padding: 24px; }
+    h1 { font-size: 1.4rem; margin: 0 0 16px; }
+    .muted { color: var(--muted); font-size: 0.9rem; }
+    .host { font-family: ui-monospace, Menlo, Consolas, monospace; }
+    .actions { display: flex; gap: 12px; margin-top: 20px; }
+    button { padding: 8px 18px; border-radius: 6px; font-size: 1rem; cursor: pointer;
+             border: 1px solid var(--accent); background: var(--accent); color: #fff; }
+    button.decline { background: #fff; color: var(--danger); border-color: var(--danger); }
+    @media (prefers-color-scheme: dark) {
+      :root { --fg: #e5e7eb; --muted: #9ca3af; --border: #374151; --bg: #111418;
+              --card: #1b1f24; }
+      button.decline { background: #1b1f24; }
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Allow this application to access your account?</h1>
+    <p><strong>{{ client_name|default('An application') }}</strong>
+       <span class="muted">(<code>{{ client_id|default('') }}</code>)</span></p>
+    <p>It will receive access at <span class="host">{{ redirect_host|default('') }}</span>.</p>
+    <p>Access level: <strong>{{ trust_type_display_name|default(trust_type) }}</strong>
+      {% if trust_type_description %}<br><span class="muted">{{ trust_type_description }}</span>{% endif %}</p>
+    <p class="muted">Only approve if you just started connecting this application yourself.</p>
+    <form action="{{ form_action|default('/oauth/authorize/confirm') }}" method="POST" class="actions">
+      <input type="hidden" name="token" value="{{ confirm_token|default('') }}">
+      <button type="submit" name="decision" value="approve">Approve</button>
+      <button type="submit" name="decision" value="decline" class="decline">Decline</button>
+    </form>
+  </div>
+</body>
+</html>

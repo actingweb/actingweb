@@ -445,6 +445,7 @@ class DbTrust:
         *,
         only_if_verified: bool = False,
         only_if_secret: str | None = None,
+        relationship: str | None = None,
     ) -> bool:
         """
         Modify a trust.
@@ -530,6 +531,13 @@ class DbTrust:
             updates.append("peer_approved = %s")
             params.append(peer_approved)
             self.handle["peer_approved"] = peer_approved
+
+        # The trust type (3.16: an OAuth2/MCP client's row follows the level
+        # the user approved at its latest authorisation).
+        if relationship:
+            updates.append("relationship = %s")
+            params.append(relationship)
+            self.handle["relationship"] = relationship
 
         # Handle unified trust attributes
         if peer_identifier is not None:

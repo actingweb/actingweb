@@ -42,6 +42,22 @@ def env() -> tuple[ActingWebOAuth2Server, MemoryStore]:
     return make_server(config), store
 
 
+@pytest.fixture(autouse=True)
+def _client_list() -> Iterator[None]:
+    """No registry here: ``mcp_client`` is the one client type (3.16)."""
+    with (
+        mock.patch(
+            "actingweb.permission_integration.client_trust_type_acceptable",
+            side_effect=lambda config, name: name == "mcp_client",
+        ),
+        mock.patch(
+            "actingweb.permission_integration.default_client_trust_type",
+            return_value="mcp_client",
+        ),
+    ):
+        yield
+
+
 @contextlib.contextmanager
 def _patched(server: ActingWebOAuth2Server) -> Iterator[None]:
     with (
@@ -111,7 +127,9 @@ class TestAuthorizeEcho:
 
 class TestProviderRoundTrip:
     def _post_and_callback(self, server: ActingWebOAuth2Server, cid: str) -> str:
-        body = urlencode(_authorize_params(cid, provider="google"))
+        body = urlencode(
+            {**_authorize_params(cid, provider="google"), "form_nonce": "nonce-1"}
+        )
         with _patched(server):
             handler = make_handler(server, body=body)
             out = handler._handle_authorization_request("POST")
@@ -137,7 +155,9 @@ class TestProviderRoundTrip:
             ),
             mock.patch("actingweb.oauth2.create_oauth2_trust_relationship"),
         ):
-            result = server.handle_oauth_callback({"code": "upstream", "state": state})
+            result = server.handle_oauth_callback(
+                {"code": "upstream", "state": state}, form_nonce_cookie="nonce-1"
+            )
         del server._authenticator_cache["google"]
         assert result["action"] == "redirect", result
         return parse_qs(urlparse(result["url"]).query)["code"][0]
@@ -187,7 +207,9 @@ class TestCallbackDoesNotUseCachedClientInfo:
         for key in ("mcp-session:someone-else", "unknown:0", "token:" + "0" * 32):
             mcp_mod.MCPHandler._cache_client_info(key, spoofed)
 
-        body = urlencode(_authorize_params(cid, provider="google"))
+        body = urlencode(
+            {**_authorize_params(cid, provider="google"), "form_nonce": "nonce-1"}
+        )
         with _patched(server):
             out = make_handler(server, body=body)._handle_authorization_request("POST")
         state = _state_of(out["location"])
@@ -210,7 +232,7 @@ class TestCallbackDoesNotUseCachedClientInfo:
                 mock.patch("actingweb.actor.Actor") as actor_cls,
             ):
                 result = server.handle_oauth_callback(
-                    {"code": "upstream", "state": state}
+                    {"code": "upstream", "state": state}, form_nonce_cookie="nonce-1"
                 )
         finally:
             del server._authenticator_cache["google"]

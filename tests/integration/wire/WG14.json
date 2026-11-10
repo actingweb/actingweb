@@ -3,13 +3,65 @@
   {
    "after": {
     "extra": {
+     "system_trusts": [],
+     "user_trusts": null
+    },
+    "publisher": {
+     "grants": {},
+     "queue": [],
+     "subscriptions": [],
+     "suspensions": [],
+     "trust": {}
+    },
+    "subscribers": {}
+   },
+   "result": {
+    "body": {
+     "error": "invalid_client_metadata",
+     "error_description": "Client registration failed: client_credentials is not offered to an anonymously registered client; an actor's owner creates such a client with OAuth2ClientManager.create_client"
+    },
+    "status": 400
+   },
+   "step": "register asking for admin and client_credentials",
+   "wire": [
+    {
+     "auth": null,
+     "children": [],
+     "headers": {
+      "content-type": "application/json"
+     },
+     "host": "wire_oauth",
+     "method": "POST",
+     "path": "/oauth/register",
+     "query": "",
+     "request": {
+      "client_name": "Wire Client",
+      "grant_types": [
+       "client_credentials"
+      ],
+      "redirect_uris": [
+       "https://client.example.test/cb"
+      ],
+      "trust_type": "admin"
+     },
+     "response": {
+      "error": "invalid_client_metadata",
+      "error_description": "Client registration failed: client_credentials is not offered to an anonymously registered client; an actor's owner creates such a client with OAuth2ClientManager.create_client"
+     },
+     "status": 400
+    }
+   ]
+  },
+  {
+   "after": {
+    "extra": {
      "system_trusts": [
       {
        "approved": true,
        "established_via": "oauth2_client",
        "peer_approved": false,
        "peerid": "oauth2_client:<client>:<client>",
-       "relationship": "admin"
+       "relationship": "mcp_client"
       }
      ],
      "user_trusts": null
@@ -46,11 +98,11 @@
      ],
      "token_endpoint": "http://<wire_oauth>/oauth/token",
      "token_endpoint_auth_method": "client_secret_post",
-     "trust_type": "admin"
+     "trust_type": "mcp_client"
     },
     "status": 201
    },
-   "step": "register",
+   "step": "register plainly",
    "wire": [
     {
      "auth": null,
@@ -64,13 +116,9 @@
      "query": "",
      "request": {
       "client_name": "Wire Client",
-      "grant_types": [
-       "client_credentials"
-      ],
       "redirect_uris": [
        "https://client.example.test/cb"
-      ],
-      "trust_type": "admin"
+      ]
      },
      "response": {
       "actor_id": "_actingweb_oauth2",
@@ -94,7 +142,7 @@
       ],
       "token_endpoint": "http://<wire_oauth>/oauth/token",
       "token_endpoint_auth_method": "client_secret_post",
-      "trust_type": "admin"
+      "trust_type": "mcp_client"
      },
      "status": 201
     }
@@ -109,7 +157,7 @@
        "established_via": "oauth2_client",
        "peer_approved": false,
        "peerid": "oauth2_client:<client>:<client>",
-       "relationship": "admin"
+       "relationship": "mcp_client"
       }
      ],
      "user_trusts": null
@@ -125,12 +173,10 @@
    },
    "result": {
     "body": {
-     "access_token": "<secret:access_token>",
-     "expires_in": 3600,
-     "scope": "mcp",
-     "token_type": "Bearer"
+     "error": "unauthorized_client",
+     "error_description": "An anonymously registered client may not use client_credentials"
     },
-    "status": 200
+    "status": 400
    },
    "step": "client_credentials token",
    "wire": [
@@ -146,124 +192,10 @@
      "query": "",
      "request": "grant_type=client_credentials&client_id=<client>&client_secret=<secret:client_secret>",
      "response": {
-      "access_token": "<secret:access_token>",
-      "expires_in": 3600,
-      "scope": "mcp",
-      "token_type": "Bearer"
+      "error": "unauthorized_client",
+      "error_description": "An anonymously registered client may not use client_credentials"
      },
-     "status": 200
-    }
-   ]
-  },
-  {
-   "after": {
-    "extra": {
-     "system_trusts": [
-      {
-       "approved": true,
-       "established_via": "oauth2_client",
-       "peer_approved": true,
-       "peerid": "oauth2_client:<client>:<client>",
-       "relationship": "admin"
-      }
-     ],
-     "user_trusts": null
-    },
-    "publisher": {
-     "grants": {},
-     "queue": [],
-     "subscriptions": [],
-     "suspensions": [],
-     "trust": {}
-    },
-    "subscribers": {}
-   },
-   "result": {
-    "body": {
-     "id": 2,
-     "jsonrpc": "2.0",
-     "result": {
-      "tools": [
-       {
-        "description": "Search (wire harness).",
-        "name": "search"
-       }
-      ]
-     }
-    },
-    "status": 200
-   },
-   "step": "tools/list",
-   "wire": [
-    {
-     "auth": "bearer:access_token",
-     "children": [],
-     "headers": {
-      "content-type": "application/json"
-     },
-     "host": "wire_oauth",
-     "method": "POST",
-     "path": "/mcp",
-     "query": "",
-     "request": {
-      "id": 1,
-      "jsonrpc": "2.0",
-      "method": "initialize",
-      "params": {
-       "capabilities": {},
-       "clientInfo": {
-        "name": "Wire Client",
-        "version": "1.0.0"
-       },
-       "protocolVersion": "2025-06-18"
-      }
-     },
-     "response": {
-      "id": 1,
-      "jsonrpc": "2.0",
-      "result": {
-       "capabilities": {
-        "tools": {
-         "listChanged": true
-        }
-       },
-       "protocolVersion": "2025-06-18",
-       "serverInfo": {
-        "name": "actingweb",
-        "version": "3.15.1"
-       }
-      }
-     },
-     "status": 200
-    },
-    {
-     "auth": "bearer:access_token",
-     "children": [],
-     "headers": {
-      "content-type": "application/json"
-     },
-     "host": "wire_oauth",
-     "method": "POST",
-     "path": "/mcp",
-     "query": "",
-     "request": {
-      "id": 2,
-      "jsonrpc": "2.0",
-      "method": "tools/list"
-     },
-     "response": {
-      "id": 2,
-      "jsonrpc": "2.0",
-      "result": {
-       "tools": [
-        {
-         "description": "Search (wire harness).",
-         "name": "search"
-        }
-       ]
-      }
-     },
-     "status": 200
+     "status": 400
     }
    ]
   }

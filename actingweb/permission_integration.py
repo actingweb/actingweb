@@ -17,6 +17,7 @@ from functools import wraps
 from typing import Any
 
 from . import config as config_class
+from .db.exceptions import DbError
 from .permission_evaluator import (
     PermissionResult,
     PermissionType,
@@ -503,6 +504,16 @@ class AccessControlConfig:
             f"OAuth2 trust types configured: allowed={allowed_trust_types}, default={default_trust_type}"
         )
 
+    def client_trust_type_acceptable(self, name: str | None) -> bool:
+        """Whether an OAuth2/MCP client may be given trust type ``name``
+        (3.16): see :func:`client_trust_type_acceptable`."""
+        return client_trust_type_acceptable(self.config, name)
+
+    def default_client_trust_type(self) -> str | None:
+        """The type an OAuth2/MCP client gets when none was chosen (3.16):
+        see :func:`default_client_trust_type`."""
+        return default_client_trust_type(self.config)
+
     def get_oauth2_trust_types(self) -> dict[str, Any]:
         """
         Get the configured OAuth2 trust type settings.
@@ -512,3 +523,67 @@ class AccessControlConfig:
             If not configured, returns None values (no hardcoded defaults).
         """
         return self._oauth2_trust_types or {"allowed": None, "default": None}
+
+
+def _client_list(config: Any) -> tuple[list[str] | None, str | None]:
+    """The application's client list and default (``configure_oauth2_trust_types``)."""
+    configured = getattr(config, "_oauth2_trust_types", None) or {}
+    allowed = configured.get("allowed")
+    return (list(allowed) if allowed is not None else None), configured.get("default")
+
+
+def _registered(config: Any, name: str) -> bool:
+    from .trust_type_registry import get_registry
+
+    try:
+        return get_registry(config).get_type(name) is not None
+    except DbError:
+        raise
+    except Exception as e:
+        logger.error(f"Trust type registry unavailable: {e}")
+        return False
+
+
+def client_trust_type_acceptable(config: Any, name: str | None) -> bool:
+    """Whether an OAuth2/MCP client may be given trust type ``name`` (3.16).
+
+    The application's list (``configure_oauth2_trust_types``) answers when it
+    is set; with no list (or ``{"allowed": None}``) every registered type
+    except ``admin`` is acceptable, and ``admin`` only when listed. A type
+    the registry does not know is never acceptable. This is the list for
+    clients (external parties reaching ``/mcp``); trusts between actors go
+    through ``/trust`` and are not restricted by it.
+    """
+    if not name:
+        return False
+    allowed, _ = _client_list(config)
+    if allowed is not None:
+        return name in allowed and _registered(config, name)
+    return name != "admin" and _registered(config, name)
+
+
+def default_client_trust_type(config: Any) -> str | None:
+    """The type an OAuth2/MCP client gets when the user chose none (3.16): the
+    configured default when it is acceptable, else ``mcp_client`` when it
+    is, else the first acceptable type in the list (or the registry, in name
+    order); None when nothing is acceptable."""
+    allowed, default = _client_list(config)
+    if default and client_trust_type_acceptable(config, default):
+        return str(default)
+    if client_trust_type_acceptable(config, "mcp_client"):
+        return "mcp_client"
+    if allowed is not None:
+        candidates = list(allowed)
+    else:
+        from .trust_type_registry import get_registry
+
+        try:
+            candidates = sorted(t.name for t in get_registry(config).list_types())
+        except DbError:
+            raise
+        except Exception:
+            candidates = []
+    for name in candidates:
+        if client_trust_type_acceptable(config, name):
+            return name
+    return None

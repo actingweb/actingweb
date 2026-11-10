@@ -418,6 +418,33 @@ class TrustManager:
         normalized = identifier.replace("@", "_at_").replace(".", "_dot_")
         return f"{source}:{normalized}"
 
+    def _retyped_client_row(self, peer_id: str, trust_type: str) -> bool:
+        """After a client's row took a new type: its permission override,
+        written for the old type, goes, and the MCP caches for the actor are
+        evicted (single process; ``todo/mcp-cache-lifecycle-and-revocation``
+        covers the others)."""
+        from ..mcp.invalidation import evict_caches_for_actor
+        from ..trust_permissions import get_trust_permission_store
+
+        actor_id = str(self._core_actor.id)
+        config = self._core_actor.config
+        if config is not None and not get_trust_permission_store(
+            config
+        ).delete_permissions(actor_id, peer_id):
+            # The override written for the old type could outlast the new
+            # one: the authorisation fails (no code) rather than grant it.
+            logger.error(
+                f"OAuth2 client trust {peer_id} re-typed to {trust_type} but its "
+                "permission override could not be removed"
+            )
+            return False
+        evict_caches_for_actor(actor_id)
+        logger.info(
+            f"OAuth2 client trust {peer_id} re-typed to {trust_type} at its "
+            "authorisation; its permission override was removed"
+        )
+        return True
+
     def create_or_update_oauth_trust(
         self,
         email: str,
@@ -557,6 +584,16 @@ class TrustManager:
                         modify_kwargs["client_platform"] = client_platform
                     if client_id and source == "oauth2_client":
                         modify_kwargs["oauth_client_id"] = client_id
+                    # A client's row follows the level the user approved at
+                    # this authorisation, up or down (3.16; it kept the
+                    # first one forever).
+                    retyped = bool(
+                        source == "oauth2_client"
+                        and trust_type
+                        and getattr(existing, "relationship", None) != trust_type
+                    )
+                    if retyped:
+                        modify_kwargs["relationship"] = trust_type
 
                         # If description still references client identifier, replace with friendly name
                         current_desc = getattr(db.handle, "desc", "") or ""
@@ -569,6 +606,10 @@ class TrustManager:
                         logger.debug(
                             f"Updated existing OAuth trust: peer_id={peer_id}, established_via={source}"
                         )
+                        if retyped and not self._retyped_client_row(
+                            peer_id, trust_type
+                        ):
+                            return False
                     else:
                         logger.warning(
                             f"OAuth trust for {peer_id} was deleted while being updated"

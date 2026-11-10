@@ -181,6 +181,52 @@ Custom clients are either confidential or public, set by
 Clients registered before 3.15 were stored as confidential whatever they
 asked for; a public client registered then must register again.
 
+**Anonymous registration** (``POST /oauth/register``, 3.16): the client
+lives on the OAuth2 system actor until a user signs in for it, so it may not
+choose its own level or a grant that needs no user. A ``trust_type`` the
+client list does not offer, or ``grant_types`` naming
+``client_credentials``, is 400 ``invalid_client_metadata``; its row on the
+system actor is always the default client type; ``client_credentials`` for
+such a client is ``unauthorized_client``. A client an actor's owner creates
+with ``OAuth2ClientManager.create_client`` keeps both.
+
+The client list
+~~~~~~~~~~~~~~~
+
+``AccessControlConfig(config).configure_oauth2_trust_types(allowed_trust_types=[...],
+default_trust_type=...)`` lists the levels an OAuth2/MCP client may be given.
+With no list, every registered type except ``admin`` is offered (``admin``
+only when listed); the default is the configured one, else ``mcp_client``.
+``client_trust_type_acceptable(name)`` and ``default_client_trust_type()``
+answer for it. The list is enforced at registration, at the authorize POST,
+at the callback, at the confirmation, and on ``trust_type`` of the SPA
+authorize call; trusts between actors (``/trust``) are not restricted by it.
+
+The browser binding
+~~~~~~~~~~~~~~~~~~~
+
+The authorize form sets a nonce cookie and carries the nonce (a hidden
+``form_nonce`` input in every form; the provider links carry it in their
+state). When the provider returns to a browser holding that nonce, the
+client gets its code. Otherwise (the client posted the form itself, or the
+user signed in from another browser) the library shows a confirmation page
+(``aw-oauth-confirm.html``: client name, the host the code goes to, the
+level, Approve and Decline) in the browser that signed in, and grants
+nothing until the user approves. A custom form template must include the
+hidden input, or every sign-in asks for confirmation.
+
+An ``oauth2_trust_requested`` lifecycle hook can decline (``False``) or
+change (a type name) the level before the trust is written; a changed level
+is shown to the user on the confirmation page and granted only on Approve.
+It fails closed.
+A route that signs the user in itself calls
+``get_actingweb_oauth2_server(config).complete_client_authorization(actor,
+client_id, redirect_uri, trust_type, state=...)``, which applies the list,
+the hook, the trust and the code in one call.
+
+A re-authorisation sets the client's existing row to the level the user
+approved this time, up or down, and removes its permission override.
+
 Trust Integration
 -----------------
 

@@ -802,6 +802,10 @@ class FastAPIIntegration(BaseActingWebIntegration):
         async def oauth2_authorize_get(request: Request) -> Response:  # pyright: ignore[reportUnusedFunction]
             return await self._handle_oauth2_endpoint(request, "authorize")
 
+        @self.fastapi_app.post("/oauth/authorize/confirm")
+        async def oauth2_authorize_confirm(request: Request) -> Response:  # pyright: ignore[reportUnusedFunction]
+            return await self._handle_oauth2_endpoint(request, "authorize/confirm")
+
         @self.fastapi_app.post("/oauth/authorize")
         async def oauth2_authorize_post(request: Request) -> Response:  # pyright: ignore[reportUnusedFunction]
             return await self._handle_oauth2_endpoint(request, "authorize")
@@ -2001,6 +2005,18 @@ class FastAPIIntegration(BaseActingWebIntegration):
                     status_code=webobj.response.status_code,
                 )
 
+        if webobj.response.template_name and self.templates:
+            # An MCP sign-in paused for the user's confirmation (3.16).
+            page = self.templates.TemplateResponse(
+                request,
+                webobj.response.template_name,
+                context=webobj.response.template_values,
+            )
+            for key, value in webobj.response.headers.items():
+                page.headers[key] = value
+            _apply_cookies(page, webobj)
+            return page
+
         return self._create_fastapi_response(webobj, request)
 
     async def _handle_oauth2_email(self, request: Request) -> Response:
@@ -2256,17 +2272,24 @@ class FastAPIIntegration(BaseActingWebIntegration):
                     f"{summarize_payload(webobj.response.template_values)}"
                 )
             if self.templates:
-                # This is an HTML template response
+                # This is an HTML template response: the handler names it
+                # (the confirmation page, 3.16), else the authorization form.
                 template_name = (
-                    "aw-oauth-authorization-form.html"  # Default OAuth2 template
+                    webobj.response.template_name or "aw-oauth-authorization-form.html"
                 )
                 try:
                     self.logger.debug(f"Attempting to render template: {template_name}")
-                    return self.templates.TemplateResponse(
+                    page = self.templates.TemplateResponse(
                         request,
                         template_name,
                         context=webobj.response.template_values,
                     )
+                    # The handler's cookies and headers reach the page (the
+                    # sign-in binding, the frame and cache headers; 3.16).
+                    for key, value in webobj.response.headers.items():
+                        page.headers[key] = value
+                    _apply_cookies(page, webobj)
+                    return page
                 except Exception as e:  # folds DbError: template render, no DB
                     # Template not found or rendering error - fall back to JSON
                     self.logger.error(f"Template rendering failed: {e}")
@@ -2297,9 +2320,11 @@ class FastAPIIntegration(BaseActingWebIntegration):
                     "Access-Control-Allow-Headers": "Authorization, Content-Type, mcp-protocol-version",
                 }
 
-                return RedirectResponse(
+                redirected = RedirectResponse(
                     url=redirect_url, status_code=302, headers=cors_headers
                 )
+                _apply_cookies(redirected, webobj)
+                return redirected
 
         # Return the OAuth2 result as JSON with CORS headers
         from fastapi.responses import JSONResponse

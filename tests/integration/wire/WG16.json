@@ -31,34 +31,23 @@
     "subscribers": {}
    },
    "result": {
-    "content_type": "text/html; charset=utf-8",
-    "inputs": [
-     "client_id",
-     "code_challenge",
-     "code_challenge_method",
-     "redirect_uri",
-     "response_type",
-     "scope",
-     "state"
-    ],
-    "options": [
-     "admin",
-     "associate",
-     "friend",
-     "mcp_client",
-     "partner",
-     "subscriber",
-     "subscriber_adopted",
-     "viewer",
-     "wire_allowed",
-     "wire_named"
-    ],
-    "provider_links": [
-     "apple",
-     "google"
-    ],
-    "status": 200,
-    "title": "Authorize access - ActingWeb"
+    "body": {
+     "action": "show_form",
+     "form_data": {
+      "client_id": "<client>",
+      "client_name": "Wire Client",
+      "code_challenge": "DJA8kGPZ7uZ6Qv-peipt2uFGxLFsjGVPvp9Q2zWmyh0",
+      "code_challenge_method": "S256",
+      "form_action": "/oauth/authorize",
+      "form_method": "POST",
+      "form_nonce": "<secret:form_nonce>",
+      "redirect_uri": "https://client.example.test/cb",
+      "state": "client-state-1"
+     },
+     "message": "Authorize Wire Client to access your ActingWeb data",
+     "template": "oauth_authorization_form"
+    },
+    "status": 200
    },
    "step": "GET the form as JSON",
    "wire": [
@@ -66,14 +55,32 @@
      "auth": null,
      "children": [],
      "headers": {
-      "content-type": "text/html; charset=utf-8"
+      "content-type": "application/json",
+      "set-cookie": [
+       "aw_authz_nonce=<cookie>; HttpOnly; Max-Age=600; Path=/; SameSite=Lax"
+      ]
      },
      "host": "wire_oauth",
      "method": "GET",
      "path": "/oauth/authorize",
      "query": "client_id=<client>&redirect_uri=https%3A%2F%2Fclient.example.test%2Fcb&response_type=code&state=client-state-1&code_challenge=DJA8kGPZ7uZ6Qv-peipt2uFGxLFsjGVPvp9Q2zWmyh0&code_challenge_method=S256",
      "request": null,
-     "response": "<html>",
+     "response": {
+      "action": "show_form",
+      "form_data": {
+       "client_id": "<client>",
+       "client_name": "Wire Client",
+       "code_challenge": "DJA8kGPZ7uZ6Qv-peipt2uFGxLFsjGVPvp9Q2zWmyh0",
+       "code_challenge_method": "S256",
+       "form_action": "/oauth/authorize",
+       "form_method": "POST",
+       "form_nonce": "<secret:form_nonce>",
+       "redirect_uri": "https://client.example.test/cb",
+       "state": "client-state-1"
+      },
+      "message": "Authorize Wire Client to access your ActingWeb data",
+      "template": "oauth_authorization_form"
+     },
      "status": 200
     }
    ]
@@ -114,6 +121,7 @@
      "client_id",
      "code_challenge",
      "code_challenge_method",
+     "form_nonce",
      "redirect_uri",
      "response_type",
      "scope",
@@ -144,7 +152,10 @@
      "auth": null,
      "children": [],
      "headers": {
-      "content-type": "text/html; charset=utf-8"
+      "content-type": "text/html; charset=utf-8",
+      "set-cookie": [
+       "aw_authz_nonce=<cookie>; HttpOnly; Max-Age=600; Path=/; SameSite=lax"
+      ]
      },
      "host": "wire_oauth",
      "method": "GET",
@@ -202,7 +213,7 @@
      "method": "POST",
      "path": "/oauth/authorize",
      "query": "",
-     "request": "client_id=<client>&redirect_uri=https%3A%2F%2Fclient.example.test%2Fcb&response_type=code&state=client-state-1&code_challenge=DJA8kGPZ7uZ6Qv-peipt2uFGxLFsjGVPvp9Q2zWmyh0&code_challenge_method=S256&provider=google&trust_type=mcp_client",
+     "request": "client_id=<client>&redirect_uri=https%3A%2F%2Fclient.example.test%2Fcb&response_type=code&state=client-state-1&code_challenge=DJA8kGPZ7uZ6Qv-peipt2uFGxLFsjGVPvp9Q2zWmyh0&code_challenge_method=S256&provider=google&trust_type=mcp_client&form_nonce=<secret:form_nonce>",
      "response": null,
      "status": 302
     }
@@ -256,7 +267,10 @@
      "auth": null,
      "children": [],
      "headers": {
-      "location": "https://client.example.test/cb?code=<secret:code>&state=client-state-1"
+      "location": "https://client.example.test/cb?code=<secret:code>&state=client-state-1",
+      "set-cookie": [
+       "aw_authz_nonce=<cookie>; HttpOnly; Max-Age=0; Path=/; SameSite=lax"
+      ]
      },
      "host": "wire_oauth",
      "method": "GET",
@@ -512,6 +526,96 @@
     "subscribers": {}
    },
    "result": {
+    "content_type": "text/html; charset=utf-8",
+    "inputs": [
+     "client_id",
+     "code_challenge",
+     "code_challenge_method",
+     "form_nonce",
+     "redirect_uri",
+     "response_type",
+     "scope",
+     "state"
+    ],
+    "options": [
+     "admin",
+     "associate",
+     "friend",
+     "mcp_client",
+     "partner",
+     "subscriber",
+     "subscriber_adopted",
+     "viewer",
+     "wire_allowed",
+     "wire_named"
+    ],
+    "provider_links": [
+     "apple",
+     "google"
+    ],
+    "status": 200,
+    "title": "Authorize access - ActingWeb"
+   },
+   "step": "GET the form again",
+   "wire": [
+    {
+     "auth": null,
+     "children": [],
+     "headers": {
+      "content-type": "text/html; charset=utf-8",
+      "set-cookie": [
+       "aw_authz_nonce=<cookie>; HttpOnly; Max-Age=600; Path=/; SameSite=lax"
+      ]
+     },
+     "host": "wire_oauth",
+     "method": "GET",
+     "path": "/oauth/authorize",
+     "query": "client_id=<client>&redirect_uri=https%3A%2F%2Fclient.example.test%2Fcb&response_type=code&state=client-state-1&code_challenge=DJA8kGPZ7uZ6Qv-peipt2uFGxLFsjGVPvp9Q2zWmyh0&code_challenge_method=S256",
+     "request": null,
+     "response": "<html>",
+     "status": 200
+    }
+   ]
+  },
+  {
+   "after": {
+    "extra": {
+     "system_trusts": [
+      {
+       "approved": true,
+       "established_via": "oauth2_client",
+       "peer_approved": false,
+       "peerid": "oauth2_client:<client2>:<client2>",
+       "relationship": "mcp_client"
+      },
+      {
+       "approved": true,
+       "established_via": "oauth2_client",
+       "peer_approved": false,
+       "peerid": "oauth2_client:<client>:<client>",
+       "relationship": "mcp_client"
+      }
+     ],
+     "user_trusts": [
+      {
+       "approved": true,
+       "established_via": "oauth2_client",
+       "peer_approved": true,
+       "peerid": "oauth2_client:<U.creator>:<client>",
+       "relationship": "mcp_client"
+      }
+     ]
+    },
+    "publisher": {
+     "grants": {},
+     "queue": [],
+     "subscriptions": [],
+     "suspensions": [],
+     "trust": {}
+    },
+    "subscribers": {}
+   },
+   "result": {
     "body": "",
     "status": 302
    },
@@ -527,7 +631,7 @@
      "method": "POST",
      "path": "/oauth/authorize",
      "query": "",
-     "request": "client_id=<client>&redirect_uri=https%3A%2F%2Fclient.example.test%2Fcb&response_type=code&state=client-state-1&code_challenge=DJA8kGPZ7uZ6Qv-peipt2uFGxLFsjGVPvp9Q2zWmyh0&code_challenge_method=S256&provider=apple&trust_type=mcp_client",
+     "request": "client_id=<client>&redirect_uri=https%3A%2F%2Fclient.example.test%2Fcb&response_type=code&state=client-state-1&code_challenge=DJA8kGPZ7uZ6Qv-peipt2uFGxLFsjGVPvp9Q2zWmyh0&code_challenge_method=S256&provider=apple&trust_type=mcp_client&form_nonce=<secret:form_nonce>",
      "response": null,
      "status": 302
     }
@@ -581,7 +685,10 @@
      "auth": null,
      "children": [],
      "headers": {
-      "location": "https://client.example.test/cb?code=<secret:code>&state=client-state-1"
+      "location": "https://client.example.test/cb?code=<secret:code>&state=client-state-1",
+      "set-cookie": [
+       "aw_authz_nonce=<cookie>; HttpOnly; Max-Age=0; Path=/; SameSite=lax"
+      ]
      },
      "host": "wire_oauth",
      "method": "POST",
@@ -637,6 +744,7 @@
      "client_id",
      "code_challenge",
      "code_challenge_method",
+     "form_nonce",
      "redirect_uri",
      "response_type",
      "scope",
@@ -667,7 +775,10 @@
      "auth": null,
      "children": [],
      "headers": {
-      "content-type": "text/html; charset=utf-8"
+      "content-type": "text/html; charset=utf-8",
+      "set-cookie": [
+       "aw_authz_nonce=<cookie>; HttpOnly; Max-Age=600; Path=/; SameSite=lax"
+      ]
      },
      "host": "wire_oauth",
      "method": "GET",
@@ -704,7 +815,7 @@
        "established_via": "oauth2_client",
        "peer_approved": false,
        "peerid": "oauth2_client:<U.creator>:<client2>",
-       "relationship": "admin"
+       "relationship": "mcp_client"
       },
       {
        "approved": true,
@@ -734,7 +845,10 @@
      "auth": null,
      "children": [],
      "headers": {
-      "location": "https://client.example.test/cb?code=<secret:code>&state=client-state-1"
+      "location": "https://client.example.test/cb?code=<secret:code>&state=client-state-1",
+      "set-cookie": [
+       "aw_authz_nonce=<cookie>; HttpOnly; Max-Age=0; Path=/; SameSite=lax"
+      ]
      },
      "host": "wire_oauth",
      "method": "GET",
@@ -771,7 +885,7 @@
        "established_via": "oauth2_client",
        "peer_approved": false,
        "peerid": "oauth2_client:<U.creator>:<client2>",
-       "relationship": "admin"
+       "relationship": "mcp_client"
       },
       {
        "approved": true,
@@ -793,11 +907,104 @@
    },
    "result": {
     "content_type": "text/html; charset=utf-8",
-    "inputs": [],
-    "options": [],
-    "provider_links": [],
-    "status": 400,
-    "title": "Something went wrong - ActingWeb"
+    "inputs": [
+     "client_id",
+     "code_challenge",
+     "code_challenge_method",
+     "form_nonce",
+     "redirect_uri",
+     "response_type",
+     "scope",
+     "state"
+    ],
+    "options": [
+     "admin",
+     "associate",
+     "friend",
+     "mcp_client",
+     "partner",
+     "subscriber",
+     "subscriber_adopted",
+     "viewer",
+     "wire_allowed",
+     "wire_named"
+    ],
+    "provider_links": [
+     "apple",
+     "google"
+    ],
+    "status": 200,
+    "title": "Authorize access - ActingWeb"
+   },
+   "step": "client2: GET the form again",
+   "wire": [
+    {
+     "auth": null,
+     "children": [],
+     "headers": {
+      "content-type": "text/html; charset=utf-8",
+      "set-cookie": [
+       "aw_authz_nonce=<cookie>; HttpOnly; Max-Age=600; Path=/; SameSite=lax"
+      ]
+     },
+     "host": "wire_oauth",
+     "method": "GET",
+     "path": "/oauth/authorize",
+     "query": "client_id=<client2>&redirect_uri=https%3A%2F%2Fclient.example.test%2Fcb&response_type=code&state=client-state-1&code_challenge=DJA8kGPZ7uZ6Qv-peipt2uFGxLFsjGVPvp9Q2zWmyh0&code_challenge_method=S256",
+     "request": null,
+     "response": "<html>",
+     "status": 200
+    }
+   ]
+  },
+  {
+   "after": {
+    "extra": {
+     "system_trusts": [
+      {
+       "approved": true,
+       "established_via": "oauth2_client",
+       "peer_approved": false,
+       "peerid": "oauth2_client:<client2>:<client2>",
+       "relationship": "mcp_client"
+      },
+      {
+       "approved": true,
+       "established_via": "oauth2_client",
+       "peer_approved": false,
+       "peerid": "oauth2_client:<client>:<client>",
+       "relationship": "mcp_client"
+      }
+     ],
+     "user_trusts": [
+      {
+       "approved": true,
+       "established_via": "oauth2_client",
+       "peer_approved": false,
+       "peerid": "oauth2_client:<U.creator>:<client2>",
+       "relationship": "mcp_client"
+      },
+      {
+       "approved": true,
+       "established_via": "oauth2_client",
+       "peer_approved": true,
+       "peerid": "oauth2_client:<U.creator>:<client>",
+       "relationship": "mcp_client"
+      }
+     ]
+    },
+    "publisher": {
+     "grants": {},
+     "queue": [],
+     "subscriptions": [],
+     "suspensions": [],
+     "trust": {}
+    },
+    "subscribers": {}
+   },
+   "result": {
+    "body": "",
+    "status": 302
    },
    "step": "client2: the Apple button's link, form-POST callback",
    "wire": [
@@ -805,15 +1012,18 @@
      "auth": null,
      "children": [],
      "headers": {
-      "content-type": "text/html; charset=utf-8"
+      "location": "https://client.example.test/cb?code=<secret:code>&state=client-state-1",
+      "set-cookie": [
+       "aw_authz_nonce=<cookie>; HttpOnly; Max-Age=0; Path=/; SameSite=lax"
+      ]
      },
      "host": "wire_oauth",
      "method": "POST",
      "path": "/oauth/callback/apple",
      "query": "",
      "request": "code=wire-provider-code&state=<secret:apple_link_state>",
-     "response": "<html 4042 chars>",
-     "status": 400
+     "response": null,
+     "status": 302
     }
    ]
   }

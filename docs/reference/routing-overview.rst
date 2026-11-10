@@ -239,7 +239,20 @@ ActingWeb is the OAuth2 authorization server for MCP clients (enabled with
   provider. ``code_challenge`` with ``code_challenge_method=S256`` binds the
   code; ``plain`` or a missing method is 400 ``invalid_request``, and a
   public client must send a challenge. Errors on this endpoint are
-  pre-redirect validation failures.
+  pre-redirect validation failures. The form sets a nonce cookie
+  (``__Host-aw_authz_nonce`` over https) and carries the nonce in a hidden
+  ``form_nonce`` input and in each provider link; a ``trust_type`` the
+  client list does not offer is 400 ``access_denied`` (3.16).
+- ``GET /oauth/callback`` and ``POST /oauth/callback/apple`` — the provider
+  returns the browser. When the browser carries the form's nonce the trust
+  is written and the client gets its code; otherwise the browser gets the
+  confirmation page (``aw-oauth-confirm.html``, or JSON for ``Accept:
+  application/json``) and nothing is granted yet.
+- ``POST /oauth/authorize/confirm`` — the user's Approve or Decline
+  (``token``, ``decision``), from the same site and with the page's cookie;
+  Approve redirects to the client with a code, Decline with
+  ``access_denied``. An expired, used or unknown token is 400; a store
+  fault 503.
 - ``POST /oauth/token`` — ``authorization_code``, ``refresh_token`` and
   ``client_credentials`` grants. Client credentials in the body or an
   ``Authorization: Basic`` header (a body ``client_id`` that differs from the

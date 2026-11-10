@@ -14,6 +14,8 @@
     <input type="hidden" name="scope" value="{{ scope|default('') }}">
     <input type="hidden" name="code_challenge" value="{{ code_challenge|default('') }}">
     <input type="hidden" name="code_challenge_method" value="{{ code_challenge_method|default('') }}">
+    {# Binds the sign-in to this browser (3.16): every form posts it back. #}
+    <input type="hidden" name="form_nonce" value="{{ form_nonce|default('') }}">
 
     {% if oauth2_trust_control_enabled and trust_types %}
       <label for="trust_type">Access level</label>

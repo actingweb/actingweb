@@ -139,6 +139,18 @@ Decorator: ``app.lifecycle_hook(event: str)``
 
 Signature: ``func(actor, **kwargs) -> Any``
 
+``oauth2_trust_requested`` (3.16): an OAuth2/MCP client is about to get a
+trust on ``actor``. Keyword arguments: ``trust_type``, ``client_id``,
+``client_name``, ``redirect_uri``, ``provider``, ``email``, ``confirmed``
+(the user approved on the confirmation page). Return ``None`` to accept, a
+type name to use it instead, or ``False`` to decline. A type other than the
+one the user chose is shown to the user on the confirmation page and
+granted only on Approve; at Approve (``confirmed=True``) and from
+``complete_client_authorization`` a different answer declines. Unlike the
+other lifecycle hooks it fails closed: any ``False``, an exception, two hooks
+naming different types, or a type the client list (or the client's own
+``allowed_trust_types``) does not offer declines.
+
 - Common events: ``actor_created``, ``actor_deleted``, ``actor_deleted_complete``, ``actor_adopted``, ``oauth_success``, ``trust_initiated``, ``trust_request_received``, ``trust_fully_approved_local``, ``trust_fully_approved_remote``, ``trust_deleted``, ``subscription_deleted``, ``email_verification_required``, ``email_sign_in_code_required``, ``email_verified``
 
 Event Details

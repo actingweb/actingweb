@@ -530,6 +530,17 @@ class OAuth2SPAHandler(BaseHandler):
         provider = params.get("provider", "google")
         # trust_type: None = user login, "mcp_client" etc = MCP authorization
         trust_type = params.get("trust_type")  # Default None for user login
+        # It is the level for an MCP client: the client list decides
+        # (3.16; any registered type, admin included, was taken).
+        if trust_type:
+            from ..permission_integration import client_trust_type_acceptable
+
+            if not client_trust_type_acceptable(self.config, str(trust_type)):
+                return self._json_error(
+                    400,
+                    f"trust_type {trust_type!r} is not offered to clients",
+                    "invalid_request",
+                )
         redirect_uri = params.get("redirect_uri", "")
         pkce_mode = params.get("pkce", "server")
         token_delivery = params.get("token_delivery", "json")

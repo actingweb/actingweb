@@ -244,6 +244,7 @@ class DbTrust:
         *,
         only_if_verified: bool = False,
         only_if_secret: str | None = None,
+        relationship: str | None = None,
     ):
         """Modify a trust
 
@@ -277,6 +278,10 @@ class DbTrust:
             given["verification_token"] = verification_token
         if peer_approved is not None:
             given["peer_approved"] = peer_approved
+        # The trust type (3.16: an OAuth2/MCP client's row follows the level
+        # the user approved at its latest authorisation).
+        if relationship:
+            given["relationship"] = relationship
 
         # Handle new unified trust attributes
         if peer_identifier is not None:

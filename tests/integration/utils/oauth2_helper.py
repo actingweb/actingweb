@@ -210,3 +210,38 @@ def create_authenticated_client(
     helper.register_client(client_name)
     helper.get_access_token(scope=scope)
     return helper
+
+
+def create_owner_client(
+    base_url: str,
+    config: Any,
+    worker_id: str = "master",
+    client_name: str = "Test Client",
+    trust_type: str = "mcp_client",
+    scope: str = "mcp",
+) -> OAuth2TestHelper:
+    """An actor and an OAuth2 client its owner created for it (3.16: an
+    anonymously registered client may not use ``client_credentials``), with
+    a ``client_credentials`` token bound to that actor.
+
+    The actor is made through the factory; the client through
+    ``OAuth2ClientManager`` (no HTTP route creates an owner's client), with
+    the test app's ``config``.
+    """
+    import uuid
+
+    from actingweb.interface.oauth_client_manager import OAuth2ClientManager
+
+    creator = f"oauth-owner-{worker_id}-{uuid.uuid4().hex[:8]}@example.test"
+    response = requests.post(f"{base_url}/", json={"creator": creator})
+    assert response.status_code == 201, response.text
+    actor = response.json()
+    created = OAuth2ClientManager(actor["id"], config).create_client(
+        f"{client_name} [w{worker_id}]", trust_type=trust_type
+    )
+    helper = OAuth2TestHelper(base_url, worker_id=worker_id)
+    helper.client_id = created["client_id"]
+    helper.client_secret = created["client_secret"]
+    helper.actor_id = actor["id"]
+    helper.get_access_token(scope=scope)
+    return helper

@@ -1246,7 +1246,68 @@ sequenceDiagram
 - [ ] `/verify_implementation` for the phase with `/security-review`, then
       codex on the diff
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+#### Phase 3 notes (2026-11-10)
+
+- Policy: `client_trust_type_acceptable` / `default_client_trust_type` are
+  module functions in `permission_integration.py` with `AccessControlConfig`
+  methods delegating to them. The default is the configured one, else
+  `mcp_client`, else the first acceptable.
+- Anonymous registration raises `ValueError` (the handler's existing 400
+  `invalid_client_metadata`); `requested_trust_type` keeps what was asked.
+  `register_client` already ignored requested `grant_types` (it always stores
+  `authorization_code`, `refresh_token`), so the refusal is the only change
+  there.
+- The pending authorisation lives on the OAuth2 system actor in bucket
+  `mcp_pending_authorizations` (keyed by a SHA-256 of the token), added to
+  the purge list; consumed with `_consume` (single use), `expires_at`
+  checked after the consume.
+- The trust store gained `modify(relationship=...)` (keyword-only, both
+  backends and the protocol) for the re-type; `create_or_update_oauth_trust`
+  re-types an existing client row, deletes its override (a failed delete
+  fails the authorisation: no code, codex) and evicts the actor's MCP
+  caches.
+- The confirm route asks `cross_site` with `session_cookie=True`: the shared
+  `_refuse_cross_site` never refuses a request without a session cookie or
+  basic auth, and the page cookie is this route's ambient credential (a
+  test caught it).
+- The decision hook (codex): a level other than the user's choice goes to
+  the confirmation page (the user approves what is shown); at Approve and
+  from `complete_client_authorization` a different answer declines; the
+  client's own `allowed_trust_types` applies to the hook's answer too. The
+  plan's "decline or lower" could not be checked as "lower" (types have no
+  order); "shown before granted" is the enforceable form.
+- `complete_client_authorization` is a method of `ActingWebOAuth2Server`
+  (`get_actingweb_oauth2_server(config)`).
+- The form's JSON answer never worked under FastAPI (the `Accept` header
+  was matched case-sensitively, and FastAPI lowercases it): fixed with a
+  case-free lookup; `WG16` records JSON now.
+- The Apple button: the link's state is no longer passed with a trust type
+  to `create_authorization_url` (the type rides in the state), so it is not
+  wrapped in JSON; `WG16` records both Apple paths completing.
+- SPA callback: a hand-built state with an unlisted type signs the user in
+  without creating a trust (the plan said "answers its existing error
+  shape"; dropping the trust is the smaller change on that route and
+  creates nothing).
+- The `oauth2_client` fixture: no HTTP route creates an owner's client, so
+  `create_owner_client` (in `tests/integration/utils/oauth2_helper.py`) makes
+  an actor over HTTP and its client with `OAuth2ClientManager` and the test
+  app's config (`TEST_APP_CONFIG`, filled by the `test_app` fixture). Two
+  more files made their own anonymous `client_credentials` clients
+  (`test_mcp_oauth2.py`, `test_mcp_resource_regression.py`) and moved too;
+  the other fixture users needed no change.
+- Not done: a Flask run of the binding tests (the wire apps are FastAPI;
+  the Flask integration got the same cookie, header and template changes,
+  read but not exercised by a test), and the browser walk (the wire rows
+  and `test_oauth2_trust_binding.py` drive the real handlers in-process;
+  no GUI tool was used).
+- Release shape: new route, template, hook event, config methods, server
+  method and a DB keyword: minor (3.16.0).
+
+Checks: unit suite, full tier both backends, docs; `WG14` to `WG16`
+re-recorded and compared twice; codex on the diff (three findings, fixed
+with tests).
 
 ---
 

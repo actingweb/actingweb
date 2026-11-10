@@ -198,6 +198,8 @@ TEST_POSTGRES_USER = os.environ.get("PG_DB_USER", "actingweb")
 TEST_POSTGRES_PASSWORD = os.environ.get("PG_DB_PASSWORD", "testpassword")
 
 TEST_APP_HOST = "localhost"
+# Filled by the test_app fixture: its ActingWeb config.
+TEST_APP_CONFIG: dict[str, Any] = {}
 # Base ports - will be offset by worker number for parallel execution
 BASE_APP_PORT = 5555
 BASE_PEER_PORT = 5556
@@ -514,13 +516,16 @@ def test_app(docker_services, setup_database, worker_info):  # pylint: disable=u
         os.environ["PG_DB_SCHEMA"] = "public"
 
     # Create app
-    fastapi_app, _ = create_test_app(
+    fastapi_app, test_aw_app = create_test_app(
         fqdn=f"{TEST_APP_HOST}:{test_app_port}",
         proto="http://",
         enable_oauth=True,
         enable_mcp=True,
         enable_devtest=True,
     )
+    # The app's config, for fixtures that act through the library (an
+    # owner's OAuth2 client, which no HTTP route creates).
+    TEST_APP_CONFIG["config"] = test_aw_app.get_config()
 
     # Run in background thread with uvicorn
     def run_app():
@@ -810,16 +815,18 @@ def oauth2_client(test_app, worker_info):
     """
     Create an authenticated OAuth2 client for testing OAuth2-protected endpoints.
 
-    This fixture provides a fully authenticated client that can access /mcp, /www,
-    and other OAuth2-protected endpoints.
+    An actor's owner creates the client for that actor (3.16: an anonymously
+    registered client may not use ``client_credentials``), and the client
+    holds a ``client_credentials`` token bound to that actor.
 
     Returns:
         OAuth2TestHelper instance with valid access token
     """
-    from .utils.oauth2_helper import create_authenticated_client
+    from .utils.oauth2_helper import create_owner_client
 
-    return create_authenticated_client(
+    return create_owner_client(
         test_app,
+        TEST_APP_CONFIG["config"],
         worker_id=worker_info["worker_id"],
         client_name="Test Fixture Client",
     )

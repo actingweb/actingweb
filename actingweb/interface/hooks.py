@@ -232,6 +232,10 @@ class LifecycleEvent(Enum):
     # proved the address and the actor was replaced or cleaned.
     ACTOR_ADOPTED = "actor_adopted"
     OAUTH_SUCCESS = "oauth_success"
+    # An OAuth2/MCP client is about to get a trust (3.16): the application
+    # may decline or lower the type. Its own fail-closed dispatcher,
+    # HookRegistry.decide_oauth2_trust.
+    OAUTH2_TRUST_REQUESTED = "oauth2_trust_requested"
     TRUST_APPROVED = "trust_approved"
     TRUST_DELETED = "trust_deleted"
     SUBSCRIPTION_DELETED = "subscription_deleted"
@@ -546,6 +550,55 @@ class HookRegistry:
         if event not in self._lifecycle_hooks:
             self._lifecycle_hooks[event] = []
         self._lifecycle_hooks[event].append(func)
+
+    def decide_oauth2_trust(
+        self, actor: Any, trust_type: str, config: Any, **kwargs: Any
+    ) -> str | None:
+        """The type an OAuth2/MCP client gets after the application's
+        ``oauth2_trust_requested`` hooks, or None when it is declined (3.16).
+
+        Each hook is called as ``hook(actor, trust_type=..., client_id=...,
+        client_name=..., redirect_uri=..., provider=..., email=...,
+        confirmed=..., **kwargs)`` and returns None (accept), a type name
+        (use it) or False (decline). Fail closed, unlike the other lifecycle
+        hooks: any False declines, an exception declines (logged), two hooks
+        naming different types decline, and a type the client list does not
+        accept declines. A storage fault (``DbError``) propagates.
+        """
+        from ..permission_integration import client_trust_type_acceptable
+
+        chosen: str | None = None
+        for hook in self._lifecycle_hooks.get(
+            LifecycleEvent.OAUTH2_TRUST_REQUESTED.value, []
+        ):
+            try:
+                result = self._execute_hook_in_sync_context(
+                    hook, actor, trust_type=trust_type, **kwargs
+                )
+            except DbError:
+                raise
+            except Exception as e:
+                logger.error(
+                    f"oauth2_trust_requested hook {getattr(hook, '__name__', hook)} "
+                    f"raised; the authorisation is declined: {e}"
+                )
+                return None
+            if result is False:
+                return None
+            if result is None:
+                continue
+            if not isinstance(result, str) or (chosen and chosen != result):
+                logger.warning("oauth2_trust_requested hooks disagree; declined")
+                return None
+            chosen = result
+        effective = chosen or trust_type
+        if not client_trust_type_acceptable(config, effective):
+            logger.warning(
+                f"oauth2_trust_requested chose {effective!r}, which the client "
+                "list does not accept; declined"
+            )
+            return None
+        return effective
 
     def register_method_hook(self, method_name: str, func: Callable[..., Any]) -> None:
         """

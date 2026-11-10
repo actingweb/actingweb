@@ -46,6 +46,25 @@ SECURITY
   peer listed its subscriptions. **Behavior change:** all of these follow
   the one access decision; ``docs/migration/v3.16.rst`` ("Every other way
   in") lists each.
+- **An MCP client could give itself any access level, ``admin``
+  included.** An anonymous ``POST /oauth/register`` stored the
+  ``trust_type`` it asked for and a ``client_credentials`` grant on the
+  OAuth2 system actor; the authorize form took any registered type from a
+  form field the client could post itself, with no form shown to the user,
+  and preselected the first type in the registry (``admin`` with no list
+  configured); a user signing in for such a request gave the client an
+  ``admin`` trust on their actor; a re-authorisation never changed an
+  existing row's type; a code was issued even when the trust could not be
+  written; the SPA authorize call created a trust of any type it named.
+  **Behavior change:** the client list (``configure_oauth2_trust_types``;
+  with none, every registered type except ``admin``) is enforced at
+  registration, the authorize POST, the callback, the confirmation and the
+  SPA authorize call; the form is bound to the browser by a nonce cookie,
+  and a sign-in it cannot bind waits for the user's Approve on a
+  confirmation page in the browser that signed in; a re-authorisation sets
+  the row to the level the user approved, up or down, and removes its
+  permission override; no code is issued without the trust.
+  ``docs/migration/v3.16.rst`` ("An MCP client's access level").
 - **A write three levels down reached subscribers past their grant.**
   ``PUT /properties/a/b/c`` registered its diff as resource ``b`` holding the
   bare value, so the filter checked ``a/b`` and an exclusion of ``a/b/c``
@@ -773,6 +792,41 @@ REMOVED
 
 CHANGED
 ~~~~~~~
+
+- **Breaking: an anonymous registration may not ask for
+  ``client_credentials`` or a level the client list does not offer.**
+  ``POST /oauth/register`` answers 400 ``invalid_client_metadata`` for
+  either, names ``OAuth2ClientManager.create_client`` (which an actor's owner
+  uses for such a client), and stores the default client type on the
+  system actor. **Breaking:** ``client_credentials`` for a client registered
+  that way is ``unauthorized_client``, also for one stored before 3.16.
+- **The MCP authorize form is bound to the browser; otherwise the user
+  confirms.** **Behavior change:** the form sets a nonce cookie
+  (``__Host-aw_authz_nonce`` over https) and carries the nonce in a hidden
+  ``form_nonce`` input (a custom template must add it, or every sign-in asks
+  for confirmation) and in each provider link. A sign-in the library cannot
+  bind shows ``aw-oauth-confirm.html`` (new, overridable) and completes on
+  ``POST /oauth/authorize/confirm`` (new). The form, the confirmation and
+  their JSON answers send ``X-Frame-Options: DENY``, ``frame-ancestors
+  'none'``, ``Cache-Control: no-store`` and ``Referrer-Policy:
+  no-referrer``. The form answers JSON for ``Accept: application/json``
+  under FastAPI too (the header was matched case-sensitively). The Apple
+  button on the form completes (its state was wrapped in JSON and never
+  matched).
+- **A client's level follows the user's latest approval.** **Behavior
+  change:** a re-authorisation re-types the client's existing row (up or
+  down) and removes its permission override; MCP caches of the process are
+  evicted (other processes until their cache TTL). The default selected
+  level is the client default (``mcp_client``), not the first registered
+  type. Rows a client obtained before 3.16 keep their type until it
+  authorises again.
+- **New:** ``AccessControlConfig.client_trust_type_acceptable()`` and
+  ``default_client_trust_type()`` (and module functions of the same names in
+  ``actingweb.permission_integration``); the ``oauth2_trust_requested``
+  lifecycle hook (fails closed; may decline or lower the level);
+  ``ActingWebOAuth2Server.complete_client_authorization()`` for a route that
+  signs the user in itself; ``DbTrust.modify(relationship=...)``
+  (keyword-only, both backends).
 
 - **Breaking: ``shared_properties`` no longer returns
   ``excluded_properties``.** ``GET /trust/<rel>/<peer>/shared_properties``

@@ -27,7 +27,7 @@
     "body": "",
     "status": 302
    },
-   "step": "client POSTs the form",
+   "step": "client POSTs the form with admin",
    "wire": [
     {
      "auth": null,
@@ -57,15 +57,7 @@
        "relationship": "mcp_client"
       }
      ],
-     "user_trusts": [
-      {
-       "approved": true,
-       "established_via": "oauth2_client",
-       "peer_approved": false,
-       "peerid": "oauth2_client:<U.creator>:<client>",
-       "relationship": "admin"
-      }
-     ]
+     "user_trusts": null
     },
     "publisher": {
      "grants": {},
@@ -80,19 +72,123 @@
     "body": "",
     "status": 302
    },
-   "step": "provider callback",
+   "step": "client POSTs the form with mcp_client",
    "wire": [
     {
      "auth": null,
      "children": [],
      "headers": {
-      "location": "https://client.example.test/cb?code=<secret:code>&state=client-state-1"
+      "location": "https://wire-provider.example.test/authorize?response_type=code&client_id=wire-google-client&redirect_uri=http%3A%2F%2F<wire_oauth>%2Foauth&scope=openid+email+profile&state=<secret:provider_state>&access_type=offline&prompt=consent"
+     },
+     "host": "wire_oauth",
+     "method": "POST",
+     "path": "/oauth/authorize",
+     "query": "",
+     "request": "client_id=<client>&redirect_uri=https%3A%2F%2Fclient.example.test%2Fcb&response_type=code&state=client-state-1&code_challenge=DJA8kGPZ7uZ6Qv-peipt2uFGxLFsjGVPvp9Q2zWmyh0&code_challenge_method=S256&provider=google&trust_type=mcp_client",
+     "response": null,
+     "status": 302
+    }
+   ]
+  },
+  {
+   "after": {
+    "extra": {
+     "system_trusts": [
+      {
+       "approved": true,
+       "established_via": "oauth2_client",
+       "peer_approved": false,
+       "peerid": "oauth2_client:<client>:<client>",
+       "relationship": "mcp_client"
+      }
+     ],
+     "user_trusts": []
+    },
+    "publisher": {
+     "grants": {},
+     "queue": [],
+     "subscriptions": [],
+     "suspensions": [],
+     "trust": {}
+    },
+    "subscribers": {}
+   },
+   "result": {
+    "content_type": "text/html; charset=utf-8",
+    "inputs": [
+     "token"
+    ],
+    "options": [],
+    "provider_links": [],
+    "status": 200,
+    "title": "Confirm access - ActingWeb"
+   },
+   "step": "provider callback in the user's browser",
+   "wire": [
+    {
+     "auth": null,
+     "children": [],
+     "headers": {
+      "content-type": "text/html; charset=utf-8",
+      "set-cookie": [
+       "aw_authz_nonce=<cookie>; HttpOnly; Max-Age=0; Path=/; SameSite=lax",
+       "aw_authz_confirm=<cookie>; HttpOnly; Max-Age=600; Path=/; SameSite=lax"
+      ]
      },
      "host": "wire_oauth",
      "method": "GET",
      "path": "/oauth/callback",
      "query": "code=wire-provider-code&state=<secret:provider_state>",
      "request": null,
+     "response": "<html 2419 chars>",
+     "status": 200
+    }
+   ]
+  },
+  {
+   "after": {
+    "extra": {
+     "system_trusts": [
+      {
+       "approved": true,
+       "established_via": "oauth2_client",
+       "peer_approved": false,
+       "peerid": "oauth2_client:<client>:<client>",
+       "relationship": "mcp_client"
+      }
+     ],
+     "user_trusts": []
+    },
+    "publisher": {
+     "grants": {},
+     "queue": [],
+     "subscriptions": [],
+     "suspensions": [],
+     "trust": {}
+    },
+    "subscribers": {}
+   },
+   "result": {
+    "body": "",
+    "status": 302
+   },
+   "step": "the user declines",
+   "wire": [
+    {
+     "auth": null,
+     "children": [],
+     "headers": {
+      "location": "https://client.example.test/cb?error=access_denied&state=client-state-1",
+      "set-cookie": [
+       "aw_authz_confirm=<cookie>; HttpOnly; Max-Age=0; Path=/; SameSite=lax",
+       "aw_authz_nonce=<cookie>; HttpOnly; Max-Age=0; Path=/; SameSite=lax"
+      ]
+     },
+     "host": "wire_oauth",
+     "method": "POST",
+     "path": "/oauth/authorize/confirm",
+     "query": "",
+     "request": "token=<secret:confirm_token>&decision=decline",
      "response": null,
      "status": 302
     }

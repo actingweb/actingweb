@@ -776,6 +776,7 @@ class DbTrustProtocol(Protocol):
         *,
         only_if_verified: bool = False,
         only_if_secret: str | None = None,
+        relationship: str | None = None,
     ) -> bool:
         """
         Modify trust using self.handle, in one write conditioned on the row

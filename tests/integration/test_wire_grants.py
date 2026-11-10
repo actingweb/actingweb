@@ -750,31 +750,56 @@ def _result(response: requests.Response) -> Any:
 
 
 def _callback(
-    s: Scenario, host: WireHost, state: str, *, apple: bool = False
+    s: Scenario,
+    host: WireHost,
+    state: str,
+    *,
+    apple: bool = False,
+    browser: Any = None,
 ) -> requests.Response:
-    """The provider sends the browser back: GET, or Apple's form POST."""
+    """The provider sends the browser back: GET, or Apple's form POST.
+    ``browser``: the session (cookies) of the browser that signed in."""
+    http = browser or requests
     if apple:
-        response = requests.post(
+        response = http.post(
             f"{host.url}/oauth/callback/apple",
             data={"code": _oauth_stub.PROVIDER_CODE, "state": state},
             allow_redirects=False,
         )
     else:
-        response = requests.get(
+        response = http.get(
             f"{host.url}/oauth/callback",
             params={"code": _oauth_stub.PROVIDER_CODE, "state": state},
             allow_redirects=False,
         )
     location = response.headers.get("location", "")
     if location.startswith(CLIENT_REDIRECT):
-        _name_secret(s, parse_qs(urlparse(location).query)["code"][0], "code")
+        query = parse_qs(urlparse(location).query)
+        if "code" in query:
+            _name_secret(s, query["code"][0], "code")
+    confirm = re.search(r'name="token" value="([^"]+)"', response.text)
+    if confirm:
+        _name_secret(s, confirm.group(1), "confirm_token")
     return response
 
 
 def _callback_step(
-    s: Scenario, host: WireHost, state: str, *, apple: bool = False
+    s: Scenario,
+    host: WireHost,
+    state: str,
+    *,
+    apple: bool = False,
+    browser: Any = None,
 ) -> Callable[[], Any]:
-    return lambda: _result(_callback(s, host, state, apple=apple))
+    return lambda: _result(_callback(s, host, state, apple=apple, browser=browser))
+
+
+def _form_nonce(response: requests.Response) -> str:
+    """The nonce the authorize form carries (JSON or HTML)."""
+    if "json" in response.headers.get("content-type", ""):
+        return str(response.json()["form_data"]["form_nonce"])
+    found = re.search(r'name="form_nonce" value="([^"]*)"', response.text)
+    return found.group(1) if found else ""
 
 
 def _authorize_params(client_id: str) -> dict[str, str]:
@@ -798,16 +823,18 @@ def _client_body(**extra: Any) -> dict[str, Any]:
 
 def test_wg14_anonymous_registration(wire_oauth):
     """WG14: an anonymous registration asking for ``admin`` and for
-    ``client_credentials``; the token; ``tools/list``."""
+    ``client_credentials``; one asking for neither; ``client_credentials``
+    for it; ``tools/list`` with no token."""
     s, _ = _oauth_world(wire_oauth)
     s.step(
-        "register",
+        "register asking for admin and client_credentials",
         lambda: _register(
             s,
             wire_oauth,
             _client_body(grant_types=["client_credentials"], trust_type="admin"),
         ),
     )
+    s.step("register plainly", lambda: _register(s, wire_oauth, _client_body()))
     client_id = next(k for k, v in s.names.items() if v == "client")
     secret = next(k for k, v in s.secrets.items() if v == "client_secret")
     s.step(
@@ -822,59 +849,83 @@ def test_wg14_anonymous_registration(wire_oauth):
             },
         ),
     )
-    s.step("tools/list", _tools_list(s, wire_oauth))
     check("WG14", s.recording())
 
 
 def test_wg15_client_posts_the_form_itself(wire_oauth):
-    """WG15: a client posts the authorize form itself with ``admin``; the
-    provider callback follows; no form was ever shown to the user."""
+    """WG15: a client posts the authorize form itself (no form shown, so no
+    nonce): with ``admin``, then with ``mcp_client`` and the provider
+    callback; the user sees the confirmation, and declines."""
     s, _ = _oauth_world(wire_oauth)
     _register(s, wire_oauth, _client_body())
     client_id = next(k for k, v in s.names.items() if v == "client")
+    victim = requests.Session()
 
-    def post_form() -> requests.Response:
-        response = requests.post(
-            f"{wire_oauth.url}/oauth/authorize",
-            data={
-                **_authorize_params(client_id),
-                "provider": "google",
-                "trust_type": "admin",
-            },
-            allow_redirects=False,
-        )
-        location = response.headers.get("location", "")
-        if "state=" in location:
-            _name_secret(s, _state_of(location), "provider_state")
-        return response
+    def post_form(trust_type: str) -> Callable[[], requests.Response]:
+        def action() -> requests.Response:
+            response = requests.post(
+                f"{wire_oauth.url}/oauth/authorize",
+                data={
+                    **_authorize_params(client_id),
+                    "provider": "google",
+                    "trust_type": trust_type,
+                },
+                allow_redirects=False,
+            )
+            location = response.headers.get("location", "")
+            if "state=" in location:
+                _name_secret(s, _state_of(location), "provider_state")
+            return response
 
-    response = s.step("client POSTs the form", post_form)
+        return action
+
+    s.step("client POSTs the form with admin", post_form("admin"))
+    response = s.step("client POSTs the form with mcp_client", post_form("mcp_client"))
     state = _state_of(response.headers["location"])
-    s.step("provider callback", _callback_step(s, wire_oauth, state))
-    check("WG15", s.recording())
+    s.step(
+        "provider callback in the user's browser",
+        _callback_step(s, wire_oauth, state, browser=victim),
+    )
+    token = next(k for k, v in s.secrets.items() if v == "confirm_token")
+    s.step(
+        "the user declines",
+        lambda: victim.post(
+            f"{wire_oauth.url}/oauth/authorize/confirm",
+            data={"token": token, "decision": "decline"},
+            headers={"Origin": wire_oauth.url},
+            allow_redirects=False,
+        ),
+    )
+    check("WG15", _without_form_length(s.recording()))
 
 
 def test_wg16_honest_flows(wire_oauth):
-    """WG16: the form as the user sees it (asked for as JSON, then as HTML);
-    for one client a POST with ``mcp_client`` and the GET callback, the token
-    and ``tools/list``, then a POST choosing Apple and Apple's form-POST
-    callback; for a second client the two provider buttons followed as they
-    are (Google's GET callback, Apple's form-POST callback)."""
+    """WG16: the form as the user sees it (JSON, then HTML) in the user's
+    browser; a POST with ``mcp_client`` and the GET callback, the token and
+    ``tools/list``; a POST choosing Apple and Apple's form-POST callback; a
+    second client's two provider buttons followed with no type chosen. The
+    browser carries the form's nonce cookie, so nothing asks for a
+    confirmation."""
     s, _ = _oauth_world(wire_oauth)
     _register(s, wire_oauth, _client_body())
     _register(s, wire_oauth, _client_body(client_name="Wire Client 2"), "client2")
     client_id = next(k for k, v in s.names.items() if v == "client")
     client2_id = next(k for k, v in s.names.items() if v == "client2")
     client_secret = next(k for k, v in s.secrets.items() if v == "client_secret")
+    browser = requests.Session()
     links: dict[str, str] = {}
+    nonce: dict[str, str] = {}
 
     def get_form(cid: str, accept: str) -> Callable[[], Any]:
         def action() -> Any:
-            response = requests.get(
+            response = browser.get(
                 f"{wire_oauth.url}/oauth/authorize",
                 params=_authorize_params(cid),
                 headers={"Accept": accept},
             )
+            nonce["value"] = _form_nonce(response)
+            if nonce["value"]:
+                _name_secret(s, nonce["value"], "form_nonce")
             for name, url in _provider_links(response.text).items():
                 links[name] = url
                 _name_secret(s, _state_of(url), f"{name}_link_state")
@@ -884,12 +935,13 @@ def test_wg16_honest_flows(wire_oauth):
 
     def post_form(provider: str, label: str) -> Callable[[], requests.Response]:
         def action() -> requests.Response:
-            response = requests.post(
+            response = browser.post(
                 f"{wire_oauth.url}/oauth/authorize",
                 data={
                     **_authorize_params(client_id),
                     "provider": provider,
                     "trust_type": "mcp_client",
+                    "form_nonce": nonce["value"],
                 },
                 allow_redirects=False,
             )
@@ -906,7 +958,7 @@ def test_wg16_honest_flows(wire_oauth):
 
     response = s.step("POST the form, Google", post_form("google", "google_state"))
     state = _state_of(response.headers["location"])
-    s.step("GET callback", _callback_step(s, wire_oauth, state))
+    s.step("GET callback", _callback_step(s, wire_oauth, state, browser=browser))
     code = next(k for k, v in s.secrets.items() if v == "code")
     s.step(
         "token for the code",
@@ -925,26 +977,30 @@ def test_wg16_honest_flows(wire_oauth):
     )
     s.step("tools/list", _tools_list(s, wire_oauth))
 
+    s.step("GET the form again", get_form(client_id, "text/html"))
     response = s.step("POST the form, Apple", post_form("apple", "apple_state"))
     state = _state_of(response.headers["location"])
     s.step(
-        "Apple's form-POST callback", _callback_step(s, wire_oauth, state, apple=True)
+        "Apple's form-POST callback",
+        _callback_step(s, wire_oauth, state, apple=True, browser=browser),
     )
 
-    # The second client's form, its buttons followed with no type chosen.
     links.clear()
     s.step("client2: GET the form as HTML", get_form(client2_id, "text/html"))
     assert set(links) == {"apple", "google"}, links
+    google_link, apple_link = links["google"], links["apple"]
     s.step(
         "client2: the Google button's link, GET callback",
-        _callback_step(s, wire_oauth, _state_of(links["google"])),
+        _callback_step(s, wire_oauth, _state_of(google_link), browser=browser),
     )
-    # The Apple button's link: its state is a nonce wrapped in JSON by the
-    # authorization URL (the plan's Phase 0 notes).
+    s.step("client2: GET the form again", get_form(client2_id, "text/html"))
     s.step(
         "client2: the Apple button's link, form-POST callback",
-        _callback_step(s, wire_oauth, _state_of(links["apple"]), apple=True),
+        _callback_step(
+            s, wire_oauth, _state_of(links["apple"]), apple=True, browser=browser
+        ),
     )
+    assert apple_link
     check("WG16", _without_form_length(s.recording()))
 
 

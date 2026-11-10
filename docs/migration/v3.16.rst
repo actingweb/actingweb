@@ -150,6 +150,11 @@ items, item 11 and item 18.
     methods or actions rule denies what it does not cover, a subscription
     needs read access, and ``shared_properties`` no longer returns
     ``excluded_properties``.
+21. **An MCP client's level is the user's choice** (see `An MCP client's
+    access level`_): configure the client list (``admin`` is no longer
+    offered without one), add the ``form_nonce`` hidden input to a custom
+    authorize form, and give server-to-server clients an owner-created
+    client (anonymous ``client_credentials`` is refused).
 
 
 What changed and why
@@ -1567,6 +1572,57 @@ nothing).
 (it asked for an operation no rule grants, so it listed nothing), no longer
 returns ``excluded_properties`` (it named everything else the actor holds),
 and answers 403 ``{"error": "not_approved"}`` for a trust not yet approved.
+
+An MCP client's access level
+-----------------------------
+
+An OAuth2/MCP client gets the level the user chooses, from the list the
+application offers clients; it cannot choose its own.
+
+**Configure the list.** ``AccessControlConfig(config).configure_oauth2_trust_types(
+allowed_trust_types=[...], default_trust_type=...)``. With no list every
+registered type except ``admin`` is offered and ``mcp_client`` is the
+default; ``admin`` is offered only when listed. The list is for clients
+(external parties reaching ``/mcp``); trusts between actors (``/trust``)
+are not restricted by it. Code that read ``config._oauth2_trust_types``
+should call ``client_trust_type_acceptable(name)`` and
+``default_client_trust_type()``.
+
+**Templates.** A custom ``aw-oauth-authorization-form.html`` must post the
+nonce back in every form:
+``<input type="hidden" name="form_nonce" value="{{ form_nonce }}">``.
+Without it the sign-in still works, but always through the confirmation
+page. Override ``aw-oauth-confirm.html`` to brand the confirmation; it must
+post ``token`` and ``decision`` (``approve``/``decline``) to
+``form_action`` from the same site.
+
+**Your own sign-in route.** A route that authenticates the user itself and
+grants a client access should call
+``get_actingweb_oauth2_server(config).complete_client_authorization(actor,
+client_id, redirect_uri, trust_type, state=..., code_challenge=...,
+code_challenge_method=...)``: it applies the list, the
+``oauth2_trust_requested`` hook, the trust and the code, and answers
+``{"action": "redirect", "url": ...}``.
+
+**Breaking: anonymous registrations.** ``POST /oauth/register`` refuses
+``grant_types`` naming ``client_credentials`` and a ``trust_type`` the list
+does not offer (400 ``invalid_client_metadata``), and a stored anonymous
+client gets ``unauthorized_client`` for ``client_credentials``. A
+server-to-server integration needs a client created by an actor's owner:
+``OAuth2ClientManager(actor_id, config).create_client(name, trust_type=...)``.
+
+**Rows to review.** A client that obtained a level before 3.16 keeps it until
+it authorises again (then the row follows the new approval). List the rows
+to review: trust rows with ``established_via = "oauth2_client"`` whose
+``relationship`` is not in the client list, for example on PostgreSQL
+``SELECT id, peerid, relationship FROM trusts WHERE established_via =
+'oauth2_client' AND relationship NOT IN ('mcp_client', ...);`` and delete or
+re-type them.
+
+**The decision hook.** ``@app.lifecycle_hook("oauth2_trust_requested")``
+receives ``trust_type``, ``client_id``, ``client_name``, ``redirect_uri``,
+``provider``, ``email`` and ``confirmed``; return ``None``, a type name, or
+``False``. It fails closed.
 
 What stays the same
 ===================

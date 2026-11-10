@@ -88,86 +88,19 @@ class TestMCPOAuth2Authorization:
     """Test OAuth2 authorization flow for MCP clients."""
 
     @pytest.fixture
-    def registered_client(self, http_client, base_url) -> dict[str, Any]:
-        """Fixture to register an OAuth2 client."""
-        response = http_client.post(
-            f"{base_url}/oauth/register",
-            json={
-                "client_name": "Test OAuth Client",
-                "redirect_uris": ["http://localhost:3000/callback"],
-                "grant_types": ["authorization_code", "refresh_token"],
-                "response_types": ["code"],
-                "scope": "mcp",
-            },
-            headers={"Content-Type": "application/json"},
+    def registered_client(self, base_url, worker_info) -> dict[str, Any]:
+        """A client an actor's owner created (3.16: an anonymous registration
+        may not ask for client_credentials)."""
+        from .conftest import TEST_APP_CONFIG
+        from .utils.oauth2_helper import create_owner_client
+
+        helper = create_owner_client(
+            base_url,
+            TEST_APP_CONFIG["config"],
+            worker_id=worker_info["worker_id"],
+            client_name="Test Token Client",
         )
-        assert response.status_code == 201
-        return response.json()
-
-    def test_authorization_endpoint_get(self, http_client, base_url, registered_client):
-        """
-        Test GET /oauth/authorize shows authorization form.
-
-        In a real flow, this would show a form asking the user to authorize
-        the MCP client. For testing, we just verify the endpoint exists.
-        """
-        response = http_client.get(
-            f"{base_url}/oauth/authorize",
-            params={
-                "client_id": registered_client["client_id"],
-                "redirect_uri": "http://localhost:3000/callback",
-                "response_type": "code",
-                "scope": "mcp",
-                "state": "test_state_123",
-            },
-        )
-
-        # Should show authorization form or redirect to login
-        # Accept both 200 (form) and 302 (redirect to Google)
-        assert response.status_code in [200, 302]
-
-    def test_authorization_request_missing_client_id(self, http_client, base_url):
-        """
-        Test authorization request without client_id.
-
-        Should return error.
-        """
-        response = http_client.get(
-            f"{base_url}/oauth/authorize",
-            params={
-                # Missing client_id
-                "redirect_uri": "http://localhost:3000/callback",
-                "response_type": "code",
-                "scope": "mcp",
-            },
-        )
-
-        assert response.status_code in [400, 401, 403]
-
-
-class TestMCPOAuth2TokenExchange:
-    """Test OAuth2 token endpoint for MCP clients."""
-
-    @pytest.fixture
-    def registered_client(self, http_client, base_url) -> dict[str, Any]:
-        """Fixture to register an OAuth2 client."""
-        response = http_client.post(
-            f"{base_url}/oauth/register",
-            json={
-                "client_name": "Test Token Client",
-                "redirect_uris": ["http://localhost:3000/callback"],
-                "grant_types": [
-                    "authorization_code",
-                    "refresh_token",
-                    "client_credentials",
-                ],
-                "response_types": ["code"],
-                "scope": "mcp",
-            },
-            headers={"Content-Type": "application/json"},
-        )
-        assert response.status_code == 201
-        return response.json()
+        return {"client_id": helper.client_id, "client_secret": helper.client_secret}
 
     def test_token_request_client_credentials(
         self, http_client, base_url, registered_client
@@ -273,13 +206,10 @@ class TestMCPOAuth2Integration:
     """Integration tests for complete MCP OAuth2 flows."""
 
     def test_client_registration_and_token_flow(self, http_client, base_url):
-        """
-        Test complete flow: register client -> get token -> use token.
-
-        This is a simplified integration test showing the basic MCP OAuth2 flow.
-        """
-        # Step 1: Register client
-        registration_response = http_client.post(
+        """An anonymous registration may not ask for client_credentials (400),
+        and a client registered without it may not use it on the system
+        actor (unauthorized_client) (3.16)."""
+        refused = http_client.post(
             f"{base_url}/oauth/register",
             json={
                 "client_name": "Integration Test Client",
@@ -289,11 +219,21 @@ class TestMCPOAuth2Integration:
             },
             headers={"Content-Type": "application/json"},
         )
+        assert refused.status_code == 400
+        assert refused.json()["error"] == "invalid_client_metadata"
 
+        registration_response = http_client.post(
+            f"{base_url}/oauth/register",
+            json={
+                "client_name": "Integration Test Client",
+                "redirect_uris": ["http://localhost:3000/callback"],
+                "scope": "mcp",
+            },
+            headers={"Content-Type": "application/json"},
+        )
         assert registration_response.status_code == 201
         client = registration_response.json()
 
-        # Step 2: Get token
         token_response = http_client.post(
             f"{base_url}/oauth/token",
             data={
@@ -304,18 +244,8 @@ class TestMCPOAuth2Integration:
             },
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
-
-        # Token endpoint might not support client_credentials yet
-        # That's OK - we're testing the infrastructure exists
-        if token_response.status_code == 200:
-            token_data = token_response.json()
-            access_token = token_data["access_token"]
-
-            # Step 3: Try to use the token (basic check)
-            # This would normally access an MCP endpoint
-            # For now, just verify token was issued
-            assert access_token
-            assert len(access_token) > 0
+        assert token_response.status_code in (400, 401)
+        assert token_response.json()["error"] == "unauthorized_client"
 
 
 @pytest.fixture

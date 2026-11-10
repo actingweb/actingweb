@@ -383,7 +383,7 @@ def test_maybe_purge_runs_once_per_interval(
     assert len(store.purges) == 1
     purged = store.purges[0]
     assert purged is not None
-    assert len(purged) == 8
+    assert len(purged) == 9  # with the pending authorisations (3.16)
     assert {
         TOKENS,
         REFRESH,

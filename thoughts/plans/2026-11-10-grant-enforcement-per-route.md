@@ -1,6 +1,6 @@
 ---
 status: done
-verified: thoughts/verifications/2026-11-10-grant-enforcement-per-route.md
+verified: thoughts/verifications/2026-11-10-grant-enforcement-per-route-reverify-1.md
 ---
 
 # Implementation Plan: a peer's grant is the answer on every route
@@ -2370,3 +2370,146 @@ Full tier on this batch (2026-11-10): ruff, format, pyright clean;
 sequential PostgreSQL 1385 passed, failing only
 `test_callback_processor_concurrency` (fails on `master` too; its todo);
 docs build with `-W`.
+
+### 2026-11-10, after verification thoughts/verifications/2026-11-10-grant-enforcement-per-route-reverify-1.md
+
+The re-run's reviews (built-in code review high, outside voice with codex,
+security review, all on `10f9563..0cef4d6`) read the second batch's own
+failure paths. Each fix below has a test that fails on `0cef4d6` unless
+noted.
+
+#### 28. A re-type that faults half way is put back, and a retry repairs it
+
+**Category**: Bug fix (re-run 1, Issue A)
+
+**What changed**: a `DbError` from removing the old override now puts the
+type back before it propagates (it escaped past the rollback); a failed
+rollback is logged. "Re-typed" also counts a stored override written for
+another type (`_stale_client_override`), so a retry with the same type
+removes what a half-done re-type left (it saw no type change and kept the
+wider override for good). An override for the approved type stays.
+
+**Files affected**: `actingweb/interface/trust_manager.py`
+(`_stale_client_override`, `_put_type_back`);
+`tests/test_client_trust_update.py`
+(`test_a_faulting_override_removal_puts_the_type_back`,
+`test_a_retry_removes_an_override_a_half_done_re_type_left`,
+`test_an_override_for_the_approved_type_stays`, the last a guard that
+passes on both).
+
+#### 29. Async `sync_peer` fires `trust_deleted` from the delete's re-read
+
+**Category**: Bug fix (re-run 1, Issue B; supersedes entry 23's async item)
+
+**What changed**: `sync_peer_async` passes `before_local_delete` like the
+sync twin, so the hook fires only for a row the delete re-read and before
+it deletes (it fired from a separate read, before and apart from the
+delete: twice on a failed delete, for a re-paired row). The delete runs in
+a worker thread; `HookRegistry.execute_lifecycle_hooks_for_loop` awaits a
+coroutine hook on the caller's loop and runs a sync hook in that thread
+(entry 23 ran sync hooks on the loop). `TrustManager.fire_deleted` takes
+`loop=`; `fire_deleted_async` is gone (it duplicated the argument contract,
+Issue J).
+
+**Files affected**: `actingweb/interface/hooks.py`,
+`actingweb/interface/trust_manager.py`,
+`actingweb/interface/subscription_manager.py`;
+`tests/test_revoked_trust_detection.py` (a real registry with a coroutine
+and a sync hook, through a worker-thread delete: order, loop, thread).
+
+#### 30. A value too deep for the filter is withheld, never sent unfiltered
+
+**Category**: Bug fix (re-run 1, Issue C)
+
+**What changed**: with an exclusion stated, `drop_excluded` withholds
+(`None`) a value nested more than `MAX_FILTER_DEPTH` (100) levels, counted
+without recursion over objects and arrays; `as_json_object` answers
+`TOO_DEEP` for text beyond the parser (entry 23 made it plain text, sent
+unfiltered). A diff leaves such a part out (`_EMPTIED`), a read gets
+`None`, the views refuse to overwrite one, `holds_excluded` counts it as
+holding an excluded part (a peer's write is 403). The full-state fallback
+uses `as_json_object` too (its own `json.loads` raised).
+
+**Files affected**: `actingweb/permission_evaluator.py`,
+`actingweb/actor.py` (`_diff_part`, the full-state fallback),
+`actingweb/interface/authenticated_views.py`;
+`tests/test_grant_stored_text.py` (nested objects at 5000, text beyond the
+parser, a value within the depth, a view reading and writing one).
+
+#### 31. A bulk `items` refusal raised by the hook is a 403 with its diff
+
+**Category**: Bug fix (re-run 1, Issue E)
+
+**What changed**: `_finish_bulk_list_update` catches `_HookDenied` (the
+canonical PERMISSION_DENIED) as it treats a None: the key is recorded, 403.
+It escaped to the bulk path's generic handler: 500, no diff.
+
+**Files affected**: `actingweb/handlers/properties.py`;
+`tests/test_grant_edges.py`
+(`test_a_bulk_items_update_a_hook_denies_is_403_with_its_diff`).
+
+#### 32. Every failed confirmation is a page for a person
+
+**Category**: UX refinement (re-run 1, Issue G)
+
+**What changed**: an error from `handle_confirmation` (an expired or spent
+pending record) goes through `_confirm_refusal` like the four refusals
+before it (it reached the browser as JSON). The 503 text says "Reload this
+page" (Back replays a spent provider code; reload re-posts with the cookie
+kept). A template that fails to render answers its handler's error status,
+else 500 (`template_fallback_status`; it was 200). The migration guide says
+an overridden `aw-oauth-confirm.html` needs an `{% if error %}` branch.
+The Accept test of `_confirm_refusal` (JSON also for no Accept) is kept:
+the page is for a browser, which always sends one.
+
+**Files affected**: `actingweb/handlers/oauth2_endpoints.py`,
+`actingweb/interface/integrations/base_integration.py`,
+`fastapi_integration.py`, `flask_integration.py`,
+`docs/migration/v3.16.rst`; `tests/test_oauth2_confirm_refusal.py` (new;
+the JSON and redirect cases pass on both, as guards).
+
+#### 33. A secret written with the approval is the call's own
+
+**Category**: Bug fix (re-run 1, Issue H)
+
+**What changed**: the replaced-row check compares the re-read secret with
+the one this call wrote, else the one read before.
+
+**Files affected**: `actingweb/actor.py`;
+`tests/test_trust_notify_url.py`
+(`test_a_secret_written_with_the_approval_is_this_call_s_own`).
+
+#### 34. A refused bare JSON-RPC method answers 403; one gate for both twins
+
+**Category**: Bug fix and refactor (re-run 1, Issues I and J)
+
+**What changed**: the parse-then-gate block, the body's method check and
+the result write are `MethodsHandler` helpers (`_parse_and_gate`,
+`_body_method_refused`, `_write_post_result`) the async twin inherits; a
+refused body method answers HTTP 403 with the JSON-RPC error (it answered
+200).
+
+**Files affected**: `actingweb/handlers/methods.py`,
+`async_methods.py`; `tests/test_methods_actions_decision.py`; changelog and
+migration guide.
+
+#### 35. Decided and accepted
+
+- **Issue F (owner decision 2026-11-10, "approval only")**: an
+  application's own target needs only an approved trust at delivery; a
+  relationship downgrade or a client row does not stop a subscription it
+  already has. Pinned by `test_approval_alone_decides_after_a_downgrade`;
+  `docs/guides/subscriptions.rst` says how to stop one.
+- **Issue D**: the absent-row cleanup's window (a re-pair between the read
+  and the permissions delete loses its override) is recorded in
+  `thoughts/reference/trust-row-deletion-invariants.md`; a second read
+  only moves it.
+- **Issue K**: the missing type hint is added.
+
+#### 36. The Full tier on this batch
+
+Full tier (2026-11-10): ruff, format, pyright clean; `verify_groups` OK;
+unit 5054 passed before the guard marker on `_put_type_back`
+(`test_no_broad_except_folds_a_db_fault_unmarked` caught it; passes after);
+DynamoDB 6507 passed; PostgreSQL 6304 passed; docs build with `-W`. No
+wire recording changed.

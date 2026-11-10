@@ -17,6 +17,7 @@ from ..access_decision import (
 )
 from ..db.exceptions import DbError
 from ..permission_evaluator import (
+    TOO_DEEP,
     GrantSnapshot,
     PermissionResult,
     PermissionType,
@@ -209,6 +210,8 @@ class AuthenticatedPropertyStore:
         if parsed is None:
             return drop_excluded(rules, key, value)
         kept = drop_excluded(rules, key, parsed)
+        if kept is None:
+            return None  # too deep to filter: withheld
         return value if kept == parsed else json.dumps(kept)
 
     def __getitem__(self, key: str) -> Any:
@@ -235,7 +238,7 @@ class AuthenticatedPropertyStore:
         for candidate in (self._store.get(key, None), value):
             if isinstance(candidate, str | bytes):
                 candidate = as_json_object(candidate)
-            if isinstance(candidate, dict | list):
+            if candidate is TOO_DEEP or isinstance(candidate, dict | list):
                 values.append(candidate)
         if values and holds_excluded(rules, key, *values):
             raise PermissionError(

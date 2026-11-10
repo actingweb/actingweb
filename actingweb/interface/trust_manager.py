@@ -14,6 +14,8 @@ from ..actor import Actor as CoreActor
 from ..trust import canonical_connection_method
 
 if TYPE_CHECKING:
+    import asyncio
+
     from .hooks import HookRegistry
 
 
@@ -168,9 +170,13 @@ class TrustManager:
         peer_id: str = "",
         relationship: str = "",
         trust_data: dict[str, Any] | None = None,
+        *,
+        loop: "asyncio.AbstractEventLoop | None" = None,
         **extra: Any,
     ) -> None:
-        """Execute a lifecycle hook."""
+        """Execute a lifecycle hook. With ``loop`` (called from a worker
+        thread an async caller on that loop waits on), a coroutine hook is
+        awaited on ``loop`` and a sync hook runs in this thread."""
         if not self._hooks:
             return
 
@@ -178,14 +184,20 @@ class TrustManager:
             from .actor_interface import ActorInterface
 
             actor_interface = ActorInterface(self._core_actor, hooks=self._hooks)
-            self._hooks.execute_lifecycle_hooks(
-                event,
-                actor=actor_interface,
-                peer_id=peer_id,
-                relationship=relationship,
-                trust_data=trust_data or {},
+            kwargs: dict[str, Any] = {
+                "peer_id": peer_id,
+                "relationship": relationship,
+                "trust_data": trust_data or {},
                 **extra,
-            )
+            }
+            if loop is not None:
+                self._hooks.execute_lifecycle_hooks_for_loop(
+                    event, loop, actor_interface, **kwargs
+                )
+            else:
+                self._hooks.execute_lifecycle_hooks(
+                    event, actor=actor_interface, **kwargs
+                )
             logger.debug(f"Lifecycle hook '{event}' executed for peer {peer_id}")
         except DbError:
             raise
@@ -231,11 +243,18 @@ class TrustManager:
         except DbError as e:  # folds DbError: hook after the approval committed
             logger.error(f"{event} for {peer_id} skipped on a store fault: {e}")
 
-    def fire_deleted(self, row: Any, *, initiated_by_peer: bool) -> None:
+    def fire_deleted(
+        self,
+        row: Any,
+        *,
+        initiated_by_peer: bool,
+        loop: "asyncio.AbstractEventLoop | None" = None,
+    ) -> None:
         """The one deletion hook path (3.16): ``trust_deleted`` before the
         delete, with ``peer_id``, ``relationship``, ``trust_data`` (the row,
         so the hook can still read the peer's cached profile) and
-        ``initiated_by_peer``."""
+        ``initiated_by_peer``. ``loop``: the event loop of an async caller
+        waiting on this thread (its coroutine hooks are awaited there)."""
         if not row:
             return
         data = row if isinstance(row, dict) else row.to_dict()
@@ -244,31 +263,9 @@ class TrustManager:
             peer_id=str(data.get("peerid") or ""),
             relationship=str(data.get("relationship") or ""),
             trust_data=data,
+            loop=loop,
             initiated_by_peer=initiated_by_peer,
         )
-
-    async def fire_deleted_async(self, row: Any, *, initiated_by_peer: bool) -> None:
-        """``fire_deleted`` on the running event loop (3.16): an async hook
-        is awaited there, not run on a fresh loop in a worker thread (its
-        loop-bound resources would fail)."""
-        if not row or not self._hooks:
-            return
-        data = row if isinstance(row, dict) else row.to_dict()
-        from .actor_interface import ActorInterface
-
-        try:
-            await self._hooks.execute_lifecycle_hooks_async(
-                "trust_deleted",
-                actor=ActorInterface(self._core_actor, hooks=self._hooks),
-                peer_id=str(data.get("peerid") or ""),
-                relationship=str(data.get("relationship") or ""),
-                trust_data=data,
-                initiated_by_peer=initiated_by_peer,
-            )
-        except DbError:
-            raise
-        except Exception as e:
-            logger.error(f"Error executing lifecycle hook 'trust_deleted': {e}")
 
     @property
     def relationships(self) -> list[TrustRelationship]:
@@ -492,6 +489,37 @@ class TrustManager:
             return False
         return True
 
+    def _stale_client_override(self, peer_id: str, trust_type: str) -> bool:
+        """A client's stored override was written for a type other than the
+        one approved now (a re-type that failed after the row changed left
+        it; its own ``trust_type`` keeps deciding). A fault raises
+        ``DbError``: nothing has been written yet."""
+        from ..trust_permissions import get_trust_permission_store
+
+        config = self._core_actor.config
+        if config is None:
+            return False
+        stored = get_trust_permission_store(config).get_permissions_uncached(
+            str(self._core_actor.id), peer_id
+        )
+        stored_type = str(getattr(stored, "trust_type", "") or "")
+        return bool(stored_type) and stored_type != trust_type
+
+    def _put_type_back(self, db: Any, peer_id: str, old_type: str) -> None:
+        """The rollback of a re-type whose override could not be removed. A
+        rollback that fails is logged: the row then holds the new type and
+        the old override, which the next authorisation removes
+        (``_stale_client_override``)."""
+        if not old_type:
+            return
+        try:
+            restored = db.modify(relationship=old_type)
+        except DbError as e:  # folds DbError: the caller re-raises its own fault; the next authorisation repairs
+            logger.error(f"OAuth2 client trust {peer_id}: type not put back: {e}")
+            return
+        if not restored:
+            logger.error(f"OAuth2 client trust {peer_id}: type not put back")
+
     def _evict_retyped(self, peer_id: str, trust_type: str) -> None:
         """After a client's row took a new type: the MCP caches for the actor
         are evicted (single process; ``todo/mcp-cache-lifecycle-and-revocation``
@@ -654,17 +682,24 @@ class TrustManager:
                     # A client's row follows the level the user approved at
                     # this authorisation, up or down (3.16; it kept the
                     # first one forever). The type changes first, then the
-                    # override written for the old type goes; when it cannot,
-                    # the type is put back and the authorisation fails. (The
-                    # other order left the old type without its override,
-                    # which can be wider, when the type change failed.)
+                    # override written for an older type goes; when it
+                    # cannot, the type is put back and the authorisation
+                    # fails. (The other order left the old type without its
+                    # override, which can be wider, when the type change
+                    # failed.) An override left from an earlier re-type that
+                    # failed half way is removed too, so a retry repairs it.
                     old_type = str(getattr(existing, "relationship", "") or "")
-                    retyped = bool(
+                    type_changes = bool(
                         source == "oauth2_client"
                         and trust_type
                         and old_type != trust_type
                     )
-                    if retyped:
+                    retyped = type_changes or bool(
+                        source == "oauth2_client"
+                        and trust_type
+                        and self._stale_client_override(peer_id, trust_type)
+                    )
+                    if type_changes:
                         modify_kwargs["relationship"] = trust_type
 
                     if db.modify(**modify_kwargs):
@@ -672,9 +707,17 @@ class TrustManager:
                             f"Updated existing OAuth trust: peer_id={peer_id}, established_via={source}"
                         )
                         if retyped:
-                            if not self._drop_client_override(peer_id, trust_type):
-                                if old_type:
-                                    db.modify(relationship=old_type)
+                            try:
+                                dropped = self._drop_client_override(
+                                    peer_id, trust_type
+                                )
+                            except DbError:
+                                if type_changes:
+                                    self._put_type_back(db, peer_id, old_type)
+                                raise
+                            if not dropped:
+                                if type_changes:
+                                    self._put_type_back(db, peer_id, old_type)
                                 return False
                             self._evict_retyped(peer_id, trust_type)
                     else:

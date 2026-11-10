@@ -162,3 +162,74 @@ def test_a_failed_type_change_keeps_the_override() -> None:
         assert w.authorise("viewer") is False
     assert w.row()["relationship"] == "friend"
     assert store.get_permissions_uncached(aid(w.actor), peer) is not None
+
+
+def _friend_with_override(w: World) -> tuple[str, TrustPermissionStore]:
+    assert w.authorise("friend")
+    peer = str(w.row()["peerid"])
+    store = get_trust_permission_store(w.config)
+    assert store.store_permissions(
+        TrustPermissions(
+            actor_id=aid(w.actor),
+            peer_id=peer,
+            trust_type="friend",
+            properties={"patterns": ["*"], "operations": ["read", "write"]},
+        ),
+        notify_peer=False,
+    )
+    return peer, store
+
+
+def test_a_faulting_override_removal_puts_the_type_back() -> None:
+    """Verification re-run 1 (Issue A): a ``DbError`` from the override
+    removal escaped past the rollback, leaving the new type with the old
+    (wider) override."""
+    from actingweb.db.exceptions import DbError
+
+    w = World()
+    peer, store = _friend_with_override(w)
+    with mock.patch.object(
+        TrustPermissionStore, "delete_permissions", side_effect=DbError("down")
+    ):
+        with pytest.raises(DbError):
+            w.authorise("viewer")
+    assert w.row()["relationship"] == "friend"
+    assert store.get_permissions_uncached(aid(w.actor), peer) is not None
+
+
+def test_a_retry_removes_an_override_a_half_done_re_type_left() -> None:
+    """Verification re-run 1 (Issue A): the rollback itself failed, so the
+    row holds the new type and the old override; the retry (same type, so
+    no type change) still removes the override."""
+    from actingweb.db.exceptions import DbError
+
+    w = World()
+    peer, store = _friend_with_override(w)
+    real_modify = type(get_trust(w.config)).modify
+
+    def rollback_fails(self: Any, *a: Any, **kw: Any) -> Any:
+        if kw == {"relationship": "friend"}:
+            return False
+        return real_modify(self, *a, **kw)
+
+    with (
+        mock.patch.object(type(get_trust(w.config)), "modify", rollback_fails),
+        mock.patch.object(
+            TrustPermissionStore, "delete_permissions", side_effect=DbError("down")
+        ),
+    ):
+        with pytest.raises(DbError):
+            w.authorise("viewer")
+    assert w.row()["relationship"] == "viewer"
+    assert store.get_permissions_uncached(aid(w.actor), peer) is not None
+    assert w.authorise("viewer")
+    assert w.row()["relationship"] == "viewer"
+    assert store.get_permissions_uncached(aid(w.actor), peer) is None
+
+
+def test_an_override_for_the_approved_type_stays() -> None:
+    """The same type authorised again keeps an override written for it."""
+    w = World()
+    peer, store = _friend_with_override(w)
+    assert w.authorise("friend")
+    assert store.get_permissions_uncached(aid(w.actor), peer) is not None

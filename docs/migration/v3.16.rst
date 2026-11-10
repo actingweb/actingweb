@@ -1561,7 +1561,9 @@ evaluator that cannot be built denies (it fell back to the table) and the
 listings (``GET /methods``, ``GET /actions``, both twins) show nothing (they
 showed everything). The async listings are filtered now (they were not).
 ``DELETE /methods/<name>`` and the JSON-RPC method named in a body posted to
-the bare ``/methods`` are decided too. Method and action hooks use the same
+the bare ``/methods`` are decided too (a refused JSON-RPC method answers
+HTTP 403 with the JSON-RPC error ``-32000``, as ``/methods/<name>`` answers
+403). Method and action hooks use the same
 decision; an error in their check denies (it allowed).
 
 **Behavior change: a subscription needs read access.** ``POST
@@ -1601,10 +1603,13 @@ should call ``client_trust_type_acceptable(name)`` and
 nonce back in every form:
 ``<input type="hidden" name="form_nonce" value="{{ form_nonce }}">``.
 Without it the sign-in still works, but always through the confirmation
-page. Override ``aw-oauth-confirm.html`` to brand the confirmation (it is
-also rendered with only ``error``, a sentence, for a refused answer); it must
+page. Override ``aw-oauth-confirm.html`` to brand the confirmation; it must
 post ``token`` and ``decision`` (``approve``/``decline``) to
-``form_action`` from the same site.
+``form_action`` from the same site. It is also rendered with only
+``error`` (a sentence for the user, and no ``confirm_token``) for a refused
+or failed answer, so an override needs an ``{% if error %}`` branch that
+shows it instead of the form; without one the user sees an empty Approve
+form that can never succeed.
 
 **Your own sign-in route.** A route that authenticates the user itself and
 grants a client access should call

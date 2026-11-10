@@ -17,7 +17,7 @@ from typing import Any
 
 import pytest
 
-from actingweb.actor import Actor
+from actingweb.actor import _EMPTIED, Actor
 from actingweb.interface.actor_interface import ActorInterface
 from actingweb.interface.authenticated_views import PermissionError
 from actingweb.trust_permissions import TrustPermissions, get_trust_permission_store
@@ -236,7 +236,9 @@ class TestApplicationTargetsAtDelivery:
     application made itself stopped delivering. It needs an approved trust."""
 
     @staticmethod
-    def _grant(approved: bool) -> Any:
+    def _grant(
+        approved: bool, relationship: str = "friend", is_client: bool = False
+    ) -> Any:
         from actingweb.permission_evaluator import GrantSnapshot
 
         return GrantSnapshot(
@@ -244,12 +246,27 @@ class TestApplicationTargetsAtDelivery:
             peer_id="p1",
             has_row=True,
             approved=approved,
-            relationship="friend",
-            is_client=False,
+            relationship=relationship,
+            is_client=is_client,
             permissions={},
         )
 
-    def test_an_approved_peer_gets_its_application_diffs(self, actor) -> None:
+    def test_approval_alone_decides_after_a_downgrade(self, actor: Any) -> None:
+        """Owner decision 2026-11-10 (verification re-run 1, Issue F): the
+        grant has no category for an application's target, so approval alone
+        decides at delivery. A relationship whose access table would not let
+        it create the subscription, or a client row holding one the
+        application made, still receives; withdrawing approval stops it."""
+        sub = {"target": "meta", "subtarget": "", "resource": ""}
+        for grant in (
+            self._grant(True, relationship="no-such-type"),
+            self._grant(True, relationship="mcp_client", is_client=True),
+        ):
+            assert (
+                actor.filter_subscription_blob("p1", sub, "{}", snapshot=grant) == "{}"
+            )
+
+    def test_an_approved_peer_gets_its_application_diffs(self, actor: Any) -> None:
         sub = {"target": "meta", "subtarget": "", "resource": ""}
         out = actor.filter_subscription_blob(
             "p1", sub, "{}", snapshot=self._grant(True)
@@ -261,10 +278,59 @@ class TestApplicationTargetsAtDelivery:
         )
 
 
-def test_text_nested_beyond_the_parser_is_text() -> None:
+EXCLUDES = {"patterns": ["*"], "excluded_patterns": ["settings/private"]}
+
+
+def _nested(depth: int) -> dict[str, Any]:
+    value: dict[str, Any] = {}
+    for _ in range(depth):
+        value = {"a": value}
+    return value
+
+
+def test_text_nested_beyond_the_parser_is_withheld() -> None:
     """Outside voice 2026-11-10: ``RecursionError`` from very deep JSON text
-    escaped the filter (a dropped diff, a view raising)."""
-    from actingweb.permission_evaluator import as_json_object
+    escaped the filter; verification re-run 1 (Issue C): treated as text, it
+    was then sent unfiltered. It is withheld."""
+    from actingweb.permission_evaluator import TOO_DEEP, as_json_object
 
     deep = "[" * 200_000 + "]" * 200_000
-    assert as_json_object(deep) is None
+    assert as_json_object(deep) is TOO_DEEP
+    assert Actor._diff_part(EXCLUDES, "settings", deep) is _EMPTIED
+
+
+def test_objects_nested_beyond_the_walk_are_withheld() -> None:
+    """Verification re-run 1 (Issue C): an object nested 5000 deep parses,
+    then the filter's walk raised ``RecursionError`` (only arrays were
+    tested, which the walk does not descend)."""
+    from actingweb.permission_evaluator import drop_excluded, holds_excluded
+
+    deep = _nested(5000)
+    text = json.dumps(deep)
+    assert drop_excluded(EXCLUDES, "settings", deep) is None
+    assert holds_excluded(EXCLUDES, "settings", deep)
+    assert Actor._diff_part(EXCLUDES, "settings", deep) is _EMPTIED
+    assert Actor._diff_part(EXCLUDES, "settings", text) is _EMPTIED
+    # No exclusion stated: nothing is walked, the value passes as it is.
+    assert drop_excluded({"patterns": ["*"]}, "settings", deep) is deep
+
+
+def test_a_value_within_the_depth_is_filtered_as_before() -> None:
+    from actingweb.permission_evaluator import MAX_FILTER_DEPTH, drop_excluded
+
+    value = {"private": "s", "deep": _nested(MAX_FILTER_DEPTH - 2)}
+    assert drop_excluded(EXCLUDES, "settings", value) == {
+        "deep": _nested(MAX_FILTER_DEPTH - 2)
+    }
+
+
+def test_a_view_withholds_and_refuses_a_value_too_deep(actor: Any) -> None:
+    """The developer view reads ``None`` for it and refuses to overwrite it
+    (it held excluded parts the filter cannot see)."""
+    w, peer = _world()
+    assert w.a.property is not None
+    w.a.property["settings"] = json.dumps(_nested(5000))
+    view = _fresh_view(w, peer)
+    assert view["settings"] is None
+    with pytest.raises(PermissionError):
+        view["settings"] = "{}"

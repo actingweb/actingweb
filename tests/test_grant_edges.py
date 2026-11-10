@@ -281,3 +281,24 @@ def test_a_bulk_items_update_a_hook_refuses_still_reaches_subscribers() -> None:
     assert ok is False
     assert handler.response.status_code == 403
     assert "notes" in pair
+
+
+def test_a_bulk_items_update_a_hook_denies_is_403_with_its_diff() -> None:
+    """Verification re-run 1 (Issue E): a hook answering PERMISSION_DENIED
+    (``_run_hooks`` raises ``_HookDenied``) escaped to the bulk path's
+    generic handler: 500, and no key for the diff."""
+    from actingweb.access_decision import PERMISSION_DENIED
+    from actingweb.aw_web_request import AWWebObj
+    from actingweb.handlers.properties import PropertiesHandler
+
+    handler = PropertiesHandler(AWWebObj(), mock.Mock())
+    handler.hooks = mock.Mock()
+    handler.hooks.execute_property_hooks.return_value = PERMISSION_DENIED
+    pair: dict[str, Any] = {}
+    with mock.patch.object(handler, "_get_actor_interface", return_value=mock.Mock()):
+        ok = handler._finish_bulk_list_update(
+            mock.Mock(), "notes", mock.Mock(), mock.Mock(), pair, 2, 1
+        )
+    assert ok is False
+    assert handler.response.status_code == 403
+    assert "notes" in pair

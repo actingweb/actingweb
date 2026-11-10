@@ -520,5 +520,8 @@ def test_bare_jsonrpc_is_decided_by_the_method_it_names(async_twin: bool) -> Non
     assert '"Forbidden"' in refused.response.body or "Forbidden" in str(
         refused.response.body
     )
+    # Verification re-run 1 (Issue I): refused with HTTP 403, as the named
+    # path is (it answered 200 with the JSON-RPC error).
+    assert refused.response.status_code == 403
     plain = run({"x": 1})
     assert plain.response.status_code == 403

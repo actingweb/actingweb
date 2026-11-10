@@ -166,3 +166,31 @@ def test_a_replaced_row_s_base_uri_does_not_get_the_old_secret() -> None:
     ):
         assert _approve(w, approved=True)
     assert _sent_to(post) == f"{stored}/trust/friend/{aid(w.a)}"
+
+
+def test_a_secret_written_with_the_approval_is_this_call_s_own() -> None:
+    """Verification re-run 1 (Issue H): the re-read row holds the secret this
+    call wrote, which differed from the one read before, so the call's own
+    write was taken for a re-pair and a move meanwhile was not followed."""
+    from actingweb.trust import Trust
+
+    w = Receiver(approved=False)
+    moved = "https://moved-meanwhile.example.test/peer"
+    real_modify = Trust.modify
+
+    def modify_then_moved(self: Trust, *a: Any, **kw: Any) -> Any:
+        out = real_modify(self, *a, **kw)
+        if kw.get("approved") is True:
+            real_modify(
+                Trust(actor_id=aid(w.a), peerid=w.b, config=w.config), baseuri=moved
+            )
+        return out
+
+    with (
+        mock.patch.object(Trust, "modify", modify_then_moved),
+        mock.patch(
+            "actingweb.actor.requests.post", return_value=mock.Mock(status_code=204)
+        ) as post,
+    ):
+        assert _approve(w, approved=True, secret="a-rotated-secret-0123456789")
+    assert _sent_to(post) == f"{moved}/trust/friend/{aid(w.a)}"

@@ -94,6 +94,14 @@ re-creates the subscriptions. Closing it would need the cleanup to run
 after the row delete, which breaks rule 2 (the row is the retry handle).
 `tests/test_trust_conditional_delete.py` holds both sides of check 2.
 
+The same window, smaller, on a retry that finds the row **absent** at
+step 7: it runs step 8 (permissions) at once. A re-pair that creates the
+row and writes a custom override between that read and step 8 loses the
+override (the row falls back to its type's default) and the retry answers
+True. Accepted (verification re-run 1, Issue D): a second read would only
+move the window, the new row's creator can write the override again, and
+answering True for a row already gone is the delete's idempotent answer.
+
 Without `expected_secret` (`TrustManager.delete_relationship`, the bulk
 routes) nothing changes: whatever row the peer id names is deleted.
 

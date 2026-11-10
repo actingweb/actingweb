@@ -1,9 +1,13 @@
 """Test revoked trust detection and cleanup during sync."""
 
+import asyncio
+import threading
+from typing import Any
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 
+from actingweb.interface.hooks import HookRegistry
 from actingweb.interface.subscription_manager import (
     SubscriptionManager,
     SubscriptionSyncResult,
@@ -21,14 +25,37 @@ async def test_sync_peer_detects_and_cleans_up_revoked_trust():
     mock_actor.config.peer_capabilities_caching = False
     mock_actor.config.peer_permissions_caching = False
 
-    # Mock successful trust deletion
-    mock_actor.delete_reciprocal_trust_async = AsyncMock(return_value=True)
-    mock_actor.get_trust_relationships.return_value = [
-        {"peerid": "peer456", "relationship": "friend"}
-    ]
-    mock_actor.config._hooks.execute_lifecycle_hooks_async = AsyncMock(
-        return_value=None
-    )
+    # The delete runs in a worker thread, as the real one does, and calls
+    # the callback with the row it re-read (3.16).
+    order: list[str] = []
+    row = {"peerid": "peer456", "relationship": "friend"}
+
+    def delete_in_thread(**kw: Any) -> bool:
+        kw["before_local_delete"](dict(row))
+        order.append("delete")
+        return True
+
+    async def delete_async(**kw: Any) -> bool:
+        return await asyncio.to_thread(delete_in_thread, **kw)
+
+    mock_actor.delete_reciprocal_trust_async = AsyncMock(side_effect=delete_async)
+
+    registry = HookRegistry()
+    seen: dict[str, Any] = {}
+    main_loop = asyncio.get_running_loop()
+
+    async def async_hook(actor: Any, **kw: Any) -> None:
+        seen["async_loop"] = asyncio.get_running_loop()
+        seen["kw"] = kw
+        order.append("async_hook")
+
+    def sync_hook(actor: Any, **kw: Any) -> None:
+        seen["sync_thread"] = threading.current_thread()
+        order.append("sync_hook")
+
+    registry.register_lifecycle_hook("trust_deleted", async_hook)
+    registry.register_lifecycle_hook("trust_deleted", sync_hook)
+    mock_actor.config._hooks = registry
 
     # Create manager
     manager = SubscriptionManager(mock_actor)
@@ -86,17 +113,17 @@ async def test_sync_peer_detects_and_cleans_up_revoked_trust():
 
             # Verify trust deletion was called
             mock_actor.delete_reciprocal_trust_async.assert_called_once_with(
-                peerid="peer456", delete_peer=False
+                peerid="peer456", delete_peer=False, before_local_delete=ANY
             )
-            # The hook is awaited on the running loop before the delete
-            # (3.16; an async hook keeps its loop-bound resources), with the
-            # row read and initiated_by_peer.
-            hooks = mock_actor.config._hooks
-            event, *_ = hooks.execute_lifecycle_hooks_async.call_args.args
-            assert event == "trust_deleted"
-            kwargs = hooks.execute_lifecycle_hooks_async.call_args.kwargs
-            assert kwargs["trust_data"]["peerid"] == "peer456"
-            assert kwargs["initiated_by_peer"] is True
+            # Verification re-run 1 (Issue B): the hooks fire from the
+            # delete's re-read (a row already gone fires nothing), before it
+            # deletes; a coroutine hook on the caller's loop, a sync hook off
+            # it.
+            assert order == ["async_hook", "sync_hook", "delete"]
+            assert seen["async_loop"] is main_loop
+            assert seen["sync_thread"] is not threading.main_thread()
+            assert seen["kw"]["trust_data"]["peerid"] == "peer456"
+            assert seen["kw"]["initiated_by_peer"] is True
             # Audit A9: our own trust row at the peer, not trust/<our id>.
             mock_proxy.get_resource_async.assert_called_once_with(
                 path="trust/friend/actor123"

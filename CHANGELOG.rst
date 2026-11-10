@@ -23,7 +23,11 @@ SECURITY
   list's grant; a bulk ``POST`` is validated and authorised whole and
   refused whole. An object stored or written as JSON text (a form post, an
   SDK write of a JSON string, and every value the developer views read
-  back from storage) is filtered as the object, and handed back as text. A
+  back from storage) is filtered as the object, and handed back as text.
+  When the grant excludes anything, a value nested more than 100 levels
+  deep (objects or arrays) is withheld from the peer (``null`` on a read,
+  left out of a diff) and the peer's write of one is 403: the filter
+  cannot walk it safely, and it is never sent unfiltered. A
   peer gets 403 for a list it may not write whether it exists or not
   (``PUT ?index=`` and a bulk ``items`` write answered 404/400 for a
   missing one first). ``docs/migration/v3.16.rst`` ("Grants hold at every
@@ -59,7 +63,8 @@ SECURITY
   trust); a request that names nothing is refused when the grant mentions
   the category, except the ``GET`` listing of methods or actions, admitted
   when the rule names anything and filtered per name, and JSON-RPC on the
-  bare ``/methods``, decided by the method its body names.
+  bare ``/methods``, decided by the method its body names (a refused one
+  answers HTTP 403 with the JSON-RPC error ``-32000``).
   ``docs/migration/v3.16.rst`` ("Every other way in") lists each.
 - **An MCP client could give itself any access level, ``admin``
   included.** An anonymous ``POST /oauth/register`` stored the
@@ -804,8 +809,8 @@ SECURITY
   answers 404, and ``trust_deleted`` does not fire for it (it now fires
   after the last comparison, before anything local goes, on the REST route
   and when ``sync_peer`` finds a revocation, and not for a row another
-  delete already removed; ``sync_peer_async`` awaits it on the running
-  loop). A re-pair landing after the second comparison keeps its row,
+  delete already removed; ``sync_peer_async`` does the same, awaiting a
+  coroutine hook on its running loop and running a sync hook off it). A re-pair landing after the second comparison keeps its row,
   but the cleanup that ran (the subscriptions, the peer's stored data) is
   gone; the peer's next sync re-creates the subscriptions. ``Trust.delete``,
   ``Actor.delete_reciprocal_trust`` (and its async twin) and

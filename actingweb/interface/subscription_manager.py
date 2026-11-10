@@ -2711,23 +2711,26 @@ class SubscriptionManager:
                     f"Trust has been revoked. Cleaning up locally."
                 )
                 try:
-                    # trust_deleted fires through TrustManager, with the row
-                    # read above, before anything local goes (3.16; a row
-                    # already gone fires nothing). Awaited on this loop, so an
-                    # async hook keeps its loop-bound resources.
+                    # trust_deleted fires as in the sync twin: through
+                    # TrustManager, with the row the delete read, after the
+                    # delete found it and before anything local goes (3.16; a
+                    # row already gone fires nothing). The delete runs in a
+                    # worker thread; a coroutine hook is awaited on this
+                    # loop (its loop-bound resources work), a sync hook runs
+                    # in that thread (off the loop).
                     from .actor_interface import ActorInterface
 
-                    relationships = await asyncio.to_thread(
-                        self._core_actor.get_trust_relationships, peerid=peer_id
-                    )
-                    if relationships:
-                        await ActorInterface(self._core_actor).trust.fire_deleted_async(
-                            relationships[0], initiated_by_peer=True
-                        )
+                    trust = ActorInterface(self._core_actor).trust
+                    loop = asyncio.get_running_loop()
+
+                    def before_local_delete(row: dict[str, Any]) -> None:
+                        trust.fire_deleted(row, initiated_by_peer=True, loop=loop)
 
                     # Delete local trust relationship without notifying peer (already revoked)
                     deleted = await self._core_actor.delete_reciprocal_trust_async(
-                        peerid=peer_id, delete_peer=False
+                        peerid=peer_id,
+                        delete_peer=False,
+                        before_local_delete=before_local_delete,
                     )
                     if deleted:
                         logger.info(

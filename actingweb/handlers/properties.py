@@ -482,10 +482,17 @@ class PropertiesHandler(_PropertyHandlerBase):
                 # Pass the entire list for hook validation
                 current_items = list_prop.to_list()
                 auth_context = self._create_auth_context(check, "write")
-                transformed = self._run_hooks(
-                    key, "post", actor_interface, current_items, [key], auth_context
-                )
-                if transformed is None:
+                try:
+                    transformed = self._run_hooks(
+                        key, "post", actor_interface, current_items, [key], auth_context
+                    )
+                    denied = transformed is None
+                except _HookDenied:
+                    # The canonical refusal (PERMISSION_DENIED) answers as a
+                    # None does: inside the bulk try it was a 500 with no
+                    # diff (verification re-run 1).
+                    denied = True
+                if denied:
                     # The batch is applied already (not rolled back): what
                     # changed still reaches the subscribers, then 403.
                     pair[key] = (

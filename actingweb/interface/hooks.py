@@ -1360,6 +1360,32 @@ class HookRegistry:
 
         return processed
 
+    def execute_lifecycle_hooks_for_loop(
+        self, event: str, loop: asyncio.AbstractEventLoop, actor: Any, **kwargs: Any
+    ) -> Any:
+        """``execute_lifecycle_hooks`` from a worker thread that an async
+        caller on ``loop`` is waiting on (3.16): a coroutine hook is awaited
+        on ``loop``, so its loop-bound resources work, and a sync hook runs
+        here, off the loop. Same error policy."""
+        result = None
+        for hook in self._lifecycle_hooks.get(event, []):
+            try:
+                if inspect.iscoroutinefunction(hook):
+                    hook_result = asyncio.run_coroutine_threadsafe(
+                        hook(actor, **kwargs), loop
+                    ).result()
+                else:
+                    hook_result = hook(actor, **kwargs)
+                if hook_result is not None:
+                    result = hook_result
+            except DbError:
+                raise
+            except TypeError as e:
+                self._report_signature_error(event, hook, e)
+            except Exception as e:
+                logger.error(f"Error in lifecycle hook for {event}: {e}")
+        return result
+
     async def execute_lifecycle_hooks_async(
         self, event: str, actor: Any, **kwargs: Any
     ) -> Any:

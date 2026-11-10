@@ -22,7 +22,11 @@ from ._errors import (
     log_db_error,
     map_db_error,
 )
-from .base_integration import BaseActingWebIntegration, default_templates_dir
+from .base_integration import (
+    BaseActingWebIntegration,
+    default_templates_dir,
+    template_fallback_status,
+)
 
 if TYPE_CHECKING:
     from ..app import ActingWebApp
@@ -1460,13 +1464,19 @@ class FlaskIntegration(BaseActingWebIntegration):
                 # Template not found or rendering error - fall back to JSON
                 from flask import jsonify
 
-                return jsonify(
+                answer = jsonify(
                     {
                         "error": "template_error",
                         "error_description": f"Failed to render template: {str(e)}",
                         "template_values": webobj.response.template_values,
                     }
                 )
+                # A refusal keeps its status; a page that failed is not a
+                # 200 (3.16).
+                answer.status_code = template_fallback_status(
+                    webobj.response.status_code
+                )
+                return answer
 
         # Handle redirect responses (e.g., OAuth2 callbacks)
         if isinstance(result, dict) and result.get("status") == "redirect":

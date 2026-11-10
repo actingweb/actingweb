@@ -155,40 +155,10 @@ class MethodsHandler(base_handler.BaseHandler):
             return
         myself = auth_result.actor
         check = auth_result.auth_obj
-        # Parse request body
-        params: Any = None
-        try:
-            body: str | bytes | None = self.request.body
-            if body is None:
-                body_str = "{}"
-            elif isinstance(body, bytes):
-                body_str = body.decode("utf-8", "ignore")
-            else:
-                body_str = body
-            params = json.loads(body_str)
-        except (TypeError, ValueError, KeyError):
-            params = None
-
-        # Check if this is a JSON-RPC request
-        is_jsonrpc = (
-            isinstance(params, dict)
-            and "jsonrpc" in params
-            and params["jsonrpc"] == "2.0"
-        )
-        # JSON-RPC on the bare /methods names its method in the body, which
-        # the JSON-RPC handler decides (3.16); every other request is
-        # decided by the name in its path (a nameless call is refused when
-        # the grant states a methods rule).
-        if (name or not is_jsonrpc) and not self._check_method_permission(
-            actor_id, check, name, "POST"
-        ):
-            if self.response:
-                self.response.set_status(403, "Forbidden")
+        gated = self._parse_and_gate(actor_id, check, name)
+        if gated is None:
             return
-        if params is None:
-            if self.response:
-                self.response.set_status(400, "Error in json body")
-            return
+        params, is_jsonrpc = gated
 
         if is_jsonrpc:
             # Handle JSON-RPC request
@@ -204,14 +174,78 @@ class MethodsHandler(base_handler.BaseHandler):
                         name, actor_interface, params, auth_context
                     )
 
+        self._write_post_result(result)
+
+    def _parse_and_gate(
+        self, actor_id: str, check: Any, name: str
+    ) -> tuple[Any, bool] | None:
+        """A POST's body, parsed, and whether it is JSON-RPC 2.0; None when
+        the request was answered here (403, or 400 for a body that is not
+        JSON). Shared by the sync and async handlers (3.16).
+
+        JSON-RPC on the bare ``/methods`` names its method in the body, which
+        the JSON-RPC handler decides (:meth:`_body_method_refused`); every
+        other request is decided by the name in its path (a nameless call is
+        refused when the grant states a methods rule)."""
+        self._jsonrpc_refused = False
+        params: Any
+        try:
+            body: str | bytes | None = self.request.body
+            if body is None:
+                body_str = "{}"
+            elif isinstance(body, bytes):
+                body_str = body.decode("utf-8", "ignore")
+            else:
+                body_str = body
+            params = json.loads(body_str)
+        except (TypeError, ValueError, KeyError):
+            params = None
+        is_jsonrpc = isinstance(params, dict) and params.get("jsonrpc") == "2.0"
+        if (name or not is_jsonrpc) and not self._check_method_permission(
+            actor_id, check, name, "POST"
+        ):
+            if self.response:
+                self.response.set_status(403, "Forbidden")
+            return None
+        if params is None:
+            if self.response:
+                self.response.set_status(400, "Error in json body")
+            return None
+        return params, is_jsonrpc
+
+    def _body_method_refused(
+        self, myself: Any, auth_obj: Any, params: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """On the bare ``/methods`` the URL named nothing to check: the method
+        the body names is decided before it is dispatched (3.16). The JSON-RPC
+        error when it is refused (answered with HTTP 403, as the named path
+        is), else None."""
+        if self._check_method_permission(
+            str(getattr(myself, "id", "") or ""),
+            auth_obj,
+            str(params["method"]),
+            "POST",
+        ):
+            return None
+        self._jsonrpc_refused = True
+        return {
+            "jsonrpc": "2.0",
+            "error": {"code": -32000, "message": "Forbidden"},
+            "id": params.get("id"),
+        }
+
+    def _write_post_result(self, result: Any) -> None:
+        if not self.response:
+            return
         if result is not None:
-            if self.response:
+            if getattr(self, "_jsonrpc_refused", False):
+                self.response.set_status(403, "Forbidden")
+            else:
                 self.response.set_status(200, "OK")
-                self.response.headers["Content-Type"] = "application/json"
-                self.response.write(json.dumps(result))
+            self.response.headers["Content-Type"] = "application/json"
+            self.response.write(json.dumps(result))
         else:
-            if self.response:
-                self.response.set_status(400, "Processing error")
+            self.response.set_status(400, "Processing error")
 
     def put(self, actor_id: str, name: str = "") -> None:
         """PUT requests are handled as POST for methods (decided as PUT)."""
@@ -296,19 +330,10 @@ class MethodsHandler(base_handler.BaseHandler):
                 "id": params.get("id"),
             }
 
-        # On the bare /methods the URL named nothing to check: the method the
-        # body names is decided before it is dispatched (3.16).
-        if not method_name and not self._check_method_permission(
-            str(getattr(myself, "id", "") or ""),
-            auth_obj,
-            str(params["method"]),
-            "POST",
-        ):
-            return {
-                "jsonrpc": "2.0",
-                "error": {"code": -32000, "message": "Forbidden"},
-                "id": params.get("id"),
-            }
+        if not method_name:
+            refused = self._body_method_refused(myself, auth_obj, params)
+            if refused is not None:
+                return refused
 
         # Extract method parameters
         method_params = params.get("params", {})

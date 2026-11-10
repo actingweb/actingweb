@@ -13,11 +13,14 @@ that reads at least one name (or, when the grant does not mention the
 category, the access table's GET on it). What each diff carries is filtered
 again at delivery for ``properties``. For other targets the same creation
 check is asked again at delivery, push and pull: a subscription the grant no
-longer admits delivers nothing (an application's own target needs only an
-approved trust, since a subscription the application made itself never
-passed the route's creation row). Their content is delivered as registered, so
-filter it in the application if it carries data some subscribers may not
-read. A peer whose
+longer admits delivers nothing. An application's own target (any other
+name) needs only an approved trust at delivery: the grant has no category
+for it, and a subscription the application made itself never passed the
+route's creation row. So changing a peer's relationship to one whose access
+table would not let it create the subscription does not stop one it already
+has; withdraw approval, or delete the subscription, to stop it. Their
+content is delivered as registered, so filter it in the application if it
+carries data some subscribers may not read. A peer whose
 trust this actor has not approved may not list its subscriptions.
 
 The ActingWeb subscription system enables real-time data synchronization between actors. Actors can:

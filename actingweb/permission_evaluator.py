@@ -218,11 +218,55 @@ def drop_excluded(rules: Any, path: str, value: Any) -> Any:
     (a list's unit is its name), and anything that is not an object is
     returned as it is. With no exclusion in ``rules`` the value is returned
     untouched, without a walk.
+
+    A value nested deeper than :data:`MAX_FILTER_DEPTH` (or text nested
+    beyond the JSON parser, :data:`TOO_DEEP`) cannot be walked safely: it is
+    withheld, ``None``, rather than returned unfiltered (3.16).
     """
     patterns = exclusion_patterns(rules)
     if not patterns:
         return value
+    if value is TOO_DEEP or _deeper_than(value, MAX_FILTER_DEPTH):
+        return None
     return _drop(patterns, path, value)
+
+
+MAX_FILTER_DEPTH = 100
+"""How deep the exclusion filter walks a value (objects and arrays). A value
+nested deeper is withheld from a peer whose grant excludes anything, and a
+peer's write of one is refused (3.16): the walk and the comparisons after it
+recurse, and Python's recursion limit would end them with an error."""
+
+
+class _TooDeep:
+    """The type of :data:`TOO_DEEP`."""
+
+    def __repr__(self) -> str:
+        return "TOO_DEEP"
+
+
+TOO_DEEP: Any = _TooDeep()
+"""What :func:`as_json_object` answers for JSON text nested beyond the
+parser: an object the filter cannot read, so it is withheld, not sent as
+text."""
+
+
+def _deeper_than(value: Any, limit: int) -> bool:
+    """Whether ``value`` nests objects or arrays more than ``limit`` deep
+    (walked without recursion)."""
+    stack: list[tuple[Any, int]] = [(value, 1)]
+    while stack:
+        node, depth = stack.pop()
+        if isinstance(node, dict):
+            children: Any = node.values()
+        elif isinstance(node, list):
+            children = node
+        else:
+            continue
+        if depth > limit:
+            return True
+        stack.extend((child, depth + 1) for child in children)
+    return False
 
 
 def _drop(patterns: list[str], path: str, value: Any) -> Any:
@@ -239,15 +283,18 @@ def _drop(patterns: list[str], path: str, value: Any) -> Any:
 
 def as_json_object(value: Any) -> Any:
     """A value that is JSON text of an object or array, parsed; None for
-    anything else (a plain string, a number, text that is not JSON). The
-    stores hand objects back as text, and a property can be written as the
-    text of an object (3.16: the grant filter walks objects only)."""
+    anything else (a plain string, a number, text that is not JSON);
+    :data:`TOO_DEEP` for text nested beyond the parser (withheld by the
+    filter, not sent as text). The stores hand objects back as text, and a
+    property can be written as the text of an object (3.16: the grant filter
+    walks objects only)."""
     if not isinstance(value, str | bytes):
         return None
     try:
         parsed = json.loads(value)
-    except (TypeError, ValueError, RecursionError):
-        # RecursionError: text nested deeper than the parser goes is text.
+    except RecursionError:
+        return TOO_DEEP
+    except (TypeError, ValueError):
         return None
     return parsed if isinstance(parsed, dict | list) else None
 
@@ -256,7 +303,11 @@ def holds_excluded(rules: Any, path: str, *values: Any) -> bool:
     """Whether any of ``values`` (each the value at ``path``) holds an
     excluded descendant. Decided on the data, so it is defined for every
     pattern (``*/secret``, ``*private*``, ``mem*/x``)."""
-    return any(drop_excluded(rules, path, v) != v for v in values)
+    for v in values:
+        kept = drop_excluded(rules, path, v)
+        if (kept is None and v is not None) or kept != v:
+            return True  # a withheld value counts as holding one
+    return False
 
 
 @dataclass(frozen=True)

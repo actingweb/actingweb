@@ -34,7 +34,11 @@ from ._errors import (
     log_db_error,
     map_db_error,
 )
-from .base_integration import BaseActingWebIntegration, default_templates_dir
+from .base_integration import (
+    BaseActingWebIntegration,
+    default_templates_dir,
+    template_fallback_status,
+)
 
 if TYPE_CHECKING:
     from ..app import ActingWebApp
@@ -2304,7 +2308,12 @@ class FastAPIIntegration(BaseActingWebIntegration):
                             "error": "template_error",
                             "error_description": f"Failed to render template: {str(e)}",
                             "template_values": webobj.response.template_values,
-                        }
+                        },
+                        # A refusal keeps its status; a page that failed is
+                        # not a 200 (3.16).
+                        status_code=template_fallback_status(
+                            webobj.response.status_code
+                        ),
                     )
             else:
                 self.logger.warning(

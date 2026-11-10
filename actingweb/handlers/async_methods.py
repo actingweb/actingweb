@@ -113,40 +113,10 @@ class AsyncMethodsHandler(MethodsHandler):
             return
         myself = auth_result.actor
         check = auth_result.auth_obj
-        # Parse request body
-        params: Any = None
-        try:
-            body: str | bytes | None = self.request.body
-            if body is None:
-                body_str = "{}"
-            elif isinstance(body, bytes):
-                body_str = body.decode("utf-8", "ignore")
-            else:
-                body_str = body
-            params = json.loads(body_str)
-        except (TypeError, ValueError, KeyError):
-            params = None
-
-        # Check if this is a JSON-RPC request
-        is_jsonrpc = (
-            isinstance(params, dict)
-            and "jsonrpc" in params
-            and params["jsonrpc"] == "2.0"
-        )
-        # JSON-RPC on the bare /methods names its method in the body, which
-        # the JSON-RPC handler decides (3.16); every other request is
-        # decided by the name in its path (a nameless call is refused when
-        # the grant states a methods rule).
-        if (name or not is_jsonrpc) and not self._check_method_permission(
-            actor_id, check, name, "POST"
-        ):
-            if self.response:
-                self.response.set_status(403, "Forbidden")
+        gated = self._parse_and_gate(actor_id, check, name)
+        if gated is None:
             return
-        if params is None:
-            if self.response:
-                self.response.set_status(400, "Error in json body")
-            return
+        params, is_jsonrpc = gated
 
         if is_jsonrpc:
             # Handle JSON-RPC request asynchronously
@@ -165,14 +135,7 @@ class AsyncMethodsHandler(MethodsHandler):
                         name, actor_interface, params, auth_context
                     )
 
-        if result is not None:
-            if self.response:
-                self.response.set_status(200, "OK")
-                self.response.headers["Content-Type"] = "application/json"
-                self.response.write(json.dumps(result))
-        else:
-            if self.response:
-                self.response.set_status(400, "Processing error")
+        self._write_post_result(result)
 
     async def put_async(self, actor_id: str, name: str = "") -> None:
         """PUT requests are handled as POST for methods (async variant;
@@ -260,19 +223,10 @@ class AsyncMethodsHandler(MethodsHandler):
                 "id": params.get("id"),
             }
 
-        # On the bare /methods the URL named nothing to check: the method the
-        # body names is decided before it is dispatched (3.16).
-        if not method_name and not self._check_method_permission(
-            str(getattr(myself, "id", "") or ""),
-            auth_obj,
-            str(params["method"]),
-            "POST",
-        ):
-            return {
-                "jsonrpc": "2.0",
-                "error": {"code": -32000, "message": "Forbidden"},
-                "id": params.get("id"),
-            }
+        if not method_name:
+            refused = self._body_method_refused(myself, auth_obj, params)
+            if refused is not None:
+                return refused
 
         # Extract method parameters
         method_params = params.get("params", {})

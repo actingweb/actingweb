@@ -2065,8 +2065,12 @@ class Actor:
                     # finds the row approved and sends nothing).
                     logger.warning(f"Re-read of the trust with {peerid} failed: {e}")
                     after = None
+                # The secret the row holds after this call: the one it wrote,
+                # else the one it had (a secret written with the approval is
+                # this call's own write, not a re-pair).
+                expected = str(secret or this_trust["secret"] or "")
                 if after and not secret_equals(
-                    str(after.get("secret") or ""), str(this_trust["secret"] or "")
+                    str(after.get("secret") or ""), expected
                 ):
                     # Replaced since (a re-pair): its base URI is not where
                     # this row's secret goes; the URL read before stands.
@@ -4011,17 +4015,21 @@ class Actor:
 
         A value that is JSON text of an object (a form-posted property, an
         SDK write of a JSON string: what a direct read parses) is filtered
-        as the object and sent as text again."""
+        as the object and sent as text again. A value too deep for the filter
+        to walk is withheld (``_EMPTIED``)."""
         if isinstance(value, str) and exclusion_patterns(rules):
             as_object = as_json_object(value)
             if as_object is not None:
-                kept_object = _prune_emptied(
-                    as_object, drop_excluded(rules, path, as_object)
-                )
+                filtered = drop_excluded(rules, path, as_object)
+                if filtered is None:
+                    return _EMPTIED
+                kept_object = _prune_emptied(as_object, filtered)
                 if kept_object is _EMPTIED:
                     return _EMPTIED
                 return value if kept_object == as_object else json.dumps(kept_object)
         kept = drop_excluded(rules, path, value)
+        if kept is None and value is not None:
+            return _EMPTIED
         return _prune_emptied(value, kept)
 
     def grant_for(self, peerid: str, *, row: Any = None) -> GrantSnapshot | None:
@@ -4260,11 +4268,12 @@ class Actor:
             if path in list_keys:
                 return value
             if isinstance(value, str):
-                try:
-                    parsed = json.loads(value)
-                except ValueError:
-                    return value
+                parsed = as_json_object(value)
+                if parsed is None:
+                    return drop_excluded(rules, path, value)
                 filtered = drop_excluded(rules, path, parsed)
+                if filtered is None:
+                    return None  # too deep to filter: withheld
                 return value if filtered == parsed else json.dumps(filtered)
             return drop_excluded(rules, path, value)
 

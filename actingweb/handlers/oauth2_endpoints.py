@@ -745,10 +745,23 @@ class OAuth2EndpointsHandler(BaseHandler):
             return self._confirm_refusal(
                 503,
                 "temporarily_unavailable",
-                "The service could not answer just now. Go back and try again.",
+                "The service could not answer just now. Reload this page to try again.",
             )
         # The pending record is spent (single use): so is the cookie.
         self._set_flow_cookie(CONFIRM_COOKIE, "", max_age=0)
+        if answer.get("action") not in ("redirect", "confirm"):
+            # An expired or spent pending record, or a failure completing it:
+            # a page for a person, JSON for a client, as the refusals above
+            # (verification re-run 1: it reached the browser as JSON).
+            self._set_flow_cookie(FORM_NONCE_COOKIE, "", max_age=0)
+            error = str(answer.get("error") or "server_error")
+            return self._confirm_refusal(
+                503 if error == "temporarily_unavailable" else 400,
+                error,
+                "This confirmation could not be completed: "
+                f"{answer.get('error_description') or error}. Start again "
+                "from the application.",
+            )
         return self.answer_callback(answer)
 
     def _render_authorization_form(

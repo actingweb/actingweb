@@ -144,6 +144,12 @@ items, item 11 and item 18.
     that would touch an excluded part is 403 with nothing applied; a rule a
     grant states but that does not match a name denies it, whatever the
     access table says. A refusal's body is ``{"error": "forbidden"}``.
+20. **Resources, methods, actions and subscriptions follow the grant too**
+    (see `Every other way in`_): ``/resources`` is decided by the
+    ``resources`` grant (``friend`` and ``partner`` lose DELETE), a stated
+    methods or actions rule denies what it does not cover, a subscription
+    needs read access, and ``shared_properties`` no longer returns
+    ``excluded_properties``.
 
 
 What changed and why
@@ -1511,8 +1517,56 @@ next whole write or resync.
 **A diff the peer may read none of is not pushed** (unchanged), and an object
 the filter empties is dropped from a diff rather than sent as ``{}`` (which
 the subscriber would store over its copy). Now that more diffs are refused, a
-subscriber sees a sequence gap more often; the pull serves such a diff as
-``{}`` with its sequence.
+subscriber sees a sequence gap more often. The library's subscriber recovers:
+the first callback after its gap timeout triggers a resync, and its copy
+converges on what it may read. The pull serves such a diff as ``{}`` with its
+sequence.
+
+Every other way in
+------------------
+
+**Behavior change: ``/resources`` follows the grant.** A peer's request to
+``/resources/<name>`` is decided by its ``resources`` grant, the same one MCP
+resources use (GET ``read``, PUT and POST ``write``, DELETE ``delete``); the
+access table decides only when the grant does not mention resources. The
+built-in types change accordingly: ``friend`` and ``partner`` lose DELETE
+(their rule has no ``delete``) and their excluded names (``private/*``,
+``security/*``); ``associate`` and ``viewer`` gain GET on ``public/*``. A
+``*`` callback hook now also answers those lower-trust peers on
+``public/*``. To keep DELETE for a type, add ``delete`` to its
+``resources.operations``. A per-trust ``resources`` override written for MCP
+URIs only (``data://*``) now denies every ``/resources`` name for that peer:
+add the names it should reach.
+
+**Behavior change: methods and actions deny what a stated rule does not
+cover.** A grant that states a ``methods`` or ``actions`` rule (even an empty
+one, ``"methods": []``) is the answer, whatever the access table admits;
+only a grant that does not mention the category leaves a name to the table,
+which is now asked with the request's method (it was always GET). An
+evaluator that cannot be built denies (it fell back to the table) and the
+listings (``GET /methods``, ``GET /actions``, both twins) show nothing (they
+showed everything). The async listings are filtered now (they were not).
+``DELETE /methods/<name>`` and the JSON-RPC method named in a body posted to
+the bare ``/methods`` are decided too. Method and action hooks use the same
+decision; an error in their check denies (it allowed).
+
+**Behavior change: a subscription needs read access.** ``POST
+/subscriptions/<peer>`` answers 403 for a ``properties``, ``resources``,
+``methods`` or ``actions`` path the peer may not read; a whole-target
+subscription needs a rule that reads at least one name. A consumer
+subscriber whose type reads named properties (``patterns:
+["displayname"]``) keeps subscribing to the whole target. A peer whose
+trust is not approved gets 403 on ``GET /subscriptions/<peer>``.
+
+**Behavior change: pushed and pulled diffs follow the access table** when the
+peer's grant does not mention properties, as a direct read does (they sent
+nothing).
+
+**Breaking: ``shared_properties`` lists what the peer may read.** ``GET
+/trust/<relationship>/<peer>/shared_properties`` decides each name as a read
+(it asked for an operation no rule grants, so it listed nothing), no longer
+returns ``excluded_properties`` (it named everything else the actor holds),
+and answers 403 ``{"error": "not_approved"}`` for a trust not yet approved.
 
 What stays the same
 ===================

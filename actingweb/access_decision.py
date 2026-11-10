@@ -8,9 +8,8 @@ views. The order:
 1. the actor's trust row for the peer must exist and be approved;
 2. the grant is read once (:class:`GrantSnapshot`); an error denies;
 3. when the grant **mentions** the category (the key is present, even
-   empty) its rule answers: an excluded path or ancestor, an unmatched or
-   empty rule, a wrong operation all deny (properties and resources; methods
-   and actions keep the access table for an unmatched rule for now);
+   empty) its rule answers: an excluded path or ancestor (properties and
+   resources), an unmatched or empty rule, a wrong operation all deny;
 4. when it does not mention the category, an OAuth2/MCP client is denied
    and a peer is answered by the access table (``config.access``), the
    application's rule per trust level, which denies by default.
@@ -99,6 +98,18 @@ def _category(category: str | PermissionType) -> PermissionType:
     )
 
 
+def evaluator_or_none(config: Config, get_evaluator: Any = None) -> Any:
+    """The handler's evaluator, or None when it cannot be built for a reason
+    other than storage (the decision then denies). ``DbError`` raises."""
+    try:
+        return (get_evaluator or get_permission_evaluator)(config)
+    except DbError:
+        raise
+    except Exception as e:
+        logger.error(f"Permission evaluator unavailable: {e}")
+        return None
+
+
 def grant_snapshot(
     config: Config,
     actor_id: str,
@@ -176,8 +187,8 @@ def decide(
                 f"{operation} ({reason})"
             )
             return Decision(False, reason, snapshot)
-        # NOT_FOUND from a stated rule: methods and actions (for now) fall
-        # through to the table, as before.
+        # NOT_FOUND from a stated rule only for tools and prompts, which no
+        # route sends here; the table answers them as before.
     if client:
         return Decision(False, NOT_GRANTED, snapshot)
     admitted = access_table_admits(
@@ -197,3 +208,202 @@ def forbidden_body(decision: Decision | None) -> dict[str, Any]:
     if decision is not None and decision.reason == NOT_APPROVED:
         return {"error": "not_approved"}
     return {"error": "forbidden"}
+
+
+# The operation a named route performs, per category (the evaluator's).
+_NAMED_OPERATION = {
+    PermissionType.METHODS: "call",
+    PermissionType.ACTIONS: "execute",
+}
+
+
+def _peer_of(auth_obj: Any) -> str:
+    acl = getattr(auth_obj, "acl", None)
+    return str(acl.get("peerid", "") or "") if isinstance(acl, dict) else ""
+
+
+def named_route_allows(
+    config: Config,
+    actor_id: str,
+    auth_obj: Any,
+    category: PermissionType,
+    name: str,
+    *,
+    method: str,
+    get_evaluator: Any,
+    legacy_method: str = "GET",
+) -> bool:
+    """A ``/methods`` or ``/actions`` request (3.16): a peer is answered by
+    :func:`decide` with the request's method for the access table (the
+    evaluator resolved by the handler's own module, ``get_evaluator``); an
+    evaluator that cannot be built denies. A caller that is not a peer is
+    answered by the access table, as before (with ``legacy_method``)."""
+    peer_id = _peer_of(auth_obj)
+    if not peer_id:
+        return bool(
+            auth_obj.check_authorisation(
+                path=category.value, subpath=name, method=legacy_method
+            )
+        )
+    try:
+        evaluator = get_evaluator(config)
+    except DbError:
+        raise
+    except Exception as e:
+        logger.error(f"Permission evaluator unavailable for {actor_id}:{peer_id}: {e}")
+        return False
+    decision = decide(
+        config,
+        actor_id,
+        peer_id,
+        category,
+        name,
+        _NAMED_OPERATION.get(category, "access"),
+        method=method,
+        evaluator=evaluator,
+    )
+    if not decision.allowed:
+        logger.info(
+            f"{category.value} access denied: {actor_id} -> {peer_id} -> {name!r} "
+            f"({decision.reason})"
+        )
+    return decision.allowed
+
+
+def listable_names(
+    config: Config,
+    actor_id: str,
+    auth_obj: Any,
+    category: PermissionType,
+    names: list[str],
+    *,
+    get_evaluator: Any,
+) -> set[str] | None:
+    """The names a peer's listing of methods or actions shows: each decided
+    as a call of it would be (one grant read). None for a caller that is not
+    a peer (no filter); an empty set when the grant cannot be read."""
+    peer_id = _peer_of(auth_obj)
+    if not peer_id:
+        return None
+    try:
+        evaluator = get_evaluator(config)
+        snapshot = evaluator.snapshot(actor_id, peer_id)
+    except DbError:
+        raise
+    except Exception as e:
+        logger.error(f"Listing for {actor_id}:{peer_id} refused: {e}")
+        return set()
+    return {
+        n
+        for n in names
+        if decide(
+            config,
+            actor_id,
+            peer_id,
+            category,
+            n,
+            _NAMED_OPERATION.get(category, "access"),
+            method="POST",
+            evaluator=evaluator,
+            snapshot=snapshot,
+        ).allowed
+    }
+
+
+# Targets whose subscription is read access to what they carry (3.16, spec
+# :2438-2442); other targets are the application's, decided by the table.
+SUBSCRIBABLE = {
+    "properties": PermissionType.PROPERTIES,
+    "resources": PermissionType.RESOURCES,
+    "methods": PermissionType.METHODS,
+    "actions": PermissionType.ACTIONS,
+}
+
+
+def _reads_something(rules: Any) -> bool:
+    """Whether a stated rule allows reading at least one name: judged on the
+    rule, not on what is stored (a subscriber subscribes before the names it
+    reads exist)."""
+    if not isinstance(rules, dict):
+        return False
+    if isinstance(rules.get("allowed"), list) and rules["allowed"]:
+        return True
+    operations = rules.get("operations")
+    return bool(
+        isinstance(rules.get("patterns"), list)
+        and rules["patterns"]
+        and isinstance(operations, list)
+        and "read" in operations
+    )
+
+
+def subscription_allowed(
+    config: Config,
+    actor_id: str,
+    peer_id: str,
+    target: str,
+    subtarget: str = "",
+    resource: str = "",
+    *,
+    evaluator: PermissionEvaluator | None = None,
+    is_client: bool | None = None,
+) -> Decision:
+    """Whether a peer may subscribe to ``target`` (with ``subtarget`` and
+    ``resource``) (3.16): read access to the path for ``properties``,
+    ``resources``, ``methods`` and ``actions``. A whole-target subscription
+    is admitted when the grant's rule reads at least one name, or, when the
+    grant does not mention the category, when the access table admits the
+    peer's GET on the target. Other targets: the access table only (as the
+    route's own row decides already)."""
+    kind = SUBSCRIBABLE.get(target)
+    path = "/".join(p for p in (subtarget, resource) if p)
+    if path and kind is not None:
+        return decide(
+            config,
+            actor_id,
+            peer_id,
+            kind,
+            path,
+            "read",
+            method="GET",
+            evaluator=evaluator,
+            is_client=is_client,
+        )
+    try:
+        evaluator = evaluator or get_permission_evaluator(config)
+        snapshot = evaluator.snapshot(actor_id, peer_id)
+    except DbError:
+        raise
+    except Exception as e:
+        logger.error(f"Subscription check for {actor_id}:{peer_id} unavailable: {e}")
+        return Decision(False, UNAVAILABLE)
+    if not snapshot.approved:
+        return Decision(False, NOT_APPROVED, snapshot)
+    if kind is None:
+        # An application's target: the access row that admits creating a
+        # subscription decides (the HTTP route asked it already; a developer
+        # view asks here). A client has no row.
+        if snapshot.is_client if is_client is None else is_client:
+            return Decision(False, NOT_GRANTED, snapshot)
+        admitted = access_table_admits(
+            config,
+            relationship=snapshot.relationship,
+            approved=True,
+            path="subscriptions",
+            subpath="<id>",
+            method="POST",
+        )
+        return Decision(admitted, ALLOWED if admitted else NO_TABLE_ROW, snapshot)
+    if snapshot.mentions(kind):
+        ok = _reads_something(snapshot.rules(kind))
+        return Decision(ok, ALLOWED if ok else NOT_GRANTED, snapshot)
+    if snapshot.is_client if is_client is None else is_client:
+        return Decision(False, NOT_GRANTED, snapshot)
+    admitted = access_table_admits(
+        config,
+        relationship=snapshot.relationship,
+        approved=True,
+        path=target,
+        method="GET",
+    )
+    return Decision(admitted, ALLOWED if admitted else NO_TABLE_ROW, snapshot)

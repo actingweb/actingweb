@@ -165,16 +165,22 @@ def test_a_stated_rule_that_does_not_match_denies(kind: PermissionType) -> None:
     )
 
 
-def test_methods_and_actions_keep_not_found_this_phase() -> None:
+def test_methods_and_actions_deny_an_unmatched_stated_rule() -> None:
+    """Phase 2: a stated methods or actions rule (even empty, the consumer's
+    ``"methods": []``) denies a name it does not cover."""
     ev = _evaluator()
     assert (
         ev.evaluate_rules_for(PermissionType.METHODS, [], "wire_import", "call")
-        == PermissionResult.NOT_FOUND
+        == PermissionResult.DENIED
     )
     assert (
         ev.evaluate_rules_for(
             PermissionType.ACTIONS, {"allowed": ["a"]}, "b", "execute"
         )
+        == PermissionResult.DENIED
+    )
+    assert (
+        ev.evaluate_rules_for(PermissionType.TOOLS, {"allowed": ["a"]}, "b", "use")
         == PermissionResult.NOT_FOUND
     )
 

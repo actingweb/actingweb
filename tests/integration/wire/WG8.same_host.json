@@ -35,37 +35,185 @@
        "updated_at": null
       }
      },
+     "queue": [],
+     "subscriptions": [],
+     "suspensions": [],
+     "trust": {
+      "F": {
+       "approved": true,
+       "baseuri": "http://<wire_app>/<F>",
+       "established_via": "trust",
+       "has_verification_token": true,
+       "peer_approved": true,
+       "relationship": "friend",
+       "secret": "<secret:trust:A-F>",
+       "verified": true
+      }
+     }
+    },
+    "subscribers": {
+     "F": {
+      "callback_state": [],
+      "peer_permissions": {
+       "actions": {
+        "allowed": [
+         "*"
+        ],
+        "denied": [
+         "delete_*",
+         "admin_*",
+         "system_*"
+        ]
+       },
+       "actor_id": "<F>",
+       "extra_attributes": {
+        "sender_timestamp": "<ts:iso-offset>"
+       },
+       "fetch_error": null,
+       "fetched_at": "<ts:iso-offset>",
+       "methods": {
+        "allowed": [
+         "*"
+        ],
+        "denied": [
+         "delete_*",
+         "admin_*",
+         "system_*"
+        ]
+       },
+       "peer_id": "<A>",
+       "prompts": null,
+       "properties": {
+        "excluded_patterns": [
+         "private/*",
+         "security/*",
+         "_internal/*",
+         "memory_*",
+         "settings/private",
+         "*/deep/private"
+        ],
+        "operations": [
+         "read",
+         "write"
+        ],
+        "patterns": [
+         "*"
+        ]
+       },
+       "resources": {
+        "excluded_patterns": [
+         "private/*",
+         "security/*"
+        ],
+        "operations": [
+         "read",
+         "write"
+        ],
+        "patterns": [
+         "*"
+        ]
+       },
+       "tools": {
+        "allowed": [
+         "*"
+        ],
+        "denied": [
+         "admin_*",
+         "system_*"
+        ]
+       }
+      },
+      "replica": {
+       "lists": {},
+       "scalars": {}
+      },
+      "subscriptions": [],
+      "trust": {
+       "approved": true,
+       "baseuri": "http://<wire_app>/<A>",
+       "established_via": "trust",
+       "has_verification_token": true,
+       "peer_approved": true,
+       "relationship": "friend",
+       "secret": "<secret:trust:A-F>",
+       "verified": true
+      }
+     }
+    }
+   },
+   "result": {
+    "body": {
+     "error": "forbidden"
+    },
+    "status": 403
+   },
+   "step": "F subscribes to memory_personal/item",
+   "wire": [
+    {
+     "auth": "bearer:trust:A-F",
+     "children": [],
+     "headers": {
+      "content-type": "application/json"
+     },
+     "host": "wire_app",
+     "method": "POST",
+     "path": "/<A>/subscriptions/<F>",
+     "query": "",
+     "request": {
+      "granularity": "high",
+      "resource": "item",
+      "subtarget": "memory_personal",
+      "target": "properties"
+     },
+     "response": {
+      "error": "forbidden"
+     },
+     "status": 403
+    }
+   ]
+  },
+  {
+   "after": {
+    "publisher": {
+     "grants": {
+      "F": {
+       "actions": null,
+       "actor_id": "<A>",
+       "created_by": "system",
+       "methods": null,
+       "notes": null,
+       "peer_id": "<F>",
+       "prompts": null,
+       "properties": {
+        "excluded_patterns": [
+         "private/*",
+         "security/*",
+         "_internal/*",
+         "memory_*",
+         "settings/private",
+         "*/deep/private"
+        ],
+        "operations": [
+         "read",
+         "write"
+        ],
+        "patterns": [
+         "*"
+        ]
+       },
+       "resources": null,
+       "tools": null,
+       "trust_type": "friend",
+       "updated_at": null
+      }
+     },
      "queue": [
       {
-       "diffs": [
-        {
-         "data": "{\"text\": \"m2\"}",
-         "sequence": 1,
-         "timestamp": "<ts:stored>"
-        }
-       ],
+       "diffs": [],
        "granularity": "high",
        "peer": "<F>",
-       "sequence": 1,
+       "sequence": 0,
        "subscriptionid": "<sub1>",
-       "subtarget": "memory_personal",
-       "target": "properties"
-      },
-      {
-       "diffs": [],
-       "granularity": "high",
-       "peer": "<F>",
-       "sequence": 0,
-       "subscriptionid": "<sub2>",
-       "subtarget": "settings",
-       "target": "properties"
-      },
-      {
-       "diffs": [],
-       "granularity": "high",
-       "peer": "<F>",
-       "sequence": 0,
-       "subscriptionid": "<sub3>",
        "subtarget": "settings",
        "target": "properties"
       }
@@ -75,29 +223,405 @@
        "callback": false,
        "granularity": "high",
        "peerid": "<F>",
-       "resource": "item",
-       "sequence": 1,
+       "resource": "",
+       "sequence": 0,
        "subscriptionid": "<sub1>",
-       "subtarget": "memory_personal",
+       "subtarget": "settings",
        "target": "properties"
+      }
+     ],
+     "suspensions": [],
+     "trust": {
+      "F": {
+       "approved": true,
+       "baseuri": "http://<wire_app>/<F>",
+       "established_via": "trust",
+       "has_verification_token": true,
+       "peer_approved": true,
+       "relationship": "friend",
+       "secret": "<secret:trust:A-F>",
+       "verified": true
+      }
+     }
+    },
+    "subscribers": {
+     "F": {
+      "callback_state": [],
+      "peer_permissions": {
+       "actions": {
+        "allowed": [
+         "*"
+        ],
+        "denied": [
+         "delete_*",
+         "admin_*",
+         "system_*"
+        ]
+       },
+       "actor_id": "<F>",
+       "extra_attributes": {
+        "sender_timestamp": "<ts:iso-offset>"
+       },
+       "fetch_error": null,
+       "fetched_at": "<ts:iso-offset>",
+       "methods": {
+        "allowed": [
+         "*"
+        ],
+        "denied": [
+         "delete_*",
+         "admin_*",
+         "system_*"
+        ]
+       },
+       "peer_id": "<A>",
+       "prompts": null,
+       "properties": {
+        "excluded_patterns": [
+         "private/*",
+         "security/*",
+         "_internal/*",
+         "memory_*",
+         "settings/private",
+         "*/deep/private"
+        ],
+        "operations": [
+         "read",
+         "write"
+        ],
+        "patterns": [
+         "*"
+        ]
+       },
+       "resources": {
+        "excluded_patterns": [
+         "private/*",
+         "security/*"
+        ],
+        "operations": [
+         "read",
+         "write"
+        ],
+        "patterns": [
+         "*"
+        ]
+       },
+       "tools": {
+        "allowed": [
+         "*"
+        ],
+        "denied": [
+         "admin_*",
+         "system_*"
+        ]
+       }
       },
+      "replica": {
+       "lists": {},
+       "scalars": {}
+      },
+      "subscriptions": [],
+      "trust": {
+       "approved": true,
+       "baseuri": "http://<wire_app>/<A>",
+       "established_via": "trust",
+       "has_verification_token": true,
+       "peer_approved": true,
+       "relationship": "friend",
+       "secret": "<secret:trust:A-F>",
+       "verified": true
+      }
+     }
+    }
+   },
+   "result": {
+    "body": {
+     "granularity": "high",
+     "resource": null,
+     "sequence": 0,
+     "subscriptionid": "<sub1>",
+     "subtarget": "settings",
+     "target": "properties"
+    },
+    "status": 201
+   },
+   "step": "F subscribes to settings",
+   "wire": [
+    {
+     "auth": "bearer:trust:A-F",
+     "children": [],
+     "headers": {
+      "content-type": "application/json",
+      "location": "http://<wire_app>/<A>/subscriptions/<F>/<F's settings>"
+     },
+     "host": "wire_app",
+     "method": "POST",
+     "path": "/<A>/subscriptions/<F>",
+     "query": "",
+     "request": {
+      "granularity": "high",
+      "subtarget": "settings",
+      "target": "properties"
+     },
+     "response": {
+      "granularity": "high",
+      "resource": null,
+      "sequence": 0,
+      "subscriptionid": "<sub1>",
+      "subtarget": "settings",
+      "target": "properties"
+     },
+     "status": 201
+    }
+   ]
+  },
+  {
+   "after": {
+    "publisher": {
+     "grants": {
+      "F": {
+       "actions": null,
+       "actor_id": "<A>",
+       "created_by": "system",
+       "methods": null,
+       "notes": null,
+       "peer_id": "<F>",
+       "prompts": null,
+       "properties": {
+        "excluded_patterns": [
+         "private/*",
+         "security/*",
+         "_internal/*",
+         "memory_*",
+         "settings/private",
+         "*/deep/private"
+        ],
+        "operations": [
+         "read",
+         "write"
+        ],
+        "patterns": [
+         "*"
+        ]
+       },
+       "resources": null,
+       "tools": null,
+       "trust_type": "friend",
+       "updated_at": null
+      }
+     },
+     "queue": [
+      {
+       "diffs": [],
+       "granularity": "high",
+       "peer": "<F>",
+       "sequence": 0,
+       "subscriptionid": "<sub1>",
+       "subtarget": "settings",
+       "target": "properties"
+      }
+     ],
+     "subscriptions": [
       {
        "callback": false,
        "granularity": "high",
        "peerid": "<F>",
        "resource": "",
        "sequence": 0,
-       "subscriptionid": "<sub2>",
+       "subscriptionid": "<sub1>",
        "subtarget": "settings",
        "target": "properties"
+      }
+     ],
+     "suspensions": [],
+     "trust": {
+      "F": {
+       "approved": true,
+       "baseuri": "http://<wire_app>/<F>",
+       "established_via": "trust",
+       "has_verification_token": true,
+       "peer_approved": true,
+       "relationship": "friend",
+       "secret": "<secret:trust:A-F>",
+       "verified": true
+      }
+     }
+    },
+    "subscribers": {
+     "F": {
+      "callback_state": [],
+      "peer_permissions": {
+       "actions": {
+        "allowed": [
+         "*"
+        ],
+        "denied": [
+         "delete_*",
+         "admin_*",
+         "system_*"
+        ]
+       },
+       "actor_id": "<F>",
+       "extra_attributes": {
+        "sender_timestamp": "<ts:iso-offset>"
+       },
+       "fetch_error": null,
+       "fetched_at": "<ts:iso-offset>",
+       "methods": {
+        "allowed": [
+         "*"
+        ],
+        "denied": [
+         "delete_*",
+         "admin_*",
+         "system_*"
+        ]
+       },
+       "peer_id": "<A>",
+       "prompts": null,
+       "properties": {
+        "excluded_patterns": [
+         "private/*",
+         "security/*",
+         "_internal/*",
+         "memory_*",
+         "settings/private",
+         "*/deep/private"
+        ],
+        "operations": [
+         "read",
+         "write"
+        ],
+        "patterns": [
+         "*"
+        ]
+       },
+       "resources": {
+        "excluded_patterns": [
+         "private/*",
+         "security/*"
+        ],
+        "operations": [
+         "read",
+         "write"
+        ],
+        "patterns": [
+         "*"
+        ]
+       },
+       "tools": {
+        "allowed": [
+         "*"
+        ],
+        "denied": [
+         "admin_*",
+         "system_*"
+        ]
+       }
       },
+      "replica": {
+       "lists": {},
+       "scalars": {}
+      },
+      "subscriptions": [],
+      "trust": {
+       "approved": true,
+       "baseuri": "http://<wire_app>/<A>",
+       "established_via": "trust",
+       "has_verification_token": true,
+       "peer_approved": true,
+       "relationship": "friend",
+       "secret": "<secret:trust:A-F>",
+       "verified": true
+      }
+     }
+    }
+   },
+   "result": {
+    "body": {
+     "error": "forbidden"
+    },
+    "status": 403
+   },
+   "step": "F subscribes to settings/private",
+   "wire": [
+    {
+     "auth": "bearer:trust:A-F",
+     "children": [],
+     "headers": {
+      "content-type": "application/json"
+     },
+     "host": "wire_app",
+     "method": "POST",
+     "path": "/<A>/subscriptions/<F>",
+     "query": "",
+     "request": {
+      "granularity": "high",
+      "resource": "private",
+      "subtarget": "settings",
+      "target": "properties"
+     },
+     "response": {
+      "error": "forbidden"
+     },
+     "status": 403
+    }
+   ]
+  },
+  {
+   "after": {
+    "publisher": {
+     "grants": {
+      "F": {
+       "actions": null,
+       "actor_id": "<A>",
+       "created_by": "system",
+       "methods": null,
+       "notes": null,
+       "peer_id": "<F>",
+       "prompts": null,
+       "properties": {
+        "excluded_patterns": [
+         "private/*",
+         "security/*",
+         "_internal/*",
+         "memory_*",
+         "settings/private",
+         "*/deep/private"
+        ],
+        "operations": [
+         "read",
+         "write"
+        ],
+        "patterns": [
+         "*"
+        ]
+       },
+       "resources": null,
+       "tools": null,
+       "trust_type": "friend",
+       "updated_at": null
+      }
+     },
+     "queue": [
+      {
+       "diffs": [],
+       "granularity": "high",
+       "peer": "<F>",
+       "sequence": 0,
+       "subscriptionid": "<sub1>",
+       "subtarget": "settings",
+       "target": "properties"
+      }
+     ],
+     "subscriptions": [
       {
        "callback": false,
        "granularity": "high",
        "peerid": "<F>",
-       "resource": "private",
+       "resource": "",
        "sequence": 0,
-       "subscriptionid": "<sub3>",
+       "subscriptionid": "<sub1>",
        "subtarget": "settings",
        "target": "properties"
       }
@@ -249,21 +773,6 @@
       {
        "diffs": [
         {
-         "data": "{\"text\": \"m2\"}",
-         "sequence": 1,
-         "timestamp": "<ts:stored>"
-        }
-       ],
-       "granularity": "high",
-       "peer": "<F>",
-       "sequence": 1,
-       "subscriptionid": "<sub1>",
-       "subtarget": "memory_personal",
-       "target": "properties"
-      },
-      {
-       "diffs": [
-        {
          "data": "{\"theme\": \"y\", \"private\": \"s2\", \"deep\": {\"private\": \"d2\"}}",
          "sequence": 1,
          "timestamp": "<ts:stored>"
@@ -272,22 +781,7 @@
        "granularity": "high",
        "peer": "<F>",
        "sequence": 1,
-       "subscriptionid": "<sub2>",
-       "subtarget": "settings",
-       "target": "properties"
-      },
-      {
-       "diffs": [
-        {
-         "data": "\"s2\"",
-         "sequence": 1,
-         "timestamp": "<ts:stored>"
-        }
-       ],
-       "granularity": "high",
-       "peer": "<F>",
-       "sequence": 1,
-       "subscriptionid": "<sub3>",
+       "subscriptionid": "<sub1>",
        "subtarget": "settings",
        "target": "properties"
       }
@@ -297,29 +791,9 @@
        "callback": false,
        "granularity": "high",
        "peerid": "<F>",
-       "resource": "item",
-       "sequence": 1,
-       "subscriptionid": "<sub1>",
-       "subtarget": "memory_personal",
-       "target": "properties"
-      },
-      {
-       "callback": false,
-       "granularity": "high",
-       "peerid": "<F>",
        "resource": "",
        "sequence": 1,
-       "subscriptionid": "<sub2>",
-       "subtarget": "settings",
-       "target": "properties"
-      },
-      {
-       "callback": false,
-       "granularity": "high",
-       "peerid": "<F>",
-       "resource": "private",
-       "sequence": 1,
-       "subscriptionid": "<sub3>",
+       "subscriptionid": "<sub1>",
        "subtarget": "settings",
        "target": "properties"
       }
@@ -449,7 +923,7 @@
         "granularity": "high",
         "id": "<A>",
         "sequence": 1,
-        "subscriptionid": "<sub2>",
+        "subscriptionid": "<sub1>",
         "subtarget": "settings",
         "target": "properties",
         "timestamp": "<ts:space>"
@@ -514,21 +988,6 @@
       {
        "diffs": [
         {
-         "data": "{\"text\": \"m2\"}",
-         "sequence": 1,
-         "timestamp": "<ts:stored>"
-        }
-       ],
-       "granularity": "high",
-       "peer": "<F>",
-       "sequence": 1,
-       "subscriptionid": "<sub1>",
-       "subtarget": "memory_personal",
-       "target": "properties"
-      },
-      {
-       "diffs": [
-        {
          "data": "{\"theme\": \"y\", \"private\": \"s2\", \"deep\": {\"private\": \"d2\"}}",
          "sequence": 1,
          "timestamp": "<ts:stored>"
@@ -537,22 +996,7 @@
        "granularity": "high",
        "peer": "<F>",
        "sequence": 1,
-       "subscriptionid": "<sub2>",
-       "subtarget": "settings",
-       "target": "properties"
-      },
-      {
-       "diffs": [
-        {
-         "data": "\"s2\"",
-         "sequence": 1,
-         "timestamp": "<ts:stored>"
-        }
-       ],
-       "granularity": "high",
-       "peer": "<F>",
-       "sequence": 1,
-       "subscriptionid": "<sub3>",
+       "subscriptionid": "<sub1>",
        "subtarget": "settings",
        "target": "properties"
       }
@@ -562,299 +1006,9 @@
        "callback": false,
        "granularity": "high",
        "peerid": "<F>",
-       "resource": "item",
-       "sequence": 1,
-       "subscriptionid": "<sub1>",
-       "subtarget": "memory_personal",
-       "target": "properties"
-      },
-      {
-       "callback": false,
-       "granularity": "high",
-       "peerid": "<F>",
        "resource": "",
        "sequence": 1,
-       "subscriptionid": "<sub2>",
-       "subtarget": "settings",
-       "target": "properties"
-      },
-      {
-       "callback": false,
-       "granularity": "high",
-       "peerid": "<F>",
-       "resource": "private",
-       "sequence": 1,
-       "subscriptionid": "<sub3>",
-       "subtarget": "settings",
-       "target": "properties"
-      }
-     ],
-     "suspensions": [],
-     "trust": {
-      "F": {
-       "approved": true,
-       "baseuri": "http://<wire_app>/<F>",
-       "established_via": "trust",
-       "has_verification_token": true,
-       "peer_approved": true,
-       "relationship": "friend",
-       "secret": "<secret:trust:A-F>",
-       "verified": true
-      }
-     }
-    },
-    "subscribers": {
-     "F": {
-      "callback_state": [],
-      "peer_permissions": {
-       "actions": {
-        "allowed": [
-         "*"
-        ],
-        "denied": [
-         "delete_*",
-         "admin_*",
-         "system_*"
-        ]
-       },
-       "actor_id": "<F>",
-       "extra_attributes": {
-        "sender_timestamp": "<ts:iso-offset>"
-       },
-       "fetch_error": null,
-       "fetched_at": "<ts:iso-offset>",
-       "methods": {
-        "allowed": [
-         "*"
-        ],
-        "denied": [
-         "delete_*",
-         "admin_*",
-         "system_*"
-        ]
-       },
-       "peer_id": "<A>",
-       "prompts": null,
-       "properties": {
-        "excluded_patterns": [
-         "private/*",
-         "security/*",
-         "_internal/*",
-         "memory_*",
-         "settings/private",
-         "*/deep/private"
-        ],
-        "operations": [
-         "read",
-         "write"
-        ],
-        "patterns": [
-         "*"
-        ]
-       },
-       "resources": {
-        "excluded_patterns": [
-         "private/*",
-         "security/*"
-        ],
-        "operations": [
-         "read",
-         "write"
-        ],
-        "patterns": [
-         "*"
-        ]
-       },
-       "tools": {
-        "allowed": [
-         "*"
-        ],
-        "denied": [
-         "admin_*",
-         "system_*"
-        ]
-       }
-      },
-      "replica": {
-       "lists": {},
-       "scalars": {}
-      },
-      "subscriptions": [],
-      "trust": {
-       "approved": true,
-       "baseuri": "http://<wire_app>/<A>",
-       "established_via": "trust",
-       "has_verification_token": true,
-       "peer_approved": true,
-       "relationship": "friend",
-       "secret": "<secret:trust:A-F>",
-       "verified": true
-      }
-     }
-    }
-   },
-   "result": {
-    "body": {
-     "data": [
-      {
-       "data": {},
-       "sequence": 1,
-       "timestamp": "<ts:iso-z>"
-      }
-     ],
-     "id": "<A>",
-     "peerid": "<F>",
-     "resource": "item",
-     "sequence": 1,
-     "subscriptionid": "<sub1>",
-     "subtarget": "memory_personal",
-     "target": "properties"
-    },
-    "status": 200
-   },
-   "step": "F pulls one subscription",
-   "wire": [
-    {
-     "auth": "bearer:trust:A-F",
-     "children": [],
-     "headers": {
-      "content-type": "application/json"
-     },
-     "host": "wire_app",
-     "method": "GET",
-     "path": "/<A>/subscriptions/<F>/<F's memory_personal/item>",
-     "query": "",
-     "request": null,
-     "response": {
-      "data": [
-       {
-        "data": {},
-        "sequence": 1,
-        "timestamp": "<ts:iso-z>"
-       }
-      ],
-      "id": "<A>",
-      "peerid": "<F>",
-      "resource": "item",
-      "sequence": 1,
-      "subscriptionid": "<sub1>",
-      "subtarget": "memory_personal",
-      "target": "properties"
-     },
-     "status": 200
-    }
-   ]
-  },
-  {
-   "after": {
-    "publisher": {
-     "grants": {
-      "F": {
-       "actions": null,
-       "actor_id": "<A>",
-       "created_by": "system",
-       "methods": null,
-       "notes": null,
-       "peer_id": "<F>",
-       "prompts": null,
-       "properties": {
-        "excluded_patterns": [
-         "private/*",
-         "security/*",
-         "_internal/*",
-         "memory_*",
-         "settings/private",
-         "*/deep/private"
-        ],
-        "operations": [
-         "read",
-         "write"
-        ],
-        "patterns": [
-         "*"
-        ]
-       },
-       "resources": null,
-       "tools": null,
-       "trust_type": "friend",
-       "updated_at": null
-      }
-     },
-     "queue": [
-      {
-       "diffs": [
-        {
-         "data": "{\"text\": \"m2\"}",
-         "sequence": 1,
-         "timestamp": "<ts:stored>"
-        }
-       ],
-       "granularity": "high",
-       "peer": "<F>",
-       "sequence": 1,
        "subscriptionid": "<sub1>",
-       "subtarget": "memory_personal",
-       "target": "properties"
-      },
-      {
-       "diffs": [
-        {
-         "data": "{\"theme\": \"y\", \"private\": \"s2\", \"deep\": {\"private\": \"d2\"}}",
-         "sequence": 1,
-         "timestamp": "<ts:stored>"
-        }
-       ],
-       "granularity": "high",
-       "peer": "<F>",
-       "sequence": 1,
-       "subscriptionid": "<sub2>",
-       "subtarget": "settings",
-       "target": "properties"
-      },
-      {
-       "diffs": [
-        {
-         "data": "\"s2\"",
-         "sequence": 1,
-         "timestamp": "<ts:stored>"
-        }
-       ],
-       "granularity": "high",
-       "peer": "<F>",
-       "sequence": 1,
-       "subscriptionid": "<sub3>",
-       "subtarget": "settings",
-       "target": "properties"
-      }
-     ],
-     "subscriptions": [
-      {
-       "callback": false,
-       "granularity": "high",
-       "peerid": "<F>",
-       "resource": "item",
-       "sequence": 1,
-       "subscriptionid": "<sub1>",
-       "subtarget": "memory_personal",
-       "target": "properties"
-      },
-      {
-       "callback": false,
-       "granularity": "high",
-       "peerid": "<F>",
-       "resource": "",
-       "sequence": 1,
-       "subscriptionid": "<sub2>",
-       "subtarget": "settings",
-       "target": "properties"
-      },
-      {
-       "callback": false,
-       "granularity": "high",
-       "peerid": "<F>",
-       "resource": "private",
-       "sequence": 1,
-       "subscriptionid": "<sub3>",
        "subtarget": "settings",
        "target": "properties"
       }
@@ -978,7 +1132,7 @@
      "peerid": "<F>",
      "resource": "",
      "sequence": 1,
-     "subscriptionid": "<sub2>",
+     "subscriptionid": "<sub1>",
      "subtarget": "settings",
      "target": "properties"
     },
@@ -1011,277 +1165,7 @@
       "peerid": "<F>",
       "resource": "",
       "sequence": 1,
-      "subscriptionid": "<sub2>",
-      "subtarget": "settings",
-      "target": "properties"
-     },
-     "status": 200
-    }
-   ]
-  },
-  {
-   "after": {
-    "publisher": {
-     "grants": {
-      "F": {
-       "actions": null,
-       "actor_id": "<A>",
-       "created_by": "system",
-       "methods": null,
-       "notes": null,
-       "peer_id": "<F>",
-       "prompts": null,
-       "properties": {
-        "excluded_patterns": [
-         "private/*",
-         "security/*",
-         "_internal/*",
-         "memory_*",
-         "settings/private",
-         "*/deep/private"
-        ],
-        "operations": [
-         "read",
-         "write"
-        ],
-        "patterns": [
-         "*"
-        ]
-       },
-       "resources": null,
-       "tools": null,
-       "trust_type": "friend",
-       "updated_at": null
-      }
-     },
-     "queue": [
-      {
-       "diffs": [
-        {
-         "data": "{\"text\": \"m2\"}",
-         "sequence": 1,
-         "timestamp": "<ts:stored>"
-        }
-       ],
-       "granularity": "high",
-       "peer": "<F>",
-       "sequence": 1,
-       "subscriptionid": "<sub1>",
-       "subtarget": "memory_personal",
-       "target": "properties"
-      },
-      {
-       "diffs": [
-        {
-         "data": "{\"theme\": \"y\", \"private\": \"s2\", \"deep\": {\"private\": \"d2\"}}",
-         "sequence": 1,
-         "timestamp": "<ts:stored>"
-        }
-       ],
-       "granularity": "high",
-       "peer": "<F>",
-       "sequence": 1,
-       "subscriptionid": "<sub2>",
-       "subtarget": "settings",
-       "target": "properties"
-      },
-      {
-       "diffs": [
-        {
-         "data": "\"s2\"",
-         "sequence": 1,
-         "timestamp": "<ts:stored>"
-        }
-       ],
-       "granularity": "high",
-       "peer": "<F>",
-       "sequence": 1,
-       "subscriptionid": "<sub3>",
-       "subtarget": "settings",
-       "target": "properties"
-      }
-     ],
-     "subscriptions": [
-      {
-       "callback": false,
-       "granularity": "high",
-       "peerid": "<F>",
-       "resource": "item",
-       "sequence": 1,
-       "subscriptionid": "<sub1>",
-       "subtarget": "memory_personal",
-       "target": "properties"
-      },
-      {
-       "callback": false,
-       "granularity": "high",
-       "peerid": "<F>",
-       "resource": "",
-       "sequence": 1,
-       "subscriptionid": "<sub2>",
-       "subtarget": "settings",
-       "target": "properties"
-      },
-      {
-       "callback": false,
-       "granularity": "high",
-       "peerid": "<F>",
-       "resource": "private",
-       "sequence": 1,
-       "subscriptionid": "<sub3>",
-       "subtarget": "settings",
-       "target": "properties"
-      }
-     ],
-     "suspensions": [],
-     "trust": {
-      "F": {
-       "approved": true,
-       "baseuri": "http://<wire_app>/<F>",
-       "established_via": "trust",
-       "has_verification_token": true,
-       "peer_approved": true,
-       "relationship": "friend",
-       "secret": "<secret:trust:A-F>",
-       "verified": true
-      }
-     }
-    },
-    "subscribers": {
-     "F": {
-      "callback_state": [],
-      "peer_permissions": {
-       "actions": {
-        "allowed": [
-         "*"
-        ],
-        "denied": [
-         "delete_*",
-         "admin_*",
-         "system_*"
-        ]
-       },
-       "actor_id": "<F>",
-       "extra_attributes": {
-        "sender_timestamp": "<ts:iso-offset>"
-       },
-       "fetch_error": null,
-       "fetched_at": "<ts:iso-offset>",
-       "methods": {
-        "allowed": [
-         "*"
-        ],
-        "denied": [
-         "delete_*",
-         "admin_*",
-         "system_*"
-        ]
-       },
-       "peer_id": "<A>",
-       "prompts": null,
-       "properties": {
-        "excluded_patterns": [
-         "private/*",
-         "security/*",
-         "_internal/*",
-         "memory_*",
-         "settings/private",
-         "*/deep/private"
-        ],
-        "operations": [
-         "read",
-         "write"
-        ],
-        "patterns": [
-         "*"
-        ]
-       },
-       "resources": {
-        "excluded_patterns": [
-         "private/*",
-         "security/*"
-        ],
-        "operations": [
-         "read",
-         "write"
-        ],
-        "patterns": [
-         "*"
-        ]
-       },
-       "tools": {
-        "allowed": [
-         "*"
-        ],
-        "denied": [
-         "admin_*",
-         "system_*"
-        ]
-       }
-      },
-      "replica": {
-       "lists": {},
-       "scalars": {}
-      },
-      "subscriptions": [],
-      "trust": {
-       "approved": true,
-       "baseuri": "http://<wire_app>/<A>",
-       "established_via": "trust",
-       "has_verification_token": true,
-       "peer_approved": true,
-       "relationship": "friend",
-       "secret": "<secret:trust:A-F>",
-       "verified": true
-      }
-     }
-    }
-   },
-   "result": {
-    "body": {
-     "data": [
-      {
-       "data": {},
-       "sequence": 1,
-       "timestamp": "<ts:iso-z>"
-      }
-     ],
-     "id": "<A>",
-     "peerid": "<F>",
-     "resource": "private",
-     "sequence": 1,
-     "subscriptionid": "<sub3>",
-     "subtarget": "settings",
-     "target": "properties"
-    },
-    "status": 200
-   },
-   "step": "F pulls one subscription",
-   "wire": [
-    {
-     "auth": "bearer:trust:A-F",
-     "children": [],
-     "headers": {
-      "content-type": "application/json"
-     },
-     "host": "wire_app",
-     "method": "GET",
-     "path": "/<A>/subscriptions/<F>/<F's settings/private>",
-     "query": "",
-     "request": null,
-     "response": {
-      "data": [
-       {
-        "data": {},
-        "sequence": 1,
-        "timestamp": "<ts:iso-z>"
-       }
-      ],
-      "id": "<A>",
-      "peerid": "<F>",
-      "resource": "private",
-      "sequence": 1,
-      "subscriptionid": "<sub3>",
+      "subscriptionid": "<sub1>",
       "subtarget": "settings",
       "target": "properties"
      },

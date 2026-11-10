@@ -29,7 +29,6 @@ from actingweb.db import (
 from actingweb.log_summary import summarize_payload
 from actingweb.permission_evaluator import (
     GrantSnapshot,
-    PermissionResult,
     PermissionType,
     drop_excluded,
     get_permission_evaluator,
@@ -4008,15 +4007,30 @@ class Actor:
         return json.dumps(kept_value) if kept_value else None
 
     def _may_read(self, snapshot: GrantSnapshot, path: str) -> bool:
-        """Whether the grant lets the peer read ``path`` (its rule, ALLOWED)."""
+        """Whether the peer may read ``path``: the one access decision, as a
+        direct read asks it (3.16): a stated rule answers, a grant that does
+        not mention properties leaves it to the access table (never for a
+        client)."""
         assert self.config is not None
+        from .access_decision import decide
+
         evaluator = get_permission_evaluator(self.config)
-        return (
-            evaluator.evaluate_snapshot(
-                snapshot, PermissionType.PROPERTIES, path, "read"
-            )
-            == PermissionResult.ALLOWED
+        decision = decide(
+            self.config,
+            str(self.id),
+            snapshot.peer_id,
+            PermissionType.PROPERTIES,
+            path,
+            "read",
+            evaluator=evaluator,
+            snapshot=snapshot,
         )
+        if not decision.allowed:
+            logger.debug(
+                f"Permission denied: {self.id}:{snapshot.peer_id} -> "
+                f"properties:{path!r}:read ({decision.reason})"
+            )
+        return decision.allowed
 
     def _readable_keys(
         self, snapshot: GrantSnapshot, parent: str, data: dict[str, Any]

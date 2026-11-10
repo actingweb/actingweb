@@ -72,7 +72,9 @@ The system controls access across six categories:
   MCP tool access like ``search``, ``fetch``, ``create_note``
 
 **Resources**
-  MCP resource access using URI patterns like ``notes://``, ``usage://``
+  Resource access: MCP resource URIs like ``notes://``, ``usage://``, and
+  the ``/resources/<name>`` route of a peer request (GET ``read``, PUT and
+  POST ``write``, DELETE ``delete``). One grant for both.
 
 **Prompts**
   MCP prompt access like ``analyze_notes``, ``summarize_document``
@@ -422,8 +424,9 @@ Every route asks one decision (``actingweb.access_decision.decide``):
 * an evaluator that cannot be built, or raises, denies; a database fault
   answers 503.
 
-Methods and actions keep the access table for a name their rule does not
-cover until a later 3.16 change; the listing (``GET /properties``) decides
+The same holds for ``resources``, ``methods`` and ``actions``, and for
+subscription creation (read access to the path) and the pushed and pulled
+diffs; a listing (``GET /properties``, ``/methods``, ``/actions``) decides
 each name the same way.
 
 Precedence Rules

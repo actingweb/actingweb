@@ -173,7 +173,30 @@
    "wire": [
     {
      "auth": "basic:<A.creator>",
-     "children": [],
+     "children": [
+      {
+       "auth": "bearer:trust:L-A",
+       "children": [],
+       "headers": {},
+       "host": "wire_app",
+       "method": "POST",
+       "path": "/<L>/callbacks/subscriptions/<A>/<L's subscription>",
+       "query": "",
+       "request": {
+        "data": {
+         "color": "green"
+        },
+        "granularity": "high",
+        "id": "<A>",
+        "sequence": 1,
+        "subscriptionid": "<sub1>",
+        "target": "properties",
+        "timestamp": "<ts:space>"
+       },
+       "response": null,
+       "status": 403
+      }
+     ],
      "headers": {},
      "host": "wire_app",
      "method": "PUT",
@@ -357,7 +380,9 @@
     "body": {
      "data": [
       {
-       "data": {},
+       "data": {
+        "color": "green"
+       },
        "sequence": 1,
        "timestamp": "<ts:iso-z>"
       }
@@ -388,7 +413,9 @@
      "response": {
       "data": [
        {
-        "data": {},
+        "data": {
+         "color": "green"
+        },
         "sequence": 1,
         "timestamp": "<ts:iso-z>"
        }

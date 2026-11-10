@@ -27,13 +27,12 @@ from ..db.exceptions import DbError
 
 # Import permission system for transparent permission checking
 try:
-    from ..permission_evaluator import PermissionResult, get_permission_evaluator
+    from ..permission_evaluator import get_permission_evaluator
 
     PERMISSION_SYSTEM_AVAILABLE = True
 except ImportError:
     # Fallback definitions for when permission system is not available
     get_permission_evaluator = None
-    PermissionResult = None
     PERMISSION_SYSTEM_AVAILABLE = False  # pyright: ignore[reportConstantRedefinition]
 
 
@@ -383,61 +382,45 @@ class HookRegistry:
                 resource_name, actor, auth_context
             )
 
-        if not PERMISSION_SYSTEM_AVAILABLE:
-            # Permission system not available - allow access
+        if hook_type not in ("method", "action"):
+            logger.warning(f"Unknown hook type for permission check: {hook_type}")
             return True
 
+        # Methods and actions (3.16): the shared decision, as their routes
+        # ask it; a stated rule that does not match denies, an error or a
+        # missing actor or configuration denies (it allowed).
+        actor_id = getattr(actor, "id", None) or getattr(actor, "actor_id", None)
+        peer_id = str(auth_context.get("peer_id") or "")
+        config = auth_context.get("config")
+        if not actor_id or not config or get_permission_evaluator is None:
+            logger.warning(
+                f"{hook_type} hook refused: no actor, configuration or evaluator"
+            )
+            return False
         try:
-            # Extract context
-            actor_id = getattr(actor, "id", None) or getattr(actor, "actor_id", None)
-            if not actor_id:
-                logger.warning("Cannot determine actor ID for permission check")
-                return True  # Allow if we can't determine actor
-
-            peer_id = auth_context.get("peer_id", "")
-            config = auth_context.get("config")
-
-            if not peer_id or not config:
-                return True  # No peer relationship or config
-
-            # Get permission evaluator and check access
-            if PERMISSION_SYSTEM_AVAILABLE:
-                evaluator = get_permission_evaluator(config)  # type: ignore
-            else:
-                logger.warning(
-                    "Permission system is not available due to failed import."
-                )
-                return True
-
-            # Property hooks are decided above (_check_property_hook_permission).
-            if hook_type == "method":
-                result = evaluator.evaluate_method_access(
-                    actor_id, peer_id, resource_name
-                )
-            elif hook_type == "action":
-                result = evaluator.evaluate_action_access(
-                    actor_id, peer_id, resource_name
-                )
-            else:
-                logger.warning(f"Unknown hook type for permission check: {hook_type}")
-                return True
-
-            if result == PermissionResult.ALLOWED:  # type: ignore
-                return True
-            elif result == PermissionResult.DENIED:  # type: ignore
-                logger.info(
-                    f"Hook access denied: {hook_type}:{resource_name} for {actor_id} -> {peer_id}"
-                )
-                return False
-            else:  # NOT_FOUND
-                # No specific permission rule - allow for backward compatibility
-                return True
-
+            evaluator = get_permission_evaluator(config)
+            allowed = decide(
+                config,
+                str(actor_id),
+                peer_id,
+                "methods" if hook_type == "method" else "actions",
+                resource_name,
+                "call" if hook_type == "method" else "execute",
+                # The request's own verb (the handler passes it), as its
+                # route was decided with.
+                method=str(auth_context.get("method") or "POST"),
+                evaluator=evaluator,
+            ).allowed
         except DbError:
             raise
         except Exception as e:
             logger.error(f"Error in hook permission check: {e}")
-            return True  # Allow on errors to maintain compatibility
+            return False
+        if not allowed:
+            logger.info(
+                f"Hook access denied: {hook_type}:{resource_name} for {actor_id} -> {peer_id}"
+            )
+        return allowed
 
     def _check_property_hook_permission(
         self, property_path: str, actor: Any, auth_context: dict[str, Any]

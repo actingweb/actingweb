@@ -32,6 +32,20 @@ SECURITY
   category leaves a name to the access table, and never for an OAuth2/MCP
   client. Property hooks and the developer views use the same decision; an
   error in a hook's check denies (it allowed).
+- **A peer reached ``/resources``, methods and actions past its grant, and
+  subscribed to what it could not read.** ``/resources`` ignored the
+  ``resources`` grant (the access table alone decided, so a ``friend`` read
+  and deleted ``private/x``); a methods or actions rule that did not cover a
+  name, or an empty one (``"methods": []``), fell through to the access
+  table, which admits the whole category per trust level; an evaluator
+  error fell back to the table and a listing showed everything; the async
+  listings were not filtered; ``DELETE /methods/<name>`` and a JSON-RPC body
+  on the bare ``/methods`` were not decided by the grant; a subscription to
+  an excluded path was created; ``shared_properties`` named every property
+  the peer could not read and answered an unapproved peer; an unapproved
+  peer listed its subscriptions. **Behavior change:** all of these follow
+  the one access decision; ``docs/migration/v3.16.rst`` ("Every other way
+  in") lists each.
 - **A write three levels down reached subscribers past their grant.**
   ``PUT /properties/a/b/c`` registered its diff as resource ``b`` holding the
   bare value, so the filter checked ``a/b`` and an exclusion of ``a/b/c``
@@ -759,6 +773,25 @@ REMOVED
 
 CHANGED
 ~~~~~~~
+
+- **Breaking: ``shared_properties`` no longer returns
+  ``excluded_properties``.** ``GET /trust/<rel>/<peer>/shared_properties``
+  lists the names the peer may read (decided as a read; it asked for an
+  operation no rule grants and listed nothing) and answers 403
+  ``{"error": "not_approved"}`` for a trust not yet approved.
+- **``/resources`` follows the ``resources`` grant.** **Behavior change:**
+  GET is ``read``, PUT and POST ``write``, DELETE ``delete``; ``friend`` and
+  ``partner`` lose DELETE and their excluded names, ``associate`` and
+  ``viewer`` gain GET on ``public/*``. A ``resources`` override written for
+  MCP URIs only now denies every ``/resources`` name for that peer.
+- **A subscription needs read access to what it carries.** **Behavior
+  change:** ``POST /subscriptions/<peer>`` answers 403 for a path the peer
+  may not read; a whole-target subscription needs a rule that reads at least
+  one name (or, with no rule for the category, the access table's GET).
+- **Method and action routes use the request's method for the access
+  table.** **Behavior change:** a grant that does not mention methods or
+  actions is decided with the request's method (it was always GET); a
+  stated rule (even empty) is the answer.
 
 - **A permission refusal answers ``{"error": "forbidden"}``.** **Behavior
   change:** the 403 a peer gets from the property routes carries this body

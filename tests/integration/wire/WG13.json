@@ -144,16 +144,37 @@
    "result": {
     "body": {
      "actor_id": "<A>",
-     "excluded_properties": [
-      "color",
-      "memory_personal",
-      "notes",
-      "private",
-      "settings"
-     ],
      "peer_id": "<F>",
      "relationship": "friend",
-     "shared_properties": []
+     "shared_properties": [
+      {
+       "display_name": "Color",
+       "item_count": 0,
+       "name": "color",
+       "operations": [
+        "read",
+        "subscribe"
+       ]
+      },
+      {
+       "display_name": "Notes",
+       "item_count": 1,
+       "name": "notes",
+       "operations": [
+        "read",
+        "subscribe"
+       ]
+      },
+      {
+       "display_name": "Settings",
+       "item_count": 0,
+       "name": "settings",
+       "operations": [
+        "read",
+        "subscribe"
+       ]
+      }
+     ]
     },
     "status": 200
    },
@@ -172,16 +193,37 @@
      "request": null,
      "response": {
       "actor_id": "<A>",
-      "excluded_properties": [
-       "color",
-       "memory_personal",
-       "notes",
-       "private",
-       "settings"
-      ],
       "peer_id": "<F>",
       "relationship": "friend",
-      "shared_properties": []
+      "shared_properties": [
+       {
+        "display_name": "Color",
+        "item_count": 0,
+        "name": "color",
+        "operations": [
+         "read",
+         "subscribe"
+        ]
+       },
+       {
+        "display_name": "Notes",
+        "item_count": 1,
+        "name": "notes",
+        "operations": [
+         "read",
+         "subscribe"
+        ]
+       },
+       {
+        "display_name": "Settings",
+        "item_count": 0,
+        "name": "settings",
+        "operations": [
+         "read",
+         "subscribe"
+        ]
+       }
+      ]
      },
      "status": 200
     }
@@ -330,19 +372,9 @@
    },
    "result": {
     "body": {
-     "actor_id": "<A>",
-     "excluded_properties": [
-      "color",
-      "memory_personal",
-      "notes",
-      "private",
-      "settings"
-     ],
-     "peer_id": "<U>",
-     "relationship": "friend",
-     "shared_properties": []
+     "error": "not_approved"
     },
-    "status": 200
+    "status": 403
    },
    "step": "U GET shared_properties",
    "wire": [
@@ -358,19 +390,9 @@
      "query": "",
      "request": null,
      "response": {
-      "actor_id": "<A>",
-      "excluded_properties": [
-       "color",
-       "memory_personal",
-       "notes",
-       "private",
-       "settings"
-      ],
-      "peer_id": "<U>",
-      "relationship": "friend",
-      "shared_properties": []
+      "error": "not_approved"
      },
-     "status": 200
+     "status": 403
     }
    ]
   },
@@ -516,32 +538,22 @@
     }
    },
    "result": {
-    "body": {
-     "data": [],
-     "id": "<A>",
-     "peerid": "<U>"
-    },
-    "status": 200
+    "body": "",
+    "status": 403
    },
    "step": "U GET its subscriptions",
    "wire": [
     {
      "auth": "bearer:trust:U-A",
      "children": [],
-     "headers": {
-      "content-type": "application/json"
-     },
+     "headers": {},
      "host": "wire_app",
      "method": "GET",
      "path": "/<A>/subscriptions/<U>",
      "query": "",
      "request": null,
-     "response": {
-      "data": [],
-      "id": "<A>",
-      "peerid": "<U>"
-     },
-     "status": 200
+     "response": null,
+     "status": 403
     }
    ]
   }

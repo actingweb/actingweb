@@ -8,7 +8,12 @@ import logging
 from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any, Optional
 
-from ..access_decision import Decision, decide, grant_snapshot
+from ..access_decision import (
+    Decision,
+    decide,
+    grant_snapshot,
+    subscription_allowed,
+)
 from ..db.exceptions import DbError
 from ..permission_evaluator import (
     GrantSnapshot,
@@ -753,8 +758,11 @@ class AuthenticatedSubscriptionManager:
         self._actor_id = actor_id
         self._config = config
 
-    def _check_subscription_permission(self, target: str, subtarget: str = "") -> None:
-        """Check if accessor can subscribe to the given target."""
+    def _check_subscription_permission(
+        self, target: str, subtarget: str = "", resource: str = ""
+    ) -> None:
+        """Check if accessor can subscribe to the given target: read access
+        to what it carries, as the route decides it (3.16)."""
         if not self._auth_context.accessor_id:
             return
 
@@ -763,36 +771,16 @@ class AuthenticatedSubscriptionManager:
             return
 
         try:
-            if target == "properties":
-                # A properties subscription is read access to the subtarget
-                # (3.16; it was evaluated as "properties/<subtarget>").
-                denied = not _view_decision(
-                    self._config,
-                    self._actor_id,
-                    self._auth_context,
-                    subtarget,
-                    "read",
-                ).allowed
-            else:
-                evaluator = get_permission_evaluator(self._config)
-                # Use property read permission as proxy for subscription permission
-                property_path = f"{target}/{subtarget}" if subtarget else target
-                denied = (
-                    evaluator.evaluate_property_access(
-                        self._actor_id,
-                        self._auth_context.permission_id,
-                        property_path,
-                        "read",
-                    )
-                    == PermissionResult.DENIED
-                )
-
-            if denied:
-                raise PermissionError(
-                    f"Subscription denied: {self._auth_context.accessor_id} to {target}"
-                )
-        except PermissionError:
-            raise
+            decision = subscription_allowed(
+                self._config,
+                self._actor_id,
+                self._auth_context.permission_id,
+                target,
+                subtarget,
+                resource,
+                evaluator=get_permission_evaluator(self._config),
+                is_client=self._auth_context.is_client or None,
+            )
         except DbError:
             raise
         except Exception as e:
@@ -804,6 +792,10 @@ class AuthenticatedSubscriptionManager:
             raise PermissionError(
                 f"Permission system error: unable to verify subscription to {target}"
             ) from e
+        if not decision.allowed:
+            raise PermissionError(
+                f"Subscription denied: {self._auth_context.accessor_id} to {target}"
+            )
 
     def create_local_subscription(
         self,
@@ -813,7 +805,7 @@ class AuthenticatedSubscriptionManager:
         granularity: str = "high",
     ) -> Any:
         """Accept a subscription request from the authenticated peer/client."""
-        self._check_subscription_permission(target, subtarget)
+        self._check_subscription_permission(target, subtarget, resource)
 
         # Create subscription with the accessor as the peer
         return self._manager._core_actor.create_subscription(

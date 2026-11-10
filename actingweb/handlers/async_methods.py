@@ -62,7 +62,7 @@ class AsyncMethodsHandler(MethodsHandler):
         myself = auth_result.actor
         check = auth_result.auth_obj
         # Use unified access control system for permission checking
-        if not self._check_method_permission(actor_id, check, name):
+        if not self._check_method_permission(actor_id, check, name, "GET"):
             if self.response:
                 self.response.set_status(403, "Forbidden")
             return
@@ -74,7 +74,7 @@ class AsyncMethodsHandler(MethodsHandler):
             if actor_interface:
                 if not name:
                     # Return list of available methods with metadata
-                    result = {"methods": self.hooks.get_method_metadata_list()}
+                    result = {"methods": self._listable_methods(actor_id, check)}
                 else:
                     auth_context = self._create_auth_context(check)
                     # Use async hook execution
@@ -114,7 +114,7 @@ class AsyncMethodsHandler(MethodsHandler):
         myself = auth_result.actor
         check = auth_result.auth_obj
         # Use unified access control system for permission checking
-        if not self._check_method_permission(actor_id, check, name):
+        if not self._check_method_permission(actor_id, check, name, "POST"):
             if self.response:
                 self.response.set_status(403, "Forbidden")
             return
@@ -164,8 +164,13 @@ class AsyncMethodsHandler(MethodsHandler):
                 self.response.set_status(400, "Processing error")
 
     async def put_async(self, actor_id: str, name: str = "") -> None:
-        """PUT requests are handled as POST for methods (async variant)."""
-        await self.post_async(actor_id, name)
+        """PUT requests are handled as POST for methods (async variant;
+        decided as PUT)."""
+        self._verb_override = "PUT"
+        try:
+            await self.post_async(actor_id, name)
+        finally:
+            self._verb_override = None
 
     async def delete_async(self, actor_id: str, name: str = "") -> None:
         """
@@ -179,6 +184,12 @@ class AsyncMethodsHandler(MethodsHandler):
         myself = auth_result.actor
         check = auth_result.auth_obj
         if not auth_result.authorize("DELETE", "methods", name):
+            return
+        # A peer is decided by its grant as well (3.16; DELETE was the one
+        # method verb the grant did not answer).
+        if not self._check_method_permission(actor_id, check, name, "DELETE"):
+            if self.response:
+                self.response.set_status(403, "Forbidden")
             return
 
         # Execute method delete hook asynchronously
@@ -235,6 +246,20 @@ class AsyncMethodsHandler(MethodsHandler):
                     "message": "Invalid Request",
                     "data": "Method name mismatch",
                 },
+                "id": params.get("id"),
+            }
+
+        # On the bare /methods the URL named nothing to check: the method the
+        # body names is decided before it is dispatched (3.16).
+        if not method_name and not self._check_method_permission(
+            str(getattr(myself, "id", "") or ""),
+            auth_obj,
+            str(params["method"]),
+            "POST",
+        ):
+            return {
+                "jsonrpc": "2.0",
+                "error": {"code": -32000, "message": "Forbidden"},
                 "id": params.get("id"),
             }
 

@@ -5,6 +5,13 @@ from typing import Any
 from actingweb.actor import resync_marker_url
 from actingweb.handlers import base_handler
 
+from ..access_decision import (
+    evaluator_or_none,
+    forbidden_body,
+    subscription_allowed,
+)
+from ..permission_evaluator import get_permission_evaluator
+
 logger = logging.getLogger(__name__)
 
 
@@ -232,7 +239,8 @@ class SubscriptionRelationshipHandler(base_handler.BaseHandler):
             subpath="<id>",
             method="GET",
             peerid=peerid,
-            approved=False,  # Allow access even if not fully approved
+            # A peer this actor has not approved is refused (3.16; it was
+            # admitted "even if not fully approved").
             path_peer=peerid,
         ):
             if self.response:
@@ -330,9 +338,25 @@ class SubscriptionRelationshipHandler(base_handler.BaseHandler):
             if self.response:
                 self.response.set_status(403, "Forbidden. Wrong peer id in request")
             return
-        # Subscription authorization is handled by ACL rules (e.g., ("subscriptions/<id>", "POST", "a"))
-        # The ACL check happens in authenticate_actor/authorize above
-        # Property-level filtering happens at callback time based on permission patterns
+        # The access row (("subscriptions/<id>", "POST", "a")) admits the
+        # route; the grant must let the peer read what it subscribes to
+        # (3.16, spec: subscription creation validates read access). What
+        # each diff carries is filtered again at delivery.
+        decision = subscription_allowed(
+            self.config,
+            actor_id,
+            peerid,
+            str(target or ""),
+            str(subtarget or ""),
+            str(resource or ""),
+            evaluator=evaluator_or_none(self.config, get_permission_evaluator),
+        )
+        if not decision.allowed:
+            if self.response:
+                self.response.set_status(403, "Forbidden")
+                self.response.headers["Content-Type"] = "application/json"
+                self.response.write(json.dumps(forbidden_body(decision)))
+            return
 
         # Use developer API - ActorInterface with SubscriptionManager
         actor_interface = self._get_actor_interface(myself)

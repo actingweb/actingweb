@@ -600,24 +600,24 @@ reason = ["2026-11-10 first recording (grant-enforcement-per-route:0)", "2026-11
 [rows."WG8"]
 test = "test_wire_grants.py::test_wg8_subtarget_push_and_pull"
 topologies = ["same_host", "two_hosts"]
-owners = ["grant-enforcement-per-route:1"]
+owners = ["grant-enforcement-per-route:1", "grant-enforcement-per-route:2"]
 exposure = false
-expected = "F's subscriptions at A (made directly, so each push answers 403 at F): memory_personal (resource item) pulls one empty diff; settings pushes and pulls {\"theme\": \"y\"} (private and deep.private dropped, the emptied deep with them); settings with resource private pulls one empty diff."
-reason = ["2026-11-10 first recording (grant-enforcement-per-route:0)", "2026-11-10 exclusions hold at every level, the bulk POST is all or nothing, a stated rule that does not match denies, 403 bodies (grant-enforcement-per-route:1)"]
+expected = "F's subscription to memory_personal (resource item) and to settings with resource private: 403 at creation (no read access); to settings: 201, then A's settings write is pulled (and pushed, 403 at F, which holds no callback row) as {\"theme\": \"y\"}."
+reason = ["2026-11-10 first recording (grant-enforcement-per-route:0)", "2026-11-10 exclusions hold at every level, the bulk POST is all or nothing, a stated rule that does not match denies, 403 bodies (grant-enforcement-per-route:1)", "2026-11-10 /resources, methods, actions and subscription creation follow the grant; push and pull follow the access table for a category the grant does not mention; shared_properties lists what the peer may read (grant-enforcement-per-route:2)"]
 
 [rows."WG9"]
 test = "test_wire_grants.py::test_wg9_category_not_mentioned"
 owners = ["grant-enforcement-per-route:1", "grant-enforcement-per-route:2"]
-exposure = true
-expected = "L (no trust type, access rows only) pulls a properties subscription: an empty diff (the push and pull filter decides by the rule only until Phase 2). wire_hooked: S 403 ({\"error\": \"forbidden\"}); F and L 200."
-reason = ["2026-11-10 first recording (grant-enforcement-per-route:0)", "2026-11-10 exclusions hold at every level, the bulk POST is all or nothing, a stated rule that does not match denies, 403 bodies (grant-enforcement-per-route:1)"]
+exposure = false
+expected = "L (no trust type, access rows only) pulls a properties subscription: color, as a direct read through the access table answers it. wire_hooked: S 403; F and L 200."
+reason = ["2026-11-10 first recording (grant-enforcement-per-route:0)", "2026-11-10 exclusions hold at every level, the bulk POST is all or nothing, a stated rule that does not match denies, 403 bodies (grant-enforcement-per-route:1)", "2026-11-10 /resources, methods, actions and subscription creation follow the grant; push and pull follow the access table for a category the grant does not mention; shared_properties lists what the peer may read (grant-enforcement-per-route:2)"]
 
 [rows."WG10"]
 test = "test_wire_grants.py::test_wg10_resources"
 owners = ["grant-enforcement-per-route:2"]
-exposure = true
-expected = "F, S, P and D on /resources/x, private/x, public/x and private: the access table alone decides (F, P, D served including private/x; S 403)."
-reason = ["2026-11-10 first recording (grant-enforcement-per-route:0)"]
+exposure = false
+expected = "/resources follows the grant: F reads and writes x and public/x, is 403 on private/x and private and on every DELETE; S reads public/x only; P is 403 on DELETE only (no security/x asked); D (admin) does everything. No hook runs on a refusal."
+reason = ["2026-11-10 first recording (grant-enforcement-per-route:0)", "2026-11-10 /resources, methods, actions and subscription creation follow the grant; push and pull follow the access table for a category the grant does not mention; shared_properties lists what the peer may read (grant-enforcement-per-route:2)"]
 
 [rows."WG11"]
 test = "test_wire_grants.py::test_wg11_empty_methods_rule"
@@ -629,16 +629,16 @@ reason = ["2026-11-10 first recording (grant-enforcement-per-route:0)"]
 [rows."WG12"]
 test = "test_wire_grants.py::test_wg12_subscription_creation"
 owners = ["grant-enforcement-per-route:2"]
-exposure = true
-expected = "F subscribes to memory_personal (excluded), color and the whole target; N (patterns [color]) to the whole target: 201 each."
-reason = ["2026-11-10 first recording (grant-enforcement-per-route:0)"]
+exposure = false
+expected = "F's subscription to memory_personal (excluded) is 403 at creation; to color and to all properties 201; N (patterns [color]) to all properties 201 (its rule reads a name)."
+reason = ["2026-11-10 first recording (grant-enforcement-per-route:0)", "2026-11-10 /resources, methods, actions and subscription creation follow the grant; push and pull follow the access table for a category the grant does not mention; shared_properties lists what the peer may read (grant-enforcement-per-route:2)"]
 
 [rows."WG13"]
 test = "test_wire_grants.py::test_wg13_shared_properties_and_unapproved_listing"
 owners = ["grant-enforcement-per-route:2"]
-exposure = true
-expected = "F's shared_properties is empty and names every property, color included, in excluded_properties; U (not approved) gets the same for its row and lists its subscriptions (200)."
-reason = ["2026-11-10 first recording (grant-enforcement-per-route:0)"]
+exposure = false
+expected = "F's shared_properties lists the names it may read (color, notes, settings) with no excluded_properties; U (not approved) is 403 not_approved there and on its subscription listing."
+reason = ["2026-11-10 first recording (grant-enforcement-per-route:0)", "2026-11-10 /resources, methods, actions and subscription creation follow the grant; push and pull follow the access table for a category the grant does not mention; shared_properties lists what the peer may read (grant-enforcement-per-route:2)"]
 
 [rows."WG14"]
 test = "test_wire_grants.py::test_wg14_anonymous_registration"

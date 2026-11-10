@@ -5,6 +5,17 @@ Subscription Manager
 Overview
 --------
 
+A peer may subscribe only to what it may read (3.16, as the protocol
+requires): creating a subscription to a ``properties``, ``resources``,
+``methods`` or ``actions`` path its grant does not let it read answers 403
+(``{"error": "forbidden"}``). A subscription to a whole target needs a rule
+that reads at least one name (or, when the grant does not mention the
+category, the access table's GET on it). What each diff carries is filtered
+again at delivery for ``properties``; diffs an application registers for
+other targets are delivered as registered, so filter them in the
+application if they carry data some subscribers may not read. A peer whose
+trust this actor has not approved may not list its subscriptions.
+
 The ActingWeb subscription system enables real-time data synchronization between actors. Actors can:
 
 - **Subscribe** to updates from peer actors

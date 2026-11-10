@@ -391,9 +391,16 @@ def test_wg8_subtarget_push_and_pull(wire_pair, topology):
         ("settings", {"subtarget": "settings"}),
         ("settings/private", {"subtarget": "settings", "resource": "private"}),
     ):
-        subid = _subid_of(_subscribe(s, f, secret, body))
-        s.name(subid, f"F's {label}")
-        subids.append(subid)
+
+        def create(label: str = label, body: dict[str, Any] = body) -> Any:
+            response = _subscribe(s, f, secret, body)
+            if response.status_code == 201:
+                subid = response.json()["subscriptionid"]
+                s.name(subid, f"F's {label}")
+                subids.append(subid)
+            return response
+
+        s.step(f"F subscribes to {label}", create)
     s.step(
         "A appends to memory_personal",
         lambda: a.interface().property_lists.memory_personal.append({"text": "m2"}),
@@ -1051,3 +1058,31 @@ def test_a_wildcard_hook_receives_the_path_it_always_has(wire_pair):
         ("delete", ["color"]),
         ("delete", ["settings", "theme"]),
     ]
+
+
+def test_a_subscriber_recovers_from_a_refused_diff(wire_pair):
+    """Not a recording: a diff the peer may read none of is not pushed (the
+    push's design), so the subscriber holds a sequence gap; after its gap
+    timeout (2 s in the wire apps) the next callback triggers a resync and
+    its copy converges on what it may read (plan Phase 1, owner 2026-11-10)."""
+    import time
+
+    from ._wire import wait_until
+
+    s = _world(wire_pair, "two_hosts")
+    a, f = s.publisher, s.subscribers[0]
+
+    def replica() -> dict[str, Any]:
+        from actingweb.remote_storage import RemotePeerStore
+
+        store = RemotePeerStore(
+            actor=f.interface(), peer_id=a.id, validate_peer_id=False
+        )
+        return {n: store.get_value(n) for n in store.list_all_scalars()}
+
+    _owner_put(a, "private", {"k": 1})  # refused: no push, a gap at 1
+    _owner_put(a, "color", "green")  # held behind the gap
+    time.sleep(2.5)
+    _owner_put(a, "color", "red")  # past the timeout: the resync
+    wait_until(lambda: (replica().get("color") or {}).get("value") == "red", 20)
+    assert "private" not in replica()

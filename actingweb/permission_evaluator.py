@@ -158,6 +158,14 @@ class PermissionType(Enum):
 # resource tree), and where a rule the grant states but does not match denies
 # (3.16; methods and actions follow in a later phase of the same plan).
 TREE_CATEGORIES = frozenset({PermissionType.PROPERTIES, PermissionType.RESOURCES})
+# Categories where a rule the grant states but that does not match a named
+# target denies (DENIED, not NOT_FOUND): the access table never overrides a
+# stated rule (3.16). Tools and prompts are MCP's, which denies anything but
+# ALLOWED already.
+STATED_RULE_CATEGORIES = TREE_CATEGORIES | {
+    PermissionType.METHODS,
+    PermissionType.ACTIONS,
+}
 
 
 def exclusion_patterns(rules: Any) -> list[str]:
@@ -670,10 +678,10 @@ class PermissionEvaluator:
 
         For properties and resources an exclusion holds on the path and its
         descendants (:func:`path_excluded`) ahead of every allow, and a rule
-        that does not match a named target denies (DENIED, not NOT_FOUND).
-        An empty target (a listing) stays NOT_FOUND: the caller decides per
-        name. Methods, actions, tools and prompts keep NOT_FOUND for a rule
-        that does not match.
+        that does not match a named target denies (DENIED, not NOT_FOUND), as
+        it does for methods and actions. An empty target (a listing) stays
+        NOT_FOUND: the caller decides per name. Tools and prompts keep
+        NOT_FOUND (MCP denies anything but ALLOWED).
         """
         tree = permission_type in TREE_CATEGORIES
         if tree and target and path_excluded(rules, target):
@@ -688,7 +696,11 @@ class PermissionEvaluator:
             )
         else:
             result = PermissionResult.NOT_FOUND
-        if tree and target and result == PermissionResult.NOT_FOUND:
+        if (
+            permission_type in STATED_RULE_CATEGORIES
+            and target
+            and result == PermissionResult.NOT_FOUND
+        ):
             return PermissionResult.DENIED
         return result
 

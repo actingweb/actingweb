@@ -2206,9 +2206,10 @@ Permission overrides SHOULD follow this structure to ensure interoperability:
   Controls MCP tool access with allowed and denied lists for tool-specific
   permissions.
 
-``resources`` (for MCP clients)
-  Controls MCP resource access with URI patterns and operations for
-  resource-specific permissions.
+``resources``
+  Controls resource access with patterns and operations: the ``/resources``
+  path of a peer request and MCP resources alike (one grant; GET is ``read``,
+  PUT and POST ``write``, DELETE ``delete``).
 
 ``prompts`` (for MCP clients)
   Controls MCP prompt access with allowed patterns for prompt-specific

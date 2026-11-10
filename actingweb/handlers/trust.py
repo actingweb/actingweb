@@ -6,7 +6,7 @@ from typing import Any
 from actingweb import auth
 from actingweb.client_text import sanitize_client_name, sanitize_label
 from actingweb.handlers import base_handler
-from actingweb.permission_evaluator import PermissionResult, get_permission_evaluator
+from actingweb.permission_evaluator import get_permission_evaluator
 
 from ..db import get_actor
 from ..db.creator_rules import is_refused_from_callers, normalise_creator
@@ -1559,13 +1559,27 @@ class TrustSharedPropertiesHandler(base_handler.BaseHandler):
             if self.response:
                 self.response.set_status(404, "Trust relationship not found")
             return
+        # A peer this actor has not approved is granted nothing to list
+        # (3.16; it got the same answer as an approved one).
+        if not trust_rel.get("approved"):
+            if self.response:
+                self.response.set_status(403, "Forbidden")
+                self.response.headers["Content-Type"] = "application/json"
+                self.response.write(json.dumps({"error": "not_approved"}))
+            return
 
-        # Get permission evaluator
-        evaluator = (
-            get_permission_evaluator(self.config)
-            if PERMISSION_SYSTEM_AVAILABLE
-            else None
-        )
+        # Get permission evaluator (one that cannot be built is a 503)
+        try:
+            evaluator = (
+                get_permission_evaluator(self.config)
+                if PERMISSION_SYSTEM_AVAILABLE
+                else None
+            )
+        except DbError:
+            raise
+        except Exception as e:
+            logger.error(f"shared_properties: evaluator unavailable: {e}")
+            evaluator = None
         if not evaluator:
             if self.response:
                 self.response.set_status(503, "Permission system not available")
@@ -1605,15 +1619,33 @@ class TrustSharedPropertiesHandler(base_handler.BaseHandler):
         # Remove duplicates
         property_names = list(set(property_names))
 
-        # Filter by peer's permissions
-        shared = []
-        excluded = []
+        # The names the peer may read, decided as a read of each is (3.16:
+        # the operation was "subscribe", which no rule grants, so nothing was
+        # ever listed); one grant read for all.
+        from ..access_decision import decide
 
-        for prop_name in property_names:
-            result = evaluator.evaluate_property_access(
-                actor_id, peerid, prop_name, operation="subscribe"
-            )
-            if result == PermissionResult.ALLOWED:
+        shared = []
+        try:
+            snapshot = evaluator.snapshot(actor_id, peerid)
+        except DbError:
+            raise
+        except Exception as e:
+            logger.error(f"shared_properties: grant for {peerid} unreadable: {e}")
+            if self.response:
+                self.response.set_status(503, "Permission system not available")
+            return
+
+        for prop_name in sorted(property_names):
+            if decide(
+                self.config,
+                actor_id,
+                peerid,
+                "properties",
+                prop_name,
+                "read",
+                evaluator=evaluator,
+                snapshot=snapshot,
+            ).allowed:
                 # Get item count if it's a property list
                 item_count = 0
                 if prop_name in list_name_set and actor_interface is not None:
@@ -1636,15 +1668,14 @@ class TrustSharedPropertiesHandler(base_handler.BaseHandler):
                         "operations": ["read", "subscribe"],
                     }
                 )
-            else:
-                excluded.append(prop_name)
 
+        # The names the peer may not read are not listed: naming them told
+        # it what else the actor holds (3.16).
         response_data = {
             "actor_id": actor_id,
             "peer_id": peerid,
             "relationship": relationship,
             "shared_properties": shared,
-            "excluded_properties": excluded,
         }
 
         if self.response:

@@ -102,7 +102,17 @@ def test_a_two_segment_write_keeps_its_shape(world: World) -> None:
 @pytest.mark.parametrize(
     "resource", ["", "item", "items", "value", "old_item", "index", "action"]
 )
-def test_an_excluded_list_delivers_nothing(world: World, resource: str) -> None:
+def test_an_old_subscription_to_a_now_excluded_list_delivers_nothing(
+    world: World, resource: str
+) -> None:
+    """Made while the list was readable, then the list was excluded."""
+    readable = {**F_GRANT, "excluded_patterns": ["*/deep/private"]}
+    r = requests.put(
+        f"{world.a['url']}/trust/friend/{world.f['id']}/permissions",
+        json={"properties": readable},
+        auth=world.owner,
+    )
+    assert r.status_code in (200, 201, 204), r.text
     r = requests.post(
         f"{world.a['url']}/properties",
         json={"memory_personal": {"_type": "list"}},
@@ -113,6 +123,12 @@ def test_an_excluded_list_delivers_nothing(world: World, resource: str) -> None:
     if resource:
         body["resource"] = resource
     subid = world.subscribe(**body)
+    r = requests.put(
+        f"{world.a['url']}/trust/friend/{world.f['id']}/permissions",
+        json={"properties": F_GRANT},
+        auth=world.owner,
+    )
+    assert r.status_code in (200, 201, 204), r.text
     r = requests.post(
         f"{world.a['url']}/properties/memory_personal/items",
         json={"action": "add", "item_value": {"text": "secret"}},
@@ -120,3 +136,25 @@ def test_an_excluded_list_delivers_nothing(world: World, resource: str) -> None:
     )
     assert r.status_code in (200, 201), r.text
     assert all(data == {} for data in world.pull(subid))
+
+
+@pytest.mark.parametrize(
+    ("body", "status"),
+    [
+        ({"subtarget": "memory_personal"}, 403),
+        ({"subtarget": "memory_personal", "resource": "item"}, 403),
+        ({"subtarget": "settings", "resource": "deep/private"}, 403),
+        ({"subtarget": "settings"}, 201),
+        ({}, 201),
+    ],
+)
+def test_creation_needs_read_access(world: World, body: dict[str, Any], status: int):
+    """Spec: subscription creation validates read access to the path."""
+    r = requests.post(
+        f"{world.a['url']}/subscriptions/{world.f['id']}",
+        json={"target": "properties", "granularity": "low", **body},
+        headers={"Authorization": f"Bearer {world.secret}"},
+    )
+    assert r.status_code == status, r.text
+    if status == 403:
+        assert r.json() == {"error": "forbidden"}

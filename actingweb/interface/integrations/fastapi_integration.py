@@ -1142,7 +1142,6 @@ class FastAPIIntegration(BaseActingWebIntegration):
                                         "operations": ["read", "subscribe"],
                                     }
                                 ],
-                                "excluded_properties": ["memory_private"],
                             }
                         }
                     },

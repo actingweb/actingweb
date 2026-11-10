@@ -22,6 +22,7 @@ import pytest
 
 from actingweb.aw_web_request import AWWebObj
 from actingweb.db.dynamodb.property import DbProperty
+from tests._grant_fakes import StubEvaluator
 
 
 @pytest.fixture(autouse=True)
@@ -181,7 +182,7 @@ class TestTrustSharedPropertiesCost:
                     "actingweb.handlers.trust.get_permission_evaluator"
                 ) as mock_get_eval,
             ):
-                mock_evaluator = Mock()
+                mock_evaluator = StubEvaluator()
                 mock_evaluator.evaluate_property_access = Mock(
                     return_value=PermissionResult.ALLOWED
                 )

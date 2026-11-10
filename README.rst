@@ -256,7 +256,8 @@ Each actor exposes a set of standard endpoints under its root URL
   delivery, and authenticated application callbacks (a peer's callbacks are
   accepted only from that peer).
 - ``/resources`` — a skeleton for exposing arbitrary resources where
-  ``/properties`` does not fit.
+  ``/properties`` does not fit; a peer reaches it as its ``resources`` grant
+  allows (the same grant MCP resources use).
 - ``/actions`` and ``/methods`` — application-defined operations (also surfaced as
   MCP tools/prompts).
 - ``/oauth`` and ``/oauth/spa/*`` — OAuth2 flows tying an actor to an identity

@@ -789,8 +789,13 @@ Review round (advisor, then codex `exec -s read-only` on the diff):
   for a two-segment write); the migration guide states it as a known
   limit. Belongs with the replica work (attribute-list plan).
 - A refused diff is not pushed (existing design), so a subscriber holds a
-  sequence gap; recovery by gap timeout and resync was not observed in a
-  test here (`WG7` ends with F applying nothing within the row).
+  sequence gap. Owner, 2026-11-10: test the recovery. Observed: the first
+  callback after the gap timeout triggers a resync and the replica
+  converges on what the peer may read
+  (`test_wire_grants.py::test_a_subscriber_recovers_from_a_refused_diff`,
+  both backends, three runs). The migration guide says so.
+- The replica's replace-not-merge: owner, 2026-11-10, moved to the
+  attribute-list plan (its Update Log).
 
 Checks: fast tier (4904 unit), full tier DynamoDB 6302 passed and PostgreSQL
 6099 passed, docs clean; all wire rows
@@ -905,15 +910,58 @@ creation.
 
 ### Verification
 
-- [ ] Run the contract's `### Checks` fast tier verbatim
-- [ ] Full tier on both backends before the commit
-- [ ] `git show --stat HEAD -- tests/integration/wire`: `WG9`, `WG10`,
-      `WG12`, `WG13` changed, nothing else; `Wire-Phase` trailer
-- [ ] `grep -rn "excluded_properties" actingweb/` has no hit
-- [ ] Sphinx build with `-W`
-- [ ] `/verify_implementation` for the phase, then codex on the diff
+- [x] Run the contract's `### Checks` fast tier verbatim
+- [x] Full tier on both backends before the commit
+- [ ] `git show --stat HEAD -- tests/integration/wire`: `WG8`, `WG9`,
+      `WG10`, `WG12`, `WG13` changed, nothing else; `Wire-Phase` trailer
+- [x] `grep -rn "excluded_properties" actingweb/` has no hit
+- [x] Sphinx build with `-W`
+- [x] codex on the diff; `/verify_implementation` at the end of the plan
+      (owner, 2026-11-10)
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+#### Phase 2 notes (2026-11-10)
+
+- `access_decision.py` gained `named_route_allows` and `listable_names`
+  (methods and actions, both handlers and both async twins: the twins
+  inherit the check, and their listings, which were not filtered at all,
+  now are), `subscription_allowed` (creation, also used by the developer
+  views' subscription manager) and `evaluator_or_none`.
+  `STATED_RULE_CATEGORIES` in the evaluator adds methods and actions to the
+  "a stated rule that does not match denies" rule; tools and prompts keep
+  NOT_FOUND (MCP denies anything but ALLOWED).
+- A caller that is not a peer keeps the access table with `GET` on the
+  methods and actions routes, as before; only the peer's fallback uses the
+  request's method. `DELETE /methods/<name>` keeps its access-row check and
+  adds the grant.
+- `PUT /methods/<name>` (handled by POST) is decided as `PUT`; method and
+  action hooks are decided with the request's verb, which the handlers put
+  in the hook context (both from codex).
+- Whole-target subscription creation is judged on the rule (a rule that
+  reads at least one name), never on what is stored; an application's own
+  target (not properties, resources, methods or actions) is decided by the
+  access row for creating a subscription, in the developer views too (the
+  first version admitted any such target there; codex).
+- `/resources`, subscription creation and `shared_properties` build the
+  evaluator through `evaluator_or_none` (or catch the failure): one that
+  cannot be built denies (403) or answers 503, never 500 (codex).
+- `shared_properties` asked for the operation `subscribe`, which no rule
+  grants, so it listed nothing (`WG13`); it decides `read` now.
+- The push/pull filter decides through `decide` (`Actor._may_read`): a grant
+  that does not mention properties leaves each name to the access table
+  (`WG9`: L now pulls `color`).
+- `WG8` gained creation steps (its excluded subscriptions are now 403 at
+  creation) and Phase 2 joined its owners; the integration test for an
+  excluded list now subscribes while the list is readable and excludes it
+  after (an old subscription delivers nothing).
+- The built-in types' `resources` rules now apply to REST: `friend` and
+  `partner` lose DELETE (their rule has no `delete`), `associate` and
+  `viewer` read `public/*` (`WG10`). In the migration guide.
+
+Checks: fast tier, full tier both backends (below), wire rows compared
+twice on DynamoDB after re-recording WG8, WG9, WG10, WG12, WG13; codex on
+the diff (six findings, all fixed with tests).
 
 ---
 

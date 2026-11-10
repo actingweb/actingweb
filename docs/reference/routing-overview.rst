@@ -28,7 +28,7 @@ Core Actor Routes
 - `/<actor_id>`: Actor root endpoint (see :ref:`actor-root-endpoint`)
 - `/<actor_id>/meta`: Discovery metadata
 - `/<actor_id>/properties`: Get/update/delete properties
-- `/<actor_id>/resources`: Fetch external resources (read-only)
+- `/<actor_id>/resources`: Application resources answered by `resource_<name>` callback hooks; a peer is decided by its `resources` grant (GET `read`, PUT/POST `write`, DELETE `delete`), and no hook runs on a refusal
 - `/<actor_id>/methods`: RPC-style methods (GET returns metadata, POST invokes)
 - `/<actor_id>/actions`: Side-effecting actions (GET returns metadata, POST invokes)
 - `/<actor_id>/trust`: Trust relationships and permissions

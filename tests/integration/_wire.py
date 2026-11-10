@@ -65,6 +65,22 @@ _UNRECORDED_PREFIXES = ("/_stub/",)
 TRUST_HOOKS = {"on": False}
 
 
+# What a wildcard property hook receives (operation, property name, path),
+# collected only while a test opens ``property_hook_paths()``.
+PROPERTY_HOOK_PATHS: dict[str, Any] = {"on": False, "seen": []}
+
+
+@contextlib.contextmanager
+def property_hook_paths() -> Any:
+    """Collect what the wire app's ``*`` property hook is called with."""
+    PROPERTY_HOOK_PATHS["seen"] = []
+    PROPERTY_HOOK_PATHS["on"] = True
+    try:
+        yield PROPERTY_HOOK_PATHS["seen"]
+    finally:
+        PROPERTY_HOOK_PATHS["on"] = False
+
+
 @contextlib.contextmanager
 def trust_hooks_recorded() -> Any:
     """Record the trust lifecycle hooks' names and argument names."""

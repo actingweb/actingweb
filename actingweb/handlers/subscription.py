@@ -8,14 +8,20 @@ from actingweb.handlers import base_handler
 logger = logging.getLogger(__name__)
 
 
-def _as_permitted(myself: Any, peerid: str, sub_dict: dict[str, Any], raw: Any) -> Any:
+def _as_permitted(
+    myself: Any,
+    peerid: str,
+    sub_dict: dict[str, Any],
+    raw: Any,
+    snapshot: Any = None,
+) -> Any:
     """A stored diff as the subscriber may read it: diffs are stored whole,
     and a pulled one passes the same filter as the pushed callback
     (``Actor.filter_subscription_blob``). A diff the peer may read none of
     reads as ``{}``, a change that changes nothing (the library's
     subscriber merges it as a no-op), its sequence kept; the push sends
     nothing for it."""
-    filtered = myself.filter_subscription_blob(peerid, sub_dict, raw)
+    filtered = myself.filter_subscription_blob(peerid, sub_dict, raw, snapshot=snapshot)
     if filtered is None:
         return {}
     try:
@@ -25,7 +31,11 @@ def _as_permitted(myself: Any, peerid: str, sub_dict: dict[str, Any], raw: Any) 
 
 
 def _served(
-    myself: Any, peerid: str, sub_dict: dict[str, Any], raw: Any
+    myself: Any,
+    peerid: str,
+    sub_dict: dict[str, Any],
+    raw: Any,
+    snapshot: Any = None,
 ) -> dict[str, Any]:
     """A stored diff's served fields: ``data`` as the subscriber may read
     it, or, for a client's resync marker (``Actor.resync_marker``), ``type``
@@ -43,7 +53,7 @@ def _served(
         )
         if url:
             return {"type": "resync", "url": url, "data": {}}
-    return {"data": _as_permitted(myself, peerid, sub_dict, raw)}
+    return {"data": _as_permitted(myself, peerid, sub_dict, raw, snapshot)}
 
 
 def _authorize_subscription_write(
@@ -418,13 +428,19 @@ class SubscriptionHandler(base_handler.BaseHandler):
 
         diffs = sub_with_diffs.get_diffs()
         sub_dict = sub_info.to_dict()
+        # One grant read serves every stored diff (3.16).
+        snapshot = (
+            myself.grant_for(peerid)
+            if diffs and sub_dict.get("target") == "properties"
+            else None
+        )
         pairs = []
         for diff in diffs:
             pairs.append(
                 {
                     "sequence": diff["sequence"],
                     "timestamp": diff["timestamp"].strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
-                    **_served(myself, peerid, sub_dict, diff.get("diff")),
+                    **_served(myself, peerid, sub_dict, diff.get("diff"), snapshot),
                 }
             )
 

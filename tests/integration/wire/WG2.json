@@ -162,10 +162,7 @@
    },
    "result": {
     "body": {
-     "deep": {
-      "private": "d"
-     },
-     "private": "s",
+     "deep": {},
      "theme": "x"
     },
     "status": 200
@@ -184,10 +181,7 @@
      "query": "",
      "request": null,
      "response": {
-      "deep": {
-       "private": "d"
-      },
-      "private": "s",
+      "deep": {},
       "theme": "x"
      },
      "status": 200
@@ -355,7 +349,9 @@
     }
    },
    "result": {
-    "body": "",
+    "body": {
+     "error": "forbidden"
+    },
     "status": 403
    },
    "step": "GET settings/private",
@@ -363,13 +359,17 @@
     {
      "auth": "bearer:trust:A-F",
      "children": [],
-     "headers": {},
+     "headers": {
+      "content-type": "application/json"
+     },
      "host": "wire_app",
      "method": "GET",
      "path": "/<A>/properties/settings/private",
      "query": "",
      "request": null,
-     "response": null,
+     "response": {
+      "error": "forbidden"
+     },
      "status": 403
     }
    ]
@@ -392,7 +392,7 @@
      "properties": {
       "color": "\"blue\"",
       "private": "{\"k\": 1}",
-      "settings": "{\"theme\": \"y\", \"private\": \"s2\", \"deep\": {\"private\": \"d2\"}}"
+      "settings": "{\"theme\": \"x\", \"private\": \"s\", \"deep\": {\"private\": \"d\"}}"
      }
     },
     "publisher": {
@@ -535,15 +535,19 @@
     }
    },
    "result": {
-    "body": "",
-    "status": 204
+    "body": {
+     "error": "forbidden"
+    },
+    "status": 403
    },
    "step": "PUT settings",
    "wire": [
     {
      "auth": "bearer:trust:A-F",
      "children": [],
-     "headers": {},
+     "headers": {
+      "content-type": "application/json"
+     },
      "host": "wire_app",
      "method": "PUT",
      "path": "/<A>/properties/settings",
@@ -555,8 +559,10 @@
       "private": "s2",
       "theme": "y"
      },
-     "response": null,
-     "status": 204
+     "response": {
+      "error": "forbidden"
+     },
+     "status": 403
     }
    ]
   }

@@ -22,6 +22,7 @@ from typing import (
     is_typeddict,
 )
 
+from ..access_decision import PERMISSION_DENIED, decide
 from ..db.exceptions import DbError
 
 # Import permission system for transparent permission checking
@@ -373,12 +374,17 @@ class HookRegistry:
         Returns:
             True if access is permitted, False otherwise
         """
-        if not PERMISSION_SYSTEM_AVAILABLE:
-            # Permission system not available - allow access
-            return True
-
         if not auth_context or not auth_context.get("peer_id"):
             # No peer context - this is likely basic/oauth auth, allow access
+            return True
+
+        if hook_type == "property":
+            return self._check_property_hook_permission(
+                resource_name, actor, auth_context
+            )
+
+        if not PERMISSION_SYSTEM_AVAILABLE:
+            # Permission system not available - allow access
             return True
 
         try:
@@ -403,20 +409,8 @@ class HookRegistry:
                 )
                 return True
 
-            if hook_type == "property":
-                hook_operation = auth_context.get("operation", "get")
-                # Map hook operations to permission operations
-                operation_map = {
-                    "get": "read",
-                    "put": "write",
-                    "post": "write",
-                    "delete": "delete",
-                }
-                permission_operation = operation_map.get(hook_operation, "read")
-                result = evaluator.evaluate_property_access(
-                    actor_id, peer_id, resource_name, permission_operation
-                )
-            elif hook_type == "method":
+            # Property hooks are decided above (_check_property_hook_permission).
+            if hook_type == "method":
                 result = evaluator.evaluate_method_access(
                     actor_id, peer_id, resource_name
                 )
@@ -444,6 +438,58 @@ class HookRegistry:
         except Exception as e:
             logger.error(f"Error in hook permission check: {e}")
             return True  # Allow on errors to maintain compatibility
+
+    def _check_property_hook_permission(
+        self, property_path: str, actor: Any, auth_context: dict[str, Any]
+    ) -> bool:
+        """A peer's property hook runs only where the shared access decision
+        allows the operation (3.16).
+
+        The handler's own decision for the request rides in the context
+        (``decision``) and is used as it is; otherwise the decision is made
+        on ``permission_path`` (the property's true path), else on the path
+        built from the hook's arguments. A grant that does not mention
+        properties leaves it to the access table; an error, a peer with no
+        actor id or no configuration denies. A storage fault raises.
+        """
+        decision = auth_context.get("decision")
+        if decision is not None:
+            return bool(decision.allowed)
+        actor_id = getattr(actor, "id", None) or getattr(actor, "actor_id", None)
+        peer_id = str(auth_context.get("peer_id") or "")
+        config = auth_context.get("config")
+        if not actor_id or not config:
+            logger.warning(
+                "Property hook refused: the actor or the configuration is unknown"
+            )
+            return False
+        operation = {
+            "get": "read",
+            "put": "write",
+            "post": "write",
+            "delete": "delete",
+        }.get(str(auth_context.get("operation", "get")), "read")
+        path = str(auth_context.get("permission_path") or property_path)
+        try:
+            if get_permission_evaluator is None:
+                return False
+            # Resolved here, as the handlers resolve theirs (a patch on this
+            # module applies).
+            evaluator = get_permission_evaluator(config)
+            return decide(
+                config,
+                str(actor_id),
+                peer_id,
+                "properties",
+                path,
+                operation,
+                evaluator=evaluator,
+            ).allowed
+        except DbError:
+            raise
+        except Exception as e:
+            logger.error(f"Error in property hook permission check: {e}")
+            return False
 
     def register_property_hook(
         self, property_name: str, func: Callable[..., Any]
@@ -603,6 +649,9 @@ class HookRegistry:
     ) -> Any:
         """Execute property hooks with transparent permission checking.
 
+        A peer's hooks run only where its grant allows the operation; a
+        denial returns ``PERMISSION_DENIED`` (3.16), distinct from ``None``.
+
         Note: If you have async hooks and are in an async context,
         use execute_property_hooks_async() instead for proper async execution.
         Async hooks in this method will be executed via asyncio.run() which
@@ -619,7 +668,9 @@ class HookRegistry:
             "property", property_path, actor, auth_context
         ):
             logger.debug(f"Property hook permission denied for {property_path}")
-            return None if operation in ["put", "post"] else value
+            # Distinct from None (a hook hiding a value or rejecting a
+            # write): the caller answers 403 (3.16).
+            return PERMISSION_DENIED
 
         # Execute hooks for specific property
         if property_name in self._property_hooks:
@@ -1045,7 +1096,9 @@ class HookRegistry:
             auth_context: Optional authentication context
 
         Returns:
-            Modified property value or None if operation was rejected
+            Modified property value or None if operation was rejected;
+            ``PERMISSION_DENIED`` when the caller's grant does not allow the
+            operation (3.16; the caller answers 403)
         """
         path = path or []
 
@@ -1058,7 +1111,9 @@ class HookRegistry:
             "property", property_path, actor, auth_context
         ):
             logger.debug(f"Property hook permission denied for {property_path}")
-            return None if operation in ["put", "post"] else value
+            # Distinct from None (a hook hiding a value or rejecting a
+            # write): the caller answers 403 (3.16).
+            return PERMISSION_DENIED
 
         # Execute hooks for specific property
         if property_name in self._property_hooks:

@@ -27,7 +27,13 @@ from actingweb.db import (
     get_trust,
 )
 from actingweb.log_summary import summarize_payload
-from actingweb.permission_evaluator import PermissionResult, get_permission_evaluator
+from actingweb.permission_evaluator import (
+    GrantSnapshot,
+    PermissionResult,
+    PermissionType,
+    drop_excluded,
+    get_permission_evaluator,
+)
 from actingweb.property_list import ListCorruptionError
 from actingweb.secret_compare import secret_digest_equals
 
@@ -455,6 +461,27 @@ _SUSPENSION_ERROR_LOG_INTERVAL_SECONDS = 300.0
 META_CHECK_TRIES = 2
 META_CHECK_TIMEOUT: tuple[float, float] = (3, 5)
 _suspension_check_error_logged_at: float | None = None
+
+
+_EMPTIED = object()
+
+
+def _prune_emptied(original: Any, kept: Any) -> Any:
+    """``kept`` (``original`` after a filter) without the objects the filter
+    emptied, at any depth; ``_EMPTIED`` when ``original`` was a non-empty
+    object and nothing of it is left. An object empty to begin with stays."""
+    if not isinstance(original, dict) or not isinstance(kept, dict):
+        return kept
+    if original and not kept:
+        return _EMPTIED
+    out: dict[str, Any] = {}
+    for key, value in kept.items():
+        pruned = _prune_emptied(original.get(key), value)
+        if pruned is not _EMPTIED:
+            out[key] = pruned
+    if original and not out:
+        return _EMPTIED
+    return out
 
 
 class ActorError(Exception):
@@ -3871,8 +3898,37 @@ class Actor:
             blob=blob,
         )
 
+    @staticmethod
+    def _diff_part(rules: Any, path: str, value: Any) -> Any:
+        """``value`` (a diff's part at ``path``) without excluded parts, and
+        without any object the filter emptied: the subscriber replaces a
+        property with what a diff carries, so an emptied ``{}`` would wipe
+        its copy of the parts it may read. ``_EMPTIED`` when nothing is left
+        of a non-empty object (3.16)."""
+        kept = drop_excluded(rules, path, value)
+        return _prune_emptied(value, kept)
+
+    def grant_for(self, peerid: str) -> GrantSnapshot | None:
+        """What ``peerid`` is granted here, read once (3.16), or None when it
+        cannot be read for a reason other than storage (callers send
+        nothing). ``DbError`` raises."""
+        if not self.config or not self.id:
+            return None
+        try:
+            return get_permission_evaluator(self.config).snapshot(str(self.id), peerid)
+        except DbError:
+            raise
+        except Exception as e:
+            logger.error(f"Grant for {peerid} could not be read: {e}")
+            return None
+
     def filter_subscription_blob(
-        self, peerid: str, sub: dict[str, Any], blob: Any
+        self,
+        peerid: str,
+        sub: dict[str, Any],
+        blob: Any,
+        *,
+        snapshot: GrantSnapshot | None = None,
     ) -> str | None:
         """A subscription diff as ``peerid`` may read it, or None when it may
         read none of it (3.16). The one filter for the pushed callback
@@ -3880,16 +3936,19 @@ class Actor:
         (``GET /subscriptions/<peer>/<subid>`` and ``/<seq>``).
 
         Only a ``properties`` subscription is filtered (other targets are the
-        application's, served as their callbacks are). A subscription to one
-        property (a subtarget, and a resource under it) carries that
-        property's value, whatever its shape: it is sent whole when the peer
-        may read ``<subtarget>`` (``<subtarget>/<resource>`` with a resource),
-        as a direct read of that path checks, else not at all. Without a
-        resource, an object's keys whose ``<subtarget>/<key>`` an exclusion
-        names are dropped (a resource-level write arrives as ``{resource: value}``). A subscription
-        to the whole target carries an object keyed by property: each key is
-        checked on its own. Fail closed: no evaluator, a value that is not an
-        object for a whole-target subscription, or an error yields None."""
+        application's, served as their callbacks are). Each part is decided
+        at its full path: a subscription to one property (a subtarget, and a
+        resource under it) carries that path's value, sent when the peer may
+        read the path; a subscription to the whole target carries an object
+        keyed by property, each key decided on its own. In every case an
+        object value loses the descendants the grant excludes, at any depth,
+        rooted at the path it sits at. A ``list:<name>`` key is a list, a
+        top-level property, decided by its bare name.
+
+        ``snapshot``: the peer's grant when the caller read it already (a
+        pull serving many diffs reads it once). Fail closed: no grant, a
+        value that is not an object for a whole-target subscription, or an
+        error yields None."""
         as_text = (
             blob
             if isinstance(blob, str)
@@ -3899,142 +3958,127 @@ class Actor:
         )
         if sub.get("target") != "properties":
             return as_text
+        if snapshot is None:
+            snapshot = self.grant_for(peerid)
+        if snapshot is None or not self.config:
+            return None
+        try:
+            parsed: Any = json.loads(as_text)
+        except (TypeError, ValueError):
+            parsed = as_text
         subtarget = str(sub.get("subtarget") or "")
-        if not subtarget:
-            try:
-                parsed = json.loads(as_text)
-            except (TypeError, ValueError):
+        try:
+            if not subtarget:
+                if not isinstance(parsed, dict):
+                    return None
+                kept = self._readable_keys(snapshot, "", parsed)
+                return json.dumps(kept) if kept else None
+            resource = str(sub.get("resource") or "")
+            path = f"{subtarget}/{resource}" if resource else subtarget
+            if not self._may_read(snapshot, path):
                 return None
             if not isinstance(parsed, dict):
-                return None
-            return self._filter_subscription_data_by_permissions(
-                peerid=peerid, blob=as_text
-            )
-        resource = str(sub.get("resource") or "")
-        path = f"{subtarget}/{resource}" if resource else subtarget
-        # A subscription to a property without a resource also receives its
-        # resource-level writes as ``{resource: value}`` (``register_diffs``):
-        # the value stays whole, but a key whose own path ``<subtarget>/<key>``
-        # an exclusion names is dropped, as a direct read of that path is
-        # refused. A ``list:`` key is a list, a top-level property: checked by
-        # its bare name, as the whole-target filter and the list store do.
-        parsed: Any = None
-        if not resource:
-            try:
-                parsed = json.loads(as_text)
-            except (TypeError, ValueError):
-                parsed = None
-        children: dict[str, tuple[str, ...]] = {}
-        if isinstance(parsed, dict):
-            # A ``list:<name>`` key is checked at both paths it can name: the
-            # list's own (a top-level property, as the whole-target filter
-            # and the list store check it) and the key's own under the
-            # subtarget, as it would be were it plain data. Either excluded
-            # drops it.
-            children = {
-                key: (f"{subtarget}/{key}", key[5:])
-                if key.startswith("list:")
-                else (f"{subtarget}/{key}",)
-                for key in parsed
-            }
-        try:
-            evaluator = get_permission_evaluator(self.config) if self.config else None
-            if not evaluator:
-                return None
-            result, excluded = evaluator.evaluate_property_with_exclusions(
-                str(self.id),
-                peerid,
-                path,
-                [child for paths in children.values() for child in paths],
-            )
+                return as_text
+            rules = snapshot.rules(PermissionType.PROPERTIES)
+            if resource:
+                kept_value = self._diff_part(rules, path, parsed)
+            else:
+                # A resource-level write arrives as ``{resource: value}``:
+                # the value is the property's, kept whole except the parts
+                # the grant excludes, at their paths under the subtarget. A
+                # ``list:<name>`` key is a list, decided by its bare name.
+                kept_value = self._diff_part(
+                    rules,
+                    subtarget,
+                    {
+                        k: v
+                        for k, v in parsed.items()
+                        if not k.startswith("list:") or self._may_read(snapshot, k[5:])
+                    },
+                )
         except DbError:
             raise
         except Exception as e:
             logger.error(f"Permission check failed for a diff to {peerid}: {e}")
             return None
-        if result != PermissionResult.ALLOWED:
+        if kept_value is _EMPTIED:
             return None
-        if not children or not excluded:
+        if kept_value == parsed:
             return as_text
-        assert isinstance(parsed, dict)
-        kept = {
-            key: value
-            for key, value in parsed.items()
-            if not any(child in excluded for child in children[key])
-        }
-        return json.dumps(kept) if kept else None
+        return json.dumps(kept_value) if kept_value else None
 
-    def _filter_subscription_data_by_permissions(
-        self, peerid: str, blob: str | bytes, subtarget: str | None = None
-    ) -> str | None:
-        """Filter subscription data based on peer's property permissions.
-
-        Returns filtered blob as JSON string, or None if nothing passes the filter.
-        Implements fail-closed: errors result in no data sent.
-        """
-        try:
-            if not self.config or not self.id:
-                logger.warning("Missing config or actor ID for subscription filtering")
-                return None  # Fail-closed
-
-            evaluator = get_permission_evaluator(self.config)
-            if not evaluator:
-                logger.warning(
-                    f"Permission evaluator not available for subscription filtering to {peerid}"
-                )
-                return None  # Fail-closed
-
-            # Parse blob with explicit encoding handling for bytes
-            if isinstance(blob, bytes):
-                data = json.loads(blob.decode("utf-8"))
-            elif isinstance(blob, str):
-                data = json.loads(blob)
-            else:
-                data = blob
-
-            if not isinstance(data, dict):
-                logger.debug(f"Cannot filter non-dict subscription data: {type(data)}")
-                return blob if isinstance(blob, str) else json.dumps(blob)
-
-            # One evaluation for the whole diff (the approval and the grant
-            # are read once, not once per key).
-            paths: dict[str, str] = {}
-            for property_name in data:
-                # Normalize property list keys: strip 'list:' prefix for permission checks
-                # Property lists use 'list:name' internally but permissions use 'name'
-                normalized_name = (
-                    property_name[5:]
-                    if property_name.startswith("list:")
-                    else property_name
-                )
-                paths[property_name] = (
-                    f"{subtarget}/{normalized_name}" if subtarget else normalized_name
-                )
-            results = evaluator.evaluate_bulk_property_access(
-                self.id, peerid, list(paths.values()), "read"
+    def _may_read(self, snapshot: GrantSnapshot, path: str) -> bool:
+        """Whether the grant lets the peer read ``path`` (its rule, ALLOWED)."""
+        assert self.config is not None
+        evaluator = get_permission_evaluator(self.config)
+        return (
+            evaluator.evaluate_snapshot(
+                snapshot, PermissionType.PROPERTIES, path, "read"
             )
-            filtered_data = {}
-            for property_name, value in data.items():
-                property_path = paths[property_name]
-                if results.get(property_path) == PermissionResult.ALLOWED:
-                    filtered_data[property_name] = value
-                else:
-                    logger.debug(
-                        f"Filtered property {property_path} from subscription callback to {peerid}"
-                    )
+            == PermissionResult.ALLOWED
+        )
 
-            if not filtered_data:
-                logger.debug(
-                    f"No permitted properties in callback to {peerid}, skipping"
-                )
-                return None
+    def _readable_keys(
+        self, snapshot: GrantSnapshot, parent: str, data: dict[str, Any]
+    ) -> dict[str, Any]:
+        """``data``'s keys (each at ``<parent>/<key>``, or ``<key>`` at the
+        top) that the peer may read, each without its excluded descendants.
+        A ``list:<name>`` key is decided by the list's bare name."""
+        rules = snapshot.rules(PermissionType.PROPERTIES)
+        kept: dict[str, Any] = {}
+        for key, value in data.items():
+            name = key[5:] if key.startswith("list:") else key
+            path = f"{parent}/{key}" if parent else name
+            if key.startswith("list:") and path != name:
+                if not self._may_read(snapshot, name):
+                    continue
+            if not self._may_read(snapshot, path):
+                logger.debug(f"Filtered {path!r} from a diff to {snapshot.peer_id}")
+                continue
+            part = self._diff_part(rules, path, value)
+            if part is not _EMPTIED:
+                kept[key] = part
+        return kept
 
-            return json.dumps(filtered_data)
-        except DbError:
-            raise
-        except Exception as e:
-            logger.error(f"Permission filtering failed for subscription callback: {e}")
-            return None  # Fail-closed: don't send data on error
+    def _filter_full_state(
+        self,
+        peerid: str,
+        subtarget: str,
+        full_state: dict[str, Any],
+        list_keys: set[str],
+    ) -> dict[str, Any]:
+        """A full-state diff (``_get_full_state_for_subscription``) without
+        the parts the peer's grant excludes, at their true paths (3.16).
+
+        For a subtarget the state is wrapped one level deeper than a diff
+        (``{subtarget: value}``), so the pull filter, which still decides
+        whether the peer may read it at all, would look for the children at
+        the wrong paths. A list's state is not descended (a list's unit is
+        its name). With no grant to read, the state is left to the pull
+        filter, which then sends nothing."""
+        snapshot = self.grant_for(peerid)
+        if snapshot is None:
+            return full_state
+        rules = snapshot.rules(PermissionType.PROPERTIES)
+
+        def kept(path: str, value: Any) -> Any:
+            if path in list_keys:
+                return value
+            if isinstance(value, str):
+                try:
+                    parsed = json.loads(value)
+                except ValueError:
+                    return value
+                filtered = drop_excluded(rules, path, parsed)
+                return value if filtered == parsed else json.dumps(filtered)
+            return drop_excluded(rules, path, value)
+
+        if subtarget:
+            return {
+                k: kept(subtarget, v) if k == subtarget else v
+                for k, v in full_state.items()
+            }
+        return {k: kept(k, v) for k, v in full_state.items()}
 
     # =========================================================================
     # Subscription Suspension Management
@@ -4628,6 +4672,9 @@ class Actor:
             # fail on the row cap.
             from .property_list import fit_full_state
 
+            full_state = self._filter_full_state(
+                peer_id, sub_subtarget or "", full_state, list_keys
+            )
             full_state = fit_full_state(full_state, self.config, list_keys=list_keys)
 
             # Store as a subscription diff

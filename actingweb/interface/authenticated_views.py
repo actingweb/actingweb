@@ -8,8 +8,16 @@ import logging
 from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any, Optional
 
+from ..access_decision import Decision, decide, grant_snapshot
 from ..db.exceptions import DbError
-from ..permission_evaluator import PermissionResult, get_permission_evaluator
+from ..permission_evaluator import (
+    GrantSnapshot,
+    PermissionResult,
+    PermissionType,
+    drop_excluded,
+    get_permission_evaluator,
+    holds_excluded,
+)
 from ..property import rows_for
 from ..property_list import AppendOnceResult, ListItemHandle
 
@@ -48,6 +56,32 @@ def _client_trust_peer_id(actor: "ActorInterface", client_id: str) -> str:
         logger.debug(f"Could not resolve the trust row of client {client_id}: {e}")
         return ""
     return str(getattr(trust, "peerid", "") or "") if trust is not None else ""
+
+
+def _view_decision(
+    config: "Config",
+    actor_id: str,
+    auth_context: "AuthContext",
+    key: str,
+    operation: str,
+    *,
+    snapshot: GrantSnapshot | None = None,
+) -> Decision:
+    """The shared access decision for a view's accessor (3.16): an OAuth2/MCP
+    client is never sent to the access table, a peer is when its grant does
+    not mention properties."""
+    return decide(
+        config,
+        actor_id,
+        auth_context.permission_id,
+        PermissionType.PROPERTIES,
+        key,
+        operation,
+        # Resolved here (a patch on this module applies, as for the handlers).
+        evaluator=get_permission_evaluator(config),
+        snapshot=snapshot,
+        is_client=auth_context.is_client or None,
+    )
 
 
 class AuthContext:
@@ -128,19 +162,13 @@ class AuthenticatedPropertyStore:
             return
 
         try:
-            evaluator = get_permission_evaluator(self._config)
-            result = evaluator.evaluate_property_access(
-                self._actor_id,
-                self._auth_context.permission_id,
-                key,
-                operation,
+            self._last_decision = _view_decision(
+                self._config, self._actor_id, self._auth_context, key, operation
             )
-
-            if result == PermissionResult.DENIED:
+            if not self._last_decision.allowed:
                 raise PermissionError(
                     f"Access denied: {operation} on '{key}' for {self._auth_context.accessor_id}"
                 )
-            # ALLOWED or NOT_FOUND (fallback to legacy) - proceed
         except PermissionError:
             raise
         except DbError:
@@ -155,19 +183,50 @@ class AuthenticatedPropertyStore:
                 f"Permission system error: unable to verify {operation} access to '{key}'"
             ) from e
 
+    def _readable(self, key: str, value: Any) -> Any:
+        """``value`` without the parts the accessor's grant excludes (3.16)."""
+        decision = getattr(self, "_last_decision", None)
+        if not self._auth_context.accessor_id or decision is None:
+            return value
+        if decision.snapshot is None:
+            return value
+        return drop_excluded(
+            decision.snapshot.rules(PermissionType.PROPERTIES), key, value
+        )
+
     def __getitem__(self, key: str) -> Any:
         """Get property value with permission check."""
         self._check_permission(key, "read")
-        return self._store[key]
+        return self._readable(key, self._store[key])
+
+    def _refuse_excluded_parts(self, key: str, value: Any) -> None:
+        """A write or delete that would touch a part the accessor's grant
+        excludes (the stored value or the new one holds it) is refused, as
+        over REST; an ``admin`` peer is not (3.16)."""
+        decision = getattr(self, "_last_decision", None)
+        if not self._auth_context.accessor_id or decision is None:
+            return
+        grant = decision.snapshot
+        if grant is None or grant.relationship.lower() == "admin":
+            return
+        rules = grant.rules(PermissionType.PROPERTIES)
+        values = [v for v in (self._store.get(key, None), value) if isinstance(v, dict)]
+        if values and holds_excluded(rules, key, *values):
+            raise PermissionError(
+                f"Access denied: a part of '{key}' is excluded for "
+                f"{self._auth_context.accessor_id}"
+            )
 
     def __setitem__(self, key: str, value: Any) -> None:
         """Set property value with permission check."""
         self._check_permission(key, "write")
+        self._refuse_excluded_parts(key, value)
         self._store[key] = value
 
     def __delitem__(self, key: str) -> None:
         """Delete property with permission check."""
         self._check_permission(key, "delete")
+        self._refuse_excluded_parts(key, None)
         del self._store[key]
 
     def __contains__(self, key: str) -> bool:
@@ -192,7 +251,7 @@ class AuthenticatedPropertyStore:
         """Get property value with permission check."""
         try:
             self._check_permission(key, "read")
-            return self._store.get(key, default)
+            return self._readable(key, self._store.get(key, default))
         except PermissionError:
             return default
 
@@ -468,17 +527,12 @@ class AuthenticatedPropertyListStore:
             return
 
         try:
-            evaluator = get_permission_evaluator(self._config)
-            # List properties use the same permission system as regular properties
+            # List properties use the same decision as regular properties
             # No "list:" prefix - that's an internal storage detail only
-            result = evaluator.evaluate_property_access(
-                self._actor_id,
-                self._auth_context.permission_id,
-                list_name,
-                operation,
+            decision = _view_decision(
+                self._config, self._actor_id, self._auth_context, list_name, operation
             )
-
-            if result == PermissionResult.DENIED:
+            if not decision.allowed:
                 raise PermissionError(
                     f"Access denied: {operation} on list '{list_name}' for {self._auth_context.accessor_id}"
                 )
@@ -559,6 +613,39 @@ class AuthenticatedPropertyListStore:
                 list(names),
                 "read",
             )
+            # A name the grant's rule does not decide (the grant does not
+            # mention properties) is the access table's for a peer and
+            # refused for a client (3.16), as a direct read decides it.
+            undecided = [
+                n for n in names if results.get(n) == PermissionResult.NOT_FOUND
+            ]
+            by_table: set[str] = set()
+            if undecided:
+                snapshot = grant_snapshot(
+                    self._config,
+                    self._actor_id,
+                    self._auth_context.permission_id,
+                    evaluator=evaluator,
+                )
+                if snapshot is None:
+                    raise RuntimeError("grant unavailable")
+                by_table = {
+                    n
+                    for n in undecided
+                    if _view_decision(
+                        self._config,
+                        self._actor_id,
+                        self._auth_context,
+                        n,
+                        "read",
+                        snapshot=snapshot,
+                    ).allowed
+                }
+            permitted = [
+                n
+                for n in names
+                if results.get(n) == PermissionResult.ALLOWED or n in by_table
+            ]
         except DbError:
             raise
         except Exception as e:
@@ -570,12 +657,7 @@ class AuthenticatedPropertyListStore:
             )
             return None
 
-        return [
-            name
-            for name in names
-            if results.get(name, PermissionResult.DENIED)
-            in (PermissionResult.ALLOWED, PermissionResult.NOT_FOUND)
-        ]
+        return permitted
 
     def list_all(self) -> list[str]:
         """Every list name this accessor may read.
@@ -681,17 +763,31 @@ class AuthenticatedSubscriptionManager:
             return
 
         try:
-            evaluator = get_permission_evaluator(self._config)
-            # Use property read permission as proxy for subscription permission
-            property_path = f"{target}/{subtarget}" if subtarget else target
-            result = evaluator.evaluate_property_access(
-                self._actor_id,
-                self._auth_context.permission_id,
-                property_path,
-                "read",
-            )
+            if target == "properties":
+                # A properties subscription is read access to the subtarget
+                # (3.16; it was evaluated as "properties/<subtarget>").
+                denied = not _view_decision(
+                    self._config,
+                    self._actor_id,
+                    self._auth_context,
+                    subtarget,
+                    "read",
+                ).allowed
+            else:
+                evaluator = get_permission_evaluator(self._config)
+                # Use property read permission as proxy for subscription permission
+                property_path = f"{target}/{subtarget}" if subtarget else target
+                denied = (
+                    evaluator.evaluate_property_access(
+                        self._actor_id,
+                        self._auth_context.permission_id,
+                        property_path,
+                        "read",
+                    )
+                    == PermissionResult.DENIED
+                )
 
-            if result == PermissionResult.DENIED:
+            if denied:
                 raise PermissionError(
                     f"Subscription denied: {self._auth_context.accessor_id} to {target}"
                 )

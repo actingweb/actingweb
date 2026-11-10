@@ -448,6 +448,17 @@ def _add_recording_hooks(aw_app: ActingWebApp) -> None:
         record_event("property_hook", actor=actor.id, operation=operation, path=path)
         return value
 
+    @aw_app.property_hook("*")
+    def wire_any_property(actor, operation, value, path):
+        """Passes every value through; collects its arguments while a test
+        asks (``_wire.property_hook_paths``), as a consumer's wildcard guard
+        reads them."""
+        from ._wire import PROPERTY_HOOK_PATHS
+
+        if PROPERTY_HOOK_PATHS["on"]:
+            PROPERTY_HOOK_PATHS["seen"].append((operation, list(path)))
+        return value
+
     @aw_app.method_hook("wire_ping")
     def wire_ping_method(actor, method_name, data):
         record_event("method", actor=actor.id, name=method_name)

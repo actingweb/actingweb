@@ -79,7 +79,11 @@ JSON with actor information:
         "trustee_root": "optional-trustee-root"
     }
 
-If not authenticated, API clients receive a 401 or 403 error response.
+If not authenticated, API clients receive a 401 or 403 error response. A
+peer refused by its grant on a property route gets 403 with ``{"error":
+"forbidden"}`` (``{"error": "not_approved"}`` for a trust not yet approved);
+a refused bulk ``POST /properties`` also lists the names it refused
+(``"refused"``) and applies none of them. ``POST /properties/<name>`` is 400.
 
 Browser Redirect Behavior
 -------------------------

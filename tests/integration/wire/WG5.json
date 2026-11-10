@@ -161,8 +161,10 @@
     }
    },
    "result": {
-    "body": "blue",
-    "status": 200
+    "body": {
+     "error": "forbidden"
+    },
+    "status": 403
    },
    "step": "GET color",
    "wire": [
@@ -177,8 +179,10 @@
      "path": "/<A>/properties/color",
      "query": "",
      "request": null,
-     "response": "blue",
-     "status": 200
+     "response": {
+      "error": "forbidden"
+     },
+     "status": 403
     }
    ]
   },
@@ -344,24 +348,9 @@
    },
    "result": {
     "body": {
-     "color": "blue",
-     "memory_personal": {
-      "_list": true,
-      "count": 1
-     },
      "notes": {
       "_list": true,
       "count": 1
-     },
-     "private": {
-      "k": 1
-     },
-     "settings": {
-      "deep": {
-       "private": "d"
-      },
-      "private": "s",
-      "theme": "x"
      }
     },
     "status": 200
@@ -380,24 +369,9 @@
      "query": "",
      "request": null,
      "response": {
-      "color": "blue",
-      "memory_personal": {
-       "_list": true,
-       "count": 1
-      },
       "notes": {
        "_list": true,
        "count": 1
-      },
-      "private": {
-       "k": 1
-      },
-      "settings": {
-       "deep": {
-        "private": "d"
-       },
-       "private": "s",
-       "theme": "x"
       }
      },
      "status": 200

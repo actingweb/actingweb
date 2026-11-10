@@ -5,20 +5,21 @@ from unittest.mock import Mock, patch
 
 from actingweb.actor import Actor
 from actingweb.permission_evaluator import PermissionResult
+from tests._grant_fakes import StubEvaluator
 
 
-def _bulk(decide):
-    """``evaluate_bulk_property_access`` from a per-path decision: the
-    filter evaluates a diff in one call (3.16)."""
+def _per_path(decide):
+    """``evaluate_property_access`` from a per-path decision (the stub
+    evaluator routes the filter's rule checks to it, 3.16)."""
 
-    def bulk(actor_id, peer_id, property_paths, operation):
-        return {path: decide(path) for path in property_paths}
+    def one(actor_id, peer_id, property_path, operation):
+        return decide(property_path)
 
-    return bulk
+    return one
 
 
 class TestSubscriptionPermissionFiltering:
-    """Test suite for _filter_subscription_data_by_permissions method."""
+    """The subscription filter (``Actor.filter_subscription_blob``)."""
 
     def setup_method(self):
         """Set up test fixtures."""
@@ -40,11 +41,11 @@ class TestSubscriptionPermissionFiltering:
         )
 
         with patch("actingweb.actor.get_permission_evaluator") as mock_get_eval:
-            mock_evaluator = Mock()
+            mock_evaluator = StubEvaluator()
             mock_get_eval.return_value = mock_evaluator
 
             # data_public and data_work allowed, data_private denied
-            mock_evaluator.evaluate_bulk_property_access.side_effect = _bulk(
+            mock_evaluator.evaluate_property_access.side_effect = _per_path(
                 lambda path: (
                     PermissionResult.DENIED
                     if "private" in path
@@ -52,10 +53,10 @@ class TestSubscriptionPermissionFiltering:
                 )
             )
 
-            result = actor._filter_subscription_data_by_permissions(
-                peerid="peer-123",
-                blob=blob,
-                subtarget=None,
+            result = actor.filter_subscription_blob(
+                "peer-123",
+                {"target": "properties", "subtarget": ""},
+                blob,
             )
 
             assert result is not None
@@ -72,15 +73,16 @@ class TestSubscriptionPermissionFiltering:
         blob = json.dumps({"data_private": {"info": "private data"}})
 
         with patch("actingweb.actor.get_permission_evaluator") as mock_get_eval:
-            mock_evaluator = Mock()
+            mock_evaluator = StubEvaluator()
             mock_get_eval.return_value = mock_evaluator
-            mock_evaluator.evaluate_bulk_property_access.side_effect = _bulk(
+            mock_evaluator.evaluate_property_access.side_effect = _per_path(
                 lambda path: PermissionResult.DENIED
             )
 
-            result = actor._filter_subscription_data_by_permissions(
-                peerid="peer-123",
-                blob=blob,
+            result = actor.filter_subscription_blob(
+                "peer-123",
+                {"target": "properties", "subtarget": ""},
+                blob,
             )
 
             assert result is None
@@ -93,15 +95,14 @@ class TestSubscriptionPermissionFiltering:
         blob = json.dumps({"data_public": {"info": "some data"}})
 
         with patch("actingweb.actor.get_permission_evaluator") as mock_get_eval:
-            mock_evaluator = Mock()
+            mock_evaluator = StubEvaluator()
             mock_get_eval.return_value = mock_evaluator
-            mock_evaluator.evaluate_bulk_property_access.side_effect = Exception(
-                "DB error"
-            )
+            mock_evaluator.evaluate_property_access.side_effect = Exception("DB error")
 
-            result = actor._filter_subscription_data_by_permissions(
-                peerid="peer-123",
-                blob=blob,
+            result = actor.filter_subscription_blob(
+                "peer-123",
+                {"target": "properties", "subtarget": ""},
+                blob,
             )
 
             assert result is None
@@ -116,9 +117,10 @@ class TestSubscriptionPermissionFiltering:
         with patch("actingweb.actor.get_permission_evaluator") as mock_get_eval:
             mock_get_eval.return_value = None
 
-            result = actor._filter_subscription_data_by_permissions(
-                peerid="peer-123",
-                blob=blob,
+            result = actor.filter_subscription_blob(
+                "peer-123",
+                {"target": "properties", "subtarget": ""},
+                blob,
             )
 
             assert result is None
@@ -131,21 +133,23 @@ class TestSubscriptionPermissionFiltering:
         blob = json.dumps({"item1": {"data": "info"}})
 
         with patch("actingweb.actor.get_permission_evaluator") as mock_get_eval:
-            mock_evaluator = Mock()
+            mock_evaluator = StubEvaluator()
             mock_get_eval.return_value = mock_evaluator
-            mock_evaluator.evaluate_bulk_property_access.side_effect = _bulk(
+            mock_evaluator.evaluate_property_access.side_effect = _per_path(
                 lambda path: PermissionResult.ALLOWED
             )
 
-            actor._filter_subscription_data_by_permissions(
-                peerid="peer-123",
-                blob=blob,
-                subtarget="data_public",
+            result = actor.filter_subscription_blob(
+                "peer-123",
+                {"target": "properties", "subtarget": "data_public"},
+                blob,
             )
+            assert result == blob
 
-            # Verify the property path includes subtarget
-            mock_evaluator.evaluate_bulk_property_access.assert_called_once_with(
-                "test-actor-id", "peer-123", ["data_public/item1"], "read"
+            # A subtarget's diff is decided at the subtarget's path; its
+            # children are dropped only where the grant excludes them (3.16)
+            mock_evaluator.evaluate_property_access.assert_called_once_with(
+                "test-actor-id", "peer-123", "data_public", "read"
             )
 
     def test_filter_fails_closed_when_no_actor_id(self):
@@ -155,15 +159,17 @@ class TestSubscriptionPermissionFiltering:
 
         blob = json.dumps({"data_public": {"info": "some data"}})
 
-        result = actor._filter_subscription_data_by_permissions(
-            peerid="peer-123",
-            blob=blob,
+        result = actor.filter_subscription_blob(
+            "peer-123",
+            {"target": "properties", "subtarget": ""},
+            blob,
         )
 
         assert result is None
 
     def test_filter_handles_non_dict_data(self):
-        """Filter passes through non-dict data unchanged."""
+        """A whole-target diff that is not an object keyed by property is
+        not sent (fail closed: nothing in it can be decided per name)."""
         actor = Actor(config=self.mock_config)
         actor.id = "test-actor-id"
 
@@ -171,16 +177,16 @@ class TestSubscriptionPermissionFiltering:
         blob = json.dumps(["item1", "item2"])
 
         with patch("actingweb.actor.get_permission_evaluator") as mock_get_eval:
-            mock_evaluator = Mock()
+            mock_evaluator = StubEvaluator()
             mock_get_eval.return_value = mock_evaluator
 
-            result = actor._filter_subscription_data_by_permissions(
-                peerid="peer-123",
-                blob=blob,
+            result = actor.filter_subscription_blob(
+                "peer-123",
+                {"target": "properties", "subtarget": ""},
+                blob,
             )
 
-            # Should return the blob as-is
-            assert result == blob
+            assert result is None
 
     def test_filter_strips_list_prefix_for_property_lists(self):
         """Filter should strip 'list:' prefix from property list keys for permission checks.
@@ -203,12 +209,12 @@ class TestSubscriptionPermissionFiltering:
         )
 
         with patch("actingweb.actor.get_permission_evaluator") as mock_get_eval:
-            mock_evaluator = Mock()
+            mock_evaluator = StubEvaluator()
             mock_get_eval.return_value = mock_evaluator
 
             # Permission check should be called with 'memory_news', not
             # 'list:memory_news' (deny the prefixed name to make the test fail)
-            mock_evaluator.evaluate_bulk_property_access.side_effect = _bulk(
+            mock_evaluator.evaluate_property_access.side_effect = _per_path(
                 lambda path: (
                     PermissionResult.ALLOWED
                     if path == "memory_news"
@@ -216,10 +222,10 @@ class TestSubscriptionPermissionFiltering:
                 )
             )
 
-            result = actor._filter_subscription_data_by_permissions(
-                peerid="peer-123",
-                blob=blob,
-                subtarget=None,
+            result = actor.filter_subscription_blob(
+                "peer-123",
+                {"target": "properties", "subtarget": ""},
+                blob,
             )
 
             # Should succeed because 'list:' was stripped and 'memory_news' matched
@@ -229,10 +235,10 @@ class TestSubscriptionPermissionFiltering:
             assert "list:memory_news" in result_data
 
             # Verify permission was checked with stripped name
-            mock_evaluator.evaluate_bulk_property_access.assert_called_once_with(
+            mock_evaluator.evaluate_property_access.assert_called_once_with(
                 "test-actor-id",
                 "peer-123",
-                ["memory_news"],  # Not 'list:memory_news'
+                "memory_news",  # Not 'list:memory_news'
                 "read",
             )
 
@@ -261,9 +267,7 @@ class TestCallbackSubscriptionFiltering:
             }
 
             # Mock the filter method
-            with patch.object(
-                actor, "_filter_subscription_data_by_permissions"
-            ) as mock_filter:
+            with patch.object(actor, "filter_subscription_blob") as mock_filter:
                 mock_filter.return_value = None  # Simulate all data filtered out
 
                 # Mock requests.post to verify it's not called
@@ -300,9 +304,7 @@ class TestCallbackSubscriptionFiltering:
                 "secret": "secret123",
             }
 
-            with patch.object(
-                actor, "_filter_subscription_data_by_permissions"
-            ) as mock_filter:
+            with patch.object(actor, "filter_subscription_blob") as mock_filter:
                 with patch("actingweb.actor.requests.post") as mock_post:
                     mock_post.return_value = Mock(status_code=204)
 
@@ -340,9 +342,7 @@ class TestCallbackSubscriptionFiltering:
 
             filtered_data = '{"data_public": {"info": "public"}}'
 
-            with patch.object(
-                actor, "_filter_subscription_data_by_permissions"
-            ) as mock_filter:
+            with patch.object(actor, "filter_subscription_blob") as mock_filter:
                 mock_filter.return_value = filtered_data
 
                 with patch("actingweb.actor.requests.post") as mock_post:

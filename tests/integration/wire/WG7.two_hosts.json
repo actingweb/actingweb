@@ -88,12 +88,12 @@
      "F": {
       "callback_state": [
        {
-        "last_seq": 1,
+        "last_seq": 0,
         "pending_count": 0,
         "pending_sequences": [],
         "resync_pending": false,
         "subscriptionid": "<sub1>",
-        "version": 1
+        "version": 0
        }
       ],
       "peer_permissions": {
@@ -167,11 +167,7 @@
       },
       "replica": {
        "lists": {},
-       "scalars": {
-        "private": {
-         "k": 1
-        }
-       }
+       "scalars": {}
       },
       "subscriptions": [
        {
@@ -179,7 +175,7 @@
         "granularity": "high",
         "peerid": "<A>",
         "resource": "",
-        "sequence": 1,
+        "sequence": 0,
         "subscriptionid": "<sub1>",
         "subtarget": "",
         "target": "properties"
@@ -203,46 +199,7 @@
    "wire": [
     {
      "auth": "basic:<A.creator>",
-     "children": [
-      {
-       "auth": "bearer:trust:A-F",
-       "children": [
-        {
-         "actor": "<F>",
-         "data": {
-          "private": {
-           "k": 1
-          }
-         },
-         "event": "subscription_data",
-         "peer": "<A>",
-         "sequence": 1,
-         "target": "properties",
-         "type": "diff"
-        }
-       ],
-       "headers": {},
-       "host": "wire_peer_app",
-       "method": "POST",
-       "path": "/<F>/callbacks/subscriptions/<A>/<sub1>",
-       "query": "",
-       "request": {
-        "data": {
-         "private": {
-          "k": 1
-         }
-        },
-        "granularity": "high",
-        "id": "<A>",
-        "sequence": 1,
-        "subscriptionid": "<sub1>",
-        "target": "properties",
-        "timestamp": "<ts:space>"
-       },
-       "response": null,
-       "status": 204
-      }
-     ],
+     "children": [],
      "headers": {},
      "host": "wire_app",
      "method": "PUT",
@@ -350,12 +307,14 @@
      "F": {
       "callback_state": [
        {
-        "last_seq": 2,
-        "pending_count": 0,
-        "pending_sequences": [],
+        "last_seq": 0,
+        "pending_count": 1,
+        "pending_sequences": [
+         2
+        ],
         "resync_pending": false,
         "subscriptionid": "<sub1>",
-        "version": 2
+        "version": 0
        }
       ],
       "peer_permissions": {
@@ -429,18 +388,7 @@
       },
       "replica": {
        "lists": {},
-       "scalars": {
-        "private": {
-         "k": 1
-        },
-        "settings": {
-         "deep": {
-          "private": "d"
-         },
-         "private": "s",
-         "theme": "x"
-        }
-       }
+       "scalars": {}
       },
       "subscriptions": [
        {
@@ -448,7 +396,7 @@
         "granularity": "high",
         "peerid": "<A>",
         "resource": "",
-        "sequence": 2,
+        "sequence": 0,
         "subscriptionid": "<sub1>",
         "subtarget": "",
         "target": "properties"
@@ -475,25 +423,7 @@
      "children": [
       {
        "auth": "bearer:trust:A-F",
-       "children": [
-        {
-         "actor": "<F>",
-         "data": {
-          "settings": {
-           "deep": {
-            "private": "d"
-           },
-           "private": "s",
-           "theme": "x"
-          }
-         },
-         "event": "subscription_data",
-         "peer": "<A>",
-         "sequence": 2,
-         "target": "properties",
-         "type": "diff"
-        }
-       ],
+       "children": [],
        "headers": {},
        "host": "wire_peer_app",
        "method": "POST",
@@ -502,10 +432,6 @@
        "request": {
         "data": {
          "settings": {
-          "deep": {
-           "private": "d"
-          },
-          "private": "s",
           "theme": "x"
          }
         },
@@ -636,12 +562,14 @@
      "F": {
       "callback_state": [
        {
-        "last_seq": 3,
-        "pending_count": 0,
-        "pending_sequences": [],
+        "last_seq": 0,
+        "pending_count": 1,
+        "pending_sequences": [
+         2
+        ],
         "resync_pending": false,
         "subscriptionid": "<sub1>",
-        "version": 3
+        "version": 0
        }
       ],
       "peer_permissions": {
@@ -715,14 +643,7 @@
       },
       "replica": {
        "lists": {},
-       "scalars": {
-        "private": {
-         "k": 1
-        },
-        "settings": {
-         "private": "s2"
-        }
-       }
+       "scalars": {}
       },
       "subscriptions": [
        {
@@ -730,7 +651,7 @@
         "granularity": "high",
         "peerid": "<A>",
         "resource": "",
-        "sequence": 3,
+        "sequence": 0,
         "subscriptionid": "<sub1>",
         "subtarget": "",
         "target": "properties"
@@ -754,46 +675,7 @@
    "wire": [
     {
      "auth": "basic:<A.creator>",
-     "children": [
-      {
-       "auth": "bearer:trust:A-F",
-       "children": [
-        {
-         "actor": "<F>",
-         "data": {
-          "settings": {
-           "private": "s2"
-          }
-         },
-         "event": "subscription_data",
-         "peer": "<A>",
-         "sequence": 3,
-         "target": "properties",
-         "type": "diff"
-        }
-       ],
-       "headers": {},
-       "host": "wire_peer_app",
-       "method": "POST",
-       "path": "/<F>/callbacks/subscriptions/<A>/<sub1>",
-       "query": "",
-       "request": {
-        "data": {
-         "settings": {
-          "private": "s2"
-         }
-        },
-        "granularity": "high",
-        "id": "<A>",
-        "sequence": 3,
-        "subscriptionid": "<sub1>",
-        "target": "properties",
-        "timestamp": "<ts:space>"
-       },
-       "response": null,
-       "status": 204
-      }
-     ],
+     "children": [],
      "headers": {},
      "host": "wire_app",
      "method": "PUT",
@@ -866,7 +748,7 @@
          "timestamp": "<ts:stored>"
         },
         {
-         "data": "{\"settings\": {\"deep\": \"d2\"}}",
+         "data": "{\"settings\": {\"deep\": {\"private\": \"d2\"}}}",
          "sequence": 4,
          "timestamp": "<ts:stored>"
         }
@@ -909,12 +791,14 @@
      "F": {
       "callback_state": [
        {
-        "last_seq": 4,
-        "pending_count": 0,
-        "pending_sequences": [],
+        "last_seq": 0,
+        "pending_count": 1,
+        "pending_sequences": [
+         2
+        ],
         "resync_pending": false,
         "subscriptionid": "<sub1>",
-        "version": 4
+        "version": 0
        }
       ],
       "peer_permissions": {
@@ -988,14 +872,7 @@
       },
       "replica": {
        "lists": {},
-       "scalars": {
-        "private": {
-         "k": 1
-        },
-        "settings": {
-         "deep": "d2"
-        }
-       }
+       "scalars": {}
       },
       "subscriptions": [
        {
@@ -1003,7 +880,7 @@
         "granularity": "high",
         "peerid": "<A>",
         "resource": "",
-        "sequence": 4,
+        "sequence": 0,
         "subscriptionid": "<sub1>",
         "subtarget": "",
         "target": "properties"
@@ -1027,46 +904,7 @@
    "wire": [
     {
      "auth": "basic:<A.creator>",
-     "children": [
-      {
-       "auth": "bearer:trust:A-F",
-       "children": [
-        {
-         "actor": "<F>",
-         "data": {
-          "settings": {
-           "deep": "d2"
-          }
-         },
-         "event": "subscription_data",
-         "peer": "<A>",
-         "sequence": 4,
-         "target": "properties",
-         "type": "diff"
-        }
-       ],
-       "headers": {},
-       "host": "wire_peer_app",
-       "method": "POST",
-       "path": "/<F>/callbacks/subscriptions/<A>/<sub1>",
-       "query": "",
-       "request": {
-        "data": {
-         "settings": {
-          "deep": "d2"
-         }
-        },
-        "granularity": "high",
-        "id": "<A>",
-        "sequence": 4,
-        "subscriptionid": "<sub1>",
-        "target": "properties",
-        "timestamp": "<ts:space>"
-       },
-       "response": null,
-       "status": 204
-      }
-     ],
+     "children": [],
      "headers": {},
      "host": "wire_app",
      "method": "PUT",
@@ -1140,7 +978,7 @@
          "timestamp": "<ts:stored>"
         },
         {
-         "data": "{\"settings\": {\"deep\": \"d2\"}}",
+         "data": "{\"settings\": {\"deep\": {\"private\": \"d2\"}}}",
          "sequence": 4,
          "timestamp": "<ts:stored>"
         },
@@ -1188,12 +1026,15 @@
      "F": {
       "callback_state": [
        {
-        "last_seq": 5,
-        "pending_count": 0,
-        "pending_sequences": [],
+        "last_seq": 0,
+        "pending_count": 2,
+        "pending_sequences": [
+         2,
+         5
+        ],
         "resync_pending": false,
         "subscriptionid": "<sub1>",
-        "version": 5
+        "version": 0
        }
       ],
       "peer_permissions": {
@@ -1267,17 +1108,7 @@
       },
       "replica": {
        "lists": {},
-       "scalars": {
-        "color": {
-         "value": "green"
-        },
-        "private": {
-         "k": 1
-        },
-        "settings": {
-         "deep": "d2"
-        }
-       }
+       "scalars": {}
       },
       "subscriptions": [
        {
@@ -1285,7 +1116,7 @@
         "granularity": "high",
         "peerid": "<A>",
         "resource": "",
-        "sequence": 5,
+        "sequence": 0,
         "subscriptionid": "<sub1>",
         "subtarget": "",
         "target": "properties"
@@ -1312,19 +1143,7 @@
      "children": [
       {
        "auth": "bearer:trust:A-F",
-       "children": [
-        {
-         "actor": "<F>",
-         "data": {
-          "color": "green"
-         },
-         "event": "subscription_data",
-         "peer": "<A>",
-         "sequence": 5,
-         "target": "properties",
-         "type": "diff"
-        }
-       ],
+       "children": [],
        "headers": {},
        "host": "wire_peer_app",
        "method": "POST",
@@ -1418,7 +1237,7 @@
          "timestamp": "<ts:stored>"
         },
         {
-         "data": "{\"settings\": {\"deep\": \"d2\"}}",
+         "data": "{\"settings\": {\"deep\": {\"private\": \"d2\"}}}",
          "sequence": 4,
          "timestamp": "<ts:stored>"
         },
@@ -1466,12 +1285,15 @@
      "F": {
       "callback_state": [
        {
-        "last_seq": 5,
-        "pending_count": 0,
-        "pending_sequences": [],
+        "last_seq": 0,
+        "pending_count": 2,
+        "pending_sequences": [
+         2,
+         5
+        ],
         "resync_pending": false,
         "subscriptionid": "<sub1>",
-        "version": 5
+        "version": 0
        }
       ],
       "peer_permissions": {
@@ -1545,17 +1367,7 @@
       },
       "replica": {
        "lists": {},
-       "scalars": {
-        "color": {
-         "value": "green"
-        },
-        "private": {
-         "k": 1
-        },
-        "settings": {
-         "deep": "d2"
-        }
-       }
+       "scalars": {}
       },
       "subscriptions": [
        {
@@ -1563,7 +1375,7 @@
         "granularity": "high",
         "peerid": "<A>",
         "resource": "",
-        "sequence": 5,
+        "sequence": 0,
         "subscriptionid": "<sub1>",
         "subtarget": "",
         "target": "properties"
@@ -1586,21 +1398,13 @@
     "body": {
      "data": [
       {
-       "data": {
-        "private": {
-         "k": 1
-        }
-       },
+       "data": {},
        "sequence": 1,
        "timestamp": "<ts:iso-z>"
       },
       {
        "data": {
         "settings": {
-         "deep": {
-          "private": "d"
-         },
-         "private": "s",
          "theme": "x"
         }
        },
@@ -1608,20 +1412,12 @@
        "timestamp": "<ts:iso-z>"
       },
       {
-       "data": {
-        "settings": {
-         "private": "s2"
-        }
-       },
+       "data": {},
        "sequence": 3,
        "timestamp": "<ts:iso-z>"
       },
       {
-       "data": {
-        "settings": {
-         "deep": "d2"
-        }
-       },
+       "data": {},
        "sequence": 4,
        "timestamp": "<ts:iso-z>"
       },
@@ -1659,21 +1455,13 @@
      "response": {
       "data": [
        {
-        "data": {
-         "private": {
-          "k": 1
-         }
-        },
+        "data": {},
         "sequence": 1,
         "timestamp": "<ts:iso-z>"
        },
        {
         "data": {
          "settings": {
-          "deep": {
-           "private": "d"
-          },
-          "private": "s",
           "theme": "x"
          }
         },
@@ -1681,20 +1469,12 @@
         "timestamp": "<ts:iso-z>"
        },
        {
-        "data": {
-         "settings": {
-          "private": "s2"
-         }
-        },
+        "data": {},
         "sequence": 3,
         "timestamp": "<ts:iso-z>"
        },
        {
-        "data": {
-         "settings": {
-          "deep": "d2"
-         }
-        },
+        "data": {},
         "sequence": 4,
         "timestamp": "<ts:iso-z>"
        },

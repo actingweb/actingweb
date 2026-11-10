@@ -10,6 +10,20 @@ status: proposed
 
 ## Update Log
 
+- **2026-11-10, from `2026-11-10-grant-enforcement-per-route.md` Phase 1
+  (owner)**: the subscriber's replica replaces a property with what a
+  resource-level diff carries (`remote_storage.apply_callback_data` calls
+  `set_value` for the top-level key; it never merges), so a write to
+  `/properties/settings/theme` reaches a subscriber as
+  `{"settings": {"theme": ...}}` and its copy of `settings` loses every
+  other key until the next whole write or resync. Existing behaviour
+  (recorded by the grant plan's `WG7` before and after its Phase 1); the
+  3.16 migration guide states it as a known limit. This plan rewrites the
+  replica store, so it takes the fix: merge a resource-level diff into the
+  stored property at its depth (a diff carries the subtarget and resource),
+  with tests for two- and three-segment writes and deletes, and a re-record
+  of the rows that show it.
+
 - **2026-11-10, from `2026-11-10-grant-enforcement-per-route.md` (owner)**:
   this plan's Phase 4 takes over audit item A8, the receiver's opt-in
   cleanup after a revocation (`auto_delete_on_revocation`), to be built on

@@ -444,9 +444,6 @@
        "query": "",
        "request": {
         "data": {
-         "deep": {
-          "private": "d2"
-         },
          "theme": "y"
         },
         "granularity": "high",
@@ -971,9 +968,6 @@
      "data": [
       {
        "data": {
-        "deep": {
-         "private": "d2"
-        },
         "theme": "y"
        },
        "sequence": 1,
@@ -1007,9 +1001,6 @@
       "data": [
        {
         "data": {
-         "deep": {
-          "private": "d2"
-         },
          "theme": "y"
         },
         "sequence": 1,

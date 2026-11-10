@@ -19,6 +19,7 @@ The evaluator supports checking permissions for:
 import functools
 import logging
 import re
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
@@ -153,6 +154,119 @@ class PermissionType(Enum):
     PROMPTS = "prompts"
 
 
+# Categories where an exclusion covers a path's descendants (a property or
+# resource tree), and where a rule the grant states but does not match denies
+# (3.16; methods and actions follow in a later phase of the same plan).
+TREE_CATEGORIES = frozenset({PermissionType.PROPERTIES, PermissionType.RESOURCES})
+
+
+def exclusion_patterns(rules: Any) -> list[str]:
+    """The patterns a rule excludes: its ``denied`` and ``excluded_patterns``."""
+    if not isinstance(rules, dict):
+        return []
+    out: list[str] = []
+    for key in ("denied", "excluded_patterns"):
+        value = rules.get(key)
+        if isinstance(value, list):
+            out.extend(str(p) for p in value)
+    return out
+
+
+def _excluded_by(patterns: list[str], node: str) -> bool:
+    """Whether ``node`` itself is excluded: a pattern matches it, or a pattern
+    ending in ``/*`` has a head (the pattern without those two characters)
+    that matches it -- ``private/*`` names the node ``private`` too."""
+    for pattern in patterns:
+        if glob_match(node, pattern):
+            return True
+        if pattern.endswith("/*") and glob_match(node, pattern[:-2]):
+            return True
+    return False
+
+
+def path_excluded(rules: Any, path: str) -> bool:
+    """Whether ``path`` or any ancestor of it is excluded by ``rules`` (3.16).
+
+    An exclusion covers its node and the node's descendants: with
+    ``settings/private`` excluded, ``settings/private/x`` is excluded too.
+    The one matcher (:func:`glob_match`, where ``*`` crosses ``/``) decides
+    each node.
+    """
+    patterns = exclusion_patterns(rules)
+    if not patterns or not path:
+        return False
+    parts = path.split("/")
+    return any(
+        _excluded_by(patterns, "/".join(parts[: i + 1])) for i in range(len(parts))
+    )
+
+
+def drop_excluded(rules: Any, path: str, value: Any) -> Any:
+    """``value`` (the value at ``path``) without its excluded descendants.
+
+    An object is walked at any depth; a key whose path (``<path>/<key>``) is
+    excluded is dropped with everything under it. Arrays are not descended
+    (a list's unit is its name), and anything that is not an object is
+    returned as it is. With no exclusion in ``rules`` the value is returned
+    untouched, without a walk.
+    """
+    patterns = exclusion_patterns(rules)
+    if not patterns:
+        return value
+    return _drop(patterns, path, value)
+
+
+def _drop(patterns: list[str], path: str, value: Any) -> Any:
+    if not isinstance(value, dict):
+        return value
+    kept: dict[str, Any] = {}
+    for key, child in value.items():
+        child_path = f"{path}/{key}" if path else str(key)
+        if _excluded_by(patterns, child_path):
+            continue
+        kept[key] = _drop(patterns, child_path, child)
+    return kept
+
+
+def holds_excluded(rules: Any, path: str, *values: Any) -> bool:
+    """Whether any of ``values`` (each the value at ``path``) holds an
+    excluded descendant. Decided on the data, so it is defined for every
+    pattern (``*/secret``, ``*private*``, ``mem*/x``)."""
+    return any(drop_excluded(rules, path, v) != v for v in values)
+
+
+@dataclass(frozen=True)
+class GrantSnapshot:
+    """What one peer is granted at one actor, read once (3.16).
+
+    ``has_row``/``approved``: the actor's trust row for the peer and its
+    approval. ``relationship``: the row's trust type. ``is_client``: the peer
+    is an OAuth2/MCP client. ``permissions``: the effective rules (the type's
+    base merged with the peer's override), ``None`` when the type is not in
+    the registry (such a peer's categories are all "not mentioned").
+    """
+
+    actor_id: str
+    peer_id: str
+    has_row: bool
+    approved: bool
+    relationship: str
+    is_client: bool
+    permissions: dict[str, Any] | None
+
+    def mentions(self, category: PermissionType) -> bool:
+        """Whether the grant states a rule for ``category`` (even an empty one)."""
+        return self.permissions is not None and category.value in self.permissions
+
+    def rules(self, category: PermissionType) -> Any:
+        return (self.permissions or {}).get(category.value)
+
+
+def _is_client_row(peer_id: str, row: Any) -> bool:
+    via = row.get("established_via") if isinstance(row, dict) else None
+    return peer_id.startswith("oauth2_client:") or via == "oauth2_client"
+
+
 class PermissionEvaluator:
     """
     Core permission evaluation engine.
@@ -213,15 +327,17 @@ class PermissionEvaluator:
                 return PermissionResult.NOT_FOUND
 
             # Get the permission rules for this type
-            permission_rules = effective_perms.get(permission_type.value)
-            if not permission_rules:
+            if permission_type.value not in effective_perms:
                 logger.debug(
                     f"No {permission_type.value} permissions defined for {actor_id}:{peer_id}"
                 )
                 return PermissionResult.NOT_FOUND
-
-            # Evaluate the permission rules
-            result = self._evaluate_rules(permission_rules, target, operation)
+            result = self.evaluate_rules_for(
+                permission_type,
+                effective_perms.get(permission_type.value),
+                target,
+                operation,
+            )
 
             # Only log denials for security monitoring. repr() so a
             # peer-controlled identifier cannot inject lines into the log.
@@ -316,18 +432,22 @@ class PermissionEvaluator:
                 return results
 
             # Get the permission rules
-            permission_rules = effective_perms.get(PermissionType.PROPERTIES.value)
-            if not permission_rules:
+            if PermissionType.PROPERTIES.value not in effective_perms:
                 logger.debug(
                     f"No properties permissions defined for {actor_id}:{peer_id}"
                 )
                 results.update(dict.fromkeys(clean_paths, PermissionResult.NOT_FOUND))
                 return results
+            permission_rules = effective_perms.get(PermissionType.PROPERTIES.value)
 
             # Evaluate each property (suppress individual logging for bulk operations)
             for property_path in clean_paths:
-                results[property_path] = self._evaluate_rules(
-                    permission_rules, property_path, operation, suppress_logging=True
+                results[property_path] = self.evaluate_rules_for(
+                    PermissionType.PROPERTIES,
+                    permission_rules,
+                    property_path,
+                    operation,
+                    suppress_logging=True,
                 )
 
             # Log summary instead of individual evaluations
@@ -536,58 +656,110 @@ class PermissionEvaluator:
             )
             return []
 
-    def evaluate_property_with_exclusions(
+    def evaluate_rules_for(
         self,
-        actor_id: str,
-        peer_id: str,
-        property_path: str,
-        child_paths: list[str],
-        operation: str = "read",
-    ) -> tuple[PermissionResult, set[str]]:
-        """``property_path`` evaluated as ``evaluate_property_access`` does,
-        and the ``child_paths`` the peer's grant explicitly excludes (a
-        ``denied`` or ``excluded_patterns`` entry matches them, or they hold
-        a control character), from one read of the approval and the grant
-        (3.16). A child the grant merely does not name is not excluded: it is
-        part of a property the peer may read whole. A storage fault raises
-        ``DbError``; any other error denies."""
-        try:
-            if has_control_characters(property_path) or self._is_unapproved(
-                actor_id, peer_id
-            ):
-                return PermissionResult.DENIED, set(child_paths)
-            effective_perms = self._get_effective_permissions(actor_id, peer_id)
-            rules = (effective_perms or {}).get(PermissionType.PROPERTIES.value)
-            if not rules:
-                return PermissionResult.NOT_FOUND, set()
+        permission_type: PermissionType,
+        rules: Any,
+        target: str,
+        operation: str,
+        *,
+        suppress_logging: bool = False,
+    ) -> PermissionResult:
+        """A stated rule (the category is in the grant, even empty) applied to
+        ``target`` (3.16).
+
+        For properties and resources an exclusion holds on the path and its
+        descendants (:func:`path_excluded`) ahead of every allow, and a rule
+        that does not match a named target denies (DENIED, not NOT_FOUND).
+        An empty target (a listing) stays NOT_FOUND: the caller decides per
+        name. Methods, actions, tools and prompts keep NOT_FOUND for a rule
+        that does not match.
+        """
+        tree = permission_type in TREE_CATEGORIES
+        if tree and target and path_excluded(rules, target):
+            if not suppress_logging:
+                logger.debug(f"Target {target!r} or an ancestor is excluded")
+            return PermissionResult.DENIED
+        if not rules:
+            result = PermissionResult.NOT_FOUND
+        elif isinstance(rules, dict):
             result = self._evaluate_rules(
-                rules, property_path, operation, suppress_logging=True
+                rules, target, operation, suppress_logging=suppress_logging
             )
-            if result == PermissionResult.DENIED:
-                # A trace of the refusal (debug: this runs for every
-                # subscriber on every write, where a denial is routine).
-                logger.debug(
-                    f"Permission denied: {actor_id}:{peer_id} -> "
-                    f"properties:{property_path!r}:{operation}"
-                )
-            denied = list(rules.get("denied") or []) + list(
-                rules.get("excluded_patterns") or []
+        else:
+            result = PermissionResult.NOT_FOUND
+        if tree and target and result == PermissionResult.NOT_FOUND:
+            return PermissionResult.DENIED
+        return result
+
+    def snapshot(self, actor_id: str, peer_id: str) -> GrantSnapshot:
+        """What ``peer_id`` is granted at ``actor_id``, from one trust-row
+        read and the (cached) override and registry lookups (3.16). A storage
+        fault raises ``DbError``."""
+        row: Any = None
+        if self.config and hasattr(self.config, "DbTrust"):
+            db_trust = get_trust(self.config)
+            if db_trust:
+                row = db_trust.get(actor_id=actor_id, peerid=peer_id)
+        if isinstance(row, dict):
+            relationship = str(row.get("relationship") or "")
+            approved = row.get("approved") is not False
+        elif row is not None:
+            relationship = str(getattr(row, "relationship", "") or "")
+            approved = getattr(row, "approved", None) is not False
+        else:
+            relationship, approved = "", False
+        has_row = bool(row)
+        permissions = (
+            self._get_effective_permissions(
+                actor_id, peer_id, relationship=relationship
             )
-            excluded = {
-                path
-                for path in child_paths
-                if has_control_characters(path)
-                or (denied and self._matches_any_pattern(path, denied))
-            }
-            return result, excluded
-        except DbError:
-            raise
-        except Exception as e:
-            logger.error(
-                f"Error evaluating {actor_id}:{peer_id} -> properties:"
-                f"{property_path!r}:{operation}: {e}"
+            if has_row
+            else None
+        )
+        return GrantSnapshot(
+            actor_id=actor_id,
+            peer_id=peer_id,
+            has_row=has_row,
+            approved=has_row and approved,
+            relationship=relationship,
+            is_client=_is_client_row(peer_id, row),
+            permissions=permissions,
+        )
+
+    def evaluate_snapshot(
+        self,
+        snapshot: GrantSnapshot,
+        permission_type: PermissionType,
+        target: str,
+        operation: str,
+        *,
+        suppress_logging: bool = True,
+    ) -> PermissionResult:
+        """``evaluate_permission`` on a snapshot: no read. An unapproved or
+        absent row and a control character are DENIED; a category the grant
+        does not mention is NOT_FOUND (the caller's access table decides)."""
+        if has_control_characters(target):
+            return PermissionResult.DENIED
+        if not snapshot.approved:
+            return PermissionResult.DENIED
+        if not snapshot.mentions(permission_type):
+            return PermissionResult.NOT_FOUND
+        result = self.evaluate_rules_for(
+            permission_type,
+            snapshot.rules(permission_type),
+            target,
+            operation,
+            suppress_logging=suppress_logging,
+        )
+        if result == PermissionResult.DENIED:
+            # Debug: a filter runs this per subscriber on every write, where
+            # a denial is routine.
+            logger.debug(
+                f"Permission denied: {snapshot.actor_id}:{snapshot.peer_id} -> "
+                f"{permission_type.value}:{target!r}:{operation}"
             )
-            return PermissionResult.DENIED, set(child_paths)
+        return result
 
     def _is_unapproved(self, actor_id: str, peer_id: str) -> bool:
         """Whether the peer has no trust row, or one this actor has not
@@ -619,12 +791,14 @@ class PermissionEvaluator:
         return False
 
     def _get_effective_permissions(
-        self, actor_id: str, peer_id: str
+        self, actor_id: str, peer_id: str, *, relationship: str | None = None
     ) -> dict[str, Any] | None:
         """
         Get the effective permissions for a trust relationship.
 
         This combines base trust type permissions with individual overrides.
+        ``relationship``: the trust row's type when the caller has read the
+        row already (no second read).
         """
         # First, determine the trust type for this relationship
         trust_type_name = None
@@ -633,6 +807,8 @@ class PermissionEvaluator:
         permission_override = self.permission_store.get_permissions(actor_id, peer_id)
         if permission_override:
             trust_type_name = permission_override.trust_type
+        elif relationship is not None:
+            trust_type_name = relationship or None
         else:
             # Look up trust relationship from database
             trust_type_name = self._lookup_trust_type_from_database(actor_id, peer_id)

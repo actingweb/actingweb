@@ -666,15 +666,135 @@ whole-target subscription) is decided per name, never as a whole.
 
 ### Verification
 
-- [ ] Run the contract's `### Checks` fast tier verbatim
-- [ ] Full tier on both backends before the commit; sequential re-run of
+- [x] Run the contract's `### Checks` fast tier verbatim
+- [x] Full tier on both backends before the commit; sequential re-run of
       any failure
 - [ ] `git show --stat HEAD -- tests/integration/wire`: `WG1` to `WG5`,
-      `WG7`, `WG8` changed, nothing else; `Wire-Phase` trailer
-- [ ] Sphinx build with `-W`
-- [ ] `/verify_implementation` for the phase, then codex on the diff
+      `WG7`, `WG8` changed (and `WG9`, owned by Phases 1 and 2), nothing
+      else; `Wire-Phase` trailer
+- [x] Sphinx build with `-W`
+- [x] codex on the diff (three findings: one fixed, one rejected with
+      reason, one is Phase 2's)
+- [ ] `/verify_implementation` for the phase
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+#### Phase 1 notes (2026-11-10)
+
+As built, and where it differs from the Changes above:
+
+- The access table's pure functions live in `actingweb/access_table.py`
+  (`matching_access_row`, `access_table_admits`), re-exported from
+  `actingweb.auth`; `Auth._match_access_row` delegates to them. A module of
+  its own because `auth` imports the actor and the actor's filter needs the
+  decision.
+- `actingweb/access_decision.py`: `decide`, `Decision`, `grant_snapshot`,
+  `forbidden_body`, and the hook sentinel `PERMISSION_DENIED` (there, not in
+  `interface/hooks.py`, so handlers import it without the interface).
+  `GrantSnapshot`, `snapshot()`, `evaluate_rules_for()` and
+  `evaluate_snapshot()` are on the evaluator; `path_excluded`,
+  `drop_excluded`, `holds_excluded` are module functions there.
+  `evaluate_permission` and the bulk evaluation keep their signatures and
+  apply the same rule (so `/mcp` and every other caller agree).
+- An empty path with a stated rule goes to the access table (as the old
+  NOT_FOUND did); the listing and the root DELETE decide per name.
+- The three `_check_property_permission` copies became one base class
+  (`_PropertyHandlerBase`); the evaluator is still resolved from
+  `actingweb.handlers.properties` (likewise in `interface/hooks.py` and
+  `interface/authenticated_views.py`), so existing patches apply. Tests
+  that mocked `evaluate_property_access` use `tests/_grant_fakes.py`
+  (`StubEvaluator`, which routes the decision's two calls to those mocks).
+- A hook's `PERMISSION_DENIED` is raised by `_run_hooks` and answered 403 by
+  a decorator on every verb of the three handlers.
+- **Depth-3 diff, smaller than planned:** the resource stays the second
+  segment and the blob is the resource's whole stored value, which is the
+  contract `register_diffs` already documents ("the blob is the FULL
+  resource object"). No new wire shape, so the subscriber side and Emm read
+  it as a two-segment write; the filter then drops the excluded child at
+  its true path (`test_subscription_grants_flow.py`). DELETE likewise sends
+  the remaining resource.
+- **Full-state fallback:** filtered where it is built, per peer, for
+  exclusions only (at the true paths; a list's state is not descended);
+  whether the peer may read it at all stays with the pull filter. The
+  first draft decided allow per key there and emptied the state for a peer
+  with no grant read (`test_property_list_spans.py` caught it).
+- **The subtarget filter** keeps the property's value whole under an
+  allowed subtarget and drops only excluded children (the first draft
+  required each child to be allowed; `test_peer_paths_binding.py:967`
+  pinned the intended behaviour).
+- **Bulk POST pre-pass:** control characters (400) first, then the `items`
+  shape (400) and that an `items` key names an existing list, then the
+  decision per name and the excluded-descendant check. The index bounds
+  and the item size (400/413) are still checked per key in the apply pass:
+  a batch whose second key fails them leaves the first applied (the
+  existing `DbError` contract's sibling; recorded as a limit, not fixed
+  here). A DbError mid-apply now registers the diffs of what was applied
+  before re-raising.
+- **`POST /properties/<name>`** is a real 400 now (the missing `return`):
+  `test_www_templates.py` and `test_subscription_baseline_storage.py` posted
+  to a named path and relied on the body being written anyway; both post to
+  the collection.
+- **The developer views' bulk list read** keeps its one bulk call; names it
+  leaves NOT_FOUND (category not mentioned) go to the table for a peer and
+  are refused for a client.
+- **A refused diff leaves a gap:** a diff the peer may read none of is not
+  pushed (the push's existing design, peer-authorisation plan); now that
+  `private` is refused, `WG7` shows F holding a sequence gap and applying no
+  later push until its resync. Documented in the migration guide.
+- Not added: a Flask run of the property flow (the handlers are framework
+  free and the integration app is FastAPI; the Flask integration's cookie
+  and template work is Phase 3's), and a separate wildcard-hook path pin
+  (no hook `path` changed; `WG9` records a hook's path).
+- Release shape: new public names (`access_decision`, `access_table`,
+  `PERMISSION_DENIED`), changed 403 bodies and a removed evaluator method:
+  minor (3.16.0, as planned).
+
+Review round (advisor, then codex `exec -s read-only` on the diff):
+
+- **Emptied objects in diffs** (advisor): the library's subscriber stores a
+  property as a diff carries it (`remote_storage.apply_callback_data`
+  replaces, never merges), so `{"settings": {}}` after a refused child
+  wiped its copy of `settings`. A diff now drops any object the filter
+  emptied, at any depth (`_prune_emptied`); `WG7`, `WG8` re-recorded.
+- **Developer views' writes** (advisor): `__setitem__`/`__delitem__` refuse a
+  write or delete that would touch an excluded part, as REST does
+  (`tests/test_grant_edges.py`).
+- **Bulk POST under a store fault**: a key is recorded as applied only
+  after its write, so the diffs registered before the 503 are exactly what
+  was written (test added; the first version recorded the faulting key).
+- **Wildcard hook path pin**: a `*` property hook on the wire app, recording
+  only inside `property_hook_paths()`, pins the `path` on GET, PUT, nested
+  PUT, `?index=` PUT, DELETE and nested DELETE
+  (`test_wire_grants.py::test_a_wildcard_hook_receives_the_path_it_always_has`).
+- codex 2 (fixed): the listing filtered values before the property hooks
+  and did not filter what a hook returned; it filters after, as the direct
+  read does.
+- codex 1 (not changed): a PUT hook returning an object with an excluded
+  sibling stores it. The hook is the application's code and receives the
+  merged stored object, excluded parts included; the peer's own body and
+  target are checked. Re-checking the hook's output would refuse every
+  nested PUT through a merging hook.
+- codex 3 (Phase 2, as planned): push and pull decide by the rule only, so a
+  grant that does not mention properties gets nothing pushed (A19, `WG9`).
+- The grep for the per-path API (`evaluate_property_access`,
+  `evaluate_bulk_property_access`, `NOT_FOUND`) leaves `shared_properties`
+  and the views' subscription check for non-properties targets (Phase 2)
+  and `permission_integration.py` (denies anything but ALLOWED).
+
+**For the owner (not changed here):**
+
+- The subscriber's replica replaces a property with what a resource-level
+  diff carries (two segments or three), losing the property's other keys
+  until the next whole write or resync. Existing (Phase 0's `WG7` shows it
+  for a two-segment write); the migration guide states it as a known
+  limit. Belongs with the replica work (attribute-list plan).
+- A refused diff is not pushed (existing design), so a subscriber holds a
+  sequence gap; recovery by gap timeout and resync was not observed in a
+  test here (`WG7` ends with F applying nothing within the row).
+
+Checks: fast tier (4904 unit), full tier DynamoDB 6302 passed and PostgreSQL
+6099 passed, docs clean; all wire rows
+compared on DynamoDB after re-recording WG1 to WG5, WG7, WG8, WG9.
 
 ---
 

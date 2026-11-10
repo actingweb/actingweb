@@ -36,6 +36,7 @@ from ._wire import (
     WireActor,
     WireHost,
     check,
+    property_hook_paths,
     trust_hooks_recorded,
 )
 
@@ -1018,3 +1019,35 @@ def test_wg19_trust_hooks(wire_pair):
             lambda: a.interface().trust.delete_relationship(h.id),
         )
     check("WG19", s.recording())
+
+
+def test_a_wildcard_hook_receives_the_path_it_always_has(wire_pair):
+    """Not a recording: what a ``*`` property hook receives as ``path`` on
+    each route, as before 3.16 (a consumer's guard reads the name from it;
+    the plan keeps it, so a later edit cannot "clean up" the doubled name
+    unnoticed)."""
+    s = _world(wire_pair, subscribe=False)
+    a = s.publisher
+    _seed(a)
+    props = f"{a.url}/properties"
+    secret = s.trust_secret
+    with property_hook_paths() as seen:
+        requests.get(f"{props}/settings/theme", headers=_bearer(secret))
+        requests.put(f"{props}/color", json="red", headers=_bearer(secret))
+        requests.put(f"{props}/settings/theme", json="z", headers=_bearer(secret))
+        requests.put(
+            f"{props}/notes/x",
+            params={"index": "0"},
+            json={"text": "n"},
+            headers=_bearer(secret),
+        )
+        requests.delete(f"{props}/color", auth=a.basic)
+        requests.delete(f"{props}/settings/theme", auth=a.basic)
+    assert seen == [
+        ("get", []),
+        ("put", []),
+        ("put", ["theme"]),
+        ("put", ["notes", "0"]),
+        ("delete", ["color"]),
+        ("delete", ["settings", "theme"]),
+    ]

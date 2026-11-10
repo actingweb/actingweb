@@ -266,6 +266,10 @@ Use the advanced format to exclude specific items:
        "excluded_patterns": ["notes/private/*"]  # Except private notes
    }
 
+An exclusion covers the whole subtree, including the node itself
+(``notes/private`` above), and a peer reading ``notes`` gets it without
+``private``. A name the rule does not cover is refused.
+
 How It Works
 ============
 

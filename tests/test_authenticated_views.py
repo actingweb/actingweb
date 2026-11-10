@@ -15,6 +15,7 @@ from actingweb.interface.authenticated_views import (
     _PermissionEnforcingListView,
 )
 from actingweb.permission_evaluator import PermissionResult
+from tests._grant_fakes import StubEvaluator
 
 
 class TestAuthContext:
@@ -186,7 +187,7 @@ class TestAuthenticatedPropertyStore:
         with patch(
             "actingweb.interface.authenticated_views.get_permission_evaluator"
         ) as mock_get_evaluator:
-            mock_evaluator = Mock()
+            mock_evaluator = StubEvaluator()
             mock_evaluator.evaluate_property_access = Mock(
                 return_value=PermissionResult.ALLOWED
             )
@@ -214,7 +215,7 @@ class TestAuthenticatedPropertyStore:
         with patch(
             "actingweb.interface.authenticated_views.get_permission_evaluator"
         ) as mock_get_evaluator:
-            mock_evaluator = Mock()
+            mock_evaluator = StubEvaluator()
             mock_evaluator.evaluate_property_access = Mock(
                 return_value=PermissionResult.ALLOWED
             )
@@ -242,7 +243,7 @@ class TestAuthenticatedPropertyStore:
         with patch(
             "actingweb.interface.authenticated_views.get_permission_evaluator"
         ) as mock_get_evaluator:
-            mock_evaluator = Mock()
+            mock_evaluator = StubEvaluator()
             mock_evaluator.evaluate_property_access = Mock(
                 return_value=PermissionResult.ALLOWED
             )
@@ -269,7 +270,7 @@ class TestAuthenticatedPropertyStore:
         with patch(
             "actingweb.interface.authenticated_views.get_permission_evaluator"
         ) as mock_get_evaluator:
-            mock_evaluator = Mock()
+            mock_evaluator = StubEvaluator()
             mock_evaluator.evaluate_property_access = Mock(
                 return_value=PermissionResult.DENIED
             )
@@ -294,7 +295,7 @@ class TestAuthenticatedPropertyStore:
         with patch(
             "actingweb.interface.authenticated_views.get_permission_evaluator"
         ) as mock_get_evaluator:
-            mock_evaluator = Mock()
+            mock_evaluator = StubEvaluator()
             mock_get_evaluator.return_value = mock_evaluator
 
             auth_store = AuthenticatedPropertyStore(
@@ -321,7 +322,7 @@ class TestAuthenticatedPropertyStore:
         with patch(
             "actingweb.interface.authenticated_views.get_permission_evaluator"
         ) as mock_get_evaluator:
-            mock_evaluator = Mock()
+            mock_evaluator = StubEvaluator()
 
             # Allow public_key and config, deny private_key
             def evaluate_side_effect(actor_id, accessor_id, key, operation):
@@ -350,7 +351,7 @@ def _list_store_evaluator(mock_get_evaluator, permission_by_op):
     """Configure the patched get_permission_evaluator() to resolve
     permission per-operation via `permission_by_op` (a dict or a callable
     op -> PermissionResult)."""
-    mock_evaluator = Mock()
+    mock_evaluator = StubEvaluator()
     if callable(permission_by_op):
         resolver = permission_by_op
     else:

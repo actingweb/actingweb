@@ -138,6 +138,12 @@ items, item 11 and item 18.
     trust is a re-pair that must carry the current secret. After every
     instance runs 3.16, run ``actingweb-peer-state report`` (then ``prune
     --apply``) and restart.
+19. **A peer's grant holds at every level of a property** (see
+    `Grants hold at every level`_). A peer reads a value without the parts its
+    grant excludes, at any depth; a write, delete or bulk ``POST /properties``
+    that would touch an excluded part is 403 with nothing applied; a rule a
+    grant states but that does not match a name denies it, whatever the
+    access table says. A refusal's body is ``{"error": "forbidden"}``.
 
 
 What changed and why
@@ -1433,6 +1439,80 @@ quiet period:
 then restart the application's processes (they keep permissions they cached
 until restarted). See :doc:`../guides/database-maintenance` ("Peer State
 Written Before 3.16").
+
+Grants hold at every level
+--------------------------
+
+A peer's grant is the answer for every level of a property and on every way
+in: a direct read, the listing, a write, a delete, a bulk ``POST``, the
+pushed and pulled subscription diffs, property hooks and the developer views
+(``actor.as_peer()``, ``actor.as_client()``) all ask one decision. Before
+3.16 an exclusion held only at the path it named: a peer granted ``*`` but
+not ``settings/private`` read and overwrote ``settings`` with its private
+child inside, and was pushed it.
+
+**Behavior change: exclusions cover the tree.**
+
+- An exclusion covers its node and everything under it, and a pattern ending
+  in ``/*`` also names the node before it: ``private/*`` refuses
+  ``private`` itself. Allow patterns keep their meaning (``public/*`` does not
+  grant ``public``).
+- A peer reads a value without its excluded descendants at any depth
+  (``GET /properties/<name>``, the listing, ``?metadata=true`` sizes, the
+  diffs). An object left empty reads as ``{}``. Arrays are not descended: a
+  list's unit is its name.
+- A peer that is not ``admin`` gets 403 for a ``PUT`` or ``DELETE`` whose
+  stored value or body holds an excluded descendant, and for ``DELETE
+  /properties`` unless it may delete every name stored.
+- A path under a list (``/properties/<list>/<x>``, ``?index=``) is decided by
+  the list's own grant as well.
+- The same rule applies to the ``resources`` category.
+
+**Behavior change: a bulk ``POST /properties`` is all or nothing.** Every
+name in the body (JSON, form arguments, or the ``property`` form) is
+validated and authorised before anything is applied. One refusal is 403 with
+``{"error": "forbidden", "refused": [<names>]}`` and nothing changed; a
+malformed ``items`` is 400 with nothing changed. Before 3.16 a refused name
+was skipped silently, and a refused bulk list update answered 403 after it
+was applied. ``POST /properties/<name>`` is 400 (it answered 400 and wrote
+the body anyway); post to the collection.
+
+**Behavior change: a rule that does not match denies.** When a peer's grant
+states a rule for properties or resources (the key is present, even empty),
+a name the rule does not cover is 403, absent from the listing and never
+pushed. Only a grant that does not mention the category leaves the name to
+the access table (``config.access``). An OAuth2/MCP client is never sent to
+the access table. Check trust types written in the ``allowed``/``denied``
+shape: a name they do not list was served through the table before. List
+every name such a type should read, or drop the category from the type to
+let the table decide.
+
+**Behavior change: refusals say little.** A permission refusal answers 403
+with ``{"error": "forbidden"}`` (``{"error": "not_approved"}`` for a trust
+this actor has not approved). It does not say that an exclusion caused it.
+
+**Property hooks.** A property hook runs only where the decision allows the
+operation. A denial is now ``actingweb.access_decision.PERMISSION_DENIED``
+from ``execute_property_hooks`` on every operation (a denied ``get`` used to
+hand back the value), which the handlers answer with 403; ``None`` keeps its
+meaning (a hook hiding a value or rejecting a write). An error in the check
+denies (it allowed). The ``path`` a hook receives is unchanged.
+
+**A write three levels down is diffed whole.** ``PUT`` or ``DELETE`` of
+``/properties/<name>/<a>/<b>`` registers the diff as resource ``<a>`` with
+the resource's whole stored value, as a two-segment write registers its
+body. It was the bare body at the second level (``{<name>: {<a>: <value>}}``),
+which put the value at the wrong depth. **Known limit, unchanged:** the
+library's subscriber stores a property as the diff carries it, so any
+resource-level diff (two segments or three) replaces its copy of
+``<name>`` with ``{<a>: ...}``; the other keys of ``<name>`` return with the
+next whole write or resync.
+
+**A diff the peer may read none of is not pushed** (unchanged), and an object
+the filter empties is dropped from a diff rather than sent as ``{}`` (which
+the subscriber would store over its copy). Now that more diffs are refused, a
+subscriber sees a sequence gap more often; the pull serves such a diff as
+``{}`` with its sequence.
 
 What stays the same
 ===================

@@ -30,6 +30,7 @@ from actingweb.interface.authenticated_views import (
     AuthenticatedPropertyListStore,
 )
 from actingweb.permission_evaluator import PermissionResult
+from tests._grant_fakes import StubEvaluator
 
 PATCH_TARGET = "actingweb.interface.authenticated_views.get_permission_evaluator"
 
@@ -97,7 +98,7 @@ def _evaluator(mock_get_evaluator, by_name, raise_on_call=False):
             for path in property_paths
         }
 
-    evaluator = Mock()
+    evaluator = StubEvaluator()
     evaluator.evaluate_bulk_property_access = Mock(side_effect=evaluate_bulk)
     mock_get_evaluator.return_value = evaluator
     return evaluator
@@ -211,16 +212,25 @@ class TestDeniedListsAreRemovedFromBothHalves:
         assert names == ["public"]
         assert not any("secret" in n for n in rows)
 
-    def test_not_found_is_treated_as_allowed(self):
-        """Matching ``_check_permission()``, which denies only on DENIED,
-        and ``handlers/properties.py``'s bulk filter."""
+    @pytest.mark.parametrize("admitted", [True, False])
+    def test_not_found_goes_to_the_access_table(self, admitted):
+        """A name the grant's rule does not decide is the access table's, as
+        a direct read decides it (3.16; it used to be listed regardless)."""
         store = FakeListStore({"unmatched": _v1_rows("unmatched", ["x"])})
-        with patch(PATCH_TARGET) as m:
-            _evaluator(m, {"unmatched": PermissionResult.NOT_FOUND})
+        with (
+            patch(PATCH_TARGET) as m,
+            patch(
+                "actingweb.access_decision.access_table_admits", return_value=admitted
+            ),
+        ):
+            evaluator = _evaluator(m, {"unmatched": PermissionResult.NOT_FOUND})
+            evaluator.evaluate_property_access = Mock(
+                return_value=PermissionResult.NOT_FOUND
+            )
             names, rows = _authed(store).list_all_with_rows()
 
-        assert names == ["unmatched"]
-        assert rows == _v1_rows("unmatched", ["x"])
+        assert names == (["unmatched"] if admitted else [])
+        assert rows == (_v1_rows("unmatched", ["x"]) if admitted else {})
 
     def test_bulk_filtering_agrees_with_n_individual_reads(self):
         names = ["a_allowed", "b_denied", "c_notfound"]
@@ -231,7 +241,10 @@ class TestDeniedListsAreRemovedFromBothHalves:
         }
         store = FakeListStore({n: _v1_rows(n, ["x"]) for n in names})
 
-        with patch(PATCH_TARGET) as m:
+        with (
+            patch(PATCH_TARGET) as m,
+            patch("actingweb.access_decision.access_table_admits", return_value=True),
+        ):
             evaluator = _evaluator(m, perms)
             evaluator.evaluate_property_access = Mock(
                 side_effect=lambda a, p, n, op: perms[n]

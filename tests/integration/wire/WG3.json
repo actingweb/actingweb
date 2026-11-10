@@ -161,7 +161,9 @@
     }
    },
    "result": {
-    "body": "",
+    "body": {
+     "error": "forbidden"
+    },
     "status": 403
    },
    "step": "GET the list",
@@ -169,13 +171,17 @@
     {
      "auth": "bearer:trust:A-F",
      "children": [],
-     "headers": {},
+     "headers": {
+      "content-type": "application/json"
+     },
      "host": "wire_app",
      "method": "GET",
      "path": "/<A>/properties/memory_personal",
      "query": "",
      "request": null,
-     "response": null,
+     "response": {
+      "error": "forbidden"
+     },
      "status": 403
     }
    ]
@@ -341,7 +347,9 @@
     }
    },
    "result": {
-    "body": "",
+    "body": {
+     "error": "forbidden"
+    },
     "status": 403
    },
    "step": "GET a tail",
@@ -349,13 +357,17 @@
     {
      "auth": "bearer:trust:A-F",
      "children": [],
-     "headers": {},
+     "headers": {
+      "content-type": "application/json"
+     },
      "host": "wire_app",
      "method": "GET",
      "path": "/<A>/properties/memory_personal/x",
      "query": "",
      "request": null,
-     "response": null,
+     "response": {
+      "error": "forbidden"
+     },
      "status": 403
     }
    ]
@@ -521,7 +533,9 @@
     }
    },
    "result": {
-    "body": "",
+    "body": {
+     "error": "forbidden"
+    },
     "status": 403
    },
    "step": "PUT a tail with ?index=0",
@@ -529,7 +543,9 @@
     {
      "auth": "bearer:trust:A-F",
      "children": [],
-     "headers": {},
+     "headers": {
+      "content-type": "application/json"
+     },
      "host": "wire_app",
      "method": "PUT",
      "path": "/<A>/properties/memory_personal/x",
@@ -537,7 +553,9 @@
      "request": {
       "text": "written by F"
      },
-     "response": null,
+     "response": {
+      "error": "forbidden"
+     },
      "status": 403
     }
    ]
@@ -703,7 +721,9 @@
     }
    },
    "result": {
-    "body": "",
+    "body": {
+     "error": "forbidden"
+    },
     "status": 403
    },
    "step": "E GET the list",
@@ -711,13 +731,17 @@
     {
      "auth": "bearer:trust:E-A",
      "children": [],
-     "headers": {},
+     "headers": {
+      "content-type": "application/json"
+     },
      "host": "wire_app",
      "method": "GET",
      "path": "/<A>/properties/memory_personal",
      "query": "",
      "request": null,
-     "response": null,
+     "response": {
+      "error": "forbidden"
+     },
      "status": 403
     }
    ]
@@ -883,12 +907,10 @@
     }
    },
    "result": {
-    "body": [
-     {
-      "text": "m1"
-     }
-    ],
-    "status": 200
+    "body": {
+     "error": "forbidden"
+    },
+    "status": 403
    },
    "step": "E GET a tail",
    "wire": [
@@ -903,12 +925,10 @@
      "path": "/<A>/properties/memory_personal/x",
      "query": "",
      "request": null,
-     "response": [
-      {
-       "text": "m1"
-      }
-     ],
-     "status": 200
+     "response": {
+      "error": "forbidden"
+     },
+     "status": 403
     }
    ]
   },
@@ -918,7 +938,7 @@
      "lists": {
       "memory_personal": [
        {
-        "text": "written by E"
+        "text": "m1"
        }
       ],
       "notes": [
@@ -1073,15 +1093,19 @@
     }
    },
    "result": {
-    "body": "",
-    "status": 204
+    "body": {
+     "error": "forbidden"
+    },
+    "status": 403
    },
    "step": "E PUT a tail with ?index=0",
    "wire": [
     {
      "auth": "bearer:trust:E-A",
      "children": [],
-     "headers": {},
+     "headers": {
+      "content-type": "application/json"
+     },
      "host": "wire_app",
      "method": "PUT",
      "path": "/<A>/properties/memory_personal/x",
@@ -1089,8 +1113,10 @@
      "request": {
       "text": "written by E"
      },
-     "response": null,
-     "status": 204
+     "response": {
+      "error": "forbidden"
+     },
+     "status": 403
     }
    ]
   }

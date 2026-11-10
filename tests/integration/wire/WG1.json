@@ -162,9 +162,9 @@
    },
    "result": {
     "body": {
-     "k": 1
+     "error": "forbidden"
     },
-    "status": 200
+    "status": 403
    },
    "step": "GET private",
    "wire": [
@@ -180,9 +180,9 @@
      "query": "",
      "request": null,
      "response": {
-      "k": 1
+      "error": "forbidden"
      },
-     "status": 200
+     "status": 403
     }
    ]
   },
@@ -203,7 +203,7 @@
      },
      "properties": {
       "color": "\"blue\"",
-      "private": "{\"k\": 2}",
+      "private": "{\"k\": 1}",
       "settings": "{\"theme\": \"x\", \"private\": \"s\", \"deep\": {\"private\": \"d\"}}"
      }
     },
@@ -347,15 +347,19 @@
     }
    },
    "result": {
-    "body": "",
-    "status": 204
+    "body": {
+     "error": "forbidden"
+    },
+    "status": 403
    },
    "step": "PUT private",
    "wire": [
     {
      "auth": "bearer:trust:A-F",
      "children": [],
-     "headers": {},
+     "headers": {
+      "content-type": "application/json"
+     },
      "host": "wire_app",
      "method": "PUT",
      "path": "/<A>/properties/private",
@@ -363,8 +367,10 @@
      "request": {
       "k": 2
      },
-     "response": null,
-     "status": 204
+     "response": {
+      "error": "forbidden"
+     },
+     "status": 403
     }
    ]
   },
@@ -385,7 +391,7 @@
      },
      "properties": {
       "color": "\"blue\"",
-      "private": "{\"k\": 2}",
+      "private": "{\"k\": 1}",
       "settings": "{\"theme\": \"x\", \"private\": \"s\", \"deep\": {\"private\": \"d\"}}"
      }
     },
@@ -535,14 +541,8 @@
       "_list": true,
       "count": 1
      },
-     "private": {
-      "k": 2
-     },
      "settings": {
-      "deep": {
-       "private": "d"
-      },
-      "private": "s",
+      "deep": {},
       "theme": "x"
      }
     },
@@ -567,14 +567,8 @@
        "_list": true,
        "count": 1
       },
-      "private": {
-       "k": 2
-      },
       "settings": {
-       "deep": {
-        "private": "d"
-       },
-       "private": "s",
+       "deep": {},
        "theme": "x"
       }
      },
@@ -599,7 +593,7 @@
      },
      "properties": {
       "color": "\"blue\"",
-      "private": "{\"k\": 2}",
+      "private": "{\"k\": 1}",
       "settings": "{\"theme\": \"x\", \"private\": \"s\", \"deep\": {\"private\": \"d\"}}"
      }
     },
@@ -755,10 +749,9 @@
      "simple": {
       "properties": [
        "color",
-       "private",
        "settings"
       ],
-      "total_bytes": 70
+      "total_bytes": 32
      }
     },
     "status": 200
@@ -788,10 +781,9 @@
       "simple": {
        "properties": [
         "color",
-        "private",
         "settings"
        ],
-       "total_bytes": 70
+       "total_bytes": 32
       }
      },
      "status": 200

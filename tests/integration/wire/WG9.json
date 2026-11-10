@@ -574,7 +574,9 @@
     }
    },
    "result": {
-    "body": "",
+    "body": {
+     "error": "forbidden"
+    },
     "status": 403
    },
    "step": "S GET wire_hooked",
@@ -582,13 +584,17 @@
     {
      "auth": "bearer:trust:S-A",
      "children": [],
-     "headers": {},
+     "headers": {
+      "content-type": "application/json"
+     },
      "host": "wire_app",
      "method": "GET",
      "path": "/<A>/properties/wire_hooked",
      "query": "",
      "request": null,
-     "response": null,
+     "response": {
+      "error": "forbidden"
+     },
      "status": 403
     }
    ]

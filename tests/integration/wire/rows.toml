@@ -550,37 +550,37 @@ reason = [
 [rows."WG1"]
 test = "test_wire_grants.py::test_wg1_parent_of_an_excluded_tree"
 owners = ["grant-enforcement-per-route:1"]
-exposure = true
-expected = "F (friend, private/* excluded) reads private whole (200) and overwrites it (PUT 204); the listing serves private with its value and ?metadata=true names it."
-reason = ["2026-11-10 first recording (grant-enforcement-per-route:0)"]
+exposure = false
+expected = "F: private 403 ({\"error\": \"forbidden\"}) on read and write; the listing omits private and serves settings without private and deep.private ({\"deep\": {}}); ?metadata=true names color and settings only."
+reason = ["2026-11-10 first recording (grant-enforcement-per-route:0)", "2026-11-10 exclusions hold at every level, the bulk POST is all or nothing, a stated rule that does not match denies, 403 bodies (grant-enforcement-per-route:1)"]
 
 [rows."WG2"]
 test = "test_wire_grants.py::test_wg2_excluded_child"
 owners = ["grant-enforcement-per-route:1"]
-exposure = true
-expected = "F reads settings with its excluded child private and grandchild deep.private inside (200); settings/private itself 403; PUT settings 204 replaces both excluded children."
-reason = ["2026-11-10 first recording (grant-enforcement-per-route:0)"]
+exposure = false
+expected = "F: settings served without private and deep.private; settings/private 403; PUT settings 403 (the stored value and the body hold excluded parts); A's settings unchanged."
+reason = ["2026-11-10 first recording (grant-enforcement-per-route:0)", "2026-11-10 exclusions hold at every level, the bulk POST is all or nothing, a stated rule that does not match denies, 403 bodies (grant-enforcement-per-route:1)"]
 
 [rows."WG3"]
 test = "test_wire_grants.py::test_wg3_excluded_list_tail"
 owners = ["grant-enforcement-per-route:1"]
-exposure = true
-expected = "F (memory_* excluded): the list, the tail /memory_personal/x and the PUT ?index=0 are 403 (the glob matches the tail). E (the list excluded by its exact name): the list 403, but the tail serves the whole list (200) and the PUT ?index=0 writes item 0 (204)."
-reason = ["2026-11-10 first recording (grant-enforcement-per-route:0)"]
+exposure = false
+expected = "F (memory_* excluded) and E (memory_personal excluded exactly): the list, the tail /memory_personal/x and the PUT ?index=0 are all 403; the list is unchanged."
+reason = ["2026-11-10 first recording (grant-enforcement-per-route:0)", "2026-11-10 exclusions hold at every level, the bulk POST is all or nothing, a stated rule that does not match denies, 403 bodies (grant-enforcement-per-route:1)"]
 
 [rows."WG4"]
 test = "test_wire_grants.py::test_wg4_bulk_post"
 owners = ["grant-enforcement-per-route:1"]
-exposure = true
-expected = "F's POST /properties: the denied key private/x skipped beside the applied allowed mood (201); bulk items for the excluded list answer 403 but are applied (memory_personal[0] is m1b); the list memory_new is created, then 403; a bare private object written (201)."
-reason = ["2026-11-10 first recording (grant-enforcement-per-route:0)"]
+exposure = false
+expected = "F's POST /properties: each request refused whole, 403 with the refused names (private/x; memory_personal; memory_new; private); nothing applied (no mood, memory_personal[0] still m1, no memory_new)."
+reason = ["2026-11-10 first recording (grant-enforcement-per-route:0)", "2026-11-10 exclusions hold at every level, the bulk POST is all or nothing, a stated rule that does not match denies, 403 bodies (grant-enforcement-per-route:1)"]
 
 [rows."WG5"]
 test = "test_wire_grants.py::test_wg5_allowed_shape_miss"
 owners = ["grant-enforcement-per-route:1"]
-exposure = true
-expected = "W (base rule {\"allowed\": [\"notes\"]}, the access table admits property GETs): color served (200); the listing serves every property, private and memory_personal included; its pull carries an empty diff."
-reason = ["2026-11-10 first recording (grant-enforcement-per-route:0)"]
+exposure = false
+expected = "W (base rule {\"allowed\": [\"notes\"]}): color 403 (a stated rule that does not match denies, whatever the access table says); the listing is notes only; its pull carries an empty diff."
+reason = ["2026-11-10 first recording (grant-enforcement-per-route:0)", "2026-11-10 exclusions hold at every level, the bulk POST is all or nothing, a stated rule that does not match denies, 403 bodies (grant-enforcement-per-route:1)"]
 
 [rows."WG6"]
 test = "test_wire_grants.py::test_wg6_flows_that_must_not_change"
@@ -593,24 +593,24 @@ reason = ["2026-11-10 first recording (grant-enforcement-per-route:0)"]
 test = "test_wire_grants.py::test_wg7_whole_target_push_and_pull"
 topologies = ["same_host", "two_hosts"]
 owners = ["grant-enforcement-per-route:1"]
-exposure = true
-expected = "F subscribed to all of A's properties: the push and the pull carry private, settings.private and settings.deep.private inside their parents; color sent. A stores the depth-3 PUT correctly, but its diff is {\"settings\": {\"deep\": \"d2\"}} (resource is the second segment only), so F's replica of settings becomes {\"deep\": \"d2\"}."
-reason = ["2026-11-10 first recording (grant-enforcement-per-route:0)"]
+exposure = false
+expected = "F subscribed to all of A's properties: nothing is pushed for private, settings/private or settings/deep/private (a diff the peer may read none of is not pushed, and an object the filter empties is dropped rather than sent as {}, which the subscriber would store over its copy); settings is pushed as {\"theme\": \"x\"}; color is pushed. F holds a sequence gap from the first refused diff and applies no later push until its resync (the push's existing design). The pull serves the refused diffs as {} with their sequence."
+reason = ["2026-11-10 first recording (grant-enforcement-per-route:0)", "2026-11-10 exclusions hold at every level, the bulk POST is all or nothing, a stated rule that does not match denies, 403 bodies (grant-enforcement-per-route:1)"]
 
 [rows."WG8"]
 test = "test_wire_grants.py::test_wg8_subtarget_push_and_pull"
 topologies = ["same_host", "two_hosts"]
 owners = ["grant-enforcement-per-route:1"]
-exposure = true
-expected = "F's subscriptions at A (made directly, so F holds no callback row and each push answers 403 at F): the A-side SDK append to memory_personal crosses no wire and the pull of memory_personal (resource item) holds one empty diff; the settings write pushes and queues deep.private with private dropped; the settings/private subscription's pull holds one empty diff."
-reason = ["2026-11-10 first recording (grant-enforcement-per-route:0)"]
+exposure = false
+expected = "F's subscriptions at A (made directly, so each push answers 403 at F): memory_personal (resource item) pulls one empty diff; settings pushes and pulls {\"theme\": \"y\"} (private and deep.private dropped, the emptied deep with them); settings with resource private pulls one empty diff."
+reason = ["2026-11-10 first recording (grant-enforcement-per-route:0)", "2026-11-10 exclusions hold at every level, the bulk POST is all or nothing, a stated rule that does not match denies, 403 bodies (grant-enforcement-per-route:1)"]
 
 [rows."WG9"]
 test = "test_wire_grants.py::test_wg9_category_not_mentioned"
 owners = ["grant-enforcement-per-route:1", "grant-enforcement-per-route:2"]
 exposure = true
-expected = "L (no trust type, access rows only) pulls a properties subscription: an empty diff. wire_hooked through its property hook: S (associate, rule does not match) 403; F and L 200."
-reason = ["2026-11-10 first recording (grant-enforcement-per-route:0)"]
+expected = "L (no trust type, access rows only) pulls a properties subscription: an empty diff (the push and pull filter decides by the rule only until Phase 2). wire_hooked: S 403 ({\"error\": \"forbidden\"}); F and L 200."
+reason = ["2026-11-10 first recording (grant-enforcement-per-route:0)", "2026-11-10 exclusions hold at every level, the bulk POST is all or nothing, a stated rule that does not match denies, 403 bodies (grant-enforcement-per-route:1)"]
 
 [rows."WG10"]
 test = "test_wire_grants.py::test_wg10_resources"

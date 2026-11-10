@@ -20,6 +20,14 @@ Signature: ``func(actor, operation: str, value: Any, path: List[str]) -> Optiona
 - ``path``: Subkeys for nested access (e.g., ``["settings", "theme"]``)
 - Return new value to allow/transform, or ``None`` to hide/deny
 - Matching: exact name first, then wildcard ``"*"`` handlers
+- A peer's hook runs only where its grant allows the operation (the same
+  decision as the route). On a denial ``execute_property_hooks`` returns
+  ``actingweb.access_decision.PERMISSION_DENIED`` for every operation and
+  the handlers answer 403; ``None`` keeps its meaning. An error in the check
+  denies. ``path`` is passed as it was before 3.16 (on some routes it starts
+  with the property name); a hook that reads a name from it keeps working.
+- In a bulk ``POST /properties`` every name is authorised before any hook
+  runs; a hook that rejects a later name does not undo earlier ones.
 
 Example:
 

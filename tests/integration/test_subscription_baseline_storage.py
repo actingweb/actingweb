@@ -68,8 +68,10 @@ def test_baseline_stores_simple_and_list_properties(
     ), f"Failed to set email: {response.text}"
 
     # Create a test list property
+    # Written to the collection: POST /properties/<name> is a 400 since
+    # 3.16 (it used to answer 400 and write the body anyway).
     response = requests.post(
-        f"{actor_b['url']}/properties/test_items",
+        f"{actor_b['url']}/properties",
         json={"value": "Item 1"},
         auth=(actor_b["creator"], actor_b["passphrase"]),
         timeout=5,
@@ -80,8 +82,10 @@ def test_baseline_stores_simple_and_list_properties(
         204,
     ), f"Failed to append Item 1 (status {response.status_code}): {response.text}"
 
+    # Written to the collection: POST /properties/<name> is a 400 since
+    # 3.16 (it used to answer 400 and write the body anyway).
     response = requests.post(
-        f"{actor_b['url']}/properties/test_items",
+        f"{actor_b['url']}/properties",
         json={"value": "Item 2"},
         auth=(actor_b["creator"], actor_b["passphrase"]),
         timeout=5,

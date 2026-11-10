@@ -388,6 +388,44 @@ The system defaults to denying access when:
 * Permission evaluation encounters an error
 * Trust relationship or trust type cannot be found
 
+Exclusions and the property tree
+--------------------------------
+
+An exclusion (an ``excluded_patterns`` or ``denied`` entry) covers the node
+it names and everything under it, for ``properties`` and ``resources``: with
+``settings/private`` excluded, ``settings/private/x`` is refused too. A
+pattern ending in ``/*`` also names the node before it: ``private/*`` refuses
+``private`` itself. Allow patterns keep their meaning (``public/*`` does not
+grant ``public``).
+
+A peer reads a value without its excluded descendants, at any depth: a read
+of ``settings`` serves the object without ``private``, as do the listing,
+``?metadata=true`` and every subscription diff. A peer that is not ``admin``
+is refused a write or delete whose stored value or body holds an excluded
+descendant, and ``DELETE /properties`` unless it may delete every name. A
+path under a list (``/properties/<list>/<x>``) is decided by the list's
+grant. A refusal answers 403 with ``{"error": "forbidden"}``; it does not
+say that an exclusion caused it.
+
+When no rule matches
+--------------------
+
+Every route asks one decision (``actingweb.access_decision.decide``):
+
+* the trust must exist and be approved (``{"error": "not_approved"}``);
+* when the peer's grant **mentions** the category (the key is present, even
+  empty), its rule answers: a name it does not cover is refused, whatever
+  the access table says;
+* when the grant does **not mention** the category, the access table
+  (``config.access``) answers for the peer's trust level, and denies by
+  default; an OAuth2/MCP client is never sent to the access table;
+* an evaluator that cannot be built, or raises, denies; a database fault
+  answers 503.
+
+Methods and actions keep the access table for a name their rule does not
+cover until a later 3.16 change; the listing (``GET /properties``) decides
+each name the same way.
+
 Precedence Rules
 ----------------
 

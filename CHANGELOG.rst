@@ -8,6 +8,37 @@ Unreleased
 SECURITY
 ~~~~~~~~
 
+- **A peer read, overwrote and was pushed property parts its grant
+  excluded.** An exclusion was checked only at the exact path a request
+  named: a peer granted ``*`` without ``settings/private`` read ``settings``
+  with its private child inside, overwrote it, received it in every
+  subscription diff, and reached an excluded list through
+  ``/properties/<list>/<x>``. A bulk ``POST /properties`` skipped a refused
+  name silently and applied a refused bulk list update before answering
+  403. **Behavior change:** an exclusion covers its node and every descendant
+  (``private/*`` also names ``private``); a peer reads a value without its
+  excluded parts at any depth (direct reads, the listing, pushed and pulled
+  diffs, the developer views); a non-admin peer's write or delete that would
+  touch an excluded part is 403; a path under a list is decided by the
+  list's grant; a bulk ``POST`` is validated and authorised whole and
+  refused whole. ``docs/migration/v3.16.rst`` ("Grants hold at every
+  level") has the details.
+- **A grant's rule that did not match a name let the access table serve
+  it.** A properties or resources rule in the ``allowed``/``denied`` shape,
+  or an empty one, answered "no rule" for a name it did not list, and the
+  handlers then asked the access table, which admits a whole category per
+  trust level: the type's rule was bypassed. **Behavior change:** a rule the
+  grant states decides every name; only a grant that does not mention the
+  category leaves a name to the access table, and never for an OAuth2/MCP
+  client. Property hooks and the developer views use the same decision; an
+  error in a hook's check denies (it allowed).
+- **A write three levels down reached subscribers past their grant.**
+  ``PUT /properties/a/b/c`` registered its diff as resource ``b`` holding the
+  bare value, so the filter checked ``a/b`` and an exclusion of ``a/b/c``
+  never applied (and the subscriber's copy of ``a.b`` was overwritten).
+  **Behavior change:** such a write or delete is diffed as resource ``b``
+  with its whole stored value, filtered at the true paths.
+
 - **Anyone who requested a trust was granted its relationship's
   permissions before the owner approved it.** ``POST
   /<actor>/trust/<relationship>`` is unauthenticated and stores a pending
@@ -728,6 +759,28 @@ REMOVED
 
 CHANGED
 ~~~~~~~
+
+- **A permission refusal answers ``{"error": "forbidden"}``.** **Behavior
+  change:** the 403 a peer gets from the property routes carries this body
+  (``{"error": "not_approved"}`` for a trust not yet approved); a refused
+  bulk ``POST /properties`` adds ``"refused"`` with the names it refused.
+  It never says that an exclusion caused the refusal.
+- **``POST /properties/<name>`` is 400.** **Behavior change:** it answered
+  400 and then wrote the body as if posted to ``/properties``; post to the
+  collection.
+- **``execute_property_hooks`` answers a permission denial with
+  ``PERMISSION_DENIED``.** **Behavior change:** a denied ``get`` used to
+  return the value unchanged; it now returns
+  ``actingweb.access_decision.PERMISSION_DENIED`` (falsy, distinct from
+  ``None``) for every operation, and the handlers answer 403. A caller that
+  runs property hooks itself with a peer in the context must check for it.
+- **The access table is a pure function.**
+  ``actingweb.access_table.access_table_admits`` and
+  ``matching_access_row`` (also importable from ``actingweb.auth``) answer
+  for a relationship without an ``Auth`` object;
+  ``actingweb.access_decision.decide`` is the one decision the routes ask.
+  ``PermissionEvaluator.evaluate_property_with_exclusions`` is removed
+  (``drop_excluded``, ``holds_excluded`` and ``path_excluded`` replace it).
 
 - **An access row authorises the method a request performs; a PUT or
   DELETE is no longer admitted by a GET row.** The subscription handler

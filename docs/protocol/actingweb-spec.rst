@@ -2296,6 +2296,9 @@ When evaluating permissions for a trust relationship, the system SHOULD:
 3. Evaluate patterns using glob matching with ``*`` (any characters) and ``?`` (single character); a backslash escapes ``*``, ``?`` and itself (``\*`` is a literal ``*``), and matching is case-sensitive without character classes
 4. Apply precedence: explicit deny > explicit allow > trust type defaults
 5. Default to deny if no matching rule is found
+6. Treat an exclusion (a deny) of a path as covering its descendants, and
+   remove excluded descendants from data returned for an ancestor of the path
+   (a read of the parent, a listing, a subscription diff)
 
 This approach provides standardized per-relationship permission management
 while maintaining backward compatibility with existing trust relationship

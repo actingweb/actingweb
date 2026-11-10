@@ -103,6 +103,11 @@ Properties Access
 -----------------
 
 The ``AuthenticatedPropertyStore`` wraps property access with permission checks:
+the same decision as the REST routes (``actingweb.access_decision.decide``).
+A name the accessor's grant does not cover is refused; a grant that does not
+mention properties leaves a peer to the access table and refuses a client. A
+value read through the view loses the parts the grant excludes, at any depth
+(see :doc:`../guides/access-control`, "Exclusions and the property tree").
 
 .. code-block:: python
 

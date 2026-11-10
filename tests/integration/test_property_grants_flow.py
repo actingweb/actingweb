@@ -9,6 +9,7 @@ validated and authorised whole before anything is applied.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import pytest
@@ -200,5 +201,56 @@ def test_post_with_a_name_is_400_and_changes_nothing(world: World) -> None:
     assert r.status_code == 400
     assert (
         requests.get(f"{world.a['url']}/properties/mood", auth=world.owner).status_code
+        == 404
+    )
+
+
+def test_a_peer_cannot_probe_for_a_list_it_may_not_write(world: World) -> None:
+    """Verification 2026-11-10: ``PUT ?index=`` answered 404 for a missing
+    list before the permission check, and the bulk pre-pass 400 "not a list
+    property": a peer told a list it may not write from one that is not
+    there. Both are 403 now, whether the list exists or not."""
+    grant = {**F_GRANT, "excluded_patterns": [*F_GRANT["excluded_patterns"], "ghost"]}
+    r = requests.put(
+        f"{world.a['url']}/trust/friend/{world.f['id']}/permissions",
+        json={"properties": grant},
+        auth=world.owner,
+    )
+    assert r.status_code in (200, 201, 204), r.text
+    for name in ("ghost", "memory_personal"):  # missing, existing
+        r = world.as_f("PUT", f"/{name}/x", params={"index": "0"}, json={"t": 1})
+        assert r.status_code == 403, name
+        r = world.as_f("POST", "", json={name: {"items": [{"index": 0, "text": "x"}]}})
+        assert r.status_code == 403, name
+    # The owner still learns that a list does not exist.
+    r = requests.put(
+        f"{world.a['url']}/properties/ghost/x",
+        params={"index": "0"},
+        json={"t": 1},
+        auth=world.owner,
+    )
+    assert r.status_code == 404
+
+
+@pytest.mark.parametrize("body", [[1, 2], "text", 3, None])
+def test_a_json_body_that_is_not_an_object_is_400(world: World, body: Any) -> None:
+    """Verification 2026-11-10: it was a 500 (the apply pass indexed it)."""
+    r = requests.post(
+        f"{world.a['url']}/properties",
+        data=json.dumps(body),
+        headers={"Content-Type": "application/json"},
+        auth=world.owner,
+    )
+    assert r.status_code == 400
+
+
+def test_an_admin_peer_deletes_a_parent_holding_an_excluded_part(world: World) -> None:
+    """Verification 2026-11-10 (Phase 1's list): the admin exemption on
+    DELETE, beside the PUT one."""
+    assert world.as_d("DELETE", "/settings").status_code in (200, 204)
+    assert (
+        requests.get(
+            f"{world.a['url']}/properties/settings", auth=world.owner
+        ).status_code
         == 404
     )

@@ -18,9 +18,11 @@ from actingweb.property_list import (
 from ..access_decision import (
     PERMISSION_DENIED,
     Decision,
+    _evaluator_unavailable,
     decide,
     forbidden_body,
 )
+from ..access_decision import peer_of as _peer_of
 from ..db.exceptions import DbError
 from ..identifiers import first_control_character
 from ..permission_evaluator import (
@@ -181,12 +183,6 @@ def _hook_denials_are_403(method: Callable[..., Any]) -> Callable[..., Any]:
     return wrapper
 
 
-def _peer_of(auth_obj: Any) -> str:
-    """The authenticated peer's id (``auth_obj.acl`` is a dict), or ""."""
-    acl = getattr(auth_obj, "acl", None)
-    return str(acl.get("peerid", "") or "") if isinstance(acl, dict) else ""
-
-
 def _decide_property(
     handler: Any, actor_id: str, auth_obj: Any, property_path: str, operation: str
 ) -> bool:
@@ -201,6 +197,10 @@ def _decide_property(
     """
     peer_id = _peer_of(auth_obj)
     handler._decision = None
+    if auth_obj is None:
+        # No authenticated caller at all: nothing to decide with (3.16; it
+        # raised AttributeError, a 500).
+        return False
     if not peer_id:
         legacy_subpath = property_path.split("/")[0] if property_path else ""
         method_map = {"read": "GET", "write": "PUT", "delete": "DELETE"}
@@ -216,7 +216,9 @@ def _decide_property(
     except DbError:
         raise
     except Exception as e:
-        logger.error(f"Permission evaluator unavailable for {actor_id}:{peer_id}: {e}")
+        _evaluator_unavailable(
+            f"Permission evaluator unavailable for {actor_id}:{peer_id}: {e}"
+        )
         handler._decision = Decision(False, "unavailable")
         return False
     decision = decide(
@@ -337,7 +339,7 @@ class _PropertyHandlerBase(base_handler.BaseHandler):
     _decision: Decision | None = None
 
     def _check_property_permission(
-        self, actor_id: str, auth_obj, property_path: str, operation: str
+        self, actor_id: str, auth_obj: Any, property_path: str, operation: str
     ) -> bool:
         """The shared access decision for a peer, the access table for a
         caller that is not one (see :func:`_decide_property`)."""
@@ -347,7 +349,11 @@ class _PropertyHandlerBase(base_handler.BaseHandler):
         _forbid(self, refused=refused)
 
     def _create_auth_context(
-        self, auth_obj, operation: str = "read", *, permission_path: str | None = None
+        self,
+        auth_obj: Any,
+        operation: str = "read",
+        *,
+        permission_path: str | None = None,
     ) -> dict[str, Any]:
         """Auth context for a property hook: the peer, and the request's
         decision so the hook's own check does not decide again (3.16)."""
@@ -965,19 +971,10 @@ class PropertiesHandler(_PropertyHandlerBase):
         # Note: request.get() may return None or "" when parameter is not present
         index_param = self.request.get("index")
         if index_param:
-            # This is a list item operation - handle it appropriately
-            if not (
-                myself
-                and hasattr(myself, "property_lists")
-                and myself.property_lists is not None
-                and myself.property_lists.exists(name)
-            ):
-                if self.response:
-                    self.response.set_status(404, f"List property '{name}' not found")
-                return
-
-            # Check write permission: the path, and the list it writes into
-            # (an item's grant is the list's, 3.16).
+            # This is a list item operation - handle it appropriately.
+            # Write permission first: the path, and the list it writes into
+            # (an item's grant is the list's), so a peer cannot tell a list
+            # it may not write from one that does not exist (3.16).
             property_path = "/".join(path) if path else ""
             if (
                 not check
@@ -987,6 +984,15 @@ class PropertiesHandler(_PropertyHandlerBase):
                 or not self._check_property_permission(actor_id, check, name, "write")
             ):
                 self._forbid()
+                return
+            if not (
+                myself
+                and hasattr(myself, "property_lists")
+                and myself.property_lists is not None
+                and myself.property_lists.exists(name)
+            ):
+                if self.response:
+                    self.response.set_status(404, f"List property '{name}' not found")
                 return
 
             # Parse the body
@@ -1381,23 +1387,30 @@ class PropertiesHandler(_PropertyHandlerBase):
         elif len(self.request.arguments()) > 0:
             if self._reject_control_characters(list(self.request.arguments())):
                 return
-            for name in self.request.arguments():
-                # Execute property post hook if available
-                val = self.request.get(name)
-                if self.hooks:
-                    actor_interface = self._get_actor_interface(myself)
-                    if actor_interface:
-                        auth_context = self._create_auth_context(check, "write")
-                        transformed = self._run_hooks(
-                            name, "post", actor_interface, val, [], auth_context
-                        )
-                        if transformed is not None:
-                            val = transformed
-                        else:
-                            continue
-                pair[name] = val
-                if myself and myself.property:
-                    myself.property[name] = val
+            try:
+                for name in self.request.arguments():
+                    # Execute property post hook if available
+                    val = self.request.get(name)
+                    if self.hooks:
+                        actor_interface = self._get_actor_interface(myself)
+                        if actor_interface:
+                            auth_context = self._create_auth_context(check, "write")
+                            transformed = self._run_hooks(
+                                name, "post", actor_interface, val, [], auth_context
+                            )
+                            if transformed is not None:
+                                val = transformed
+                            else:
+                                continue
+                    if myself and myself.property:
+                        myself.property[name] = val
+                    pair[name] = val
+            except DbError:
+                # As the JSON branch (3.16): the keys already written get
+                # their diffs before the 503.
+                if pair:
+                    myself.register_diffs(target="properties", blob=json.dumps(pair))
+                raise
         else:
             try:
                 body = self.request.body
@@ -1423,6 +1436,10 @@ class PropertiesHandler(_PropertyHandlerBase):
                     myself.register_diffs(target="properties", blob=json.dumps(pair))
                 raise
             if self.response and self.response.status_code not in (None, 200, 201):
+                # Stopped part way (a 400, 413 or a hook's 403): what was
+                # written before the stop still reaches the subscribers.
+                if pair:
+                    myself.register_diffs(target="properties", blob=json.dumps(pair))
                 return
         if not pair:
             if self.response:
@@ -1467,6 +1484,12 @@ class PropertiesHandler(_PropertyHandlerBase):
         part its grant excludes. One grant read serves every name."""
         entries = self._post_entries()
         if entries is None:
+            if self._json_body_is_not_an_object():
+                # Valid JSON that is not an object: a 400 here (the apply
+                # pass indexed it as one and answered 500, 3.16).
+                if self.response:
+                    self.response.set_status(400, "The JSON body must be an object")
+                return False
             return True
         # A control character in a name answers 400 for every caller, ahead
         # of any permission decision (its own refusal, as before).
@@ -1474,24 +1497,53 @@ class PropertiesHandler(_PropertyHandlerBase):
             return False
         for name, value in entries:
             problem = _items_problem(name, value)
-            if (
-                problem is None
-                and isinstance(value, dict)
-                and isinstance(value.get("items"), list)
-                and value["items"]
-            ):
-                if not (
-                    myself
-                    and getattr(myself, "property_lists", None) is not None
-                    and myself.property_lists.exists(name)
-                ):
-                    problem = f"Property '{name}' is not a list property"
             if problem:
                 if self.response:
                     self.response.set_status(400, problem)
                 return False
-        if not _peer_of(check):
-            return True
+        if _peer_of(check) and not self._post_is_authorised(
+            actor_id, check, myself, entries
+        ):
+            return False
+        # Whether an ``items`` write names a list reads storage: only after
+        # the names are authorised, so a peer learns nothing of a list it
+        # may not write (3.16).
+        for name, value in entries:
+            if (
+                isinstance(value, dict)
+                and isinstance(value.get("items"), list)
+                and value["items"]
+                and not (
+                    myself
+                    and getattr(myself, "property_lists", None) is not None
+                    and myself.property_lists.exists(name)
+                )
+            ):
+                if self.response:
+                    self.response.set_status(
+                        400, f"Property '{name}' is not a list property"
+                    )
+                return False
+        return True
+
+    def _json_body_is_not_an_object(self) -> bool:
+        body = self.request.body
+        if isinstance(body, bytes):
+            body = body.decode("utf-8", "ignore")
+        try:
+            parsed = json.loads(body or "{}")
+        except (TypeError, ValueError):
+            return False
+        return not isinstance(parsed, dict)
+
+    def _post_is_authorised(
+        self,
+        actor_id: str,
+        check: Any,
+        myself: Any,
+        entries: list[tuple[str, Any]],
+    ) -> bool:
+        """A peer's POST, authorised whole: 403 listing the refused names."""
         refused: list[str] = []
         for name, value in entries:
             if not self._check_property_permission(actor_id, check, name, "write"):
@@ -1557,18 +1609,9 @@ class PropertiesHandler(_PropertyHandlerBase):
 
             # Handle items array for bulk list updates
             elif isinstance(val, dict) and "items" in val:
-                # Validate items array structure
-                if not isinstance(val["items"], list):
-                    logger.error(
-                        f"Invalid 'items' field for property '{key}': expected list, got {type(val['items']).__name__}"
-                    )
-                    if self.response:
-                        self.response.set_status(
-                            400,
-                            f"Invalid 'items' field for property '{key}': expected list, got {type(val['items']).__name__}",
-                        )
-                    return
-
+                # The shape of ``items`` (a list of objects, each with a
+                # non-negative integer ``index``) was checked for the whole
+                # request before anything was applied (``_items_problem``).
                 if len(val["items"]) == 0:
                     logger.warning(
                         f"Empty 'items' array for property '{key}': no updates to perform"
@@ -1616,51 +1659,7 @@ class PropertiesHandler(_PropertyHandlerBase):
                             projected_length = snapshot_length
 
                             for i, item_spec in enumerate(val["items"]):
-                                if not isinstance(item_spec, dict):
-                                    logger.error(
-                                        f"Invalid item at position {i}: must be a dictionary, got {type(item_spec).__name__}"
-                                    )
-                                    if self.response:
-                                        self.response.set_status(
-                                            400,
-                                            f"Invalid item at position {i}: must be a dictionary, got {type(item_spec).__name__}",
-                                        )
-                                    return
-
-                                if "index" not in item_spec:
-                                    logger.error(
-                                        f"Missing 'index' field in item at position {i}: {item_spec}"
-                                    )
-                                    if self.response:
-                                        self.response.set_status(
-                                            400,
-                                            f"Missing 'index' field in item at position {i}",
-                                        )
-                                    return
-
                                 index = item_spec["index"]
-
-                                if not isinstance(index, int):
-                                    logger.error(
-                                        f"Invalid index type in item at position {i}: expected integer, got {type(index).__name__}"
-                                    )
-                                    if self.response:
-                                        self.response.set_status(
-                                            400,
-                                            f"Invalid index type in item at position {i}: expected integer, got {type(index).__name__}",
-                                        )
-                                    return
-
-                                if index < 0:
-                                    logger.error(
-                                        f"Invalid index value in item at position {i}: {index} (must be >= 0)"
-                                    )
-                                    if self.response:
-                                        self.response.set_status(
-                                            400,
-                                            f"Invalid index value in item at position {i}: {index} (must be >= 0)",
-                                        )
-                                    return
 
                                 if len(item_spec) == 1:  # Only "index" -- delete
                                     pending_deletes_v2.append(index)
@@ -1834,54 +1833,8 @@ class PropertiesHandler(_PropertyHandlerBase):
                         projected_length = len(list_prop)
 
                         for i, item_spec in enumerate(val["items"]):
-                            # Validate item structure
-                            if not isinstance(item_spec, dict):
-                                logger.error(
-                                    f"Invalid item at position {i}: must be a dictionary, got {type(item_spec).__name__}"
-                                )
-                                if self.response:
-                                    self.response.set_status(
-                                        400,
-                                        f"Invalid item at position {i}: must be a dictionary, got {type(item_spec).__name__}",
-                                    )
-                                return
-
-                            # Check for required "index" field
-                            if "index" not in item_spec:
-                                logger.error(
-                                    f"Missing 'index' field in item at position {i}: {item_spec}"
-                                )
-                                if self.response:
-                                    self.response.set_status(
-                                        400,
-                                        f"Missing 'index' field in item at position {i}",
-                                    )
-                                return
-
+                            # Shape checked for the whole request (``_items_problem``).
                             index = item_spec["index"]
-
-                            # Validate index type and value
-                            if not isinstance(index, int):
-                                logger.error(
-                                    f"Invalid index type in item at position {i}: expected integer, got {type(index).__name__}"
-                                )
-                                if self.response:
-                                    self.response.set_status(
-                                        400,
-                                        f"Invalid index type in item at position {i}: expected integer, got {type(index).__name__}",
-                                    )
-                                return
-
-                            if index < 0:
-                                logger.error(
-                                    f"Invalid index value in item at position {i}: {index} (must be >= 0)"
-                                )
-                                if self.response:
-                                    self.response.set_status(
-                                        400,
-                                        f"Invalid index value in item at position {i}: {index} (must be >= 0)",
-                                    )
-                                return
 
                             # Check if this is a deletion (empty item data)
                             if (

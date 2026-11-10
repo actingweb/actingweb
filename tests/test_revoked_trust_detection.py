@@ -1,6 +1,6 @@
 """Test revoked trust detection and cleanup during sync."""
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -80,8 +80,20 @@ async def test_sync_peer_detects_and_cleans_up_revoked_trust():
 
             # Verify trust deletion was called
             mock_actor.delete_reciprocal_trust_async.assert_called_once_with(
-                peerid="peer456", delete_peer=False
+                peerid="peer456", delete_peer=False, before_local_delete=ANY
             )
+            # The hook fires through the delete's callback (3.16), with the
+            # row the delete read and initiated_by_peer.
+            hooks = mock_actor.config._hooks  # what the manager's ActorInterface holds
+            callback = mock_actor.delete_reciprocal_trust_async.call_args.kwargs[
+                "before_local_delete"
+            ]
+            callback({"peerid": "peer456", "relationship": "friend"})
+            event, *_ = hooks.execute_lifecycle_hooks.call_args.args
+            assert event == "trust_deleted"
+            kwargs = hooks.execute_lifecycle_hooks.call_args.kwargs
+            assert kwargs["trust_data"]["peerid"] == "peer456"
+            assert kwargs["initiated_by_peer"] is True
             # Audit A9: our own trust row at the peer, not trust/<our id>.
             mock_proxy.get_resource_async.assert_called_once_with(
                 path="trust/friend/actor123"
@@ -228,8 +240,20 @@ def test_sync_peer_sync_detects_and_cleans_up_revoked_trust():
 
             # Verify trust deletion was called
             mock_actor.delete_reciprocal_trust.assert_called_once_with(
-                peerid="peer456", delete_peer=False
+                peerid="peer456", delete_peer=False, before_local_delete=ANY
             )
+            # The hook fires through the delete's callback (3.16), with the
+            # row the delete read and initiated_by_peer.
+            hooks = mock_actor.config._hooks  # what the manager's ActorInterface holds
+            callback = mock_actor.delete_reciprocal_trust.call_args.kwargs[
+                "before_local_delete"
+            ]
+            callback({"peerid": "peer456", "relationship": "friend"})
+            event, *_ = hooks.execute_lifecycle_hooks.call_args.args
+            assert event == "trust_deleted"
+            kwargs = hooks.execute_lifecycle_hooks.call_args.kwargs
+            assert kwargs["trust_data"]["peerid"] == "peer456"
+            assert kwargs["initiated_by_peer"] is True
 
             # Verify result
             assert not result.success

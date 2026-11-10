@@ -252,3 +252,73 @@ def test_a_client_row_is_recognised() -> None:
     with mock.patch("actingweb.permission_evaluator.get_trust", return_value=db_trust):
         grant = ev.snapshot("a1", "oauth2_client:x:y")
     assert grant.is_client
+
+
+# ---------------------------------------------------------------------------
+# Tests the verification of 2026-11-10 found missing (Phase 1)
+# ---------------------------------------------------------------------------
+
+
+def test_a_caller_with_no_auth_object_is_refused() -> None:
+    """It raised AttributeError (a 500) on ``None.check_authorisation``."""
+    from actingweb.handlers.properties import _decide_property
+
+    handler = mock.Mock()
+    assert _decide_property(handler, "a1", None, "color", "read") is False
+
+
+@pytest.mark.parametrize(("method_row", "allowed"), [("GET", True), ("PUT", False)])
+def test_a_property_hook_not_mentioned_follows_the_table(
+    method_row: str, allowed: bool
+) -> None:
+    """At the hook layer (no decision in the context): a grant that does not
+    mention properties leaves the hook to the access table."""
+    from actingweb.interface.hooks import HookRegistry
+    from actingweb.permission_evaluator import GrantSnapshot
+
+    ev = _evaluator()
+    ev.snapshot = lambda a, p, **kw: GrantSnapshot(  # type: ignore[method-assign]
+        actor_id=a,
+        peer_id=p,
+        has_row=True,
+        approved=True,
+        relationship="friend",
+        is_client=False,
+        permissions={"methods": {"allowed": ["x"]}},
+    )
+    config = _Config([("friend", "properties", method_row, "a")])
+    with mock.patch(
+        "actingweb.interface.hooks.get_permission_evaluator", return_value=ev
+    ):
+        out = HookRegistry()._check_property_hook_permission(
+            "color",
+            mock.Mock(id="a1"),
+            {"peer_id": "p1", "config": config, "operation": "get"},
+        )
+    assert out is allowed
+
+
+def test_a_hooks_denial_is_a_403_at_the_handler() -> None:
+    """``PERMISSION_DENIED`` from the property hooks reaches the peer as 403
+    (``_hook_denials_are_403``), not as 404 or a value."""
+    from actingweb.access_decision import PERMISSION_DENIED
+    from actingweb.aw_web_request import AWWebObj
+    from actingweb.handlers.properties import PropertiesHandler
+
+    handler = PropertiesHandler(AWWebObj(), mock.Mock())
+    handler.hooks = mock.Mock()
+    handler.hooks.execute_property_hooks.return_value = PERMISSION_DENIED
+    myself = mock.Mock()
+    myself.property = mock.MagicMock()
+    myself.property.__getitem__.return_value = '"blue"'
+    myself.property_lists.exists.return_value = False
+    auth = mock.Mock()
+    auth.acl = {"peerid": "p1"}
+    result = mock.Mock(success=True, actor=myself, auth_obj=auth)
+    with (
+        mock.patch.object(handler, "authenticate_actor", return_value=result),
+        mock.patch.object(handler, "_check_property_permission", return_value=True),
+        mock.patch.object(handler, "_get_actor_interface", return_value=mock.Mock()),
+    ):
+        handler.get("a1", "color")
+    assert handler.response.status_code == 403

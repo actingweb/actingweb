@@ -10,7 +10,7 @@ import logging
 import re
 import secrets
 from typing import TYPE_CHECKING, Any
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 from ..db.exceptions import DbError
 from ..oauth2 import create_oauth2_authenticator
@@ -26,6 +26,20 @@ logger = logging.getLogger(__name__)
 
 # RFC 7636 §4.2: a code_challenge is 43-128 unreserved characters.
 _PKCE_CHALLENGE_RE = re.compile(r"[A-Za-z0-9._~-]{43,128}")
+
+
+def _shown_host(redirect_uri: str) -> str:
+    """The host a confirmation page names as where the code goes (3.16):
+    host and port only. ``netloc`` carries userinfo, so
+    ``https://claude.ai@evil.test/cb`` read as claude.ai while the code went
+    to evil.test."""
+    parsed = urlparse(redirect_uri)
+    host = parsed.hostname or ""
+    try:
+        port = parsed.port
+    except ValueError:
+        port = None
+    return f"{host}:{port}" if host and port else host
 
 
 class ActingWebOAuth2Server:
@@ -272,10 +286,22 @@ class ActingWebOAuth2Server:
                 if not client_trust_type_acceptable(self.config, trust_type) or (
                     isinstance(per_client, list) and trust_type not in per_client
                 ):
-                    logger.warning(
-                        f"Authorization for client {client_id} asked for trust "
-                        f"type {trust_type!r}, which is not offered; declined"
-                    )
+                    if trust_type == "admin":
+                        # The one a pre-3.16 form preselected: say how to
+                        # offer it, if that is what the application wants.
+                        logger.error(
+                            f"Authorization for client {client_id} asked for "
+                            "trust type 'admin', which is not offered to "
+                            "clients; declined. To offer it, list it: "
+                            "AccessControlConfig(config).configure_oauth2_trust_types("
+                            "allowed_trust_types=[..., 'admin'])"
+                        )
+                    else:
+                        logger.warning(
+                            f"Authorization for client {client_id} asked for "
+                            f"trust type {trust_type!r}, which is not offered; "
+                            "declined"
+                        )
                     return self._error_response(
                         "access_denied", "The requested access level is not offered"
                     )
@@ -1024,11 +1050,15 @@ class ActingWebOAuth2Server:
             email=record.get("email"),
             confirmed=confirmed,
         )
-        return str(result) if result else None
+        decided = str(result) if result else None
+        # Whatever answered (the registry's dispatcher re-checks, a caller's
+        # own ``decide_trust`` may not): only an acceptable type (3.16).
+        if decided and not client_trust_type_acceptable(self.config, decided):
+            return None
+        return decided
 
     def _confirmation(self, token: str, record: dict[str, Any]) -> dict[str, Any]:
         """What the user confirms: the client, where it goes, the level."""
-        from urllib.parse import urlparse
 
         from ..trust_type_registry import get_registry
 
@@ -1039,7 +1069,7 @@ class ActingWebOAuth2Server:
             "token": token,
             "client_name": record.get("client_name") or "MCP Client",
             "client_id": record.get("client_id"),
-            "redirect_host": urlparse(str(record.get("redirect_uri") or "")).netloc,
+            "redirect_host": _shown_host(str(record.get("redirect_uri") or "")),
             "trust_type": trust_type,
             "trust_type_display_name": getattr(type_info, "display_name", trust_type),
             "trust_type_description": getattr(type_info, "description", ""),
@@ -1131,7 +1161,12 @@ class ActingWebOAuth2Server:
         # The level the page showed is the one granted: the hook may still
         # decline (or answer differently, which declines), never change it.
         effective = self._decided_type(actor_obj, record, decide_trust, True)
-        if effective != record.get("trust_type"):
+        per_client = client_data.get("allowed_trust_types")
+        if effective != record.get("trust_type") or (
+            isinstance(per_client, list) and effective not in per_client
+        ):
+            # The client's own list may have narrowed since the page was
+            # shown (3.16).
             return self._denied(redirect_uri, record.get("original_state"))
         return self._complete(actor_obj, record)
 

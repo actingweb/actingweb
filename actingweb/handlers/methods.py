@@ -12,7 +12,7 @@ from typing import Any
 from actingweb import auth
 from actingweb.handlers import base_handler
 
-from ..access_decision import listable_names, named_route_allows
+from ..access_decision import listable_names, named_route_allows, peer_of
 from ..db.exceptions import DbError
 from ..permission_evaluator import PermissionType, get_permission_evaluator
 
@@ -23,7 +23,7 @@ class MethodsHandler(base_handler.BaseHandler):
     """Handler for /<actor_id>/methods endpoint."""
 
     def _check_method_permission(
-        self, actor_id: str, auth_obj, method_name: str, method: str = "POST"
+        self, actor_id: str, auth_obj: Any, method_name: str, method: str = "POST"
     ) -> bool:
         """The shared access decision for a peer's ``/methods`` request
         with the request's ``method`` (3.16): a rule the grant states (even
@@ -61,10 +61,9 @@ class MethodsHandler(base_handler.BaseHandler):
             return entries
         return [e for e in entries if str(e.get("name", "")) in allowed]
 
-    def _create_auth_context(self, auth_obj) -> dict[str, Any]:
+    def _create_auth_context(self, auth_obj: Any) -> dict[str, Any]:
         """Create auth context for hook execution with peer information."""
-        # Note: auth_obj.acl is a dict, not an object, so we use .get()
-        peer_id = auth_obj.acl.get("peerid", "") if hasattr(auth_obj, "acl") else ""
+        peer_id = peer_of(auth_obj)
         return {
             "peer_id": peer_id,
             "config": self.config,

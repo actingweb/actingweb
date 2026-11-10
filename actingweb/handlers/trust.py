@@ -1033,7 +1033,12 @@ class TrustPeerHandler(base_handler.BaseHandler):
             and get_trust_permission_store
         ):
             permission_store = get_trust_permission_store(self.config)
-            previous_override = permission_store.get_permissions(actor_id, peerid)
+            # From the store, not the cache (3.16): a failed trust write
+            # restores this, and a stale entry would write it back over a
+            # live override (or delete one).
+            previous_override = permission_store.get_permissions_uncached(
+                actor_id, peerid
+            )
             try:
                 # Stored silently: the peer is told once the trust write
                 # landed (below), never of a grant a failed write rolls back.
@@ -1277,13 +1282,15 @@ class TrustPeerHandler(base_handler.BaseHandler):
                 self.response.set_status(404, "Not found")
             return
 
-        # Trigger trust_deleted lifecycle hook BEFORE deleting (the one path:
-        # TrustManager.fire_deleted, the row as trust_data)
-        if self.hooks:
+        # trust_deleted fires through TrustManager.fire_deleted (the row as
+        # trust_data) after the delete's last secret check and before
+        # anything local goes (3.16): a delete that loses to a re-pair fires
+        # nothing for the row that stands.
+        def before_local_delete(row: dict[str, Any]) -> None:
+            if not self.hooks:
+                return
             try:
-                actor_interface.trust.fire_deleted(
-                    relationships[0], initiated_by_peer=is_peer
-                )
+                actor_interface.trust.fire_deleted(row, initiated_by_peer=is_peer)
             except DbError:
                 raise
             except Exception as e:
@@ -1294,15 +1301,24 @@ class TrustPeerHandler(base_handler.BaseHandler):
         try:
             if local_only:
                 deleted = myself.delete_reciprocal_trust(
-                    peerid=peerid, notify_peers=False, expected_secret=expected_secret
+                    peerid=peerid,
+                    notify_peers=False,
+                    expected_secret=expected_secret,
+                    before_local_delete=before_local_delete,
                 )
             elif is_peer:
                 deleted = actor_interface.trust.delete_peer_trust(
-                    peer_id=peerid, notify_peer=False, expected_secret=expected_secret
+                    peer_id=peerid,
+                    notify_peer=False,
+                    expected_secret=expected_secret,
+                    before_local_delete=before_local_delete,
                 )
             else:
                 deleted = actor_interface.trust.delete_peer_trust(
-                    peer_id=peerid, notify_peer=True, expected_secret=expected_secret
+                    peer_id=peerid,
+                    notify_peer=True,
+                    expected_secret=expected_secret,
+                    before_local_delete=before_local_delete,
                 )
         except TrustReplaced:
             logger.info(
@@ -1587,8 +1603,10 @@ class TrustSharedPropertiesHandler(base_handler.BaseHandler):
                 self.response.set_status(404, "Trust relationship not found")
             return
         # A peer this actor has not approved is granted nothing to list
-        # (3.16; it got the same answer as an approved one).
-        if not trust_rel.get("approved"):
+        # (3.16; it got the same answer as an approved one). Only an explicit
+        # False, as the grant snapshot reads it (a row from before the field
+        # is approved there, and every other route admits it).
+        if trust_rel.get("approved") is False:
             if self.response:
                 self.response.set_status(403, "Forbidden")
                 self.response.headers["Content-Type"] = "application/json"

@@ -69,6 +69,26 @@ _LOGOUT_COOKIES: tuple[tuple[str, str], ...] = (
 )
 
 
+_form_without_nonce_warned = False
+
+
+def _warn_form_without_nonce() -> None:
+    """A browser that was shown the authorize form (it holds the nonce
+    cookie) posted it without ``form_nonce`` (3.16): most likely a custom
+    ``aw-oauth-authorization-form.html`` without the hidden input, so every
+    sign-in goes through the confirmation page. Once per process."""
+    global _form_without_nonce_warned
+    if _form_without_nonce_warned:
+        return
+    _form_without_nonce_warned = True
+    logger.warning(
+        "An authorize form was posted without form_nonce: if the application "
+        "overrides aw-oauth-authorization-form.html, add "
+        '<input type="hidden" name="form_nonce" value="{{ form_nonce }}"> to '
+        "every form, or each sign-in asks for a confirmation"
+    )
+
+
 class OAuth2EndpointsHandler(BaseHandler):
     """
     Handler for OAuth2 authorization server endpoints.
@@ -296,6 +316,13 @@ class OAuth2EndpointsHandler(BaseHandler):
                     )[0]
                     or None,
                 }
+
+            if (
+                method == "POST"
+                and not params.get("form_nonce")
+                and self._flow_cookie(FORM_NONCE_COOKIE)
+            ):
+                _warn_form_without_nonce()
 
             # Debug logging for MCP OAuth2 flow
             if logger.isEnabledFor(logging.DEBUG):
@@ -587,12 +614,15 @@ class OAuth2EndpointsHandler(BaseHandler):
         return str(value) if value else None
 
     def _set_page_headers(self) -> None:
-        """The form and the confirmation are not framed, cached or referred
-        (3.16)."""
+        """The form and the confirmation are not framed or cached, and refer
+        no other site (3.16). ``same-origin``, not ``no-referrer``: under
+        ``no-referrer`` a browser sends ``Origin: null`` on the page's own
+        POST, which a browser without Fetch Metadata then has refused as
+        cross-site (the confirmation's Approve)."""
         self.response.headers["X-Frame-Options"] = "DENY"
         self.response.headers["Content-Security-Policy"] = "frame-ancestors 'none'"
         self.response.headers["Cache-Control"] = "no-store"
-        self.response.headers["Referrer-Policy"] = "no-referrer"
+        self.response.headers["Referrer-Policy"] = "same-origin"
 
     def _decide_trust(self) -> Any:
         """The application's ``oauth2_trust_requested`` hooks as a callable
@@ -685,13 +715,16 @@ class OAuth2EndpointsHandler(BaseHandler):
             )
         if decision not in ("approve", "decline"):
             return self.error_response(400, "invalid_request: approve or decline")
-        self._set_flow_cookie(CONFIRM_COOKIE, "", max_age=0)
         try:
             answer = self.oauth2_server.handle_confirmation(
                 token, decision == "approve", decide_trust=self._decide_trust()
             )
         except TokenStoreUnavailable:
+            # The pending record was not consumed: the cookie stays, so the
+            # user's retry of the same page can still answer (3.16).
             return self.error_response(503, "temporarily_unavailable")
+        # The pending record is spent (single use): so is the cookie.
+        self._set_flow_cookie(CONFIRM_COOKIE, "", max_age=0)
         return self.answer_callback(answer)
 
     def _render_authorization_form(

@@ -2049,15 +2049,17 @@ class Actor:
             params = {
                 "approved": True,
             }
-            # The base URI this call wrote, when it wrote one (3.16: the
-            # notification went to the URL the row had before).
-            requrl = (
-                (baseuri or this_trust["baseuri"])
-                + "/trust/"
-                + relationship
-                + "/"
-                + self.id
-            )
+            # The base URI this call wrote, else the row's as it stands after
+            # the write (3.16: the notification went to the URL the row had
+            # before, also when another request had moved it meanwhile).
+            if not baseuri:
+                after = trust.Trust(
+                    actor_id=self.id, peerid=peerid, config=self.config
+                ).get()
+                baseuri_now = str((after or this_trust).get("baseuri") or "")
+            else:
+                baseuri_now = baseuri
+            requrl = baseuri_now + "/trust/" + relationship + "/" + self.id
             if this_trust["secret"]:
                 headers = {
                     "Authorization": "Bearer " + this_trust["secret"],
@@ -3044,6 +3046,7 @@ class Actor:
         notify_peers: bool = True,
         *,
         expected_secret: str | None = None,
+        before_local_delete: Callable[[dict[str, Any]], None] | None = None,
     ) -> bool:
         """Deletes a trust relationship and requests deletion of peer's relationship as well.
 
@@ -3057,6 +3060,10 @@ class Actor:
         raises. A re-pair landing between the second check and the row delete
         keeps its row, without the subscriptions the cleanup removed (the
         remaining window; the peer's next sync re-creates them).
+
+        ``before_local_delete`` (3.16): called with each row after its last
+        secret check and before its local cleanup (the trust handler fires
+        ``trust_deleted`` there, so a delete that loses fires nothing).
         """
         failed_once = False  # For multiple relationships, this will be True if at least one deletion at peer failed
         success_once = False  # True if at least one relationship was deleted at peer
@@ -3128,6 +3135,7 @@ class Actor:
                     f"Skipping remote delete for {reason}; deleting locally only"
                 )
                 success_once = True
+            current = None
             if expected_secret is not None:
                 current = trust.Trust(
                     actor_id=self.id, peerid=rel["peerid"], config=self.config
@@ -3136,6 +3144,11 @@ class Actor:
                     str(current.get("secret") or ""), expected_secret
                 ):
                     raise TrustReplaced(rel.get("peerid"))
+            if before_local_delete is not None:
+                # After the last secret check and before anything local goes
+                # (3.16): a lost race fires nothing, and the caller's hook can
+                # still read the row's data (the cached peer profile).
+                before_local_delete(dict(current or rel))
             if not self.subs_list:
                 # strict=False: a fault leaves this peer's subscriptions as
                 # orphans rather than failing the trust deletion.
@@ -3468,6 +3481,15 @@ class Actor:
             )
         except Exception:  # folds DbError: peer HTTP only
             return None
+        if self.last_response_code == 403:
+            # The peer's grant does not admit it (3.16: a subscription needs
+            # read access to what it names); said, not only returned as None.
+            logger.warning(
+                f"Peer {peerid} refused a subscription to "
+                f"{'/'.join(p for p in (target, subtarget, resource) if p)}: "
+                "the grant it gives this actor does not let this actor read it"
+            )
+            return None
         try:
             if logger.isEnabledFor(logging.DEBUG):
                 logger.debug(
@@ -3711,13 +3733,15 @@ class Actor:
             # it. Its base URI is empty or this actor's own.
             return
 
-        # Filter blob based on peer permissions for property subscriptions
-        # (the one filter the pull paths use too).
-        if sub.get("target") == "properties":
-            filtered_blob = self.filter_subscription_blob(peerid, sub, blob)
-            if filtered_blob is None:
-                return  # Nothing to send after filtering
-            blob = filtered_blob
+        # The one filter the pull paths use too: a properties diff as the
+        # peer may read it; another target's diff only while the peer may
+        # still have the subscription (3.16).
+        filtered_blob = self.filter_subscription_blob(
+            peerid, sub, blob, snapshot=self.grant_for(peerid, row=trust_rel)
+        )
+        if filtered_blob is None:
+            return  # Nothing to send after filtering
+        blob = filtered_blob
 
         params = {
             "id": self.id,
@@ -3902,9 +3926,11 @@ class Actor:
         delete_peer: bool = False,
         *,
         expected_secret: str | None = None,
+        before_local_delete: Callable[[dict[str, Any]], None] | None = None,
     ) -> bool:
         """Async version - wraps sync method in asyncio.to_thread to prevent
-        blocking (``expected_secret`` as in the sync method)."""
+        blocking (``expected_secret`` and ``before_local_delete`` as in the
+        sync method)."""
         import asyncio
 
         return await asyncio.to_thread(
@@ -3912,6 +3938,7 @@ class Actor:
             peerid=peerid,
             delete_peer=delete_peer,
             expected_secret=expected_secret,
+            before_local_delete=before_local_delete,
         )
 
     async def create_remote_subscription_async(
@@ -3963,18 +3990,38 @@ class Actor:
         without any object the filter emptied: the subscriber replaces a
         property with what a diff carries, so an emptied ``{}`` would wipe
         its copy of the parts it may read. ``_EMPTIED`` when nothing is left
-        of a non-empty object (3.16)."""
+        of a non-empty object (3.16).
+
+        A value that is JSON text of an object (a form-posted property, an
+        SDK write of a JSON string: what a direct read parses) is filtered
+        as the object and sent as text again."""
+        if isinstance(value, str):
+            try:
+                as_object = json.loads(value)
+            except (TypeError, ValueError):
+                as_object = None
+            if isinstance(as_object, dict | list):
+                kept_object = _prune_emptied(
+                    as_object, drop_excluded(rules, path, as_object)
+                )
+                if kept_object is _EMPTIED:
+                    return _EMPTIED
+                return value if kept_object == as_object else json.dumps(kept_object)
         kept = drop_excluded(rules, path, value)
         return _prune_emptied(value, kept)
 
-    def grant_for(self, peerid: str) -> GrantSnapshot | None:
+    def grant_for(self, peerid: str, *, row: Any = None) -> GrantSnapshot | None:
         """What ``peerid`` is granted here, read once (3.16), or None when it
         cannot be read for a reason other than storage (callers send
-        nothing). ``DbError`` raises."""
+        nothing). ``row``: the trust row when the caller read it already.
+        ``DbError`` raises."""
         if not self.config or not self.id:
             return None
         try:
-            return get_permission_evaluator(self.config).snapshot(str(self.id), peerid)
+            evaluator = get_permission_evaluator(self.config)
+            if row is None:
+                return evaluator.snapshot(str(self.id), peerid)
+            return evaluator.snapshot(str(self.id), peerid, row=row)
         except DbError:
             raise
         except Exception as e:
@@ -3995,7 +4042,8 @@ class Actor:
         (``GET /subscriptions/<peer>/<subid>`` and ``/<seq>``).
 
         Only a ``properties`` subscription is filtered (other targets are the
-        application's, served as their callbacks are). Each part is decided
+        application's, served as their callbacks are, while the peer may
+        still subscribe to them: the creation check is asked again). Each part is decided
         at its full path: a subscription to one property (a subtarget, and a
         resource under it) carries that path's value, sent when the peer may
         read the path; a subscription to the whole target carries an object
@@ -4015,10 +4063,13 @@ class Actor:
             if isinstance(blob, bytes)
             else json.dumps(blob)
         )
-        if sub.get("target") != "properties":
-            return as_text
         if snapshot is None:
             snapshot = self.grant_for(peerid)
+        if sub.get("target") != "properties":
+            # Another target's content is the application's; whether the
+            # peer may still have the subscription is asked again (3.16): a
+            # grant narrowed after it was made delivers nothing.
+            return as_text if self._may_still_subscribe(sub, snapshot) else None
         if snapshot is None or not self.config:
             return None
         try:
@@ -4036,9 +4087,16 @@ class Actor:
             path = f"{subtarget}/{resource}" if resource else subtarget
             if not self._may_read(snapshot, path):
                 return None
+            rules = snapshot.rules(PermissionType.PROPERTIES)
+            if isinstance(parsed, str):
+                # The property's value as JSON text: filtered as the object
+                # a direct read would parse (3.16).
+                part = self._diff_part(rules, path, parsed)
+                if part is _EMPTIED:
+                    return None
+                return as_text if part == parsed else json.dumps(part)
             if not isinstance(parsed, dict):
                 return as_text
-            rules = snapshot.rules(PermissionType.PROPERTIES)
             if resource:
                 kept_value = self._diff_part(rules, path, parsed)
             else:
@@ -4046,15 +4104,23 @@ class Actor:
                 # the value is the property's, kept whole except the parts
                 # the grant excludes, at their paths under the subtarget. A
                 # ``list:<name>`` key is a list, decided by its bare name.
+                lists = {
+                    k: v
+                    for k, v in parsed.items()
+                    if k.startswith("list:") and self._may_read(snapshot, k[5:])
+                }
                 kept_value = self._diff_part(
                     rules,
                     subtarget,
-                    {
-                        k: v
-                        for k, v in parsed.items()
-                        if not k.startswith("list:") or self._may_read(snapshot, k[5:])
-                    },
+                    {k: v for k, v in parsed.items() if not k.startswith("list:")},
                 )
+                if lists:
+                    # A list's diff object passes whole once its name may be
+                    # read (3.16): its keys are not property paths.
+                    kept_value = {
+                        **({} if kept_value is _EMPTIED else kept_value),
+                        **lists,
+                    }
         except DbError:
             raise
         except Exception as e:
@@ -4065,6 +4131,32 @@ class Actor:
         if kept_value == parsed:
             return as_text
         return json.dumps(kept_value) if kept_value else None
+
+    def _may_still_subscribe(
+        self, sub: dict[str, Any], snapshot: GrantSnapshot | None
+    ) -> bool:
+        """The creation check for a subscription to a target other than
+        ``properties``, asked at delivery (3.16). Fail closed."""
+        if snapshot is None or not self.config:
+            return False
+        from .access_decision import subscription_allowed
+
+        try:
+            return subscription_allowed(
+                self.config,
+                str(self.id),
+                snapshot.peer_id,
+                str(sub.get("target") or ""),
+                str(sub.get("subtarget") or ""),
+                str(sub.get("resource") or ""),
+                evaluator=get_permission_evaluator(self.config),
+                snapshot=snapshot,
+            ).allowed
+        except DbError:
+            raise
+        except Exception as e:
+            logger.error(f"Subscription re-check for {snapshot.peer_id} failed: {e}")
+            return False
 
     def _may_read(self, snapshot: GrantSnapshot, path: str) -> bool:
         """Whether the peer may read ``path``: the one access decision, as a
@@ -4108,6 +4200,12 @@ class Actor:
                     continue
             if not self._may_read(snapshot, path):
                 logger.debug(f"Filtered {path!r} from a diff to {snapshot.peer_id}")
+                continue
+            if key.startswith("list:"):
+                # A list's diff object (list, operation, items): a list's
+                # unit is its name, decided above; its keys are not property
+                # paths an exclusion could name (3.16).
+                kept[key] = value
                 continue
             part = self._diff_part(rules, path, value)
             if part is not _EMPTIED:

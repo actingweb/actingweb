@@ -74,3 +74,31 @@ def test_a_modify_that_does_not_notify_reads_nothing_more() -> None:
         )
     post.assert_not_called()
     assert reads.call_count == 1
+
+
+def test_a_move_by_another_request_is_followed() -> None:
+    """Verification 2026-11-10 (plan: else read again after the write):
+    another request moved the base URI between this call's read and its
+    write; the approval goes to where the row points now."""
+    from actingweb.trust import Trust
+
+    w = Receiver(approved=False)
+    moved = "https://moved-meanwhile.example.test/peer"
+    real_modify = Trust.modify
+
+    def modify_then_moved(self: Trust, *a: Any, **kw: Any) -> Any:
+        out = real_modify(self, *a, **kw)
+        if kw.get("approved") is True:
+            real_modify(
+                Trust(actor_id=aid(w.a), peerid=w.b, config=w.config), baseuri=moved
+            )
+        return out
+
+    with (
+        mock.patch.object(Trust, "modify", modify_then_moved),
+        mock.patch(
+            "actingweb.actor.requests.post", return_value=mock.Mock(status_code=204)
+        ) as post,
+    ):
+        assert _approve(w, approved=True)
+    assert _sent_to(post) == f"{moved}/trust/friend/{aid(w.a)}"

@@ -3,6 +3,8 @@
 import json
 from unittest.mock import Mock, patch
 
+import pytest
+
 from actingweb.actor import Actor
 from actingweb.permission_evaluator import PermissionResult
 from tests._grant_fakes import StubEvaluator
@@ -292,8 +294,11 @@ class TestCallbackSubscriptionFiltering:
                     # HTTP request was NOT made because filter returned None
                     mock_post.assert_not_called()
 
-    def test_callback_skips_filtering_for_non_property_targets(self):
-        """callback_subscription should not filter non-property subscriptions."""
+    @pytest.mark.parametrize("still_allowed", [True, False])
+    def test_a_non_property_target_is_rechecked_not_filtered(self, still_allowed):
+        """A subscription to another target is delivered as stored while the
+        peer may still have it, and not at all once the grant no longer
+        admits it (3.16: the creation check is asked again at delivery)."""
         actor = Actor(config=self.mock_config)
         actor.id = "test-actor-id"
 
@@ -304,29 +309,34 @@ class TestCallbackSubscriptionFiltering:
                 "secret": "secret123",
             }
 
-            with patch.object(actor, "filter_subscription_blob") as mock_filter:
-                with patch("actingweb.actor.requests.post") as mock_post:
-                    mock_post.return_value = Mock(status_code=204)
+            with (
+                patch.object(actor, "grant_for", return_value=Mock()),
+                patch.object(
+                    actor, "_may_still_subscribe", return_value=still_allowed
+                ) as recheck,
+                patch("actingweb.actor.requests.post") as mock_post,
+            ):
+                mock_post.return_value = Mock(status_code=204)
 
-                    actor.callback_subscription(
-                        peerid="peer-123",
-                        sub_obj=Mock(),
-                        sub={
-                            "target": "trust",
-                            "subscriptionid": "sub-1",
-                            "granularity": "high",
-                            "subtarget": None,
-                            "resource": None,
-                        },
-                        diff={"sequence": 1, "timestamp": "2024-01-01T00:00:00Z"},
-                        blob='{"data": "trust change"}',
-                    )
+                actor.callback_subscription(
+                    peerid="peer-123",
+                    sub_obj=Mock(),
+                    sub={
+                        "target": "trust",
+                        "subscriptionid": "sub-1",
+                        "granularity": "high",
+                        "subtarget": None,
+                        "resource": None,
+                    },
+                    diff={"sequence": 1, "timestamp": "2024-01-01T00:00:00Z"},
+                    blob='{"data": "trust change"}',
+                )
 
-                    # Filter was NOT called for non-property target
-                    mock_filter.assert_not_called()
-
-                    # HTTP request WAS made
-                    mock_post.assert_called_once()
+                recheck.assert_called_once()
+                assert mock_post.called is still_allowed
+                if still_allowed:
+                    sent = mock_post.call_args.kwargs.get("data") or ""
+                    assert "trust change" in str(sent)
 
     def test_callback_uses_filtered_blob(self):
         """callback_subscription should use filtered blob in the callback."""

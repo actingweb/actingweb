@@ -674,25 +674,6 @@
      "auth": "basic:<A.creator>",
      "children": [
       {
-       "actor": "<A>",
-       "event": "trust_deleted",
-       "initiated_by_peer": false,
-       "peer": "<G>",
-       "relationship": "friend"
-      },
-      {
-       "actor": "<A>",
-       "arguments": [
-        "initiated_by_peer",
-        "peer_id",
-        "relationship",
-        "trust_data"
-       ],
-       "event": "trust_hook",
-       "hook": "trust_deleted",
-       "peer": "<G>"
-      },
-      {
        "auth": "bearer:trust:G-A",
        "children": [
         {
@@ -723,6 +704,25 @@
        "request": null,
        "response": null,
        "status": 204
+      },
+      {
+       "actor": "<A>",
+       "event": "trust_deleted",
+       "initiated_by_peer": false,
+       "peer": "<G>",
+       "relationship": "friend"
+      },
+      {
+       "actor": "<A>",
+       "arguments": [
+        "initiated_by_peer",
+        "peer_id",
+        "relationship",
+        "trust_data"
+       ],
+       "event": "trust_hook",
+       "hook": "trust_deleted",
+       "peer": "<G>"
       }
      ],
      "headers": {},

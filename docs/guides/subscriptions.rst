@@ -11,9 +11,11 @@ requires): creating a subscription to a ``properties``, ``resources``,
 (``{"error": "forbidden"}``). A subscription to a whole target needs a rule
 that reads at least one name (or, when the grant does not mention the
 category, the access table's GET on it). What each diff carries is filtered
-again at delivery for ``properties``; diffs an application registers for
-other targets are delivered as registered, so filter them in the
-application if they carry data some subscribers may not read. A peer whose
+again at delivery for ``properties``. For other targets the same creation
+check is asked again at delivery, push and pull: a subscription the grant no
+longer admits delivers nothing. Their content is delivered as registered, so
+filter it in the application if it carries data some subscribers may not
+read. A peer whose
 trust this actor has not approved may not list its subscriptions.
 
 The ActingWeb subscription system enables real-time data synchronization between actors. Actors can:

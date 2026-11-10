@@ -199,6 +199,24 @@ def _get_auto_schemas(
     return input_schema, output_schema
 
 
+_trust_approved_warned = False
+
+
+def _warn_trust_approved_deprecated() -> None:
+    """Registering ``trust_approved`` logs one deprecation warning per
+    process (3.16)."""
+    global _trust_approved_warned
+    if _trust_approved_warned:
+        return
+    _trust_approved_warned = True
+    logger.warning(
+        "The trust_approved hook is deprecated: register "
+        "trust_fully_approved_local (it fires on every approving route); "
+        "trust_approved runs only when no trust_fully_approved_local hook is "
+        "registered"
+    )
+
+
 class HookType(Enum):
     """Types of hooks available."""
 
@@ -547,6 +565,8 @@ class HookRegistry:
             event: Lifecycle event name
             func: Function with signature ``(actor, **kwargs) -> Any``
         """
+        if event == "trust_approved":
+            _warn_trust_approved_deprecated()
         if event not in self._lifecycle_hooks:
             self._lifecycle_hooks[event] = []
         self._lifecycle_hooks[event].append(func)

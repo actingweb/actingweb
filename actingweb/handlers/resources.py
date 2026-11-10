@@ -5,7 +5,7 @@ from typing import Any
 
 from actingweb.handlers import base_handler
 
-from ..access_decision import decide, evaluator_or_none, forbidden_body
+from ..access_decision import decide, evaluator_or_none, forbidden_body, peer_of
 from ..permission_evaluator import PermissionType, get_permission_evaluator
 
 logger = logging.getLogger(__name__)
@@ -25,8 +25,7 @@ class ResourcesHandler(base_handler.BaseHandler):
         access table with the request's method. A caller that is not a peer
         is decided by the access table, as before. A refusal is 403 and the
         hook does not run."""
-        acl = getattr(auth_result.auth_obj, "acl", None)
-        peer_id = str(acl.get("peerid", "") or "") if isinstance(acl, dict) else ""
+        peer_id = peer_of(auth_result.auth_obj)
         if not peer_id:
             return bool(auth_result.authorize(method, "resources", name))
         decision = decide(

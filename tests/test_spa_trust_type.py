@@ -9,10 +9,10 @@ from unittest import mock
 from actingweb.aw_web_request import AWWebObj
 
 
-def _authorize(trust_type: str | None) -> dict:
+def _authorize(trust_type: str | None, **extra: str) -> dict:
     from actingweb.handlers.oauth2_spa import OAuth2SPAHandler
 
-    body = {"provider": "google", "redirect_uri": "https://app.example/cb"}
+    body = {"provider": "google", "redirect_uri": "https://app.example/cb", **extra}
     if trust_type is not None:
         body["trust_type"] = trust_type
     handler = OAuth2SPAHandler(AWWebObj(body=json.dumps(body)), mock.Mock(), hooks=None)
@@ -30,11 +30,11 @@ def test_an_unlisted_trust_type_is_refused_at_authorize() -> None:
 
 
 def test_a_listed_type_and_a_plain_login_pass_the_check() -> None:
-    """Past the check the route needs a real configuration (a mock one
-    fails further on): what matters is that the check did not refuse."""
+    """The check passes: the route goes on to the next one, an invalid
+    ``prompt`` here, and answers that 400 instead (verification
+    2026-11-10: the test swallowed every exception past the check)."""
     for trust_type in ("mcp_client", None):
-        try:
-            result = _authorize(trust_type)
-        except Exception:  # noqa: BLE001 - beyond the check, on a mock config
-            continue
-        assert "not offered" not in json.dumps(result)
+        result = _authorize(trust_type, prompt="not-a-prompt")
+        text = json.dumps(result)
+        assert "not offered" not in text, trust_type
+        assert "Invalid prompt" in text, trust_type

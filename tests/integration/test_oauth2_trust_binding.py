@@ -280,6 +280,24 @@ def test_the_confirmation_refuses(flow: Flow, case: str) -> None:
     assert flow.code_of(r) is None
 
 
+def test_a_store_fault_leaves_the_retry(flow: Flow) -> None:
+    """Verification 2026-11-10: the confirm cookie was cleared before the
+    store was read, so the user's retry after a 503 got 400."""
+    from actingweb.oauth2_server.token_manager import (
+        ActingWebTokenManager,
+        TokenStoreUnavailable,
+    )
+
+    browser, token = flow.paused()
+    with mock.patch.object(
+        ActingWebTokenManager,
+        "consume_pending_authorization",
+        side_effect=TokenStoreUnavailable("fault"),
+    ):
+        assert flow.confirm(browser, token, "approve").status_code == 503
+    assert flow.code_of(flow.confirm(browser, token, "approve"))
+
+
 def test_an_expired_confirmation_is_refused(flow: Flow) -> None:
     import time as time_module
 
@@ -388,6 +406,49 @@ def test_approve_grants_only_the_level_shown(flow: Flow) -> None:
     assert flow.user_rows() == []
 
 
+@pytest.mark.parametrize("change", ["disabled", "generation", "narrowed"])
+def test_a_client_changed_before_approve_gets_nothing(flow: Flow, change: str) -> None:
+    """Verification 2026-11-10: the confirm-time re-checks of the client."""
+    from actingweb.oauth2_server.client_registry import MCPClientRegistry
+
+    browser, token = flow.paused("mcp_client")
+    real = MCPClientRegistry.validate_client
+
+    def changed(self: Any, client_id: str, *a: Any, **kw: Any) -> Any:
+        data = real(self, client_id, *a, **kw)
+        if change == "disabled" or not data:
+            return None
+        data = dict(data)
+        if change == "generation":
+            data["session_generation"] = "something-else"
+        else:
+            data["allowed_trust_types"] = ["viewer"]
+        return data
+
+    with mock.patch.object(MCPClientRegistry, "validate_client", changed):
+        r = flow.confirm(browser, token, "approve")
+    assert flow.error_of(r) == "access_denied"
+    assert flow.code_of(r) is None
+    assert flow.user_rows() == []
+
+
+def test_a_callers_own_decision_cannot_grant_an_unoffered_type(flow: Flow) -> None:
+    """Verification 2026-11-10: a caller passing its own ``decide_trust`` to
+    the public methods gets the acceptability re-check too."""
+    from actingweb.oauth2_server.oauth2_server import get_actingweb_oauth2_server
+
+    server = get_actingweb_oauth2_server(flow.host.config)
+    record = {"trust_type": "mcp_client", "client_id": "c"}
+    assert (
+        server._decided_type(mock.Mock(), record, lambda *a, **k: "no_such", True)
+        is None
+    )
+    assert (
+        server._decided_type(mock.Mock(), record, lambda *a, **k: "viewer", True)
+        == "viewer"
+    )
+
+
 def test_a_retype_whose_override_cannot_be_removed_issues_no_code(flow: Flow) -> None:
     from actingweb.trust_permissions import TrustPermissionStore
 
@@ -408,7 +469,7 @@ def test_the_pages_are_not_framed_or_cached(flow: Flow) -> None:
         assert response.headers["X-Frame-Options"] == "DENY"
         assert response.headers["Cache-Control"] == "no-store"
         assert "frame-ancestors 'none'" in response.headers["Content-Security-Policy"]
-        assert response.headers["Referrer-Policy"] == "no-referrer"
+        assert response.headers["Referrer-Policy"] == "same-origin"
 
 
 def test_the_helper_for_an_own_sign_in_route(flow: Flow, listed: Any) -> None:
@@ -435,3 +496,23 @@ def test_the_helper_for_an_own_sign_in_route(flow: Flow, listed: Any) -> None:
         core, flow.client_id, REDIRECT, "viewer", state="s9"
     )
     assert "code=" in done["url"] and "state=s9" in done["url"]
+
+
+def test_a_form_posted_without_its_nonce_is_named_once(
+    flow: Flow, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Verification 2026-11-10 (plan: one warning per process): a browser
+    that was shown the form posts it without ``form_nonce``, as a custom
+    template without the hidden input would."""
+    import logging
+
+    from actingweb.handlers import oauth2_endpoints
+
+    oauth2_endpoints._form_without_nonce_warned = False
+    with caplog.at_level(logging.WARNING, logger="actingweb.handlers.oauth2_endpoints"):
+        for _ in range(2):
+            browser = requests.Session()
+            flow.form(browser)  # sets the nonce cookie
+            flow.post(browser, "mcp_client")  # no form_nonce
+    named = [r for r in caplog.records if "without form_nonce" in r.getMessage()]
+    assert len(named) == 1

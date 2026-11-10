@@ -79,6 +79,19 @@ class TestTheRowDelete:
         assert Trust(actor_id=aid(w.a), peerid=w.b, config=w.config).delete()
         assert handle.delete(only_if_secret=w.secrets[w.b]) is True
 
+    def test_an_absent_row_still_loses_its_leftover_grant(self) -> None:
+        """Verification 2026-11-10: the conditional delete of a row already
+        gone returned before the cleanup an unconditional one runs."""
+        w = Receiver()
+        handle = Trust(actor_id=aid(w.a), peerid=w.b, config=w.config)
+        handle.get()
+        db = get_trust(w.config)
+        assert db.get(actor_id=aid(w.a), peerid=w.b)
+        assert db.delete(only_if_secret=w.secrets[w.b])
+        assert _grant(w, w.b) is not None  # left behind, as by a fault
+        assert handle.delete(only_if_secret=w.secrets[w.b]) is True
+        assert _grant(w, w.b) is None
+
     def test_the_store_delete_is_conditional(self) -> None:
         """Replaced after the fresh read: the store's own condition holds."""
         w = Receiver()
@@ -212,4 +225,59 @@ class TestTheHandler:
     def test_an_unraced_delete_still_deletes(self) -> None:
         w = Receiver()
         assert self._delete(w, self._creator(w), notify="false") == 204
+        assert not w.row(w.b)
+
+
+class TestTheHookAfterTheLastCheck:
+    """Verification 2026-11-10, Issue 7: ``trust_deleted`` fires after the
+    delete's last secret check, so a delete that loses fires nothing."""
+
+    def _setup(self) -> tuple[Receiver, list[dict[str, Any]]]:
+        from actingweb.interface.hooks import HookRegistry
+
+        registry = HookRegistry()
+        seen: list[dict[str, Any]] = []
+        registry.register_lifecycle_hook(
+            "trust_deleted", lambda actor, **kw: seen.append(kw)
+        )
+        return Receiver(hooks=registry), seen
+
+    def _delete(self, w: Receiver, **params: str) -> int:
+        token = base64.b64encode(f"{w.a.creator}:{PASSPHRASE}".encode()).decode()
+        webobj = AWWebObj(
+            url="https://test.example.com/x",
+            params=params,
+            headers={"Authorization": f"Basic {token}"},
+        )
+        TrustPeerHandler(webobj, w.config, hooks=w.hooks).delete(
+            aid(w.a), "friend", w.b
+        )
+        return webobj.response.status_code
+
+    def test_a_lost_race_fires_no_hook(self) -> None:
+        w, seen = self._setup()
+        real = type(w.a).delete_reciprocal_trust
+
+        def wrapped(actor: Any, *a: Any, **kw: Any) -> Any:
+            if actor.id == aid(w.a):
+                _repair(w, w.b)
+            return real(actor, *a, **kw)
+
+        with mock.patch.object(type(w.a), "delete_reciprocal_trust", wrapped):
+            assert self._delete(w, notify="false") == 404
+        assert seen == []
+        assert w.row(w.b)
+
+    def test_a_delete_fires_once_with_the_row_before_local_data_goes(self) -> None:
+        w, seen = self._setup()
+        _subscribe(w, w.b)
+        subs_at_hook: list[int] = []
+        w.hooks.register_lifecycle_hook(  # type: ignore[union-attr]
+            "trust_deleted", lambda actor, **kw: subs_at_hook.append(len(_subs(w, w.b)))
+        )
+        assert self._delete(w, notify="false") == 204
+        assert len(seen) == 1
+        assert seen[0]["trust_data"]["peerid"] == w.b
+        assert seen[0]["initiated_by_peer"] is False
+        assert subs_at_hook == [1]  # the subscriptions were still there
         assert not w.row(w.b)

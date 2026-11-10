@@ -159,3 +159,15 @@ def test_creation_needs_read_access(world: World, body: dict[str, Any], status: 
     assert r.status_code == status, r.text
     if status == 403:
         assert r.json() == {"error": "forbidden"}
+
+
+def test_an_excluded_depth_three_delete_shows_nothing_excluded(world: World) -> None:
+    """Verification 2026-11-10 (Phase 1's list): deleting an excluded part
+    three levels down sends the remaining resource as the peer may read it
+    (the subscriber replaces its copy with it), never the excluded part."""
+    world.owner_put("settings", {"deep": {"ok": 1, "private": "d"}})
+    whole = world.subscribe()
+    under = world.subscribe(subtarget="settings")
+    world.owner_delete("settings/deep/private")
+    assert world.pull(whole) == [{"settings": {"deep": {"ok": 1}}}]
+    assert world.pull(under) == [{"deep": {"ok": 1}}]

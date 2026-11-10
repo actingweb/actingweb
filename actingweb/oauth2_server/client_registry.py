@@ -11,6 +11,7 @@ import logging
 import secrets
 import time
 from typing import Any
+from urllib.parse import urlparse
 
 from .. import attribute
 from .. import config as config_class
@@ -98,6 +99,13 @@ class MCPClientRegistry:
             )
         is_public = auth_method == "none"
 
+        # A redirect URI carries no userinfo (3.16): ``https://a.example@b``
+        # reads as a.example on a confirmation page while the code goes to b.
+        for uri in registration_data.get("redirect_uris") or []:
+            parsed = urlparse(str(uri))
+            if parsed.username is not None or parsed.password is not None:
+                raise ValueError("redirect_uris must not carry a user name or password")
+
         # Generate client credentials
         client_id = f"mcp_{secrets.token_hex(16)}"
         client_secret: str | None = None if is_public else secrets.token_urlsafe(32)
@@ -113,6 +121,13 @@ class MCPClientRegistry:
             "token_endpoint_auth_method": auth_method,
             "trust_type": registration_data.get("trust_type", "mcp_client"),
             "created_at": int(time.time()),
+            # What an anonymous registration asked for, kept for the owner
+            # to see (3.16; its row is always the default client type).
+            **(
+                {"requested_trust_type": str(registration_data["requested_trust_type"])}
+                if registration_data.get("requested_trust_type")
+                else {}
+            ),
             "actor_id": actor_id,
         }
         # R3: the client-credentials grant mints from this registration; one

@@ -130,3 +130,63 @@ def test_purge_fault_does_not_fail_the_grant(env: Any) -> None:
     out, status, _ = _token(server, {"grant_type": "nope"})
     assert status == 400
     assert out["error"] == "unsupported_grant_type"
+
+
+def test_a_redirect_uri_with_a_user_name_is_refused(env: Any) -> None:
+    """3.16 (verification 2026-11-10, Issue 5): ``https://claude.ai@evil.test``
+    reads as claude.ai on a confirmation page while the code goes to evil.test."""
+    server, _ = env
+    for uri in ("https://claude.ai@evil.test/cb", "https://u:p@evil.test/cb"):
+        handler = make_handler(
+            server,
+            body=json.dumps({"client_name": "x", "redirect_uris": [uri]}),
+        )
+        out = handler._handle_client_registration()
+        assert handler.response.status_code == 400, uri
+        assert out["error"] == "invalid_client_metadata"
+
+
+def test_the_confirmation_names_the_host_without_userinfo() -> None:
+    from actingweb.oauth2_server.oauth2_server import _shown_host
+
+    assert _shown_host("https://claude.ai@evil.test/cb") == "evil.test"
+    assert _shown_host("https://u:p@evil.test:8443/cb") == "evil.test:8443"
+    assert _shown_host("https://claude.ai/api/mcp/auth_callback") == "claude.ai"
+    assert _shown_host("not a url") == ""
+
+
+def test_the_requested_trust_type_is_kept(env: Any) -> None:
+    """Verification 2026-11-10: ``requested_trust_type`` was set on the
+    registration data but not stored with the client."""
+    server, _ = env
+    resp = register(server, requested_trust_type="viewer")
+    stored = server.client_registry.validate_client(resp["client_id"])
+    assert stored is not None
+    assert stored.get("requested_trust_type") == "viewer"
+    plain = server.client_registry.validate_client(register(server)["client_id"])
+    assert plain is not None and "requested_trust_type" not in plain
+
+
+def test_a_registration_asking_for_admin_alone_is_refused(env: Any) -> None:
+    """Verification 2026-11-10: WG14 sent admin together with
+    client_credentials, so the 400 it records is the grant refusal."""
+    server, _ = env
+    handler = make_handler(
+        server, body=json.dumps({"client_name": "x", "trust_type": "admin"})
+    )
+    out = handler._handle_client_registration()
+    assert handler.response.status_code == 400
+    assert out["error"] == "invalid_client_metadata"
+
+
+@pytest.mark.parametrize(
+    ("proto", "name"),
+    [("https://", "__Host-aw_authz_nonce"), ("http://", "aw_authz_nonce")],
+)
+def test_the_flow_cookie_is_host_prefixed_over_https(
+    env: Any, proto: str, name: str
+) -> None:
+    server, _ = env
+    handler = make_handler(server)
+    handler.config.proto = proto
+    assert handler._cookie_name("aw_authz_nonce") == name

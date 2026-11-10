@@ -125,6 +125,7 @@ class TestTrustHandlerPermissions(unittest.TestCase):
 
         # No existing permissions
         self.permission_store.get_permissions.return_value = None
+        self.permission_store.get_permissions_uncached.return_value = None
 
         # Mock permission creation
         mock_permissions = Mock()
@@ -286,6 +287,51 @@ class TestThePutOrder:
         ):
             _put(w, {"desc": "x", "permissions": NEW_GRANT})
         assert _patterns(w) == before
+
+    def test_a_failed_modify_restores_what_the_store_holds_not_the_cache(
+        self,
+    ) -> None:
+        """Verification 2026-11-10, Issue 8: another process changed the
+        override; this one's cache is stale."""
+        w = Receiver()
+        before = _patterns(w)
+        store = get_trust_permission_store(w.config)
+        stale = store.get_permissions_uncached(aid(w.a), w.b)
+        assert stale is not None
+        stale_copy = TrustPermissions.from_dict(
+            {**stale.to_dict(), "properties": {"patterns": ["stale/*"]}}
+        )
+        store._cache[f"{aid(w.a)}:{w.b}"] = stale_copy
+        with mock.patch.object(Actor, "modify_trust_and_notify", return_value=False):
+            assert _put(w, {"desc": "x", "permissions": NEW_GRANT}) == 400
+        assert _patterns(w) == before
+
+    def test_a_restore_that_faults_raises_and_the_row_stays_unapproved(
+        self,
+    ) -> None:
+        """Verification 2026-11-10: the restore-itself-faults branch. The new
+        override is left on a row the failed write left unapproved, which
+        grants nothing (peer-authorisation A1)."""
+        w = Receiver(approved=False)
+        real_store = TrustPermissionStore.store_permissions
+
+        def store_then_fault(
+            self: Any, permissions: Any, notify_peer: Any = None
+        ) -> Any:
+            if notify_peer is False and "kept/*" in repr(permissions.properties):
+                raise DbError("permissions write", aid(w.a))  # the restore
+            return real_store(self, permissions, notify_peer=notify_peer)
+
+        with (
+            mock.patch.object(Actor, "reverify_pending_trust", return_value=True),
+            mock.patch.object(Actor, "modify_trust_and_notify", return_value=False),
+            mock.patch.object(
+                TrustPermissionStore, "store_permissions", store_then_fault
+            ),
+            pytest.raises(DbError),
+        ):
+            _put(w, {"approved": True, "permissions": NEW_GRANT})
+        assert w.row(w.b)["approved"] is False
 
     def test_a_failed_modify_removes_a_grant_it_created(self) -> None:
         w = Receiver()

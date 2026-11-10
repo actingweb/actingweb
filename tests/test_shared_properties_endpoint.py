@@ -242,6 +242,34 @@ class TestSharedPropertiesEndpoint:
                 assert "excluded_properties" not in response_data
                 assert "denied_prop1" not in json.dumps(response_data)
 
+    def test_a_row_without_the_approved_field_is_not_refused_as_unapproved(self):
+        """Verification 2026-11-10: the snapshot reads ``approved=None`` as
+        approved; this route refused it."""
+        webobj = Mock()
+        webobj.request = Mock()
+        handler = TrustSharedPropertiesHandler(webobj, self.mock_config)
+        handler.response = self.mock_response
+        mock_auth_result = Mock()
+        mock_auth_result.success = True
+        mock_actor = Mock()
+        mock_auth_result.actor = mock_actor
+        mock_auth_result.auth_obj = Mock()
+        mock_auth_result.auth_obj.acl = {"peerid": "peer-123"}
+        mock_actor.get_trust_relationship = Mock(
+            return_value={"peerid": "peer-123", "approved": None}
+        )
+        with (
+            patch.object(handler, "authenticate_actor", return_value=mock_auth_result),
+            # Past the approval check the next step is the evaluator: one
+            # that cannot be built answers 503, which shows the row passed.
+            patch(
+                "actingweb.handlers.trust.get_permission_evaluator",
+                side_effect=RuntimeError("stop here"),
+            ),
+        ):
+            handler.get("actor-123", "friend", "peer-123")
+        assert self.mock_response.set_status.call_args[0][0] == 503
+
     def test_an_unapproved_peer_is_refused(self):
         """A trust this actor has not approved lists nothing (3.16)."""
         webobj = Mock()

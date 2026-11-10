@@ -720,12 +720,14 @@ class PermissionEvaluator:
             return PermissionResult.DENIED
         return result
 
-    def snapshot(self, actor_id: str, peer_id: str) -> GrantSnapshot:
+    def snapshot(
+        self, actor_id: str, peer_id: str, *, row: Any = None
+    ) -> GrantSnapshot:
         """What ``peer_id`` is granted at ``actor_id``, from one trust-row
-        read and the (cached) override and registry lookups (3.16). A storage
-        fault raises ``DbError``."""
-        row: Any = None
-        if self.config and hasattr(self.config, "DbTrust"):
+        read and the (cached) override and registry lookups (3.16). ``row``:
+        the trust row when the caller read it already (no second read). A
+        storage fault raises ``DbError``."""
+        if row is None and self.config and hasattr(self.config, "DbTrust"):
             db_trust = get_trust(self.config)
             if db_trust:
                 row = db_trust.get(actor_id=actor_id, peerid=peer_id)

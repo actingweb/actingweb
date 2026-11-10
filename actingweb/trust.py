@@ -174,7 +174,15 @@ class Trust:
                 )
                 return False
             if not row:
-                return True
+                # Already gone (an earlier delete, or one that faulted after
+                # the row): what follows the row still runs, as it does for
+                # an unconditional delete of an absent row (3.16). The
+                # conditional delete refuses a row that appeared meanwhile.
+                self.trust = {}
+                return self._after_row_delete(
+                    self.handle.delete(only_if_secret=only_if_secret),
+                    str(self.peerid or ""),
+                )
             self.trust = dict(row)
 
         # Load the row: which OAuth2 client it connects is read from it.
@@ -267,6 +275,11 @@ class Trust:
             else self.handle.delete()
         )
 
+        return self._after_row_delete(result, peerid)
+
+    def _after_row_delete(self, result: bool, peerid: str) -> bool:
+        """What follows the row (3.16, shared with the conditional delete of
+        a row already gone): its custom permissions, and the MCP caches."""
         try:
             # The row's custom permissions go right after the row, never
             # before it: a fault in between would leave a live row on its

@@ -21,7 +21,12 @@ SECURITY
   diffs, the developer views); a non-admin peer's write or delete that would
   touch an excluded part is 403; a path under a list is decided by the
   list's grant; a bulk ``POST`` is validated and authorised whole and
-  refused whole. ``docs/migration/v3.16.rst`` ("Grants hold at every
+  refused whole. An object stored or written as JSON text (a form post, an
+  SDK write of a JSON string, and every value the developer views read
+  back from storage) is filtered as the object, and handed back as text. A
+  peer gets 403 for a list it may not write whether it exists or not
+  (``PUT ?index=`` and a bulk ``items`` write answered 404/400 for a
+  missing one first). ``docs/migration/v3.16.rst`` ("Grants hold at every
   level") has the details.
 - **A grant's rule that did not match a name let the access table serve
   it.** A properties or resources rule in the ``allowed``/``denied`` shape,
@@ -43,9 +48,17 @@ SECURITY
   on the bare ``/methods`` were not decided by the grant; a subscription to
   an excluded path was created; ``shared_properties`` named every property
   the peer could not read and answered an unapproved peer; an unapproved
-  peer listed its subscriptions. **Behavior change:** all of these follow
-  the one access decision; ``docs/migration/v3.16.rst`` ("Every other way
-  in") lists each.
+  peer listed its subscriptions; a subscription the grant stopped admitting
+  kept delivering; a ``methods``, ``actions`` or ``resources`` request that
+  named nothing (``POST /methods`` without JSON-RPC, an empty JSON-RPC
+  ``method``, a bare ``/resources``) went to the access table whatever the
+  grant stated, so every ``*`` hook ran with an empty name.
+  **Behavior change:** all of these follow the one access decision; a
+  subscription to any target is asked its creation check again at each
+  delivery, push and pull; a request that names nothing is refused when the
+  grant mentions the category, except the ``GET`` listing of methods or
+  actions, admitted when the rule names anything and filtered per name.
+  ``docs/migration/v3.16.rst`` ("Every other way in") lists each.
 - **An MCP client could give itself any access level, ``admin``
   included.** An anonymous ``POST /oauth/register`` stored the
   ``trust_type`` it asked for and a ``client_credentials`` grant on the
@@ -63,8 +76,18 @@ SECURITY
   and a sign-in it cannot bind waits for the user's Approve on a
   confirmation page in the browser that signed in; a re-authorisation sets
   the row to the level the user approved, up or down, and removes its
-  permission override; no code is issued without the trust.
-  ``docs/migration/v3.16.rst`` ("An MCP client's access level").
+  permission override first (a removal that fails leaves the row as it
+  was); no code is issued without the trust, also when the row is deleted
+  during the authorisation. **Behavior change:** a redirect URI with a user
+  name or password is refused at registration (``invalid_client_metadata``),
+  and the confirmation page names the host the code goes to without one (it
+  showed ``claude.ai@evil.test``). The confirmation re-checks the client's
+  own ``allowed_trust_types`` at Approve, and any decision hook's answer
+  against the client list; a 503 keeps the page usable for a retry; the
+  form and confirmation pages send ``Referrer-Policy: same-origin`` (under
+  ``no-referrer`` a browser without Fetch Metadata had its own Approve
+  refused as cross-site). ``docs/migration/v3.16.rst`` ("An MCP client's
+  access level").
 - **A write three levels down reached subscribers past their grant.**
   ``PUT /properties/a/b/c`` registered its diff as resource ``b`` holding the
   bare value, so the filter checked ``a/b`` and an exclusion of ``a/b/c``
@@ -775,7 +798,10 @@ SECURITY
   it was authorised against (its secret is compared on a consistent read
   before the remote delete, again before the local cleanup, and by a
   conditional row delete); a row replaced meanwhile is kept and the request
-  answers 404. A re-pair landing after the second comparison keeps its row,
+  answers 404, and ``trust_deleted`` does not fire for it (it now fires
+  after the last comparison, before anything local goes, on the REST route
+  and when ``sync_peer`` finds a revocation; there it no longer fires with
+  an empty row). A re-pair landing after the second comparison keeps its row,
   but the cleanup that ran (the subscriptions, the peer's stored data) is
   gone; the peer's next sync re-creates the subscriptions. ``Trust.delete``,
   ``Actor.delete_reciprocal_trust`` (and its async twin) and
@@ -790,10 +816,8 @@ SECURITY
   itself still sends nothing (its other callers delete the trust row with it
   or store a new grant next). **Check:** a peer receiving permission
   callbacks with ``auto_delete_on_revocation`` now sees a deleted override
-  as a change to the default; that comparison still acts only on patterns
-  that disappear, not on an added exclusion, a dropped ``read``, scalar
-  properties or copies fetched by query
-  (``docs/quickstart/configuration.rst``).
+  as a change to the default (see the revocation entry under FIXED for what
+  that comparison acts on).
 
 REMOVED
 ~~~~~~~
@@ -827,6 +851,18 @@ REMOVED
 CHANGED
 ~~~~~~~
 
+- **Breaking: a custom trust store and an ``Actor`` subclass take new
+  keywords.** ``DbTrust.delete`` takes the keyword-only ``only_if_secret``
+  (delete only the row with that secret; False for a row with another one;
+  True when absent) and ``DbTrust.modify`` takes ``relationship``; the
+  library passes them on every trust ``DELETE`` and an MCP client's
+  re-authorisation at a new level. ``Actor.delete_reciprocal_trust`` (and
+  its async twin) takes the keyword-only ``expected_secret`` and
+  ``before_local_delete``, which the trust ``DELETE`` and ``sync_peer``
+  pass. A backend or subclass without them raises ``TypeError``.
+  **Check:** custom backends and overrides accept the keywords (or
+  ``**kwargs``); ``docs/migration/v3.16.rst`` ("Custom database backends").
+
 - **Trust hooks fire once, with the same arguments, on every route.** An
   approval through ``PUT /trust/<rel>/<peer>`` or the web UI fired
   ``trust_fully_approved_local``, ``TrustManager.approve_relationship``
@@ -839,9 +875,9 @@ CHANGED
   transition to approved by both sides, with ``trust_data`` = the row; a
   repeat approval fires nothing. ``trust_approved`` is deprecated: it runs
   in its place, with the same arguments, only when no
-  ``trust_fully_approved_local`` hook is registered (with a one-time
-  warning); an application that registered both now sees only the
-  canonical one. ``trust_deleted`` fires before the delete on every route
+  ``trust_fully_approved_local`` hook is registered, and registering it
+  logs a warning once per process; an application that registered both now
+  sees only the canonical one. ``trust_deleted`` fires before the delete on every route
   with the row as ``trust_data`` and ``initiated_by_peer``. A lifecycle hook
   without ``**kwargs`` raises ``TypeError`` on the arguments it does not
   name; that is now logged at ERROR naming the hook, once per process.
@@ -1670,7 +1706,10 @@ CHANGED
   store fault) or 500 (anything else) with the old permissions still
   stored, so the peer's retry finishes it.
   Removing a trust also fails with 503 when that peer's callback state
-  cannot be listed.
+  cannot be listed. The comparison acts only on patterns that disappear from
+  the grant, not on an added exclusion, a dropped ``read``, scalar
+  properties or copies an application fetched by query
+  (``docs/quickstart/configuration.rst``).
 
 - **Behavior change: a write whose subscription diff cannot be registered
   answers 503.** The property write stays, but a fault reading the
@@ -2042,6 +2081,18 @@ ADDED
 
 FIXED
 ~~~~~
+
+- **A bulk ``POST /properties`` with a JSON body that is not an object
+  answered 500.** It answers 400. A bulk ``POST`` that stops part way (a
+  400, 413 or a hook's refusal) or faults in its form arguments now
+  registers the diffs of the keys it had already written, as a fault in a
+  JSON body did.
+
+- **The trust's shared properties refused a row without an approval
+  field.** ``GET /trust/<rel>/<peer>/shared_properties`` answered
+  ``not_approved`` for a row with no ``approved`` field, which every other
+  route treats as approved. A conditional trust delete of a row already
+  gone skipped the permission and cache cleanup an unconditional one runs.
 
 - **In a process serving two ActingWeb applications, a changed grant was
   not seen.** The permission store is rebuilt when another application's

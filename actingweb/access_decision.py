@@ -106,8 +106,23 @@ def evaluator_or_none(config: Config, get_evaluator: Any = None) -> Any:
     except DbError:
         raise
     except Exception as e:
-        logger.error(f"Permission evaluator unavailable: {e}")
+        _evaluator_unavailable(f"Permission evaluator unavailable: {e}")
         return None
+
+
+_evaluator_failure_logged = False
+
+
+def _evaluator_unavailable(message: str) -> None:
+    """An evaluator that cannot be built is a configuration fault, the same
+    on every request: ERROR once per process, DEBUG after (3.16, plan:
+    the decision denies, the log names it once)."""
+    global _evaluator_failure_logged
+    if _evaluator_failure_logged:
+        logger.debug(message)
+        return
+    _evaluator_failure_logged = True
+    logger.error(f"{message} (every peer request is refused; logged once)")
 
 
 def grant_snapshot(
@@ -166,6 +181,19 @@ def decide(
     if has_control_characters(path):
         return Decision(False, EXCLUDED, snapshot)
     client = snapshot.is_client if is_client is None else is_client
+    if not path and kind in _NAMED_KINDS and snapshot.mentions(kind):
+        # A request that names nothing (3.16; spec: a method, an action and
+        # a resource are addressed by the path): a call has nothing to
+        # grant. The library's GET listing of methods and actions is
+        # filtered per name afterwards, so it is admitted when the rule
+        # names anything; a bare ``/resources`` GET has no listing to
+        # filter (it runs the application's hook) and is refused.
+        listing = (
+            (method or "GET").upper() == "GET"
+            and kind is not PermissionType.RESOURCES
+            and _names_something(snapshot.rules(kind))
+        )
+        return Decision(listing, ALLOWED if listing else NOT_GRANTED, snapshot)
     if snapshot.mentions(kind) and path:
         try:
             result = evaluator.evaluate_rules_for(
@@ -217,9 +245,14 @@ _NAMED_OPERATION = {
 }
 
 
-def _peer_of(auth_obj: Any) -> str:
+def peer_of(auth_obj: Any) -> str:
+    """The authenticated peer's id (``auth_obj.acl`` is a dict), or "" for a
+    caller that is not a peer (the creator, a trustee, an SPA login)."""
     acl = getattr(auth_obj, "acl", None)
     return str(acl.get("peerid", "") or "") if isinstance(acl, dict) else ""
+
+
+_peer_of = peer_of
 
 
 def named_route_allows(
@@ -250,7 +283,9 @@ def named_route_allows(
     except DbError:
         raise
     except Exception as e:
-        logger.error(f"Permission evaluator unavailable for {actor_id}:{peer_id}: {e}")
+        _evaluator_unavailable(
+            f"Permission evaluator unavailable for {actor_id}:{peer_id}: {e}"
+        )
         return False
     decision = decide(
         config,
@@ -320,6 +355,23 @@ SUBSCRIBABLE = {
 }
 
 
+# The categories whose routes address one name each (3.16).
+_NAMED_KINDS = frozenset(
+    {PermissionType.METHODS, PermissionType.ACTIONS, PermissionType.RESOURCES}
+)
+
+
+def _names_something(rules: Any) -> bool:
+    """Whether a stated rule names at least one item (an ``allowed`` list or
+    a pattern), whatever the operation."""
+    if not isinstance(rules, dict):
+        return False
+    for key in ("allowed", "patterns"):
+        if isinstance(rules.get(key), list) and rules[key]:
+            return True
+    return False
+
+
 def _reads_something(rules: Any) -> bool:
     """Whether a stated rule allows reading at least one name: judged on the
     rule, not on what is stored (a subscriber subscribes before the names it
@@ -347,6 +399,7 @@ def subscription_allowed(
     *,
     evaluator: PermissionEvaluator | None = None,
     is_client: bool | None = None,
+    snapshot: GrantSnapshot | None = None,
 ) -> Decision:
     """Whether a peer may subscribe to ``target`` (with ``subtarget`` and
     ``resource``) (3.16): read access to the path for ``properties``,
@@ -354,7 +407,11 @@ def subscription_allowed(
     is admitted when the grant's rule reads at least one name, or, when the
     grant does not mention the category, when the access table admits the
     peer's GET on the target. Other targets: the access table only (as the
-    route's own row decides already)."""
+    route's own row decides already).
+
+    Asked again when a diff is delivered (3.16), so a subscription the grant
+    no longer admits delivers nothing; ``snapshot`` is the grant when the
+    caller read it already."""
     kind = SUBSCRIBABLE.get(target)
     path = "/".join(p for p in (subtarget, resource) if p)
     if path and kind is not None:
@@ -368,10 +425,12 @@ def subscription_allowed(
             method="GET",
             evaluator=evaluator,
             is_client=is_client,
+            snapshot=snapshot,
         )
     try:
         evaluator = evaluator or get_permission_evaluator(config)
-        snapshot = evaluator.snapshot(actor_id, peer_id)
+        if snapshot is None:
+            snapshot = evaluator.snapshot(actor_id, peer_id)
     except DbError:
         raise
     except Exception as e:

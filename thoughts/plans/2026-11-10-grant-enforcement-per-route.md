@@ -1,5 +1,6 @@
 ---
 status: done
+verified: thoughts/verifications/2026-11-10-grant-enforcement-per-route.md
 ---
 
 # Implementation Plan: a peer's grant is the answer on every route
@@ -1759,3 +1760,489 @@ follows.
   route: every phase's diff to `tests/integration/wire/` was exactly the
   rows it owned.
 
+
+## Iterations
+
+### 2026-11-10, after verification thoughts/verifications/2026-11-10-grant-enforcement-per-route.md
+
+Owner decisions (2026-11-10): Issue 3, re-check the path at delivery;
+Issue 4, refuse a call with no name and keep the listing (and check that
+the bare GETs list methods, actions and resources); Issue 7, fire the
+deletion hook after the last secret check; browser QA of the OAuth pages
+through Emm.
+
+#### 1. The developer views see stored objects that arrive as text
+
+**Category**: Verification fix (Issue 1, High)
+
+**What changed**: `AuthenticatedPropertyStore._readable` parses a stored
+value that is JSON text of an object or array, filters the object, and
+hands it back as text (the type the caller always got);
+`_refuse_excluded_parts` parses the stored value the same way, so a write
+over a stored excluded part is refused as over REST.
+
+**Files affected**:
+- `actingweb/interface/authenticated_views.py`: `_as_json_object`,
+  `_readable`, `_refuse_excluded_parts`.
+- `tests/test_grant_stored_text.py` (new), `TestTheViews`: real storage, a
+  freshly loaded actor; read, `get`, `to_dict` drop `private`; a write and
+  a delete over it raise `PermissionError` and the stored value is
+  unchanged. Both tests fail on the code before.
+
+**Rationale**: both backends return a property as the text the database
+holds (`property.py:357-365`), and `drop_excluded`/`holds_excluded` walk
+objects only; the earlier test used a store of dicts.
+
+#### 2. A diff value given as JSON text is filtered as the object
+
+**Category**: Verification fix (Issue 2, High)
+
+**What changed**: `Actor._diff_part` parses a string value that is JSON of
+an object or array, filters and prunes it, and sends it as text again (or
+nothing when nothing is left); the subtarget branch of
+`filter_subscription_blob` does the same for a property value that is
+text.
+
+**Files affected**:
+- `actingweb/actor.py`: `_diff_part`, `filter_subscription_blob`.
+- `tests/test_grant_stored_text.py`, `TestTheDiffFilter`: whole-target and
+  subtarget diffs carrying `{"theme","private"}` as text arrive without
+  `private`; only-excluded text sends nothing; plain text is unchanged.
+  The three filtering tests fail on the code before.
+
+**Rationale**: a form-posted object or an SDK write of a JSON string is
+stored and diffed as text; a direct GET parses it and filters, the diff
+did not.
+
+#### 3. Subscriptions to other targets are re-checked at delivery
+
+**Category**: Verification fix (Issue 3, owner decision)
+
+**What changed**: `filter_subscription_blob` asks `subscription_allowed`
+again for a target other than `properties` (`_may_still_subscribe`, fail
+closed), on the push and on the pull; the push now passes every target
+through the filter. `subscription_allowed` takes an optional `snapshot`
+(a pull serving many diffs reads the grant once). Content of those
+targets is still the application's.
+
+**Files affected**:
+- `actingweb/actor.py`: `callback_subscription`, `filter_subscription_blob`,
+  `_may_still_subscribe`.
+- `actingweb/access_decision.py`: `subscription_allowed(snapshot=)`.
+- `tests/test_grant_stored_text.py`, `TestOtherTargetsAtDelivery`: a
+  `resources/x` subscription delivers while allowed and nothing once `x`
+  is excluded; an unapproved peer gets nothing.
+- `tests/test_subscription_permission_filtering.py`: the test that pinned
+  "non-property targets skip filtering" now pins the re-check (sent when
+  allowed, not sent when refused).
+- `tests/test_subscription_callbacks.py`, `tests/test_debug_payload_guard.py`:
+  transport tests with mock configs pass the filter through (they test the
+  HTTP send, and the re-check fails closed on a mock config).
+
+**Rationale**: creation was decided by the grant, delivery was not: a
+grant narrowed afterwards kept delivering.
+
+#### 4. A request that names nothing is decided by the stated rule
+
+**Category**: Verification fix (Issue 4, owner decision; spec checked)
+
+**What changed**: in `decide`, for `methods`, `actions` and `resources`
+with a stated rule and no name: a call (POST, PUT, DELETE, JSON-RPC with an
+empty `method`) is refused; the library's GET listing of methods and
+actions is admitted when the rule names anything (it is filtered per name
+afterwards); a bare `GET /resources` is refused (no listing to filter, it
+runs the application's `resource_` hook). A grant that does not mention the
+category keeps the access table. Spec reading (owner asked): a method, an
+action and a resource are addressed by the path
+(`actingweb-spec.rst:640`, `:1121`, `:1213-1217`, `:1232-1234`); no listing
+is defined, the methods/actions listings are the library's.
+
+**Files affected**:
+- `actingweb/access_decision.py`: `_NAMED_KINDS`, `_names_something`, the
+  nameless branch of `decide`.
+- `tests/test_methods_actions_decision.py`: nameless calls refused beside a
+  table row admitting every verb (all three categories, three verbs, a
+  naming and an empty rule); the listing admitted only when the rule names
+  something; bare resources GET refused; a grant not mentioning the
+  category keeps the table. Twelve fail on the code before.
+
+**Rationale**: the empty name went to the access table, so a stated rule
+was skipped and every `*` method hook ran with `method_name == ""` for the
+consumer's `"methods": []` shape.
+
+#### 5. The confirmation page names the host, and redirect URIs carry no userinfo
+
+**Category**: Verification fix (Issue 5)
+
+**What changed**: the confirmation's `redirect_host` is the URI's host and
+port (`_shown_host`), not `netloc`; client registration refuses a redirect
+URI with a user name or password (`ValueError`, a 400
+`invalid_client_metadata` at `/oauth/register`; the owner's
+`create_client` raises too).
+
+**Files affected**:
+- `actingweb/oauth2_server/oauth2_server.py`: `_shown_host`.
+- `actingweb/oauth2_server/client_registry.py`: the userinfo check in
+  `register_client`.
+- `tests/test_oauth2_token_endpoint_errors.py`:
+  `test_a_redirect_uri_with_a_user_name_is_refused`,
+  `test_the_confirmation_names_the_host_without_userinfo`.
+
+**Rationale**: `https://claude.ai@evil.test/cb` read as claude.ai on the
+page while the code went to evil.test.
+
+#### 6. An existing client's row: no code without it, re-type order, description
+
+**Category**: Verification fix (Issue 6; Issue 10, two of its items)
+
+**What changed**: `create_or_update_oauth_trust` answers False when the
+row is gone at the update (the modify answered False, or the read found
+nothing), so no code is issued; a re-type removes the old override before
+the row changes (`_drop_client_override`; a failed removal leaves the row's
+type as it was) and evicts the MCP caches after (`_evict_retyped`); the
+default-description rename runs at every authorisation of a client again,
+as before Phase 3.
+
+**Files affected**:
+- `actingweb/interface/trust_manager.py`: `create_or_update_oauth_trust`,
+  `_drop_client_override`, `_evict_retyped` (replace `_retyped_client_row`).
+- `tests/test_client_trust_update.py` (new): the two lost-row cases answer
+  False; a failed override removal leaves `friend` and the next
+  authorisation re-types with the override gone; the description follows
+  the name at the same level. All four fail on the code before.
+
+**Rationale**: the plan says a code only when the trust was written; the
+override's own `trust_type` decides over the row's, so removing it after
+the type changed left it deciding when the removal failed; the rename had
+been moved under `if retyped:` by accident.
+
+#### 7. `trust_deleted` fires after the delete's last secret check
+
+**Category**: Verification fix (Issue 7, owner decision)
+
+**What changed**: `delete_reciprocal_trust` (and its async twin, and
+`TrustManager.delete_peer_trust`) take a keyword-only
+`before_local_delete(row)` callback, called for each row after its last
+secret check and before its local cleanup; the REST trust DELETE fires
+`trust_deleted` (through `fire_deleted`, the fresh row as `trust_data`)
+there instead of before calling the delete. A delete that loses to a
+re-pair fires nothing; a peer's refusal of the remote DELETE (502) fires
+nothing either, since nothing was deleted. The hook still runs before any
+local data goes.
+
+**Files affected**:
+- `actingweb/actor.py`: `delete_reciprocal_trust(_async)(before_local_delete=)`.
+- `actingweb/interface/trust_manager.py`: `delete_peer_trust` passes the
+  keywords only when given.
+- `actingweb/handlers/trust.py`: the DELETE's hook moved into the callback.
+- `tests/test_trust_conditional_delete.py`, `TestTheHookAfterTheLastCheck`:
+  a lost race fires no hook (fails on the code before); a delete fires
+  once, with the row, while the subscriptions are still there.
+
+**Rationale**: the application's cleanup ran for a row that survived.
+
+#### 8. The PUT's rollback snapshot is read from the store
+
+**Category**: Verification fix (Issue 8)
+
+**What changed**: the trust PUT reads the previous override with
+`get_permissions_uncached`, as the grant DELETE does.
+
+**Files affected**:
+- `actingweb/handlers/trust.py`: the PUT's snapshot.
+- `tests/test_trust_handler_permissions.py`:
+  `test_a_failed_modify_restores_what_the_store_holds_not_the_cache` (a
+  stale cached override; fails on the code before); the mock-based PUT test
+  stubs the uncached read too.
+
+**Rationale**: a stale cache entry made a failed modify write a stale
+grant back, or delete a live one.
+
+#### 9. The confirmation: cookie kept on a 503, a referrer policy browsers accept, every answer re-checked
+
+**Category**: Verification fix (Issue 10, the confirmation items)
+
+**What changed**: the confirm cookie is cleared after the pending record
+is spent, not before the store is read, so a 503's retry still answers;
+the form and confirmation pages send `Referrer-Policy: same-origin` (under
+`no-referrer` a browser sends `Origin: null` on the page's own POST, which
+`cross_site` refuses when the browser sends no `Sec-Fetch-Site`; same-origin
+still refers no other site); `_decided_type` re-checks acceptability on any
+`decide_trust` answer (a caller's own one did not); Approve re-checks the
+client's own `allowed_trust_types`.
+
+**Files affected**:
+- `actingweb/handlers/oauth2_endpoints.py`: `_handle_confirm`,
+  `_set_page_headers`.
+- `actingweb/oauth2_server/oauth2_server.py`: `_decided_type`,
+  `handle_confirmation`.
+- `tests/integration/test_oauth2_trust_binding.py`:
+  `test_a_store_fault_leaves_the_retry`,
+  `test_a_client_changed_before_approve_gets_nothing` (disabled,
+  `session_generation` changed, list narrowed: the last two were missing
+  tests, the third a new check), `test_a_callers_own_decision_cannot_grant_an_unoffered_type`;
+  the header test pins `same-origin`.
+
+**Rationale**: the 503 retry was a dead end; an honest Approve would be
+refused in a browser without Fetch Metadata; the public methods trusted a
+caller's hook answer.
+
+#### 10. A conditional delete of a row already gone still cleans up
+
+**Category**: Verification fix (Issue 11)
+
+**What changed**: `Trust.delete(only_if_secret=)` on an absent row runs
+the conditional row delete and the permission and cache cleanup an
+unconditional delete runs (`_after_row_delete`, shared), not `return True`;
+a row that appeared meanwhile carries another secret and is refused.
+
+**Files affected**:
+- `actingweb/trust.py`: `delete`, `_after_row_delete`.
+- `tests/test_trust_conditional_delete.py`:
+  `test_an_absent_row_still_loses_its_leftover_grant` (fails before).
+
+#### 11. `sync_peer` fires `trust_deleted` through the one path
+
+**Category**: Verification fix (Issue 11)
+
+**What changed**: both twins of `sync_peer`'s revocation cleanup pass a
+`before_local_delete` callback that fires `fire_deleted(row,
+initiated_by_peer=True)` with the row the delete read; a row already gone
+fires nothing (it fired with `{}` and `"friend"`).
+
+**Files affected**:
+- `actingweb/interface/subscription_manager.py`: `sync_peer`,
+  `sync_peer_async`.
+- `tests/test_revoked_trust_detection.py`: the delete is asserted with the
+  callback, and calling it fires `trust_deleted` with the row and
+  `initiated_by_peer=True`.
+
+#### 12. A list's diff object passes whole once its name may be read
+
+**Category**: Verification fix (Issue 11)
+
+**What changed**: the diff filter no longer walks a `list:<name>` value
+(`list`, `operation`, `items`) as property paths; the list is decided by
+its name and passes whole, in the whole-target and the subtarget branch.
+
+**Files affected**:
+- `actingweb/actor.py`: `_readable_keys`, the subtarget branch of
+  `filter_subscription_blob`.
+- `tests/test_grant_stored_text.py`, `TestListDiffObjects`: exclusions
+  `*/items` and `*/operation` leave a list diff whole; an excluded list is
+  still dropped. Fail before.
+
+#### 13. `shared_properties` reads approval as the grant does
+
+**Category**: Verification fix (Issue 11)
+
+**What changed**: only `approved is False` is refused as `not_approved`;
+a row without the field is approved, as `GrantSnapshot` and every other
+route read it.
+
+**Files affected**:
+- `actingweb/handlers/trust.py`: `TrustSharedPropertiesHandler.get`.
+- `tests/test_shared_properties_endpoint.py`:
+  `test_a_row_without_the_approved_field_is_not_refused_as_unapproved`.
+
+#### 14. No list-existence probe; a non-object JSON body is 400
+
+**Category**: Verification fix (Issue 11)
+
+**What changed**: `PUT /properties/<list>/<x>?index=` decides write
+permission before it looks the list up; the bulk POST pre-pass validates
+shapes, then authorises a peer's names, then checks that an `items` write
+names a list, so a peer gets 403 whether the list exists or not (the owner
+still gets 404/400). A JSON body that is valid but not an object is a 400
+in the pre-pass (it was a 500).
+
+**Files affected**:
+- `actingweb/handlers/properties.py`: `put` (index branch),
+  `_post_is_admissible`, `_post_is_authorised`,
+  `_json_body_is_not_an_object`.
+- `tests/integration/test_property_grants_flow.py`:
+  `test_a_peer_cannot_probe_for_a_list_it_may_not_write`,
+  `test_a_json_body_that_is_not_an_object_is_400`. Fail before.
+
+#### 15. A bulk POST that stops part way registers what it wrote
+
+**Category**: Verification fix (Issue 11)
+
+**What changed**: the form-arguments branch registers the diffs of the
+keys it wrote before a `DbError` (as the JSON branch did), and a key is
+counted only after its write; the JSON apply registers them before
+returning on a 400, 413 or a hook's 403.
+
+**Files affected**:
+- `actingweb/handlers/properties.py`: `post`.
+- `tests/test_grant_edges.py`:
+  `test_a_form_post_that_faults_registers_what_it_applied`,
+  `test_a_post_stopped_part_way_registers_what_it_applied`. Fail before.
+
+#### 16. Hygiene from the verification
+
+**Category**: Verification fix (Issue 11, hygiene)
+
+**What changed**: the per-item shape checks in `_apply_post_params` (both
+list formats) are removed: the pre-pass (`_items_problem`) checks the
+whole request first for every caller, so they could not run (and had
+drifted: only the pre-pass refuses a `bool` index). One `peer_of` in
+`access_decision` serves the properties, resources, methods and actions
+handlers (`_peer_of` stays as an alias). `auth_obj` is annotated on the
+methods this plan added. The FastAPI OpenAPI text no longer mentions
+excluded properties; `_apply_cookies`' docstring says what SameSite the
+binding's cookies get.
+
+**Files affected**:
+- `actingweb/handlers/properties.py`, `resources.py`, `methods.py`,
+  `actions.py`, `actingweb/access_decision.py`,
+  `actingweb/interface/integrations/fastapi_integration.py`.
+
+**Rationale**: the code review's cleanup findings; the contract requires
+type hints on every function.
+
+#### 17. The plan's undeclared deviations, closed
+
+**Category**: Verification fix (deviations the verification listed)
+
+**What changed**:
+- `requested_trust_type` is stored with an anonymously registered client
+  (`client_registry.register_client`).
+- An authorisation asking for `admin` when it is not offered logs at ERROR
+  and names the configuration call that offers it.
+- A browser that was shown the form and posts it without `form_nonce` (a
+  custom template without the hidden input) logs one warning per process
+  (`_warn_form_without_nonce`).
+- An evaluator that cannot be built logs at ERROR once per process, DEBUG
+  after (`_evaluator_unavailable`).
+- The library's subscriber logs a peer's 403 on a subscription request
+  (`create_remote_subscription`).
+- The approval notification goes to the base URI given, else to the row's
+  as read after the write (a move by another request is followed).
+- Registering `trust_approved` logs the deprecation (once per process),
+  not its first fire.
+- The push passes the trust row it read to the grant snapshot
+  (`PermissionEvaluator.snapshot(row=)`, `Actor.grant_for(row=)`).
+
+**Files affected**:
+- `actingweb/oauth2_server/client_registry.py`, `oauth2_server.py`;
+  `actingweb/handlers/oauth2_endpoints.py`; `actingweb/access_decision.py`;
+  `actingweb/actor.py`; `actingweb/interface/hooks.py`,
+  `trust_manager.py`; `actingweb/permission_evaluator.py`.
+- Tests: `test_the_requested_trust_type_is_kept`,
+  `test_a_form_posted_without_its_nonce_is_named_once`,
+  `test_an_unbuildable_evaluator_is_named_once`,
+  `test_a_refused_remote_subscription_is_logged`,
+  `test_a_move_by_another_request_is_followed`, the deprecation test now
+  expects the warning at registration; `test_trust_approve_notify_async.py`
+  stubs the read after the write.
+
+#### 18. Two deviations accepted as they are
+
+**Category**: Decision recorded (verification deviations)
+
+- **A sign-in slower than ten minutes** ends in "Invalid or expired state",
+  not the confirmation: the state and the nonce cookie both live 600 s
+  (`state_manager.py:38`), so there is no window where the cookie is gone
+  and the state is not. Lengthening the state's life to reach the
+  confirmation would lengthen every authorisation code request's window;
+  restarting from the client is the answer.
+- **`permission_path` is not passed to the property hooks**: the hook
+  context carries the request's `Decision`, which the hook's own check
+  uses (`hooks.py:442-444`); the path would only be read when there is no
+  decision.
+
+#### 19. The tests the verification found missing, and a caller with no `Auth`
+
+**Category**: Verification fix (missing tests per phase)
+
+**What changed**: a property request with no `Auth` object is refused (it
+raised `AttributeError`, a 500; found writing its test). Tests added:
+- Phase 1: `test_a_caller_with_no_auth_object_is_refused`,
+  `test_a_property_hook_not_mentioned_follows_the_table`,
+  `test_a_hooks_denial_is_a_403_at_the_handler` (`test_access_decision.py`);
+  `test_an_admin_peer_deletes_a_parent_holding_an_excluded_part`;
+  `test_an_excluded_depth_three_delete_shows_nothing_excluded` (the
+  remaining resource is sent, filtered, as designed).
+- Phase 2 (`test_methods_actions_decision.py`): resources not mentioned
+  follow the table; `resources: []` and an empty pattern list deny; a
+  whole-target subscription needs a rule that reads something; a
+  `resources` subscription to an excluded path is refused; the actions
+  DELETE asks the grant.
+- Phase 3: an isolated `admin` registration is 400; the flow cookie is
+  `__Host-` over https; a re-type evicts the MCP caches (and a same-level
+  authorisation does not); the SPA "listed type passes" test is
+  deterministic (it swallowed every exception past the check).
+- Phase 4: `create_or_update_oauth_trust` sends no grant callback (create
+  and re-type); `delete_relationship_async` fires `trust_deleted` with the
+  row; a PUT whose restore faults raises and leaves the row unapproved.
+
+**Files affected**:
+- `actingweb/handlers/properties.py`: `_decide_property` (`auth_obj is
+  None`; the evaluator failure logs once).
+- The test files named above.
+
+#### 20. Test gaps accepted, with the reason
+
+**Category**: Decision recorded
+
+- **Push assertions in `test_subscription_grants_flow.py`**: the pushed
+  side of the depth-3 and excluded-list cases is pinned by the `WG7` and
+  `WG8` recordings (both hosts), which assert the callbacks' bodies.
+- **"The replaced row keeps its OAuth2 client"**: a re-pair applies to a
+  peer's trust row; an OAuth2 client's row is never re-paired, so a
+  conditional delete cannot lose one to it.
+- **"Expired at 61 minutes"**: the pending authorisation lives ten minutes
+  (`PENDING_AUTHORIZATION_TTL = 600`), the number the plan's text had
+  wrong; the ten-minute expiry is tested.
+- **The client sweep's hook**: the sweep deletes through
+  `delete_relationship`, whose hook is tested.
+- **Flask cookie handling** (declared in Phase 3): the wire apps are
+  FastAPI; Flask sets the same cookies through `set_cookie` with the same
+  attributes.
+- **The demo's hook on a web-UI approval**: the web UI's Approve posts to
+  the REST PUT, whose hook is tested on the real handler; the browser walk
+  through Emm (below) covers the page.
+
+#### 21. Docs and changelog for this batch
+
+**Category**: Verification fix (doc items, Issue 9)
+
+**What changed**: `trust-relationships.rst` gains "What changes and who is
+told" (the grant DELETE's callback and 404, the PUT order, the trust
+DELETE's 404 on a lost race, the 403 for a bearer on an unknown peer, the
+owner's unchecked base-URI move); `handler-architecture.rst` says which
+hooks fire where; `subscriptions.rst` the delivery re-check;
+`access-control.rst` the nameless requests; `hooks.rst` and the hooks
+reference the hook's new place and the deprecation at registration, and
+`oauth2_trust_requested` in the event list; the migration guide's custom
+backends list names `DbTrust.delete(only_if_secret=)` and
+`modify(relationship=)`, the subclass note names `before_local_delete`, and
+the MCP section the redirect-URI rule; the deletion-invariants reference
+moves step 0. CHANGELOG: a **Breaking** entry under CHANGED for the store
+and subclass keywords (Issue 9), the security entries extended for this
+batch, the `auto_delete_on_revocation` limit moved to the revocation
+entry, two FIXED entries.
+
+**Files affected**: `docs/guides/trust-relationships.rst`,
+`subscriptions.rst`, `access-control.rst`, `hooks.rst`;
+`docs/reference/hooks-reference.rst`; `docs/sdk/handler-architecture.rst`;
+`docs/migration/v3.16.rst`; `thoughts/reference/trust-row-deletion-invariants.md`;
+`CHANGELOG.rst`.
+
+#### 22. `WG19` re-recorded; the Full tier on this batch
+
+**Category**: Verification fix (follow-up of entry 7)
+
+**What changed**: `WG19` records the REST delete's `trust_deleted` after
+its `DELETE` to the peer (entry 7 moved it after the last secret check);
+compared twice, `rows.toml` says why. No other recording changed (`WT5`
+included).
+
+Full tier on this batch (2026-11-10): ruff, format, pyright clean;
+`verify_groups` OK; unit 5032 passed (one parallel isolation flake,
+`test_property_lookup_readiness`, passes alone); DynamoDB 6483 passed
+(before the re-recording, `WG19` failed as expected); PostgreSQL 6280
+passed; sequential PostgreSQL 1384 passed, failing only
+`test_callback_processor_concurrency` (fails on `master` too; its todo);
+docs build with `-W`.

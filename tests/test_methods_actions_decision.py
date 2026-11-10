@@ -293,3 +293,180 @@ def test_a_method_hook_is_decided_with_the_request_verb() -> None:
             {"peer_id": "p1", "config": mock.Mock(), "method": "GET"},
         )
     assert decide_.call_args.kwargs["method"] == "GET"
+
+
+# ---------------------------------------------------------------------------
+# A request that names nothing (verification 2026-11-10, Issue 4)
+# ---------------------------------------------------------------------------
+
+EVERY_ROW = [
+    ("subscriber", "methods", "GET,POST,PUT,DELETE", "a"),
+    ("subscriber", "actions", "GET,POST,PUT,DELETE", "a"),
+    ("subscriber", "resources", "GET,POST,PUT,DELETE", "a"),
+]
+NAMED = {"patterns": ["wire_*"], "operations": ["call", "execute", "read"]}
+
+
+def _nameless(category: PermissionType, method: str, rules: Any) -> bool:
+    ev = _evaluator({category.value: rules})
+    return named_route_allows(
+        _Config(EVERY_ROW),  # type: ignore[arg-type]
+        "a1",
+        _auth(),
+        category,
+        "",
+        method=method,
+        get_evaluator=lambda c: ev,
+    )
+
+
+@pytest.mark.parametrize(
+    "category",
+    [PermissionType.METHODS, PermissionType.ACTIONS, PermissionType.RESOURCES],
+)
+@pytest.mark.parametrize("method", ["POST", "PUT", "DELETE"])
+def test_a_call_that_names_nothing_is_refused_whatever_the_table_says(
+    category, method
+) -> None:
+    """Consumer shape: a stated rule beside a table row that admits every
+    verb; before, the empty name went to the table and a ``*`` hook ran."""
+    assert not _nameless(category, method, NAMED)
+    assert not _nameless(category, method, [])
+
+
+@pytest.mark.parametrize("category", [PermissionType.METHODS, PermissionType.ACTIONS])
+def test_the_listing_is_admitted_when_the_rule_names_something(category) -> None:
+    assert _nameless(category, "GET", NAMED)
+    assert not _nameless(category, "GET", [])
+    assert not _nameless(category, "GET", {"patterns": [], "operations": ["call"]})
+
+
+def test_a_bare_resources_get_is_refused_under_a_stated_rule() -> None:
+    """Spec: the path must name the resource; there is no listing to filter."""
+    assert not _nameless(PermissionType.RESOURCES, "GET", NAMED)
+
+
+@pytest.mark.parametrize(
+    "category",
+    [PermissionType.METHODS, PermissionType.ACTIONS, PermissionType.RESOURCES],
+)
+def test_a_grant_that_does_not_mention_the_category_keeps_the_table(category) -> None:
+    ev = _evaluator({"properties": {}})
+    assert named_route_allows(
+        _Config(EVERY_ROW),  # type: ignore[arg-type]
+        "a1",
+        _auth(),
+        category,
+        "",
+        method="POST",
+        get_evaluator=lambda c: ev,
+    )
+
+
+def test_an_unbuildable_evaluator_is_named_once(caplog) -> None:
+    """Verification 2026-11-10 (plan: one ERROR per process)."""
+    import logging
+
+    from actingweb import access_decision
+
+    access_decision._evaluator_failure_logged = False
+
+    def boom(config: Any) -> Any:
+        raise RuntimeError("no registry")
+
+    with caplog.at_level(logging.DEBUG, logger="actingweb.access_decision"):
+        for _ in range(3):
+            assert not named_route_allows(
+                _Config(EMM_ROWS),  # type: ignore[arg-type]
+                "a1",
+                _auth(),
+                PermissionType.METHODS,
+                "x",
+                method="POST",
+                get_evaluator=boom,
+            )
+            assert access_decision.evaluator_or_none(_Config([]), boom) is None  # type: ignore[arg-type]
+    errors = [r for r in caplog.records if r.levelno == logging.ERROR]
+    assert len(errors) == 1
+
+
+# ---------------------------------------------------------------------------
+# Tests the verification of 2026-11-10 found missing (Phase 2)
+# ---------------------------------------------------------------------------
+
+RES_ROWS = [("subscriber", "resources", "GET,POST,PUT,DELETE", "a")]
+
+
+def _resource(permissions: dict[str, Any], name: str, method: str) -> bool:
+    ev = _evaluator(permissions)
+    return named_route_allows(
+        _Config(RES_ROWS),  # type: ignore[arg-type]
+        "a1",
+        _auth(),
+        PermissionType.RESOURCES,
+        name,
+        method=method,
+        get_evaluator=lambda c: ev,
+    )
+
+
+def test_resources_not_mentioned_follow_the_table() -> None:
+    assert _resource({"properties": {}}, "x", "GET")
+    assert _resource({"properties": {}}, "x", "DELETE")
+
+
+def test_an_empty_resources_rule_denies_whatever_the_table_says() -> None:
+    assert not _resource({"resources": []}, "x", "GET")
+    assert not _resource(
+        {"resources": {"patterns": [], "operations": ["read"]}}, "x", "GET"
+    )
+
+
+def _subscribe(permissions: dict[str, Any], target: str, subtarget: str = "") -> bool:
+    from actingweb.access_decision import subscription_allowed
+
+    return subscription_allowed(
+        _Config(RES_ROWS + [("subscriber", "properties", "GET", "a")]),  # type: ignore[arg-type]
+        "a1",
+        "p1",
+        target,
+        subtarget,
+        evaluator=_evaluator(permissions),
+    ).allowed
+
+
+def test_a_whole_target_subscription_needs_something_readable() -> None:
+    nothing = {"properties": {"patterns": [], "operations": ["read"]}}
+    write_only = {"properties": {"patterns": ["*"], "operations": ["write"]}}
+    something = {"properties": {"patterns": ["color"], "operations": ["read"]}}
+    assert not _subscribe(nothing, "properties")
+    assert not _subscribe(write_only, "properties")
+    assert _subscribe(something, "properties")
+
+
+def test_a_resources_subscription_to_an_excluded_path_is_refused() -> None:
+    grant = {
+        "resources": {
+            "patterns": ["*"],
+            "operations": ["read"],
+            "excluded_patterns": ["private/*"],
+        }
+    }
+    assert not _subscribe(grant, "resources", "private/x")
+    assert _subscribe(grant, "resources", "public/x")
+
+
+def test_an_actions_delete_asks_the_grant() -> None:
+    """Verification 2026-11-10: only the methods DELETE was tested."""
+    from actingweb.handlers.actions import ActionsHandler
+
+    handler = _handler(ActionsHandler)
+    result = mock.Mock(success=True, actor=mock.Mock(), auth_obj=_auth())
+    with (
+        mock.patch.object(handler, "authenticate_actor", return_value=result),
+        mock.patch.object(handler, "_check_action_permission", return_value=False) as c,
+    ):
+        handler.delete("a1", "record")
+    assert c.call_args.args[3] == "DELETE"
+    assert handler.response.status_code == 403
+    handler.hooks.execute_action_hooks.assert_not_called()

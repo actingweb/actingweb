@@ -186,3 +186,76 @@ def test_a_bulk_post_that_faults_registers_what_it_applied() -> None:
     myself.register_diffs.assert_called_once_with(
         target="properties", blob=json.dumps({"a": 1})
     )
+
+
+def _bulk_handler(params: dict[str, Any] | None, body: Any, fail_on: str) -> Any:
+    from actingweb.aw_web_request import AWWebObj
+    from actingweb.handlers.properties import PropertiesHandler
+
+    class _Props:
+        def __init__(self) -> None:
+            self.written: dict[str, Any] = {}
+
+        def __getitem__(self, name: str) -> Any:
+            return None
+
+        def __setitem__(self, name: str, value: Any) -> None:
+            if name == fail_on:
+                raise DbError("simulated")
+            self.written[name] = value
+
+    myself = mock.Mock()
+    myself.property = _Props()
+    auth = mock.Mock()
+    auth.acl = {"peerid": ""}
+    result = mock.Mock(success=True, actor=myself, auth_obj=auth)
+    result.authorize.return_value = True
+    handler = PropertiesHandler(
+        AWWebObj(
+            body=json.dumps(body) if body is not None else None, params=params or {}
+        ),
+        mock.Mock(),
+    )
+    handler.hooks = None
+    return handler, myself, result
+
+
+def test_a_form_post_that_faults_registers_what_it_applied() -> None:
+    """Verification 2026-11-10: the form-arguments branch registered no
+    diff for the keys it had written before a fault."""
+    handler, myself, result = _bulk_handler({"a": "1", "b": "2"}, None, "b")
+    with (
+        mock.patch.object(handler, "authenticate_actor", return_value=result),
+        pytest.raises(DbError),
+    ):
+        handler.post("a1", "")
+    assert myself.property.written == {"a": "1"}
+    myself.register_diffs.assert_called_once_with(
+        target="properties", blob=json.dumps({"a": "1"})
+    )
+
+
+def test_a_post_stopped_part_way_registers_what_it_applied() -> None:
+    """Verification 2026-11-10: a stop in the JSON apply (here a 400 for a
+    value the pre-pass does not check) returned without the diffs of the
+    keys written before it."""
+    from actingweb.handlers import properties as props_module
+
+    handler, myself, result = _bulk_handler(None, {"a": 1, "b": 2}, "")
+    real = props_module.PropertiesHandler._apply_post_params
+
+    def stop_after_a(self: Any, me: Any, check: Any, params: Any, pair: Any) -> None:
+        real(self, me, check, {"a": params["a"]}, pair)
+        self.response.set_status(400, "stop")
+
+    with (
+        mock.patch.object(handler, "authenticate_actor", return_value=result),
+        mock.patch.object(
+            props_module.PropertiesHandler, "_apply_post_params", stop_after_a
+        ),
+    ):
+        handler.post("a1", "")
+    assert handler.response.status_code == 400
+    myself.register_diffs.assert_called_once_with(
+        target="properties", blob=json.dumps({"a": 1})
+    )

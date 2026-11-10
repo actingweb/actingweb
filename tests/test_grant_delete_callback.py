@@ -131,3 +131,25 @@ def test_the_store_delete_and_the_row_routes_send_nothing(sender) -> None:
         secret="s" * 40,
     )
     assert sender.sent == []
+
+
+def test_an_oauth2_client_trust_sends_nothing(sender) -> None:
+    """Verification 2026-11-10: the plan listed it; it was not tested."""
+    from unittest import mock as _mock
+
+    from actingweb.interface.actor_interface import ActorInterface
+
+    w = _receiver()
+    with _mock.patch(
+        "actingweb.trust_type_registry.get_registry", side_effect=RuntimeError
+    ):
+        trust = ActorInterface(w.a).trust
+        for level in ("friend", "viewer"):  # a create, then a re-type
+            assert trust.create_or_update_oauth_trust(
+                "user@example.test",
+                level,
+                established_via="oauth2_client",
+                client_id="mcp_0123456789abcdef",
+                client_name="Claude",
+            )
+    assert sender.sent == []

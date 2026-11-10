@@ -34,7 +34,7 @@ runs, and the other numbers were kept so references to them stay valid.
 
 | # | Step | Before the row? | On a fault | Retry reaches it by |
 | --- | --- | --- | --- | --- |
-| 0 | Lifecycle hook `trust_deleted`, before step 1, outside `Trust.delete`: `DELETE /<actor>/trust/<rel>/<peer>` and `TrustManager.delete_relationship`. The sweep (step 6) uses the latter, so sibling rows fire it on every route | yes | a `DbError` propagates (503), row stays; any other hook exception is logged and the delete goes on | the row; **the hook fires again on a retry** |
+| 0 | Lifecycle hook `trust_deleted`, outside `Trust.delete`. `TrustManager.delete_relationship` (and the sweep, step 6, which uses it) fires it before step 1. The REST `DELETE /<actor>/trust/<rel>/<peer>` and `sync_peer` fire it through `delete_reciprocal_trust(before_local_delete=)`, after step 1 and the second secret check, before step 2 (3.16): a delete that loses to a re-pair, or finds no row, fires nothing | yes | a `DbError` propagates (503), row stays; any other hook exception is logged and the delete goes on | the row; **the hook fires again on a retry** |
 | 1 | Remote DELETE to the peer (peer trusts only) | yes | a refusal or no answer is logged; with `delete_peer`, the call answers False and the row stays. A 404 counts as deleted (the peer has no row) | the row |
 | 2 | Subscriptions, remote-peer store, callback state, peer profile, capabilities, peer permissions | yes | a raised `DbError` stops it, row stays. Their return values are not checked: a store that answers False instead of raising lets the row go with its data left (subscriptions are non-strict: a fault leaves orphans) | the row (when it raised) |
 | 3a | Owner (the client row is in this actor's bucket, and the index names no other actor): `disable_client` (tokens, then index row, then client row; both rows confirmed) | yes | `DbError`, row stays, and the client row stays (a token store that cannot list every token raises before any row goes; an index row confirmed gone with the client row not is a failure) | the row; `client_owned_by` reads the client row and the missing index names nobody else, so the retry takes 3a again |
@@ -86,7 +86,8 @@ re-pair swaps the secret, so a different secret means a different row.
    standing raises `TrustReplaced`.
 
 **The remaining window.** A re-pair that lands after check 2 and before
-step 7 keeps its row, but step 2 has run: its subscriptions, remote-peer
+step 7 keeps its row, but step 2 has run (and step 0 fired for the old row,
+on the REST route): its subscriptions, remote-peer
 store, callback state and peer profile are gone, and steps 3-4 may have run
 for an OAuth2 row. The new row stands without them; the peer's next sync
 re-creates the subscriptions. Closing it would need the cleanup to run

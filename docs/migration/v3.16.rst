@@ -773,6 +773,11 @@ module docstring of ``actingweb.db.protocols`` states:
   (None when the row is gone). The library no longer writes ``previous + 1``
   through ``modify(seqnr=...)``, which let two concurrent changes share a
   number;
+- take the keyword-only ``only_if_secret`` on ``DbTrust.delete`` (delete
+  only the row holding that secret, as one conditional delete; ``True`` when
+  it deleted or the row is absent, ``False`` when a row with another secret
+  stands, ``DbError`` on a fault) and ``relationship`` on ``DbTrust.modify``
+  (the trust ``DELETE`` and an MCP client's re-authorisation pass them);
 - take ``callback`` on ``DbSubscription.create`` and ``modify`` as a bool
   only (``None`` on ``modify`` leaves it), raising ``TypeError`` before any
   I/O for anything else;
@@ -1615,6 +1620,12 @@ client gets ``unauthorized_client`` for ``client_credentials``. A
 server-to-server integration needs a client created by an actor's owner:
 ``OAuth2ClientManager(actor_id, config).create_client(name, trust_type=...)``.
 
+**Redirect URIs.** A registration whose ``redirect_uris`` carry a user
+name or password (``https://name@host/cb``) is refused with
+``invalid_client_metadata``; the confirmation page names the host and port
+the code goes to. A client registered with such a URI before 3.16 keeps
+it; list them (``mcp_clients`` buckets) and delete them.
+
 **Rows to review.** A client that obtained a level before 3.16 keeps it until
 it authorises again (then the row follows the new approval). List the rows
 to review: trust rows with ``established_via = "oauth2_client"`` whose
@@ -1640,13 +1651,16 @@ repeat approval fires nothing. ``trust_data`` is the row as approved.
 **Rename** ``@app.lifecycle_hook("trust_approved")`` to
 ``trust_fully_approved_local``. Until you do, ``trust_approved`` runs in its
 place (with a one-time warning), but only when no
-``trust_fully_approved_local`` hook is registered: an application that
-registered both, for the two routes that used to fire them, now sees only
-the canonical one, once.
+``trust_fully_approved_local`` hook is registered (registering it logs a
+warning once per process): an application that registered both, for the
+two routes that used to fire them, now sees only the canonical one, once.
 
-``trust_deleted`` fires before the delete on every route, with the row as
-``trust_data`` (so the hook can still read the cached peer profile) and
-``initiated_by_peer``. **Check** that every lifecycle hook accepts
+``trust_deleted`` fires before the local data goes on every route, with the
+row as ``trust_data`` (so the hook can still read the cached peer profile)
+and ``initiated_by_peer``. On the REST ``DELETE`` and in ``sync_peer`` it
+fires after the delete found the row (and checked it is the row the
+request was authorised against): a delete that loses to a re-pair, or
+finds no row, fires nothing. **Check** that every lifecycle hook accepts
 ``**kwargs``: one written as ``def on_deleted(actor, peer_id, relationship,
 trust_data):`` raises ``TypeError`` and is skipped, now logged at ERROR with
 the hook's name.
@@ -1654,7 +1668,7 @@ the hook's name.
 Two related changes: a trust ``DELETE`` that loses to a re-pair of the same
 peer answers 404 and leaves the new row (an ``Actor`` subclass that
 overrides ``delete_reciprocal_trust`` must accept the new keyword-only
-``expected_secret``, or ``**kwargs``), and ``DELETE
+``expected_secret`` and ``before_local_delete``, or ``**kwargs``), and ``DELETE
 /trust/<rel>/<peer>/permissions`` tells the peer its grant is back to the
 default (404 when there was no override).
 

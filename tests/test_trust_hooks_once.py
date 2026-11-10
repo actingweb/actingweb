@@ -115,12 +115,15 @@ def test_each_approving_route_fires_the_canonical_hook_once(route: str) -> None:
 def test_only_the_deprecated_hook_registered_fires_once_and_warns(
     route: str, caplog: pytest.LogCaptureFixture
 ) -> None:
-    TrustManager._warned_trust_approved = False
-    w, rec = _setup("trust_approved")
+    from actingweb.interface import hooks as hooks_module
+
+    hooks_module._trust_approved_warned = False
     with caplog.at_level(logging.WARNING):
+        w, rec = _setup("trust_approved")  # registering it warns, once
+        assert caplog.text.count("trust_approved hook is deprecated") == 1
         ROUTES[route](w)
     assert rec.events() == ["trust_approved"]
-    assert "trust_approved hook is deprecated" in caplog.text
+    assert caplog.text.count("trust_approved hook is deprecated") == 1
 
 
 def test_with_both_registered_only_the_canonical_one_fires() -> None:
@@ -188,6 +191,20 @@ class TestDeletion:
         assert status == 404
         assert rec.calls == []
         assert w.row(w.b)
+
+    def test_delete_relationship_async(self) -> None:
+        """Verification 2026-11-10: the async twin was not tested."""
+        registry = HookRegistry()
+        rec = Recorder(registry, "trust_deleted")
+        w = Receiver(hooks=registry)
+        with mock.patch(
+            "actingweb.actor.requests.delete",
+            return_value=mock.Mock(status_code=204),
+        ):
+            assert asyncio.run(_manager(w).delete_relationship_async(w.b))
+        assert rec.events() == ["trust_deleted"]
+        assert rec.calls[0][1]["trust_data"]["peerid"] == w.b
+        assert rec.calls[0][1]["initiated_by_peer"] is False
 
     def test_delete_relationship(self) -> None:
         registry = HookRegistry()

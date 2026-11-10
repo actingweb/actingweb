@@ -97,7 +97,9 @@ def _db_error_handler(aw_app: Any) -> Callable[..., Any]:
 def _apply_cookies(response: Response, webobj: AWWebObj) -> None:
     """Copy the handler's cookies onto ``response`` with every attribute the
     handler set (path and SameSite included: a ``__Host-`` cookie needs
-    ``path=/``, the sign-in binding ``SameSite=Strict``)."""
+    ``path=/``; the sign-in binding's cookies are ``SameSite=None`` over
+    https, so a provider's form POST back carries them, and ``Lax`` over
+    http)."""
     for cookie in webobj.response.cookies:
         samesite = str(cookie.get("samesite") or "lax").lower()
         response.set_cookie(
@@ -1131,7 +1133,7 @@ class FastAPIIntegration(BaseActingWebIntegration):
             tags=["Trust"],
             responses={
                 200: {
-                    "description": "List of shared and excluded properties",
+                    "description": "The properties the peer may read",
                     "content": {
                         "application/json": {
                             "example": {

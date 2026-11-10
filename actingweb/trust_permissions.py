@@ -606,8 +606,53 @@ class TrustPermissionStore:
             logger.error(f"Error listing trust permissions for actor {actor_id}: {e}")
             return []
 
+    def get_permissions_uncached(
+        self, actor_id: str, peer_id: str
+    ) -> TrustPermissions | None:
+        """The stored override, read from the store, not the cache (3.16: a
+        delete decides from what is there). A fault raises ``DbError``."""
+        self._cache.pop(f"{actor_id}:{peer_id}", None)
+        return self.get_permissions(actor_id, peer_id)
+
+    def notify_default_grant(
+        self, actor_id: str, peer_id: str, trust_type: str
+    ) -> None:
+        """Tell the peer its grant is back to its trust type's default (3.16:
+        the override was deleted), through the sender a store uses, with its
+        resends; when peer notification is on. Fire-and-forget."""
+        if not self._should_notify_peer(None):
+            return
+        try:
+            self._notify_peer(
+                create_permission_override(
+                    actor_id=actor_id,
+                    peer_id=peer_id,
+                    trust_type=trust_type,
+                    permission_updates={},
+                )
+            )
+        except Exception as e:  # folds DbError: notification after the delete
+            logger.warning(
+                f"Could not tell {peer_id} its grant from {actor_id} was reset: {e}"
+            )
+
+    def notify_stored_grant(self, actor_id: str, peer_id: str) -> None:
+        """Send the peer the grant stored for it now, when peer notification
+        is on (3.16: the trust ``PUT`` stores a grant silently and tells the
+        peer only once the trust write landed). Fire-and-forget."""
+        if not self._should_notify_peer(None):
+            return
+        try:
+            stored = self.get_permissions_uncached(actor_id, peer_id)
+            if stored:
+                self._notify_peer(stored)
+        except Exception as e:  # folds DbError: notification after the write
+            logger.warning(f"Could not tell {peer_id} its grant from {actor_id}: {e}")
+
     def delete_permissions(self, actor_id: str, peer_id: str) -> bool:
-        """Delete trust relationship permissions."""
+        """Delete trust relationship permissions. Sends nothing to the peer:
+        its callers delete a row's override with the row or before a new one
+        (the REST delete of a grant notifies, ``notify_default_grant``)."""
         bucket = self._get_permissions_bucket(actor_id)
         if not bucket:
             return False
@@ -640,7 +685,11 @@ class TrustPermissionStore:
             return False
 
     def update_permissions(
-        self, actor_id: str, peer_id: str, updates: dict[str, Any]
+        self,
+        actor_id: str,
+        peer_id: str,
+        updates: dict[str, Any],
+        notify_peer: bool | None = None,
     ) -> bool:
         """Update specific permission fields for a trust relationship.
 
@@ -675,7 +724,7 @@ class TrustPermissionStore:
             updated_permissions = TrustPermissions.from_dict(updated_data)
 
             # Store the updated permissions
-            return self.store_permissions(updated_permissions)
+            return self.store_permissions(updated_permissions, notify_peer=notify_peer)
 
         except DbError:
             raise

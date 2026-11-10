@@ -145,7 +145,7 @@ lifecycle hook (see :doc:`../reference/hooks-reference` for the full
    app.with_subscription_processing(auto_cleanup=False)
 
    @app.lifecycle_hook("trust_deleted")
-   def on_trust_deleted(actor, peer_id, relationship, trust_data):
+   def on_trust_deleted(actor, peer_id, relationship, trust_data, **kwargs):
        # Custom cleanup logic
        from actingweb.remote_storage import RemotePeerStore
        from actingweb.callback_processor import CallbackProcessor
@@ -202,21 +202,21 @@ auto-subscribe regardless of who approves last:
 .. code-block:: python
 
    @app.lifecycle_hook("trust_fully_approved_local")
-   def on_trust_approved_local(actor, peer_id, relationship, trust_data):
+   def on_trust_approved_local(actor, peer_id, relationship, trust_data, **kwargs):
        # This actor approved last -- trust is now mutual
        actor.subscriptions.subscribe_to_peer(
            peer_id=peer_id, target="properties"
        )
 
    @app.lifecycle_hook("trust_fully_approved_remote")
-   def on_trust_approved_remote(actor, peer_id, relationship, trust_data):
+   def on_trust_approved_remote(actor, peer_id, relationship, trust_data, **kwargs):
        # The peer approved last -- trust is now mutual
        actor.subscriptions.subscribe_to_peer(
            peer_id=peer_id, target="properties"
        )
 
    @app.lifecycle_hook("trust_deleted")
-   def on_trust_deleted(actor, peer_id, relationship, trust_data):
+   def on_trust_deleted(actor, peer_id, relationship, trust_data, **kwargs):
        # Application-specific cleanup (storage cleanup is automatic)
        notify_websocket_clients(f"Peer {peer_id} disconnected")
        log_audit_event("trust_deleted", peer_id=peer_id)

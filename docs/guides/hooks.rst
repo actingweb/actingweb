@@ -186,6 +186,12 @@ Lifecycle Hooks
 
 Available events: ``actor_created``, ``actor_deleted``, ``actor_deleted_complete``, ``actor_adopted``, ``oauth_success``, ``email_verification_required``, ``email_sign_in_code_required``, ``email_verified``, ``trust_initiated``, ``trust_request_received``, ``trust_fully_approved_local``, ``trust_fully_approved_remote``, ``trust_deleted``, ``subscription_deleted``.
 
+``trust_fully_approved_local`` fires once, on every approving route (3.16);
+``trust_approved`` is its deprecated name and runs only when no
+``trust_fully_approved_local`` hook is registered. ``trust_deleted`` fires
+before the delete, with the row as ``trust_data`` and ``initiated_by_peer``.
+Every lifecycle hook must accept ``**kwargs``.
+
 Subscription Hook
 -----------------
 

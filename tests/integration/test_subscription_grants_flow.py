@@ -135,7 +135,8 @@ def test_an_old_subscription_to_a_now_excluded_list_delivers_nothing(
         auth=world.owner,
     )
     assert r.status_code in (200, 201), r.text
-    assert all(data == {} for data in world.pull(subid))
+    pulled = world.pull(subid)
+    assert all(data == {} for data in pulled), pulled
 
 
 @pytest.mark.parametrize(

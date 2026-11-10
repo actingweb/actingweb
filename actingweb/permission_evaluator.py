@@ -286,7 +286,23 @@ class PermissionEvaluator:
     def __init__(self, config: config_class.Config):
         self.config = config
         self.trust_type_registry = get_trust_type_registry(config)
-        self.permission_store = get_trust_permission_store(config)
+        self._permission_store: Any = None
+
+    @property
+    def permission_store(self) -> Any:
+        """The trust permission store, looked up on each use (3.16): the
+        store is a singleton rebuilt when another application's config asks
+        for it (two apps in one process), and an evaluator that kept the one
+        it was built with read that store's cache while writes went to the
+        new one, so a narrowed grant was not seen. An assigned store (tests)
+        is used as given."""
+        if self._permission_store is not None:
+            return self._permission_store
+        return get_trust_permission_store(self.config)
+
+    @permission_store.setter
+    def permission_store(self, store: Any) -> None:
+        self._permission_store = store
 
     def evaluate_permission(
         self,

@@ -155,6 +155,10 @@ items, item 11 and item 18.
     offered without one), add the ``form_nonce`` hidden input to a custom
     authorize form, and give server-to-server clients an owner-created
     client (anonymous ``client_credentials`` is refused).
+22. **Trust hooks fire once, with the same arguments** (see `Trust hooks
+    fire once, with the same arguments`_): rename ``trust_approved`` to
+    ``trust_fully_approved_local`` and give every lifecycle hook
+    ``**kwargs``.
 
 
 What changed and why
@@ -1623,6 +1627,36 @@ re-type them.
 receives ``trust_type``, ``client_id``, ``client_name``, ``redirect_uri``,
 ``provider``, ``email`` and ``confirmed``; return ``None``, a type name, or
 ``False``. It fails closed.
+
+Trust hooks fire once, with the same arguments
+-----------------------------------------------
+
+Every route that approves a trust fires ``trust_fully_approved_local``, once,
+when the trust becomes approved by both sides: ``PUT /trust/<rel>/<peer>``
+and the web UI, ``TrustManager.approve_relationship`` (and its async twin)
+and creating the trust toward a peer whose verified request was waiting. A
+repeat approval fires nothing. ``trust_data`` is the row as approved.
+
+**Rename** ``@app.lifecycle_hook("trust_approved")`` to
+``trust_fully_approved_local``. Until you do, ``trust_approved`` runs in its
+place (with a one-time warning), but only when no
+``trust_fully_approved_local`` hook is registered: an application that
+registered both, for the two routes that used to fire them, now sees only
+the canonical one, once.
+
+``trust_deleted`` fires before the delete on every route, with the row as
+``trust_data`` (so the hook can still read the cached peer profile) and
+``initiated_by_peer``. **Check** that every lifecycle hook accepts
+``**kwargs``: one written as ``def on_deleted(actor, peer_id, relationship,
+trust_data):`` raises ``TypeError`` and is skipped, now logged at ERROR with
+the hook's name.
+
+Two related changes: a trust ``DELETE`` that loses to a re-pair of the same
+peer answers 404 and leaves the new row (an ``Actor`` subclass that
+overrides ``delete_reciprocal_trust`` must accept the new keyword-only
+``expected_secret``, or ``**kwargs``), and ``DELETE
+/trust/<rel>/<peer>/permissions`` tells the peer its grant is back to the
+default (404 when there was no override).
 
 What stays the same
 ===================

@@ -162,8 +162,12 @@ class TestTrustHandlerPermissions(unittest.TestCase):
                 "methods": {"allowed": ["get_profile"]},
             },
         )
+        # Stored silently; the peer is told once the trust write landed (3.16).
         self.permission_store.store_permissions.assert_called_once_with(
-            mock_permissions
+            mock_permissions, notify_peer=False
+        )
+        self.permission_store.notify_stored_grant.assert_called_once_with(
+            "test-actor", "test-peer"
         )
 
     @patch("actingweb.handlers.trust.PERMISSION_SYSTEM_AVAILABLE", True)
@@ -206,3 +210,105 @@ class TestTrustHandlerPermissions(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ---------------------------------------------------------------------------
+# 3.16 (plan grant-enforcement-per-route, Phase 4): the PUT writes the grant
+# first, then the trust; a failure leaves both as they were. Real storage.
+# ---------------------------------------------------------------------------
+
+import base64  # noqa: E402
+from typing import Any  # noqa: E402
+from unittest import mock  # noqa: E402
+
+import pytest  # noqa: E402
+
+from actingweb.actor import Actor  # noqa: E402
+from actingweb.aw_web_request import AWWebObj  # noqa: E402
+from actingweb.db.exceptions import DbError  # noqa: E402
+from actingweb.trust_permissions import (  # noqa: E402
+    TrustPermissionStore,
+    get_trust_permission_store,
+)
+from tests._adoption_helpers import aid  # noqa: E402
+from tests.test_trust_re_pair import PASSPHRASE, Receiver  # noqa: E402
+
+NEW_GRANT = {"properties": {"patterns": ["new/*"], "operations": ["read"]}}
+
+
+def _put(w: Receiver, body: dict[str, Any]) -> int:
+    token = base64.b64encode(f"{w.a.creator}:{PASSPHRASE}".encode()).decode()
+    webobj = AWWebObj(
+        url="https://test.example.com/x",
+        body=json.dumps(body),
+        headers={"Authorization": f"Basic {token}"},
+    )
+    TrustPeerHandler(webobj, w.config).put(aid(w.a), "friend", w.b)
+    return webobj.response.status_code
+
+
+def _patterns(w: Receiver) -> Any:
+    grant = get_trust_permission_store(w.config).get_permissions_uncached(aid(w.a), w.b)
+    return grant.properties if grant else None
+
+
+class TestThePutOrder:
+    def test_a_failed_grant_write_leaves_the_row_unapproved_and_untold(self) -> None:
+        w = Receiver(approved=False)
+        with (
+            mock.patch.object(Actor, "reverify_pending_trust", return_value=True),
+            mock.patch.object(
+                TrustPermissionStore, "update_permissions", return_value=False
+            ),
+            mock.patch("actingweb.actor.requests.post") as told,
+        ):
+            assert _put(w, {"approved": True, "permissions": NEW_GRANT}) == 500
+        assert w.row(w.b)["approved"] is False
+        told.assert_not_called()
+
+    def test_a_failed_modify_restores_the_previous_grant(self) -> None:
+        w = Receiver()
+        before = _patterns(w)
+        with mock.patch.object(Actor, "modify_trust_and_notify", return_value=False):
+            assert _put(w, {"desc": "x", "permissions": NEW_GRANT}) == 400
+        assert _patterns(w) == before
+
+    def test_a_faulting_modify_restores_the_previous_grant(self) -> None:
+        w = Receiver()
+        before = _patterns(w)
+        with (
+            mock.patch.object(
+                Actor,
+                "modify_trust_and_notify",
+                side_effect=DbError("trust write", aid(w.a)),
+            ),
+            pytest.raises(DbError),
+        ):
+            _put(w, {"desc": "x", "permissions": NEW_GRANT})
+        assert _patterns(w) == before
+
+    def test_a_failed_modify_removes_a_grant_it_created(self) -> None:
+        w = Receiver()
+        assert get_trust_permission_store(w.config).delete_permissions(aid(w.a), w.b)
+        with mock.patch.object(Actor, "modify_trust_and_notify", return_value=False):
+            assert _put(w, {"desc": "x", "permissions": NEW_GRANT}) == 400
+        assert _patterns(w) is None
+
+    def test_the_peer_is_told_only_once_the_trust_write_landed(self) -> None:
+        w = Receiver()
+        with (
+            mock.patch.object(TrustPermissionStore, "_notify_peer") as told,
+            mock.patch.object(Actor, "modify_trust_and_notify", return_value=False),
+        ):
+            assert _put(w, {"desc": "x", "permissions": NEW_GRANT}) == 400
+        told.assert_not_called()
+
+        with mock.patch.object(TrustPermissionStore, "_notify_peer") as told:
+            assert _put(w, {"desc": "x", "permissions": NEW_GRANT}) == 204
+        told.assert_called_once()
+        assert "new/*" in repr(told.call_args.args[0].properties)
+
+    def test_a_successful_put_keeps_the_new_grant(self) -> None:
+        w = Receiver()
+        assert _put(w, {"desc": "x", "permissions": NEW_GRANT}) == 204
+        assert "new/*" in repr(_patterns(w))

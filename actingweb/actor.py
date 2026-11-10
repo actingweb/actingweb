@@ -34,7 +34,7 @@ from actingweb.permission_evaluator import (
     get_permission_evaluator,
 )
 from actingweb.property_list import ListCorruptionError
-from actingweb.secret_compare import secret_digest_equals
+from actingweb.secret_compare import secret_digest_equals, secret_equals
 
 from .db.creator_rules import (
     is_exempt,
@@ -460,6 +460,11 @@ _SUSPENSION_ERROR_LOG_INTERVAL_SECONDS = 300.0
 META_CHECK_TRIES = 2
 META_CHECK_TIMEOUT: tuple[float, float] = (3, 5)
 _suspension_check_error_logged_at: float | None = None
+
+
+class TrustReplaced(Exception):
+    """A trust delete with an expected secret found the row replaced (a
+    re-pair landed): the new row is left alone (3.16)."""
 
 
 _EMPTIED = object()
@@ -2044,7 +2049,15 @@ class Actor:
             params = {
                 "approved": True,
             }
-            requrl = this_trust["baseuri"] + "/trust/" + relationship + "/" + self.id
+            # The base URI this call wrote, when it wrote one (3.16: the
+            # notification went to the URL the row had before).
+            requrl = (
+                (baseuri or this_trust["baseuri"])
+                + "/trust/"
+                + relationship
+                + "/"
+                + self.id
+            )
             if this_trust["secret"]:
                 headers = {
                     "Authorization": "Bearer " + this_trust["secret"],
@@ -2493,7 +2506,10 @@ class Actor:
             logger.debug("Timeout creating trust with peer async, deleting my trust.")
             self._drop_failed_attempt(peer["id"], secret)
             return False
-        except httpx.RequestError as e:
+        except Exception as e:  # folds DbError: peer HTTP only
+            # Any failure of the request drops the attempt, as the sync twin
+            # does (3.16: an exception that was not an httpx error, an
+            # invalid URL say, left the half-made row behind).
             logger.debug(
                 f"Not able to create trust with peer async: {e}, deleting my trust."
             )
@@ -3026,11 +3042,21 @@ class Actor:
         peerid: str | None = None,
         delete_peer: bool = False,
         notify_peers: bool = True,
+        *,
+        expected_secret: str | None = None,
     ) -> bool:
         """Deletes a trust relationship and requests deletion of peer's relationship as well.
 
         ``notify_peers=False`` skips the remote DELETE (``delete_peer`` is then
         ignored) and runs only the local cleanup.
+
+        ``expected_secret`` (3.16): delete only the row with this secret, the
+        one the caller authorised against. It is compared before the remote
+        DELETE, again just before the local cleanup, and by the row delete
+        itself; a row a re-pair replaced is left alone and ``TrustReplaced``
+        raises. A re-pair landing between the second check and the row delete
+        keeps its row, without the subscriptions the cleanup removed (the
+        remaining window; the peer's next sync re-creates them).
         """
         failed_once = False  # For multiple relationships, this will be True if at least one deletion at peer failed
         success_once = False  # True if at least one relationship was deleted at peer
@@ -3041,6 +3067,10 @@ class Actor:
         else:
             rels = self.get_trust_relationships(peerid=peerid)
         for rel in rels:
+            if expected_secret is not None and not secret_equals(
+                str(rel.get("secret") or ""), expected_secret
+            ):
+                raise TrustReplaced(rel.get("peerid"))
             # For OAuth2-established trusts, there is no remote actor endpoint to call.
             # Skip remote deletion and delete locally only.
             is_oauth2_trust = (
@@ -3098,6 +3128,14 @@ class Actor:
                     f"Skipping remote delete for {reason}; deleting locally only"
                 )
                 success_once = True
+            if expected_secret is not None:
+                current = trust.Trust(
+                    actor_id=self.id, peerid=rel["peerid"], config=self.config
+                ).get()
+                if current and not secret_equals(
+                    str(current.get("secret") or ""), expected_secret
+                ):
+                    raise TrustReplaced(rel.get("peerid"))
             if not self.subs_list:
                 # strict=False: a fault leaves this peer's subscriptions as
                 # orphans rather than failing the trust deletion.
@@ -3225,8 +3263,22 @@ class Actor:
             dbtrust = trust.Trust(
                 actor_id=self.id, peerid=rel["peerid"], config=self.config
             )
+            deleted = (
+                dbtrust.delete(only_if_secret=expected_secret)
+                if expected_secret is not None
+                else dbtrust.delete()
+            )
+            if not deleted and expected_secret is not None:
+                current = trust.Trust(
+                    actor_id=self.id, peerid=rel["peerid"], config=self.config
+                ).get()
+                if current and not secret_equals(
+                    str(current.get("secret") or ""), expected_secret
+                ):
+                    # Lost to a re-pair: not a fault.
+                    raise TrustReplaced(rel.get("peerid"))
             if (
-                not dbtrust.delete()
+                not deleted
                 and trust.Trust(
                     actor_id=self.id, peerid=rel["peerid"], config=self.config
                 ).get()
@@ -3845,13 +3897,21 @@ class Actor:
         )
 
     async def delete_reciprocal_trust_async(
-        self, peerid: str | None = None, delete_peer: bool = False
+        self,
+        peerid: str | None = None,
+        delete_peer: bool = False,
+        *,
+        expected_secret: str | None = None,
     ) -> bool:
-        """Async version - wraps sync method in asyncio.to_thread to prevent blocking."""
+        """Async version - wraps sync method in asyncio.to_thread to prevent
+        blocking (``expected_secret`` as in the sync method)."""
         import asyncio
 
         return await asyncio.to_thread(
-            self.delete_reciprocal_trust, peerid=peerid, delete_peer=delete_peer
+            self.delete_reciprocal_trust,
+            peerid=peerid,
+            delete_peer=delete_peer,
+            expected_secret=expected_secret,
         )
 
     async def create_remote_subscription_async(

@@ -167,6 +167,7 @@ class TrustManager:
         peer_id: str = "",
         relationship: str = "",
         trust_data: dict[str, Any] | None = None,
+        **extra: Any,
     ) -> None:
         """Execute a lifecycle hook."""
         if not self._hooks:
@@ -182,12 +183,75 @@ class TrustManager:
                 peer_id=peer_id,
                 relationship=relationship,
                 trust_data=trust_data or {},
+                **extra,
             )
             logger.debug(f"Lifecycle hook '{event}' executed for peer {peer_id}")
         except DbError:
             raise
         except Exception as e:
             logger.error(f"Error executing lifecycle hook '{event}': {e}")
+
+    _warned_trust_approved = False
+
+    def _registered(self, event: str) -> bool:
+        hooks = getattr(self._hooks, "_lifecycle_hooks", None) or {}
+        return bool(hooks.get(event))
+
+    @staticmethod
+    def _fully_approved(row: Any) -> bool:
+        if row is None:
+            return False
+        if isinstance(row, dict):
+            return bool(row.get("approved")) and bool(row.get("peer_approved"))
+        return bool(getattr(row, "approved", False)) and bool(
+            getattr(row, "peer_approved", False)
+        )
+
+    def fire_approved(self, peer_id: str, before: Any, after: Any) -> None:
+        """The one approval hook path (3.16): ``trust_fully_approved_local``
+        once, when the row went from not fully approved (``before``) to
+        approved by both sides (``after``), with ``trust_data`` = the row. A
+        repeat approval fires nothing. ``trust_approved`` (deprecated) fires
+        in its place only when no ``trust_fully_approved_local`` hook is
+        registered. A store fault after the approval committed is logged,
+        not raised (a retry would fire twice)."""
+        if not self._fully_approved(after) or self._fully_approved(before):
+            return
+        row = after if isinstance(after, dict) else after.to_dict()
+        event = "trust_fully_approved_local"
+        if not self._registered(event) and self._registered("trust_approved"):
+            event = "trust_approved"
+            if not TrustManager._warned_trust_approved:
+                TrustManager._warned_trust_approved = True
+                logger.warning(
+                    "The trust_approved hook is deprecated: register "
+                    "trust_fully_approved_local (it fires on every approving route)"
+                )
+        try:
+            self._execute_lifecycle_hook(
+                event,
+                peer_id=peer_id,
+                relationship=str(row.get("relationship") or ""),
+                trust_data=row,
+            )
+        except DbError as e:  # folds DbError: hook after the approval committed
+            logger.error(f"{event} for {peer_id} skipped on a store fault: {e}")
+
+    def fire_deleted(self, row: Any, *, initiated_by_peer: bool) -> None:
+        """The one deletion hook path (3.16): ``trust_deleted`` before the
+        delete, with ``peer_id``, ``relationship``, ``trust_data`` (the row,
+        so the hook can still read the peer's cached profile) and
+        ``initiated_by_peer``."""
+        if not row:
+            return
+        data = row if isinstance(row, dict) else row.to_dict()
+        self._execute_lifecycle_hook(
+            "trust_deleted",
+            peer_id=str(data.get("peerid") or ""),
+            relationship=str(data.get("relationship") or ""),
+            trust_data=data,
+            initiated_by_peer=initiated_by_peer,
+        )
 
     @property
     def relationships(self) -> list[TrustRelationship]:
@@ -274,20 +338,8 @@ class TrustManager:
         peer_id = self._core_actor.last_trust_approved_on_create
         if not peer_id or not isinstance(rel_data, dict):
             return
-        if not (rel_data.get("approved") and rel_data.get("peer_approved")):
-            return
-        try:
-            self._execute_lifecycle_hook(
-                "trust_fully_approved_local",
-                peer_id=peer_id,
-                relationship=str(rel_data.get("relationship") or ""),
-                trust_data=rel_data,
-            )
-        except DbError as e:  # folds DbError: hook after the approval committed
-            logger.error(
-                f"trust_fully_approved_local for {peer_id} skipped on a store "
-                f"fault after the approval committed: {e}"
-            )
+        # The waiting request was not approved here before this create.
+        self.fire_approved(peer_id, None, rel_data)
 
     def approve_relationship(self, peer_id: str) -> bool:
         """Approve a trust relationship with lifecycle hook execution."""
@@ -305,22 +357,10 @@ class TrustManager:
             # twice.
             try:
                 updated_trust = self.get_relationship(peer_id)
-                if (
-                    updated_trust
-                    and updated_trust.approved
-                    and updated_trust.peer_approved
-                ):
-                    self._execute_lifecycle_hook(
-                        "trust_approved",
-                        peer_id=peer_id,
-                        relationship=relationship.relationship,
-                        trust_data=updated_trust.to_dict(),
-                    )
             except DbError as e:  # folds DbError: hook after the approval committed
-                logger.error(
-                    f"trust_approved for {peer_id} skipped on a store fault "
-                    f"after the approval committed: {e}"
-                )
+                logger.error(f"Approval hook for {peer_id} skipped: {e}")
+                updated_trust = None
+            self.fire_approved(peer_id, relationship, updated_trust)
 
         return bool(result)
 
@@ -336,11 +376,7 @@ class TrustManager:
 
         # Execute lifecycle hook BEFORE deletion
         if relationship:
-            self._execute_lifecycle_hook(
-                "trust_deleted",
-                peer_id=peer_id,
-                relationship=relationship.relationship,
-            )
+            self.fire_deleted(relationship, initiated_by_peer=False)
 
         result = self._core_actor.delete_reciprocal_trust(
             peerid=peer_id, delete_peer=True
@@ -850,7 +886,13 @@ class TrustManager:
         )
         return bool(result)
 
-    def delete_peer_trust(self, peer_id: str, notify_peer: bool = True) -> bool:
+    def delete_peer_trust(
+        self,
+        peer_id: str,
+        notify_peer: bool = True,
+        *,
+        expected_secret: str | None = None,
+    ) -> bool:
         """
         Delete a trust relationship, optionally notifying the peer.
 
@@ -867,9 +909,14 @@ class TrustManager:
             - Lifecycle hooks (trust_deleted) should be executed by the caller
             - Associated permissions are automatically deleted by the core method
         """
-        result = self._core_actor.delete_reciprocal_trust(
-            peerid=peer_id, delete_peer=notify_peer
-        )
+        if expected_secret is None:  # keeps a subclass's older signature working
+            result = self._core_actor.delete_reciprocal_trust(
+                peerid=peer_id, delete_peer=notify_peer
+            )
+        else:
+            result = self._core_actor.delete_reciprocal_trust(
+                peerid=peer_id, delete_peer=notify_peer, expected_secret=expected_secret
+            )
         return bool(result)
 
     @property

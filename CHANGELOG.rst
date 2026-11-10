@@ -156,7 +156,10 @@ SECURITY
   the row still holding the secret the request authenticated with
   (relationship, approval, base URI and grants stay; the answer follows the
   stored approval; no ``trust_request_received``); anything else answers
-  403 and changes nothing. A pending row is never re-paired: its holder's
+  403 and changes nothing. **Behavior change:** a request carrying a bearer
+  for a peer this actor holds no row for answers 403 ("No trust to
+  re-pair") and creates nothing; the initiator pairs afresh, without the
+  bearer, after removing its own row. A pending row is never re-paired: its holder's
   request is a creation request, which replaces it only if it verifies. A
   creation request is verified when the requester answers with its token
   from a relationship it approved (the one it created before sending the
@@ -761,6 +764,37 @@ SECURITY
   that peer may read). Other targets are served as stored, as their
   callbacks are.
 
+- **A trust delete could remove the row a re-pair had just written, and a
+  deleted grant left the peer believing it still held it.** ``DELETE
+  /trust/<rel>/<peer>`` deleted whatever row the peer id named when the
+  delete ran: a re-pair landing between the request's read and its delete
+  lost its new row, with its subscriptions, grant and OAuth2 client. ``DELETE
+  /trust/<rel>/<peer>/permissions`` sent the peer nothing, so the peer kept
+  acting on the grant it was last sent, and answered 204 also when there
+  was nothing to delete. **Behavior change:** the delete removes only the row
+  it was authorised against (its secret is compared on a consistent read
+  before the remote delete, again before the local cleanup, and by a
+  conditional row delete); a row replaced meanwhile is kept and the request
+  answers 404. A re-pair landing after the second comparison keeps its row,
+  but the cleanup that ran (the subscriptions, the peer's stored data) is
+  gone; the peer's next sync re-creates the subscriptions. ``Trust.delete``,
+  ``Actor.delete_reciprocal_trust`` (and its async twin) and
+  ``TrustManager.delete_peer_trust`` take a keyword-only ``only_if_secret`` /
+  ``expected_secret``; the store's ``DbTrust.delete`` takes
+  ``only_if_secret`` and answers False for a row with another secret.
+  **Behavior change:** deleting a grant override sends the permission
+  callback with the peer's default grant for its trust type (through the
+  same sender, with the same resends, as a ``PUT`` of the grant, and only
+  when ``notify_peer_on_change`` is on); deleting a grant that does not
+  exist answers 404 and sends nothing. ``TrustPermissionStore.delete_permissions``
+  itself still sends nothing (its other callers delete the trust row with it
+  or store a new grant next). **Check:** a peer receiving permission
+  callbacks with ``auto_delete_on_revocation`` now sees a deleted override
+  as a change to the default; that comparison still acts only on patterns
+  that disappear, not on an added exclusion, a dropped ``read``, scalar
+  properties or copies fetched by query
+  (``docs/quickstart/configuration.rst``).
+
 REMOVED
 ~~~~~~~
 
@@ -792,6 +826,38 @@ REMOVED
 
 CHANGED
 ~~~~~~~
+
+- **Trust hooks fire once, with the same arguments, on every route.** An
+  approval through ``PUT /trust/<rel>/<peer>`` or the web UI fired
+  ``trust_fully_approved_local``, ``TrustManager.approve_relationship``
+  fired ``trust_approved`` instead, and a repeated ``PUT`` with
+  ``approved=true`` fired again; ``trust_deleted`` got the row as
+  ``trust_data`` on some routes and an empty dict or no ``initiated_by_peer``
+  on others. **Behavior change:** every approving route (``PUT`` and the web
+  UI, ``approve_relationship`` and ``approve_relationship_async``,
+  approve-on-create) fires ``trust_fully_approved_local`` once, on the
+  transition to approved by both sides, with ``trust_data`` = the row; a
+  repeat approval fires nothing. ``trust_approved`` is deprecated: it runs
+  in its place, with the same arguments, only when no
+  ``trust_fully_approved_local`` hook is registered (with a one-time
+  warning); an application that registered both now sees only the
+  canonical one. ``trust_deleted`` fires before the delete on every route
+  with the row as ``trust_data`` and ``initiated_by_peer``. A lifecycle hook
+  without ``**kwargs`` raises ``TypeError`` on the arguments it does not
+  name; that is now logged at ERROR naming the hook, once per process.
+  **Check:** rename ``trust_approved`` hooks to
+  ``trust_fully_approved_local`` and give every lifecycle hook ``**kwargs``
+  (migration guide, "Trust hooks fire once, with the same arguments").
+
+- **A ``PUT`` of a trust with new permissions writes the grant first.** The
+  trust was approved and the peer told before the grant was stored, so a
+  failed grant write left the peer approved on the grant it had.
+  **Behavior change:** the grant is written first; a failure answers 500
+  with the trust unchanged (unapproved, when the ``PUT`` approved it) and
+  the peer not told. The peer is sent the new grant only once the trust
+  write landed; when that write fails (404/400, or a store fault), the
+  grant as it was is restored (or the new one deleted) and the peer is told
+  nothing.
 
 - **Breaking: an anonymous registration may not ask for
   ``client_credentials`` or a level the client list does not offer.**
@@ -1976,6 +2042,25 @@ ADDED
 
 FIXED
 ~~~~~
+
+- **In a process serving two ActingWeb applications, a changed grant was
+  not seen.** The permission store is rebuilt when another application's
+  config asks for it, and the permission evaluator kept the store it was
+  built with: writes went to the new store while decisions read the old
+  one's cache, so a narrowed grant kept serving what it had excluded. The
+  evaluator now looks the store up on each use. A process with one
+  application was not affected.
+
+- **An approval that also moved the peer's base URI was announced at the
+  old one.** ``modify_trust_and_notify(approved=True, baseuri=...)`` sent
+  the approval to the URL the row had before the write. It goes to the base
+  URI the same call wrote.
+
+- **An async trust creation that failed with an error other than an HTTP
+  one left its half-made row.** ``create_reciprocal_trust_async`` dropped
+  the attempt only on an ``httpx`` error (an invalid URL raised something
+  else), and the next attempt was taken for a re-pair. Any failure of the
+  request now drops the attempt, as the sync method does.
 
 - **A subscriber deleted a live trust when its peer deleted its
   subscriptions.** When every subscription to a peer answered 404,

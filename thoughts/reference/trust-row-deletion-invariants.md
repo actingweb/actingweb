@@ -66,6 +66,36 @@ has no TTL: after a delete in one worker, another worker can serve its
 cached permissions for a row with the same peer id until it restarts. See
 `thoughts/todo/mcp-cache-lifecycle-and-revocation.md`.
 
+## The conditional delete (3.16)
+
+`DELETE /<actor>/trust/<rel>/<peer>` deletes only the row it was authorised
+against: the handler passes that row's secret (the bearer's row for a peer,
+the row as read for the creator) as `expected_secret` to
+`Actor.delete_reciprocal_trust` (or `TrustManager.delete_peer_trust`). A
+re-pair swaps the secret, so a different secret means a different row.
+
+1. **Before step 1** (the remote DELETE): each listed row's secret is
+   compared; a mismatch raises `TrustReplaced` (the handler answers 404).
+2. **Before step 2** (the local cleanup): the row is read again
+   (`Trust.get`, a consistent read on DynamoDB) and compared.
+3. **Step 7**: `Trust.delete(only_if_secret=)` compares on a fresh read
+   before steps 3-4, and `DbTrust.delete(only_if_secret=)` deletes on the
+   condition (DynamoDB `attribute_not_exists(id) OR secret = :s`;
+   PostgreSQL `... AND secret = %s`, then a re-read on rowcount 0 to tell
+   absent, True, from replaced, False). A False with a different row
+   standing raises `TrustReplaced`.
+
+**The remaining window.** A re-pair that lands after check 2 and before
+step 7 keeps its row, but step 2 has run: its subscriptions, remote-peer
+store, callback state and peer profile are gone, and steps 3-4 may have run
+for an OAuth2 row. The new row stands without them; the peer's next sync
+re-creates the subscriptions. Closing it would need the cleanup to run
+after the row delete, which breaks rule 2 (the row is the retry handle).
+`tests/test_trust_conditional_delete.py` holds both sides of check 2.
+
+Without `expected_secret` (`TrustManager.delete_relationship`, the bulk
+routes) nothing changes: whatever row the peer id names is deleted.
+
 ## Known residue (accepted)
 
 - **Step 8:** permissions left behind by a fault stay until a row with the

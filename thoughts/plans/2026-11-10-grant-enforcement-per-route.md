@@ -1468,7 +1468,73 @@ A13 to A16, the stale notification URL, C10, and the documented items.
 - [ ] `grep -n "approved=False" actingweb/handlers/subscription.py` has no
       hit
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+#### Phase 4 notes (2026-11-10)
+
+- Grant delete: `TrustPermissionStore.get_permissions_uncached` (drops the
+  cache entry, then a strict read) and `notify_default_grant` (an override
+  with no updates for the stored trust type, through `_notify_peer`, so the
+  503 resends apply; only when `notify_peer_on_change`). The handler
+  answers 404 for no override, 500 when the delete itself answers False.
+- Conditional delete: `TrustReplaced` (in `actor.py`) carries the lost race
+  to the handler, which answers 404; `TrustManager.delete_peer_trust`
+  passes `expected_secret` only when given, so a subclass or fake with the
+  old signature keeps working through it. `Trust.delete` compares with
+  `secret_equals`.
+- PUT: the grant is stored with `notify_peer=False` (codex: the peer was
+  told of a grant a failed trust write then rolled back) and sent with
+  `notify_stored_grant` once the trust write landed; `update_permissions`
+  gained `notify_peer=` (additive, defaulted). The restore of the previous
+  override is silent too.
+- DELETE: the handler compares the row it read with the secret it was
+  authorised against *before* the `trust_deleted` hook (codex: a stale
+  bearer fired the new row's hook, then lost the race), so a replaced row
+  fires nothing and answers 404.
+- Hooks: `fire_approved(peer_id, before, after)` decides the transition
+  itself (callers pass the row read before the write and after it);
+  `approve_relationship_async` runs the sync method in an executor, so it
+  is one path. `modify_and_notify` (the public `TrustManager` method) fires
+  nothing: the REST `PUT` calls it and fires afterwards, and firing in both
+  would double it; an application calling it directly gets no hook, as
+  before. The `TypeError` log is per hook and event, once per process, at
+  ERROR with the hook's name; every later failure logs as before.
+- The plan's "built-in" notes on the approval hooks were wrong: nothing
+  caches a peer profile on approval (only `sync_peer` and
+  `refresh_peer_profile` do); the hooks reference now says so. The
+  `trust_deleted` built-in is the delete cascade, after the hook.
+- Accepted, not fixed (codex, recorded here): a grant `DELETE` racing an
+  owner's grant `PUT` is last-writer-wins between two owner requests; two
+  simultaneous approvals of one pending row can both see the transition
+  and fire the hook twice (the write is conditioned on the secret, not on
+  the row being unapproved).
+- `WG18`: 204 with one permission callback to F, then 404 with none.
+  `WG19`: the repeat REST approve fires nothing, `approve_relationship`
+  fires `trust_fully_approved_local` (the harness registers both names),
+  `trust_deleted` carries `initiated_by_peer` on both routes. Compared twice
+  after recording; no other row changed.
+- `subscription.py`: `grep -n "approved=False"` has no hit.
+- Found by the sequential PostgreSQL run (then reproduced on DynamoDB, and
+  at the Phase 3 commit): `test_subscription_callback_flows` followed by
+  `test_subscription_grants_flow` delivered a list the grant had since
+  excluded. Cause: `PermissionEvaluator.permission_store` was captured at
+  construction, and the store singleton is rebuilt whenever another app's
+  config asks for it (the test servers run three apps in one process), so
+  the evaluator read a stale cache. Fixed by looking the store up on each
+  use (`tests/test_evaluator_store_lookup.py` fails without it). The
+  parallel runs had hidden it: `--dist loadgroup` put the two files on
+  different workers.
+- Full tier on the final tree (2026-11-10): ruff, format, pyright clean;
+  unit 4973 passed; DynamoDB 6411 passed; PostgreSQL 6208 passed; the
+  sequential PostgreSQL integration run 1372 passed and 1 failed,
+  `test_callback_processor_concurrency.py::test_two_concurrent_deliveries_run_the_handler_once`,
+  which fails the same way on `master` and at the Phase 3 commit (filed:
+  `thoughts/todo/callback-concurrency-test-sequential-postgresql.md`); docs
+  build with `-W`. Codex on the Phase 4 diff: six findings, three fixed
+  (the PUT's early grant callback, the hook on a stale DELETE, the
+  `TypeError` wording), three accepted above.
+- Emm's suite on the final commit is left to `/verify_implementation` (the
+  plan's verification list), run after this commit.
 
 ---
 

@@ -58,10 +58,7 @@
         "excluded_patterns": [
          "private/*",
          "security/*",
-         "_internal/*",
-         "memory_*",
-         "settings/private",
-         "*/deep/private"
+         "_internal/*"
         ],
         "operations": [
          "read",
@@ -120,7 +117,155 @@
    "wire": [
     {
      "auth": "basic:<A.creator>",
-     "children": [],
+     "children": [
+      {
+       "auth": "bearer:trust:A-F",
+       "children": [
+        {
+         "actor": "<F>",
+         "data": {
+          "actions": {
+           "allowed": [
+            "*"
+           ],
+           "denied": [
+            "delete_*",
+            "admin_*",
+            "system_*"
+           ]
+          },
+          "methods": {
+           "allowed": [
+            "*"
+           ],
+           "denied": [
+            "delete_*",
+            "admin_*",
+            "system_*"
+           ]
+          },
+          "prompts": null,
+          "properties": {
+           "excluded_patterns": [
+            "private/*",
+            "security/*",
+            "_internal/*"
+           ],
+           "operations": [
+            "read",
+            "write"
+           ],
+           "patterns": [
+            "*"
+           ]
+          },
+          "resources": {
+           "excluded_patterns": [
+            "private/*",
+            "security/*"
+           ],
+           "operations": [
+            "read",
+            "write"
+           ],
+           "patterns": [
+            "*"
+           ]
+          },
+          "tools": {
+           "allowed": [
+            "*"
+           ],
+           "denied": [
+            "admin_*",
+            "system_*"
+           ]
+          }
+         },
+         "event": "permissions",
+         "granting_actor_id": "<A>",
+         "permission_changes": {
+          "granted_patterns": [],
+          "has_revocations": false,
+          "is_initial": false,
+          "revoked_patterns": []
+         }
+        }
+       ],
+       "headers": {},
+       "host": "wire_app",
+       "method": "POST",
+       "path": "/<F>/callbacks/permissions/<A>",
+       "query": "",
+       "request": {
+        "data": {
+         "actions": {
+          "allowed": [
+           "*"
+          ],
+          "denied": [
+           "delete_*",
+           "admin_*",
+           "system_*"
+          ]
+         },
+         "methods": {
+          "allowed": [
+           "*"
+          ],
+          "denied": [
+           "delete_*",
+           "admin_*",
+           "system_*"
+          ]
+         },
+         "prompts": null,
+         "properties": {
+          "excluded_patterns": [
+           "private/*",
+           "security/*",
+           "_internal/*"
+          ],
+          "operations": [
+           "read",
+           "write"
+          ],
+          "patterns": [
+           "*"
+          ]
+         },
+         "resources": {
+          "excluded_patterns": [
+           "private/*",
+           "security/*"
+          ],
+          "operations": [
+           "read",
+           "write"
+          ],
+          "patterns": [
+           "*"
+          ]
+         },
+         "tools": {
+          "allowed": [
+           "*"
+          ],
+          "denied": [
+           "admin_*",
+           "system_*"
+          ]
+         }
+        },
+        "id": "<A>",
+        "target": "permissions",
+        "timestamp": "<ts:iso-offset>",
+        "type": "permission"
+       },
+       "response": null,
+       "status": 204
+      }
+     ],
      "headers": {},
      "host": "wire_app",
      "method": "DELETE",
@@ -190,10 +335,7 @@
         "excluded_patterns": [
          "private/*",
          "security/*",
-         "_internal/*",
-         "memory_*",
-         "settings/private",
-         "*/deep/private"
+         "_internal/*"
         ],
         "operations": [
          "read",
@@ -246,7 +388,7 @@
    },
    "result": {
     "body": "",
-    "status": 204
+    "status": 404
    },
    "step": "A deletes it again",
    "wire": [
@@ -260,7 +402,7 @@
      "query": "",
      "request": null,
      "response": null,
-     "status": 204
+     "status": 404
     }
    ]
   }

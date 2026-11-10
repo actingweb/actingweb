@@ -5,6 +5,7 @@ from typing import Any
 from actingweb.db import get_trust, get_trust_list
 
 from .db.exceptions import DbError
+from .secret_compare import secret_equals
 
 # What a peer may call itself, and where it may say it lives. Both arrive
 # from the peer (an unauthenticated trust request, or the peer's /meta) and
@@ -146,10 +147,35 @@ class Trust:
             )
         return self.trust
 
-    def delete(self) -> bool:
-        """Delete the trust relationship"""
+    def delete(self, *, only_if_secret: str | None = None) -> bool:
+        """Delete the trust relationship.
+
+        ``only_if_secret`` (3.16): delete only the row that has this secret.
+        It is compared on a fresh read before anything is removed (the OAuth2
+        client, its tokens, the sibling rows) and again by the row delete, so
+        a row a re-pair replaced in the meantime is left alone and False is
+        answered. A re-pair landing between those two checks keeps its row;
+        what the cleanup between them removed is gone (the remaining window,
+        ``thoughts/reference/trust-row-deletion-invariants.md``).
+        """
         if not self.handle:
             return False
+
+        if only_if_secret is not None:
+            from .db import get_trust
+
+            fresh = get_trust(self.config) if self.config else None
+            row = (
+                fresh.get(actor_id=self.actor_id, peerid=self.peerid) if fresh else None
+            )
+            if row and not secret_equals(str(row.get("secret") or ""), only_if_secret):
+                logger.info(
+                    f"Trust {self.actor_id}:{self.peerid} was replaced; not deleted"
+                )
+                return False
+            if not row:
+                return True
+            self.trust = dict(row)
 
         # Load the row: which OAuth2 client it connects is read from it.
         if not self.trust:
@@ -235,7 +261,11 @@ class Trust:
             )
 
         self.trust = {}
-        result = self.handle.delete()
+        result = (
+            self.handle.delete(only_if_secret=only_if_secret)
+            if only_if_secret is not None
+            else self.handle.delete()
+        )
 
         try:
             # The row's custom permissions go right after the row, never

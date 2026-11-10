@@ -873,10 +873,32 @@ class HookRegistry:
                         result = hook_result
                 except DbError:
                     raise
+                except TypeError as e:
+                    self._report_signature_error(event, hook, e)
                 except Exception as e:
                     logger.error(f"Error in lifecycle hook for {event}: {e}")
 
         return result
+
+    _signature_errors_reported: set[tuple[str, str]] = set()
+
+    @classmethod
+    def _report_signature_error(cls, event: str, hook: Any, error: TypeError) -> None:
+        """A lifecycle hook that raised ``TypeError``, most often one written
+        without ``**kwargs`` that is handed an argument it does not name
+        (3.16: ``trust_deleted`` gets ``initiated_by_peer`` on every route).
+        The first one per hook and event, per process, is logged with the
+        hook's name and the hint; every later one as any hook error."""
+        name = getattr(hook, "__qualname__", None) or repr(hook)
+        if (event, name) in cls._signature_errors_reported:
+            logger.error(f"Error in lifecycle hook for {event}: {error}")
+            return
+        cls._signature_errors_reported.add((event, name))
+        logger.error(
+            f"Lifecycle hook {name} for {event} raised TypeError ({error}); "
+            "if it does not take **kwargs, add it (a lifecycle hook must "
+            "accept **kwargs)"
+        )
 
     def execute_method_hooks(
         self,
@@ -1345,6 +1367,8 @@ class HookRegistry:
                         result = hook_result
                 except DbError:
                     raise
+                except TypeError as e:
+                    self._report_signature_error(event, hook, e)
                 except Exception as e:
                     logger.error(f"Error in lifecycle hook for {event}: {e}")
 

@@ -398,12 +398,17 @@ class TestJ4PostCommitFolds:
         from actingweb.interface.trust_manager import TrustManager
 
         core = mock.Mock()
-        core.get_trust_relationship.return_value = {
+        approved = {
             "peerid": "peer-1",
             "relationship": "friend",
             "approved": True,
             "peer_approved": True,
         }
+        # The hook fires on the transition (3.16): pending before, approved after.
+        core.get_trust_relationship.side_effect = [
+            {**approved, "approved": False},
+            approved,
+        ]
         core.modify_trust_and_notify.return_value = True
         hooks = mock.Mock()
         hooks.execute_lifecycle_hooks.side_effect = _raise

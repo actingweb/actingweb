@@ -338,19 +338,7 @@
    "wire": [
     {
      "auth": "basic:<A.creator>",
-     "children": [
-      {
-       "actor": "<A>",
-       "arguments": [
-        "peer_id",
-        "relationship",
-        "trust_data"
-       ],
-       "event": "trust_hook",
-       "hook": "trust_fully_approved_local",
-       "peer": "<G>"
-      }
-     ],
+     "children": [],
      "headers": {},
      "host": "wire_app",
      "method": "PUT",
@@ -530,7 +518,7 @@
       "trust_data"
      ],
      "event": "trust_hook",
-     "hook": "trust_approved",
+     "hook": "trust_fully_approved_local",
      "peer": "<H>"
     }
    ]
@@ -895,13 +883,14 @@
     {
      "actor": "<A>",
      "event": "trust_deleted",
-     "initiated_by_peer": null,
+     "initiated_by_peer": false,
      "peer": "<H>",
      "relationship": "friend"
     },
     {
      "actor": "<A>",
      "arguments": [
+      "initiated_by_peer",
       "peer_id",
       "relationship",
       "trust_data"

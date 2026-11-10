@@ -409,6 +409,39 @@ class TestTheInitiator:
             )
         assert not Trust(actor_id=aid(w.b), peerid=other, config=w.config).get()
 
+    def test_the_async_create_drops_its_row_on_any_send_error(self) -> None:
+        """3.16 (plan grant-enforcement-per-route, Phase 4): an exception
+        that is not an httpx error (an invalid URL, say) dropped nothing, and
+        the next attempt was taken for a re-pair of the half-made row."""
+        w = Initiator()
+        other = f"peer-x-{uuid.uuid4().hex[:8]}"
+        url = f"https://{other}.example.test/{other}"
+        info = {"last_response_code": 200, "data": {"id": other, "type": "urn:test"}}
+
+        def run(post: Any) -> Any:
+            client = mock.MagicMock()
+            client.__aenter__.return_value.post = post
+            with (
+                mock.patch.object(
+                    w.b, "get_peer_info_async", mock.AsyncMock(return_value=info)
+                ),
+                mock.patch("httpx.AsyncClient", return_value=client),
+            ):
+                return asyncio.run(
+                    w.b.create_reciprocal_trust_async(
+                        url=url, secret=_new_secret(), relationship="friend"
+                    )
+                )
+
+        assert run(mock.AsyncMock(side_effect=ValueError("bad url"))) is False
+        assert not Trust(actor_id=aid(w.b), peerid=other, config=w.config).get()
+
+        second = mock.AsyncMock(return_value=mock.Mock(status_code=201, content=b"{}"))
+        assert run(second)
+        sent = second.call_args.kwargs
+        assert "Authorization" not in sent.get("headers", {})  # a creation
+        assert Trust(actor_id=aid(w.b), peerid=other, config=w.config).get()
+
 
 # ---------------------------------------------------------------------------
 # ?notify=false

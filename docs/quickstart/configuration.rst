@@ -1001,6 +1001,14 @@ subscription callbacks and want to ensure that revoked data is cleaned up.
 new permissions only have ``["memory_*"]``, then ``profile_*`` is considered revoked.
 Any cached lists matching ``profile_*`` (like ``profile_info``) will be deleted.
 
+**What it does not yet act on (3.16):** only a pattern that disappears from
+the grant counts as revoked. A pattern added to ``excluded_patterns``, an
+operation dropped from a pattern that stays (``read`` removed), a scalar
+property cached outside a list, and copies an application fetched by query are
+not deleted. A deleted grant override now sends a permission callback (the
+peer is back on its trust type's default), so a narrower default triggers the
+comparison above.
+
 **Callback Hook Data:**
 
 When handling permission callbacks, the hook data includes a ``permission_changes`` dict:

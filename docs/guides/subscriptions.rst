@@ -515,7 +515,10 @@ list with subscribers, prefer suspending the ``properties`` target first
 Fan-Out Manager
 ---------------
 
-For advanced use cases, control callback delivery with circuit breakers:
+For advanced use cases, control callback delivery with circuit breakers.
+``deliver()`` sends the payload as given to every subscriber; it does not
+apply grants (the library's own diff and resync paths filter property data
+per peer first). Send only what every subscriber of the target may read.
 
 .. code-block:: python
 

@@ -34,8 +34,13 @@ def _served(
     reader that does not know the type."""
     config = getattr(myself, "config", None)
     if config:
-        own_root = f"{config.proto}{config.fqdn}/{myself.id}/"
-        url = resync_marker_url(raw, own_root)
+        url = resync_marker_url(
+            raw,
+            config,
+            myself.id,
+            str(sub_dict.get("target") or ""),
+            sub_dict.get("subtarget"),
+        )
         if url:
             return {"type": "resync", "url": url, "data": {}}
     return {"data": _as_permitted(myself, peerid, sub_dict, raw)}

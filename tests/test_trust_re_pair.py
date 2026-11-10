@@ -2396,6 +2396,58 @@ class TestTheResyncAfterReverify11:
         assert served["url"].endswith(f"/{aid(w.a)}/properties/notes")
         assert served["data"] == {}
 
+    def _store_raw(self, w: Receiver, peer: str, subid: str, blob: Any) -> int:
+        seq = w.a._increment_subscription_sequence(peer, subid)
+        assert seq and w.a._store_subscription_diff(peer, subid, seq, blob)
+        return seq
+
+    def test_a_marker_for_one_subtarget_reaches_a_whole_target_subscriber(
+        self,
+    ) -> None:
+        """Reverify-14 Issue 1: a resume of one subtarget gives a client
+        subscribed to the whole target a marker for that subtarget only."""
+        w = Receiver()
+        peer, subid, secret = self._client_sub(w, "oauth2_client", "")
+        assert w.a.suspend_subscriptions("properties", "notes")
+        w.a.set_property("notes", "changed")
+        with mock.patch("actingweb.actor.requests.post") as post:
+            assert w.a.resume_subscriptions("properties", "notes") == 1
+        post.assert_not_called()
+        [served] = json.loads(self._client_reads(w, peer, subid, secret, None))["data"]
+        assert served["type"] == "resync"
+        assert served["url"] == (
+            f"{w.config.proto}{w.config.fqdn}/{aid(w.a)}/properties/notes"
+        )
+
+    @pytest.mark.parametrize("path", ["properties/other", "trust", "properties"])
+    def test_data_shaped_like_a_marker_outside_the_subscription_is_data(
+        self, path: str
+    ) -> None:
+        """Reverify-14 Issue 3: a value shaped like a marker whose URL is not
+        the subscription's target (or under it) is served as data."""
+        w = Receiver()
+        peer, subid, secret = self._client_sub(w, "oauth2_client", "", "notes")
+        root = f"{w.config.proto}{w.config.fqdn}/{aid(w.a)}"
+        self._store_raw(w, peer, subid, {"type": "resync", "url": f"{root}/{path}"})
+        [served] = json.loads(self._client_reads(w, peer, subid, secret, None))["data"]
+        assert "type" not in served and "url" not in served
+
+    def test_a_marker_stored_before_a_host_change_points_at_the_new_host(
+        self,
+    ) -> None:
+        """Reverify-14 Issue 3: the served URL is rebuilt from today's
+        config, so a marker stored under the old host is still a marker."""
+        w = Receiver()
+        peer, subid, secret = self._client_sub(w, "oauth2_client", "", "notes")
+        old = f"https://old.example.test/{aid(w.a)}/properties/notes"
+        seq = self._store_raw(w, peer, subid, {"type": "resync", "url": old})
+        served = json.loads(self._client_reads(w, peer, subid, secret, seq))
+        assert served["type"] == "resync"
+        assert served["url"] == (
+            f"{w.config.proto}{w.config.fqdn}/{aid(w.a)}/properties/notes"
+        )
+        assert served["data"] == {}
+
     def test_a_peer_still_gets_its_resync(self) -> None:
         """The control: a peer's subscription is resynced."""
         w = Receiver()

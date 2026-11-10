@@ -4049,3 +4049,56 @@ Emm's suite on `409adeb` (environment 9, its adoption worktree unchanged):
 PostgreSQL 2 failed / 7406 passed, DynamoDB 3 failed / 54 passed, the
 `master` baseline's failures by name. The environment 9 server was stopped
 afterwards.
+
+### 2026-11-10, after verification thoughts/verifications/2026-11-10-peer-authorisation-fixes-reverify-14.md
+
+Scope (owner, 2026-11-10: Issues 1 to 3). No known client polls
+subscriptions today; 1 and 2 are where the new spec text gave a client that
+follows it wrong data, 3 the marker's recognition. Issues 4 to 6 are left
+by the owner's rule.
+
+#### 91. A resync marker is scoped to its subscription, and the spec says what to discard and skip
+
+**Category**: Verification fix (reverify-14 Issues 1 to 3)
+
+**What changed**:
+- Issue 3: `resync_marker_url(raw, config, actor_id, target, subtarget)`
+  accepts a marker only when its path after `/<actor>/` is the
+  subscription's `target[/subtarget]` or lies under it (a resume of one
+  subtarget for a whole-target subscription), and serves the URL rebuilt
+  from the current config. Data shaped like a marker that points elsewhere
+  (a sibling property, `trust`, the parent of a subtarget) is served as
+  data; a marker stored before a host change still points here.
+  `_served` passes the subscription's target and subtarget.
+- Issue 1: the spec and the guide say the `url` is the subscription's
+  target or lies under it, and a polling subscriber discards only the
+  cached state the `url` names (one property when one subtarget was
+  resumed).
+- Issue 2: the spec and the guide say the re-read already reflects what the
+  diffs after the marker in the same answer change under the `url`: the
+  subscriber skips those changes, applies the rest, and takes the answer's
+  highest sequence. (Not all diffs: with a narrow marker, a diff for
+  another property is not in the re-read.)
+- Changelog: the `url` is the subscription's target or the one subtarget
+  resumed.
+
+**Files affected**:
+- `actingweb/actor.py`: `resync_marker_url`.
+- `actingweb/handlers/subscription.py`: `_served`.
+- `tests/test_trust_re_pair.py`: `test_data_shaped_like_a_marker_outside_the_subscription_is_data`
+  (sibling, `trust`, parent) and
+  `test_a_marker_stored_before_a_host_change_points_at_the_new_host` fail on
+  the code before; `test_a_marker_for_one_subtarget_reaches_a_whole_target_subscriber`
+  pins the narrow marker the docs now describe (passes on both).
+- `docs/protocol/actingweb-spec.rst`, `docs/guides/subscriptions.rst`,
+  `CHANGELOG.rst`.
+
+**Rationale**: the marker said where to re-read but not what it covers,
+and the prefix check let any URL on this actor through; a client following
+the spec could replace its whole cached target with one property, apply a
+list change twice, or fill its cache for one property with another
+resource.
+
+The Full tier on the code of iteration 91: ruff, format and pyright clean;
+`verify_groups` OK; DynamoDB 6181 passed; PostgreSQL 5978 passed; the docs
+build passes; no recording changed.

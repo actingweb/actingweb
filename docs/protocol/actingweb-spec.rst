@@ -3008,9 +3008,14 @@ On receiving a resync callback, the peer SHOULD:
 A subscriber with no callback endpoint (it reads its diffs by polling) MAY
 find its resync as a diff: a GET on the subscription (or on the diff's own
 URL) then shows that sequence with ``"type": "resync"``, the ``url`` and an
-empty ``data`` object. The subscriber SHOULD act on it as on a resync
-callback (steps 1 to 3); one that does not know the type merges ``{}``, a
-change that changes nothing.
+empty ``data`` object. The ``url`` is the subscription's target or lies
+under it. The subscriber SHOULD act on it as on a resync callback (steps 1
+to 3), discarding only the cached state the ``url`` names. Its GET happens
+after every diff in the same answer was stored, so it already reflects the
+changes they make to what the ``url`` names: the subscriber SHOULD skip
+those parts of the diffs after the marker, apply the rest as usual, and
+take the answer's highest sequence as its own. One that does not know the
+type merges ``{}``, a change that changes nothing.
 
 Permission Callback (OPTIONAL)
 ------------------------------

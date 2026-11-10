@@ -85,11 +85,16 @@ def resync_marker(url: str) -> dict[str, str]:
     return {"type": "resync", "url": url}
 
 
-def resync_marker_url(raw: Any, own_root: str) -> str | None:
-    """The URL of a stored resync marker, or None for any other diff. Only
-    a marker pointing under this actor (``own_root``, ending in ``/``)
-    counts; an owner's data that happens to look like one only makes the
-    client re-read."""
+def resync_marker_url(
+    raw: Any, config: Any, actor_id: str | None, target: str, subtarget: Any
+) -> str | None:
+    """The URL to serve for a stored resync marker, or None for any other
+    diff. A marker counts only when its path on this actor is the
+    subscription's own ``target[/subtarget]`` or lies under it (a resume of
+    one subtarget for a whole-target subscription), so data shaped like a
+    marker can only make the subscriber re-read part of what it subscribed
+    to. The URL is rebuilt from the current config: a marker stored before
+    a host change still points here."""
     try:
         parsed = json.loads(raw) if isinstance(raw, str | bytes) else raw
     except (TypeError, ValueError):
@@ -97,9 +102,15 @@ def resync_marker_url(raw: Any, own_root: str) -> str | None:
     if not isinstance(parsed, dict) or set(parsed) != {"type", "url"}:
         return None
     url = parsed.get("url")
-    if parsed.get("type") != "resync" or not isinstance(url, str):
+    if parsed.get("type") != "resync" or not isinstance(url, str) or not actor_id:
         return None
-    return url if url.startswith(own_root) else None
+    _, sep, path = url.partition(f"/{actor_id}/")
+    if not sep:
+        return None
+    scope = f"{target}/{subtarget}" if subtarget else target
+    if path != scope and not path.startswith(f"{scope}/"):
+        return None
+    return _resync_url(config, actor_id, path, None)
 
 
 # A verification's GETs (our trust row there, then its /meta) go to a base

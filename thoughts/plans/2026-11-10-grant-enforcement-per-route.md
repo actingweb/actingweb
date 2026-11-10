@@ -1,5 +1,5 @@
 ---
-status: active
+status: done
 ---
 
 # Implementation Plan: a peer's grant is the answer on every route
@@ -1707,3 +1707,55 @@ fresh-context Claude reviewer; codex's citations were spot-checked.
   drafted.
 - The MCP token bucket and the SPA token bucket being disjoint (an MCP
   token cannot reach REST) is from the research trace, not re-read here.
+
+## Implementation Summary
+
+**Completed:** 2026-11-10
+**All phases:** Complete (0 to 4; commits `70521b6`, `167ed5e`,
+`3e66670`, `6097f62`, `7b36fbf` on `fix/3.16.0-grant-enforcement`, local
+only, never pushed)
+**Test status:** All passing on both backends (parallel Full tier); one
+pre-existing sequential-PostgreSQL failure, filed
+(`thoughts/todo/callback-concurrency-test-sequential-postgresql.md`, fails
+on `master` too). Verification (`/verify_implementation`, with Emm's suite)
+follows.
+
+### Deviations from Plan
+
+- Phase 0: the depth-3 diff shape was fixed here rather than only recorded
+  (owner); the Apple button and the `admin` preselect moved into Phase 3
+  (owner).
+- Phase 1: the depth-3 diff fix is smaller than planned (the resource stays
+  the second segment, the value is filtered whole); diffs drop objects the
+  filter emptied, because the subscriber replaces a property rather than
+  merging; the replica replace-not-merge went to the attribute-list plan
+  (owner).
+- Phase 3: the hook's "lower or decline" became "a different level is
+  shown before it is granted" (types have no order); the SPA callback with
+  an unlisted type signs in without a trust instead of answering an error.
+- Phase 4: `TrustManager.modify_and_notify` fires no approval hook (the
+  REST `PUT` fires after it; firing in both would double it); the PUT's
+  grant is now stored silently and announced after the trust write (codex);
+  the DELETE checks the row's secret before the hook (codex). Two races
+  accepted and recorded under the Phase 4 notes (grant DELETE vs PUT,
+  simultaneous approvals).
+- Added outside the plan, found by its own runs: the permission evaluator
+  reads the live store (a stale cache in a process serving several apps),
+  and a todo for the concurrency test that fails in sequential PostgreSQL
+  runs on `master`.
+
+### Learnings
+
+- Parallel runs (`--dist loadgroup`) can hide an order-dependent defect for
+  a long time: the stale-store bug only showed in a sequential run, where
+  a test file that starts a second app ran before the grants flow.
+- The access table as a fallback had to be bounded by "mentioned vs not
+  mentioned": a stated rule that does not match denies; only an unmentioned
+  category falls to the table, and never for a client.
+- The hooks reference promised a profile fetch on approval that nothing
+  performs; documentation claims about built-in behaviour need a grep for
+  the call site before they are repeated.
+- The wire recordings were the cheapest way to see what changed on each
+  route: every phase's diff to `tests/integration/wire/` was exactly the
+  rows it owned.
+

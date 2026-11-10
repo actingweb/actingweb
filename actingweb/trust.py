@@ -176,13 +176,10 @@ class Trust:
             if not row:
                 # Already gone (an earlier delete, or one that faulted after
                 # the row): what follows the row still runs, as it does for
-                # an unconditional delete of an absent row (3.16). The
-                # conditional delete refuses a row that appeared meanwhile.
+                # an unconditional delete of an absent row (3.16). A handle
+                # built after the row went has nothing loaded to delete.
                 self.trust = {}
-                return self._after_row_delete(
-                    self.handle.delete(only_if_secret=only_if_secret),
-                    str(self.peerid or ""),
-                )
+                return self._after_row_delete(True, str(self.peerid or ""))
             self.trust = dict(row)
 
         # Load the row: which OAuth2 client it connects is read from it.

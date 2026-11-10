@@ -428,7 +428,7 @@ and the next sign-in retries.
     The pre-3.16 name of ``trust_fully_approved_local``. It runs in its place, with the same arguments, only when no ``trust_fully_approved_local`` hook is registered; registering it logs a deprecation warning (once per process). With both registered only ``trust_fully_approved_local`` runs. Rename the hook.
 
 ``trust_deleted``
-    Triggered before a trust relationship's local data is deleted, on every route that deletes one: ``DELETE /trust/<rel>/<peer>`` (by the owner or the peer), ``TrustManager.delete_relationship`` and its async twin, and a peer's revocation found by ``sync_peer``. On the REST route and in ``sync_peer`` it fires after the delete has found the row (and, on REST, checked it is still the row the request was authorised against): a delete that loses to a re-pair, or that finds no row, fires nothing.
+    Triggered before a trust relationship's local data is deleted, on every route that deletes one: ``DELETE /trust/<rel>/<peer>`` (by the owner or the peer), ``TrustManager.delete_relationship`` and its async twin, and a peer's revocation found by ``sync_peer``. On the REST route and in ``sync_peer`` it fires after the delete has found the row (and, on REST, checked it is still the row the request was authorised against): a delete that loses to a re-pair, or that finds no row, fires nothing. ``sync_peer_async`` awaits it on the running event loop, with the row it read, before the delete.
 
     **Signature**: ``func(actor: ActorInterface, peer_id: str, relationship: str, trust_data: dict, initiated_by_peer: bool, **kwargs) -> None``
 

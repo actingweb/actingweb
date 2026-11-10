@@ -1647,17 +1647,8 @@ class SubscriptionManager:
                     actor_interface = ActorInterface(self._core_actor)
 
                     def before_local_delete(row: dict[str, Any]) -> None:
-                        try:
-                            actor_interface.trust.fire_deleted(
-                                row, initiated_by_peer=True
-                            )
-                        except DbError:
-                            raise
-                        except Exception as e:
-                            logger.error(
-                                f"Error executing trust_deleted hook: {e}",
-                                exc_info=True,
-                            )
+                        # fire_deleted logs a hook's error, lets DbError through.
+                        actor_interface.trust.fire_deleted(row, initiated_by_peer=True)
 
                     # Delete local trust relationship without notifying peer (already revoked)
                     deleted = self._core_actor.delete_reciprocal_trust(
@@ -2720,32 +2711,23 @@ class SubscriptionManager:
                     f"Trust has been revoked. Cleaning up locally."
                 )
                 try:
-                    # trust_deleted fires through TrustManager.fire_deleted,
-                    # with the row the delete read, after the delete found it
-                    # and before anything local goes (3.16): a row already
-                    # gone fires nothing (it fired with {} and "friend").
+                    # trust_deleted fires through TrustManager, with the row
+                    # read above, before anything local goes (3.16; a row
+                    # already gone fires nothing). Awaited on this loop, so an
+                    # async hook keeps its loop-bound resources.
                     from .actor_interface import ActorInterface
 
-                    actor_interface = ActorInterface(self._core_actor)
-
-                    def before_local_delete(row: dict[str, Any]) -> None:
-                        try:
-                            actor_interface.trust.fire_deleted(
-                                row, initiated_by_peer=True
-                            )
-                        except DbError:
-                            raise
-                        except Exception as e:
-                            logger.error(
-                                f"Error executing trust_deleted hook: {e}",
-                                exc_info=True,
-                            )
+                    relationships = await asyncio.to_thread(
+                        self._core_actor.get_trust_relationships, peerid=peer_id
+                    )
+                    if relationships:
+                        await ActorInterface(self._core_actor).trust.fire_deleted_async(
+                            relationships[0], initiated_by_peer=True
+                        )
 
                     # Delete local trust relationship without notifying peer (already revoked)
                     deleted = await self._core_actor.delete_reciprocal_trust_async(
-                        peerid=peer_id,
-                        delete_peer=False,
-                        before_local_delete=before_local_delete,
+                        peerid=peer_id, delete_peer=False
                     )
                     if deleted:
                         logger.info(

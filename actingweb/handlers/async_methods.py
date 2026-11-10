@@ -113,13 +113,8 @@ class AsyncMethodsHandler(MethodsHandler):
             return
         myself = auth_result.actor
         check = auth_result.auth_obj
-        # Use unified access control system for permission checking
-        if not self._check_method_permission(actor_id, check, name, "POST"):
-            if self.response:
-                self.response.set_status(403, "Forbidden")
-            return
-
         # Parse request body
+        params: Any = None
         try:
             body: str | bytes | None = self.request.body
             if body is None:
@@ -130,12 +125,28 @@ class AsyncMethodsHandler(MethodsHandler):
                 body_str = body
             params = json.loads(body_str)
         except (TypeError, ValueError, KeyError):
+            params = None
+
+        # Check if this is a JSON-RPC request
+        is_jsonrpc = (
+            isinstance(params, dict)
+            and "jsonrpc" in params
+            and params["jsonrpc"] == "2.0"
+        )
+        # JSON-RPC on the bare /methods names its method in the body, which
+        # the JSON-RPC handler decides (3.16); every other request is
+        # decided by the name in its path (a nameless call is refused when
+        # the grant states a methods rule).
+        if (name or not is_jsonrpc) and not self._check_method_permission(
+            actor_id, check, name, "POST"
+        ):
+            if self.response:
+                self.response.set_status(403, "Forbidden")
+            return
+        if params is None:
             if self.response:
                 self.response.set_status(400, "Error in json body")
             return
-
-        # Check if this is a JSON-RPC request
-        is_jsonrpc = "jsonrpc" in params and params["jsonrpc"] == "2.0"
 
         if is_jsonrpc:
             # Handle JSON-RPC request asynchronously

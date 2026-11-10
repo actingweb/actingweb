@@ -433,7 +433,8 @@ A ``methods``, ``actions`` or ``resources`` request that names nothing
 (``POST /methods`` with no method, JSON-RPC with an empty ``method``, a bare
 ``/resources``) has nothing to grant: when the grant mentions the category
 it is refused, except the ``GET`` listing of methods or actions, which is
-admitted when the rule names anything and then filtered per name. The
+admitted when the rule names anything and then filtered per name, and
+JSON-RPC on the bare ``/methods``, decided by the method its body names. The
 protocol addresses each of these by its path. When the grant does not
 mention the category, the access table answers, as before.
 

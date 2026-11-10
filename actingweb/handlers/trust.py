@@ -1287,14 +1287,9 @@ class TrustPeerHandler(base_handler.BaseHandler):
         # anything local goes (3.16): a delete that loses to a re-pair fires
         # nothing for the row that stands.
         def before_local_delete(row: dict[str, Any]) -> None:
-            if not self.hooks:
-                return
-            try:
+            # fire_deleted logs a hook's error and lets a DbError through.
+            if self.hooks:
                 actor_interface.trust.fire_deleted(row, initiated_by_peer=is_peer)
-            except DbError:
-                raise
-            except Exception as e:
-                logger.error(f"Error triggering trust_deleted hook: {e}")
 
         from ..actor import TrustReplaced
 

@@ -228,3 +228,43 @@ def test_a_refused_remote_subscription_is_logged(caplog) -> None:
     ):
         assert me.create_remote_subscription(peerid="pub1", target="properties") is None
     assert any("refused a subscription" in r.getMessage() for r in caplog.records)
+
+
+class TestApplicationTargetsAtDelivery:
+    """Code review 2026-11-10: an application's own target was re-checked
+    against the creation row (``subscriptions/<id>``), so a subscription the
+    application made itself stopped delivering. It needs an approved trust."""
+
+    @staticmethod
+    def _grant(approved: bool) -> Any:
+        from actingweb.permission_evaluator import GrantSnapshot
+
+        return GrantSnapshot(
+            actor_id="a1",
+            peer_id="p1",
+            has_row=True,
+            approved=approved,
+            relationship="friend",
+            is_client=False,
+            permissions={},
+        )
+
+    def test_an_approved_peer_gets_its_application_diffs(self, actor) -> None:
+        sub = {"target": "meta", "subtarget": "", "resource": ""}
+        out = actor.filter_subscription_blob(
+            "p1", sub, "{}", snapshot=self._grant(True)
+        )
+        assert out == "{}"
+        assert (
+            actor.filter_subscription_blob("p1", sub, "{}", snapshot=self._grant(False))
+            is None
+        )
+
+
+def test_text_nested_beyond_the_parser_is_text() -> None:
+    """Outside voice 2026-11-10: ``RecursionError`` from very deep JSON text
+    escaped the filter (a dropped diff, a view raising)."""
+    from actingweb.permission_evaluator import as_json_object
+
+    deep = "[" * 200_000 + "]" * 200_000
+    assert as_json_object(deep) is None

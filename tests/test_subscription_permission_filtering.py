@@ -295,7 +295,9 @@ class TestCallbackSubscriptionFiltering:
                     mock_post.assert_not_called()
 
     @pytest.mark.parametrize("still_allowed", [True, False])
-    def test_a_non_property_target_is_rechecked_not_filtered(self, still_allowed):
+    def test_a_non_property_target_is_rechecked_not_filtered(
+        self, still_allowed: bool
+    ) -> None:
         """A subscription to another target is delivered as stored while the
         peer may still have it, and not at all once the grant no longer
         admits it (3.16: the creation check is asked again at delivery)."""

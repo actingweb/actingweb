@@ -2246,3 +2246,127 @@ Full tier on this batch (2026-11-10): ruff, format, pyright clean;
 passed; sequential PostgreSQL 1384 passed, failing only
 `test_callback_processor_concurrency` (fails on `master` too; its todo);
 docs build with `-W`.
+
+### 2026-11-10, after the review of the first iteration batch (commit `10f9563`)
+
+The code review (built-in, high) and the outside voice (codex and a
+fresh-context reviewer) on `78b5953..10f9563`, and the browser walk
+(gstack browse on the library's `wire_oauth` harness and on Emm's env 9
+at `10f9563`), found what follows; each fix has a test that fails on
+`10f9563` where one could be written.
+
+#### 23. Regressions and gaps in the first batch, fixed
+
+**Category**: Bug fix (review of entries 1-22)
+
+- **Bare JSON-RPC on `/methods` was refused** (entry 4's nameless branch
+  ran at the URL check before the body was parsed): the URL check is
+  skipped for JSON-RPC with no name in the path, and the JSON-RPC handler
+  decides the method the body names. `test_bare_jsonrpc_is_decided_by_the_method_it_names`
+  (both twins, through `post()`; fails on `10f9563`).
+- **The re-type order** (entry 6) removed the override before the type
+  changed, so a failed change left the old type without its override
+  (wider). The type changes first, the override goes after, and a failed
+  removal puts the old type back. `test_a_failed_type_change_keeps_the_override`.
+- **The absent-row cleanup** (entry 10) called the conditional delete on a
+  handle with nothing loaded, which answers False, so the cleanup never ran
+  outside the test: it now runs directly. The test builds the handle after
+  the row went, as the retry does.
+- **Async `sync_peer`** ran async `trust_deleted` hooks on a fresh loop in a
+  worker thread (entry 11): it awaits them on the running loop
+  (`TrustManager.fire_deleted_async`), with the row it read, before the
+  delete; the sync twin keeps the callback.
+- **Application targets at delivery** (entry 3): re-checked against the
+  creation row, which a subscription the application made itself never
+  passed; they now need an approved trust only; `resources`, `methods` and
+  `actions` keep the grant check. `TestApplicationTargetsAtDelivery`.
+- **The re-read after the approval write** (entry 17) could raise after
+  the commit (503, peer never told): a `DbError` there falls back to the
+  URL read before. `test_a_faulting_re_read_still_tells_the_peer`.
+- **The re-read could point at a replaced row** (outside voice): its base
+  URI is used only when the row still holds the secret the notice carries.
+  `test_a_replaced_row_s_base_uri_does_not_get_the_old_secret`.
+- **`trust_deleted` for a row already gone** (outside voice): the delete
+  re-reads the row whenever a callback is given and fires only when it is
+  there. `test_a_row_another_delete_removed_fires_no_hook`.
+- **A bulk `items` update a hook refused** left the applied batch without
+  a diff (outside voice): the key is recorded, so the diff is registered
+  before the 403. `test_a_bulk_items_update_a_hook_refuses_still_reaches_subscribers`.
+- **JSON text nested beyond the parser** raised `RecursionError`: it is
+  text (`as_json_object`). `test_text_nested_beyond_the_parser_is_text`.
+
+**Files affected**: `actingweb/handlers/methods.py`, `async_methods.py`,
+`properties.py`, `trust.py` (handler); `actingweb/interface/trust_manager.py`,
+`subscription_manager.py`; `actingweb/actor.py`; `actingweb/trust.py`;
+`actingweb/permission_evaluator.py`; the tests named.
+
+#### 24. One JSON-text helper; cleanups
+
+**Category**: Refactor (code review)
+
+`permission_evaluator.as_json_object` is the one parser of stored JSON
+text (views and the diff filter used copies), and both callers return
+before parsing when the rules hold no exclusion. The `_peer_of` alias is
+gone (`peer_of` everywhere); the evaluator-failure logger is public
+(`log_evaluator_unavailable`); the delete callbacks no longer wrap
+`fire_deleted` in a second try/except (`_execute_lifecycle_hook` already
+logs and lets `DbError` through); new test functions are annotated.
+
+#### 25. The confirmation's refusals are a page for a person
+
+**Category**: UX refinement (browser walk F-003, F-004)
+
+A refused confirmation (used or expired page, another browser, cross-site,
+a store fault) renders `aw-oauth-confirm.html` with an `error` sentence
+and no form for a browser, with its status kept (both integrations now
+pass the handler's status to a template response); an API caller keeps
+the JSON. The card has a 16 px side gutter at phone width.
+`test_a_refusal_is_a_page_for_a_browser_and_json_for_a_client`.
+
+**Files affected**: `actingweb/handlers/oauth2_endpoints.py`
+(`_confirm_refusal`), `actingweb/templates/aw-oauth-confirm.html`,
+`actingweb/interface/integrations/fastapi_integration.py`,
+`flask_integration.py`.
+
+#### 26. Accepted, with the reason
+
+- **Browser walk F-001** (Back after Approve renders a new confirmation
+  and a second code): the harness's stand-in provider accepts its fixed
+  code every time. A real provider's authorization code is single use
+  (RFC 6749 §4.1.2), so a replayed callback fails at the code exchange; the
+  confirmation token itself is single use (tested).
+- **Browser walk F-002** (`admin` offered on the harness form): the
+  harness's client list includes it on purpose (it records `WG14`-`WG16`);
+  with no list, `admin` is not offered (tested).
+- **A `DbError` from `trust_deleted` after the remote DELETE** (the hook
+  now fires after it) leaves the local row while the peer's is gone: the
+  row is the retry handle (deletion invariants, rule 2); the retry's remote
+  DELETE answers 404, which counts as deleted, and the local delete
+  finishes.
+- **An `Actor` subclass overriding `delete_reciprocal_trust`** gets the new
+  keywords on the REST route: recorded as **Breaking** in the changelog and
+  the migration guide.
+- **A pending record spent and then `_complete` faulting** leaves the
+  retry a "start again" page: rare, and the user restarts from the client.
+- **Emm (consumer adoption, not changed here)**: its authorize template has
+  no `form_nonce` input (every provider sign-in will ask for a
+  confirmation), its password route (`api/oauth_password.py`) mints the
+  code itself instead of calling `complete_client_authorization`, and it
+  sets its own `Referrer-Policy`. The migration guide names the first two
+  ("An MCP client's access level": the hidden input, and "Your own
+  sign-in route"); the third is Emm's own header.
+
+#### 27. `WG15` re-recorded; the Full tier on this batch
+
+**Category**: Verification fix (follow-up of entry 25)
+
+**What changed**: `WG15`'s confirmation page is 23 characters longer (the
+`error` block and the side gutter of entry 25); nothing else in the
+recording changed. Re-recorded and compared on both backends.
+
+Full tier on this batch (2026-11-10): ruff, format, pyright clean;
+`verify_groups` OK; unit 5042 passed; DynamoDB 6493 passed and PostgreSQL
+6290 passed (before the re-recording, `WG15` failed as expected);
+sequential PostgreSQL 1385 passed, failing only
+`test_callback_processor_concurrency` (fails on `master` too; its todo);
+docs build with `-W`.

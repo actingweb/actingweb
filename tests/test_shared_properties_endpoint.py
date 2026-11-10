@@ -242,7 +242,9 @@ class TestSharedPropertiesEndpoint:
                 assert "excluded_properties" not in response_data
                 assert "denied_prop1" not in json.dumps(response_data)
 
-    def test_a_row_without_the_approved_field_is_not_refused_as_unapproved(self):
+    def test_a_row_without_the_approved_field_is_not_refused_as_unapproved(
+        self,
+    ) -> None:
         """Verification 2026-11-10: the snapshot reads ``approved=None`` as
         approved; this route refused it."""
         webobj = Mock()

@@ -1601,7 +1601,8 @@ should call ``client_trust_type_acceptable(name)`` and
 nonce back in every form:
 ``<input type="hidden" name="form_nonce" value="{{ form_nonce }}">``.
 Without it the sign-in still works, but always through the confirmation
-page. Override ``aw-oauth-confirm.html`` to brand the confirmation; it must
+page. Override ``aw-oauth-confirm.html`` to brand the confirmation (it is
+also rendered with only ``error``, a sentence, for a refused answer); it must
 post ``token`` and ``decision`` (``approve``/``decline``) to
 ``form_action`` from the same site.
 

@@ -470,3 +470,55 @@ def test_an_actions_delete_asks_the_grant() -> None:
     assert c.call_args.args[3] == "DELETE"
     assert handler.response.status_code == 403
     handler.hooks.execute_action_hooks.assert_not_called()
+
+
+@pytest.mark.parametrize("async_twin", [False, True])
+def test_bare_jsonrpc_is_decided_by_the_method_it_names(async_twin: bool) -> None:
+    """Code review 2026-11-10: with nameless calls refused, a JSON-RPC POST to
+    the bare /methods was refused at the URL check before the body's method
+    was decided. The body's method decides; a bare non-JSON-RPC call is
+    still refused."""
+    import json as _json
+
+    from actingweb.aw_web_request import AWWebObj
+    from actingweb.handlers.async_methods import AsyncMethodsHandler
+    from actingweb.handlers.methods import MethodsHandler
+
+    def run(body: dict[str, Any]) -> Any:
+        cls: Any = AsyncMethodsHandler if async_twin else MethodsHandler
+        handler: Any = cls(AWWebObj(body=_json.dumps(body)), mock.Mock())
+        handler.hooks = mock.Mock()
+        handler.hooks.execute_method_hooks.return_value = {"ok": True}
+        handler.hooks.execute_method_hooks_async = mock.AsyncMock(
+            return_value={"ok": True}
+        )
+        auth = _auth()
+        auth.response = {"code": 200}
+        result = mock.Mock(success=True, actor=mock.Mock(), auth_obj=auth)
+        with (
+            mock.patch.object(
+                handler, "_authenticate_dual_context", return_value=result
+            ),
+            mock.patch.object(
+                handler,
+                "_check_method_permission",
+                side_effect=lambda a, c, name, m: name == "wire_ping",
+            ),
+            mock.patch.object(
+                handler, "_get_actor_interface", return_value=mock.Mock()
+            ),
+        ):
+            if async_twin:
+                asyncio.run(handler.post_async("a1", ""))
+            else:
+                handler.post("a1", "")
+        return handler
+
+    granted = run({"jsonrpc": "2.0", "method": "wire_ping", "id": 1})
+    assert granted.response.status_code == 200
+    refused = run({"jsonrpc": "2.0", "method": "secret", "id": 1})
+    assert '"Forbidden"' in refused.response.body or "Forbidden" in str(
+        refused.response.body
+    )
+    plain = run({"x": 1})
+    assert plain.response.status_code == 403

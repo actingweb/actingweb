@@ -83,13 +83,13 @@ class TestTheRowDelete:
         """Verification 2026-11-10: the conditional delete of a row already
         gone returned before the cleanup an unconditional one runs."""
         w = Receiver()
-        handle = Trust(actor_id=aid(w.a), peerid=w.b, config=w.config)
-        handle.get()
         db = get_trust(w.config)
         assert db.get(actor_id=aid(w.a), peerid=w.b)
         assert db.delete(only_if_secret=w.secrets[w.b])
         assert _grant(w, w.b) is not None  # left behind, as by a fault
-        assert handle.delete(only_if_secret=w.secrets[w.b]) is True
+        # A handle built after the row went, as the retry builds it.
+        fresh = Trust(actor_id=aid(w.a), peerid=w.b, config=w.config)
+        assert fresh.delete(only_if_secret=w.secrets[w.b]) is True
         assert _grant(w, w.b) is None
 
     def test_the_store_delete_is_conditional(self) -> None:
@@ -281,3 +281,21 @@ class TestTheHookAfterTheLastCheck:
         assert seen[0]["initiated_by_peer"] is False
         assert subs_at_hook == [1]  # the subscriptions were still there
         assert not w.row(w.b)
+
+
+def test_a_row_another_delete_removed_fires_no_hook() -> None:
+    """Outside voice 2026-11-10: the hook fired with the listed row when the
+    re-read found it gone (two deletes racing), also with no secret given."""
+    w = Receiver()
+    seen: list[Any] = []
+    real_get = Trust.get
+
+    def gone(self: Trust, *a: Any, **kw: Any) -> Any:
+        return None  # another delete won since the listing
+
+    with mock.patch.object(Trust, "get", gone):
+        w.a.delete_reciprocal_trust(
+            peerid=w.b, notify_peers=False, before_local_delete=seen.append
+        )
+    assert seen == []
+    del real_get

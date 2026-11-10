@@ -20,7 +20,9 @@ from ..permission_evaluator import (
     GrantSnapshot,
     PermissionResult,
     PermissionType,
+    as_json_object,
     drop_excluded,
+    exclusion_patterns,
     get_permission_evaluator,
     holds_excluded,
 )
@@ -42,19 +44,6 @@ class PermissionError(Exception):
 
 
 logger = logging.getLogger(__name__)
-
-
-def _as_json_object(value: Any) -> Any:
-    """A stored value that is JSON text of an object or array, parsed; None
-    for anything else (a plain string, a number). The stores hand objects
-    back as text (3.16: the grant filter only walks objects)."""
-    if not isinstance(value, str | bytes):
-        return None
-    try:
-        parsed = json.loads(value)
-    except (TypeError, ValueError):
-        return None
-    return parsed if isinstance(parsed, dict | list) else None
 
 
 def _client_trust_peer_id(actor: "ActorInterface", client_id: str) -> str:
@@ -214,7 +203,9 @@ class AuthenticatedPropertyStore:
         if decision.snapshot is None:
             return value
         rules = decision.snapshot.rules(PermissionType.PROPERTIES)
-        parsed = _as_json_object(value)
+        if not exclusion_patterns(rules):
+            return value  # nothing to drop: no parse
+        parsed = as_json_object(value)
         if parsed is None:
             return drop_excluded(rules, key, value)
         kept = drop_excluded(rules, key, parsed)
@@ -236,12 +227,14 @@ class AuthenticatedPropertyStore:
         if grant is None or grant.relationship.lower() == "admin":
             return
         rules = grant.rules(PermissionType.PROPERTIES)
+        if not exclusion_patterns(rules):
+            return
         # The stored value comes back as JSON text: parsed, or its excluded
         # parts went unseen and a write replaced them (3.16).
         values: list[Any] = []
         for candidate in (self._store.get(key, None), value):
             if isinstance(candidate, str | bytes):
-                candidate = _as_json_object(candidate)
+                candidate = as_json_object(candidate)
             if isinstance(candidate, dict | list):
                 values.append(candidate)
         if values and holds_excluded(rules, key, *values):

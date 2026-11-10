@@ -102,3 +102,67 @@ def test_a_move_by_another_request_is_followed() -> None:
     ):
         assert _approve(w, approved=True)
     assert _sent_to(post) == f"{moved}/trust/friend/{aid(w.a)}"
+
+
+def test_a_faulting_re_read_still_tells_the_peer() -> None:
+    """Code review 2026-11-10: a DbError from the read after the committed
+    approval answered 503 and the peer was never told (a retry finds the row
+    approved and sends nothing). It is told at the URL read before."""
+    from actingweb.db.exceptions import DbError
+    from actingweb.trust import Trust
+
+    w = Receiver(approved=False)
+    stored = w.row(w.b)["baseuri"]
+    real_get = Trust.get
+    state = {"armed": False}
+    real_modify = Trust.modify
+
+    def modify_then_arm(self: Trust, *a: Any, **kw: Any) -> Any:
+        out = real_modify(self, *a, **kw)
+        if kw.get("approved") is True:
+            state["armed"] = True
+        return out
+
+    def get_faulting_after(self: Trust, *a: Any, **kw: Any) -> Any:
+        if state["armed"]:
+            raise DbError("trust read", aid(w.a))
+        return real_get(self, *a, **kw)
+
+    with (
+        mock.patch.object(Trust, "modify", modify_then_arm),
+        mock.patch.object(Trust, "get", get_faulting_after),
+        mock.patch(
+            "actingweb.actor.requests.post", return_value=mock.Mock(status_code=204)
+        ) as post,
+    ):
+        assert _approve(w, approved=True)
+    assert _sent_to(post) == f"{stored}/trust/friend/{aid(w.a)}"
+
+
+def test_a_replaced_row_s_base_uri_does_not_get_the_old_secret() -> None:
+    """Outside voice 2026-11-10: a re-pair replacing the row between the write
+    and the re-read must not send the old row's secret to the new base URI."""
+    from actingweb.trust import Trust
+
+    w = Receiver(approved=False)
+    stored = w.row(w.b)["baseuri"]
+    real_modify = Trust.modify
+
+    def modify_then_repaired(self: Trust, *a: Any, **kw: Any) -> Any:
+        out = real_modify(self, *a, **kw)
+        if kw.get("approved") is True:
+            real_modify(
+                Trust(actor_id=aid(w.a), peerid=w.b, config=w.config),
+                baseuri="https://elsewhere.example.test/x",
+                secret="a-new-secret-0123456789",
+            )
+        return out
+
+    with (
+        mock.patch.object(Trust, "modify", modify_then_repaired),
+        mock.patch(
+            "actingweb.actor.requests.post", return_value=mock.Mock(status_code=204)
+        ) as post,
+    ):
+        assert _approve(w, approved=True)
+    assert _sent_to(post) == f"{stored}/trust/friend/{aid(w.a)}"

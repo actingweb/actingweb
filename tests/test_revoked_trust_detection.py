@@ -23,6 +23,12 @@ async def test_sync_peer_detects_and_cleans_up_revoked_trust():
 
     # Mock successful trust deletion
     mock_actor.delete_reciprocal_trust_async = AsyncMock(return_value=True)
+    mock_actor.get_trust_relationships.return_value = [
+        {"peerid": "peer456", "relationship": "friend"}
+    ]
+    mock_actor.config._hooks.execute_lifecycle_hooks_async = AsyncMock(
+        return_value=None
+    )
 
     # Create manager
     manager = SubscriptionManager(mock_actor)
@@ -80,18 +86,15 @@ async def test_sync_peer_detects_and_cleans_up_revoked_trust():
 
             # Verify trust deletion was called
             mock_actor.delete_reciprocal_trust_async.assert_called_once_with(
-                peerid="peer456", delete_peer=False, before_local_delete=ANY
+                peerid="peer456", delete_peer=False
             )
-            # The hook fires through the delete's callback (3.16), with the
-            # row the delete read and initiated_by_peer.
-            hooks = mock_actor.config._hooks  # what the manager's ActorInterface holds
-            callback = mock_actor.delete_reciprocal_trust_async.call_args.kwargs[
-                "before_local_delete"
-            ]
-            callback({"peerid": "peer456", "relationship": "friend"})
-            event, *_ = hooks.execute_lifecycle_hooks.call_args.args
+            # The hook is awaited on the running loop before the delete
+            # (3.16; an async hook keeps its loop-bound resources), with the
+            # row read and initiated_by_peer.
+            hooks = mock_actor.config._hooks
+            event, *_ = hooks.execute_lifecycle_hooks_async.call_args.args
             assert event == "trust_deleted"
-            kwargs = hooks.execute_lifecycle_hooks.call_args.kwargs
+            kwargs = hooks.execute_lifecycle_hooks_async.call_args.kwargs
             assert kwargs["trust_data"]["peerid"] == "peer456"
             assert kwargs["initiated_by_peer"] is True
             # Audit A9: our own trust row at the peer, not trust/<our id>.

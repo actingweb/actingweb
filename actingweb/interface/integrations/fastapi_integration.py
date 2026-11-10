@@ -2285,6 +2285,8 @@ class FastAPIIntegration(BaseActingWebIntegration):
                         request,
                         template_name,
                         context=webobj.response.template_values,
+                        # A refusal page keeps its status (3.16).
+                        status_code=webobj.response.status_code or 200,
                     )
                     # The handler's cookies and headers reach the page (the
                     # sign-in binding, the frame and cache headers; 3.16).

@@ -106,14 +106,14 @@ def evaluator_or_none(config: Config, get_evaluator: Any = None) -> Any:
     except DbError:
         raise
     except Exception as e:
-        _evaluator_unavailable(f"Permission evaluator unavailable: {e}")
+        log_evaluator_unavailable(f"Permission evaluator unavailable: {e}")
         return None
 
 
 _evaluator_failure_logged = False
 
 
-def _evaluator_unavailable(message: str) -> None:
+def log_evaluator_unavailable(message: str) -> None:
     """An evaluator that cannot be built is a configuration fault, the same
     on every request: ERROR once per process, DEBUG after (3.16, plan:
     the decision denies, the log names it once)."""
@@ -252,9 +252,6 @@ def peer_of(auth_obj: Any) -> str:
     return str(acl.get("peerid", "") or "") if isinstance(acl, dict) else ""
 
 
-_peer_of = peer_of
-
-
 def named_route_allows(
     config: Config,
     actor_id: str,
@@ -271,7 +268,7 @@ def named_route_allows(
     evaluator resolved by the handler's own module, ``get_evaluator``); an
     evaluator that cannot be built denies. A caller that is not a peer is
     answered by the access table, as before (with ``legacy_method``)."""
-    peer_id = _peer_of(auth_obj)
+    peer_id = peer_of(auth_obj)
     if not peer_id:
         return bool(
             auth_obj.check_authorisation(
@@ -283,7 +280,7 @@ def named_route_allows(
     except DbError:
         raise
     except Exception as e:
-        _evaluator_unavailable(
+        log_evaluator_unavailable(
             f"Permission evaluator unavailable for {actor_id}:{peer_id}: {e}"
         )
         return False
@@ -317,7 +314,7 @@ def listable_names(
     """The names a peer's listing of methods or actions shows: each decided
     as a call of it would be (one grant read). None for a caller that is not
     a peer (no filter); an empty set when the grant cannot be read."""
-    peer_id = _peer_of(auth_obj)
+    peer_id = peer_of(auth_obj)
     if not peer_id:
         return None
     try:

@@ -247,6 +247,29 @@ class TrustManager:
             initiated_by_peer=initiated_by_peer,
         )
 
+    async def fire_deleted_async(self, row: Any, *, initiated_by_peer: bool) -> None:
+        """``fire_deleted`` on the running event loop (3.16): an async hook
+        is awaited there, not run on a fresh loop in a worker thread (its
+        loop-bound resources would fail)."""
+        if not row or not self._hooks:
+            return
+        data = row if isinstance(row, dict) else row.to_dict()
+        from .actor_interface import ActorInterface
+
+        try:
+            await self._hooks.execute_lifecycle_hooks_async(
+                "trust_deleted",
+                actor=ActorInterface(self._core_actor, hooks=self._hooks),
+                peer_id=str(data.get("peerid") or ""),
+                relationship=str(data.get("relationship") or ""),
+                trust_data=data,
+                initiated_by_peer=initiated_by_peer,
+            )
+        except DbError:
+            raise
+        except Exception as e:
+            logger.error(f"Error executing lifecycle hook 'trust_deleted': {e}")
+
     @property
     def relationships(self) -> list[TrustRelationship]:
         """Get all trust relationships."""
@@ -449,9 +472,9 @@ class TrustManager:
         return f"{source}:{normalized}"
 
     def _drop_client_override(self, peer_id: str, trust_type: str) -> bool:
-        """Before a client's row takes a new type: its permission override,
-        written for the old type, goes. False when it cannot (the row then
-        keeps its type and the authorisation fails: the override's own
+        """After a client's row took a new type: its permission override,
+        written for the old type, goes. False when it cannot (the caller puts
+        the old type back and the authorisation fails: the override's own
         ``trust_type`` would otherwise keep deciding for existing tokens)."""
         from ..trust_permissions import get_trust_permission_store
 
@@ -630,17 +653,18 @@ class TrustManager:
                             modify_kwargs["desc"] = f"OAuth2 client: {client_name}"
                     # A client's row follows the level the user approved at
                     # this authorisation, up or down (3.16; it kept the
-                    # first one forever). The override written for the old
-                    # type goes first: when it cannot, the row keeps its type
-                    # and the authorisation fails.
+                    # first one forever). The type changes first, then the
+                    # override written for the old type goes; when it cannot,
+                    # the type is put back and the authorisation fails. (The
+                    # other order left the old type without its override,
+                    # which can be wider, when the type change failed.)
+                    old_type = str(getattr(existing, "relationship", "") or "")
                     retyped = bool(
                         source == "oauth2_client"
                         and trust_type
-                        and getattr(existing, "relationship", None) != trust_type
+                        and old_type != trust_type
                     )
                     if retyped:
-                        if not self._drop_client_override(peer_id, trust_type):
-                            return False
                         modify_kwargs["relationship"] = trust_type
 
                     if db.modify(**modify_kwargs):
@@ -648,6 +672,10 @@ class TrustManager:
                             f"Updated existing OAuth trust: peer_id={peer_id}, established_via={source}"
                         )
                         if retyped:
+                            if not self._drop_client_override(peer_id, trust_type):
+                                if old_type:
+                                    db.modify(relationship=old_type)
+                                return False
                             self._evict_retyped(peer_id, trust_type)
                     else:
                         # The row went between the read and the write: no

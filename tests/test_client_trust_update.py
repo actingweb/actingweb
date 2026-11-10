@@ -11,6 +11,7 @@ only at a re-type. Real storage; both backends through ``DATABASE_BACKEND``.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from typing import Any
 from unittest import mock
 
@@ -31,7 +32,7 @@ EMAIL = "user@example.test"
 
 
 @pytest.fixture(autouse=True)
-def no_registry():
+def no_registry() -> Iterator[None]:
     """The trust type names are used as given (no registry fallback)."""
     with mock.patch(
         "actingweb.trust_type_registry.get_registry", side_effect=RuntimeError
@@ -138,3 +139,26 @@ def test_a_re_type_evicts_the_actors_mcp_caches() -> None:
         evict.assert_not_called()
         assert w.authorise("viewer")
         evict.assert_called_with(aid(w.actor))
+
+
+def test_a_failed_type_change_keeps_the_override() -> None:
+    """Code review 2026-11-10: the override was removed before the type
+    changed, so a failed change left the old type without its override
+    (which can be wider). The type changes first now."""
+    w = World()
+    assert w.authorise("friend")
+    peer = str(w.row()["peerid"])
+    store = get_trust_permission_store(w.config)
+    assert store.store_permissions(
+        TrustPermissions(
+            actor_id=aid(w.actor),
+            peer_id=peer,
+            trust_type="friend",
+            properties={"patterns": ["public/*"], "operations": ["read"]},
+        ),
+        notify_peer=False,
+    )
+    with mock.patch.object(type(get_trust(w.config)), "modify", return_value=False):
+        assert w.authorise("viewer") is False
+    assert w.row()["relationship"] == "friend"
+    assert store.get_permissions_uncached(aid(w.actor), peer) is not None

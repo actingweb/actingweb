@@ -18,11 +18,11 @@ from actingweb.property_list import (
 from ..access_decision import (
     PERMISSION_DENIED,
     Decision,
-    _evaluator_unavailable,
     decide,
     forbidden_body,
+    log_evaluator_unavailable,
+    peer_of,
 )
-from ..access_decision import peer_of as _peer_of
 from ..db.exceptions import DbError
 from ..identifiers import first_control_character
 from ..permission_evaluator import (
@@ -195,7 +195,7 @@ def _decide_property(
     peer (the creator, a trustee) is answered by the access table, as
     before.
     """
-    peer_id = _peer_of(auth_obj)
+    peer_id = peer_of(auth_obj)
     handler._decision = None
     if auth_obj is None:
         # No authenticated caller at all: nothing to decide with (3.16; it
@@ -216,7 +216,7 @@ def _decide_property(
     except DbError:
         raise
     except Exception as e:
-        _evaluator_unavailable(
+        log_evaluator_unavailable(
             f"Permission evaluator unavailable for {actor_id}:{peer_id}: {e}"
         )
         handler._decision = Decision(False, "unavailable")
@@ -358,7 +358,7 @@ class _PropertyHandlerBase(base_handler.BaseHandler):
         """Auth context for a property hook: the peer, and the request's
         decision so the hook's own check does not decide again (3.16)."""
         context: dict[str, Any] = {
-            "peer_id": _peer_of(auth_obj),
+            "peer_id": peer_of(auth_obj),
             "config": self.config,
             "operation": operation,
         }
@@ -376,7 +376,7 @@ class _PropertyHandlerBase(base_handler.BaseHandler):
         so the grant for the list answers. The list's existence is read only
         after the full path was allowed, so a refusal says nothing about
         which names exist."""
-        if len(path) < 2 or not _peer_of(auth_obj):
+        if len(path) < 2 or not peer_of(auth_obj):
             return True
         if not (
             myself
@@ -471,10 +471,10 @@ class PropertiesHandler(_PropertyHandlerBase):
         only how the batch itself was applied differs between them.
 
         Returns ``False`` (having already set a 403 response) if a hook
-        rejected the update -- the caller must ``return`` immediately
-        without setting ``pair[key]``, matching the pre-Phase-11 behaviour
-        where a hook rejection short-circuited before the summary was
-        recorded.
+        rejected the update -- the caller must ``return`` immediately. The
+        batch was applied before the hook ran (it is not rolled back), so
+        ``pair[key]`` is set either way and the caller registers the diff:
+        subscribers learn what changed (3.16; a refusal left them stale).
         """
         if self.hooks:
             actor_interface = self._get_actor_interface(myself)
@@ -486,7 +486,12 @@ class PropertiesHandler(_PropertyHandlerBase):
                     key, "post", actor_interface, current_items, [key], auth_context
                 )
                 if transformed is None:
-                    # Hook rejected the update - need to revert changes
+                    # The batch is applied already (not rolled back): what
+                    # changed still reaches the subscribers, then 403.
+                    pair[key] = (
+                        f"[Bulk update: {items_updated} items updated, "
+                        f"{items_deleted} items deleted]"
+                    )
                     if self.response:
                         self.response.set_status(403, "Bulk update rejected by hooks")
                     return False
@@ -786,7 +791,7 @@ class PropertiesHandler(_PropertyHandlerBase):
         # descendants (3.16). A name the grant's rule does not cover is not
         # listed; a grant that does not mention properties leaves each name
         # to the access table, as a direct read.
-        peer_id = _peer_of(check)
+        peer_id = peer_of(check)
 
         def readable(names: list[str]) -> set[str]:
             if not peer_id or not actor_interface or not actor_interface.id:
@@ -1501,7 +1506,7 @@ class PropertiesHandler(_PropertyHandlerBase):
                 if self.response:
                     self.response.set_status(400, problem)
                 return False
-        if _peer_of(check) and not self._post_is_authorised(
+        if peer_of(check) and not self._post_is_authorised(
             actor_id, check, myself, entries
         ):
             return False
@@ -2023,7 +2028,7 @@ class PropertiesHandler(_PropertyHandlerBase):
                 return
             # A peer deletes everything only when it may delete every name
             # stored (3.16): the root is not decided as a whole.
-            if _peer_of(check) and not self._may_delete_every_name(
+            if peer_of(check) and not self._may_delete_every_name(
                 actor_id, check, actor_interface
             ):
                 self._forbid()

@@ -140,7 +140,7 @@
      "path": "/oauth/callback",
      "query": "code=wire-provider-code&state=<secret:provider_state>",
      "request": null,
-     "response": "<html 2419 chars>",
+     "response": "<html 2442 chars>",
      "status": 200
     }
    ]

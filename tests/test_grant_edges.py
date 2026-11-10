@@ -259,3 +259,25 @@ def test_a_post_stopped_part_way_registers_what_it_applied() -> None:
     myself.register_diffs.assert_called_once_with(
         target="properties", blob=json.dumps({"a": 1})
     )
+
+
+def test_a_bulk_items_update_a_hook_refuses_still_reaches_subscribers() -> None:
+    """Outside voice 2026-11-10: the batch is applied before the hook runs
+    and is not rolled back; with no key in ``pair`` the stop registered no
+    diff and subscribers kept stale list contents."""
+    from actingweb.aw_web_request import AWWebObj
+    from actingweb.handlers.properties import PropertiesHandler
+
+    handler = PropertiesHandler(AWWebObj(), mock.Mock())
+    handler.hooks = mock.Mock()
+    pair: dict[str, Any] = {}
+    with (
+        mock.patch.object(handler, "_get_actor_interface", return_value=mock.Mock()),
+        mock.patch.object(handler, "_run_hooks", return_value=None),
+    ):
+        ok = handler._finish_bulk_list_update(
+            mock.Mock(), "notes", mock.Mock(), mock.Mock(), pair, 2, 1
+        )
+    assert ok is False
+    assert handler.response.status_code == 403
+    assert "notes" in pair

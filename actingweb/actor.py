@@ -30,7 +30,9 @@ from actingweb.log_summary import summarize_payload
 from actingweb.permission_evaluator import (
     GrantSnapshot,
     PermissionType,
+    as_json_object,
     drop_excluded,
+    exclusion_patterns,
     get_permission_evaluator,
 )
 from actingweb.property_list import ListCorruptionError
@@ -2053,9 +2055,22 @@ class Actor:
             # the write (3.16: the notification went to the URL the row had
             # before, also when another request had moved it meanwhile).
             if not baseuri:
-                after = trust.Trust(
-                    actor_id=self.id, peerid=peerid, config=self.config
-                ).get()
+                try:
+                    after: Any = trust.Trust(
+                        actor_id=self.id, peerid=peerid, config=self.config
+                    ).get()
+                except DbError as e:  # folds DbError: the approval committed
+                    # The peer is still told, at the URL read before the
+                    # write: a 503 now would leave it never told (a retry
+                    # finds the row approved and sends nothing).
+                    logger.warning(f"Re-read of the trust with {peerid} failed: {e}")
+                    after = None
+                if after and not secret_equals(
+                    str(after.get("secret") or ""), str(this_trust["secret"] or "")
+                ):
+                    # Replaced since (a re-pair): its base URI is not where
+                    # this row's secret goes; the URL read before stands.
+                    after = None
                 baseuri_now = str((after or this_trust).get("baseuri") or "")
             else:
                 baseuri_now = baseuri
@@ -3136,19 +3151,21 @@ class Actor:
                 )
                 success_once = True
             current = None
-            if expected_secret is not None:
+            if expected_secret is not None or before_local_delete is not None:
                 current = trust.Trust(
                     actor_id=self.id, peerid=rel["peerid"], config=self.config
                 ).get()
+            if expected_secret is not None:
                 if current and not secret_equals(
                     str(current.get("secret") or ""), expected_secret
                 ):
                     raise TrustReplaced(rel.get("peerid"))
-            if before_local_delete is not None:
+            if before_local_delete is not None and current:
                 # After the last secret check and before anything local goes
-                # (3.16): a lost race fires nothing, and the caller's hook can
+                # (3.16): a lost race fires nothing, a row another delete
+                # already removed fires nothing, and the caller's hook can
                 # still read the row's data (the cached peer profile).
-                before_local_delete(dict(current or rel))
+                before_local_delete(dict(current))
             if not self.subs_list:
                 # strict=False: a fault leaves this peer's subscriptions as
                 # orphans rather than failing the trust deletion.
@@ -3995,12 +4012,9 @@ class Actor:
         A value that is JSON text of an object (a form-posted property, an
         SDK write of a JSON string: what a direct read parses) is filtered
         as the object and sent as text again."""
-        if isinstance(value, str):
-            try:
-                as_object = json.loads(value)
-            except (TypeError, ValueError):
-                as_object = None
-            if isinstance(as_object, dict | list):
+        if isinstance(value, str) and exclusion_patterns(rules):
+            as_object = as_json_object(value)
+            if as_object is not None:
                 kept_object = _prune_emptied(
                     as_object, drop_excluded(rules, path, as_object)
                 )
@@ -4136,10 +4150,19 @@ class Actor:
         self, sub: dict[str, Any], snapshot: GrantSnapshot | None
     ) -> bool:
         """The creation check for a subscription to a target other than
-        ``properties``, asked at delivery (3.16). Fail closed."""
+        ``properties``, asked at delivery (3.16). Fail closed.
+
+        A target the grant has a category for (``resources``, ``methods``,
+        ``actions``) is decided by the grant as at creation; an
+        application's own target only needs an approved trust: its creation
+        row (``subscriptions/<id>``) is the route's gate, and a subscription
+        the application made itself never passed it."""
         if snapshot is None or not self.config:
             return False
-        from .access_decision import subscription_allowed
+        from .access_decision import SUBSCRIBABLE, subscription_allowed
+
+        if str(sub.get("target") or "") not in SUBSCRIBABLE:
+            return bool(snapshot.approved)
 
         try:
             return subscription_allowed(

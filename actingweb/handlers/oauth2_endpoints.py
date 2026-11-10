@@ -637,6 +637,18 @@ class OAuth2EndpointsHandler(BaseHandler):
 
         return decide
 
+    def _confirm_refusal(self, status: int, error: str, message: str) -> dict[str, Any]:
+        """A refused confirmation: the JSON error for an API caller, the
+        confirmation template with ``error`` (no form) for a browser (3.16;
+        a person saw raw JSON)."""
+        self.response.set_status(status)
+        if "application/json" in self._header("accept") or not self._header("accept"):
+            return {"error": error, "error_description": message}
+        self._set_page_headers()
+        self.response.template_name = CONFIRM_TEMPLATE
+        self.response.template_values = {"error": message}
+        return {}
+
     def answer_callback(self, callback_response: dict[str, Any]) -> dict[str, Any]:
         """A callback's (or confirmation's) answer as this handler sends it:
         a redirect, the confirmation page (template ``aw-oauth-confirm.html``,
@@ -697,8 +709,11 @@ class OAuth2EndpointsHandler(BaseHandler):
             require_evidence=True,
             session_cookie=True,
         ):
-            self.response.set_status(403, "Cross-site request refused")
-            return {"error": "forbidden"}
+            return self._confirm_refusal(
+                403,
+                "forbidden",
+                "This request did not come from this site's confirmation page.",
+            )
         body = self.request.body
         text = (
             body.decode("utf-8", "ignore")
@@ -710,11 +725,16 @@ class OAuth2EndpointsHandler(BaseHandler):
         decision = (form.get("decision") or [""])[0]
         cookie = self._flow_cookie(CONFIRM_COOKIE)
         if not token or not cookie or not secret_equals(token, cookie):
-            return self.error_response(
-                400, "invalid_request: start again from the client"
+            return self._confirm_refusal(
+                400,
+                "invalid_request",
+                "This confirmation was already answered, has expired, or was "
+                "opened in another browser. Start again from the application.",
             )
         if decision not in ("approve", "decline"):
-            return self.error_response(400, "invalid_request: approve or decline")
+            return self._confirm_refusal(
+                400, "invalid_request", "Choose Approve or Decline."
+            )
         try:
             answer = self.oauth2_server.handle_confirmation(
                 token, decision == "approve", decide_trust=self._decide_trust()
@@ -722,7 +742,11 @@ class OAuth2EndpointsHandler(BaseHandler):
         except TokenStoreUnavailable:
             # The pending record was not consumed: the cookie stays, so the
             # user's retry of the same page can still answer (3.16).
-            return self.error_response(503, "temporarily_unavailable")
+            return self._confirm_refusal(
+                503,
+                "temporarily_unavailable",
+                "The service could not answer just now. Go back and try again.",
+            )
         # The pending record is spent (single use): so is the cookie.
         self._set_flow_cookie(CONFIRM_COOKIE, "", max_age=0)
         return self.answer_callback(answer)

@@ -55,9 +55,11 @@ SECURITY
   grant stated, so every ``*`` hook ran with an empty name.
   **Behavior change:** all of these follow the one access decision; a
   subscription to any target is asked its creation check again at each
-  delivery, push and pull; a request that names nothing is refused when the
-  grant mentions the category, except the ``GET`` listing of methods or
-  actions, admitted when the rule names anything and filtered per name.
+  delivery, push and pull (an application's own target needs an approved
+  trust); a request that names nothing is refused when the grant mentions
+  the category, except the ``GET`` listing of methods or actions, admitted
+  when the rule names anything and filtered per name, and JSON-RPC on the
+  bare ``/methods``, decided by the method its body names.
   ``docs/migration/v3.16.rst`` ("Every other way in") lists each.
 - **An MCP client could give itself any access level, ``admin``
   included.** An anonymous ``POST /oauth/register`` stored the
@@ -86,7 +88,8 @@ SECURITY
   against the client list; a 503 keeps the page usable for a retry; the
   form and confirmation pages send ``Referrer-Policy: same-origin`` (under
   ``no-referrer`` a browser without Fetch Metadata had its own Approve
-  refused as cross-site). ``docs/migration/v3.16.rst`` ("An MCP client's
+  refused as cross-site); a refused confirmation is a page for a person
+  (``aw-oauth-confirm.html`` with ``error``), JSON for an API caller. ``docs/migration/v3.16.rst`` ("An MCP client's
   access level").
 - **A write three levels down reached subscribers past their grant.**
   ``PUT /properties/a/b/c`` registered its diff as resource ``b`` holding the
@@ -800,8 +803,9 @@ SECURITY
   conditional row delete); a row replaced meanwhile is kept and the request
   answers 404, and ``trust_deleted`` does not fire for it (it now fires
   after the last comparison, before anything local goes, on the REST route
-  and when ``sync_peer`` finds a revocation; there it no longer fires with
-  an empty row). A re-pair landing after the second comparison keeps its row,
+  and when ``sync_peer`` finds a revocation, and not for a row another
+  delete already removed; ``sync_peer_async`` awaits it on the running
+  loop). A re-pair landing after the second comparison keeps its row,
   but the cleanup that ran (the subscriptions, the peer's stored data) is
   gone; the peer's next sync re-creates the subscriptions. ``Trust.delete``,
   ``Actor.delete_reciprocal_trust`` (and its async twin) and

@@ -17,6 +17,7 @@ The evaluator supports checking permissions for:
 """
 
 import functools
+import json
 import logging
 import re
 from dataclasses import dataclass
@@ -234,6 +235,21 @@ def _drop(patterns: list[str], path: str, value: Any) -> Any:
             continue
         kept[key] = _drop(patterns, child_path, child)
     return kept
+
+
+def as_json_object(value: Any) -> Any:
+    """A value that is JSON text of an object or array, parsed; None for
+    anything else (a plain string, a number, text that is not JSON). The
+    stores hand objects back as text, and a property can be written as the
+    text of an object (3.16: the grant filter walks objects only)."""
+    if not isinstance(value, str | bytes):
+        return None
+    try:
+        parsed = json.loads(value)
+    except (TypeError, ValueError, RecursionError):
+        # RecursionError: text nested deeper than the parser goes is text.
+        return None
+    return parsed if isinstance(parsed, dict | list) else None
 
 
 def holds_excluded(rules: Any, path: str, *values: Any) -> bool:

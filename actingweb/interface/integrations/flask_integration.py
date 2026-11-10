@@ -1447,7 +1447,9 @@ class FlaskIntegration(BaseActingWebIntegration):
             )
             try:
                 page = Response(
-                    render_template(template_name, **webobj.response.template_values)
+                    render_template(template_name, **webobj.response.template_values),
+                    # A refusal page keeps its status (3.16).
+                    status=webobj.response.status_code or 200,
                 )
                 # The handler's cookies and headers reach the page (3.16).
                 for key, value in webobj.response.headers.items():

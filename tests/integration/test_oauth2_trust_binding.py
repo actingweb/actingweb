@@ -516,3 +516,27 @@ def test_a_form_posted_without_its_nonce_is_named_once(
             flow.post(browser, "mcp_client")  # no form_nonce
     named = [r for r in caplog.records if "without form_nonce" in r.getMessage()]
     assert len(named) == 1
+
+
+def test_a_refusal_is_a_page_for_a_browser_and_json_for_a_client(flow: Flow) -> None:
+    """Browser walk 2026-11-10 (F-003): a person who answered a used page saw
+    raw JSON. A browser gets the confirmation template's refusal, with the
+    status kept; an API caller keeps the JSON."""
+    browser, token = flow.paused()
+    assert flow.code_of(flow.confirm(browser, token, "approve"))
+    page = browser.post(
+        f"{flow.host.url}/oauth/authorize/confirm",
+        data={"token": token, "decision": "approve"},
+        headers={"Origin": flow.host.url, "Accept": "text/html"},
+        allow_redirects=False,
+    )
+    assert page.status_code == 400
+    assert "cannot be used" in page.text and "<form" not in page.text
+    api = browser.post(
+        f"{flow.host.url}/oauth/authorize/confirm",
+        data={"token": token, "decision": "approve"},
+        headers={"Origin": flow.host.url, "Accept": "application/json"},
+        allow_redirects=False,
+    )
+    assert api.status_code == 400
+    assert api.json()["error"] == "invalid_request"

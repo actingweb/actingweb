@@ -433,3 +433,45 @@ def test_the_permissions_get_answers_only_for_the_row_s_type() -> None:
     with mock.patch.object(handler, "authenticate_actor", return_value=result):
         handler.get(aid(w.actor), "friend", peer)
     assert handler.response.status_code == 404
+
+
+def test_the_re_type_decides_from_the_row_it_just_read() -> None:
+    """Re-run 6 (Issue 3): the decision used an earlier read; an overlapping
+    authorisation in between meant no write and a code at the other type."""
+    w = World()
+    assert w.authorise("viewer")
+    stale = w.trust.get_relationship(str(w.row()["peerid"]))
+    db = get_trust(w.config)
+    assert db.get(actor_id=aid(w.actor), peerid=str(w.row()["peerid"]))
+    assert db.modify(relationship="friend")  # the overlapping authorisation
+    with mock.patch.object(type(w.trust), "get_relationship", return_value=stale):
+        assert w.authorise("viewer")
+    assert w.row()["relationship"] == "viewer"
+
+
+def test_the_trust_put_s_edit_replaces_a_stale_override() -> None:
+    """Re-run 5/6 (Issues 1, 8): the other edit path, ``PUT /trust/<rel>/<peer>``
+    with ``permissions``: replaced, its unseen fields not carried."""
+    import json as _json
+
+    from actingweb.aw_web_request import AWWebObj
+    from actingweb.handlers.trust import TrustPeerHandler
+
+    w = World()
+    peer, store = _stale_client(w)
+    stale = store.get_permissions_uncached(aid(w.actor), peer)
+    assert stale is not None
+    stale.methods = {"allowed": ["*"]}
+    assert store.store_permissions(stale, notify_peer=False)
+    body = {
+        "permissions": {"properties": {"patterns": ["a/*"], "operations": ["read"]}}
+    }
+    handler = TrustPeerHandler(AWWebObj(body=_json.dumps(body)), w.config)
+    auth = mock.Mock(acl={"peerid": "", "relationship": "creator"})
+    result = mock.Mock(success=True, actor=w.actor, auth_obj=auth)
+    result.authorize.return_value = True
+    with mock.patch.object(handler, "authenticate_actor", return_value=result):
+        handler.put(aid(w.actor), "viewer", peer)
+    stored = store.get_permissions_uncached(aid(w.actor), peer)
+    assert stored is not None and stored.trust_type == "viewer"
+    assert not stored.methods

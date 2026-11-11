@@ -1098,12 +1098,18 @@ class TrustPeerHandler(base_handler.BaseHandler):
             if permission_store is not None and not trust_updated:
                 # The trust was not written: the override goes back to what
                 # it was (an override on an unapproved row grants nothing).
-                if previous_override:
+                restored = (
                     permission_store.store_permissions(
                         previous_override, notify_peer=False
                     )
-                else:
-                    permission_store.delete_permissions(actor_id, peerid)
+                    if previous_override
+                    else permission_store.delete_permissions(actor_id, peerid)
+                )
+                if not restored:
+                    logger.error(
+                        f"The permission override for {actor_id}:{peerid} could "
+                        "not be restored after a failed trust write"
+                    )
 
         if trust_updated and permission_store is not None:
             permission_store.notify_stored_grant(actor_id, peerid)
@@ -1363,9 +1369,8 @@ class TrustPermissionHandler(base_handler.BaseHandler):
             # The path's type must be the row's, as the PUT requires (3.16):
             # what applies is decided by the row's type.
             myself = auth_result.actor
-            if not myself or not myself.get_trust_relationships(
-                relationship=relationship, peerid=peerid
-            ):
+            row = myself.get_trust_relationship(peerid=peerid) if myself else None
+            if not row or row.get("relationship") != relationship:
                 if self.response:
                     self.response.set_status(404, "Trust relationship not found")
                 return
@@ -1501,7 +1506,11 @@ class TrustPermissionHandler(base_handler.BaseHandler):
                 return
 
             permission_store = get_trust_permission_store(self.config)
-            existing_permissions = permission_store.get_permissions(actor_id, peerid)
+            # From the store, not the cache (3.16): replace-or-merge decides
+            # what is written, and another process may have deleted it.
+            existing_permissions = permission_store.get_permissions_uncached(
+                actor_id, peerid
+            )
 
             # A client's override for another type is not applied (and not
             # shown): it is replaced by one holding only this edit, for the
@@ -1533,7 +1542,7 @@ class TrustPermissionHandler(base_handler.BaseHandler):
                 else:
                     self.response.set_status(500, "Failed to create permissions")
 
-        except ValueError as e:
+        except (ValueError, RecursionError) as e:
             logger.error(f"Invalid JSON in permission request: {e}")
             if self.response:
                 self.response.set_status(400, "Invalid JSON")

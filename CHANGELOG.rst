@@ -8,6 +8,15 @@ Unreleased
 SECURITY
 ~~~~~~~~
 
+- **An actor's owner could write a grant into another actor.** ``PUT
+  /<actor>/trust/<rel>/<peer>/permissions`` (and ``permissions`` in a trust
+  ``PUT``) on an existing override copied any field the request named,
+  ``actor_id``, ``peer_id`` and ``trust_type`` included, and the store keys
+  on those, so on a shared host one actor's owner could give itself any
+  level at another actor. **Behavior change:**
+  ``TrustPermissionStore.update_permissions`` takes only the permission
+  categories and ``notes``; identity and bookkeeping fields are refused
+  and logged.
 - **A peer read, overwrote and was pushed property parts its grant
   excluded.** An exclusion was checked only at the exact path a request
   named: a peer granted ``*`` without ``settings/private`` read ``settings``
@@ -35,8 +44,11 @@ SECURITY
   of diffs); the owner reads it as stored. A sub-path ``PUT`` into such a
   value answers 409 (it cannot be merged into; replacing the whole would
   lose what the write did not name), and a request body nested beyond the
-  parser answers 400 on every route (both answered 500; a list item
-  ``PUT ?index=`` stored such a body as text). **Behavior change:** a direct
+  parser is refused as invalid JSON on the property, method, action,
+  resource, subscription and trust routes (both answered 500; a list item
+  ``PUT ?index=`` stored such a body as text). A sub-path ``PUT`` onto plain
+  text, or onto a JSON list or scalar, answers 409 too (it replaced the
+  whole value, or answered 500). **Behavior change:** a direct
   ``GET /properties/<name>`` of a plain-text value runs the property's read
   hook, as the listing does (a hook answering ``None`` is 404), and a
   sub-path of plain text is 404 (it answered the whole text). A
@@ -949,7 +961,8 @@ CHANGED
   fails is logged and retried; it refuses only an approval of the
   override's own type, which would bring it back, or when the override
   cannot be read); the owner's edit of such an override replaces it with
-  one holding only that edit; the permissions views show only an override
+  one holding only that edit (``PUT .../permissions`` then answers 201);
+  the permissions views show only an override
   that applies, and ``GET /trust/<type>/<peer>/permissions`` answers 404
   unless ``<type>`` is the row's type;
   MCP caches of the process are evicted (other processes until their cache

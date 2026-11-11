@@ -335,3 +335,11 @@ def test_writes_over_text_beyond_the_parser(world: World) -> None:
     assert body_put.status_code == 400
     assert owner_put("/deep", json={"x": 1}).status_code in (200, 204)
     assert world.stored("deep") == {"x": 1}
+    # Re-run 6 (Issue 5): plain text, and a JSON list or scalar, have no
+    # parts either: nothing is replaced.
+    core.property["text"] = "plain"
+    core.property["a_list"] = "[1, 2]"
+    assert owner_put("/text/x", json=1).status_code == 409
+    assert owner_put("/a_list/x", json=1).status_code == 409
+    text = requests.get(f"{world.a['url']}/properties/text", auth=world.owner)
+    assert text.text == "plain"

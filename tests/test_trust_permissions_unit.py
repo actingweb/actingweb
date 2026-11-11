@@ -796,3 +796,51 @@ class TestThePermissionSenderResendsA503:
         assert _retry_after("soon") == 1.0
         assert _retry_after("nan") == 1.0
         assert _retry_after("-3") == 0.0
+
+
+def test_an_update_cannot_change_whose_override_it_is() -> None:
+    """Re-run 6 (Issue 1): ``update_permissions`` copied any field the
+    request named; the store keys on ``actor_id`` and ``peer_id``, so an
+    owner's PUT with ``{"actor_id": "victim", ...}`` wrote a grant into
+    another actor's store, with the ``trust_type`` of its choice."""
+    from unittest import mock
+
+    from actingweb.trust_permissions import TrustPermissions, TrustPermissionStore
+
+    store = object.__new__(TrustPermissionStore)
+    existing = TrustPermissions(
+        actor_id="a1",
+        peer_id="p1",
+        trust_type="viewer",
+        properties={"patterns": ["public/*"], "operations": ["read"]},
+    )
+    written: list[TrustPermissions] = []
+    with (
+        mock.patch.object(store, "get_permissions", return_value=existing),
+        mock.patch.object(
+            store,
+            "store_permissions",
+            side_effect=lambda p, **kw: written.append(p) or True,
+        ),
+    ):
+        assert store.update_permissions(
+            "a1",
+            "p1",
+            {
+                "actor_id": "victim",
+                "peer_id": "attacker",
+                "trust_type": "admin",
+                "created_by": "x",
+                "notes": "ok",
+                "methods": {"allowed": ["m"]},
+            },
+        )
+    assert len(written) == 1
+    stored = written[0]
+    assert (stored.actor_id, stored.peer_id, stored.trust_type) == (
+        "a1",
+        "p1",
+        "viewer",
+    )
+    assert stored.created_by == "system"
+    assert stored.notes == "ok" and stored.methods == {"allowed": ["m"]}

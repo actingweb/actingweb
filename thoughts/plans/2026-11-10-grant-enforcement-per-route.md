@@ -1,6 +1,6 @@
 ---
 status: done
-verified: thoughts/verifications/2026-11-11-grant-enforcement-per-route-reverify-5.md
+verified: thoughts/verifications/2026-11-11-grant-enforcement-per-route-reverify-6.md
 ---
 
 # Implementation Plan: a peer's grant is the answer on every route
@@ -2858,3 +2858,78 @@ bytes as `json.loads` does before its prefix check.
 Full tier (2026-11-11): ruff, format, pyright clean; `verify_groups` OK;
 unit 5083 passed; DynamoDB 6538 passed; PostgreSQL 6335 passed; docs build
 with `-W`. No wire recording changed.
+
+### 2026-11-11, after verification thoughts/verifications/2026-11-11-grant-enforcement-per-route-reverify-6.md
+
+#### 57. An override's identity is not the request's
+
+**Category**: Bug fix, security (re-run 6, Issue 1; predates this branch, on `master`)
+
+**What changed**: `TrustPermissionStore.update_permissions` takes only the
+permission categories and `notes`; `actor_id`, `peer_id`, `trust_type`,
+`created_by` and `updated_at` are refused and logged. It copied any field
+the request named, and the store keys on `actor_id`/`peer_id`, so an
+owner's PUT could write a grant into another actor. In the changelog's
+SECURITY section.
+
+**Files affected**: `actingweb/trust_permissions.py`, `CHANGELOG.rst`;
+`tests/test_trust_permissions_unit.py`
+(`test_an_update_cannot_change_whose_override_it_is`).
+
+#### 58. One text path on a direct read, with the filter
+
+**Category**: Bug fix (re-run 6, Issues 2, 8)
+
+**What changed**: plain text and the owner's text beyond the parser share
+one branch: no parts (404), the read hook, then the exclusion filter and
+the withheld check on what the hook returned (entry 54 skipped the filter);
+a result that cannot be serialised is 404, as on the JSON branch.
+
+**Not changed (re-run 6, Issue 8, the hook's sub-path):** the path a read
+hook receives is a pinned contract (a consumer's guard reads it; the wire
+test `test_a_wildcard_hook_receives_the_path_it_always_has` holds it, and
+the Full tier caught the attempted change). It stays as before 3.16.
+
+**Files affected**: `actingweb/handlers/properties.py`;
+`tests/test_grant_edges.py`
+(`test_a_read_hook_s_result_on_plain_text_is_filtered`).
+
+#### 59. The re-type and the edit read the store
+
+**Category**: Bug fix (re-run 6, Issues 3, 4)
+
+**What changed**: the re-type decides from the row it just read (one read
+for the decision and the pre-write cleanup); `PUT .../permissions` decides
+replace-or-merge from the store, not the process cache.
+
+**Files affected**: `actingweb/interface/trust_manager.py`,
+`actingweb/handlers/trust.py`; `tests/test_client_trust_update.py`
+(`test_the_re_type_decides_from_the_row_it_just_read`,
+`test_the_trust_put_s_edit_replaces_a_stale_override`, the second a guard
+for entry 52's other path).
+
+#### 60. No parts, no merge; leftovers
+
+**Category**: Bug fix / cleanup (re-run 6, Issues 5, 6, 7)
+
+**What changed**: a sub-path PUT onto plain text or a JSON list or scalar
+answers 409 (it replaced the whole value, or answered 500). The changelog
+names the routes that refuse a body beyond the parser instead of "every
+route", and the permissions PUT and async trust POST join them. A failed
+restore after a failed trust write is logged; the PUT's unused `old` read
+is gone; the permissions GET reads one row; bytes decode with
+`surrogatepass`, as `json.loads` does.
+
+**Files affected**: `actingweb/handlers/properties.py`, `trust.py`,
+`async_trust.py`, `actingweb/permission_evaluator.py`, `CHANGELOG.rst`;
+`tests/integration/test_property_grants_flow.py`,
+`tests/test_grant_stored_text.py`
+(`test_bytes_with_lone_surrogates_are_read_as_the_parser_reads_them`).
+
+#### 61. The Full tier on this batch
+
+Full tier (2026-11-11): ruff, format, pyright clean; `verify_groups` OK;
+unit 5089 passed; DynamoDB 6543 and PostgreSQL 6340 passed, each failing
+only `test_a_wildcard_hook_receives_the_path_it_always_has`, which pins
+the hook path entry 58 tried to change; reverted (entry 58), that file
+passes on both backends. Docs build with `-W`. No wire recording changed.

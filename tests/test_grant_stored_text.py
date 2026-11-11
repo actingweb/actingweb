@@ -366,3 +366,12 @@ def test_bytes_are_read_as_the_parser_reads_them() -> None:
     assert as_json_object(text.encode("utf-8-sig")) == {"private": "s"}
     assert as_json_object(text.encode("utf-16")) == {"private": "s"}
     assert as_json_object(b"plain") is None
+
+
+def test_bytes_with_lone_surrogates_are_read_as_the_parser_reads_them() -> None:
+    """Re-run 6 (Issue 7): ``json.loads`` decodes bytes with
+    ``surrogatepass``; a strict decode treated these as not JSON."""
+    from actingweb.permission_evaluator import as_json_object
+
+    parsed = as_json_object(b'{"private":"s","x":"\xed\xa0\x80"}')
+    assert isinstance(parsed, dict) and parsed["private"] == "s"

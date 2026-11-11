@@ -428,3 +428,34 @@ def test_a_list_item_body_beyond_the_parser_is_400() -> None:
     ):
         handler.put("a1", "notes")
     assert handler.response.status_code == 400
+
+
+def test_a_read_hook_s_result_on_plain_text_is_filtered() -> None:
+    """Re-run 6 (Issue 2): the plain-text branch ran the read hook without
+    the filter that follows it on the JSON branch and in the listing: a hook
+    expanding text to an object sent a peer the keys its grant excludes."""
+    handler, result = _get_handler(
+        {"profile": "ref:1"},
+        hook=lambda name, *a, **k: {"name": "n", "ssn": "secret"},
+    )
+    snapshot = mock.Mock(relationship="friend")
+    snapshot.rules.return_value = {
+        "patterns": ["*"],
+        "excluded_patterns": ["profile/ssn"],
+    }
+    decision = mock.Mock(snapshot=snapshot)
+
+    def decide(*a: Any, **k: Any) -> bool:
+        handler._decision = decision
+        return True
+
+    result.auth_obj.acl = {"peerid": "p1"}
+    with (
+        mock.patch.object(handler, "authenticate_actor", return_value=result),
+        mock.patch.object(handler, "_check_property_permission", side_effect=decide),
+        mock.patch.object(handler, "_list_tail_allowed", return_value=True),
+        mock.patch.object(handler, "_get_actor_interface", return_value=mock.Mock()),
+    ):
+        handler.get("a1", "profile")
+    assert handler.response.status_code == 200
+    assert json.loads(handler.response.body) == {"name": "n"}

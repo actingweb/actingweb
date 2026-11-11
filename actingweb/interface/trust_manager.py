@@ -650,7 +650,8 @@ class TrustManager:
                 if not db:
                     logger.error("Failed to instantiate database backend")
                     return False
-                if db.get(actor_id=self._core_actor.id, peerid=peer_id):
+                stored_row = db.get(actor_id=self._core_actor.id, peerid=peer_id)
+                if stored_row:
                     now_iso = datetime.utcnow().isoformat()
 
                     # Always update last_accessed and established_via for OAuth2 trusts
@@ -687,7 +688,9 @@ class TrustManager:
                     # first one forever). An override written for another
                     # type is never applied (the evaluator), so it is
                     # removed as cleanup after the write, with no rollback.
-                    old_type = str(getattr(existing, "relationship", "") or "")
+                    # The row as just read (3.16: an earlier read could
+                    # miss an overlapping authorisation's write).
+                    old_type = str(stored_row.get("relationship") or "")
                     type_changes = bool(
                         source == "oauth2_client"
                         and trust_type
@@ -698,8 +701,7 @@ class TrustManager:
                         # than the row's) goes first: once the row took its
                         # type again it would apply. When it cannot go and
                         # this approval is its type, no code (3.16).
-                        # Against the row as stored now, not the read above.
-                        leftover = self._clean_client_override(peer_id)
+                        leftover = self._clean_client_override(peer_id, old_type)
                         if type_changes and leftover in (
                             trust_type,
                             _UNKNOWN_OVERRIDE,

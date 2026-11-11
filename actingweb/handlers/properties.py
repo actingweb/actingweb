@@ -713,23 +713,17 @@ class PropertiesHandler(_PropertyHandlerBase):
                 self.response.set_status(404, "Property not found")
             return
         jsonblob = _parsed(lookup)
-        if jsonblob is TOO_DEEP:
+        if jsonblob is TOO_DEEP and peer_of(check):
             # Nested beyond the parser: never to a peer (nothing about it
-            # can be checked, 3.16); the owner reads it whole as stored, as
-            # plain text is read (a part of it cannot be found).
-            if peer_of(check):
-                if self.response:
-                    self.response.set_status(403, "Forbidden")
-                return
-            if len(path) > 1:
-                if self.response:
-                    self.response.set_status(404)
-                return
-            out = lookup
-        elif jsonblob is lookup:
-            # Not JSON: the text as stored. It has no parts (a sub-path is
-            # 404), and the read hook decides it as it decides it in the
-            # listing (3.16: a hook's refusal was skipped here).
+            # can be checked, 3.16).
+            if self.response:
+                self.response.set_status(403, "Forbidden")
+            return
+        if jsonblob is TOO_DEEP or jsonblob is lookup:
+            # Text as stored (not JSON, or the owner's text beyond the
+            # parser). It has no parts (a sub-path is 404), and the read
+            # hook and the filter decide it as they do a parsed value
+            # (3.16: the hook's refusal was skipped here).
             if len(path) > 1:
                 if self.response:
                     self.response.set_status(404)
@@ -747,15 +741,25 @@ class PropertiesHandler(_PropertyHandlerBase):
                             self.response.set_status(404)
                         return
                     if transformed is not lookup:
-                        if peer_of(check) and beyond_parser(transformed):
+                        filtered = drop_excluded(
+                            _property_rules(self), property_path, transformed
+                        )
+                        if withheld(transformed, filtered) or (
+                            peer_of(check) and beyond_parser(transformed)
+                        ):
                             if self.response:
                                 self.response.set_status(403, "Forbidden")
                             return
-                        out = (
-                            transformed
-                            if isinstance(transformed, str)
-                            else json.dumps(transformed)
-                        )
+                        try:
+                            out = (
+                                filtered
+                                if isinstance(filtered, str)
+                                else json.dumps(filtered)
+                            )
+                        except (TypeError, ValueError):
+                            if self.response:
+                                self.response.set_status(404)
+                            return
         else:
             try:
                 out = jsonblob
@@ -767,7 +771,10 @@ class PropertiesHandler(_PropertyHandlerBase):
                 if self.hooks:
                     actor_interface = self._get_actor_interface(myself)
                     if actor_interface:
-                        # Use the original name for the hook, not the modified path
+                        # Use the original name for the hook, not the modified path.
+                        # The path a hook receives is a pinned contract (a
+                        # consumer's guard reads it; the wire test
+                        # test_a_wildcard_hook_receives_the_path_it_always_has).
                         hook_path = path[1:] if len(path) > 1 else []
                         auth_context = self._create_auth_context(check, "read")
                         transformed = self._run_hooks(
@@ -1251,11 +1258,6 @@ class PropertiesHandler(_PropertyHandlerBase):
             self._forbid()
             return
         if len(path) == 1:
-            old = myself.property[name] if myself and myself.property else None
-            try:
-                old = json.loads(old or "{}")
-            except (TypeError, ValueError, KeyError, RecursionError):
-                old = {}
             # Parsed once above (``incoming``): JSON, or the text as sent.
             is_json = incoming is not body
             new_body = incoming
@@ -1306,13 +1308,13 @@ class PropertiesHandler(_PropertyHandlerBase):
             orig = json.loads(orig or "{}")
             merge_dict(orig, store)
             res = orig
-        except RecursionError:
-            # The stored value is nested beyond the parser: a part cannot be
-            # merged into it, and replacing the whole would lose what the
-            # write did not name (3.16).
-            self.response.set_status(409, "Stored value nested too deep to update")
+        except (RecursionError, ValueError, AttributeError):
+            # The stored value has no parts to merge into (text, a list or
+            # a scalar, or JSON nested beyond the parser), and replacing the
+            # whole would lose what the write did not name (3.16).
+            self.response.set_status(409, "Stored value has no parts to update")
             return
-        except (TypeError, ValueError, KeyError):
+        except (TypeError, KeyError):
             res = store
         # Execute property put hook if available
         final_res = res

@@ -101,6 +101,17 @@ class TrustPermissions:
         return True
 
 
+_EDITABLE_FIELDS = frozenset(
+    {"properties", "methods", "actions", "tools", "resources", "prompts", "notes"}
+)
+"""What ``update_permissions`` takes from an update."""
+
+_IDENTITY_FIELDS = frozenset(
+    {"actor_id", "peer_id", "trust_type", "created_by", "updated_at"}
+)
+"""What it never does: an override's identity and its bookkeeping."""
+
+
 def is_client_peer(peer_id: str) -> bool:
     """An OAuth2/MCP client's peer id (``oauth2_client:...``), the rows a
     client authorisation creates and re-types (3.16)."""
@@ -728,7 +739,13 @@ class TrustPermissionStore:
 
             # Update only the specified fields, normalizing properties format
             for field, value in updates.items():
-                if hasattr(existing, field):
+                if field in _IDENTITY_FIELDS:
+                    # Which actor, peer and base type an override belongs to
+                    # is the store's, never the request's (3.16: the store
+                    # keys on these, so an owner's PUT could write into
+                    # another actor's grants).
+                    logger.warning(f"Refused to update permission field: {field}")
+                elif field in _EDITABLE_FIELDS:
                     # Normalize properties to spec-compliant format
                     if field == "properties":
                         from .peer_permissions import normalize_property_permission

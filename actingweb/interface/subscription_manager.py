@@ -1723,8 +1723,8 @@ class SubscriptionManager:
                     logger.warning(
                         f"Trust with {peer_id} was re-paired during the "
                         "revocation cleanup; the new row is kept (if "
-                        "trust_deleted already fired, the peer's next sync "
-                        "re-creates its subscriptions)"
+                        "trust_deleted already fired, the local cleanup "
+                        "it announced has run)"
                     )
                 except DbError:
                     raise
@@ -2820,8 +2820,8 @@ class SubscriptionManager:
                     logger.warning(
                         f"Trust with {peer_id} was re-paired during the "
                         "revocation cleanup; the new row is kept (if "
-                        "trust_deleted already fired, the peer's next sync "
-                        "re-creates its subscriptions)"
+                        "trust_deleted already fired, the local cleanup "
+                        "it announced has run)"
                     )
                 except DbError:
                     raise

@@ -274,3 +274,122 @@ class TestAClientOverrideForAnotherTypeIsInert:
         ev = self._evaluator("friend")
         perms = ev._get_effective_permissions("a1", "peer123", relationship="viewer")
         assert perms["properties"]["operations"] == ["read", "write"]
+
+
+def test_an_overlapping_authorisation_s_override_is_kept() -> None:
+    """Re-run 4 (Issue 2): the cleanup compared the override with the type
+    its own call approved; an overlapping authorisation that wrote the row
+    back to the override's type lost the override. It compares with the row
+    as stored."""
+    w = World()
+    peer, store = _friend_with_override(w)
+    db_type = type(get_trust(w.config))
+    real_modify = db_type.modify
+
+    def other_tab_writes_friend_back(self: Any, *a: Any, **kw: Any) -> Any:
+        out = real_modify(self, *a, **kw)
+        if kw.get("relationship") == "viewer":
+            other = get_trust(w.config)
+            assert other.get(actor_id=aid(w.actor), peerid=peer)
+            real_modify(other, relationship="friend")
+        return out
+
+    with mock.patch.object(db_type, "modify", other_tab_writes_friend_back):
+        assert w.authorise("viewer")
+    assert w.row()["relationship"] == "friend"
+    kept = store.get_permissions_uncached(aid(w.actor), peer)
+    assert kept is not None and kept.trust_type == "friend"
+
+
+def test_a_stale_override_that_cannot_go_does_not_come_back() -> None:
+    """Re-run 4 (Issue 2): an inert override left by a failed cleanup came
+    back into force when the user approved its type again. It is removed
+    before the re-type, and when it cannot be, that approval issues no
+    code."""
+    w = World()
+    peer, store = _friend_with_override(w)
+    with mock.patch.object(
+        TrustPermissionStore, "delete_permissions", return_value=False
+    ):
+        assert w.authorise("viewer")  # the friend override is left, inert
+        assert w.authorise("friend") is False
+    assert w.row()["relationship"] == "viewer"
+    assert w.authorise("friend")  # the removal works now: re-typed
+    assert w.row()["relationship"] == "friend"
+    assert store.get_permissions_uncached(aid(w.actor), peer) is None
+
+
+def _stale_client(w: World) -> tuple[str, TrustPermissionStore]:
+    """A client re-typed friend → viewer whose friend override the cleanup
+    could not remove (inert)."""
+    peer, store = _friend_with_override(w)
+    with mock.patch.object(
+        TrustPermissionStore, "delete_permissions", return_value=False
+    ):
+        assert w.authorise("viewer")
+    assert w.row()["relationship"] == "viewer"
+    return peer, store
+
+
+def _owner_handler(w: World, body: Any = None) -> Any:
+    import json as _json
+
+    from actingweb.aw_web_request import AWWebObj
+    from actingweb.handlers.trust import TrustPermissionHandler
+
+    handler = TrustPermissionHandler(
+        AWWebObj(body=_json.dumps(body) if body is not None else None), w.config
+    )
+    auth = mock.Mock(acl={"peerid": "", "relationship": "creator"})
+    result = mock.Mock(success=True, actor=w.actor, auth_obj=auth)
+    result.authorize.return_value = True
+    return handler, result
+
+
+def test_the_owner_s_edit_of_a_stale_client_override_applies() -> None:
+    """Re-run 4 (Issue 3): the owner's edit kept the stale type, answered
+    200 and was never applied. It is written for the row's type."""
+    w = World()
+    peer, store = _stale_client(w)
+    handler, result = _owner_handler(
+        w, {"properties": {"patterns": ["public/*"], "operations": ["read"]}}
+    )
+    with mock.patch.object(handler, "authenticate_actor", return_value=result):
+        handler.put(aid(w.actor), "viewer", peer)
+    assert handler.response.status_code == 200
+    stored = store.get_permissions_uncached(aid(w.actor), peer)
+    assert stored is not None and stored.trust_type == "viewer"
+
+
+def test_the_owner_does_not_see_a_stale_client_override_as_applied() -> None:
+    """Re-run 4 (Issue 3): ``GET .../permissions`` showed the inert override
+    as the client's grant."""
+    w = World()
+    peer, _ = _stale_client(w)
+    handler, result = _owner_handler(w)
+    with mock.patch.object(handler, "authenticate_actor", return_value=result):
+        handler.get(aid(w.actor), "viewer", peer)
+    # The defaults' branch answered (this test has no registry, so it
+    # reports an error), not the override's.
+    assert "custom_override" not in str(handler.response.body)
+    assert '"friend"' not in str(handler.response.body)
+
+
+def test_the_evaluator_reads_the_row_to_decide_a_client_override() -> None:
+    """Re-run 4 (Issue 7): with no row type given, the evaluator reads the
+    row (real storage) and does not apply a stale client override."""
+    from actingweb.permission_evaluator import PermissionEvaluator
+
+    w = World()
+    peer, store = _stale_client(w)
+    ev = object.__new__(PermissionEvaluator)
+    ev.config = w.config
+    ev.permission_store = store
+    registry = mock.Mock()
+    registry.get_type.side_effect = lambda name: mock.Mock(
+        base_permissions={"properties": {"patterns": [f"{name}/*"]}}
+    )
+    ev.trust_type_registry = registry
+    assert ev._get_effective_permissions(aid(w.actor), peer) == {
+        "properties": {"patterns": ["viewer/*"]}
+    }

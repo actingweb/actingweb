@@ -1647,8 +1647,10 @@ client that names another type (written before a re-type, or set that way
 with ``create_permission_override(..., trust_type=...)``) is not applied:
 the client gets its row's type, and the next authorisation deletes the
 override (logged at WARNING). An override for the row's type is applied and
-kept. To narrow a client's access, write its override with the client row's
-own type. A peer's (not a client's) override is applied as before.
+kept. The owner's ``PUT /trust/<type>/<client>/permissions`` writes the row's
+type into such an override, so the edit applies; ``GET .../permissions``,
+``GET /permissions/<client>`` and the web UI show only an override that
+applies. A peer's (not a client's) override is applied as before.
 
 **The decision hook.** ``@app.lifecycle_hook("oauth2_trust_requested")``
 receives ``trust_type``, ``client_id``, ``client_name``, ``redirect_uri``,

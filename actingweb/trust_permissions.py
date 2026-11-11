@@ -101,6 +101,24 @@ class TrustPermissions:
         return True
 
 
+def is_client_peer(peer_id: str) -> bool:
+    """An OAuth2/MCP client's peer id (``oauth2_client:...``), the rows a
+    client authorisation creates and re-types (3.16)."""
+    return str(peer_id or "").startswith("oauth2_client:")
+
+
+def override_applies(permissions: Any, peer_id: str, row_type: str | None) -> bool:
+    """Whether a stored override is applied for this trust (3.16, owner
+    decision 2026-11-11): always for a peer; for an OAuth2/MCP client only
+    when it names the row's type (its level is the one the user approved).
+    The evaluator, the owner's grant API and the views use this one rule."""
+    if permissions is None:
+        return False
+    if not is_client_peer(peer_id):
+        return True
+    return str(getattr(permissions, "trust_type", "") or "") == str(row_type or "")
+
+
 class TrustPermissionStore:
     """
     Storage manager for per-trust-relationship permissions.

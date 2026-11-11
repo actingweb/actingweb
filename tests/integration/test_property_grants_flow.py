@@ -300,7 +300,38 @@ def test_text_beyond_the_parser_never_reaches_a_peer(world: World) -> None:
         assert "deep" not in who("GET", "").json()
     owner = requests.get(f"{world.a['url']}/properties/deep", auth=world.owner)
     assert owner.status_code == 200 and owner.text == deep
-    # The admin's grant excludes nothing: it may replace the value; the
-    # friend's excludes parts, so it may not.
+    # The friend's grant excludes parts: it may not replace the value.
     assert world.as_f("PUT", "/deep", json={"x": 1}).status_code == 403
-    assert world.as_d("PUT", "/deep", json={"x": 1}).status_code in (200, 204)
+
+
+def test_writes_over_text_beyond_the_parser(world: World) -> None:
+    """Re-run 4 (Issues 1, 4): a sub-path PUT into such a value merged
+    nothing and wrote the part over the whole property (204, data lost); a
+    body nested beyond the parser answered 500. Every built-in type excludes
+    something, so a peer is refused before either (the unit test
+    ``test_touches_excluded_beyond_the_parser`` holds a grant with no
+    exclusion); the owner reaches both."""
+    from actingweb.actor import Actor
+
+    from .conftest import TEST_APP_CONFIG
+
+    deep = "[" * 200_000 + "]" * 200_000
+    core = Actor(world.a["id"], config=TEST_APP_CONFIG["config"])
+    assert core.property is not None
+    core.property["deep"] = deep
+
+    def owner_put(path: str, **kw: Any) -> requests.Response:
+        return requests.put(
+            f"{world.a['url']}/properties{path}", auth=world.owner, **kw
+        )
+
+    assert owner_put("/deep/x", json=1).status_code == 409
+    owner = requests.get(f"{world.a['url']}/properties/deep", auth=world.owner)
+    assert owner.text == deep  # nothing lost
+    assert world.as_f("PUT", "/deep/x", json=1).status_code == 403
+    body_put = owner_put(
+        "/color", data=deep, headers={"Content-Type": "application/json"}
+    )
+    assert body_put.status_code == 400
+    assert owner_put("/deep", json={"x": 1}).status_code in (200, 204)
+    assert world.stored("deep") == {"x": 1}

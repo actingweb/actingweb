@@ -12,6 +12,7 @@ from ..db import get_actor
 from ..db.creator_rules import is_refused_from_callers, normalise_creator
 from ..db.exceptions import CreatorTaken, DbError
 from ..secret_compare import secret_equals
+from ..trust_permissions import override_applies
 
 # Import permission system with fallback
 try:
@@ -688,6 +689,10 @@ class TrustPeerHandler(base_handler.BaseHandler):
             # Add permission information to response
             permission_store = get_trust_permission_store(self.config)
             permissions = permission_store.get_permissions(actor_id, peerid)
+            if not override_applies(permissions, peerid, my_trust.get("relationship")):
+                # A client's override for another type is not applied
+                # (3.16): not shown as its grant either.
+                permissions = None
 
             if permissions:
                 my_trust["permissions"] = {
@@ -1043,6 +1048,14 @@ class TrustPeerHandler(base_handler.BaseHandler):
                 # Stored silently: the peer is told once the trust write
                 # landed (below), never of a grant a failed write rolls back.
                 if previous_override:
+                    if not override_applies(previous_override, peerid, relationship):
+                        # A client's override for another type is not
+                        # applied: the edit is written for the row's type,
+                        # so it is (3.16; it kept the stale type).
+                        permission_updates = {
+                            **permission_updates,
+                            "trust_type": relationship,
+                        }
                     permissions_updated = permission_store.update_permissions(
                         actor_id, peerid, permission_updates, notify_peer=False
                     )
@@ -1351,6 +1364,8 @@ class TrustPermissionHandler(base_handler.BaseHandler):
         try:
             permission_store = get_trust_permission_store(self.config)
             custom_permissions = permission_store.get_permissions(actor_id, peerid)
+            if not override_applies(custom_permissions, peerid, relationship):
+                custom_permissions = None  # not applied (3.16): the defaults
 
             if custom_permissions:
                 # Return custom permission overrides
@@ -1482,7 +1497,11 @@ class TrustPermissionHandler(base_handler.BaseHandler):
             existing_permissions = permission_store.get_permissions(actor_id, peerid)
 
             if existing_permissions:
-                # Update existing permissions
+                # Update existing permissions (a client's override for
+                # another type is written for the row's type, so it is
+                # applied; 3.16)
+                if not override_applies(existing_permissions, peerid, relationship):
+                    params = {**params, "trust_type": relationship}
                 success = permission_store.update_permissions(actor_id, peerid, params)
                 if success:
                     self.response.set_status(200, "Updated")

@@ -28,10 +28,10 @@ from actingweb.db import (
 )
 from actingweb.log_summary import summarize_payload
 from actingweb.permission_evaluator import (
+    TOO_DEEP,
     GrantSnapshot,
     PermissionType,
     as_json_object,
-    beyond_parser,
     drop_excluded,
     exclusion_patterns,
     get_permission_evaluator,
@@ -4019,23 +4019,23 @@ class Actor:
 
         A value that is JSON text of an object (a form-posted property, an
         SDK write of a JSON string: what a direct read parses) is filtered
-        as the object and sent as text again. A value too deep for the filter
-        to walk is withheld (``_EMPTIED``). With no exclusion stated the
-        value passes as it is, unwalked (its depth does not matter)."""
-        if beyond_parser(value):
+        as the object and sent as text again; it is parsed once. Text nested
+        beyond the parser never goes to a peer, and a value too deep for the
+        filter is withheld (``_EMPTIED``). With no exclusion stated the value
+        passes as it is, unwalked (its depth does not matter)."""
+        as_object = as_json_object(value)
+        if as_object is TOO_DEEP:
             return _EMPTIED  # never to a peer, whatever its grant (3.16)
         if not exclusion_patterns(rules):
             return value
-        if isinstance(value, str):
-            as_object = as_json_object(value)
-            if as_object is not None:
-                filtered = drop_excluded(rules, path, as_object)
-                if withheld(as_object, filtered):
-                    return _EMPTIED
-                kept_object = _prune_emptied(as_object, filtered)
-                if kept_object is _EMPTIED:
-                    return _EMPTIED
-                return value if kept_object == as_object else json.dumps(kept_object)
+        if as_object is not None:
+            filtered = drop_excluded(rules, path, as_object)
+            if withheld(as_object, filtered):
+                return _EMPTIED
+            kept_object = _prune_emptied(as_object, filtered)
+            if kept_object is _EMPTIED:
+                return _EMPTIED
+            return value if kept_object == as_object else json.dumps(kept_object)
         kept = drop_excluded(rules, path, value)
         if withheld(value, kept):
             return _EMPTIED
@@ -4286,14 +4286,12 @@ class Actor:
             subscriber's copy)."""
             if path in list_keys:
                 return value
-            if beyond_parser(value):
+            parsed = as_json_object(value)
+            if parsed is TOO_DEEP:
                 return _EMPTIED  # never to a peer, whatever its grant (3.16)
             if not exclusion_patterns(rules):
                 return value
-            if isinstance(value, str):
-                parsed = as_json_object(value)
-                if parsed is None:
-                    return value
+            if parsed is not None:
                 filtered = drop_excluded(rules, path, parsed)
                 if withheld(parsed, filtered):
                     return _EMPTIED

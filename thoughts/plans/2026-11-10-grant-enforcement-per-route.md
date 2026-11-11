@@ -1,6 +1,6 @@
 ---
 status: done
-verified: thoughts/verifications/2026-11-11-grant-enforcement-per-route-reverify-3.md
+verified: thoughts/verifications/2026-11-11-grant-enforcement-per-route-reverify-4.md
 ---
 
 # Implementation Plan: a peer's grant is the answer on every route
@@ -2711,4 +2711,82 @@ code it deadlocks rather than failing by wiring.
 
 Full tier (2026-11-11): ruff, format, pyright clean; `verify_groups` OK;
 unit 5071 passed; DynamoDB 6525 passed; PostgreSQL 6322 passed; docs build
+with `-W`. No wire recording changed.
+
+### 2026-11-11, after verification thoughts/verifications/2026-11-11-grant-enforcement-per-route-reverify-4.md
+
+#### 48. A write into text beyond the parser never loses data
+
+**Category**: Bug fix (re-run 4, Issues 1, 4)
+
+**What changed**: a sub-path PUT into a stored value nested beyond the
+parser answers 409 (entry 44 let the merge fall back to the written part,
+which replaced the whole property: 204, data lost); a body nested beyond
+the parser answers 400 on every body parse (properties, methods, actions,
+both twins, the FastAPI JSON dependency), where it answered 500.
+
+**Files affected**: `actingweb/handlers/properties.py`, `methods.py`,
+`actions.py`, `async_actions.py`,
+`actingweb/interface/integrations/fastapi_integration.py`;
+`tests/integration/test_property_grants_flow.py`
+(`test_writes_over_text_beyond_the_parser`, both backends: 409 with
+nothing lost, 400, a whole replacement), `tests/test_grant_edges.py`
+(`test_touches_excluded_beyond_the_parser`: a grant with and without an
+exclusion; no built-in type is without one, so no peer over HTTP).
+
+#### 49. A client's override is compared with its row everywhere
+
+**Category**: Bug fix (re-run 4, Issues 2, 3, 6)
+
+**What changed**: one rule, `trust_permissions.override_applies` (always
+for a peer; for a client only when it names the row's type), used by the
+evaluator, the owner's grant API and the views. The cleanup compares a
+client's override with the row's type, not the approved one: before the
+write (an override inert already, which would apply again once the row
+took its type; if it cannot be removed and this approval is its type, no
+code) and after a type change (against the row as stored, so an
+overlapping authorisation's override for the type it wrote is kept). The
+owner's edit of an inert override writes the row's type (it kept the stale
+one, answered 200 and was never applied); `GET /trust/.../permissions`,
+`GET /permissions/<peer>`, the trust GET's permissions and the web UI's
+custom-permissions flag show only an override that applies. The evaluator
+reads the row once (`_approval` returns its type with the approval) and
+resolves the type in one place.
+
+**Files affected**: `actingweb/trust_permissions.py`,
+`actingweb/permission_evaluator.py`, `actingweb/interface/trust_manager.py`,
+`actingweb/handlers/trust.py`, `permissions.py`, `www.py`,
+`docs/migration/v3.16.rst`, `CHANGELOG.rst`;
+`tests/test_client_trust_update.py`
+(`test_an_overlapping_authorisation_s_override_is_kept`,
+`test_a_stale_override_that_cannot_go_does_not_come_back`,
+`test_the_owner_s_edit_of_a_stale_client_override_applies`,
+`test_the_owner_does_not_see_a_stale_client_override_as_applied`,
+`test_the_evaluator_reads_the_row_to_decide_a_client_override`, the last a
+guard for the row-reading branch), `tests/test_permission_pattern_matching.py`
+and `tests/test_db_fault_permissions.py` (stubs follow the signatures).
+
+#### 50. One parse; the direct GET's own try; the warning says what ran
+
+**Category**: Bug fix / cleanup (re-run 4, Issues 5, 6, 8)
+
+**What changed**: `as_json_object` skips text that does not open an
+object or array; the diff, the full state and the view parse once and
+reuse it (`beyond_parser` is that comparison). The direct GET parses in
+its own step (`_parsed`), so a `RecursionError` from a hook or the filter
+is not taken for stored text; a hook's result nested beyond the parser is
+refused for a peer, as the listing does. The late-`TrustReplaced` warning
+no longer claims the peer's sync re-creates subscriptions.
+
+**Files affected**: `actingweb/permission_evaluator.py`,
+`actingweb/actor.py`, `actingweb/interface/authenticated_views.py`,
+`actingweb/handlers/properties.py`,
+`actingweb/interface/subscription_manager.py`;
+`tests/test_grant_stored_text.py`
+(`test_text_beyond_the_parser_is_withheld_with_no_exclusion`).
+
+#### 51. The Full tier on this batch
+
+Full tier (2026-11-11): ruff, format, pyright clean; `verify_groups` OK;
+unit 5078 passed; DynamoDB 6533 passed; PostgreSQL 6330 passed; docs build
 with `-W`. No wire recording changed.

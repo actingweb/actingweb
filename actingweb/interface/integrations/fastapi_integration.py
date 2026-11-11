@@ -491,7 +491,7 @@ async def get_json_body(request: Request) -> dict[str, Any]:
             return {}
         parsed_json = json.loads(body.decode("utf-8"))
         return parsed_json if isinstance(parsed_json, dict) else {}
-    except (json.JSONDecodeError, UnicodeDecodeError):
+    except (json.JSONDecodeError, UnicodeDecodeError, RecursionError):
         return {}
 
 

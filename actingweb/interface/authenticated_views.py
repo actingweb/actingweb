@@ -22,7 +22,6 @@ from ..permission_evaluator import (
     PermissionResult,
     PermissionType,
     as_json_object,
-    beyond_parser,
     drop_excluded,
     exclusion_patterns,
     get_permission_evaluator,
@@ -203,14 +202,14 @@ class AuthenticatedPropertyStore:
         decision = getattr(self, "_last_decision", None)
         if not self._auth_context.accessor_id or decision is None:
             return value
+        parsed = as_json_object(value)  # once (only text opening [ or {)
+        if parsed is TOO_DEEP:
+            return None  # never to a peer, whatever its grant (3.16)
         if decision.snapshot is None:
             return value
-        if beyond_parser(value):
-            return None  # never to a peer, whatever its grant (3.16)
         rules = decision.snapshot.rules(PermissionType.PROPERTIES)
         if not exclusion_patterns(rules):
-            return value  # nothing to drop: no parse
-        parsed = as_json_object(value)
+            return value
         if parsed is None:
             return drop_excluded(rules, key, value)
         kept = drop_excluded(rules, key, parsed)

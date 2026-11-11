@@ -200,7 +200,7 @@ class MethodsHandler(base_handler.BaseHandler):
             else:
                 body_str = body
             params = json.loads(body_str)
-        except (TypeError, ValueError, KeyError):
+        except (TypeError, ValueError, KeyError, RecursionError):
             params = None
         is_jsonrpc = isinstance(params, dict) and params.get("jsonrpc") == "2.0"
         if (name or not is_jsonrpc) and not self._check_method_permission(

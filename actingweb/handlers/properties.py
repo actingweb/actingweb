@@ -712,8 +712,24 @@ class PropertiesHandler(_PropertyHandlerBase):
             if self.response:
                 self.response.set_status(404, "Property not found")
             return
-        try:
-            jsonblob = json.loads(lookup)
+        jsonblob = _parsed(lookup)
+        if jsonblob is TOO_DEEP:
+            # Nested beyond the parser: never to a peer (nothing about it
+            # can be checked, 3.16); the owner reads it whole as stored, as
+            # plain text is read (a part of it cannot be found).
+            if peer_of(check):
+                if self.response:
+                    self.response.set_status(403, "Forbidden")
+                return
+            if len(path) > 1:
+                if self.response:
+                    self.response.set_status(404)
+                return
+            out = lookup
+        elif jsonblob is lookup:
+            # Not JSON: the text as stored.
+            out = lookup
+        else:
             try:
                 out = jsonblob
                 if len(path) > 1:
@@ -744,9 +760,10 @@ class PropertiesHandler(_PropertyHandlerBase):
                                 self.response.set_status(404)
                             return
                 # A peer reads the value without its excluded descendants,
-                # at any depth (3.16); one too deep to filter is refused.
+                # at any depth (3.16); one too deep to filter, or a hook's
+                # text nested beyond the parser, is refused.
                 filtered = drop_excluded(_property_rules(self), property_path, out)
-                if withheld(out, filtered):
+                if withheld(out, filtered) or (peer_of(check) and beyond_parser(out)):
                     if self.response:
                         self.response.set_status(403, "Forbidden")
                     return
@@ -755,18 +772,6 @@ class PropertiesHandler(_PropertyHandlerBase):
                 if self.response:
                     self.response.set_status(404)
                 return
-            # Keep as string for response.write()
-        except RecursionError:
-            # Nested beyond the parser: never to a peer (nothing about it
-            # can be checked, 3.16); the owner reads it as stored, as plain
-            # text is read.
-            if peer_of(check):
-                if self.response:
-                    self.response.set_status(403, "Forbidden")
-                return
-            out = lookup
-        except (TypeError, ValueError, KeyError):
-            out = lookup
         if self.response:
             self.response.set_status(200, "Ok")
             self.response.headers["Content-Type"] = "application/json"
@@ -1056,7 +1061,7 @@ class PropertiesHandler(_PropertyHandlerBase):
 
             try:
                 item_value = json.loads(body)
-            except (TypeError, ValueError, KeyError):
+            except (TypeError, ValueError, KeyError, RecursionError):
                 item_value = body
 
             # Get the list property and set the item at the specified index
@@ -1204,7 +1209,12 @@ class PropertiesHandler(_PropertyHandlerBase):
             body = ""
         # A peer may not overwrite a value that holds, or write one that
         # would hold, a part its grant excludes (3.16).
-        if self._touches_excluded(myself, path, _parsed(body)):
+        incoming = _parsed(body)
+        if incoming is TOO_DEEP:
+            # A body nested beyond the parser cannot be read (3.16: 500).
+            self.response.set_status(400, "Body nested too deep")
+            return
+        if self._touches_excluded(myself, path, incoming):
             self._forbid()
             return
         if len(path) == 1:
@@ -1216,7 +1226,7 @@ class PropertiesHandler(_PropertyHandlerBase):
             try:
                 new_body = json.loads(body)
                 is_json = True
-            except (TypeError, ValueError, KeyError):
+            except (TypeError, ValueError, KeyError, RecursionError):
                 new_body = body
                 is_json = False
             # Execute property put hook if available
@@ -1255,7 +1265,7 @@ class PropertiesHandler(_PropertyHandlerBase):
         # Make store var to be merged with original struct
         try:
             body = json.loads(body)
-        except (TypeError, ValueError, KeyError):
+        except (TypeError, ValueError, KeyError, RecursionError):
             pass
         store = {path[len(path) - 1]: body}
         # Make store to be at same level as orig value
@@ -1269,7 +1279,13 @@ class PropertiesHandler(_PropertyHandlerBase):
             orig = json.loads(orig or "{}")
             merge_dict(orig, store)
             res = orig
-        except (TypeError, ValueError, KeyError, RecursionError):
+        except RecursionError:
+            # The stored value is nested beyond the parser: a part cannot be
+            # merged into it, and replacing the whole would lose what the
+            # write did not name (3.16).
+            self.response.set_status(409, "Stored value nested too deep to update")
+            return
+        except (TypeError, ValueError, KeyError):
             res = store
         # Execute property put hook if available
         final_res = res
@@ -1471,7 +1487,7 @@ class PropertiesHandler(_PropertyHandlerBase):
                 elif body is None:
                     body = "{}"
                 params = json.loads(body)
-            except (TypeError, ValueError, KeyError):
+            except (TypeError, ValueError, KeyError, RecursionError):
                 if self.response:
                     self.response.set_status(400, "Error in json body")
                 return
@@ -1521,7 +1537,7 @@ class PropertiesHandler(_PropertyHandlerBase):
             body = body.decode("utf-8", "ignore")
         try:
             params = json.loads(body or "{}")
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, RecursionError):
             return None
         if not isinstance(params, dict):
             return None
@@ -1585,7 +1601,7 @@ class PropertiesHandler(_PropertyHandlerBase):
             body = body.decode("utf-8", "ignore")
         try:
             parsed = json.loads(body or "{}")
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, RecursionError):
             return False
         return not isinstance(parsed, dict)
 
@@ -2294,7 +2310,7 @@ class PropertyMetadataHandler(_PropertyHandlerBase):
             if isinstance(body, bytes):
                 body = body.decode("utf-8", "ignore")
             params = json.loads(body or "{}")
-        except (TypeError, ValueError, KeyError):
+        except (TypeError, ValueError, KeyError, RecursionError):
             if self.response:
                 self.response.set_status(400, "Invalid JSON body")
             return
@@ -2449,7 +2465,7 @@ class PropertyListItemsHandler(_PropertyHandlerBase):
             if isinstance(body, bytes):
                 body = body.decode("utf-8", "ignore")
             params = json.loads(body or "{}")
-        except (TypeError, ValueError, KeyError):
+        except (TypeError, ValueError, KeyError, RecursionError):
             if self.response:
                 self.response.set_status(400, "Invalid JSON body")
             return

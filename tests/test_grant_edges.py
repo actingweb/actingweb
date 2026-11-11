@@ -332,3 +332,27 @@ def test_a_hook_refusing_a_later_key_registers_what_was_applied(shape: str) -> N
     myself.register_diffs.assert_called_once_with(
         target="properties", blob=json.dumps(expected)
     )
+
+
+def test_touches_excluded_beyond_the_parser() -> None:
+    """Re-run 4 (Issue 7): with a value nested beyond the parser, a peer
+    whose grant excludes something is refused; one whose grant excludes
+    nothing passes this check (and reaches the PUT's own refusal of a
+    sub-path merge, 409, or replaces the whole)."""
+    from actingweb.aw_web_request import AWWebObj
+    from actingweb.handlers.properties import PropertiesHandler
+    from actingweb.permission_evaluator import TOO_DEEP
+
+    deep = "[" * 200_000 + "]" * 200_000
+    myself = mock.Mock()
+    myself.property = {"deep": deep, "color": "blue"}
+    for rules, refused in (
+        ({"patterns": ["*"], "excluded_patterns": ["private/*"]}, True),
+        ({"patterns": ["*"]}, False),
+    ):
+        handler = PropertiesHandler(AWWebObj(), mock.Mock())
+        snapshot = mock.Mock(relationship="friend")
+        snapshot.rules.return_value = rules
+        handler._decision = mock.Mock(snapshot=snapshot)
+        assert handler._touches_excluded(myself, ["deep", "x"], 1) is refused
+        assert handler._touches_excluded(myself, ["color"], TOO_DEEP) is refused

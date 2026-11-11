@@ -334,3 +334,23 @@ def test_a_view_withholds_and_refuses_a_value_too_deep(actor: Any) -> None:
     assert view["settings"] is None
     with pytest.raises(PermissionError):
         view["settings"] = "{}"
+
+
+def test_text_beyond_the_parser_is_withheld_with_no_exclusion() -> None:
+    """Re-run 4 (Issue 7): the rule holds whatever the grant: with no
+    exclusion stated the diff, the full state and the view still withhold
+    text nested beyond the parser, and plain text and JSON pass."""
+    from unittest import mock
+
+    deep = "[" * 200_000 + "]" * 200_000
+    none_excluded = {"patterns": ["*"]}
+    assert Actor._diff_part(none_excluded, "p", deep) is _EMPTIED
+    assert Actor._diff_part(None, "p", deep) is _EMPTIED
+    assert Actor._diff_part(None, "p", "plain") == "plain"
+    assert Actor._diff_part(None, "p", '{"a": 1}') == '{"a": 1}'
+    actor = object.__new__(Actor)
+    grant = TestApplicationTargetsAtDelivery._grant(True)
+    with mock.patch.object(Actor, "grant_for", return_value=grant):
+        assert actor._filter_full_state(
+            "p1", "", {"deep": deep, "color": "b"}, set()
+        ) == {"color": "b"}

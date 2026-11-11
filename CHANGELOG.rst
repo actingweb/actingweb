@@ -32,7 +32,10 @@ SECURITY
   unfiltered. An excluded part is dropped whatever its depth. Text nested
   beyond the JSON parser (only an application can store it) is never sent
   to a peer, whatever its grant (403 on a read, left out of the listing and
-  of diffs); the owner reads it as stored. A
+  of diffs); the owner reads it as stored. A sub-path ``PUT`` into such a
+  value answers 409 (it cannot be merged into; replacing the whole would
+  lose what the write did not name), and a request body nested beyond the
+  parser answers 400 (both answered 500). A
   peer gets 403 for a list it may not write whether it exists or not
   (``PUT ?index=`` and a bulk ``items`` write answered 404/400 for a
   missing one first). ``docs/migration/v3.16.rst`` ("Grants hold at every
@@ -938,8 +941,11 @@ CHANGED
 - **A client's level follows the user's latest approval.** **Behavior
   change:** a re-authorisation re-types the client's existing row (up or
   down); a client's permission override that names a type other than its
-  row's is not applied and is deleted at the next authorisation (a removal
-  that fails is logged, retried, and does not refuse the authorisation);
+  row's is not applied and is deleted at authorisation (a removal that
+  fails is logged and retried; it refuses only an approval of the
+  override's own type, which would bring it back); the owner's edit of
+  such an override writes the row's type, and the permissions views show
+  only an override that applies;
   MCP caches of the process are evicted (other processes until their cache
   TTL). The default selected
   level is the client default (``mcp_client``), not the first registered

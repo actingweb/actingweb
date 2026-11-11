@@ -29,7 +29,12 @@ from actingweb.db import get_trust
 from . import config as config_class
 from .db.exceptions import DbError
 from .identifiers import has_control_characters
-from .trust_permissions import get_trust_permission_store, merge_permissions
+from .trust_permissions import (
+    get_trust_permission_store,
+    is_client_peer,
+    merge_permissions,
+    override_applies,
+)
 from .trust_type_registry import get_registry as get_trust_type_registry
 
 logger = logging.getLogger(__name__)
@@ -303,8 +308,15 @@ def as_json_object(value: Any) -> Any:
     :data:`TOO_DEEP` for text nested beyond the parser (withheld by the
     filter, not sent as text). The stores hand objects back as text, and a
     property can be written as the text of an object (3.16: the grant filter
-    walks objects only)."""
-    if not isinstance(value, str | bytes):
+    walks objects only). Text that does not open an object or array is not
+    parsed."""
+    if isinstance(value, bytes):
+        if value.lstrip()[:1] not in (b"[", b"{"):
+            return None
+    elif isinstance(value, str):
+        if value.lstrip()[:1] not in ("[", "{"):
+            return None
+    else:
         return None
     try:
         parsed = json.loads(value)
@@ -326,17 +338,8 @@ def beyond_parser(value: Any) -> bool:
     """Whether ``value`` is JSON text nested beyond the parser (3.16). Such
     text is never sent to a peer, whatever its grant (nothing about it can
     be checked: a sub-path, an exclusion, a read hook); the owner reads it
-    as plain text is read. Text that does not open an object or array is
-    not parsed."""
-    if isinstance(value, bytes):
-        head = value.lstrip()[:1]
-        if head not in (b"[", b"{"):
-            return False
-    elif isinstance(value, str):
-        if value.lstrip()[:1] not in ("[", "{"):
-            return False
-    else:
-        return False
+    as plain text is read. A caller that parses the value anyway uses
+    :func:`as_json_object` and compares with :data:`TOO_DEEP` instead."""
     return as_json_object(value) is TOO_DEEP
 
 
@@ -447,11 +450,14 @@ class PermissionEvaluator:
                 )
                 return PermissionResult.DENIED
 
-            if self._is_unapproved(actor_id, peer_id):
+            unapproved, row_type = self._approval(actor_id, peer_id)
+            if unapproved:
                 return PermissionResult.DENIED
 
             # Get the effective permissions for this trust relationship
-            effective_perms = self._get_effective_permissions(actor_id, peer_id)
+            effective_perms = self._get_effective_permissions(
+                actor_id, peer_id, relationship=row_type
+            )
             if not effective_perms:
                 logger.warning(
                     f"No effective permissions found for {actor_id}:{peer_id}"
@@ -550,12 +556,15 @@ class PermissionEvaluator:
             )
 
         try:
-            if self._is_unapproved(actor_id, peer_id):
+            unapproved, row_type = self._approval(actor_id, peer_id)
+            if unapproved:
                 results.update(dict.fromkeys(clean_paths, PermissionResult.DENIED))
                 return results
 
             # Get the effective permissions once for all properties
-            effective_perms = self._get_effective_permissions(actor_id, peer_id)
+            effective_perms = self._get_effective_permissions(
+                actor_id, peer_id, relationship=row_type
+            )
             if not effective_perms:
                 logger.warning(
                     f"No effective permissions found for {actor_id}:{peer_id}"
@@ -753,9 +762,12 @@ class PermissionEvaluator:
             List of allowed patterns/items
         """
         try:
-            if self._is_unapproved(actor_id, peer_id):
+            unapproved, row_type = self._approval(actor_id, peer_id)
+            if unapproved:
                 return []
-            effective_perms = self._get_effective_permissions(actor_id, peer_id)
+            effective_perms = self._get_effective_permissions(
+                actor_id, peer_id, relationship=row_type
+            )
             if not effective_perms:
                 return []
 
@@ -901,32 +913,40 @@ class PermissionEvaluator:
 
     def _is_unapproved(self, actor_id: str, peer_id: str) -> bool:
         """Whether the peer has no trust row, or one this actor has not
-        approved. Such a peer is granted nothing here (3.16): its secret
-        authenticates it (``auth.py``), and anyone can file a trust request
-        with a relationship of its choice, so a grant may only follow an
-        approval. The access table refuses it the same way
+        approved (:meth:`_approval`)."""
+        return self._approval(actor_id, peer_id)[0]
+
+    def _approval(self, actor_id: str, peer_id: str) -> tuple[bool, str | None]:
+        """``(unapproved, relationship)``: whether the peer has no trust row,
+        or one this actor has not approved, and the row's type (None when no
+        row was read), so the effective permissions need no second read
+        (3.16). Such a peer is granted nothing here: its secret authenticates
+        it (``auth.py``), and anyone can file a trust request with a
+        relationship of its choice, so a grant may only follow an approval.
+        The access table refuses it the same way
         (``Auth._match_access_row``); its own trust row stays reachable there.
         A storage fault raises ``DbError``."""
         if not self.config or not hasattr(self.config, "DbTrust"):
-            return False
+            return False, None
         db_trust = get_trust(self.config)
         if not db_trust:
-            return False
+            return False, None
         row = db_trust.get(actor_id=actor_id, peerid=peer_id)
-        approved = (
-            row.get("approved")
-            if isinstance(row, dict)
-            else getattr(row, "approved", None)
-        )
         if not row:
             # No trust at all: nothing it holds can grant (a permission
             # override a failed delete left behind grants nothing either).
             logger.warning(f"Permission denied: {actor_id}:{peer_id} has no trust")
-            return True
+            return True, None
+        if isinstance(row, dict):
+            approved = row.get("approved")
+            relationship = str(row.get("relationship") or "")
+        else:
+            approved = getattr(row, "approved", None)
+            relationship = str(getattr(row, "relationship", "") or "")
         if approved is False:
             logger.warning(f"Permission denied: {actor_id}:{peer_id} is not approved")
-            return True
-        return False
+            return True, relationship
+        return False, relationship
 
     def _get_effective_permissions(
         self, actor_id: str, peer_id: str, *, relationship: str | None = None
@@ -938,39 +958,31 @@ class PermissionEvaluator:
         ``relationship``: the trust row's type when the caller has read the
         row already (no second read).
         """
-        # First, determine the trust type for this relationship
-        trust_type_name = None
-
-        # Check for permission overrides first (higher priority)
         permission_override = self.permission_store.get_permissions(actor_id, peer_id)
-        if permission_override and peer_id.startswith("oauth2_client:"):
+        row_type: str | None = relationship
+        if row_type is None and (
+            permission_override is None or is_client_peer(peer_id)
+        ):
+            # The row's type is needed (no override, or a client's, which
+            # applies only for the row's type): read once.
+            row_type = self._lookup_trust_type_from_database(actor_id, peer_id)
+        if permission_override is not None and not override_applies(
+            permission_override, peer_id, row_type
+        ):
             # An OAuth2/MCP client's level is the one the user approved, the
-            # row's type: an override written for another type (before a
-            # re-type, or set that way) is inert (owner decision 2026-11-11),
-            # so a stale one can never decide, whatever a re-type's cleanup
-            # managed to remove.
-            row_type = (
-                relationship
-                if relationship is not None
-                else self._lookup_trust_type_from_database(actor_id, peer_id)
+            # row's type: an override for another type (before a re-type, or
+            # set that way) is not applied (owner decision 2026-11-11), so a
+            # stale one never decides, whatever a cleanup managed to remove.
+            logger.debug(
+                f"Override for {actor_id}:{peer_id} names "
+                f"'{permission_override.trust_type}', the row is "
+                f"'{row_type}': not applied"
             )
-            if str(permission_override.trust_type or "") != str(row_type or ""):
-                logger.debug(
-                    f"Override for {actor_id}:{peer_id} names "
-                    f"'{permission_override.trust_type}', the row is "
-                    f"'{row_type}': not applied"
-                )
-                permission_override = None
-                trust_type_name = row_type or None
-        if permission_override:
-            trust_type_name = permission_override.trust_type
-        elif trust_type_name is not None:
-            pass  # the row's type, read above
-        elif relationship is not None:
-            trust_type_name = relationship or None
-        else:
-            # Look up trust relationship from database
-            trust_type_name = self._lookup_trust_type_from_database(actor_id, peer_id)
+            permission_override = None
+        # A peer's override names its base type (it decides over the row's).
+        trust_type_name = (
+            permission_override.trust_type if permission_override else row_type
+        ) or None
 
         if not trust_type_name:
             logger.debug(f"No trust relationship found for {actor_id}:{peer_id}")

@@ -468,44 +468,53 @@ class TrustManager:
         normalized = identifier.replace("@", "_at_").replace(".", "_dot_")
         return f"{source}:{normalized}"
 
-    def _clean_client_override(self, peer_id: str, trust_type: str) -> None:
-        """A client's permission override naming a type other than
-        ``trust_type`` (the one the user approved at this authorisation) is
-        deleted; one naming ``trust_type`` stays. Cleanup only: the evaluator
-        never applies a client override for another type (owner decision
-        2026-11-11), so a removal that fails or races is logged and the
-        authorisation stands; the next one tries again."""
+    def _clean_client_override(
+        self, peer_id: str, row_type: str | None = None
+    ) -> str | None:
+        """Delete a client's permission override whose type differs from its
+        row's type (``row_type``, else the row as stored now): the evaluator
+        does not apply it (owner decision 2026-11-11), so this is cleanup.
+        Compared with the row, not with the type an authorisation approved,
+        so an overlapping authorisation's override for the type it wrote is
+        kept. Answers the stale type left in place when the removal failed
+        (logged), else None."""
         from ..trust_permissions import get_trust_permission_store
 
         config = self._core_actor.config
         if config is None:
-            return
+            return None
         actor_id = str(self._core_actor.id)
         store = get_trust_permission_store(config)
+        stale_type = ""
         try:
+            if row_type is None:
+                row = get_trust(config).get(actor_id=actor_id, peerid=peer_id)
+                if not row:
+                    return None
+                row_type = str(row.get("relationship") or "")
             stored = store.get_permissions_uncached(actor_id, peer_id)
-            stored_type = str(getattr(stored, "trust_type", "") or "")
-            if stored is None or stored_type == trust_type:
-                return
+            stale_type = str(getattr(stored, "trust_type", "") or "")
+            if stored is None or stale_type == row_type:
+                return None
             removed = store.delete_permissions(actor_id, peer_id)
-        except DbError as e:  # folds DbError: cleanup of an inert override; the next authorisation retries
+        except DbError as e:  # folds DbError: cleanup of an unapplied override
             logger.error(
                 f"OAuth2 client trust {peer_id}: its override for another type "
                 f"was not removed (it is not applied): {e}"
             )
-            return
+            return stale_type or None
         if not removed:
             logger.error(
                 f"OAuth2 client trust {peer_id}: its override for "
-                f"'{stored_type}' was not removed (it is not applied)"
+                f"'{stale_type}' was not removed (it is not applied)"
             )
-            return
+            return stale_type
         logger.warning(
             f"OAuth2 client trust {peer_id}: its permission override for "
-            f"'{stored_type}' was removed; the user approved '{trust_type}' "
-            "at this authorisation (a client's override must name its row's "
-            "type)"
+            f"'{stale_type}' was removed; the row's type is '{row_type}' (a "
+            "client's override must name its row's type)"
         )
+        return None
 
     def _evict_retyped(self, peer_id: str, trust_type: str) -> None:
         """After a client's row took a new type: the MCP caches for the actor
@@ -677,6 +686,19 @@ class TrustManager:
                         and trust_type
                         and old_type != trust_type
                     )
+                    if source == "oauth2_client" and trust_type:
+                        # An override already inert (it names a type other
+                        # than the row's) goes first: once the row took its
+                        # type again it would apply. When it cannot go and
+                        # this approval is its type, no code (3.16).
+                        leftover = self._clean_client_override(peer_id, old_type)
+                        if leftover and leftover == trust_type and type_changes:
+                            logger.error(
+                                f"OAuth2 client trust {peer_id} not re-typed to "
+                                f"{trust_type}: an old override for that type "
+                                "could not be removed"
+                            )
+                            return False
                     if type_changes:
                         modify_kwargs["relationship"] = trust_type
 
@@ -684,9 +706,11 @@ class TrustManager:
                         logger.debug(
                             f"Updated existing OAuth trust: peer_id={peer_id}, established_via={source}"
                         )
-                        if source == "oauth2_client" and trust_type:
-                            self._clean_client_override(peer_id, trust_type)
                         if type_changes:
+                            # The old type's override is inert now: cleanup,
+                            # against the row as stored (another
+                            # authorisation may have written its own type).
+                            self._clean_client_override(peer_id)
                             self._evict_retyped(peer_id, trust_type)
                     else:
                         # The row went between the read and the write: no

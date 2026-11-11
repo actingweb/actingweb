@@ -169,7 +169,7 @@ class ActionsHandler(base_handler.BaseHandler):
             else:
                 body_str = body
             params = json.loads(body_str)
-        except (TypeError, ValueError, KeyError):
+        except (TypeError, ValueError, KeyError, RecursionError):
             if self.response:
                 self.response.set_status(400, "Error in json body")
             return
@@ -231,7 +231,7 @@ class ActionsHandler(base_handler.BaseHandler):
             else:
                 body_str = body
             params = json.loads(body_str)
-        except (TypeError, ValueError, KeyError):
+        except (TypeError, ValueError, KeyError, RecursionError):
             if self.response:
                 self.response.set_status(400, "Error in json body")
             return

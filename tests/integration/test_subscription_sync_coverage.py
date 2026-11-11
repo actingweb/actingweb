@@ -15,6 +15,34 @@ import requests
 pytestmark = pytest.mark.xdist_group(name="sync_coverage")
 
 
+def _subscription_id(subscriber: dict | None, publisher: dict | None) -> str:
+    """The id of ``subscriber``'s one subscription at ``publisher``, from
+    the subscriber's own listing."""
+    assert subscriber and publisher
+    response = requests.get(
+        f"{subscriber['url']}/subscriptions",
+        params={"peerid": publisher["id"]},
+        auth=(subscriber["creator"], subscriber["passphrase"]),
+        timeout=5,
+    )
+    assert response.status_code == 200, response.text
+    rows = response.json()["data"]
+    assert len(rows) == 1, rows
+    return rows[0]["subscriptionid"]
+
+
+def _sdk_actor(actor_id: str):
+    """The actor through the library, under the test app's own config."""
+    from actingweb.actor import Actor
+
+    from .conftest import TEST_APP_CONFIG
+
+    core = Actor(config=TEST_APP_CONFIG["config"])
+    core.get(actor_id=actor_id)
+    assert core.id == actor_id, f"actor {actor_id} not found"
+    return core
+
+
 class TestSyncPeerTrustRevocation:
     """Test sync_peer trust revocation detection end-to-end.
 
@@ -29,14 +57,14 @@ class TestSyncPeerTrustRevocation:
     subscription_id: str | None = None
 
     def test_001_create_actors_and_establish_trust(
-        self, actor_factory, trust_helper
+        self, class_actor_factory, trust_helper
     ) -> None:
         """Create two actors with trust relationship and subscription."""
         # Create actors
-        TestSyncPeerTrustRevocation.actor_a = actor_factory.create(
+        TestSyncPeerTrustRevocation.actor_a = class_actor_factory.create(
             "trust_revoke_a@example.com"
         )
-        TestSyncPeerTrustRevocation.actor_b = actor_factory.create(
+        TestSyncPeerTrustRevocation.actor_b = class_actor_factory.create(
             "trust_revoke_b@example.com"
         )
 
@@ -55,7 +83,7 @@ class TestSyncPeerTrustRevocation:
             auth=(self.actor_b["creator"], self.actor_b["passphrase"]),  # type: ignore[index]
             timeout=5,
         )
-        assert response.status_code in (200, 201, 204)
+        assert response.status_code == 201
 
         # Set a property on B
         response = requests.put(
@@ -64,7 +92,7 @@ class TestSyncPeerTrustRevocation:
             auth=(self.actor_b["creator"], self.actor_b["passphrase"]),  # type: ignore[index]
             timeout=5,
         )
-        assert response.status_code in (200, 204)
+        assert response.status_code == 204
 
         # Create subscription from A to B
         response = requests.post(
@@ -79,18 +107,15 @@ class TestSyncPeerTrustRevocation:
             auth=(self.actor_a["creator"], self.actor_a["passphrase"]),  # type: ignore[index]
             timeout=5,
         )
-        assert response.status_code in (200, 201, 204)
-
-        if response.status_code in (200, 201):
-            sub_data = response.json()
-            TestSyncPeerTrustRevocation.subscription_id = sub_data.get("subscriptionid")
-
-        # If we still don't have a subscription ID, that's OK - tests will skip gracefully
+        assert response.status_code == 204
+        # 204 carries no body: the id is read from A's own listing.
+        TestSyncPeerTrustRevocation.subscription_id = _subscription_id(
+            self.actor_a, self.actor_b
+        )
 
     def test_002_sync_with_valid_trust_succeeds(self) -> None:
         """Test sync_peer succeeds with valid trust."""
-        if not self.actor_a or not self.actor_b:
-            pytest.skip("Previous test failed to create actors")
+        assert self.actor_a and self.actor_b, "Previous test failed to create actors"
 
         from actingweb.actor import Actor
         from actingweb.config import Config
@@ -115,12 +140,11 @@ class TestSyncPeerTrustRevocation:
         This simulates the scenario where the peer deletes the subscription
         but trust still exists.
         """
-        if (
-            not self.actor_a
-            or not self.actor_b
-            or not TestSyncPeerTrustRevocation.subscription_id
-        ):
-            pytest.skip("Previous test failed")
+        assert (
+            self.actor_a
+            and self.actor_b
+            and TestSyncPeerTrustRevocation.subscription_id
+        ), "Previous test failed"
 
         # Delete the local subscription on peer (B) that corresponds to A's callback subscription
         # The subscription on B has A as the subscriber
@@ -129,17 +153,13 @@ class TestSyncPeerTrustRevocation:
             auth=(self.actor_b["creator"], self.actor_b["passphrase"]),
             timeout=5,
         )
-        # Accept 204 (deleted) or 404 (already deleted/doesn't exist)
-        assert response.status_code in (
-            200,
-            204,
-            404,
-        ), f"Failed to delete subscription: {response.status_code}"
+        assert response.status_code == 204, (
+            f"Failed to delete subscription: {response.status_code}"
+        )
 
     def test_004_sync_cleans_dead_subscription_preserves_trust(self) -> None:
         """Test sync_peer cleans dead subscription but preserves trust when trust exists."""
-        if not self.actor_a or not self.actor_b:
-            pytest.skip("Previous test failed")
+        assert self.actor_a and self.actor_b, "Previous test failed"
 
         from actingweb.actor import Actor
         from actingweb.config import Config
@@ -164,14 +184,13 @@ class TestSyncPeerTrustRevocation:
             timeout=5,
         )
         # Trust should still exist (200) because only the subscription was deleted
-        assert response.status_code in (
-            200,
-            404,
-        ), f"Trust check returned unexpected status: {response.status_code}"
+        assert response.status_code == 200, (
+            f"Trust check returned unexpected status: {response.status_code}"
+        )
 
     def test_005_cleanup(self) -> None:
         """Clean up test actors (handled by fixture cleanup)."""
-        # Actors are cleaned up by actor_factory fixture
+        # Actors are cleaned up by class_actor_factory fixture
         pass
 
 
@@ -187,14 +206,14 @@ class TestSyncSubscriptionBaseline:
     subscription_id: str | None = None
 
     def test_001_setup_actors_and_subscription(
-        self, actor_factory, trust_helper
+        self, class_actor_factory, trust_helper
     ) -> None:
         """Create actors, trust, and subscription."""
         # Create actors
-        TestSyncSubscriptionBaseline.actor_a = actor_factory.create(
+        TestSyncSubscriptionBaseline.actor_a = class_actor_factory.create(
             "baseline_a@example.com"
         )
-        TestSyncSubscriptionBaseline.actor_b = actor_factory.create(
+        TestSyncSubscriptionBaseline.actor_b = class_actor_factory.create(
             "baseline_b@example.com"
         )
 
@@ -213,7 +232,7 @@ class TestSyncSubscriptionBaseline:
             auth=(self.actor_b["creator"], self.actor_b["passphrase"]),  # type: ignore[index]
             timeout=5,
         )
-        assert response.status_code in (200, 201, 204)
+        assert response.status_code == 201
 
         # Set properties on B
         response = requests.put(
@@ -222,7 +241,7 @@ class TestSyncSubscriptionBaseline:
             auth=(self.actor_b["creator"], self.actor_b["passphrase"]),  # type: ignore[index]
             timeout=5,
         )
-        assert response.status_code in (200, 204)
+        assert response.status_code == 204
 
         response = requests.put(
             f"{self.actor_b['url']}/properties/status",  # type: ignore[index]
@@ -230,7 +249,7 @@ class TestSyncSubscriptionBaseline:
             auth=(self.actor_b["creator"], self.actor_b["passphrase"]),  # type: ignore[index]
             timeout=5,
         )
-        assert response.status_code in (200, 204)
+        assert response.status_code == 204
 
         # Create subscription from A to B
         response = requests.post(
@@ -245,32 +264,25 @@ class TestSyncSubscriptionBaseline:
             auth=(self.actor_a["creator"], self.actor_a["passphrase"]),  # type: ignore[index]
             timeout=5,
         )
-        assert response.status_code in (200, 201, 204)
-
-        if response.status_code in (200, 201):
-            sub_data = response.json()
-            TestSyncSubscriptionBaseline.subscription_id = sub_data.get(
-                "subscriptionid"
-            )
-
-        # If we still don't have a subscription ID, that's OK - tests will skip gracefully
+        assert response.status_code == 204
+        # 204 carries no body: the id is read from A's own listing.
+        TestSyncSubscriptionBaseline.subscription_id = _subscription_id(
+            self.actor_a, self.actor_b
+        )
 
     def test_002_sync_subscription_fetches_baseline(self) -> None:
         """Test that sync_subscription with no diffs fetches baseline data."""
-        if (
-            not self.actor_a
-            or not self.actor_b
-            or not TestSyncSubscriptionBaseline.subscription_id
-        ):
-            pytest.skip("Previous test failed")
+        assert (
+            self.actor_a
+            and self.actor_b
+            and TestSyncSubscriptionBaseline.subscription_id
+        ), "Previous test failed"
 
         from actingweb.actor import Actor
         from actingweb.config import Config
         from actingweb.interface.actor_interface import ActorInterface
-        from actingweb.interface.subscription_manager import (
-            SubscriptionProcessingConfig,
-        )
         from actingweb.remote_storage import RemotePeerStore
+        from actingweb.subscription_config import SubscriptionProcessingConfig
 
         database_backend = os.environ.get("DATABASE_BACKEND", "dynamodb")
         config = Config(database=database_backend)
@@ -309,30 +321,35 @@ class TestSyncSubscriptionBaseline:
 
     def test_003_sync_with_list_property(self) -> None:
         """Test baseline fetch transforms list metadata to items."""
-        if (
-            not self.actor_a
-            or not self.actor_b
-            or not TestSyncSubscriptionBaseline.subscription_id
-        ):
-            pytest.skip("Previous test failed")
+        assert (
+            self.actor_a
+            and self.actor_b
+            and TestSyncSubscriptionBaseline.subscription_id
+        ), "Previous test failed"
 
-        # Add list items to B
+        # A list "items" at B with three items
+        b_auth = (self.actor_b["creator"], self.actor_b["passphrase"])
+        response = requests.post(
+            f"{self.actor_b['url']}/properties",
+            json={"items": {"_type": "list"}},
+            auth=b_auth,
+            timeout=5,
+        )
+        assert response.status_code == 201, response.text
         for i in range(3):
             response = requests.post(
-                f"{self.actor_b['url']}/properties/items",
-                json={"value": f"Item {i + 1}"},
-                auth=(self.actor_b["creator"], self.actor_b["passphrase"]),
+                f"{self.actor_b['url']}/properties/items/items",
+                json={"action": "add", "item_value": f"Item {i + 1}"},
+                auth=b_auth,
                 timeout=5,
             )
-            assert response.status_code in (200, 201, 204)
+            assert response.status_code == 201, response.text
 
         from actingweb.actor import Actor
         from actingweb.config import Config
         from actingweb.interface.actor_interface import ActorInterface
-        from actingweb.interface.subscription_manager import (
-            SubscriptionProcessingConfig,
-        )
         from actingweb.remote_storage import RemotePeerStore
+        from actingweb.subscription_config import SubscriptionProcessingConfig
 
         database_backend = os.environ.get("DATABASE_BACKEND", "dynamodb")
         config = Config(database=database_backend)
@@ -360,9 +377,11 @@ class TestSyncSubscriptionBaseline:
             actor=actor_interface, peer_id=self.actor_b["id"], validate_peer_id=False
         )
 
-        _ = remote_store.get_list("items")
-        # List may or may not be populated depending on implementation
-        # Just verify no errors occurred during sync
+        # Today: B's REST item adds were queued as diffs, so the sync applies
+        # them rather than the baseline, and a REST list diff is not applied
+        # as a list operation (wire row WL1): A's replica list stays empty.
+        # attribute-list-v2-port:4 owns the change.
+        assert remote_store.get_list("items") == []
 
     def test_004_cleanup(self) -> None:
         """Clean up test actors (handled by fixture cleanup)."""
@@ -375,12 +394,12 @@ class TestSyncSubscriptionErrorHandling:
     actor_a: dict | None = None
     actor_b: dict | None = None
 
-    def test_001_create_actors(self, actor_factory, trust_helper) -> None:
+    def test_001_create_actors(self, class_actor_factory, trust_helper) -> None:
         """Create actors for error handling tests."""
-        TestSyncSubscriptionErrorHandling.actor_a = actor_factory.create(
+        TestSyncSubscriptionErrorHandling.actor_a = class_actor_factory.create(
             "error_handling_a@example.com"
         )
-        TestSyncSubscriptionErrorHandling.actor_b = actor_factory.create(
+        TestSyncSubscriptionErrorHandling.actor_b = class_actor_factory.create(
             "error_handling_b@example.com"
         )
 
@@ -394,24 +413,11 @@ class TestSyncSubscriptionErrorHandling:
 
     def test_002_sync_nonexistent_subscription_returns_404(self) -> None:
         """Test that syncing a non-existent subscription returns 404."""
-        if not self.actor_a or not self.actor_b:
-            pytest.skip("Previous test failed")
+        assert self.actor_a and self.actor_b, "Previous test failed"
 
-        from actingweb.actor import Actor
-        from actingweb.config import Config
         from actingweb.interface.actor_interface import ActorInterface
 
-        database_backend = os.environ.get("DATABASE_BACKEND", "dynamodb")
-        config = Config(database=database_backend)
-
-        sdk_actor_a = Actor(config=config)
-        sdk_actor_a.get(actor_id=self.actor_a["id"])
-
-        # Check if actor was found - skip if not (test isolation limitation)
-        if not sdk_actor_a.id:
-            pytest.skip(
-                "Actor not found via SDK - test isolation prevents direct DB access"
-            )
+        sdk_actor_a = _sdk_actor(self.actor_a["id"])
 
         actor_interface = ActorInterface(sdk_actor_a)
 
@@ -426,24 +432,11 @@ class TestSyncSubscriptionErrorHandling:
 
     def test_003_sync_with_no_trust_returns_error(self) -> None:
         """Test syncing with a peer we don't have trust with returns error."""
-        if not self.actor_a:
-            pytest.skip("Previous test failed")
+        assert self.actor_a, "Previous test failed"
 
-        from actingweb.actor import Actor
-        from actingweb.config import Config
         from actingweb.interface.actor_interface import ActorInterface
 
-        database_backend = os.environ.get("DATABASE_BACKEND", "dynamodb")
-        config = Config(database=database_backend)
-
-        sdk_actor_a = Actor(config=config)
-        sdk_actor_a.get(actor_id=self.actor_a["id"])
-
-        # Check if actor was found - skip if not (test isolation limitation)
-        if not sdk_actor_a.id:
-            pytest.skip(
-                "Actor not found via SDK - test isolation prevents direct DB access"
-            )
+        sdk_actor_a = _sdk_actor(self.actor_a["id"])
 
         actor_interface = ActorInterface(sdk_actor_a)
 

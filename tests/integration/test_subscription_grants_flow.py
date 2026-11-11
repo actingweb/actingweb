@@ -33,7 +33,7 @@ class World:
             json={"properties": F_GRANT},
             auth=self.owner,
         )
-        assert r.status_code in (200, 201, 204), r.text
+        assert r.status_code == 201, r.text
 
     @property
     def owner(self) -> tuple[str, str]:
@@ -43,7 +43,7 @@ class World:
         r = requests.put(
             f"{self.a['url']}/properties/{path}", json=value, auth=self.owner
         )
-        assert r.status_code in (200, 201, 204), r.text
+        assert r.status_code == 204, r.text
 
     def owner_delete(self, path: str) -> None:
         r = requests.delete(f"{self.a['url']}/properties/{path}", auth=self.owner)
@@ -112,7 +112,7 @@ def test_an_old_subscription_to_a_now_excluded_list_delivers_nothing(
         json={"properties": readable},
         auth=world.owner,
     )
-    assert r.status_code in (200, 201, 204), r.text
+    assert r.status_code == 200, r.text
     r = requests.post(
         f"{world.a['url']}/properties",
         json={"memory_personal": {"_type": "list"}},
@@ -128,13 +128,13 @@ def test_an_old_subscription_to_a_now_excluded_list_delivers_nothing(
         json={"properties": F_GRANT},
         auth=world.owner,
     )
-    assert r.status_code in (200, 201, 204), r.text
+    assert r.status_code == 200, r.text
     r = requests.post(
         f"{world.a['url']}/properties/memory_personal/items",
         json={"action": "add", "item_value": {"text": "secret"}},
         auth=world.owner,
     )
-    assert r.status_code in (200, 201), r.text
+    assert r.status_code == 201, r.text
     pulled = world.pull(subid)
     assert all(data == {} for data in pulled), pulled
 

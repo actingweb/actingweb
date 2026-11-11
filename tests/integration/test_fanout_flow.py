@@ -114,7 +114,7 @@ class TestDiffsQueuedForSeveralSubscribers:
                 json={"approved": True},
                 auth=(self.publisher_creator, self.publisher_passphrase),  # type: ignore[arg-type]
             )
-            assert response.status_code in [200, 204]
+            assert response.status_code == 204
 
             # Grant permissions
             response = requests.put(
@@ -127,7 +127,7 @@ class TestDiffsQueuedForSeveralSubscribers:
                 },
                 auth=(self.publisher_creator, self.publisher_passphrase),  # type: ignore[arg-type]
             )
-            assert response.status_code in [200, 201, 204]
+            assert response.status_code == 201
 
         assert len(self.trust_secrets) == 3
 
@@ -149,7 +149,7 @@ class TestDiffsQueuedForSeveralSubscribers:
                 },
                 auth=(subscriber["creator"], subscriber["passphrase"]),  # type: ignore[arg-type]
             )
-            assert response.status_code in [200, 201, 202, 204]
+            assert response.status_code == 204
 
             # Get subscription ID from publisher's view
             response = requests.get(
@@ -194,8 +194,7 @@ class TestDiffsQueuedForSeveralSubscribers:
             auth=(self.publisher_creator, self.publisher_passphrase),  # type: ignore[arg-type]
         )
 
-        # 201 or 204 is success
-        assert response.status_code in [201, 204]
+        assert response.status_code == 204
 
         # Verify property was set
         response = requests.get(
@@ -214,13 +213,11 @@ class TestDiffsQueuedForSeveralSubscribers:
                 headers={"Authorization": f"Bearer {self.trust_secrets[i]}"},
             )
 
-            # 200 or 404 (subscription may have cleared)
-            assert response.status_code in [200, 404]
-            if response.status_code == 200:
-                data = response.json()
-                # Verify sequence is tracked
-                assert "sequence" in data
-                assert isinstance(data["sequence"], int)
+            assert response.status_code == 200
+            data = response.json()
+            # Verify sequence is tracked
+            assert "sequence" in data
+            assert isinstance(data["sequence"], int)
 
     def test_030_large_payload_test(self, http_client):
         """
@@ -238,7 +235,7 @@ class TestDiffsQueuedForSeveralSubscribers:
             auth=(self.publisher_creator, self.publisher_passphrase),  # type: ignore[arg-type]
         )
 
-        assert response.status_code in [201, 204]
+        assert response.status_code == 204
 
     def test_031_verify_large_payload_diffs(self, http_client):
         """
@@ -261,8 +258,9 @@ class TestDiffsQueuedForSeveralSubscribers:
         """
         Test clearing subscription diffs for one subscriber.
         """
-        if not self.subscription_ids or not self.trust_secrets:
-            pytest.skip("No subscriptions available")
+        assert self.subscription_ids and self.trust_secrets, (
+            "No subscriptions available"
+        )
 
         # Clear diffs up to sequence 2 for first subscriber
         response = requests.put(
@@ -274,7 +272,7 @@ class TestDiffsQueuedForSeveralSubscribers:
             },
         )
 
-        assert response.status_code in [200, 204]
+        assert response.status_code == 204
 
     def test_041_verify_diffs_cleared(self, http_client):
         """
@@ -285,22 +283,22 @@ class TestDiffsQueuedForSeveralSubscribers:
             headers={"Authorization": f"Bearer {self.trust_secrets[0]}"},
         )
 
-        # 200 or 404 are both acceptable
-        assert response.status_code in [200, 404]
+        assert response.status_code == 200
 
-        if response.status_code == 200:
-            data = response.json()
-            # If there are remaining diffs, they should have sequence > 2
-            if "data" in data and len(data["data"]) > 0:
-                for diff in data["data"]:
-                    assert diff.get("sequence", 0) > 2
+        assert response.status_code == 200
+        data = response.json()
+        # If there are remaining diffs, they should have sequence > 2
+        if "data" in data and len(data["data"]) > 0:
+            for diff in data["data"]:
+                assert diff.get("sequence", 0) > 2
 
     def test_050_delete_subscription(self, http_client):
         """
         Test deleting one subscription.
         """
-        if not self.subscription_ids or not self.trust_secrets:
-            pytest.skip("No subscriptions available")
+        assert self.subscription_ids and self.trust_secrets, (
+            "No subscriptions available"
+        )
 
         # Delete subscription for first subscriber
         response = requests.delete(
@@ -308,7 +306,7 @@ class TestDiffsQueuedForSeveralSubscribers:
             headers={"Authorization": f"Bearer {self.trust_secrets[0]}"},
         )
 
-        assert response.status_code in [200, 204]
+        assert response.status_code == 204
 
     def test_051_verify_subscription_deleted(self, http_client):
         """
@@ -338,7 +336,7 @@ class TestDiffsQueuedForSeveralSubscribers:
             auth=(self.publisher_creator, self.publisher_passphrase),  # type: ignore[arg-type]
         )
 
-        assert response.status_code in [201, 204]
+        assert response.status_code == 204
 
     def test_061_verify_large_payload_tracked(self, http_client):
         """
@@ -353,12 +351,16 @@ class TestDiffsQueuedForSeveralSubscribers:
                 headers={"Authorization": f"Bearer {self.trust_secrets[i]}"},
             )
 
+            if i == 0:
+                # test_050 deleted the first subscriber's subscription.
+                assert response.status_code == 404
+                continue
             # Should have sequence for the large payload
-            if response.status_code == 200:
-                data = response.json()
-                assert "sequence" in data
-                # Sequence should have increased
-                assert data["sequence"] >= 3
+            assert response.status_code == 200
+            data = response.json()
+            assert "sequence" in data
+            # Sequence should have increased
+            assert data["sequence"] >= 3
 
     def test_070_concurrent_property_changes(self, http_client):
         """
@@ -373,7 +375,7 @@ class TestDiffsQueuedForSeveralSubscribers:
                 data=f"concurrent_value_{i}",
                 auth=(self.publisher_creator, self.publisher_passphrase),  # type: ignore[arg-type]
             )
-            assert response.status_code in [201, 204]
+            assert response.status_code == 204
 
     def test_071_verify_all_concurrent_changes_tracked(self, http_client):
         """
@@ -386,11 +388,11 @@ class TestDiffsQueuedForSeveralSubscribers:
                 headers={"Authorization": f"Bearer {self.trust_secrets[1]}"},
             )
 
-            if response.status_code == 200:
-                data = response.json()
-                # Should have sequence covering all changes
-                # Initial (1) + large (1) + concurrent (10) = at least 12
-                assert data["sequence"] >= 12
+            assert response.status_code == 200
+            data = response.json()
+            # Should have sequence covering all changes
+            # Initial (1) + large (1) + concurrent (10) = at least 12
+            assert data["sequence"] >= 12
 
     def test_099_cleanup(self, http_client):
         """

@@ -627,13 +627,62 @@ Retired, each with its cover (rows in `wire/rows.toml`, unit files under
 
 ### Verification
 
-- [ ] Run the contract's `### Checks` full tier verbatim
-- [ ] `grep -nE "status_code (in|not in) [\[\(]|if .*status_code" tests/integration/test_subscription_*.py tests/integration/test_property_notifications.py tests/integration/test_fanout_flow.py tests/integration/test_trust_flow.py`
+- [x] Run the contract's `### Checks` full tier verbatim
+- [x] `grep -nE "status_code (in|not in) [\[\(]|if .*status_code" tests/integration/test_subscription_*.py tests/integration/test_property_notifications.py tests/integration/test_fanout_flow.py tests/integration/test_trust_flow.py`
       returns nothing, apart from per-backend assertions, each with its note
-- [ ] `grep -c "pytest.skip(" tests/integration/test_subscription_*.py tests/integration/test_fanout_flow.py`
+- [x] `grep -c "pytest.skip(" tests/integration/test_subscription_*.py tests/integration/test_fanout_flow.py`
       shows 0 for each file
 
-### Implementation Status: Not Started
+### Implementation notes (Phase 3)
+
+- **Measured after Phase 2:** 132 loose sites (status lists and
+  status-guarded branches) in eleven files, and 27 `pytest.skip` calls (the
+  plan's 125, 35 and 41 predate Phase 2 and the security PRs).
+- **How each status was chosen:** a scratch rewrite routed every
+  `.status_code` read through a probe that logged file, line and status;
+  the files ran on both backends. 129 sites showed one status, the same on
+  both, and became `== <status>`. One loop (`test_fanout_flow.py`, the
+  large-payload check) sees 404 for the subscription `test_050` deleted and
+  200 for the rest, now asserted per subscriber. No status differs between
+  the backends, so no per-backend assertion was needed.
+- **Guards:** a guard that always held became an unconditional assert with
+  its body; one that never held lost a body that never ran (its `else`, if
+  any, became the path). Two dead bodies in `test_trust_flow.py` (the
+  unapproved trust's fields) were revived against the 202 the run shows.
+  The three `/meta/actingweb/supported` blocks parsed plain text as JSON
+  and so asserted nothing; they now assert `subscriptionresync` among the
+  options.
+- **Deviation: skips became asserts, not fixtures.** Each
+  `if not <earlier state>: pytest.skip(...)` is `assert <state>, <msg>`:
+  a failed setup fails, which is the plan's point, without rewriting the
+  ordered classes. Where the cause was fixture scope, a fixture was added:
+  `class_actor_factory` (class scope, in `conftest.py`) for
+  `test_subscription_sync_coverage.py`, whose `actor_factory` deleted the
+  actors when `test_001` ended. That, not the configuration, was why the
+  SDK "could not find" the actor.
+- **Failures the skips hid, now fixed in the tests:** the sync-coverage
+  subscription id was read from a 201 body the 204 subscribe never has
+  (read from the subscriber's listing now); a stale import
+  (`SubscriptionProcessingConfig` lives in `actingweb.subscription_config`);
+  `test_004`'s trust check observed 404 only because the actors were
+  already deleted (200, as its comment says); list items posted in a shape
+  the API refuses (400; now created as a list and added with
+  `action: add`); `test_027` expected sequence 1 on a `meta` subscription
+  nothing writes (0).
+- **Today's behaviour pinned:** `TestSyncSubscriptionBaseline.test_003`
+  asserts A's replica list stays empty after the sync: B's REST item adds
+  were queued as diffs, and a REST list diff is not applied as a list
+  operation (`WL1`), with a comment naming `attribute-list-v2-port:4`.
+- `test_subscription_baseline_storage.py` no longer relies on `WL9`'s
+  stray write: the security PRs moved its writes to the collection (201),
+  so no `spec-1-5:1` comment was needed.
+- Each converted class passes alone and in its file; a class-scoped
+  fixture keeps its state across a `--reruns` retry (checked with a
+  throwaway test that fails once).
+
+- Full tier green on both backends.
+
+### Implementation Status: Complete
 
 ---
 

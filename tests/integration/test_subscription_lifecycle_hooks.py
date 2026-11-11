@@ -98,7 +98,7 @@ class TestSubscriptionDeletedHook:
             json={"approved": True},
             auth=(self.publisher_creator, self.publisher_passphrase),  # type: ignore[arg-type]
         )
-        assert response.status_code in [200, 204]
+        assert response.status_code == 204
 
         # Grant permissions
         response = requests.put(
@@ -111,7 +111,7 @@ class TestSubscriptionDeletedHook:
             },
             auth=(self.publisher_creator, self.publisher_passphrase),  # type: ignore[arg-type]
         )
-        assert response.status_code in [200, 201, 204]
+        assert response.status_code == 201
 
     def test_004_create_subscription(self, http_client):
         """Subscriber creates subscription to publisher (creates inbound sub on publisher)."""
@@ -125,7 +125,7 @@ class TestSubscriptionDeletedHook:
             },
             auth=(self.subscriber_creator, self.subscriber_passphrase),  # type: ignore[arg-type]
         )
-        assert response.status_code in [200, 201, 202, 204]
+        assert response.status_code == 204
 
         # Get subscription ID from publisher's view (inbound subscription)
         response = requests.get(
@@ -187,7 +187,7 @@ class TestSubscriptionDeletedHook:
             },
             auth=(self.subscriber_creator, self.subscriber_passphrase),  # type: ignore[arg-type]
         )
-        assert response.status_code in [200, 201, 202, 204]
+        assert response.status_code == 204
 
         # Get new subscription ID from publisher's view
         response = requests.get(
@@ -321,7 +321,7 @@ class TestRevokePeerSubscription:
             json={"approved": True},
             auth=(self.publisher_creator, self.publisher_passphrase),  # type: ignore[arg-type]
         )
-        assert response.status_code in [200, 204]
+        assert response.status_code == 204
 
         # Grant permissions
         response = requests.put(
@@ -334,7 +334,7 @@ class TestRevokePeerSubscription:
             },
             auth=(self.publisher_creator, self.publisher_passphrase),  # type: ignore[arg-type]
         )
-        assert response.status_code in [200, 201, 204]
+        assert response.status_code == 201
 
     def test_003_create_multiple_subscriptions(self, http_client):
         """Create multiple subscriptions for testing."""
@@ -351,7 +351,7 @@ class TestRevokePeerSubscription:
             },
             auth=(self.subscriber_creator, self.subscriber_passphrase),  # type: ignore[arg-type]
         )
-        assert response.status_code in [200, 201, 202, 204]
+        assert response.status_code == 204
 
         # Create second subscription
         response = requests.post(
@@ -364,7 +364,7 @@ class TestRevokePeerSubscription:
             },
             auth=(self.subscriber_creator, self.subscriber_passphrase),  # type: ignore[arg-type]
         )
-        assert response.status_code in [200, 201, 202, 204]
+        assert response.status_code == 204
 
         # Get subscription IDs from publisher's view
         response = requests.get(
@@ -399,8 +399,7 @@ class TestRevokePeerSubscription:
         This simulates the publisher using revoke_peer_subscription() to
         terminate one specific subscription from a peer.
         """
-        if not self.subscription_ids:
-            pytest.skip("No subscriptions available")
+        assert self.subscription_ids, "No subscriptions available"
 
         sub_id_to_revoke = self.subscription_ids[0]
 
@@ -430,8 +429,7 @@ class TestRevokePeerSubscription:
 
     def test_030_revoke_remaining_subscription(self, http_client):
         """Revoke the remaining subscription."""
-        if len(self.subscription_ids) < 2:
-            pytest.skip("Not enough subscriptions")
+        assert len(self.subscription_ids) >= 2, "Not enough subscriptions"
 
         response = requests.delete(
             f"{self.publisher_url}/subscriptions/{self.subscriber_id}/{self.subscription_ids[1]}",
@@ -552,15 +550,15 @@ class TestUnsubscribeVsRevoke:
             json={"approved": True},
             auth=(self.actor_a_creator, self.actor_a_passphrase),  # type: ignore[arg-type]
         )
-        assert response.status_code in [200, 204]
+        assert response.status_code == 204
 
         # Get B's trust secret to A
         response = requests.get(
             f"{self.actor_b_url}/trust/friend/{self.actor_a_id}",
             auth=(self.actor_b_creator, self.actor_b_passphrase),  # type: ignore[arg-type]
         )
-        if response.status_code == 200:
-            TestUnsubscribeVsRevoke.trust_secret_b = response.json().get("secret")
+        assert response.status_code == 200
+        TestUnsubscribeVsRevoke.trust_secret_b = response.json().get("secret")
 
         # Grant mutual permissions
         for actor_url, actor_auth, peer_id in [
@@ -585,7 +583,7 @@ class TestUnsubscribeVsRevoke:
                 },
                 auth=actor_auth,  # type: ignore[arg-type]
             )
-            assert response.status_code in [200, 201, 204]
+            assert response.status_code == 201
 
     def test_003_create_bidirectional_subscriptions(self, http_client):
         """Create subscriptions in both directions."""
@@ -600,19 +598,17 @@ class TestUnsubscribeVsRevoke:
             },
             auth=(self.actor_a_creator, self.actor_a_passphrase),  # type: ignore[arg-type]
         )
-        assert response.status_code in [200, 201, 202, 204]
+        assert response.status_code == 204
 
         # Get subscription ID from B's view (inbound)
         response = requests.get(
             f"{self.actor_b_url}/subscriptions/{self.actor_a_id}",
             headers={"Authorization": f"Bearer {self.trust_secret_a}"},
         )
-        if response.status_code == 200:
-            data = response.json()
-            if "data" in data and len(data["data"]) > 0:
-                TestUnsubscribeVsRevoke.sub_a_to_b_id = data["data"][0][
-                    "subscriptionid"
-                ]
+        assert response.status_code == 200
+        data = response.json()
+        if "data" in data and len(data["data"]) > 0:
+            TestUnsubscribeVsRevoke.sub_a_to_b_id = data["data"][0]["subscriptionid"]
 
         # B subscribes to A (outbound for B, inbound for A)
         response = requests.post(
@@ -625,19 +621,17 @@ class TestUnsubscribeVsRevoke:
             },
             auth=(self.actor_b_creator, self.actor_b_passphrase),  # type: ignore[arg-type]
         )
-        assert response.status_code in [200, 201, 202, 204]
+        assert response.status_code == 204
 
         # Get subscription ID from A's view (inbound)
         response = requests.get(
             f"{self.actor_a_url}/subscriptions/{self.actor_b_id}",
             headers={"Authorization": f"Bearer {self.trust_secret_b}"},
         )
-        if response.status_code == 200:
-            data = response.json()
-            if "data" in data and len(data["data"]) > 0:
-                TestUnsubscribeVsRevoke.sub_b_to_a_id = data["data"][0][
-                    "subscriptionid"
-                ]
+        assert response.status_code == 200
+        data = response.json()
+        if "data" in data and len(data["data"]) > 0:
+            TestUnsubscribeVsRevoke.sub_b_to_a_id = data["data"][0]["subscriptionid"]
 
     def test_010_verify_both_subscriptions_exist(self, http_client):
         """Verify both subscriptions exist."""
@@ -662,8 +656,7 @@ class TestUnsubscribeVsRevoke:
         This tests the owner/publisher revoking an inbound subscription.
         A is the publisher, B is the subscriber.
         """
-        if not self.sub_b_to_a_id:
-            pytest.skip("No subscription ID available")
+        assert self.sub_b_to_a_id, "No subscription ID available"
 
         # A revokes B's subscription (owner-initiated)
         response = requests.delete(
@@ -687,8 +680,7 @@ class TestUnsubscribeVsRevoke:
         This tests the subscriber terminating their own outbound subscription.
         A is the subscriber, B is the publisher.
         """
-        if not self.sub_a_to_b_id:
-            pytest.skip("No subscription ID available")
+        assert self.sub_a_to_b_id, "No subscription ID available"
 
         # A needs to delete their outbound subscription
         # First, get A's outbound subscriptions to B

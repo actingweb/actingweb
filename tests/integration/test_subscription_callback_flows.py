@@ -167,7 +167,7 @@ class TestNormalCallbackFlow:
             json={"approved": True},
             auth=(self.publisher_creator, self.publisher_passphrase),
         )
-        assert response.status_code in [200, 204]
+        assert response.status_code == 204
 
     def test_004_create_subscription(self):
         """Create subscription from subscriber to publisher."""
@@ -182,7 +182,7 @@ class TestNormalCallbackFlow:
             },
             auth=(self.subscriber_creator, self.subscriber_passphrase),
         )
-        assert response.status_code in [200, 201, 204]
+        assert response.status_code == 204
 
         # Get subscription ID from publisher
         response = requests.get(
@@ -319,7 +319,7 @@ class TestGapDetectionAndHandling:
             },
             auth=(self.subscriber_creator, self.subscriber_passphrase),
         )
-        assert response.status_code in [200, 201, 204]
+        assert response.status_code == 204
 
         # Get subscription ID
         response = requests.get(
@@ -761,7 +761,7 @@ class TestLegacySubscriptionHookFires:
             json={"approved": True},
             auth=(self.publisher_creator, self.publisher_passphrase),
         )
-        assert response.status_code in [200, 204]
+        assert response.status_code == 204
 
         response = requests.post(
             f"{self.subscriber_url}/subscriptions",
@@ -772,7 +772,7 @@ class TestLegacySubscriptionHookFires:
             },
             auth=(self.subscriber_creator, self.subscriber_passphrase),
         )
-        assert response.status_code in [200, 201, 204]
+        assert response.status_code == 204
 
         response = requests.get(
             f"{self.publisher_url}/subscriptions/{self.subscriber_id}",

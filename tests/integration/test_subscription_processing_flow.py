@@ -100,7 +100,7 @@ class TestPeerCapabilitiesInSubscriptions:
             json={"approved": True},
             auth=(self.actor1_creator, self.actor1_passphrase),  # type: ignore[arg-type]
         )
-        assert response.status_code in [200, 204]
+        assert response.status_code == 204
 
     def test_003_verify_trust_has_capability_fields(self, http_client):
         """
@@ -129,18 +129,13 @@ class TestPeerCapabilitiesInSubscriptions:
             f"{self.actor2_url}/meta/actingweb/supported",
         )
 
-        # Should return 200 with supported options
-        # or 404 if no supported options configured
-        assert response.status_code in [200, 404]
+        # 200 with the supported options
+        assert response.status_code == 200
 
-        if response.status_code == 200 and response.text:
-            try:
-                data = response.json()
-                # Should have 'supported' key with comma-separated options
-                assert "supported" in data or isinstance(data, dict)
-            except ValueError:
-                # Empty or invalid JSON is acceptable - endpoint exists but no options
-                pass
+        assert response.status_code == 200
+        # Plain text: the supported options, comma-separated.
+        options = [o.strip() for o in response.text.split(",")]
+        assert "subscriptionresync" in options, response.text
 
     def test_099_cleanup(self, http_client):
         """
@@ -246,7 +241,7 @@ class TestPeerCapabilitiesIntegration:
             json={"approved": True},
             auth=(self.actor1_creator, self.actor1_passphrase),  # type: ignore[arg-type]
         )
-        assert response.status_code in [200, 204]
+        assert response.status_code == 204
 
     def test_010_verify_capabilities_endpoint_exists(self, http_client):
         """
@@ -256,8 +251,8 @@ class TestPeerCapabilitiesIntegration:
             f"{self.actor2_url}/meta/actingweb/supported",
         )
 
-        # Should return 200 (with options) or 404 (no options configured)
-        assert response.status_code in [200, 404]
+        # 200 with the supported options
+        assert response.status_code == 200
 
     def test_011_verify_capabilities_endpoint_format(self, http_client):
         """
@@ -267,14 +262,10 @@ class TestPeerCapabilitiesIntegration:
             f"{self.actor1_url}/meta/actingweb/supported",
         )
 
-        if response.status_code == 200 and response.text:
-            try:
-                data = response.json()
-                # Should be a dict with 'supported' key or similar structure
-                assert isinstance(data, dict)
-            except ValueError:
-                # Empty or invalid JSON - endpoint exists but no content
-                pass
+        assert response.status_code == 200
+        # Plain text: the supported options, comma-separated.
+        options = [o.strip() for o in response.text.split(",")]
+        assert "subscriptionresync" in options, response.text
 
     def test_020_trust_has_capability_fields_schema(self, http_client):
         """
@@ -323,7 +314,7 @@ class TestPeerCapabilitiesIntegration:
         response = requests.get(f"{peer_url}/meta/actingweb/supported")
 
         # Endpoint should exist
-        assert response.status_code in [200, 404]
+        assert response.status_code == 200
 
     def test_040_verify_capability_check_before_feature(self, http_client):
         """
@@ -339,23 +330,10 @@ class TestPeerCapabilitiesIntegration:
             f"{self.actor2_url}/meta/actingweb/supported",
         )
 
-        if response.status_code == 200 and response.text:
-            try:
-                data = response.json()
-                supported_options = data.get("supported", "")
-
-                # Parse supported options (comma-separated string)
-                if supported_options:
-                    options = [opt.strip() for opt in supported_options.split(",")]
-                else:
-                    options = []
-
-                # Document available options
-                # Common options: subscriptionresync, callbackcompression, etc.
-                assert isinstance(options, list)
-            except ValueError:
-                # No JSON response
-                pass
+        assert response.status_code == 200
+        # Plain text: the supported options, comma-separated.
+        options = [o.strip() for o in response.text.split(",")]
+        assert "subscriptionresync" in options, response.text
 
     def test_099_cleanup(self, http_client):
         """
@@ -455,7 +433,7 @@ class TestCleanupOnTrustDeletion:
             json={"approved": True},
             auth=(self.publisher_creator, self.publisher_passphrase),  # type: ignore[arg-type]
         )
-        assert response.status_code in [200, 204]
+        assert response.status_code == 204
 
         # Grant permissions
         response = requests.put(
@@ -468,7 +446,7 @@ class TestCleanupOnTrustDeletion:
             },
             auth=(self.publisher_creator, self.publisher_passphrase),  # type: ignore[arg-type]
         )
-        assert response.status_code in [200, 201, 204]
+        assert response.status_code == 201
 
         # Create subscription
         response = requests.post(
@@ -481,7 +459,7 @@ class TestCleanupOnTrustDeletion:
             },
             auth=(self.subscriber_creator, self.subscriber_passphrase),  # type: ignore[arg-type]
         )
-        assert response.status_code in [200, 201, 202, 204]
+        assert response.status_code == 204
 
         # Get subscription ID
         response = requests.get(
@@ -507,7 +485,7 @@ class TestCleanupOnTrustDeletion:
                 data=f"value_{i}",
                 auth=(self.publisher_creator, self.publisher_passphrase),  # type: ignore[arg-type]
             )
-            assert response.status_code in [201, 204]
+            assert response.status_code == 204
 
     def test_011_verify_subscription_data_exists(self, http_client):
         """
@@ -526,8 +504,7 @@ class TestCleanupOnTrustDeletion:
         """
         Verify subscription diffs exist before cleanup.
         """
-        if not self.subscription_id:
-            pytest.skip("No subscription ID available")
+        assert self.subscription_id, "No subscription ID available"
 
         response = requests.get(
             f"{self.publisher_url}/subscriptions/{self.subscriber_id}/{self.subscription_id}",
@@ -548,7 +525,7 @@ class TestCleanupOnTrustDeletion:
             auth=(self.publisher_creator, self.publisher_passphrase),  # type: ignore[arg-type]
         )
 
-        assert response.status_code in [200, 204]
+        assert response.status_code == 204
 
     def test_021_verify_subscriptions_cleaned_up(self, http_client):
         """
@@ -560,23 +537,22 @@ class TestCleanupOnTrustDeletion:
             headers={"Authorization": f"Bearer {self.trust_secret}"},
         )
 
-        # Should return 401/403 (invalid trust) or 404 (no subscriptions)
-        assert response.status_code in [401, 403, 404]
+        # 403: the trust is gone
+        assert response.status_code == 403
 
     def test_022_verify_subscription_diffs_cleaned_up(self, http_client):
         """
         Verify subscription diffs are cleaned up after trust deletion.
         """
-        if not self.subscription_id:
-            pytest.skip("No subscription ID available")
+        assert self.subscription_id, "No subscription ID available"
 
         response = requests.get(
             f"{self.publisher_url}/subscriptions/{self.subscriber_id}/{self.subscription_id}",
             headers={"Authorization": f"Bearer {self.trust_secret}"},
         )
 
-        # Should return 401/403 (invalid trust) or 404 (no diffs)
-        assert response.status_code in [401, 403, 404]
+        # 403: the trust is gone
+        assert response.status_code == 403
 
     def test_099_cleanup(self, http_client):
         """

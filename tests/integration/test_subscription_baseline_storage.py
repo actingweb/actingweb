@@ -51,10 +51,7 @@ def test_baseline_stores_simple_and_list_properties(
         auth=(actor_b["creator"], actor_b["passphrase"]),
         timeout=5,
     )
-    assert response.status_code in (
-        200,
-        204,
-    ), f"Failed to set displayname: {response.text}"
+    assert response.status_code == 204, f"Failed to set displayname: {response.text}"
 
     response = requests.put(
         f"{actor_b['url']}/properties/email",
@@ -62,10 +59,7 @@ def test_baseline_stores_simple_and_list_properties(
         auth=(actor_b["creator"], actor_b["passphrase"]),
         timeout=5,
     )
-    assert response.status_code in (
-        200,
-        204,
-    ), f"Failed to set email: {response.text}"
+    assert response.status_code == 204, f"Failed to set email: {response.text}"
 
     # Create a test list property
     # Written to the collection: POST /properties/<name> is a 400 since
@@ -76,11 +70,9 @@ def test_baseline_stores_simple_and_list_properties(
         auth=(actor_b["creator"], actor_b["passphrase"]),
         timeout=5,
     )
-    assert response.status_code in (
-        200,
-        201,
-        204,
-    ), f"Failed to append Item 1 (status {response.status_code}): {response.text}"
+    assert response.status_code == 201, (
+        f"Failed to append Item 1 (status {response.status_code}): {response.text}"
+    )
 
     # Written to the collection: POST /properties/<name> is a 400 since
     # 3.16 (it used to answer 400 and write the body anyway).
@@ -90,11 +82,9 @@ def test_baseline_stores_simple_and_list_properties(
         auth=(actor_b["creator"], actor_b["passphrase"]),
         timeout=5,
     )
-    assert response.status_code in (
-        200,
-        201,
-        204,
-    ), f"Failed to append Item 2 (status {response.status_code}): {response.text}"
+    assert response.status_code == 201, (
+        f"Failed to append Item 2 (status {response.status_code}): {response.text}"
+    )
 
     # Establish trust from actor_a to actor_b using trust_helper
     trust_helper.establish(actor_a, actor_b, "friend", approve=True)
@@ -106,10 +96,9 @@ def test_baseline_stores_simple_and_list_properties(
         auth=(actor_b["creator"], actor_b["passphrase"]),
         timeout=5,
     )
-    assert response.status_code in (
-        200,
-        201,
-    ), f"Failed to grant permissions (status {response.status_code}): {response.text}"
+    assert response.status_code == 201, (
+        f"Failed to grant permissions (status {response.status_code}): {response.text}"
+    )
 
     # Create subscription from actor_a to actor_b
     # Actor_a (subscriber) creates subscription on their own endpoint, pointing to actor_b (publisher)
@@ -125,18 +114,16 @@ def test_baseline_stores_simple_and_list_properties(
         auth=(actor_a["creator"], actor_a["passphrase"]),
         timeout=5,
     )
-    assert response.status_code in (
-        200,
-        201,
-        204,
-    ), f"Failed to create subscription (status {response.status_code}): {response.text}"
+    assert response.status_code == 204, (
+        f"Failed to create subscription (status {response.status_code}): {response.text}"
+    )
 
     # Handle 204 No Content response
-    if response.status_code == 204:
-        print("\nWARNING: Subscription creation returned 204 (No Content)")
-        print("This test needs to retrieve subscription ID differently")
-        # For now, skip the sync test since we don't have sub_id
-        return
+    assert response.status_code == 204
+    print("\nWARNING: Subscription creation returned 204 (No Content)")
+    print("This test needs to retrieve subscription ID differently")
+    # For now, skip the sync test since we don't have sub_id
+    return
 
     sub_data = response.json()
     sub_id = sub_data.get("subscriptionid")

@@ -810,6 +810,16 @@ def actor_factory(test_app: str, worker_info: dict):
     manager.cleanup()
 
 
+@pytest.fixture(scope="class")
+def class_actor_factory(test_app: str, worker_info: dict):
+    """As ``actor_factory``, but its actors live until the class ends: for a
+    test class whose numbered methods share the actors its first method
+    creates (``actor_factory`` deletes them when that method ends)."""
+    manager = ActorManager(test_app, worker_info["worker_id"])
+    yield manager
+    manager.cleanup()
+
+
 @pytest.fixture
 def oauth2_client(test_app, worker_info):
     """

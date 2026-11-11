@@ -516,14 +516,15 @@ def test_sub_path_writes_read_bom_text_as_reads_do() -> None:
     from actingweb.aw_web_request import AWWebObj
     from actingweb.handlers.properties import PropertiesHandler
 
-    stored = {"settings": "\ufeff" + json.dumps({"theme": "x", "k": 1})}
-    myself = mock.Mock()
-    myself.property = stored
-    auth = mock.Mock()
-    auth.acl = {"peerid": ""}
-    result = mock.Mock(success=True, actor=myself, auth_obj=auth)
-    result.authorize.return_value = True
     for method, body in (("put", json.dumps("y")), ("delete", None)):
+        # A fresh value each time: the PUT rewrites it without the mark.
+        stored = {"settings": "\ufeff" + json.dumps({"theme": "x", "k": 1})}
+        myself = mock.Mock()
+        myself.property = stored
+        auth = mock.Mock()
+        auth.acl = {"peerid": ""}
+        result = mock.Mock(success=True, actor=myself, auth_obj=auth)
+        result.authorize.return_value = True
         handler = PropertiesHandler(AWWebObj(body=body, params={}), mock.Mock())
         handler.hooks = None
         with (
@@ -533,3 +534,11 @@ def test_sub_path_writes_read_bom_text_as_reads_do() -> None:
         ):
             getattr(handler, method)("a1", "settings/theme")
         assert handler.response.status_code in (200, 204), method
+
+
+def test_the_owner_reads_undecodable_bytes_as_before() -> None:
+    """Re-run 10 (Issue 2): the strict decode is for a peer; the owner got a
+    404 for what it stored."""
+    handler, result = _get_handler({"blob": b"caf\xe9"})
+    _run_get(handler, result, "blob")
+    assert handler.response.status_code == 200

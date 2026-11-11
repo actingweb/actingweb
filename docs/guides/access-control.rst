@@ -775,8 +775,11 @@ fields (and logs them). A category is an object (``properties`` may also be
 a list of names) or ``null``; when present, its ``patterns``,
 ``excluded_patterns``, ``operations``, ``allowed`` and ``denied`` are lists
 of strings, and ``notes`` is text; otherwise the edit answers 400. Other
-keys are stored as they are. A rule list that is not a list of strings, in
-an override stored another way, keeps the trust type's value. In a ``PUT
+keys inside a category are stored as they are; other top-level keys are
+ignored. An override stored another way that holds a malformed rule allows
+less, never more: a category that is not an object allows nothing, a
+malformed allow list allows nothing, and a malformed exclusion leaves the
+trust type's exclusions in place. In a ``PUT
 /trust/{relationship}/{peerid}`` body, ``"permissions": null`` changes
 nothing.
 

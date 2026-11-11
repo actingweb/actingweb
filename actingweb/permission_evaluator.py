@@ -30,6 +30,7 @@ from . import config as config_class
 from .db.exceptions import DbError
 from .identifiers import has_control_characters
 from .trust_permissions import (
+    PERMISSION_CATEGORIES,
     get_trust_permission_store,
     is_client_peer,
     merge_permissions,
@@ -1033,14 +1034,7 @@ class PermissionEvaluator:
             override_dict = {}
 
             # Extract non-None override fields
-            for field in [
-                "properties",
-                "methods",
-                "actions",
-                "tools",
-                "resources",
-                "prompts",
-            ]:
+            for field in PERMISSION_CATEGORIES:
                 override_value = getattr(permission_override, field, None)
                 if override_value is not None:
                     override_dict[field] = override_value

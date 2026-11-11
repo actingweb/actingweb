@@ -284,11 +284,11 @@ def _parsed(value: Any) -> Any:
             # byte-order mark, UTF-16 in its bytes) is one here too: the
             # read, the write check and the filter agree on it (3.16). Only
             # such text is parsed again.
-            if isinstance(value, str):
-                maybe_json = "\ufeff" in value[:4] or "\x00" in value[:4]
-            else:
-                maybe_json = b"\x00" in value[:4]
-            if maybe_json:
+            # (Bytes that failed are not JSON to a client either:
+            # ``json.loads(bytes)`` already decoded as a client does.)
+            if isinstance(value, str) and (
+                "\ufeff" in value[:4] or "\x00" in value[:4]
+            ):
                 as_object = as_json_object(value)
                 return value if as_object is None else as_object
             return value
@@ -755,14 +755,17 @@ class PropertiesHandler(_PropertyHandlerBase):
                         return
                     value = transformed
             if isinstance(value, bytes):
-                # One decode, strict (3.16: a lenient decode on output handed
-                # a client an object the strict parse had not filtered).
+                # For a peer one decode, strict (3.16: a lenient decode on
+                # output handed a client an object the strict parse had not
+                # filtered); the owner reads what it stored, as before.
                 try:
                     value = value.decode("utf-8")
                 except UnicodeDecodeError:
-                    if self.response:
-                        self.response.set_status(404)
-                    return
+                    if peer_of(check):
+                        if self.response:
+                            self.response.set_status(404)
+                        return
+                    value = value.decode("utf-8", "replace")
             if peer_of(check):
                 # What a peer's client reads as JSON is filtered as JSON
                 # (3.16): stored text behind a byte-order mark, or a hook's

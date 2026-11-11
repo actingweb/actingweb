@@ -1,6 +1,6 @@
 ---
 status: done
-verified: thoughts/verifications/2026-11-11-grant-enforcement-per-route-reverify-9.md
+verified: thoughts/verifications/2026-11-11-grant-enforcement-per-route-reverify-10.md
 ---
 
 # Implementation Plan: a peer's grant is the answer on every route
@@ -3097,4 +3097,51 @@ as an escape; a trust handler comment is corrected.
 
 Full tier (2026-11-11): ruff, format, pyright clean; `verify_groups` OK;
 unit 5103 passed; DynamoDB 6558 passed; PostgreSQL 6355 passed; docs build
+with `-W`. No wire recording changed.
+
+### 2026-11-11, after verification thoughts/verifications/2026-11-11-grant-enforcement-per-route-reverify-10.md
+
+#### 72. A malformed override allows less, never more
+
+**Category**: Bug fix (re-run 10, Issue 1; corrects entry 69)
+
+**What changed**: `merge_permissions` reads each override rule through
+`_well_formed_rule`: a category that is not an object allows nothing (an
+explicit deny rule replaces the trust type's, never merges into it), except
+the `properties` shorthand list of names, which is normalised; an allow
+list (`patterns`, `operations`, `allowed`) that is not a list of names is
+empty; an exclusion (`excluded_patterns`, `denied`) given as one string
+excludes that pattern, any other malformed one is dropped so the trust
+type's exclusions stay. Entry 69 kept the trust type's value for every
+key, which for allow keys and whole categories handed out the trust type's
+wider grant where the override used to deny. (`patterns` merges by union:
+no override narrows it, so a malformed one acts as an empty one.) The
+evaluator takes the category list from `trust_permissions`; the merge logs
+at debug, not on every evaluation at warning.
+
+**Files affected**: `actingweb/trust_permissions.py`,
+`actingweb/permission_evaluator.py`, `CHANGELOG.rst`,
+`docs/guides/access-control.rst`; `tests/test_trust_permissions_unit.py`
+(`test_a_malformed_override_allows_less_never_more`, through the
+evaluator).
+
+#### 73. Leftovers
+
+**Category**: Bug fix / test quality (re-run 10, Issues 2, 3)
+
+**What changed**: the strict bytes decode is for a peer; the owner reads
+undecodable bytes as before. The sub-path DELETE test builds its own value
+(the PUT had rewritten the shared one). The changelog says the read and
+write hooks receive BOM/UTF-16 JSON as an object (delete hooks get the
+text). `_parsed`'s dead bytes re-parse is gone. The guide says which keys
+are ignored.
+
+**Files affected**: `actingweb/handlers/properties.py`, `CHANGELOG.rst`,
+`docs/guides/access-control.rst`; `tests/test_grant_edges.py`
+(`test_the_owner_reads_undecodable_bytes_as_before`).
+
+#### 74. The Full tier on this batch
+
+Full tier (2026-11-11): ruff, format, pyright clean; `verify_groups` OK;
+unit 5105 passed; DynamoDB 6560 passed; PostgreSQL 6357 passed; docs build
 with `-W`. No wire recording changed.

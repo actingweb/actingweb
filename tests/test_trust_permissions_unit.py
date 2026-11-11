@@ -860,6 +860,59 @@ def test_a_rule_list_that_is_not_a_list_keeps_the_base_value() -> None:
         merged = merge_permissions(base, {"properties": {"excluded_patterns": bad}})
         assert merged["properties"]["excluded_patterns"] == ["private/*"]
         assert permission_updates_problem({"properties": {"excluded_patterns": bad}})
-    merged = merge_permissions(base, {"properties": "everything"})
-    assert merged["properties"] == base["properties"]
     assert permission_updates_problem({"properties": {"patterns": ["a"]}}) is None
+
+
+def test_a_malformed_override_allows_less_never_more() -> None:
+    """Re-run 10 (Issue 1): keeping the trust type's value is fail-closed
+    only for exclusions; for an allow list, or a category that is not an
+    object, it handed out the trust type's wider grant where the override
+    used to deny. Through the evaluator."""
+    from actingweb.permission_evaluator import (
+        PermissionEvaluator,
+        PermissionResult,
+        PermissionType,
+    )
+    from actingweb.trust_permissions import merge_permissions
+
+    base = {
+        "properties": {
+            "patterns": ["*"],
+            "operations": ["read", "write"],
+            "excluded_patterns": ["private/*"],
+        },
+        "methods": {"allowed": ["*"]},
+        "tools": {"allowed": ["*"]},
+    }
+    cases = [
+        (
+            {"properties": {"operations": "read"}},
+            PermissionType.PROPERTIES,
+            "x",
+            "write",
+        ),
+        ({"methods": {"allowed": None}}, PermissionType.METHODS, "m", "call"),
+        ({"methods": {"allowed": "get_x"}}, PermissionType.METHODS, "m", "call"),
+        ({"methods": ["x"]}, PermissionType.METHODS, "m", "call"),
+        ({"tools": []}, PermissionType.TOOLS, "search", "call"),
+        ({"properties": "everything"}, PermissionType.PROPERTIES, "x", "read"),
+        (
+            {"properties": {"excluded_patterns": "x"}},
+            PermissionType.PROPERTIES,
+            "x",
+            "read",
+        ),
+    ]
+    # (``patterns`` is a union field: no override narrows it, so a malformed
+    # one is an empty one, as a valid empty override is.)
+    ev = object.__new__(PermissionEvaluator)
+    ev.config = None  # type: ignore[misc]
+    for override, kind, target, op in cases:
+        merged = merge_permissions(base, override)
+        ev._get_effective_permissions = lambda a, p, m=merged, **k: m  # type: ignore[method-assign]
+        ev._approval = lambda a, p: (False, "friend")  # type: ignore[method-assign]
+        result = ev.evaluate_permission("a1", "p1", kind, target, op)
+        assert result == PermissionResult.DENIED, (override, result)
+    # A category it does not name is the trust type's, as before.
+    merged = merge_permissions(base, {"methods": ["x"]})
+    assert merged["tools"] == base["tools"]

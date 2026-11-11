@@ -113,6 +113,9 @@ _IDENTITY_FIELDS = frozenset(
 
 
 _CATEGORIES = tuple(sorted(_EDITABLE_FIELDS - {"notes"}))
+PERMISSION_CATEGORIES = _CATEGORIES
+"""The permission categories an override holds (one list for the store, the
+intake check and the evaluator)."""
 _RULE_LIST_KEYS = ("patterns", "excluded_patterns", "operations", "allowed", "denied")
 
 
@@ -810,6 +813,49 @@ class TrustPermissionStore:
 # Permission helper functions
 
 
+_EXCLUSION_KEYS = ("excluded_patterns", "denied")
+_DENY_RULE: dict[str, Any] = {"patterns": [], "operations": [], "allowed": []}
+"""A rule that allows nothing, in both rule shapes (patterns/operations and
+allowed); it replaces the trust type's rule, never merges into it."""
+
+
+def _well_formed_rule(category: str, rule: Any) -> dict[str, Any]:
+    """An override's rule for ``category`` in the shape the evaluator reads,
+    failing toward less access (3.16; a row written before the intake check
+    or through the store API may hold anything):
+
+    - not an object: the ``properties`` shorthand list of names is
+      normalised; anything else is an empty rule, which denies (it replaced
+      the trust type's rule and denied before; falling back to the trust
+      type's rule granted more);
+    - an allow list (``patterns``, ``operations``, ``allowed``) that is not
+      a list of names is empty: it allows nothing;
+    - an exclusion (``excluded_patterns``, ``denied``) given as one string
+      excludes that pattern; any other malformed one is dropped, so the
+      trust type's own exclusions stay (it replaced them).
+    """
+    if not isinstance(rule, dict):
+        if category == "properties" and _is_name_list(rule):
+            from .peer_permissions import normalize_property_permission
+
+            normalized = normalize_property_permission(rule)
+            if isinstance(normalized, dict):
+                return normalized
+        logger.debug(f"Override {category} is not an object; it allows nothing")
+        return dict(_DENY_RULE)
+    out: dict[str, Any] = {}
+    for key, value in rule.items():
+        if key not in _RULE_LIST_KEYS or _is_name_list(value):
+            out[key] = value
+        elif key in _EXCLUSION_KEYS:
+            if isinstance(value, str):
+                out[key] = [value]
+            # else: dropped, the trust type's exclusions apply
+        else:
+            out[key] = []
+    return out
+
+
 def merge_permissions(
     base_permissions: dict[str, Any],
     override_permissions: dict[str, Any] | None,
@@ -839,7 +885,8 @@ def merge_permissions(
     Security Notes:
         - With merge_base=True: Cannot accidentally remove base security exclusions
         - With merge_base=False: Full override capability, use with caution
-        - Other fields (operations, allowed, denied) are always replaced by overrides
+        - Other fields (operations, allowed, denied) are replaced by overrides
+        - A malformed rule fails toward less access (``_well_formed_rule``)
     """
     if not override_permissions:
         return base_permissions.copy()
@@ -854,58 +901,38 @@ def merge_permissions(
         if overrides is None:
             # None means use base permissions for this category
             continue
+        replaces = not isinstance(overrides, dict) and not (
+            category == "properties" and _is_name_list(overrides)
+        )
+        overrides = _well_formed_rule(category, overrides)
 
-        if category in merged:
-            if isinstance(merged[category], dict) and isinstance(overrides, dict):
-                # Deep merge dictionaries
-                merged_category = merged[category].copy()
-                for key, value in overrides.items():
-                    if key in _RULE_LIST_KEYS and not _is_name_list(value):
-                        # A rule list that is not a list of names (null, a
-                        # string) keeps the base value (3.16: it replaced it,
-                        # dropping the trust type's exclusions; a row stored
-                        # before the intake check, or through the store API,
-                        # is covered here).
-                        logger.warning(
-                            f"Override {category}.{key} is not a list of names; "
-                            "the trust type's value applies"
-                        )
-                        continue
-                    if (
-                        merge_base
-                        and key in UNION_MERGE_FIELDS
-                        and isinstance(value, list)
-                    ):
-                        # Union merge: combine arrays, preserving base values
-                        # - Empty override arrays preserve base values (fail-safe)
-                        # - To clear base values entirely, use merge_base=False
-                        # - Pattern order: base patterns first, then new patterns
-                        #   (order doesn't affect evaluation; all patterns are matched)
-                        base_list = merged_category.get(key, [])
-                        if isinstance(base_list, list):
-                            # Combine and deduplicate, base values first
-                            combined = list(base_list) + [
-                                item for item in value if item not in base_list
-                            ]
-                            merged_category[key] = combined
-                        else:
-                            merged_category[key] = value
+        if replaces:
+            # Not a rule: it allows nothing, whatever the trust type allows.
+            merged[category] = overrides
+        elif category in merged and isinstance(merged[category], dict):
+            # Deep merge dictionaries
+            merged_category = merged[category].copy()
+            for key, value in overrides.items():
+                if merge_base and key in UNION_MERGE_FIELDS:
+                    # Union merge: combine arrays, preserving base values
+                    # - Empty override arrays preserve base values (fail-safe)
+                    # - To clear base values entirely, use merge_base=False
+                    # - Pattern order: base patterns first, then new patterns
+                    #   (order doesn't affect evaluation; all patterns are matched)
+                    base_list = merged_category.get(key, [])
+                    if isinstance(base_list, list):
+                        # Combine and deduplicate, base values first
+                        merged_category[key] = list(base_list) + [
+                            item for item in value if item not in base_list
+                        ]
                     else:
-                        # Replace: override value replaces base value
                         merged_category[key] = value
-                merged[category] = merged_category
-            elif isinstance(merged[category], dict) and not isinstance(overrides, dict):
-                # A category that is not an object cannot replace the trust
-                # type's rule (3.16: a string or list replaced it).
-                logger.warning(
-                    f"Override {category} is not an object; the trust type's "
-                    "rule applies"
-                )
-            else:
-                # Replace with override
-                merged[category] = overrides
+                else:
+                    # Replace: override value replaces base value
+                    merged_category[key] = value
+            merged[category] = merged_category
         else:
-            # Add new category
+            # Add new category (or replace a base that is not an object)
             merged[category] = overrides
 
     return merged

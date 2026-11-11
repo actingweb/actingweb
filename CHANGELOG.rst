@@ -19,8 +19,9 @@ SECURITY
   and logged; the grant API sets ``created_by`` itself, and answers 400
   for a rule whose pattern or operation keys are not lists of strings,
   ``null`` included. Such a value already stored (or written through the
-  store API) keeps the trust type's value on merge: a string or ``null``
-  there replaced the trust type's list, dropping its base exclusions.
+  store API) allows less on merge, never more: a malformed exclusion keeps
+  the trust type's exclusions (a string or ``null`` replaced them), a
+  malformed allow list or a category that is not an object allows nothing.
   **Check:** the fix stops new writes, not grants already written. On a
   host that serves actors of more than one owner, review each actor's
   overrides (``TrustPermissionStore.list_actor_permissions``) for peers it
@@ -46,7 +47,7 @@ SECURITY
   byte-order mark, or UTF-16 in its bytes). **Behavior change:** for the
   owner too: such text written as a whole property is stored as plain JSON
   text, it is read back re-serialised, its parts can be read, written and
-  deleted, and property hooks receive it as an object.
+  deleted, and the read and write hooks receive it as an object.
   **Behavior change:** when the grant excludes anything, a kept part
   nested more than 100 levels deep (objects or arrays) is withheld from
   the peer (a direct read is 403, the name is left out of the listing and

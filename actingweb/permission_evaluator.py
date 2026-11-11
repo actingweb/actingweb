@@ -315,6 +315,31 @@ def as_json_object(value: Any) -> Any:
     return parsed if isinstance(parsed, dict | list) else None
 
 
+def withheld(value: Any, filtered: Any) -> bool:
+    """Whether :func:`drop_excluded` withheld ``value`` (too deep to
+    filter): it answered ``None`` for a value that was not ``None``. The
+    caller leaves the value out (3.16), never sends it as ``null``."""
+    return filtered is None and value is not None
+
+
+def beyond_parser(value: Any) -> bool:
+    """Whether ``value`` is JSON text nested beyond the parser (3.16). Such
+    text is never sent to a peer, whatever its grant (nothing about it can
+    be checked: a sub-path, an exclusion, a read hook); the owner reads it
+    as plain text is read. Text that does not open an object or array is
+    not parsed."""
+    if isinstance(value, bytes):
+        head = value.lstrip()[:1]
+        if head not in (b"[", b"{"):
+            return False
+    elif isinstance(value, str):
+        if value.lstrip()[:1] not in ("[", "{"):
+            return False
+    else:
+        return False
+    return as_json_object(value) is TOO_DEEP
+
+
 def holds_excluded(rules: Any, path: str, *values: Any) -> bool:
     """Whether any of ``values`` (each the value at ``path``) holds an
     excluded descendant. Decided on the data, so it is defined for every
@@ -918,8 +943,29 @@ class PermissionEvaluator:
 
         # Check for permission overrides first (higher priority)
         permission_override = self.permission_store.get_permissions(actor_id, peer_id)
+        if permission_override and peer_id.startswith("oauth2_client:"):
+            # An OAuth2/MCP client's level is the one the user approved, the
+            # row's type: an override written for another type (before a
+            # re-type, or set that way) is inert (owner decision 2026-11-11),
+            # so a stale one can never decide, whatever a re-type's cleanup
+            # managed to remove.
+            row_type = (
+                relationship
+                if relationship is not None
+                else self._lookup_trust_type_from_database(actor_id, peer_id)
+            )
+            if str(permission_override.trust_type or "") != str(row_type or ""):
+                logger.debug(
+                    f"Override for {actor_id}:{peer_id} names "
+                    f"'{permission_override.trust_type}', the row is "
+                    f"'{row_type}': not applied"
+                )
+                permission_override = None
+                trust_type_name = row_type or None
         if permission_override:
             trust_type_name = permission_override.trust_type
+        elif trust_type_name is not None:
+            pass  # the row's type, read above
         elif relationship is not None:
             trust_type_name = relationship or None
         else:

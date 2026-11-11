@@ -1641,13 +1641,14 @@ to review: trust rows with ``established_via = "oauth2_client"`` whose
 re-type them.
 
 **A client's permission override names its row's type.** The override's own
-``trust_type`` is the base its rules extend, so at each authorisation the
-level the user approves replaces it: an override for an OAuth2 or MCP
+``trust_type`` is the base its rules extend, and an OAuth2 or MCP client's
+level is the one the user approved, its row's type. So an override for a
 client that names another type (written before a re-type, or set that way
-with ``create_permission_override(..., trust_type=...)``) is removed, and
-the removal is logged at WARNING. An override for the approved type is
-kept. To narrow a client's access, write its override with the client
-row's own type.
+with ``create_permission_override(..., trust_type=...)``) is not applied:
+the client gets its row's type, and the next authorisation deletes the
+override (logged at WARNING). An override for the row's type is applied and
+kept. To narrow a client's access, write its override with the client row's
+own type. A peer's (not a client's) override is applied as before.
 
 **The decision hook.** ``@app.lifecycle_hook("oauth2_trust_requested")``
 receives ``trust_type``, ``client_id``, ``client_name``, ``redirect_uri``,

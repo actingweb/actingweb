@@ -29,7 +29,10 @@ SECURITY
   the peer (a direct read is 403, the name is left out of the listing and
   of a diff, a developer view reads ``None``) and the peer's write of one
   is 403: the filter cannot walk it safely, and it is never sent
-  unfiltered. An excluded part is dropped whatever its depth. A
+  unfiltered. An excluded part is dropped whatever its depth. Text nested
+  beyond the JSON parser (only an application can store it) is never sent
+  to a peer, whatever its grant (403 on a read, left out of the listing and
+  of diffs); the owner reads it as stored. A
   peer gets 403 for a list it may not write whether it exists or not
   (``PUT ?index=`` and a bulk ``items`` write answered 404/400 for a
   missing one first). ``docs/migration/v3.16.rst`` ("Grants hold at every
@@ -934,8 +937,11 @@ CHANGED
   matched).
 - **A client's level follows the user's latest approval.** **Behavior
   change:** a re-authorisation re-types the client's existing row (up or
-  down) and removes its permission override; MCP caches of the process are
-  evicted (other processes until their cache TTL). The default selected
+  down); a client's permission override that names a type other than its
+  row's is not applied and is deleted at the next authorisation (a removal
+  that fails is logged, retried, and does not refuse the authorisation);
+  MCP caches of the process are evicted (other processes until their cache
+  TTL). The default selected
   level is the client default (``mcp_client``), not the first registered
   type. Rows a client obtained before 3.16 keep their type until it
   authorises again.

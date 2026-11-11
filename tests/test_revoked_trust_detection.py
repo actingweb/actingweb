@@ -53,6 +53,13 @@ async def _revoke(
         return True
 
     mock_actor.delete_reciprocal_trust = MagicMock(side_effect=delete)
+
+    async def delete_async(**kw: Any) -> bool:
+        # As the real async twin: the sync delete on the default executor
+        # (how 3.16's first fix ran it, which the deadlock test needs).
+        return await asyncio.to_thread(delete, **kw)
+
+    mock_actor.delete_reciprocal_trust_async = AsyncMock(side_effect=delete_async)
     manager = SubscriptionManager(mock_actor)
     mock_proxy = MagicMock()
     mock_proxy.trust = dict(row)
@@ -450,3 +457,15 @@ def test_a_json_refusal_is_not_read_as_a_live_trust() -> None:
     manager, actor, _ = _all_404_manager(404)
     manager.sync_peer("peer456")
     actor.delete_reciprocal_trust.assert_called_once()
+
+
+def test_a_forked_child_starts_its_own_revocation_pool() -> None:
+    """Re-run 3 (Issue 5): a child forked after the pool started inherits a
+    pool whose threads do not exist; the fork hook forgets it."""
+    from actingweb.interface import subscription_manager as sm
+
+    first = sm._revocation_executor()
+    sm._forget_revocation_pool()
+    second = sm._revocation_executor()
+    assert second is not first
+    first.shutdown(wait=False)

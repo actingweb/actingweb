@@ -1,6 +1,6 @@
 ---
 status: done
-verified: thoughts/verifications/2026-11-10-grant-enforcement-per-route-reverify-2.md
+verified: thoughts/verifications/2026-11-11-grant-enforcement-per-route-reverify-3.md
 ---
 
 # Implementation Plan: a peer's grant is the answer on every route
@@ -2626,3 +2626,89 @@ stored, and the removal now reads first and has nothing to do. The test
 stores an override for the old type (its point stands: no code when it
 cannot be removed); the file passes on both backends. Docs build with
 `-W`. No wire recording changed.
+
+### 2026-11-11, after verification thoughts/verifications/2026-11-11-grant-enforcement-per-route-reverify-3.md
+
+#### 43. A client's override for another type is inert; the re-type has no rollback
+
+**Category**: Decision changed (re-run 3, Issue 2; supersedes entries 28 and 37's rollback and fail-closed removal)
+
+**What changed**: owner decision 2026-11-11: the evaluator does not apply
+an OAuth2/MCP client's override (peer id `oauth2_client:`) whose
+`trust_type` differs from the row's type; the client gets its row's type.
+So a stale override can never decide, and the re-type is "change the
+type, then delete an override for another type" with no rollback: a
+removal that fails or raises is logged and retried at the next
+authorisation, and the authorisation stands (each rollback so far raced a
+concurrent authorisation; the store has no conditional write to close
+it). `_drop_client_override`, `_stale_client_override` and
+`_put_type_back` are replaced by `_clean_client_override`; the re-type log
+no longer claims a removal. A peer's override is applied as before.
+
+**Files affected**: `actingweb/permission_evaluator.py`
+(`_get_effective_permissions`), `actingweb/interface/trust_manager.py`,
+`docs/migration/v3.16.rst`, `CHANGELOG.rst`;
+`tests/test_client_trust_update.py` (the failed and faulting removals
+re-type and the next authorisation cleans up; three evaluator tests:
+a client's stale override is not applied, one for its type is, a peer's
+is), `tests/integration/test_oauth2_trust_binding.py`
+(`test_a_retype_whose_override_cannot_be_removed_still_issues_a_code`, a
+smoke test). The rollback race tests are removed with the rollback.
+
+#### 44. Text beyond the parser never reaches a peer
+
+**Category**: Bug fix (re-run 3, Issues 1, 3, 8)
+
+**What changed**: one rule (`permission_evaluator.beyond_parser`): JSON text
+nested beyond the parser is never sent to a peer, whatever its grant
+(nothing about it can be checked: a sub-path, an exclusion, a read hook).
+A peer's direct read (any sub-path) is 403, the listing and the hooks'
+listing leave it out, `_diff_part` and the full-state fallback leave it
+out, the developer view reads `None`; the owner reads it as stored, as
+plain text is read. A peer's write over it is refused only when its grant
+excludes something. The direct GET parses once (`RecursionError` is the
+signal). The PUT and sub-path delete parses treat it as text (they
+answered 500), and the FastAPI integration passes a JSON body it cannot
+parse through as written (it answered 500 for the owner). `withheld()`
+names the "filtered to `None`" test every caller repeated.
+
+**Files affected**: `actingweb/permission_evaluator.py`,
+`actingweb/handlers/properties.py`, `actingweb/actor.py`,
+`actingweb/interface/authenticated_views.py`,
+`actingweb/interface/integrations/fastapi_integration.py`;
+`tests/integration/test_property_grants_flow.py`
+(`test_text_beyond_the_parser_never_reaches_a_peer`, over HTTP with a
+200,000-deep string, both backends).
+
+#### 45. A plain call's hook result keeps its status
+
+**Category**: Bug fix (re-run 3, Issue 4)
+
+**What changed**: `_write_post_result(result, jsonrpc=)` reads the
+refusal's code only from a JSON-RPC answer (whose top-level `error` is the
+library's); a plain call whose hook returns -32000 answers 200 again.
+
+**Files affected**: `actingweb/handlers/methods.py`, `async_methods.py`;
+`tests/test_methods_actions_decision.py`
+(`test_a_plain_call_s_hook_result_keeps_its_status`, both twins).
+
+#### 46. Revocation hygiene and tests that show their bug
+
+**Category**: Bug fix / test quality (re-run 3, Issues 5, 6, 7)
+
+**What changed**: the revocation pool is forgotten in a forked child
+(`os.register_at_fork`); the bridged hook's docstring says a hook that
+swallows the cancellation keeps running; a late `TrustReplaced` is a
+WARNING naming the window it falls in. The deadlock test's helper wires
+the async delete as the first fix ran it (default executor), so on that
+code it deadlocks rather than failing by wiring.
+
+**Files affected**: `actingweb/interface/subscription_manager.py`,
+`actingweb/interface/hooks.py`; `tests/test_revoked_trust_detection.py`
+(`test_a_forked_child_starts_its_own_revocation_pool`).
+
+#### 47. The Full tier on this batch
+
+Full tier (2026-11-11): ruff, format, pyright clean; `verify_groups` OK;
+unit 5071 passed; DynamoDB 6525 passed; PostgreSQL 6322 passed; docs build
+with `-W`. No wire recording changed.

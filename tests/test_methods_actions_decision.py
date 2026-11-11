@@ -525,3 +525,36 @@ def test_bare_jsonrpc_is_decided_by_the_method_it_names(async_twin: bool) -> Non
     assert refused.response.status_code == 403
     plain = run({"x": 1})
     assert plain.response.status_code == 403
+
+
+@pytest.mark.parametrize("async_twin", [False, True])
+def test_a_plain_call_s_hook_result_keeps_its_status(async_twin: bool) -> None:
+    """Re-run 3 (Issue 4): the refusal's 403 was read from any result whose
+    error code was -32000, so a plain (not JSON-RPC) call whose hook
+    returned that code (the start of JSON-RPC's server-error range) answered
+    403. Only a JSON-RPC answer is read."""
+    import json as _json
+
+    from actingweb.aw_web_request import AWWebObj
+    from actingweb.handlers.async_methods import AsyncMethodsHandler
+    from actingweb.handlers.methods import MethodsHandler
+
+    hook_result = {"error": {"code": -32000, "message": "quota"}}
+    cls: Any = AsyncMethodsHandler if async_twin else MethodsHandler
+    handler: Any = cls(AWWebObj(body=_json.dumps({"x": 1})), mock.Mock())
+    handler.hooks = mock.Mock()
+    handler.hooks.execute_method_hooks.return_value = hook_result
+    handler.hooks.execute_method_hooks_async = mock.AsyncMock(return_value=hook_result)
+    auth = _auth()
+    auth.response = {"code": 200}
+    result = mock.Mock(success=True, actor=mock.Mock(), auth_obj=auth)
+    with (
+        mock.patch.object(handler, "_authenticate_dual_context", return_value=result),
+        mock.patch.object(handler, "_check_method_permission", return_value=True),
+        mock.patch.object(handler, "_get_actor_interface", return_value=mock.Mock()),
+    ):
+        if async_twin:
+            asyncio.run(handler.post_async("a1", "quota"))
+        else:
+            handler.post("a1", "quota")
+    assert handler.response.status_code == 200

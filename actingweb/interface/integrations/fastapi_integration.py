@@ -1504,7 +1504,9 @@ class FastAPIIntegration(BaseActingWebIntegration):
                     response = JSONResponse(
                         content=json_content, status_code=webobj.response.status_code
                     )
-                except (json.JSONDecodeError, TypeError):
+                except (json.JSONDecodeError, TypeError, RecursionError):
+                    # Not parseable here (RecursionError: nested beyond the
+                    # parser, 3.16): the body as the handler wrote it.
                     response = Response(
                         content=webobj.response.body,
                         status_code=webobj.response.status_code,

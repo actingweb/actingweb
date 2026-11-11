@@ -277,3 +277,30 @@ def test_a_value_too_deep_to_filter_is_withheld_not_null(world: World) -> None:
     assert world.as_d("GET", "/deep").json() == deep
     assert world.stored("deep") == deep
     assert world.as_f("PUT", "/color", json=deep).status_code == 403
+
+
+def test_text_beyond_the_parser_never_reaches_a_peer(world: World) -> None:
+    """Re-run 3 of the grant-enforcement verification (Issues 1, 3): text
+    nested beyond the JSON parser (stored by the application as text; no
+    REST write can store it) skipped the sub-path walk and the read hooks
+    and was sent whole to a peer whose grant excluded nothing. It never
+    reaches a peer, on any path; the owner reads it as stored, as plain text
+    is read; a peer may replace it when its grant excludes nothing."""
+    from actingweb.actor import Actor
+
+    from .conftest import TEST_APP_CONFIG
+
+    deep = "[" * 200_000 + "]" * 200_000
+    core = Actor(world.a["id"], config=TEST_APP_CONFIG["config"])
+    assert core.property is not None
+    core.property["deep"] = deep
+    for who in (world.as_f, world.as_d):  # excludes something / nothing
+        assert who("GET", "/deep").status_code == 403
+        assert who("GET", "/deep/x").status_code == 403
+        assert "deep" not in who("GET", "").json()
+    owner = requests.get(f"{world.a['url']}/properties/deep", auth=world.owner)
+    assert owner.status_code == 200 and owner.text == deep
+    # The admin's grant excludes nothing: it may replace the value; the
+    # friend's excludes parts, so it may not.
+    assert world.as_f("PUT", "/deep", json={"x": 1}).status_code == 403
+    assert world.as_d("PUT", "/deep", json={"x": 1}).status_code in (200, 204)

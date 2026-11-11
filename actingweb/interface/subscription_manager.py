@@ -5,6 +5,7 @@ Simplified subscription management for ActingWeb actors.
 import contextvars
 import functools
 import logging
+import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -22,6 +23,18 @@ logger = logging.getLogger(__name__)
 
 _revocation_pool: ThreadPoolExecutor | None = None
 _revocation_pool_lock = threading.Lock()
+
+
+def _forget_revocation_pool() -> None:
+    """In a forked child the parent's pool threads do not exist: start a
+    new pool on first use (3.16)."""
+    global _revocation_pool, _revocation_pool_lock
+    _revocation_pool = None
+    _revocation_pool_lock = threading.Lock()
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_forget_revocation_pool)
 
 
 def _revocation_executor() -> ThreadPoolExecutor:
@@ -1704,9 +1717,14 @@ class SubscriptionManager:
                             f"Failed to delete trust relationship with {peer_id}"
                         )
                 except TrustReplaced:
-                    logger.info(
-                        f"Trust with {peer_id} was re-paired since the probe; "
-                        "the new row is kept"
+                    # Either before anything ran, or (the remaining window of
+                    # the deletion invariants) after trust_deleted fired and
+                    # the local cleanup ran: the new row stands either way.
+                    logger.warning(
+                        f"Trust with {peer_id} was re-paired during the "
+                        "revocation cleanup; the new row is kept (if "
+                        "trust_deleted already fired, the peer's next sync "
+                        "re-creates its subscriptions)"
                     )
                 except DbError:
                     raise
@@ -2796,9 +2814,14 @@ class SubscriptionManager:
                             f"Failed to delete trust relationship with {peer_id}"
                         )
                 except TrustReplaced:
-                    logger.info(
-                        f"Trust with {peer_id} was re-paired since the probe; "
-                        "the new row is kept"
+                    # Either before anything ran, or (the remaining window of
+                    # the deletion invariants) after trust_deleted fired and
+                    # the local cleanup ran: the new row stands either way.
+                    logger.warning(
+                        f"Trust with {peer_id} was re-paired during the "
+                        "revocation cleanup; the new row is kept (if "
+                        "trust_deleted already fired, the peer's next sync "
+                        "re-creates its subscriptions)"
                     )
                 except DbError:
                     raise

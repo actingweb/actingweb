@@ -22,10 +22,12 @@ from ..permission_evaluator import (
     PermissionResult,
     PermissionType,
     as_json_object,
+    beyond_parser,
     drop_excluded,
     exclusion_patterns,
     get_permission_evaluator,
     holds_excluded,
+    withheld,
 )
 from ..property import rows_for
 from ..property_list import AppendOnceResult, ListItemHandle
@@ -203,6 +205,8 @@ class AuthenticatedPropertyStore:
             return value
         if decision.snapshot is None:
             return value
+        if beyond_parser(value):
+            return None  # never to a peer, whatever its grant (3.16)
         rules = decision.snapshot.rules(PermissionType.PROPERTIES)
         if not exclusion_patterns(rules):
             return value  # nothing to drop: no parse
@@ -210,7 +214,7 @@ class AuthenticatedPropertyStore:
         if parsed is None:
             return drop_excluded(rules, key, value)
         kept = drop_excluded(rules, key, parsed)
-        if kept is None:
+        if withheld(parsed, kept):
             return None  # too deep to filter: withheld
         return value if kept == parsed else json.dumps(kept)
 

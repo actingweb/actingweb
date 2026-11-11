@@ -177,7 +177,7 @@ class MethodsHandler(base_handler.BaseHandler):
                         name, actor_interface, params, auth_context
                     )
 
-        self._write_post_result(result)
+        self._write_post_result(result, jsonrpc=is_jsonrpc)
 
     def _parse_and_gate(
         self, actor_id: str, check: Any, name: str
@@ -235,14 +235,19 @@ class MethodsHandler(base_handler.BaseHandler):
             "id": params.get("id"),
         }
 
-    def _write_post_result(self, result: Any) -> None:
+    def _write_post_result(self, result: Any, *, jsonrpc: bool) -> None:
+        """A POST's answer. A JSON-RPC answer's top-level ``error`` is always
+        the library's (a hook's result is wrapped under ``result``), so its
+        ``JSONRPC_FORBIDDEN`` is the body method's refusal: HTTP 403, as the
+        named path answers. A plain call's hook result is written as it is,
+        whatever it carries."""
         if not self.response:
             return
         if result is not None:
-            error = result.get("error") if isinstance(result, dict) else None
+            error = (
+                result.get("error") if jsonrpc and isinstance(result, dict) else None
+            )
             if isinstance(error, dict) and error.get("code") == JSONRPC_FORBIDDEN:
-                # The body's method was refused (only the check answers this
-                # code): 403, as the named path answers.
                 self.response.set_status(403, "Forbidden")
             else:
                 self.response.set_status(200, "OK")

@@ -19,7 +19,6 @@ import pytest
 
 from actingweb.db import get_trust
 from actingweb.interface.actor_interface import ActorInterface
-from actingweb.interface.trust_manager import TrustManager
 from actingweb.trust import Trust
 from actingweb.trust_permissions import (
     TrustPermissions,
@@ -90,11 +89,16 @@ def test_a_row_gone_before_the_update_issues_no_code() -> None:
         assert w.authorise("mcp_client") is False
 
 
-def test_a_failed_override_removal_leaves_the_row_as_it_was() -> None:
+def test_a_failed_override_removal_still_re_types() -> None:
+    """Owner decision 2026-11-11 (re-run 3, Issue 2): the override for the
+    old type is inert once the row changed, so a removal that fails is
+    cleanup left for the next authorisation, not a reason to roll back (each
+    rollback raced a concurrent authorisation)."""
     w = World()
     assert w.authorise("friend")
     peer = str(w.row()["peerid"])
-    assert get_trust_permission_store(w.config).store_permissions(
+    store = get_trust_permission_store(w.config)
+    assert store.store_permissions(
         TrustPermissions(
             actor_id=aid(w.actor),
             peer_id=peer,
@@ -106,16 +110,11 @@ def test_a_failed_override_removal_leaves_the_row_as_it_was() -> None:
     with mock.patch.object(
         TrustPermissionStore, "delete_permissions", return_value=False
     ):
-        assert w.authorise("viewer") is False
-    assert w.row()["relationship"] == "friend"
-    assert w.authorise("viewer")
+        assert w.authorise("viewer")
     assert w.row()["relationship"] == "viewer"
-    assert (
-        get_trust_permission_store(w.config).get_permissions_uncached(
-            aid(w.actor), peer
-        )
-        is None
-    )
+    assert store.get_permissions_uncached(aid(w.actor), peer) is not None
+    assert w.authorise("viewer")
+    assert store.get_permissions_uncached(aid(w.actor), peer) is None
 
 
 def test_the_description_follows_the_name_without_a_re_type() -> None:
@@ -181,10 +180,10 @@ def _friend_with_override(w: World) -> tuple[str, TrustPermissionStore]:
     return peer, store
 
 
-def test_a_faulting_override_removal_puts_the_type_back() -> None:
-    """Verification re-run 1 (Issue A): a ``DbError`` from the override
-    removal escaped past the rollback, leaving the new type with the old
-    (wider) override."""
+def test_a_faulting_override_removal_still_re_types() -> None:
+    """Re-run 3 (Issue 2): a ``DbError`` from the cleanup is logged, the
+    re-type stands (the override it left is not applied), and the next
+    authorisation removes it."""
     from actingweb.db.exceptions import DbError
 
     w = World()
@@ -192,39 +191,10 @@ def test_a_faulting_override_removal_puts_the_type_back() -> None:
     with mock.patch.object(
         TrustPermissionStore, "delete_permissions", side_effect=DbError("down")
     ):
-        with pytest.raises(DbError):
-            w.authorise("viewer")
-    assert w.row()["relationship"] == "friend"
-    assert store.get_permissions_uncached(aid(w.actor), peer) is not None
-
-
-def test_a_retry_removes_an_override_a_half_done_re_type_left() -> None:
-    """Verification re-run 1 (Issue A): the rollback itself failed, so the
-    row holds the new type and the old override; the retry (same type, so
-    no type change) still removes the override."""
-    from actingweb.db.exceptions import DbError
-
-    w = World()
-    peer, store = _friend_with_override(w)
-    real_modify = type(get_trust(w.config)).modify
-
-    def rollback_fails(self: Any, *a: Any, **kw: Any) -> Any:
-        if kw == {"relationship": "friend"}:
-            return False
-        return real_modify(self, *a, **kw)
-
-    with (
-        mock.patch.object(type(get_trust(w.config)), "modify", rollback_fails),
-        mock.patch.object(
-            TrustPermissionStore, "delete_permissions", side_effect=DbError("down")
-        ),
-    ):
-        with pytest.raises(DbError):
-            w.authorise("viewer")
+        assert w.authorise("viewer")
     assert w.row()["relationship"] == "viewer"
     assert store.get_permissions_uncached(aid(w.actor), peer) is not None
     assert w.authorise("viewer")
-    assert w.row()["relationship"] == "viewer"
     assert store.get_permissions_uncached(aid(w.actor), peer) is None
 
 
@@ -261,64 +231,46 @@ def test_an_override_for_another_type_is_removed_with_a_warning(
     assert any("'viewer' was removed" in r.getMessage() for r in caplog.records)
 
 
-def test_an_owner_s_override_written_during_the_check_is_kept() -> None:
-    """Re-run 2 (Issue 5): the stale check and the delete were separate
-    reads; an owner's override for the approved type written in between
-    was deleted. The delete decides on its own read."""
-    w = World()
-    assert w.authorise("viewer")
-    peer = str(w.row()["peerid"])
-    store = get_trust_permission_store(w.config)
-    assert store.store_permissions(
-        TrustPermissions(
-            actor_id=aid(w.actor),
-            peer_id=peer,
-            trust_type="friend",
+class TestAClientOverrideForAnotherTypeIsInert:
+    """Owner decision 2026-11-11 (re-run 3, Issue 2): the evaluator does not
+    apply an OAuth2/MCP client's override that names a type other than the
+    row's, so a stale one can never decide; a peer's override is applied as
+    before."""
+
+    @staticmethod
+    def _evaluator(override_type: str) -> Any:
+        from actingweb.permission_evaluator import PermissionEvaluator
+
+        evaluator = object.__new__(PermissionEvaluator)
+        evaluator.permission_store = mock.Mock()
+        evaluator.permission_store.get_permissions.return_value = TrustPermissions(
+            actor_id="a1",
+            peer_id="x",
+            trust_type=override_type,
             properties={"patterns": ["*"], "operations": ["read", "write"]},
-        ),
-        notify_peer=False,
-    )
-    real_stale = TrustManager._stale_client_override
-
-    def owner_writes_meanwhile(self: Any, peer_id: str, trust_type: str) -> bool:
-        out = real_stale(self, peer_id, trust_type)
-        assert store.store_permissions(
-            TrustPermissions(
-                actor_id=aid(w.actor),
-                peer_id=peer,
-                trust_type="viewer",
-                properties={"patterns": ["public/*"], "operations": ["read"]},
-            ),
-            notify_peer=False,
         )
-        return out
+        registry = mock.Mock()
+        registry.get_type.side_effect = lambda name: mock.Mock(
+            base_permissions={"properties": {"patterns": [f"{name}/*"]}}
+        )
+        evaluator.trust_type_registry = registry
+        return evaluator
 
-    with mock.patch.object(
-        TrustManager, "_stale_client_override", owner_writes_meanwhile
-    ):
-        assert w.authorise("viewer")
-    kept = store.get_permissions_uncached(aid(w.actor), peer)
-    assert kept is not None and kept.trust_type == "viewer"
+    def test_a_client_s_stale_override_is_not_applied(self) -> None:
+        ev = self._evaluator("friend")
+        perms = ev._get_effective_permissions(
+            "a1", "oauth2_client:u:c", relationship="viewer"
+        )
+        assert perms == {"properties": {"patterns": ["viewer/*"]}}
 
+    def test_a_client_s_override_for_its_type_is_applied(self) -> None:
+        ev = self._evaluator("viewer")
+        perms = ev._get_effective_permissions(
+            "a1", "oauth2_client:u:c", relationship="viewer"
+        )
+        assert perms["properties"]["operations"] == ["read", "write"]
 
-def test_the_rollback_leaves_a_type_another_authorisation_wrote() -> None:
-    """Re-run 2 (Issue 6): the rollback overwrote the type unconditionally;
-    a concurrent authorisation's type is left as it wrote it."""
-    from actingweb.db.exceptions import DbError
-
-    w = World()
-    peer, _ = _friend_with_override(w)
-
-    def other_tab_then_fault(self: Any, *a: Any, **kw: Any) -> Any:
-        # Another authorisation re-types the row to admin meanwhile.
-        db = get_trust(w.config)
-        assert db.get(actor_id=aid(w.actor), peerid=peer)
-        assert db.modify(relationship="admin")
-        raise DbError("down")
-
-    with mock.patch.object(
-        TrustPermissionStore, "delete_permissions", other_tab_then_fault
-    ):
-        with pytest.raises(DbError):
-            w.authorise("viewer")
-    assert w.row()["relationship"] == "admin"
+    def test_a_peer_s_override_is_applied_whatever_it_names(self) -> None:
+        ev = self._evaluator("friend")
+        perms = ev._get_effective_permissions("a1", "peer123", relationship="viewer")
+        assert perms["properties"]["operations"] == ["read", "write"]

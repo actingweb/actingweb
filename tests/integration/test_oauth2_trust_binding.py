@@ -449,12 +449,18 @@ def test_a_callers_own_decision_cannot_grant_an_unoffered_type(flow: Flow) -> No
     )
 
 
-def test_a_retype_whose_override_cannot_be_removed_issues_no_code(flow: Flow) -> None:
+def test_a_retype_whose_override_cannot_be_removed_still_issues_a_code(
+    flow: Flow,
+) -> None:
+    """Owner decision 2026-11-11 (re-run 3): an override for the old type is
+    not applied once the row is re-typed, so its removal is cleanup; a
+    removal that fails does not refuse the authorisation (it refused, and
+    the rollback that went with it raced concurrent authorisations). A
+    smoke test over HTTP; the unit tests in ``test_client_trust_update.py``
+    hold the cleanup and the evaluator rule."""
     from actingweb.trust_permissions import TrustPermissions, TrustPermissionStore
 
     assert flow.code_of(flow.honest("mcp_client"))
-    # An override written for the old type stands (re-run 2: with none, the
-    # removal has nothing to do and the re-type completes).
     old_override = TrustPermissions(
         actor_id="a", peer_id="p", trust_type="mcp_client", properties={}
     )
@@ -467,7 +473,7 @@ def test_a_retype_whose_override_cannot_be_removed_issues_no_code(flow: Flow) ->
         ),
     ):
         r = flow.honest("viewer")
-    assert flow.code_of(r) is None
+    assert flow.code_of(r)
 
 
 def test_the_pages_are_not_framed_or_cached(flow: Flow) -> None:

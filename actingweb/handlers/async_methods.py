@@ -135,7 +135,7 @@ class AsyncMethodsHandler(MethodsHandler):
                         name, actor_interface, params, auth_context
                     )
 
-        self._write_post_result(result)
+        self._write_post_result(result, jsonrpc=is_jsonrpc)
 
     async def put_async(self, actor_id: str, name: str = "") -> None:
         """PUT requests are handled as POST for methods (async variant;

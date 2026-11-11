@@ -1379,8 +1379,10 @@ class HookRegistry:
         on ``loop``, so its loop-bound resources work, and a sync hook runs
         here, off the loop. Same error policy; a coroutine hook that does not
         finish within ``LOOP_HOOK_TIMEOUT_SECONDS`` (or a loop that stopped)
-        is cancelled and logged, and the next hook runs. Never call it on
-        ``loop``'s own thread: it would wait on itself."""
+        is cancelled and logged, and the next hook runs. Cancelling asks the
+        task to stop; a hook that catches ``CancelledError`` keeps running
+        on ``loop`` while the caller goes on. Never call it on ``loop``'s
+        own thread: it would wait on itself."""
 
         def run(hook: Callable[..., Any]) -> Any:
             if not inspect.iscoroutinefunction(hook):

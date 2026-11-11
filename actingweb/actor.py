@@ -31,9 +31,11 @@ from actingweb.permission_evaluator import (
     GrantSnapshot,
     PermissionType,
     as_json_object,
+    beyond_parser,
     drop_excluded,
     exclusion_patterns,
     get_permission_evaluator,
+    withheld,
 )
 from actingweb.property_list import ListCorruptionError
 from actingweb.secret_compare import secret_digest_equals, secret_equals
@@ -4020,20 +4022,22 @@ class Actor:
         as the object and sent as text again. A value too deep for the filter
         to walk is withheld (``_EMPTIED``). With no exclusion stated the
         value passes as it is, unwalked (its depth does not matter)."""
+        if beyond_parser(value):
+            return _EMPTIED  # never to a peer, whatever its grant (3.16)
         if not exclusion_patterns(rules):
             return value
         if isinstance(value, str):
             as_object = as_json_object(value)
             if as_object is not None:
                 filtered = drop_excluded(rules, path, as_object)
-                if filtered is None:
+                if withheld(as_object, filtered):
                     return _EMPTIED
                 kept_object = _prune_emptied(as_object, filtered)
                 if kept_object is _EMPTIED:
                     return _EMPTIED
                 return value if kept_object == as_object else json.dumps(kept_object)
         kept = drop_excluded(rules, path, value)
-        if kept is None and value is not None:
+        if withheld(value, kept):
             return _EMPTIED
         return _prune_emptied(value, kept)
 
@@ -4102,8 +4106,8 @@ class Actor:
         try:
             parsed: Any = json.loads(as_text)
         except RecursionError:
-            # Nested beyond the parser: it cannot be filtered, so nothing is
-            # sent (3.16).
+            # Nested beyond the parser: never to a peer, whatever its grant
+            # (3.16).
             logger.warning(
                 f"A diff for {peerid} is nested too deep to filter; not sent"
             )
@@ -4280,18 +4284,22 @@ class Actor:
             """The value filtered; ``_EMPTIED`` when it is too deep to
             filter: the key is left out (a ``null`` would wipe the
             subscriber's copy)."""
-            if path in list_keys or not exclusion_patterns(rules):
+            if path in list_keys:
+                return value
+            if beyond_parser(value):
+                return _EMPTIED  # never to a peer, whatever its grant (3.16)
+            if not exclusion_patterns(rules):
                 return value
             if isinstance(value, str):
                 parsed = as_json_object(value)
                 if parsed is None:
                     return value
                 filtered = drop_excluded(rules, path, parsed)
-                if filtered is None:
+                if withheld(parsed, filtered):
                     return _EMPTIED
                 return value if filtered == parsed else json.dumps(filtered)
             filtered = drop_excluded(rules, path, value)
-            return _EMPTIED if filtered is None and value is not None else filtered
+            return _EMPTIED if withheld(value, filtered) else filtered
 
         out: dict[str, Any] = {}
         for k, v in full_state.items():

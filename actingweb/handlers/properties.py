@@ -28,10 +28,12 @@ from ..identifiers import first_control_character
 from ..permission_evaluator import (
     TOO_DEEP,
     PermissionType,
+    beyond_parser,
     drop_excluded,
     exclusion_patterns,
     get_permission_evaluator,
     holds_excluded,
+    withheld,
 )
 
 
@@ -407,8 +409,10 @@ class _PropertyHandlerBase(base_handler.BaseHandler):
         stored_text = myself.property[path[0]] if myself and myself.property else None
         stored_whole = _parsed(stored_text)
         if stored_whole is TOO_DEEP or incoming is TOO_DEEP:
-            # Too deep to tell what it holds: refused (3.16).
-            return True
+            # Too deep to tell whether it holds an excluded part: refused
+            # when the grant excludes anything (3.16); with nothing excluded
+            # there is nothing to tell.
+            return bool(exclusion_patterns(rules))
         stored = _value_at(stored_whole, path[1:])
         values = [v for v in (stored, incoming) if isinstance(v, dict)]
         return bool(values) and holds_excluded(rules, "/".join(path), *values)
@@ -708,19 +712,6 @@ class PropertiesHandler(_PropertyHandlerBase):
             if self.response:
                 self.response.set_status(404, "Property not found")
             return
-        if _parsed(lookup) is TOO_DEEP:
-            # Nested beyond the parser: the text as stored, unless the
-            # peer's grant excludes something, which cannot be filtered out
-            # of it (3.16).
-            if exclusion_patterns(_property_rules(self)):
-                if self.response:
-                    self.response.set_status(403, "Forbidden")
-                return
-            if self.response:
-                self.response.set_status(200, "Ok")
-                self.response.headers["Content-Type"] = "application/json"
-                self.response.write(lookup)
-            return
         try:
             jsonblob = json.loads(lookup)
             try:
@@ -755,7 +746,7 @@ class PropertiesHandler(_PropertyHandlerBase):
                 # A peer reads the value without its excluded descendants,
                 # at any depth (3.16); one too deep to filter is refused.
                 filtered = drop_excluded(_property_rules(self), property_path, out)
-                if filtered is None and out is not None:
+                if withheld(out, filtered):
                     if self.response:
                         self.response.set_status(403, "Forbidden")
                     return
@@ -765,6 +756,15 @@ class PropertiesHandler(_PropertyHandlerBase):
                     self.response.set_status(404)
                 return
             # Keep as string for response.write()
+        except RecursionError:
+            # Nested beyond the parser: never to a peer (nothing about it
+            # can be checked, 3.16); the owner reads it as stored, as plain
+            # text is read.
+            if peer_of(check):
+                if self.response:
+                    self.response.set_status(403, "Forbidden")
+                return
+            out = lookup
         except (TypeError, ValueError, KeyError):
             out = lookup
         if self.response:
@@ -814,9 +814,13 @@ class PropertiesHandler(_PropertyHandlerBase):
         if properties and len(properties) > 0:
             for name, value in list(properties.items()):
                 js = _parsed(value)
-                # Nested beyond the parser: the text as stored (a peer whose
-                # grant excludes something does not get it, below).
-                pair[name] = value if js is TOO_DEEP else js
+                if js is TOO_DEEP:
+                    # Nested beyond the parser: never listed for a peer
+                    # (3.16); the owner gets the text as stored.
+                    if peer_of(check):
+                        continue
+                    js = value
+                pair[name] = js
 
         # A peer sees the names its grant lets it read, each decided on its
         # own (one grant read for all), and each value without its excluded
@@ -842,25 +846,16 @@ class PropertiesHandler(_PropertyHandlerBase):
                 # hooks see.
                 self._decision = request_decision
 
-        def withheld(name: str, value: Any, filtered: Any) -> bool:
-            """Too deep to filter (3.16): the name is left out, not listed
-            with ``null``."""
-            if filtered is None and value is not None:
-                return True
-            return (
-                isinstance(value, str)
-                and _parsed(value) is TOO_DEEP
-                and bool(exclusion_patterns(_property_rules(self)))
-            )
-
         if peer_id and pair:
             allowed_names = readable(list(pair))
+            rules = _property_rules(self)
             kept_pair: dict[str, Any] = {}
             for n, v in pair.items():
                 if n not in allowed_names:
                     continue
-                filtered = drop_excluded(_property_rules(self), n, v)
-                if not withheld(n, v, filtered):
+                filtered = drop_excluded(rules, n, v)
+                # Too deep to filter (3.16): left out, not listed as null.
+                if not withheld(v, filtered):
                     kept_pair[n] = filtered
             pair = kept_pair
 
@@ -880,7 +875,10 @@ class PropertiesHandler(_PropertyHandlerBase):
                             key,
                             transformed,
                         )
-                        if peer_id and withheld(key, transformed, filtered):
+                        if peer_id and (
+                            withheld(transformed, filtered)
+                            or beyond_parser(transformed)
+                        ):
                             continue
                         result[key] = filtered
                 pair = result
@@ -1213,7 +1211,7 @@ class PropertiesHandler(_PropertyHandlerBase):
             old = myself.property[name] if myself and myself.property else None
             try:
                 old = json.loads(old or "{}")
-            except (TypeError, ValueError, KeyError):
+            except (TypeError, ValueError, KeyError, RecursionError):
                 old = {}
             try:
                 new_body = json.loads(body)
@@ -1271,7 +1269,7 @@ class PropertiesHandler(_PropertyHandlerBase):
             orig = json.loads(orig or "{}")
             merge_dict(orig, store)
             res = orig
-        except (TypeError, ValueError, KeyError):
+        except (TypeError, ValueError, KeyError, RecursionError):
             res = store
         # Execute property put hook if available
         final_res = res
@@ -2175,7 +2173,7 @@ class PropertiesHandler(_PropertyHandlerBase):
         old = orig
         try:
             orig = json.loads(orig or "{}")
-        except (TypeError, ValueError, KeyError):
+        except (TypeError, ValueError, KeyError, RecursionError):
             # Since /properties/something was handled above
             # orig must be json loadable
             self.response.set_status(404)

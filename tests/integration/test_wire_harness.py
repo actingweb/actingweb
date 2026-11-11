@@ -462,3 +462,14 @@ def test_sibling_callbacks_sort_by_the_receivers_name_and_nothing_else_moves():
     paths = [e.get("path", e.get("event"))[:2] for e in out[0]["children"]]
     assert paths == ["/b", "/c", "e", "/b", "/c"]
     assert out[0]["children"][1]["children"] == [cb(c)]
+
+
+def test_a_commit_cannot_make_itself_an_owner_and_re_record():
+    """Owners are read from the parent: adding an owner and re-recording in
+    one commit fails."""
+    before = {"WX1": {"owners": []}}
+    after = {"WX1": {"owners": ["p:3"]}}
+    problems = _verify_groups().wire_phase_problems(
+        "0123456789abcdef", [("M", "WX1.json")], ["p:3"], after, before
+    )
+    assert any("not among its owners" in p for p in problems), problems

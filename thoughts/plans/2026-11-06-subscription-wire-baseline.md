@@ -466,6 +466,9 @@ were written.
     have changed `WG6`'s recorded method listing);
   - `verify_groups.py`: the `second` key and the `Wire-Phase` trailer
     check, each with planted-violation tests.
+- **The `Wire-Phase` check reads owners from the parent commit** (fixed
+  after review): a commit cannot add itself as an owner and re-record in
+  one go.
 - **Deviation: the `Wire-Phase` check is local only.** CI's test job
   checks out at depth 1, so the check finds no merge base there and says
   it was skipped. Making it run in CI means a `fetch-depth: 0` checkout in
@@ -565,7 +568,7 @@ Retired, each with its cover (rows in `wire/rows.toml`, unit files under
 | same file, `TestResyncOnResume` | a hand-sent resync | `WD10`, `WD11` |
 | same file, `TestMultipleSubscribersSuspension` | one write to three subscribers | `WD13`, `WD14.high` |
 | `test_subscription_processing_flow.py`, `TestSubscriptionProcessingFlow` | in-order, duplicate, list and resync callbacks; cleanup on trust delete | `WS1.target`, `WD8`, `WL11.target`, `WD10`, `WC5`; the kept `TestCleanupOnTrustDeletion` |
-| same file, `TestCallbackSequencing` | out-of-order delivery and gaps | `WD9`, `WD19`; `tests/test_callback_processor.py` |
+| same file, `TestCallbackSequencing` | out-of-order delivery and gaps, a filled gap draining the held callbacks | `WD9`, `WD19`; `tests/test_callback_processor.py` (`test_gap_adds_to_pending`, `test_fill_gap_processes_pending`, `test_pending_callbacks_sorted`) |
 | same file, `TestResyncStateHandling` | the publisher's queue after a resync | `WD9`, `WQ1` to `WQ3` |
 | same file, `TestBackPressure` | many out-of-order callbacks | `WD19`; `tests/test_callback_processor.py` |
 | `test_fanout_flow.py`, `TestGranularityDowngrade`, `TestCircuitBreakerBehavior`, `TestCircuitBreakerRecovery` | `FanOutManager` features, none on the publish path | `tests/test_fanout.py`; `WD13`, `WD14` |

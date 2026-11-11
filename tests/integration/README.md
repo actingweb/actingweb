@@ -59,7 +59,7 @@ a run compares against it byte for byte.
 - One tier: every row is in the regression set. A recording that differs
   is a behaviour change, not a flake; the wire step never reruns.
 - Re-record a row only on purpose, by id, never all at once:
-  `WIRE_RECORD=WS1.subtarget,WD9 poetry run pytest tests/integration/test_wire_delivery.py`
+  `WIRE_RECORD=WD9,WD19 poetry run pytest tests/integration/test_wire_delivery.py`
   (refused under `CI`), and add a dated line to the row's `reason`. A
   mismatch leaves `wire/<row>.actual.json` beside the expected file;
   delete it once read.

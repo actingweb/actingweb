@@ -193,8 +193,9 @@ def wire_phase_problems(
     ``changes``: ``(status, file name)`` for each recording the commit
     touches (``A`` added, ``M`` modified, ``D`` deleted). ``trailers``: its
     ``Wire-Phase`` values. ``rows_after`` and ``rows_before``: the registry's
-    rows at the commit and at its parent (a deleted file's row is read from
-    the parent)."""
+    rows at the commit and at its parent. A changed or deleted file's owners
+    are read from the parent, so a commit cannot make itself an owner and
+    re-record in one go: ownership changes in a commit of its own."""
     problems: list[str] = []
     short = commit[:10]
     touched = [(st, name) for st, name in changes if st in ("M", "D")]
@@ -210,12 +211,11 @@ def wire_phase_problems(
     phase = trailers[0].strip()
     after, before = recording_rows(rows_after), recording_rows(rows_before)
     for status, name in touched:
-        rows = rows_after if status == "M" else rows_before
-        row = (after if status == "M" else before).get(name)
+        row = before.get(name) or (after.get(name) if status == "M" else None)
         if row is None:
             problems.append(f"{short}: {name} belongs to no row in rows.toml")
             continue
-        owners = rows[row].get("owners") or []
+        owners = (rows_before.get(row) or {}).get("owners") or []
         if phase not in owners:
             problems.append(
                 f"{short}: {name} ({row}) changed under Wire-Phase {phase},"

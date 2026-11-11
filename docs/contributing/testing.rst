@@ -184,7 +184,7 @@ diff in the commit that makes it.
 
   .. code-block:: bash
 
-     WIRE_RECORD=WS1.subtarget,WD9 poetry run pytest tests/integration/test_wire_delivery.py -p no:rerunfailures
+     WIRE_RECORD=WD9,WD19 poetry run pytest tests/integration/test_wire_delivery.py -p no:rerunfailures
 
   ``WIRE_RECORD`` is refused under ``CI`` and has no "all". A mismatch leaves
   ``<row>.actual.json`` beside the expected file; delete it once read.

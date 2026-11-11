@@ -1,6 +1,6 @@
 ---
 status: done
-verified: thoughts/verifications/2026-11-11-grant-enforcement-per-route-reverify-6.md
+verified: thoughts/verifications/2026-11-11-grant-enforcement-per-route-reverify-7.md
 ---
 
 # Implementation Plan: a peer's grant is the answer on every route
@@ -2933,3 +2933,66 @@ unit 5089 passed; DynamoDB 6543 and PostgreSQL 6340 passed, each failing
 only `test_a_wildcard_hook_receives_the_path_it_always_has`, which pins
 the hook path entry 58 tried to change; reverted (entry 58), that file
 passes on both backends. Docs build with `-W`. No wire recording changed.
+
+### 2026-11-11, after verification thoughts/verifications/2026-11-11-grant-enforcement-per-route-reverify-7.md
+
+#### 62. What a peer's client reads as JSON is filtered as JSON
+
+**Category**: Bug fix (re-run 7, Issue 1)
+
+**What changed**: on a direct read's text branch, a peer's value that is
+JSON text (stored behind a byte-order mark, or returned by the read hook)
+is parsed and filtered as the object and sent as JSON; it went out raw with
+`Content-Type: application/json`, unfiltered, and a client read it as the
+object. Text beyond the parser is 403 there too; plain text is sent as
+before; the owner's reads are unchanged.
+
+**Files affected**: `actingweb/handlers/properties.py`;
+`tests/test_grant_edges.py`
+(`test_json_text_a_peer_s_client_reads_as_json_is_filtered`).
+
+#### 63. The owner's grant API: statuses and bookkeeping
+
+**Category**: Bug fix (re-run 7, Issues 2, 3, 4, 5)
+
+**What changed**: a trust PUT whose trust write and override restore both
+fail answers 500 naming it (it answered 400/404 while the new grant
+stood). A `permissions` body that is not an object answers 400 on both
+edit paths (500). The store sets `created_by` (the create path took it
+from the body). The
+permissions PUT checks the row with one read, as the GET. A sub-path
+DELETE on a JSON list or scalar answers 404 (500). The SECURITY entry tells
+operators on shared hosts to review existing overrides.
+
+**Files affected**: `actingweb/handlers/trust.py`,
+`actingweb/handlers/properties.py`, `actingweb/trust_permissions.py`,
+`CHANGELOG.rst`; `tests/test_client_trust_update.py`
+(`test_a_grant_that_is_not_an_object_is_400`,
+`test_the_store_owns_created_by`,
+`test_the_permissions_put_reads_the_store_not_the_cache` (a guard for entry
+59), `test_a_failed_restore_is_not_reported_as_nothing_changed`),
+`tests/integration/test_property_grants_flow.py`,
+`tests/test_db_fault_callers.py` (its mock follows the one-row read).
+
+#### 64. Accepted, with the reason (re-run 7, Issue 6)
+
+- `store_permissions` keys on the object's own identity: the sweep found
+  every caller builds it from the URL or the row.
+- A sub-path write through a scalar child replaces that child: inside the
+  path the writer may write (pre-existing).
+- The re-type's write is unconditional: no conditional store (entry 43).
+- `updated_at` is not stamped (still refused from a request): stamping it
+  changed every wire recording that holds a grant (97 rows, only that
+  field, checked); a display field is not worth re-recording that
+  evidence for.
+
+#### 65. The Full tier on this batch
+
+Full tier (2026-11-11): ruff, format, pyright clean; `verify_groups` OK;
+unit 5092 passed. DynamoDB and PostgreSQL each failed 97 wire rows, every
+difference the new `updated_at` in a recorded grant (checked field by
+field); stamping it was dropped (entry 64) rather than re-record them. The
+re-run follows below.
+Re-run after dropping the stamp: unit 5093 passed; DynamoDB 6548 passed;
+PostgreSQL 6345 passed; docs build with `-W`; ruff, format, pyright clean;
+`verify_groups` OK. No wire recording changed.

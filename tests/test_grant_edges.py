@@ -459,3 +459,44 @@ def test_a_read_hook_s_result_on_plain_text_is_filtered() -> None:
         handler.get("a1", "profile")
     assert handler.response.status_code == 200
     assert json.loads(handler.response.body) == {"name": "n"}
+
+
+def _peer_get(stored: dict[str, Any], name: str, hook: Any = None) -> Any:
+    handler, result = _get_handler(stored, hook=hook)
+    snapshot = mock.Mock(relationship="friend")
+    snapshot.rules.return_value = {
+        "patterns": ["*"],
+        "excluded_patterns": ["profile/ssn"],
+    }
+    decision = mock.Mock(snapshot=snapshot)
+
+    def decide(*a: Any, **k: Any) -> bool:
+        handler._decision = decision
+        return True
+
+    result.auth_obj.acl = {"peerid": "p1"}
+    with (
+        mock.patch.object(handler, "authenticate_actor", return_value=result),
+        mock.patch.object(handler, "_check_property_permission", side_effect=decide),
+        mock.patch.object(handler, "_list_tail_allowed", return_value=True),
+        mock.patch.object(handler, "_get_actor_interface", return_value=mock.Mock()),
+    ):
+        handler.get("a1", name)
+    return handler
+
+
+def test_json_text_a_peer_s_client_reads_as_json_is_filtered() -> None:
+    """Re-run 7 (Issue 1): stored JSON behind a byte-order mark, or a read
+    hook's object text, went out raw as JSON, unfiltered; a client reads it
+    as the object (httpx did, with the key the grant excludes)."""
+    secret = json.dumps({"name": "n", "ssn": "x"})
+    handler = _peer_get({"profile": "﻿" + secret}, "profile")
+    assert handler.response.status_code == 200
+    assert json.loads(handler.response.body) == {"name": "n"}
+    handler = _peer_get(
+        {"profile": "ref:1"}, "profile", hook=lambda name, *a, **k: secret
+    )
+    assert handler.response.status_code == 200
+    assert json.loads(handler.response.body) == {"name": "n"}
+    handler = _peer_get({"profile": "plain"}, "profile")
+    assert handler.response.body == "plain"

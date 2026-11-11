@@ -28,6 +28,7 @@ from ..identifiers import first_control_character
 from ..permission_evaluator import (
     TOO_DEEP,
     PermissionType,
+    as_json_object,
     beyond_parser,
     drop_excluded,
     exclusion_patterns,
@@ -58,7 +59,8 @@ def delete_dict(d1, path):
     d1 is modified to no longer contain the attr/value pair
     or dict that is specified by path.
     """
-    if not d1:
+    if not d1 or not isinstance(d1, dict):
+        # Nothing to walk (3.16: a list or scalar raised, a 500).
         return False
     if len(path) > 1 and path[1] and len(path[1]) > 0:
         return delete_dict(d1.get(path[0]), path[1:])
@@ -728,7 +730,7 @@ class PropertiesHandler(_PropertyHandlerBase):
                 if self.response:
                     self.response.set_status(404)
                 return
-            out = lookup
+            value: Any = lookup
             if self.hooks:
                 actor_interface = self._get_actor_interface(myself)
                 if actor_interface:
@@ -740,26 +742,33 @@ class PropertiesHandler(_PropertyHandlerBase):
                         if self.response:
                             self.response.set_status(404)
                         return
-                    if transformed is not lookup:
-                        filtered = drop_excluded(
-                            _property_rules(self), property_path, transformed
-                        )
-                        if withheld(transformed, filtered) or (
-                            peer_of(check) and beyond_parser(transformed)
-                        ):
-                            if self.response:
-                                self.response.set_status(403, "Forbidden")
-                            return
-                        try:
-                            out = (
-                                filtered
-                                if isinstance(filtered, str)
-                                else json.dumps(filtered)
-                            )
-                        except (TypeError, ValueError):
-                            if self.response:
-                                self.response.set_status(404)
-                            return
+                    value = transformed
+            if peer_of(check):
+                # What a peer's client reads as JSON is filtered as JSON
+                # (3.16): stored text behind a byte-order mark, or a hook's
+                # object text, went out raw as an object, unfiltered.
+                if isinstance(value, str | bytes):
+                    as_object = as_json_object(
+                        value.lstrip("\ufeff") if isinstance(value, str) else value
+                    )
+                    if as_object is TOO_DEEP:
+                        if self.response:
+                            self.response.set_status(403, "Forbidden")
+                        return
+                    if as_object is not None:
+                        value = as_object
+                filtered = drop_excluded(_property_rules(self), property_path, value)
+                if withheld(value, filtered):
+                    if self.response:
+                        self.response.set_status(403, "Forbidden")
+                    return
+                value = filtered
+            try:
+                out = value if isinstance(value, str) else json.dumps(value)
+            except (TypeError, ValueError):
+                if self.response:
+                    self.response.set_status(404)
+                return
         else:
             try:
                 out = jsonblob

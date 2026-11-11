@@ -99,6 +99,10 @@ class TestB2PermissionOverridePut:
         handler = TrustPermissionHandler(webobj, config)
         me = mock.Mock()
         me.get_trust_relationships.return_value = [{"peerid": "peer1"}]
+        me.get_trust_relationship.return_value = {
+            "peerid": "peer1",
+            "relationship": "friend",
+        }
         auth = mock.Mock(success=True, actor=me)
         auth.authorize.return_value = True
         handler.authenticate_actor = mock.Mock(return_value=auth)  # type: ignore[method-assign]

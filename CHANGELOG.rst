@@ -16,7 +16,12 @@ SECURITY
   level at another actor. **Behavior change:**
   ``TrustPermissionStore.update_permissions`` takes only the permission
   categories and ``notes``; identity and bookkeeping fields are refused
-  and logged.
+  and logged, and the store sets ``created_by`` itself.
+  **Check:** the fix stops new writes, not grants already written. On a
+  host that serves actors of more than one owner, review each actor's
+  overrides (``TrustPermissionStore.list_actor_permissions``) for peers it
+  did not grant, and look in request logs for permission PUTs whose body
+  named ``actor_id``, ``peer_id`` or ``trust_type``.
 - **A peer read, overwrote and was pushed property parts its grant
   excluded.** An exclusion was checked only at the exact path a request
   named: a peer granted ``*`` without ``settings/private`` read ``settings``

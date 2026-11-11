@@ -911,6 +911,11 @@ class TrustPeerHandler(base_handler.BaseHandler):
             # Handle permission updates
             if "permissions" in params and PERMISSION_SYSTEM_AVAILABLE:
                 permission_updates = params["permissions"]
+                if not isinstance(permission_updates, dict):
+                    # 3.16: a list or scalar failed in the store, a 500.
+                    if self.response:
+                        self.response.set_status(400, "permissions must be an object")
+                    return
         except (ValueError, RecursionError):
             if not self.request.get("_method") or self.request.get("_method") != "PUT":
                 if self.response:
@@ -1086,6 +1091,7 @@ class TrustPeerHandler(base_handler.BaseHandler):
                 return
 
         trust_updated = False
+        restore_failed = False
         try:
             trust_updated = actor_interface.trust.modify_and_notify(
                 peer_id=peerid,
@@ -1110,6 +1116,7 @@ class TrustPeerHandler(base_handler.BaseHandler):
                         f"The permission override for {actor_id}:{peerid} could "
                         "not be restored after a failed trust write"
                     )
+                    restore_failed = True
 
         if trust_updated and permission_store is not None:
             permission_store.notify_stored_grant(actor_id, peerid)
@@ -1130,6 +1137,13 @@ class TrustPeerHandler(base_handler.BaseHandler):
 
         if trust_updated:
             self.response.set_status(204, "Ok")
+            return
+        if restore_failed:
+            # The trust was not written, but the new grant could not be
+            # taken back: say so, not "nothing changed" (3.16).
+            self.response.set_status(
+                500, "Trust not modified; the permissions change could not be undone"
+            )
             return
         # Trust modification failed - check if it's because trust doesn't
         # exist or because of a validation error
@@ -1495,12 +1509,15 @@ class TrustPermissionHandler(base_handler.BaseHandler):
             elif body is None:
                 body = "{}"
             params = json.loads(body)
+            if not isinstance(params, dict):
+                # 3.16: a list or scalar failed in the store, a 500.
+                if self.response:
+                    self.response.set_status(400, "Permissions must be an object")
+                return
 
-            # Validate trust relationship exists
-            relationships = myself.get_trust_relationships(
-                relationship=relationship, peerid=peerid
-            )
-            if not relationships or len(relationships) == 0:
+            # The trust exists with the path's type (one row, as the GET)
+            row = myself.get_trust_relationship(peerid=peerid) if myself else None
+            if not row or row.get("relationship") != relationship:
                 if self.response:
                     self.response.set_status(404, "Trust relationship not found")
                 return

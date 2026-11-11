@@ -475,3 +475,98 @@ def test_the_trust_put_s_edit_replaces_a_stale_override() -> None:
     stored = store.get_permissions_uncached(aid(w.actor), peer)
     assert stored is not None and stored.trust_type == "viewer"
     assert not stored.methods
+
+
+def test_a_grant_that_is_not_an_object_is_400() -> None:
+    """Re-run 7 (Issue 4): a list or scalar failed in the store, a 500."""
+    w = World()
+    assert w.authorise("viewer")
+    peer = str(w.row()["peerid"])
+    handler, result = _owner_handler(w, [1, 2])
+    with mock.patch.object(handler, "authenticate_actor", return_value=result):
+        handler.put(aid(w.actor), "viewer", peer)
+    assert handler.response.status_code == 400
+
+
+def test_the_store_owns_created_by() -> None:
+    """Re-run 7 (Issue 4): the create path took ``created_by`` from the body,
+    which an update refuses."""
+    w = World()
+    assert w.authorise("viewer")
+    peer = str(w.row()["peerid"])
+    handler, result = _owner_handler(
+        w,
+        {
+            "created_by": "someone-else",
+            "properties": {"patterns": ["a/*"], "operations": ["read"]},
+        },
+    )
+    with mock.patch.object(handler, "authenticate_actor", return_value=result):
+        handler.put(aid(w.actor), "viewer", peer)
+    assert handler.response.status_code == 201
+    stored = get_trust_permission_store(w.config).get_permissions_uncached(
+        aid(w.actor), peer
+    )
+    assert stored is not None
+    assert stored.created_by == "system"
+
+
+def test_the_permissions_put_reads_the_store_not_the_cache() -> None:
+    """Re-run 6/7 (Issues 4, 5): an override deleted elsewhere (another
+    process) but still in this process's cache was merged into, bringing
+    its fields back. The edit reads the store: it creates (201)."""
+    w = World()
+    assert w.authorise("viewer")
+    peer = str(w.row()["peerid"])
+    store = get_trust_permission_store(w.config)
+    assert store.store_permissions(
+        TrustPermissions(
+            actor_id=aid(w.actor),
+            peer_id=peer,
+            trust_type="viewer",
+            methods={"allowed": ["*"]},
+        ),
+        notify_peer=False,
+    )
+    assert store.get_permissions(aid(w.actor), peer) is not None  # cached
+    bucket = store._get_permissions_bucket(aid(w.actor))
+    assert bucket is not None
+    bucket.delete_attr(name=f"{aid(w.actor)}:{peer}")  # another process
+    handler, result = _owner_handler(
+        w, {"properties": {"patterns": ["a/*"], "operations": ["read"]}}
+    )
+    with mock.patch.object(handler, "authenticate_actor", return_value=result):
+        handler.put(aid(w.actor), "viewer", peer)
+    assert handler.response.status_code == 201
+    stored = store.get_permissions_uncached(aid(w.actor), peer)
+    assert stored is not None and not stored.methods
+
+
+def test_a_failed_restore_is_not_reported_as_nothing_changed() -> None:
+    """Re-run 7 (Issue 2): the trust write and the override's restore both
+    failed; the caller got 400 and the new grant stood."""
+    import json as _json
+
+    from actingweb.aw_web_request import AWWebObj
+    from actingweb.handlers.trust import TrustPeerHandler
+    from actingweb.interface.trust_manager import TrustManager
+
+    w = World()
+    assert w.authorise("viewer")
+    peer = str(w.row()["peerid"])
+    body = {
+        "permissions": {"properties": {"patterns": ["a/*"], "operations": ["read"]}}
+    }
+    handler = TrustPeerHandler(AWWebObj(body=_json.dumps(body)), w.config)
+    auth = mock.Mock(acl={"peerid": "", "relationship": "creator"})
+    result = mock.Mock(success=True, actor=w.actor, auth_obj=auth)
+    result.authorize.return_value = True
+    with (
+        mock.patch.object(handler, "authenticate_actor", return_value=result),
+        mock.patch.object(TrustManager, "modify_and_notify", return_value=False),
+        mock.patch.object(
+            TrustPermissionStore, "delete_permissions", return_value=False
+        ),
+    ):
+        handler.put(aid(w.actor), "viewer", peer)
+    assert handler.response.status_code == 500

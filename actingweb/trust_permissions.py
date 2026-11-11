@@ -894,7 +894,9 @@ def create_permission_override(
         tools=permission_updates.get("tools"),
         resources=permission_updates.get("resources"),
         prompts=permission_updates.get("prompts"),
-        created_by=permission_updates.get("created_by", "system"),
+        # The store's bookkeeping, not the request's (3.16; an update
+        # refuses it too).
+        created_by="system",
         notes=permission_updates.get("notes"),
     )
 

@@ -343,3 +343,8 @@ def test_writes_over_text_beyond_the_parser(world: World) -> None:
     assert owner_put("/a_list/x", json=1).status_code == 409
     text = requests.get(f"{world.a['url']}/properties/text", auth=world.owner)
     assert text.text == "plain"
+    # Re-run 7 (Issue 4): a sub-path DELETE on a list or scalar was a 500.
+    core.property["n"] = "5"
+    for name in ("n", "a_list"):
+        r = requests.delete(f"{world.a['url']}/properties/{name}/x", auth=world.owner)
+        assert r.status_code == 404

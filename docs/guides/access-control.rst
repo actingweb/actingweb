@@ -769,11 +769,14 @@ Create or update permission overrides for a trust relationship:
    }
 
 Only the permission categories and ``notes`` are taken from the body
-(3.16). ``actor_id``, ``peer_id``, ``trust_type``, ``created_by`` and
-``updated_at`` belong to the store: a create sets them, an update refuses
-them. A category is an object (``properties`` may also be a list of names),
-and its ``patterns``, ``excluded_patterns``, ``operations``, ``allowed`` and
-``denied`` are lists of strings; anything else answers 400. In a ``PUT
+(3.16). ``actor_id``, ``peer_id`` and ``trust_type`` come from the path and
+the trust row, and ``created_by`` is set by the API; an update ignores these
+fields (and logs them). A category is an object (``properties`` may also be
+a list of names) or ``null``; when present, its ``patterns``,
+``excluded_patterns``, ``operations``, ``allowed`` and ``denied`` are lists
+of strings, and ``notes`` is text; otherwise the edit answers 400. Other
+keys are stored as they are. A rule list that is not a list of strings, in
+an override stored another way, keeps the trust type's value. In a ``PUT
 /trust/{relationship}/{peerid}`` body, ``"permissions": null`` changes
 nothing.
 

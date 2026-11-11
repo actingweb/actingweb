@@ -500,3 +500,36 @@ def test_json_text_a_peer_s_client_reads_as_json_is_filtered() -> None:
     assert json.loads(handler.response.body) == {"name": "n"}
     handler = _peer_get({"profile": "plain"}, "profile")
     assert handler.response.body == "plain"
+
+
+def test_undecodable_bytes_are_not_sent() -> None:
+    """Re-run 9 (Issue 2): bytes holding JSON with one invalid byte were not
+    JSON to the strict parse (unfiltered), then decoded leniently on output
+    into an object a client reads."""
+    handler = _peer_get({"profile": b'{"ssn":"x","a":"\xff"}'}, "profile")
+    assert handler.response.status_code == 404
+
+
+def test_sub_path_writes_read_bom_text_as_reads_do() -> None:
+    """Re-run 9 (Issue 3): a read found the part, the sub-path PUT answered
+    409 and the DELETE 404."""
+    from actingweb.aw_web_request import AWWebObj
+    from actingweb.handlers.properties import PropertiesHandler
+
+    stored = {"settings": "\ufeff" + json.dumps({"theme": "x", "k": 1})}
+    myself = mock.Mock()
+    myself.property = stored
+    auth = mock.Mock()
+    auth.acl = {"peerid": ""}
+    result = mock.Mock(success=True, actor=myself, auth_obj=auth)
+    result.authorize.return_value = True
+    for method, body in (("put", json.dumps("y")), ("delete", None)):
+        handler = PropertiesHandler(AWWebObj(body=body, params={}), mock.Mock())
+        handler.hooks = None
+        with (
+            mock.patch.object(handler, "authenticate_actor", return_value=result),
+            mock.patch.object(handler, "_check_property_permission", return_value=True),
+            mock.patch.object(handler, "_list_tail_allowed", return_value=True),
+        ):
+            getattr(handler, method)("a1", "settings/theme")
+        assert handler.response.status_code in (200, 204), method

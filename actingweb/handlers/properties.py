@@ -282,9 +282,16 @@ def _parsed(value: Any) -> Any:
         except (TypeError, ValueError):
             # Text a JSON client reads as an object or array (behind a
             # byte-order mark, UTF-16 in its bytes) is one here too: the
-            # read, the write check and the filter agree on it (3.16).
-            as_object = as_json_object(value)
-            return value if as_object is None else as_object
+            # read, the write check and the filter agree on it (3.16). Only
+            # such text is parsed again.
+            if isinstance(value, str):
+                maybe_json = "\ufeff" in value[:4] or "\x00" in value[:4]
+            else:
+                maybe_json = b"\x00" in value[:4]
+            if maybe_json:
+                as_object = as_json_object(value)
+                return value if as_object is None else as_object
+            return value
     return value
 
 
@@ -747,6 +754,15 @@ class PropertiesHandler(_PropertyHandlerBase):
                             self.response.set_status(404)
                         return
                     value = transformed
+            if isinstance(value, bytes):
+                # One decode, strict (3.16: a lenient decode on output handed
+                # a client an object the strict parse had not filtered).
+                try:
+                    value = value.decode("utf-8")
+                except UnicodeDecodeError:
+                    if self.response:
+                        self.response.set_status(404)
+                    return
             if peer_of(check):
                 # What a peer's client reads as JSON is filtered as JSON
                 # (3.16): stored text behind a byte-order mark, or a hook's
@@ -766,12 +782,7 @@ class PropertiesHandler(_PropertyHandlerBase):
                     return
                 value = filtered
             try:
-                if isinstance(value, bytes):
-                    out = value.decode("utf-8", "replace")
-                elif isinstance(value, str):
-                    out = value
-                else:
-                    out = json.dumps(value)
+                out = value if isinstance(value, str) else json.dumps(value)
             except (TypeError, ValueError):
                 if self.response:
                     self.response.set_status(404)
@@ -1319,19 +1330,17 @@ class PropertiesHandler(_PropertyHandlerBase):
             c = copy.copy(store)
             store = {path[i]: c}
             i -= 1
-        orig = myself.property[name] if myself and myself.property else None
-        try:
-            orig = json.loads(orig or "{}")
-            merge_dict(orig, store)
-            res = orig
-        except (RecursionError, ValueError, AttributeError):
+        stored_text = myself.property[name] if myself and myself.property else None
+        # Read as every other path reads it (a byte-order mark, UTF-16 text).
+        orig = _parsed(stored_text) if stored_text else {}
+        if not isinstance(orig, dict):
             # The stored value has no parts to merge into (text, a list or
             # a scalar, or JSON nested beyond the parser), and replacing the
             # whole would lose what the write did not name (3.16).
             self.response.set_status(409, "Stored value has no parts to update")
             return
-        except (TypeError, KeyError):
-            res = store
+        merge_dict(orig, store)
+        res = orig
         # Execute property put hook if available
         final_res = res
         if self.hooks:
@@ -2232,11 +2241,10 @@ class PropertiesHandler(_PropertyHandlerBase):
             return
         orig = myself.property[name] if myself and myself.property else None
         old = orig
-        try:
-            orig = json.loads(orig or "{}")
-        except (TypeError, ValueError, KeyError, RecursionError):
-            # Since /properties/something was handled above
-            # orig must be json loadable
+        # Read as every other path reads it (a byte-order mark, UTF-16 text);
+        # a value with no parts has nothing to delete under it.
+        orig = _parsed(orig) if orig else {}
+        if not isinstance(orig, dict):
             self.response.set_status(404)
             return
         if not delete_dict(orig, path[1:]):

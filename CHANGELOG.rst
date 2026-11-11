@@ -17,9 +17,10 @@ SECURITY
   ``TrustPermissionStore.update_permissions`` takes only the permission
   categories and ``notes``; identity and bookkeeping fields are refused
   and logged; the grant API sets ``created_by`` itself, and answers 400
-  for a rule whose pattern or operation keys are not lists of strings (a
-  string in their place replaced the trust type's list, dropping its base
-  exclusions).
+  for a rule whose pattern or operation keys are not lists of strings,
+  ``null`` included. Such a value already stored (or written through the
+  store API) keeps the trust type's value on merge: a string or ``null``
+  there replaced the trust type's list, dropping its base exclusions.
   **Check:** the fix stops new writes, not grants already written. On a
   host that serves actors of more than one owner, review each actor's
   overrides (``TrustPermissionStore.list_actor_permissions``) for peers it
@@ -42,7 +43,10 @@ SECURITY
   SDK write of a JSON string, and every value the developer views read
   back from storage) is filtered as the object, and handed back as text;
   text counts as JSON when a JSON client would read it as JSON (behind a
-  byte-order mark, or UTF-16 in its bytes).
+  byte-order mark, or UTF-16 in its bytes). **Behavior change:** for the
+  owner too: such text written as a whole property is stored as plain JSON
+  text, it is read back re-serialised, its parts can be read, written and
+  deleted, and property hooks receive it as an object.
   **Behavior change:** when the grant excludes anything, a kept part
   nested more than 100 levels deep (objects or arrays) is withheld from
   the peer (a direct read is 403, the name is left out of the listing and

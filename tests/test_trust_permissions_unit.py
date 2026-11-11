@@ -844,3 +844,22 @@ def test_an_update_cannot_change_whose_override_it_is() -> None:
     )
     assert stored.created_by == "system"
     assert stored.notes == "ok" and stored.methods == {"allowed": ["m"]}
+
+
+def test_a_rule_list_that_is_not_a_list_keeps_the_base_value() -> None:
+    """Re-run 9 (Issue 1): a ``null`` or a string in a rule list replaced the
+    trust type's list on merge, dropping its base exclusions; a row stored
+    before the intake check, or through the store API, is covered here."""
+    from actingweb.trust_permissions import (
+        merge_permissions,
+        permission_updates_problem,
+    )
+
+    base = {"properties": {"patterns": ["*"], "excluded_patterns": ["private/*"]}}
+    for bad in (None, "private/*", [1]):
+        merged = merge_permissions(base, {"properties": {"excluded_patterns": bad}})
+        assert merged["properties"]["excluded_patterns"] == ["private/*"]
+        assert permission_updates_problem({"properties": {"excluded_patterns": bad}})
+    merged = merge_permissions(base, {"properties": "everything"})
+    assert merged["properties"] == base["properties"]
+    assert permission_updates_problem({"properties": {"patterns": ["a"]}}) is None

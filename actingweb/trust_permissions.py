@@ -112,8 +112,12 @@ _IDENTITY_FIELDS = frozenset(
 """What it never does: an override's identity and its bookkeeping."""
 
 
-_CATEGORIES = ("properties", "methods", "actions", "tools", "resources", "prompts")
+_CATEGORIES = tuple(sorted(_EDITABLE_FIELDS - {"notes"}))
 _RULE_LIST_KEYS = ("patterns", "excluded_patterns", "operations", "allowed", "denied")
+
+
+def _is_name_list(value: Any) -> bool:
+    return isinstance(value, list) and all(isinstance(v, str) for v in value)
 
 
 def permission_updates_problem(updates: Any) -> str | None:
@@ -124,6 +128,8 @@ def permission_updates_problem(updates: Any) -> str | None:
     its base exclusions)."""
     if not isinstance(updates, dict):
         return "Permissions must be an object"
+    if updates.get("notes") is not None and not isinstance(updates["notes"], str):
+        return "notes must be text"
     for category in _CATEGORIES:
         rule = updates.get(category)
         if rule is None:
@@ -136,10 +142,7 @@ def permission_updates_problem(updates: Any) -> str | None:
         if not isinstance(rule, dict):
             return f"{category} must be an object"
         for key in _RULE_LIST_KEYS:
-            value = rule.get(key)
-            if value is not None and not (
-                isinstance(value, list) and all(isinstance(v, str) for v in value)
-            ):
+            if key in rule and not _is_name_list(rule[key]):
                 return f"{category}.{key} must be a list of strings"
     return None
 
@@ -857,6 +860,17 @@ def merge_permissions(
                 # Deep merge dictionaries
                 merged_category = merged[category].copy()
                 for key, value in overrides.items():
+                    if key in _RULE_LIST_KEYS and not _is_name_list(value):
+                        # A rule list that is not a list of names (null, a
+                        # string) keeps the base value (3.16: it replaced it,
+                        # dropping the trust type's exclusions; a row stored
+                        # before the intake check, or through the store API,
+                        # is covered here).
+                        logger.warning(
+                            f"Override {category}.{key} is not a list of names; "
+                            "the trust type's value applies"
+                        )
+                        continue
                     if (
                         merge_base
                         and key in UNION_MERGE_FIELDS
@@ -880,6 +894,13 @@ def merge_permissions(
                         # Replace: override value replaces base value
                         merged_category[key] = value
                 merged[category] = merged_category
+            elif isinstance(merged[category], dict) and not isinstance(overrides, dict):
+                # A category that is not an object cannot replace the trust
+                # type's rule (3.16: a string or list replaced it).
+                logger.warning(
+                    f"Override {category} is not an object; the trust type's "
+                    "rule applies"
+                )
             else:
                 # Replace with override
                 merged[category] = overrides

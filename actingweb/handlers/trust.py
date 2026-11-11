@@ -897,7 +897,8 @@ class TrustPeerHandler(base_handler.BaseHandler):
                 body = "{}"
             params = json.loads(body)
             if not isinstance(params, dict):
-                # 3.16: a list or scalar body raised in the lookups, a 500.
+                # 3.16: a scalar body raised in the lookups (a 500), and a list
+                # body was taken for an empty edit.
                 if self.response:
                     self.response.set_status(400, "Body must be an object")
                 return

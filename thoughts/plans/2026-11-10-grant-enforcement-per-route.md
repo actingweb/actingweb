@@ -1,6 +1,6 @@
 ---
 status: done
-verified: thoughts/verifications/2026-11-11-grant-enforcement-per-route-reverify-8.md
+verified: thoughts/verifications/2026-11-11-grant-enforcement-per-route-reverify-9.md
 ---
 
 # Implementation Plan: a peer's grant is the answer on every route
@@ -3049,3 +3049,52 @@ unit 5099 passed; DynamoDB 6554 passed; PostgreSQL 6350 passed with one
 parallel failure, `test_verification_fetch.py::TestLateAndFull::test_a_full_pool_refuses_at_once`
 (a timing test this batch does not touch), which passes alone three times
 in a row; docs build with `-W`. No wire recording changed.
+
+### 2026-11-11, after verification thoughts/verifications/2026-11-11-grant-enforcement-per-route-reverify-9.md
+
+#### 69. The merge fails closed on a mistyped rule
+
+**Category**: Bug fix (re-run 9, Issue 1)
+
+**What changed**: `merge_permissions` keeps the trust type's value when an
+override's `patterns`, `excluded_patterns`, `operations`, `allowed` or
+`denied` is not a list of strings (`null`, a string), and keeps the trust
+type's rule when an override category is not an object; both are logged.
+So a row stored before the intake check, or through the store API, can no
+longer drop the base exclusions. The intake check refuses such a key
+present with `null` too, and `notes` that is not text; its categories are
+derived from the editable fields.
+
+**Files affected**: `actingweb/trust_permissions.py`,
+`docs/guides/access-control.rst`, `CHANGELOG.rst`;
+`tests/test_trust_permissions_unit.py`
+(`test_a_rule_list_that_is_not_a_list_keeps_the_base_value`).
+
+#### 70. One strict decode; writes read as reads do; one byte-order mark
+
+**Category**: Bug fix (re-run 9, Issues 2, 3, 4, 5)
+
+**What changed**: the text branch decodes bytes once, strictly, before the
+peer filter (undecodable bytes are 404; a lenient decode on output handed a
+client an object the strict parse had not filtered). Sub-path PUT and
+DELETE read the stored value through `_parsed`, as reads do. `_client_text`
+strips no byte-order mark beyond the one the codec consumes, as
+`json.loads(bytes)`; `_parsed` parses failing text again only when it has a
+byte-order mark or NULs. The changelog gives the owner-visible
+normalisation a **Behavior change:** sentence; the guide says what an
+update ignores rather than "refuses"; the stored-text tests write the mark
+as an escape; a trust handler comment is corrected.
+
+**Files affected**: `actingweb/handlers/properties.py`,
+`actingweb/permission_evaluator.py`, `actingweb/handlers/trust.py`,
+`CHANGELOG.rst`, `docs/guides/access-control.rst`;
+`tests/test_grant_edges.py` (`test_undecodable_bytes_are_not_sent`,
+`test_sub_path_writes_read_bom_text_as_reads_do`),
+`tests/test_grant_stored_text.py`
+(`test_a_second_byte_order_mark_is_not_skipped`).
+
+#### 71. The Full tier on this batch
+
+Full tier (2026-11-11): ruff, format, pyright clean; `verify_groups` OK;
+unit 5103 passed; DynamoDB 6558 passed; PostgreSQL 6355 passed; docs build
+with `-W`. No wire recording changed.

@@ -380,7 +380,7 @@ def test_bytes_with_lone_surrogates_are_read_as_the_parser_reads_them() -> None:
 @pytest.mark.parametrize(
     "text",
     [
-        "﻿" + json.dumps(SETTINGS),
+        "\ufeff" + json.dumps(SETTINGS),
         json.dumps(SETTINGS).encode("utf-16-le").decode("latin-1"),
         json.dumps(SETTINGS).encode("utf-16-be").decode("latin-1"),
     ],
@@ -406,8 +406,16 @@ def test_a_view_does_not_let_a_peer_overwrite_bom_text_with_an_excluded_part(
     """Re-run 8 (Issue 1): the write check took BOM-prefixed JSON for text."""
     w, peer = _world()
     assert w.a.property is not None
-    w.a.property["settings"] = "﻿" + json.dumps(SETTINGS)
+    w.a.property["settings"] = "\ufeff" + json.dumps(SETTINGS)
     view = _fresh_view(w, peer)
     assert json.loads(view["settings"]) == {"theme": "x"}
     with pytest.raises(PermissionError):
         view["settings"] = "{}"
+
+
+def test_a_second_byte_order_mark_is_not_skipped() -> None:
+    """Re-run 9 (Issue 3): every leading mark was stripped; a JSON client
+    skips one and rejects the text."""
+    from actingweb.permission_evaluator import as_json_object
+
+    assert as_json_object("\ufeff\ufeff" + json.dumps(SETTINGS)) is None

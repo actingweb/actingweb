@@ -350,7 +350,9 @@ def _client_text(data: bytes) -> str | None:
         text = data.decode(json.detect_encoding(data), "surrogatepass")
     except (UnicodeDecodeError, LookupError):
         return None
-    text = text.lstrip("\ufeff")
+    # The codec consumed the one byte-order mark ``json.loads`` skips; no
+    # other is stripped (3.16: every leading one was, so text a client
+    # rejects was parsed here).
     return text if text.lstrip()[:1] in ("[", "{") else None
 
 

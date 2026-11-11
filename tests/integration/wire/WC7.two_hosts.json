@@ -1,0 +1,90 @@
+{
+ "steps": [
+  {
+   "after": {
+    "extra": {
+     "A.suspensions": [
+      [
+       "properties",
+       "y"
+      ]
+     ]
+    },
+    "publisher": {
+     "grants": {
+      "B": null
+     },
+     "queue": [],
+     "subscriptions": [],
+     "suspensions": [
+      {
+       "subtarget": "y",
+       "target": "properties"
+      }
+     ],
+     "trust": {
+      "B": null
+     }
+    },
+    "subscribers": {
+     "B": {
+      "callback_state": [],
+      "peer_permissions": null,
+      "replica": {
+       "lists": {},
+       "scalars": {}
+      },
+      "subscriptions": [],
+      "trust": null
+     }
+    }
+   },
+   "result": true,
+   "step": "A created again under its id (SDK)",
+   "wire": []
+  },
+  {
+   "after": {
+    "extra": {
+     "A.suspensions": [
+      [
+       "properties",
+       "y"
+      ]
+     ]
+    },
+    "publisher": {
+     "grants": {
+      "B": null
+     },
+     "queue": [],
+     "subscriptions": [],
+     "suspensions": [
+      {
+       "subtarget": "y",
+       "target": "properties"
+      }
+     ],
+     "trust": {
+      "B": null
+     }
+    },
+    "subscribers": {
+     "B": {
+      "callback_state": [],
+      "peer_permissions": null,
+      "replica": {
+       "lists": {},
+       "scalars": {}
+      },
+      "subscriptions": [],
+      "trust": null
+     }
+    }
+   },
+   "result": null,
+   "step": "put (SDK)",
+   "wire": []
+  }
+ ]
+}

@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: active
 ---
 
 # Implementation Plan: the subscription wire between two actors, recorded as it is today
@@ -373,31 +373,135 @@ Permissions between peers:
 
 ### Verification
 
-- [ ] Run the contract's `### Checks` fast tier verbatim
-- [ ] Run the contract's `### Checks` full tier before each commit, one run
+- [x] Run the contract's `### Checks` fast tier verbatim
+- [x] Run the contract's `### Checks` full tier before each commit, one run
       at a time, both backends
-- [ ] The first commit's `git show --stat HEAD -- tests/integration/wire` is
+- [x] The first commit's `git show --stat HEAD -- tests/integration/wire` is
       empty apart from `rows.toml`'s schema header
-- [ ] `poetry run pytest tests/ -m wire -p no:rerunfailures` passes five
+- [x] `poetry run pytest tests/ -m wire -p no:rerunfailures` passes five
       times in a row on each backend, sequentially, and once under
       `make test-all-parallel`
-- [ ] `git diff --stat master...HEAD -- actingweb examples` is empty
-- [ ] No recording the security plan made has changed
-- [ ] Sensitivity, on a scratch copy and not committed: each of these
+- [x] `git diff --stat master...HEAD -- actingweb examples` is empty
+- [x] No recording the security plan made has changed
+- [x] Sensitivity, on a scratch copy and not committed: each of these
       changes at least one recording, and the rows are noted: the `/items`
       add diff's key renamed; `callback_subscription` returning before it
       sends; the `PUT` clear made a no-op; the permission filter returning
       its input; `apply_callback_data` skipping list operations; one key
       added to the callback body
-- [ ] "Recorded outcomes" filled; the row-variant count recorded (about 65
+- [x] "Recorded outcomes" filled; the row-variant count recorded (about 65
       rows, 128 variants by the tables above)
 
 ### Recorded outcomes
 
-Filled by the first recording. Known from the spike: `WL1.target`'s scalar
-replica, `WD9` as in the table, `WD10.import`'s shape.
+Filled by the first recording (2026-11-11, DynamoDB, compared on
+PostgreSQL). **63 row variants in 122 files**, one file per row for both
+backends (no `second` file was needed). Each row's `expected` in
+`rows.toml` says what it records; that is the record, and this list keeps
+only where the recording differs from the tables above. Most differences
+come from the two security PRs (#171, #172), which landed after the tables
+were written.
 
-### Implementation Status: Not Started
+- **No exposure remains.** `WS2.subtarget` is identical to `WS1.subtarget`
+  (a subtarget diff is judged once by its name since #171, so the object's
+  keys are not filtered and no sequence is spent); `WD9`'s poll is answered
+  filtered (sequence 1 as `{}`), so `denied` never reaches B; `WP6`'s
+  baseline returns `shown` only; `WL16` sends only the subtarget's value.
+  Every row is `exposure = false`; the four rows keep their owners.
+- `WS1.subtarget`, `WS9.subtarget`: after B answers a string 400, the next
+  diff is held as pending behind the refused sequence, so the empty value
+  and the SDK delete change nothing at B.
+- `WS3.target`: `PUT p/k/j` sends A's merged `k`, which carries a key step
+  1's body dropped; `WS5.target`: `DELETE q/k` leaves B's `q` as
+  `{k: ""}`, losing its other keys.
+- `WS6.target`: three callbacks, in the order one, three, two; the two
+  no-op registrations do not show on the wire.
+- `WS7.target`: the diff carries the raw body (`blue`), and A stores the
+  hook's value as JSON text (`"\"BLUE\""`): publisher and subscriber
+  disagree. `WS9.subtarget`: the SDK set sends the hook's value (`BLUE`).
+- `WL7.target`: 2, 25 and 26 changes give the same text summary; there is
+  no threshold at 25.
+- `WL9.target`: 400, not 201; nothing is written (no stray root write).
+  Phase 3's note on `test_subscription_baseline_storage.py` depends on this.
+- `WL10.target`: the seven form routes write at A (A's listing in the
+  snapshot) and send nothing; the two `/www` deletes each send
+  `{name: ""}` (not an empty registration). The form-created empty list
+  never appears in A's listing.
+- `WL12.target`: from the first falsy append, B's replica list cannot be
+  read (`IndexError`), recorded as `read_error`.
+- `WL15.target`: `PUT /properties/list:x` answers 500 (the store refuses a
+  `list:` name), so no scalar `list:x` can be made over REST; the excluded
+  `x` is queued and not sent.
+- `WD7`: the sync fetches `/properties`, `/methods` and `/actions` after
+  the poll and clear (no profile or permission fetch). `WD20` and `WM1`'s
+  subscribe fetch the baseline, then `/properties` again, `/methods`,
+  `/actions` and `/permissions/<B>`.
+- `WQ5`: the medium callback reaches the data hook as `{}`.
+- `WP3`: deleting the grant now sends a permission callback (the plan
+  expected none) and B stores the `friend` default: not stale.
+- `WP4`: the older callback is answered 204, not stored, and no
+  permissions hook runs.
+- `WC7`: nothing is sent after the re-creation because no trust or
+  subscription survives the delete; the suspension row does.
+- `WM1`: confirmed: the second write through the same instance reaches B
+  only, and B2 keeps the old value.
+
+### Implementation notes (Phase 1)
+
+- **What the first commit needed.** The snapshot already held both sides'
+  trust rows, the grants and B's peer permissions, and `WIRE_RECORD`
+  already took row ids (the 2026-11-08 log line). The harness commit adds:
+  - an async step (`Scenario.step` runs an `async` action on its own loop
+    and drains the tasks it left);
+  - `Scenario.sort_callbacks`, opt-in for rows with several subscribers or
+    subscriptions (`WD13`, `WD14`, `WD15`): the publisher sends in
+    random-id order, so each run of sibling callbacks is sorted by the
+    receiver's name, then by subtarget and resource;
+  - the replica snapshot records a list that cannot be read
+    (`read_error`, for `WL12`) instead of failing;
+  - `wire_pair` extensions: `resource`, `add_subscriber`, `subscribe`
+    (another subscription), `deleted` (an actor the row deletes);
+  - the `transformed` property hook (`WS7`, `WS9`), and `wire_import`
+    with `"suspend": false` (`WD18`'s async append; a new method would
+    have changed `WG6`'s recorded method listing);
+  - `verify_groups.py`: the `second` key and the `Wire-Phase` trailer
+    check, each with planted-violation tests.
+- **Deviation: the `Wire-Phase` check is local only.** CI's test job
+  checks out at depth 1, so the check finds no merge base there and says
+  it was skipped. Making it run in CI means a `fetch-depth: 0` checkout in
+  that job: the owner's call, not made here.
+- **Deviation: `WC8` dropped.** `WC3` and `WC4` already record the
+  `subscription_deleted` hook and its `initiated_by_peer`. The subscriber's
+  side runs no such hook in either row, so `WC8` would add nothing.
+- **The `WL1` to `WL5` split** (the tables group them): `WL1` items add,
+  `WL2` update, `WL3` delete, `WL4` `PUT ?index=N`, `WL5` metadata; each at
+  target and subtarget level, over a two-item list B already holds.
+- `WS3` and `WS5` are recorded in both topologies (the default), so 12
+  files where the table implied 6.
+- **Stability:** five consecutive wire runs per backend, sequential, no
+  reruns: 297 passed in each (DynamoDB 3.5 to 5 min, PostgreSQL 1.5 min;
+  CI's wire step allows 10).
+- **Sensitivity** (scratch mutations of the library, reverted, over the
+  new files and `test_wire_peer_paths.py`), each turning rows red: the
+  `/items` add diff's `value` key renamed (`WL1`, 4 variants);
+  `callback_subscription` returning before it sends (almost every row);
+  the `PUT` clear a no-op (`WD7`, `WD9`, `WD12`, `WQ3`, 10 variants); the
+  permission filter returning its input (`WL15`, `WD9`: the thinnest cover,
+  since the security plans' `WA`/`WG` rows were not in this run);
+  `apply_callback_data` skipping list operations (every list row at target
+  level, `WD5`, `WD15`, `WD18`); one key added to the callback body (almost
+  every row).
+- **Full tier:** green on both backends. The first `make test-all-parallel`
+  failed once each: `WL7.target[two_hosts]` on DynamoDB (no `.actual.json`
+  left, so not a recording difference) and
+  `test_verification_fetch.py::test_a_full_pool_refuses_at_once` on
+  PostgreSQL (a library timing test); both passed three times alone and in
+  two more parallel runs per backend. Treated as load flakes; watch `WL7`.
+- `WD19` holds five callbacks within the 2 s gap timeout; it has stayed
+  inside it in every run so far, but it is the one row a slow runner could
+  push past it.
+
+### Implementation Status: Complete
 
 ---
 

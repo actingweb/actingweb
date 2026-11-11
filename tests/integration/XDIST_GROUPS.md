@@ -32,33 +32,19 @@ Feature-specific tests that logically belong together.
 
 | Group | Description | Files |
 |-------|-------------|-------|
-| `subscription_processing` | Subscription callback processing | test_subscription_processing_flow.py |
-| `subscription_suspension` | Subscription suspension mechanics | test_subscription_suspension_flow.py |
 | `subscription_callback_flows` | Subscription callback flow variations | test_subscription_callback_flows.py |
 | `wire_peer_paths` | Wire recordings over the peer paths (`wire/rows.toml`) | test_wire_peer_paths.py, test_wire_access.py, test_wire_trust.py, test_wire_grants.py, test_wire_harness.py, test_peer_state_flow.py |
 | `property_grants_flow` | A peer's grant at every level of a property | test_property_grants_flow.py |
 | `subscription_grants_flow` | Pushed and pulled diffs follow the grant at every level | test_subscription_grants_flow.py |
 | `resources_grant` | `/resources` follows the peer's grant | test_resources_grant.py |
 | `subscription_sync_dataclasses` | Subscription sync data structures | test_subscription_sync_dataclasses.py |
-| `subscription_with_peer_capabilities` | Subscriptions with peer capability discovery | test_subscription_with_peer_capabilities.py |
-| `circuit_breaker` | Circuit breaker failure handling | test_circuit_breaker_flow.py |
-| `circuit_breaker_recovery` | Circuit breaker recovery mechanisms | test_circuit_breaker_recovery.py |
-| `back_pressure` | Back pressure handling for subscriptions | test_back_pressure.py |
 | `cached_capabilities` | Capability caching behavior | test_cached_capabilities.py |
-| `callback_sequencing` | Callback sequence ordering | test_callback_sequencing.py |
 | `cleanup_verification` | Cleanup verification tests | test_cleanup_verification.py |
-| `granularity_downgrade` | Subscription granularity downgrade handling | test_granularity_downgrade.py |
-| `multiple_subscribers_suspension` | Suspension with multiple subscribers | test_multiple_subscribers_suspension.py |
 | `peer_capabilities` | Peer capability discovery | test_peer_capabilities_integration.py |
 | `peer_capabilities_subscription` | Subscription with peer capabilities | test_peer_capabilities_subscription.py |
 | `peer_profile_trust_flow` | Peer profile trust operations | test_peer_profile_trust_flow.py |
 | `property_list_collision` | Property list collision handling | test_property_list_collision.py |
-| `resync_callbacks` | Resync callback handling | test_resync_callbacks.py |
-| `resync_on_resume` | Resync on subscription resume | test_resync_on_resume.py |
-| `resync_state_handling` | Resync state management | test_resync_state_handling.py |
-| `suspension_subtarget` | Subscription subtarget suspension | test_suspension_subtarget.py |
 | `baseline_storage` | Baseline sync storage of simple and list properties | test_subscription_baseline_storage.py |
-| `list_diff_peer_replica` | `remove_where`/`update_where` list diffs delivered to a subscriber's RemotePeerStore, and a spanned item's diff skipped | test_list_diff_peer_replica.py |
 | `callback_processor_cas` | Two threads deliver one in-order callback against the real store; the handler runs once | test_callback_processor_concurrency.py |
 | `peer_profile_extraction` | Peer profile extraction during subscription sync | test_peer_profile_extraction.py |
 | `sync_coverage` | Subscription sync coverage tests (trust revocation, baseline fetch, error handling) | test_subscription_sync_coverage.py |

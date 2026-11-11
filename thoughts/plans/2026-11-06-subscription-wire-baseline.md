@@ -547,11 +547,48 @@ document:
 
 ### Verification
 
-- [ ] Run the contract's `### Checks` full tier verbatim
-- [ ] `poetry run python tests/integration/verify_groups.py` passes
-- [ ] The verification document lists every deleted class with its cover
+- [x] Run the contract's `### Checks` full tier verbatim
+- [x] `poetry run python tests/integration/verify_groups.py` passes
+- [x] The verification document lists every deleted class with its cover (the table above, for the verification to carry)
 
-### Implementation Status: Not Started
+### Implementation notes (Phase 2)
+
+Retired, each with its cover (rows in `wire/rows.toml`, unit files under
+`tests/`):
+
+| Retired | What it tested | Cover |
+| --- | --- | --- |
+| `test_subscription_suspension_flow.py`, `TestSubscriptionSuspensionFlow` | diffs while "suspended" (it posted to a route nothing serves) | `WD10`, `WD11`, `WL17`; `tests/test_subscription_suspension.py` |
+| same file, `TestResyncCallbacks` | hand-sent resync and low-granularity callbacks | `WD6`, `WD10`, `WD12`, `WD14.low` |
+| same file, `TestSubscriptionWithPeerCapabilities` | a trust's capability fields | `WD12`, `WD20`; `tests/test_peer_capabilities.py`, `tests/test_supported_options.py`, `test_peer_capabilities_integration.py` |
+| same file, `TestSuspensionWithSubtarget` | subtarget suspension (never suspended) | `WD10.import`, `WL17` |
+| same file, `TestResyncOnResume` | a hand-sent resync | `WD10`, `WD11` |
+| same file, `TestMultipleSubscribersSuspension` | one write to three subscribers | `WD13`, `WD14.high` |
+| `test_subscription_processing_flow.py`, `TestSubscriptionProcessingFlow` | in-order, duplicate, list and resync callbacks; cleanup on trust delete | `WS1.target`, `WD8`, `WL11.target`, `WD10`, `WC5`; the kept `TestCleanupOnTrustDeletion` |
+| same file, `TestCallbackSequencing` | out-of-order delivery and gaps | `WD9`, `WD19`; `tests/test_callback_processor.py` |
+| same file, `TestResyncStateHandling` | the publisher's queue after a resync | `WD9`, `WQ1` to `WQ3` |
+| same file, `TestBackPressure` | many out-of-order callbacks | `WD19`; `tests/test_callback_processor.py` |
+| `test_fanout_flow.py`, `TestGranularityDowngrade`, `TestCircuitBreakerBehavior`, `TestCircuitBreakerRecovery` | `FanOutManager` features, none on the publish path | `tests/test_fanout.py`; `WD13`, `WD14` |
+| `test_property_list_notifications.py` (integration) | seven placeholders | `WL1` to `WL8` |
+| `test_list_diff_peer_replica.py` | `remove_where`/`update_where` and a spanned item at the replica | `WL11.target`, `WL13.target` (its WARNING assertion moved there) |
+
+- Kept in `test_subscription_processing_flow.py`:
+  `TestPeerCapabilitiesInSubscriptions`, `TestPeerCapabilitiesIntegration`,
+  `TestCleanupOnTrustDeletion` (Phase 3 tightens them). The kept first
+  class of `test_fanout_flow.py` is renamed
+  `TestDiffsQueuedForSeveralSubscribers` for what it does.
+- `XDIST_GROUPS.md`: the fourteen retired groups removed (several rows
+  named files that no longer existed; Phase 4 fixes the rest of the
+  table's stale names).
+- `tests/test_property_list_notifications.py` (the unit file, which
+  `test_v2_list_mutation_committed.py` imports) is a different file and
+  stays.
+
+- Full tier green on DynamoDB; on PostgreSQL one isolation flake in
+  `test_deletions_command.py` (another run's lease), green three times
+  alone.
+
+### Implementation Status: Complete
 
 ---
 

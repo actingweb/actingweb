@@ -308,30 +308,50 @@ def as_json_object(value: Any) -> Any:
     :data:`TOO_DEEP` for text nested beyond the parser (withheld by the
     filter, not sent as text). The stores hand objects back as text, and a
     property can be written as the text of an object (3.16: the grant filter
-    walks objects only). Text that does not open an object or array is not
-    parsed."""
-    if isinstance(value, bytes):
-        # As ``json.loads`` reads bytes: a UTF-8 BOM, or UTF-16/32 (3.16: the
-        # prefix check skipped those, which the parser would have read).
-        try:
-            value = value.decode(json.detect_encoding(value), "surrogatepass")
-        except (UnicodeDecodeError, LookupError):
+    walks objects only).
+
+    Text is read as a JSON client reads it (3.16): a client parses the UTF-8
+    bytes it receives with ``json.loads(bytes)``, which skips a byte-order
+    mark and reads UTF-16/32, so such text is JSON here too (a filter that
+    took it for plain text sent the client an object it never filtered).
+    Text that opens no object or array that way is not parsed."""
+    if isinstance(value, str):
+        head = value.lstrip()[:1]
+        if head in ("[", "{") and "\x00" not in value[:4]:
+            text: str = value
+        elif head in ("\ufeff", "\x00") or "\x00" in value[:4]:
+            # What a client reads from the UTF-8 bytes of this text.
+            client = _client_text(value.encode("utf-8", "surrogatepass"))
+            if client is None:
+                return None
+            text = client
+        else:
             return None
-        value = value.lstrip("\ufeff")
-        if value.lstrip()[:1] not in ("[", "{"):
+    elif isinstance(value, bytes | bytearray):
+        client = _client_text(bytes(value))
+        if client is None:
             return None
-    elif isinstance(value, str):
-        if value.lstrip()[:1] not in ("[", "{"):
-            return None
+        text = client
     else:
         return None
     try:
-        parsed = json.loads(value)
+        parsed = json.loads(text)
     except RecursionError:
         return TOO_DEEP
     except (TypeError, ValueError):
         return None
     return parsed if isinstance(parsed, dict | list) else None
+
+
+def _client_text(data: bytes) -> str | None:
+    """``data`` decoded as ``json.loads`` decodes bytes (BOM, UTF-16/32,
+    ``surrogatepass``), when it opens an object or array; else None."""
+    try:
+        text = data.decode(json.detect_encoding(data), "surrogatepass")
+    except (UnicodeDecodeError, LookupError):
+        return None
+    text = text.lstrip("\ufeff")
+    return text if text.lstrip()[:1] in ("[", "{") else None
 
 
 def withheld(value: Any, filtered: Any) -> bool:

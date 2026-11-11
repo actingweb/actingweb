@@ -112,6 +112,38 @@ _IDENTITY_FIELDS = frozenset(
 """What it never does: an override's identity and its bookkeeping."""
 
 
+_CATEGORIES = ("properties", "methods", "actions", "tools", "resources", "prompts")
+_RULE_LIST_KEYS = ("patterns", "excluded_patterns", "operations", "allowed", "denied")
+
+
+def permission_updates_problem(updates: Any) -> str | None:
+    """Why ``updates`` (a grant edit from a request) cannot be stored, or
+    None (3.16). An edit is an object; each permission category is an object
+    or null; a rule's pattern and operation keys are lists of strings (a
+    string in their place replaced the trust type's list on merge, dropping
+    its base exclusions)."""
+    if not isinstance(updates, dict):
+        return "Permissions must be an object"
+    for category in _CATEGORIES:
+        rule = updates.get(category)
+        if rule is None:
+            continue
+        if category == "properties" and isinstance(rule, list):
+            # The shorthand list of property names.
+            if not all(isinstance(item, str) for item in rule):
+                return "properties must be names"
+            continue
+        if not isinstance(rule, dict):
+            return f"{category} must be an object"
+        for key in _RULE_LIST_KEYS:
+            value = rule.get(key)
+            if value is not None and not (
+                isinstance(value, list) and all(isinstance(v, str) for v in value)
+            ):
+                return f"{category}.{key} must be a list of strings"
+    return None
+
+
 def is_client_peer(peer_id: str) -> bool:
     """An OAuth2/MCP client's peer id (``oauth2_client:...``), the rows a
     client authorisation creates and re-types (3.16)."""

@@ -375,3 +375,39 @@ def test_bytes_with_lone_surrogates_are_read_as_the_parser_reads_them() -> None:
 
     parsed = as_json_object(b'{"private":"s","x":"\xed\xa0\x80"}')
     assert isinstance(parsed, dict) and parsed["private"] == "s"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "﻿" + json.dumps(SETTINGS),
+        json.dumps(SETTINGS).encode("utf-16-le").decode("latin-1"),
+        json.dumps(SETTINGS).encode("utf-16-be").decode("latin-1"),
+    ],
+)
+def test_text_a_json_client_reads_as_an_object_is_one_everywhere(text: str) -> None:
+    """Re-run 8 (Issue 1): only the direct read handled a byte-order mark;
+    the diff, the full state, the views and the write check took such text
+    (and UTF-16 in its bytes, which ``response.json()`` reads) for plain
+    text and sent or overwrote it unfiltered."""
+    from actingweb.handlers.properties import _parsed
+    from actingweb.permission_evaluator import as_json_object
+
+    rules = {"patterns": ["*"], "excluded_patterns": ["settings/private"]}
+    assert as_json_object(text) == SETTINGS
+    assert _parsed(text) == SETTINGS
+    assert json.loads(Actor._diff_part(rules, "settings", text)) == {"theme": "x"}
+    assert as_json_object("plain") is None and _parsed("plain") == "plain"
+
+
+def test_a_view_does_not_let_a_peer_overwrite_bom_text_with_an_excluded_part(
+    actor: Any,
+) -> None:
+    """Re-run 8 (Issue 1): the write check took BOM-prefixed JSON for text."""
+    w, peer = _world()
+    assert w.a.property is not None
+    w.a.property["settings"] = "﻿" + json.dumps(SETTINGS)
+    view = _fresh_view(w, peer)
+    assert json.loads(view["settings"]) == {"theme": "x"}
+    with pytest.raises(PermissionError):
+        view["settings"] = "{}"

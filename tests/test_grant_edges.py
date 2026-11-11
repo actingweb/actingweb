@@ -490,7 +490,7 @@ def test_json_text_a_peer_s_client_reads_as_json_is_filtered() -> None:
     hook's object text, went out raw as JSON, unfiltered; a client reads it
     as the object (httpx did, with the key the grant excludes)."""
     secret = json.dumps({"name": "n", "ssn": "x"})
-    handler = _peer_get({"profile": "﻿" + secret}, "profile")
+    handler = _peer_get({"profile": "\ufeff" + secret}, "profile")
     assert handler.response.status_code == 200
     assert json.loads(handler.response.body) == {"name": "n"}
     handler = _peer_get(

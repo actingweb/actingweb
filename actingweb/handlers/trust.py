@@ -12,7 +12,7 @@ from ..db import get_actor
 from ..db.creator_rules import is_refused_from_callers, normalise_creator
 from ..db.exceptions import CreatorTaken, DbError
 from ..secret_compare import secret_equals
-from ..trust_permissions import override_applies
+from ..trust_permissions import override_applies, permission_updates_problem
 
 # Import permission system with fallback
 try:
@@ -896,6 +896,11 @@ class TrustPeerHandler(base_handler.BaseHandler):
             elif body is None:
                 body = "{}"
             params = json.loads(body)
+            if not isinstance(params, dict):
+                # 3.16: a list or scalar body raised in the lookups, a 500.
+                if self.response:
+                    self.response.set_status(400, "Body must be an object")
+                return
             if "baseuri" in params:
                 baseuri = params["baseuri"]
             else:
@@ -909,12 +914,16 @@ class TrustPeerHandler(base_handler.BaseHandler):
                     approved = True
 
             # Handle permission updates
-            if "permissions" in params and PERMISSION_SYSTEM_AVAILABLE:
+            if params.get("permissions") is not None and PERMISSION_SYSTEM_AVAILABLE:
+                # ``null`` is no change: the trust GET answers it for a row
+                # without an override, and a client sends it back.
                 permission_updates = params["permissions"]
-                if not isinstance(permission_updates, dict):
-                    # 3.16: a list or scalar failed in the store, a 500.
+                problem = permission_updates_problem(permission_updates)
+                if problem:
+                    # 3.16: a list or scalar failed in the store, a 500, and a
+                    # mistyped rule was stored.
                     if self.response:
-                        self.response.set_status(400, "permissions must be an object")
+                        self.response.set_status(400, problem)
                     return
         except (ValueError, RecursionError):
             if not self.request.get("_method") or self.request.get("_method") != "PUT":
@@ -1509,10 +1518,12 @@ class TrustPermissionHandler(base_handler.BaseHandler):
             elif body is None:
                 body = "{}"
             params = json.loads(body)
-            if not isinstance(params, dict):
-                # 3.16: a list or scalar failed in the store, a 500.
+            problem = permission_updates_problem(params)
+            if problem:
+                # 3.16: a list or scalar failed in the store, a 500, and a
+                # mistyped rule was stored.
                 if self.response:
-                    self.response.set_status(400, "Permissions must be an object")
+                    self.response.set_status(400, problem)
                 return
 
             # The trust exists with the path's type (one row, as the GET)

@@ -1,6 +1,6 @@
 ---
 status: done
-verified: thoughts/verifications/2026-11-11-grant-enforcement-per-route-reverify-7.md
+verified: thoughts/verifications/2026-11-11-grant-enforcement-per-route-reverify-8.md
 ---
 
 # Implementation Plan: a peer's grant is the answer on every route
@@ -2996,3 +2996,56 @@ re-run follows below.
 Re-run after dropping the stamp: unit 5093 passed; DynamoDB 6548 passed;
 PostgreSQL 6345 passed; docs build with `-W`; ruff, format, pyright clean;
 `verify_groups` OK. No wire recording changed.
+
+### 2026-11-11, after verification thoughts/verifications/2026-11-11-grant-enforcement-per-route-reverify-8.md
+
+#### 66. Text is JSON when a JSON client reads it as JSON, everywhere
+
+**Category**: Bug fix (re-run 8, Issues 1, 4)
+
+**What changed**: `as_json_object` reads a string as a client reads its
+UTF-8 bytes (`json.loads(bytes)`: a byte-order mark skipped, UTF-16/32
+read), with a fast path for text that opens an object or array; `_parsed`
+falls back to it. So the direct read, the listing, the write check, diffs,
+the full state and the views agree: such text is the object, filtered as
+one, and a peer cannot overwrite one holding an excluded part (entry 62
+handled a byte-order mark on the direct read only). The text branch's own
+strip is gone; bytes are written as text to the owner (they were a 404).
+
+**Files affected**: `actingweb/permission_evaluator.py`,
+`actingweb/handlers/properties.py`, `CHANGELOG.rst`;
+`tests/test_grant_stored_text.py`
+(`test_text_a_json_client_reads_as_an_object_is_one_everywhere`, three
+encodings; `test_a_view_does_not_let_a_peer_overwrite_bom_text_with_an_excluded_part`),
+`tests/test_grant_edges.py` (the BOM written as an escape).
+
+#### 67. Grant edits: bodies, `null`, and rule types
+
+**Category**: Bug fix (re-run 8, Issues 2, 3, 5, 6)
+
+**What changed**: one check, `trust_permissions.permission_updates_problem`,
+on both edit paths: an edit is an object; a category is an object (or the
+`properties` shorthand list of names) or null; its `patterns`,
+`excluded_patterns`, `operations`, `allowed` and `denied` are lists of
+strings; 400 otherwise (a string there replaced the base list on merge,
+dropping the trust type's exclusions). In the trust PUT, `"permissions":
+null` is no change again (entry 63 answered 400, which broke a client
+echoing the trust GET), and a body that is not an object is 400 (500). The
+access-control guide's examples and the changelog say what the grant API
+takes and sets.
+
+**Files affected**: `actingweb/trust_permissions.py`,
+`actingweb/handlers/trust.py`, `docs/guides/access-control.rst`,
+`CHANGELOG.rst`; `tests/test_client_trust_update.py`
+(`test_the_trust_put_s_body_and_permissions`,
+`test_the_permissions_put_refuses_a_mistyped_rule_and_a_wrong_type`),
+`tests/integration/test_property_grants_flow.py` (the list DELETE case
+goes one level deeper, where it raised).
+
+#### 68. The Full tier on this batch
+
+Full tier (2026-11-11): ruff, format, pyright clean; `verify_groups` OK;
+unit 5099 passed; DynamoDB 6554 passed; PostgreSQL 6350 passed with one
+parallel failure, `test_verification_fetch.py::TestLateAndFull::test_a_full_pool_refuses_at_once`
+(a timing test this batch does not touch), which passes alone three times
+in a row; docs build with `-W`. No wire recording changed.

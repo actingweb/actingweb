@@ -345,6 +345,6 @@ def test_writes_over_text_beyond_the_parser(world: World) -> None:
     assert text.text == "plain"
     # Re-run 7 (Issue 4): a sub-path DELETE on a list or scalar was a 500.
     core.property["n"] = "5"
-    for name in ("n", "a_list"):
-        r = requests.delete(f"{world.a['url']}/properties/{name}/x", auth=world.owner)
+    for path in ("n/x", "a_list/x/y"):
+        r = requests.delete(f"{world.a['url']}/properties/{path}", auth=world.owner)
         assert r.status_code == 404

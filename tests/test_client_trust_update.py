@@ -570,3 +570,53 @@ def test_a_failed_restore_is_not_reported_as_nothing_changed() -> None:
     ):
         handler.put(aid(w.actor), "viewer", peer)
     assert handler.response.status_code == 500
+
+
+def _trust_put(w: World, peer: str, body: Any) -> Any:
+    import json as _json
+
+    from actingweb.aw_web_request import AWWebObj
+    from actingweb.handlers.trust import TrustPeerHandler
+
+    handler = TrustPeerHandler(AWWebObj(body=_json.dumps(body)), w.config)
+    auth = mock.Mock(acl={"peerid": "", "relationship": "creator"})
+    result = mock.Mock(success=True, actor=w.actor, auth_obj=auth)
+    result.authorize.return_value = True
+    with mock.patch.object(handler, "authenticate_actor", return_value=result):
+        handler.put(aid(w.actor), "viewer", peer)
+    return handler
+
+
+def test_the_trust_put_s_body_and_permissions() -> None:
+    """Re-run 8 (Issues 2, 6): ``"permissions": null`` (what the trust GET
+    answers) is no change, not 400; a body or grant that is not an object,
+    or a rule key that is not a list, is 400 (a 500, or stored)."""
+    w = World()
+    assert w.authorise("viewer")
+    peer = str(w.row()["peerid"])
+    assert (
+        _trust_put(w, peer, {"desc": "d", "permissions": None}).response.status_code
+        == 204
+    )
+    assert _trust_put(w, peer, [1]).response.status_code == 400
+    assert _trust_put(w, peer, {"permissions": [1]}).response.status_code == 400
+    bad = {"permissions": {"properties": {"excluded_patterns": "private/*"}}}
+    assert _trust_put(w, peer, bad).response.status_code == 400
+
+
+def test_the_permissions_put_refuses_a_mistyped_rule_and_a_wrong_type() -> None:
+    """Re-run 8 (Issues 3, 6): a string where a list goes replaced the base
+    exclusions on merge; the path's type must be the row's (one-row read)."""
+    w = World()
+    assert w.authorise("viewer")
+    peer = str(w.row()["peerid"])
+    handler, result = _owner_handler(
+        w, {"properties": {"excluded_patterns": "private/*"}}
+    )
+    with mock.patch.object(handler, "authenticate_actor", return_value=result):
+        handler.put(aid(w.actor), "viewer", peer)
+    assert handler.response.status_code == 400
+    handler, result = _owner_handler(w, {"properties": ["a"]})
+    with mock.patch.object(handler, "authenticate_actor", return_value=result):
+        handler.put(aid(w.actor), "friend", peer)
+    assert handler.response.status_code == 404

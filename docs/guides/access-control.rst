@@ -672,7 +672,7 @@ Response includes permission overrides if they exist:
        "properties": {"allowed": ["notes/*"], "denied": ["private/*"]},
        "methods": {"allowed": ["get_*", "list_*"]},
        "tools": {"allowed": ["search", "create_note"]},
-       "created_by": "admin",
+       "created_by": "system",
        "notes": "Custom permissions for this relationship"
      }
    }
@@ -740,8 +740,8 @@ Response:
        "patterns": ["notes://*", "public://*"],
        "operations": ["read"]
      },
-     "created_by": "admin",
-     "updated_at": "2024-01-15T10:30:00Z",
+     "created_by": "system",
+     "updated_at": null,
      "notes": "Custom permissions for enhanced access"
    }
 
@@ -767,6 +767,15 @@ Create or update permission overrides for a trust relationship:
      },
      "notes": "Enhanced permissions for trusted partner"
    }
+
+Only the permission categories and ``notes`` are taken from the body
+(3.16). ``actor_id``, ``peer_id``, ``trust_type``, ``created_by`` and
+``updated_at`` belong to the store: a create sets them, an update refuses
+them. A category is an object (``properties`` may also be a list of names),
+and its ``patterns``, ``excluded_patterns``, ``operations``, ``allowed`` and
+``denied`` are lists of strings; anything else answers 400. In a ``PUT
+/trust/{relationship}/{peerid}`` body, ``"permissions": null`` changes
+nothing.
 
 **DELETE /trust/{relationship}/{peerid}/permissions**
 

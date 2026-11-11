@@ -280,7 +280,11 @@ def _parsed(value: Any) -> Any:
         except RecursionError:
             return TOO_DEEP
         except (TypeError, ValueError):
-            return value
+            # Text a JSON client reads as an object or array (behind a
+            # byte-order mark, UTF-16 in its bytes) is one here too: the
+            # read, the write check and the filter agree on it (3.16).
+            as_object = as_json_object(value)
+            return value if as_object is None else as_object
     return value
 
 
@@ -748,9 +752,7 @@ class PropertiesHandler(_PropertyHandlerBase):
                 # (3.16): stored text behind a byte-order mark, or a hook's
                 # object text, went out raw as an object, unfiltered.
                 if isinstance(value, str | bytes):
-                    as_object = as_json_object(
-                        value.lstrip("\ufeff") if isinstance(value, str) else value
-                    )
+                    as_object = as_json_object(value)
                     if as_object is TOO_DEEP:
                         if self.response:
                             self.response.set_status(403, "Forbidden")
@@ -764,7 +766,12 @@ class PropertiesHandler(_PropertyHandlerBase):
                     return
                 value = filtered
             try:
-                out = value if isinstance(value, str) else json.dumps(value)
+                if isinstance(value, bytes):
+                    out = value.decode("utf-8", "replace")
+                elif isinstance(value, str):
+                    out = value
+                else:
+                    out = json.dumps(value)
             except (TypeError, ValueError):
                 if self.response:
                     self.response.set_status(404)

@@ -16,7 +16,10 @@ SECURITY
   level at another actor. **Behavior change:**
   ``TrustPermissionStore.update_permissions`` takes only the permission
   categories and ``notes``; identity and bookkeeping fields are refused
-  and logged, and the store sets ``created_by`` itself.
+  and logged; the grant API sets ``created_by`` itself, and answers 400
+  for a rule whose pattern or operation keys are not lists of strings (a
+  string in their place replaced the trust type's list, dropping its base
+  exclusions).
   **Check:** the fix stops new writes, not grants already written. On a
   host that serves actors of more than one owner, review each actor's
   overrides (``TrustPermissionStore.list_actor_permissions``) for peers it
@@ -37,7 +40,9 @@ SECURITY
   list's grant; a bulk ``POST`` is validated and authorised whole and
   refused whole. An object stored or written as JSON text (a form post, an
   SDK write of a JSON string, and every value the developer views read
-  back from storage) is filtered as the object, and handed back as text.
+  back from storage) is filtered as the object, and handed back as text;
+  text counts as JSON when a JSON client would read it as JSON (behind a
+  byte-order mark, or UTF-16 in its bytes).
   **Behavior change:** when the grant excludes anything, a kept part
   nested more than 100 levels deep (objects or arrays) is withheld from
   the peer (a direct read is 403, the name is left out of the listing and

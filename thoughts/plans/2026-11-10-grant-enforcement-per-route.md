@@ -1,6 +1,6 @@
 ---
 status: done
-verified: thoughts/verifications/2026-11-11-grant-enforcement-per-route-reverify-4.md
+verified: thoughts/verifications/2026-11-11-grant-enforcement-per-route-reverify-5.md
 ---
 
 # Implementation Plan: a peer's grant is the answer on every route
@@ -2789,4 +2789,72 @@ no longer claims the peer's sync re-creates subscriptions.
 
 Full tier (2026-11-11): ruff, format, pyright clean; `verify_groups` OK;
 unit 5078 passed; DynamoDB 6533 passed; PostgreSQL 6330 passed; docs build
+with `-W`. No wire recording changed.
+
+### 2026-11-11, after verification thoughts/verifications/2026-11-11-grant-enforcement-per-route-reverify-5.md
+
+#### 52. The owner's edit replaces an override that does not apply
+
+**Category**: Bug fix (re-run 5, Issue 1)
+
+**What changed**: both edit paths (`PUT /trust/<rel>/<peer>` with
+`permissions`, `PUT .../permissions`) replace a client override that does
+not apply with a fresh one holding only the owner's edit, for the row's
+type (entry 49 merged into it and re-stamped it, so its other fields,
+never shown to the owner, came into force).
+
+**Files affected**: `actingweb/handlers/trust.py`, `docs/migration/v3.16.rst`;
+`tests/test_client_trust_update.py`
+(`test_the_owner_s_edit_of_a_stale_client_override_applies` now holds a
+field outside the edit).
+
+#### 53. The re-type fails closed on an unread override; the row is read fresh
+
+**Category**: Bug fix (re-run 5, Issues 2, 4)
+
+**What changed**: a read fault in the pre-write cleanup answers
+`_UNKNOWN_OVERRIDE`, and a re-type refuses on it (it read as "none left");
+the cleanup reads the row itself before the write. `GET
+/trust/<type>/<peer>/permissions` answers 404 unless `<type>` is the
+row's, as the PUT does.
+
+**Files affected**: `actingweb/interface/trust_manager.py`,
+`actingweb/handlers/trust.py`; `tests/test_client_trust_update.py`
+(`test_a_read_fault_before_the_re_type_issues_no_code`,
+`test_the_permissions_get_answers_only_for_the_row_s_type`).
+
+#### 54. Bodies, list items, plain text and bytes
+
+**Category**: Bug fix (re-run 5, Issues 3, 5, 6)
+
+**What changed**: a list item `PUT ?index=` refuses a body beyond the
+parser with 400 (it stored it as text, and list items are not filtered);
+the other routes' body parses (callbacks, subscriptions, resources, trust)
+treat it as invalid JSON. A direct read of plain text is 404 for a
+sub-path and runs the read hook, as the listing does (**Behavior change**,
+in the changelog). The PUT parses its body once. `as_json_object` decodes
+bytes as `json.loads` does before its prefix check.
+
+**Files affected**: `actingweb/handlers/properties.py`, `callbacks.py`,
+`subscription.py`, `resources.py`, `trust.py`,
+`actingweb/permission_evaluator.py`, `CHANGELOG.rst`;
+`tests/test_grant_edges.py`
+(`test_plain_text_has_no_parts_and_the_read_hook_decides_it`,
+`test_a_list_item_body_beyond_the_parser_is_400`),
+`tests/test_grant_stored_text.py`
+(`test_bytes_are_read_as_the_parser_reads_them`).
+
+#### 55. Accepted, with the reason
+
+- **Re-run 5, Issue 7** (`is_client_peer` by prefix, `_is_client_row` also
+  by `established_via`): only `oauth2_client:` rows are created and
+  re-typed by a client authorisation, so only they can hold an override for
+  another type; a row without the prefix is never re-typed.
+- **`_parsed` and `as_json_object`** overlap but answer different questions
+  (any JSON value; only objects and arrays).
+
+#### 56. The Full tier on this batch
+
+Full tier (2026-11-11): ruff, format, pyright clean; `verify_groups` OK;
+unit 5083 passed; DynamoDB 6538 passed; PostgreSQL 6335 passed; docs build
 with `-W`. No wire recording changed.

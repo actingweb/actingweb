@@ -163,7 +163,7 @@ class TrustHandler(base_handler.BaseHandler):
                 relationship = params["relationship"]
             if "desc" in params:
                 desc = params["desc"]
-        except ValueError:
+        except (ValueError, RecursionError):
             url = self.request.get("url")
             relationship = self.request.get("relationship")
         if len(url) == 0:
@@ -290,7 +290,7 @@ class TrustRelationshipHandler(base_handler.BaseHandler):
                 creator = params["creator"]
             else:
                 creator = None
-        except ValueError:
+        except (ValueError, RecursionError):
             if self.response:
                 self.response.set_status(400, "No json content")
             return
@@ -438,7 +438,7 @@ class TrustRelationshipHandler(base_handler.BaseHandler):
                 verification_token = params["verify"]
             else:
                 verification_token = None
-        except ValueError:
+        except (ValueError, RecursionError):
             if self.response:
                 self.response.set_status(400, "No json content")
             return
@@ -769,7 +769,7 @@ class TrustPeerHandler(base_handler.BaseHandler):
             if "approved" in params:
                 if params["approved"] and params["approved"] is True:
                     peer_approved = True
-        except ValueError:
+        except (ValueError, RecursionError):
             if self.response:
                 self.response.set_status(400, "No json content")
             return
@@ -911,7 +911,7 @@ class TrustPeerHandler(base_handler.BaseHandler):
             # Handle permission updates
             if "permissions" in params and PERMISSION_SYSTEM_AVAILABLE:
                 permission_updates = params["permissions"]
-        except ValueError:
+        except (ValueError, RecursionError):
             if not self.request.get("_method") or self.request.get("_method") != "PUT":
                 if self.response:
                     self.response.set_status(400, "No json content")
@@ -1047,15 +1047,13 @@ class TrustPeerHandler(base_handler.BaseHandler):
             try:
                 # Stored silently: the peer is told once the trust write
                 # landed (below), never of a grant a failed write rolls back.
-                if previous_override:
-                    if not override_applies(previous_override, peerid, relationship):
-                        # A client's override for another type is not
-                        # applied: the edit is written for the row's type,
-                        # so it is (3.16; it kept the stale type).
-                        permission_updates = {
-                            **permission_updates,
-                            "trust_type": relationship,
-                        }
+                # A client's override for another type is not applied (and
+                # not shown): the edit replaces it with one holding only what
+                # the owner wrote, for the row's type (3.16: merged into it,
+                # its unseen fields would have applied too).
+                if previous_override and override_applies(
+                    previous_override, peerid, relationship
+                ):
                     permissions_updated = permission_store.update_permissions(
                         actor_id, peerid, permission_updates, notify_peer=False
                     )
@@ -1362,6 +1360,15 @@ class TrustPermissionHandler(base_handler.BaseHandler):
             return
 
         try:
+            # The path's type must be the row's, as the PUT requires (3.16):
+            # what applies is decided by the row's type.
+            myself = auth_result.actor
+            if not myself or not myself.get_trust_relationships(
+                relationship=relationship, peerid=peerid
+            ):
+                if self.response:
+                    self.response.set_status(404, "Trust relationship not found")
+                return
             permission_store = get_trust_permission_store(self.config)
             custom_permissions = permission_store.get_permissions(actor_id, peerid)
             if not override_applies(custom_permissions, peerid, relationship):
@@ -1496,12 +1503,16 @@ class TrustPermissionHandler(base_handler.BaseHandler):
             permission_store = get_trust_permission_store(self.config)
             existing_permissions = permission_store.get_permissions(actor_id, peerid)
 
+            # A client's override for another type is not applied (and not
+            # shown): it is replaced by one holding only this edit, for the
+            # row's type (3.16: merged into it, its unseen fields would have
+            # applied too).
+            if existing_permissions and not override_applies(
+                existing_permissions, peerid, relationship
+            ):
+                existing_permissions = None
             if existing_permissions:
-                # Update existing permissions (a client's override for
-                # another type is written for the row's type, so it is
-                # applied; 3.16)
-                if not override_applies(existing_permissions, peerid, relationship):
-                    params = {**params, "trust_type": relationship}
+                # Update existing permissions
                 success = permission_store.update_permissions(actor_id, peerid, params)
                 if success:
                     self.response.set_status(200, "Updated")

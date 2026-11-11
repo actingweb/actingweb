@@ -328,7 +328,7 @@ class CallbacksHandler(base_handler.BaseHandler):
                 else:
                     body_str = body
                 params = json.loads(body_str)
-            except (TypeError, ValueError, KeyError):
+            except (TypeError, ValueError, KeyError, RecursionError):
                 self.response.set_status(400, "Error in json body")
                 return
             if not isinstance(params, dict) or not isinstance(
@@ -589,7 +589,7 @@ class CallbacksHandler(base_handler.BaseHandler):
                     else:
                         body_str = body
                     params = json.loads(body_str)
-                except (TypeError, ValueError, KeyError):
+                except (TypeError, ValueError, KeyError, RecursionError):
                     self.response.set_status(400, "Error in json body")
                     return
                 if not isinstance(params, dict):
@@ -676,7 +676,7 @@ class CallbacksHandler(base_handler.BaseHandler):
                     else:
                         body_str = body
                     hook_data = json.loads(body_str)
-                except (TypeError, ValueError, KeyError):
+                except (TypeError, ValueError, KeyError, RecursionError):
                     hook_data = {}
 
                 hook_data["method"] = method

@@ -311,7 +311,14 @@ def as_json_object(value: Any) -> Any:
     walks objects only). Text that does not open an object or array is not
     parsed."""
     if isinstance(value, bytes):
-        if value.lstrip()[:1] not in (b"[", b"{"):
+        # As ``json.loads`` reads bytes: a UTF-8 BOM, or UTF-16/32 (3.16: the
+        # prefix check skipped those, which the parser would have read).
+        try:
+            value = value.decode(json.detect_encoding(value))
+        except (UnicodeDecodeError, LookupError):
+            return None
+        value = value.lstrip("\ufeff")
+        if value.lstrip()[:1] not in ("[", "{"):
             return None
     elif isinstance(value, str):
         if value.lstrip()[:1] not in ("[", "{"):

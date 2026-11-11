@@ -35,7 +35,11 @@ SECURITY
   of diffs); the owner reads it as stored. A sub-path ``PUT`` into such a
   value answers 409 (it cannot be merged into; replacing the whole would
   lose what the write did not name), and a request body nested beyond the
-  parser answers 400 (both answered 500). A
+  parser answers 400 on every route (both answered 500; a list item
+  ``PUT ?index=`` stored such a body as text). **Behavior change:** a direct
+  ``GET /properties/<name>`` of a plain-text value runs the property's read
+  hook, as the listing does (a hook answering ``None`` is 404), and a
+  sub-path of plain text is 404 (it answered the whole text). A
   peer gets 403 for a list it may not write whether it exists or not
   (``PUT ?index=`` and a bulk ``items`` write answered 404/400 for a
   missing one first). ``docs/migration/v3.16.rst`` ("Grants hold at every
@@ -943,9 +947,11 @@ CHANGED
   down); a client's permission override that names a type other than its
   row's is not applied and is deleted at authorisation (a removal that
   fails is logged and retried; it refuses only an approval of the
-  override's own type, which would bring it back); the owner's edit of
-  such an override writes the row's type, and the permissions views show
-  only an override that applies;
+  override's own type, which would bring it back, or when the override
+  cannot be read); the owner's edit of such an override replaces it with
+  one holding only that edit; the permissions views show only an override
+  that applies, and ``GET /trust/<type>/<peer>/permissions`` answers 404
+  unless ``<type>`` is the row's type;
   MCP caches of the process are evicted (other processes until their cache
   TTL). The default selected
   level is the client default (``mcp_client``), not the first registered

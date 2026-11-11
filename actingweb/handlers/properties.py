@@ -727,8 +727,35 @@ class PropertiesHandler(_PropertyHandlerBase):
                 return
             out = lookup
         elif jsonblob is lookup:
-            # Not JSON: the text as stored.
+            # Not JSON: the text as stored. It has no parts (a sub-path is
+            # 404), and the read hook decides it as it decides it in the
+            # listing (3.16: a hook's refusal was skipped here).
+            if len(path) > 1:
+                if self.response:
+                    self.response.set_status(404)
+                return
             out = lookup
+            if self.hooks:
+                actor_interface = self._get_actor_interface(myself)
+                if actor_interface:
+                    auth_context = self._create_auth_context(check, "read")
+                    transformed = self._run_hooks(
+                        name or "*", "get", actor_interface, lookup, [], auth_context
+                    )
+                    if transformed is None:
+                        if self.response:
+                            self.response.set_status(404)
+                        return
+                    if transformed is not lookup:
+                        if peer_of(check) and beyond_parser(transformed):
+                            if self.response:
+                                self.response.set_status(403, "Forbidden")
+                            return
+                        out = (
+                            transformed
+                            if isinstance(transformed, str)
+                            else json.dumps(transformed)
+                        )
         else:
             try:
                 out = jsonblob
@@ -1061,7 +1088,13 @@ class PropertiesHandler(_PropertyHandlerBase):
 
             try:
                 item_value = json.loads(body)
-            except (TypeError, ValueError, KeyError, RecursionError):
+            except RecursionError:
+                # Nested beyond the parser: never stored as text (a list's
+                # items are not walked by the grant filter), 400 (3.16).
+                if self.response:
+                    self.response.set_status(400, "Body nested too deep")
+                return
+            except (TypeError, ValueError, KeyError):
                 item_value = body
 
             # Get the list property and set the item at the specified index
@@ -1223,12 +1256,9 @@ class PropertiesHandler(_PropertyHandlerBase):
                 old = json.loads(old or "{}")
             except (TypeError, ValueError, KeyError, RecursionError):
                 old = {}
-            try:
-                new_body = json.loads(body)
-                is_json = True
-            except (TypeError, ValueError, KeyError, RecursionError):
-                new_body = body
-                is_json = False
+            # Parsed once above (``incoming``): JSON, or the text as sent.
+            is_json = incoming is not body
+            new_body = incoming
             # Execute property put hook if available
             new = new_body
             if self.hooks:
@@ -1263,10 +1293,7 @@ class PropertiesHandler(_PropertyHandlerBase):
         # Keep text blob for later diff registration
         blob = body
         # Make store var to be merged with original struct
-        try:
-            body = json.loads(body)
-        except (TypeError, ValueError, KeyError, RecursionError):
-            pass
+        body = incoming  # parsed once above
         store = {path[len(path) - 1]: body}
         # Make store to be at same level as orig value
         i = len(path) - 2

@@ -356,3 +356,75 @@ def test_touches_excluded_beyond_the_parser() -> None:
         handler._decision = mock.Mock(snapshot=snapshot)
         assert handler._touches_excluded(myself, ["deep", "x"], 1) is refused
         assert handler._touches_excluded(myself, ["color"], TOO_DEEP) is refused
+
+
+def _get_handler(stored: dict[str, Any], hook: Any = None) -> tuple[Any, Any]:
+    from actingweb.aw_web_request import AWWebObj
+    from actingweb.handlers.properties import PropertiesHandler
+
+    myself = mock.Mock()
+    myself.property = stored
+    auth = mock.Mock()
+    auth.acl = {"peerid": ""}
+    result = mock.Mock(success=True, actor=myself, auth_obj=auth)
+    handler = PropertiesHandler(AWWebObj(params={}), mock.Mock())
+    handler.hooks = None
+    if hook is not None:
+        handler.hooks = mock.Mock()
+        handler.hooks.execute_property_hooks.side_effect = hook
+    return handler, result
+
+
+def _run_get(handler: Any, result: Any, name: str) -> None:
+    with (
+        mock.patch.object(handler, "authenticate_actor", return_value=result),
+        mock.patch.object(handler, "_check_property_permission", return_value=True),
+        mock.patch.object(handler, "_list_tail_allowed", return_value=True),
+        mock.patch.object(handler, "_get_actor_interface", return_value=mock.Mock()),
+    ):
+        handler.get("a1", name)
+
+
+def test_plain_text_has_no_parts_and_the_read_hook_decides_it() -> None:
+    """Re-run 5 (Issue 5): a direct read of plain text answered the whole
+    text for any sub-path and skipped the read hook, which the listing runs:
+    a hook withholding the property hid it from the listing only."""
+    handler, result = _get_handler({"email": "a@example.test"})
+    _run_get(handler, result, "email/x")
+    assert handler.response.status_code == 404
+    handler, result = _get_handler(
+        {"email": "a@example.test"}, hook=lambda name, *a, **k: None
+    )
+    _run_get(handler, result, "email")
+    assert handler.response.status_code == 404
+    handler, result = _get_handler(
+        {"email": "a@example.test"}, hook=lambda name, *a, **k: "redacted"
+    )
+    _run_get(handler, result, "email")
+    assert handler.response.status_code == 200
+    assert handler.response.body == "redacted"
+
+
+def test_a_list_item_body_beyond_the_parser_is_400() -> None:
+    """Re-run 5 (Issue 3): ``PUT ?index=`` stored such a body as text, and
+    list items are not walked by the grant filter."""
+    from actingweb.aw_web_request import AWWebObj
+    from actingweb.handlers.properties import PropertiesHandler
+
+    deep = "[" * 200_000 + "]" * 200_000
+    myself = mock.Mock()
+    myself.property = {}
+    myself.property_lists.exists.return_value = True
+    auth = mock.Mock()
+    auth.acl = {"peerid": ""}
+    result = mock.Mock(success=True, actor=myself, auth_obj=auth)
+    result.authorize.return_value = True
+    handler = PropertiesHandler(AWWebObj(body=deep, params={"index": "0"}), mock.Mock())
+    handler.hooks = None
+    with (
+        mock.patch.object(handler, "authenticate_actor", return_value=result),
+        mock.patch.object(handler, "_check_property_permission", return_value=True),
+        mock.patch.object(handler, "_list_tail_allowed", return_value=True),
+    ):
+        handler.put("a1", "notes")
+    assert handler.response.status_code == 400

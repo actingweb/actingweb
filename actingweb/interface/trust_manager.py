@@ -137,6 +137,11 @@ class TrustRelationship:
 
 logger = logging.getLogger(__name__)
 
+_UNKNOWN_OVERRIDE = "\x00unknown"
+"""``_clean_client_override``'s answer when the stored override could not be
+read: a re-type refuses on it (it may be an old override for the approved
+type)."""
+
 
 class TrustManager:
     """
@@ -502,7 +507,9 @@ class TrustManager:
                 f"OAuth2 client trust {peer_id}: its override for another type "
                 f"was not removed (it is not applied): {e}"
             )
-            return stale_type or None
+            # Unknown when the read itself faulted: the caller treats it as
+            # an override it could not remove (3.16: it read as none).
+            return stale_type or _UNKNOWN_OVERRIDE
         if not removed:
             logger.error(
                 f"OAuth2 client trust {peer_id}: its override for "
@@ -691,12 +698,16 @@ class TrustManager:
                         # than the row's) goes first: once the row took its
                         # type again it would apply. When it cannot go and
                         # this approval is its type, no code (3.16).
-                        leftover = self._clean_client_override(peer_id, old_type)
-                        if leftover and leftover == trust_type and type_changes:
+                        # Against the row as stored now, not the read above.
+                        leftover = self._clean_client_override(peer_id)
+                        if type_changes and leftover in (
+                            trust_type,
+                            _UNKNOWN_OVERRIDE,
+                        ):
                             logger.error(
                                 f"OAuth2 client trust {peer_id} not re-typed to "
                                 f"{trust_type}: an old override for that type "
-                                "could not be removed"
+                                "could not be removed (or read)"
                             )
                             return False
                     if type_changes:

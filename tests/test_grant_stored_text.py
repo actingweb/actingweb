@@ -354,3 +354,15 @@ def test_text_beyond_the_parser_is_withheld_with_no_exclusion() -> None:
         assert actor._filter_full_state(
             "p1", "", {"deep": deep, "color": "b"}, set()
         ) == {"color": "b"}
+
+
+def test_bytes_are_read_as_the_parser_reads_them() -> None:
+    """Re-run 5 (Issue 6): the prefix check skipped bytes with a UTF-8 BOM
+    or in UTF-16, which ``json.loads`` reads, so an SDK write of such bytes
+    escaped the developer view's exclusion check."""
+    from actingweb.permission_evaluator import as_json_object
+
+    text = '{"private": "s"}'
+    assert as_json_object(text.encode("utf-8-sig")) == {"private": "s"}
+    assert as_json_object(text.encode("utf-16")) == {"private": "s"}
+    assert as_json_object(b"plain") is None

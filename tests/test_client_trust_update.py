@@ -351,14 +351,24 @@ def test_the_owner_s_edit_of_a_stale_client_override_applies() -> None:
     200 and was never applied. It is written for the row's type."""
     w = World()
     peer, store = _stale_client(w)
+    # The stale override also holds a field the edit does not name.
+    stale = store.get_permissions_uncached(aid(w.actor), peer)
+    assert stale is not None
+    stale.methods = {"allowed": ["*"]}
+    assert store.store_permissions(stale, notify_peer=False)
     handler, result = _owner_handler(
         w, {"properties": {"patterns": ["public/*"], "operations": ["read"]}}
     )
     with mock.patch.object(handler, "authenticate_actor", return_value=result):
         handler.put(aid(w.actor), "viewer", peer)
-    assert handler.response.status_code == 200
+    assert handler.response.status_code in (200, 201)
     stored = store.get_permissions_uncached(aid(w.actor), peer)
     assert stored is not None and stored.trust_type == "viewer"
+    # Re-run 5 (Issue 1): replaced, not merged: the stale override's other
+    # fields, never shown to the owner, do not come into force.
+    assert not stored.methods
+    assert stored.properties is not None
+    assert stored.properties["patterns"] == ["public/*"]
 
 
 def test_the_owner_does_not_see_a_stale_client_override_as_applied() -> None:
@@ -393,3 +403,33 @@ def test_the_evaluator_reads_the_row_to_decide_a_client_override() -> None:
     assert ev._get_effective_permissions(aid(w.actor), peer) == {
         "properties": {"patterns": ["viewer/*"]}
     }
+
+
+def test_a_read_fault_before_the_re_type_issues_no_code() -> None:
+    """Re-run 5 (Issue 2): a fault reading the override before a re-type
+    read as "none left", so a stale override of the approved type could
+    come back. An unread override refuses the re-type; the row stays."""
+    from actingweb.db.exceptions import DbError
+
+    w = World()
+    assert w.authorise("friend")
+    with mock.patch.object(
+        TrustPermissionStore,
+        "get_permissions_uncached",
+        side_effect=DbError("down"),
+    ):
+        assert w.authorise("viewer") is False
+    assert w.row()["relationship"] == "friend"
+    assert w.authorise("viewer")
+
+
+def test_the_permissions_get_answers_only_for_the_row_s_type() -> None:
+    """Re-run 5 (Issue 4): the GET decided what applies by the path's type,
+    which it never compared with the row's; the stale type's path showed
+    the unapplied override as the grant. It answers 404, as the PUT does."""
+    w = World()
+    peer, _ = _stale_client(w)
+    handler, result = _owner_handler(w)
+    with mock.patch.object(handler, "authenticate_actor", return_value=result):
+        handler.get(aid(w.actor), "friend", peer)
+    assert handler.response.status_code == 404

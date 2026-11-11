@@ -33,7 +33,7 @@ def _as_permitted(
         return {}
     try:
         return json.loads(filtered)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, RecursionError):
         return filtered
 
 
@@ -174,7 +174,7 @@ class SubscriptionRootHandler(base_handler.BaseHandler):
             subtarget = params.get("subtarget", "")
             resource = params.get("resource", "")
             granularity = params.get("granularity", "none")
-        except ValueError:
+        except (ValueError, RecursionError):
             peerid = self.request.get("peerid")
             target = self.request.get("target")
             subtarget = self.request.get("subtarget") or ""
@@ -324,7 +324,7 @@ class SubscriptionRelationshipHandler(base_handler.BaseHandler):
                 granularity = params["granularity"]
             else:
                 granularity = "none"
-        except ValueError:
+        except (ValueError, RecursionError):
             if self.response:
                 self.response.set_status(400, "No json body")
             return
@@ -511,7 +511,7 @@ class SubscriptionHandler(base_handler.BaseHandler):
                     400, "Error in json body and no GET parameters"
                 )
                 return
-        except (TypeError, ValueError, KeyError):
+        except (TypeError, ValueError, KeyError, RecursionError):
             seq = self.request.get("sequence")
             if len(seq) == 0:
                 self.response.set_status(

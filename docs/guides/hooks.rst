@@ -184,7 +184,15 @@ Lifecycle Hooks
            revoke_permissions(actor, peer_id)
            notify_user(actor, f"{peer_id} unsubscribed from your data")
 
-Available events: ``actor_created``, ``actor_deleted``, ``actor_deleted_complete``, ``actor_adopted``, ``oauth_success``, ``email_verification_required``, ``email_sign_in_code_required``, ``email_verified``, ``trust_initiated``, ``trust_request_received``, ``trust_fully_approved_local``, ``trust_fully_approved_remote``, ``trust_deleted``, ``subscription_deleted``.
+Available events: ``actor_created``, ``actor_deleted``, ``actor_deleted_complete``, ``actor_adopted``, ``oauth_success``, ``email_verification_required``, ``email_sign_in_code_required``, ``email_verified``, ``trust_initiated``, ``trust_request_received``, ``trust_fully_approved_local``, ``trust_fully_approved_remote``, ``trust_deleted``, ``subscription_deleted``, ``oauth2_trust_requested``.
+
+``trust_fully_approved_local`` fires once, on every approving route (3.16);
+``trust_approved`` is its deprecated name (registering it logs a warning)
+and runs only when no ``trust_fully_approved_local`` hook is registered.
+``oauth2_trust_requested`` decides the level an OAuth2/MCP client is
+granted (see :doc:`../reference/hooks-reference`). ``trust_deleted`` fires
+before the delete, with the row as ``trust_data`` and ``initiated_by_peer``.
+Every lifecycle hook must accept ``**kwargs``.
 
 Subscription Hook
 -----------------

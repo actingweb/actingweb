@@ -72,7 +72,9 @@ The system controls access across six categories:
   MCP tool access like ``search``, ``fetch``, ``create_note``
 
 **Resources**
-  MCP resource access using URI patterns like ``notes://``, ``usage://``
+  Resource access: MCP resource URIs like ``notes://``, ``usage://``, and
+  the ``/resources/<name>`` route of a peer request (GET ``read``, PUT and
+  POST ``write``, DELETE ``delete``). One grant for both.
 
 **Prompts**
   MCP prompt access like ``analyze_notes``, ``summarize_document``
@@ -388,6 +390,56 @@ The system defaults to denying access when:
 * Permission evaluation encounters an error
 * Trust relationship or trust type cannot be found
 
+Exclusions and the property tree
+--------------------------------
+
+An exclusion (an ``excluded_patterns`` or ``denied`` entry) covers the node
+it names and everything under it, for ``properties`` and ``resources``: with
+``settings/private`` excluded, ``settings/private/x`` is refused too. A
+pattern ending in ``/*`` also names the node before it: ``private/*`` refuses
+``private`` itself. Allow patterns keep their meaning (``public/*`` does not
+grant ``public``).
+
+A peer reads a value without its excluded descendants, at any depth: a read
+of ``settings`` serves the object without ``private``, as do the listing,
+``?metadata=true`` and every subscription diff. A peer that is not ``admin``
+is refused a write or delete whose stored value or body holds an excluded
+descendant, and ``DELETE /properties`` unless it may delete every name. A
+path under a list (``/properties/<list>/<x>``) is decided by the list's
+grant. A refusal answers 403 with ``{"error": "forbidden"}``; it does not
+say that an exclusion caused it.
+
+When no rule matches
+--------------------
+
+Every route asks one decision (``actingweb.access_decision.decide``):
+
+* the trust must exist and be approved (``{"error": "not_approved"}``);
+* when the peer's grant **mentions** the category (the key is present, even
+  empty), its rule answers: a name it does not cover is refused, whatever
+  the access table says;
+* when the grant does **not mention** the category, the access table
+  (``config.access``) answers for the peer's trust level, and denies by
+  default; an OAuth2/MCP client is never sent to the access table;
+* an evaluator that cannot be built, or raises, denies; a database fault
+  answers 503.
+
+The same holds for ``resources``, ``methods`` and ``actions``, and for
+subscription creation (read access to the path) and the pushed and pulled
+diffs; a listing (``GET /properties``, ``/methods``, ``/actions``) decides
+each name the same way.
+
+A ``methods``, ``actions`` or ``resources`` request that names nothing
+(``POST /methods`` with no method, JSON-RPC with an empty ``method``, a bare
+``/resources``) has nothing to grant: when the grant mentions the category
+it is refused, except the ``GET`` listing of methods or actions, which is
+admitted when the rule names anything and then filtered per name, and
+JSON-RPC on the bare ``/methods``, decided by the method its body names (so
+an empty ``method`` names nothing and is refused there, and a body with no
+``method`` is the JSON-RPC error ``-32600``). The protocol addresses each of
+these by its path. When the grant does not
+mention the category, the access table answers, as before.
+
 Precedence Rules
 ----------------
 
@@ -622,7 +674,7 @@ Response includes permission overrides if they exist:
        "properties": {"allowed": ["notes/*"], "denied": ["private/*"]},
        "methods": {"allowed": ["get_*", "list_*"]},
        "tools": {"allowed": ["search", "create_note"]},
-       "created_by": "admin",
+       "created_by": "system",
        "notes": "Custom permissions for this relationship"
      }
    }
@@ -690,8 +742,8 @@ Response:
        "patterns": ["notes://*", "public://*"],
        "operations": ["read"]
      },
-     "created_by": "admin",
-     "updated_at": "2024-01-15T10:30:00Z",
+     "created_by": "system",
+     "updated_at": null,
      "notes": "Custom permissions for enhanced access"
    }
 
@@ -717,6 +769,27 @@ Create or update permission overrides for a trust relationship:
      },
      "notes": "Enhanced permissions for trusted partner"
    }
+
+Only the permission categories and ``notes`` are taken from the body
+(3.16). ``actor_id`` and ``peer_id`` come from the path; a new override's
+``trust_type`` is the path's type (checked against the trust row), an
+update keeps the stored one, and ``created_by`` is set by the API; an update
+ignores these fields when a body names them (and logs them). A category is an object (``properties`` may also be
+a list of names) or ``null``; when present, its ``patterns``,
+``excluded_patterns``, ``operations``, ``allowed`` and ``denied`` are lists
+of strings, and ``notes`` is text; otherwise the edit answers 400. Other
+keys inside a category are stored as they are; other top-level keys are
+ignored. An override stored another way (the store API) that holds a
+malformed rule is read as: a category that is not an object, or a malformed
+``operations`` or ``allowed``, allows nothing; a malformed
+``excluded_patterns`` leaves the trust type's exclusions in place (a single
+string is taken as one pattern; a string ``denied`` is a one-item list,
+which replaces the type's ``denied`` as any override does); a malformed
+``patterns`` acts as an
+empty one and a ``properties`` list of names is normalised, both merged
+with the trust type's patterns as any override is. In a ``PUT
+/trust/{relationship}/{peerid}`` body, ``"permissions": null`` changes
+nothing.
 
 **DELETE /trust/{relationship}/{peerid}/permissions**
 

@@ -12,76 +12,66 @@ from typing import Any
 from actingweb import auth
 from actingweb.handlers import base_handler
 
+from ..access_decision import listable_names, named_route_allows, peer_of
 from ..db.exceptions import DbError
-from ..permission_evaluator import (
-    PermissionResult,
-    get_permission_evaluator,
-)
+from ..permission_evaluator import PermissionType, get_permission_evaluator
 
 logger = logging.getLogger(__name__)
+
+JSONRPC_FORBIDDEN = -32000
+"""The JSON-RPC error code of a method the caller's grant refuses (3.16)."""
 
 
 class MethodsHandler(base_handler.BaseHandler):
     """Handler for /<actor_id>/methods endpoint."""
 
     def _check_method_permission(
-        self, actor_id: str, auth_obj, method_name: str
+        self, actor_id: str, auth_obj: Any, method_name: str, method: str = "POST"
     ) -> bool:
-        """
-        Check method permission using the unified access control system.
+        """The shared access decision for a peer's ``/methods`` request
+        with the request's ``method`` (3.16): a rule the grant states (even
+        empty) answers, else the access table; an evaluator that cannot be
+        built denies. A caller that is not a peer is answered by the access
+        table, as before."""
+        method = getattr(self, "_verb_override", None) or method
+        # The verb the hooks this request runs are decided with (3.16).
+        self._request_method = method
+        return named_route_allows(
+            self.config,
+            actor_id,
+            auth_obj,
+            PermissionType.METHODS,
+            method_name,
+            method=method,
+            get_evaluator=get_permission_evaluator,
+        )
 
-        Args:
-            actor_id: The actor ID
-            auth_obj: Auth object from authentication
-            method_name: Method name to check access for
+    def _listable_methods(self, actor_id: str, auth_obj: Any) -> list[Any]:
+        """The methods a listing shows: all for a caller that is not a peer;
+        for a peer, each decided as a call of it would be (3.16), none when
+        the grant cannot be read (it showed all)."""
+        assert self.hooks is not None
+        entries = self.hooks.get_method_metadata_list()
+        allowed = listable_names(
+            self.config,
+            actor_id,
+            auth_obj,
+            PermissionType.METHODS,
+            [str(e.get("name", "")) for e in entries],
+            get_evaluator=get_permission_evaluator,
+        )
+        if allowed is None:
+            return entries
+        return [e for e in entries if str(e.get("name", "")) in allowed]
 
-        Returns:
-            True if access is allowed, False otherwise
-        """
-        # Get peer ID from auth object (if authenticated via trust relationship)
-        # Note: auth_obj.acl is a dict, not an object, so we use .get()
-        peer_id = auth_obj.acl.get("peerid", "") if hasattr(auth_obj, "acl") else ""
-
-        if not peer_id:
-            # No peer relationship - fall back to legacy authorization for basic/oauth auth
-            return auth_obj.check_authorisation(
-                path="methods", subpath=method_name, method="GET"
-            )
-
-        # Use permission evaluator for peer-based access
-        try:
-            evaluator = get_permission_evaluator(self.config)
-            result = evaluator.evaluate_method_access(actor_id, peer_id, method_name)
-
-            if result == PermissionResult.ALLOWED:
-                return True
-            elif result == PermissionResult.DENIED:
-                logger.info(
-                    f"Method access denied: {actor_id} -> {peer_id} -> {method_name}"
-                )
-                return False
-            else:  # NOT_FOUND
-                # No specific permission rule - fall back to legacy for backward compatibility
-                return auth_obj.check_authorisation(
-                    path="methods", subpath=method_name, method="GET"
-                )
-
-        except DbError:
-            raise
-        except Exception as e:
-            logger.error(
-                f"Error in method permission evaluation for {actor_id}:{peer_id}:{method_name}: {e}"
-            )
-            # Fall back to legacy authorization on errors
-            return auth_obj.check_authorisation(
-                path="methods", subpath=method_name, method="GET"
-            )
-
-    def _create_auth_context(self, auth_obj) -> dict[str, Any]:
+    def _create_auth_context(self, auth_obj: Any) -> dict[str, Any]:
         """Create auth context for hook execution with peer information."""
-        # Note: auth_obj.acl is a dict, not an object, so we use .get()
-        peer_id = auth_obj.acl.get("peerid", "") if hasattr(auth_obj, "acl") else ""
-        return {"peer_id": peer_id, "config": self.config}
+        peer_id = peer_of(auth_obj)
+        return {
+            "peer_id": peer_id,
+            "config": self.config,
+            "method": getattr(self, "_request_method", None),
+        }
 
     def get(self, actor_id: str, name: str = "") -> None:
         """
@@ -118,7 +108,7 @@ class MethodsHandler(base_handler.BaseHandler):
         myself = auth_result.actor
         check = auth_result.auth_obj
         # Use unified access control system for permission checking
-        if not self._check_method_permission(actor_id, check, name):
+        if not self._check_method_permission(actor_id, check, name, "GET"):
             if self.response:
                 self.response.set_status(403, "Forbidden")
             return
@@ -130,34 +120,7 @@ class MethodsHandler(base_handler.BaseHandler):
             if actor_interface:
                 if not name:
                     # Return list of available methods with metadata, filtered by permissions
-                    all_methods = self.hooks.get_method_metadata_list()
-
-                    # Filter methods based on peer permissions
-                    peer_id = (
-                        check.acl.get("peerid", "") if hasattr(check, "acl") else ""
-                    )
-                    if peer_id:
-                        # For peer-based auth, filter by allowed methods
-                        try:
-                            evaluator = get_permission_evaluator(self.config)
-                            filtered_methods = []
-                            for method in all_methods:
-                                method_name = method.get("name", "")
-                                perm_result = evaluator.evaluate_method_access(
-                                    actor_id, peer_id, method_name
-                                )
-                                if perm_result == PermissionResult.ALLOWED:
-                                    filtered_methods.append(method)
-                            result = {"methods": filtered_methods}
-                        except DbError:
-                            raise
-                        except Exception as e:
-                            logger.error(f"Error filtering methods by permission: {e}")
-                            # Fall back to returning all methods on error
-                            result = {"methods": all_methods}
-                    else:
-                        # For non-peer auth (basic/oauth), return all methods
-                        result = {"methods": all_methods}
+                    result = {"methods": self._listable_methods(actor_id, check)}
                 else:
                     auth_context = self._create_auth_context(check)
                     result = self.hooks.execute_method_hooks(
@@ -195,29 +158,10 @@ class MethodsHandler(base_handler.BaseHandler):
             return
         myself = auth_result.actor
         check = auth_result.auth_obj
-        # Use unified access control system for permission checking
-        if not self._check_method_permission(actor_id, check, name):
-            if self.response:
-                self.response.set_status(403, "Forbidden")
+        gated = self._parse_and_gate(actor_id, check, name)
+        if gated is None:
             return
-
-        # Parse request body
-        try:
-            body: str | bytes | None = self.request.body
-            if body is None:
-                body_str = "{}"
-            elif isinstance(body, bytes):
-                body_str = body.decode("utf-8", "ignore")
-            else:
-                body_str = body
-            params = json.loads(body_str)
-        except (TypeError, ValueError, KeyError):
-            if self.response:
-                self.response.set_status(400, "Error in json body")
-            return
-
-        # Check if this is a JSON-RPC request
-        is_jsonrpc = "jsonrpc" in params and params["jsonrpc"] == "2.0"
+        params, is_jsonrpc = gated
 
         if is_jsonrpc:
             # Handle JSON-RPC request
@@ -233,18 +177,92 @@ class MethodsHandler(base_handler.BaseHandler):
                         name, actor_interface, params, auth_context
                     )
 
+        self._write_post_result(result, jsonrpc=is_jsonrpc)
+
+    def _parse_and_gate(
+        self, actor_id: str, check: Any, name: str
+    ) -> tuple[Any, bool] | None:
+        """A POST's body, parsed, and whether it is JSON-RPC 2.0; None when
+        the request was answered here (403, or 400 for a body that is not
+        JSON). Shared by the sync and async handlers (3.16).
+
+        JSON-RPC on the bare ``/methods`` names its method in the body, which
+        the JSON-RPC handler decides (:meth:`_body_method_refused`); every
+        other request is decided by the name in its path (a nameless call is
+        refused when the grant states a methods rule)."""
+        params: Any
+        try:
+            body: str | bytes | None = self.request.body
+            if body is None:
+                body_str = "{}"
+            elif isinstance(body, bytes):
+                body_str = body.decode("utf-8", "ignore")
+            else:
+                body_str = body
+            params = json.loads(body_str)
+        except (TypeError, ValueError, KeyError, RecursionError):
+            params = None
+        is_jsonrpc = isinstance(params, dict) and params.get("jsonrpc") == "2.0"
+        if (name or not is_jsonrpc) and not self._check_method_permission(
+            actor_id, check, name, "POST"
+        ):
+            if self.response:
+                self.response.set_status(403, "Forbidden")
+            return None
+        if params is None:
+            if self.response:
+                self.response.set_status(400, "Error in json body")
+            return None
+        return params, is_jsonrpc
+
+    def _body_method_refused(
+        self, myself: Any, auth_obj: Any, params: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """On the bare ``/methods`` the URL named nothing to check: the method
+        the body names is decided before it is dispatched (3.16). The JSON-RPC
+        error when it is refused (answered with HTTP 403, as the named path
+        is), else None."""
+        if self._check_method_permission(
+            str(getattr(myself, "id", "") or ""),
+            auth_obj,
+            str(params["method"]),
+            "POST",
+        ):
+            return None
+        return {
+            "jsonrpc": "2.0",
+            "error": {"code": JSONRPC_FORBIDDEN, "message": "Forbidden"},
+            "id": params.get("id"),
+        }
+
+    def _write_post_result(self, result: Any, *, jsonrpc: bool) -> None:
+        """A POST's answer. A JSON-RPC answer's top-level ``error`` is always
+        the library's (a hook's result is wrapped under ``result``), so its
+        ``JSONRPC_FORBIDDEN`` is the body method's refusal: HTTP 403, as the
+        named path answers. A plain call's hook result is written as it is,
+        whatever it carries."""
+        if not self.response:
+            return
         if result is not None:
-            if self.response:
+            error = (
+                result.get("error") if jsonrpc and isinstance(result, dict) else None
+            )
+            if isinstance(error, dict) and error.get("code") == JSONRPC_FORBIDDEN:
+                self.response.set_status(403, "Forbidden")
+            else:
                 self.response.set_status(200, "OK")
-                self.response.headers["Content-Type"] = "application/json"
-                self.response.write(json.dumps(result))
+            self.response.headers["Content-Type"] = "application/json"
+            self.response.write(json.dumps(result))
         else:
-            if self.response:
-                self.response.set_status(400, "Processing error")
+            self.response.set_status(400, "Processing error")
 
     def put(self, actor_id: str, name: str = "") -> None:
-        """PUT requests are handled as POST for methods."""
-        self.post(actor_id, name)
+        """PUT requests are handled as POST for methods (decided as PUT)."""
+        self._verb_override = "PUT"
+        try:
+            self.post(actor_id, name)
+        finally:
+            self._verb_override = None
 
     def delete(self, actor_id: str, name: str = "") -> None:
         """
@@ -258,6 +276,12 @@ class MethodsHandler(base_handler.BaseHandler):
         myself = auth_result.actor
         check = auth_result.auth_obj
         if not auth_result.authorize("DELETE", "methods", name):
+            return
+        # A peer is decided by its grant as well (3.16; DELETE was the one
+        # method verb the grant did not answer).
+        if not self._check_method_permission(actor_id, check, name, "DELETE"):
+            if self.response:
+                self.response.set_status(403, "Forbidden")
             return
 
         # Execute method delete hook
@@ -314,6 +338,11 @@ class MethodsHandler(base_handler.BaseHandler):
                 },
                 "id": params.get("id"),
             }
+
+        if not method_name:
+            refused = self._body_method_refused(myself, auth_obj, params)
+            if refused is not None:
+                return refused
 
         # Extract method parameters
         method_params = params.get("params", {})

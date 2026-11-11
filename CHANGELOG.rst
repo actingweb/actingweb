@@ -8,6 +8,153 @@ Unreleased
 SECURITY
 ~~~~~~~~
 
+- **An actor's owner could write a grant into another actor.** ``PUT
+  /<actor>/trust/<rel>/<peer>/permissions`` (and ``permissions`` in a trust
+  ``PUT``) on an existing override copied any field the request named,
+  ``actor_id``, ``peer_id`` and ``trust_type`` included, and the store keys
+  on those, so on a shared host one actor's owner could give itself any
+  level at another actor. **Behavior change:**
+  ``TrustPermissionStore.update_permissions`` takes only the permission
+  categories and ``notes``; identity and bookkeeping fields are refused
+  and logged; the grant API sets ``created_by`` itself, and answers 400
+  for a rule whose pattern or operation keys are not lists of strings,
+  ``null`` included. Such a value already stored (or written through the
+  store API) is read on merge as: a malformed ``excluded_patterns`` keeps
+  the trust type's exclusions (a string or ``null`` replaced them; a single
+  string is taken as one pattern, and a string ``denied`` as a one-item
+  list, which replaces the type's ``denied`` as any override does); a malformed
+  ``operations`` or ``allowed``, or a category that is not an object,
+  allows nothing; a malformed ``patterns`` acts as an empty one and a
+  ``properties`` list of names is normalised, both merged with the trust
+  type's patterns as any override is (before 3.16 these two denied).
+  **Check:** the fix stops new writes, not grants already written. On a
+  host that serves actors of more than one owner, review each actor's
+  overrides (``TrustPermissionStore.list_actor_permissions``) for peers it
+  did not grant, and look in request logs for permission PUTs whose body
+  named ``actor_id``, ``peer_id`` or ``trust_type``.
+- **A peer read, overwrote and was pushed property parts its grant
+  excluded.** An exclusion was checked only at the exact path a request
+  named: a peer granted ``*`` without ``settings/private`` read ``settings``
+  with its private child inside, overwrote it, received it in every
+  subscription diff, and reached an excluded list through
+  ``/properties/<list>/<x>``. A bulk ``POST /properties`` skipped a refused
+  name silently and applied a refused bulk list update before answering
+  403. **Behavior change:** an exclusion covers its node and every descendant
+  (``private/*`` also names ``private``); a peer reads a value without its
+  excluded parts at any depth (direct reads, the listing, pushed and pulled
+  diffs, the developer views); a non-admin peer's write or delete that would
+  touch an excluded part is 403; a path under a list is decided by the
+  list's grant; a bulk ``POST`` is validated and authorised whole and
+  refused whole by the grant (an application hook that refuses part way
+  does not undo what was already written: those keys' diffs reach the
+  subscribers, then 403, where a hook's refusal of a bulk list update was
+  a 500). An object stored or written as JSON text (a form post, an
+  SDK write of a JSON string, and every value the developer views read
+  back from storage) is filtered as the object, and handed back as text;
+  text counts as JSON when a JSON client would read it as JSON (behind a
+  byte-order mark, or UTF-16 in its bytes). **Behavior change:** for the
+  owner too: such text written as a whole property is stored as plain JSON
+  text, it is read back re-serialised, its parts can be read, written and
+  deleted, and the read and write hooks receive it as an object.
+  **Behavior change:** when the grant excludes anything, a kept part
+  nested more than 100 levels deep (objects or arrays) is withheld from
+  the peer (a direct read is 403, the name is left out of the listing and
+  of a diff, a developer view reads ``None``) and the peer's write of an
+  object that deep is 403: the filter cannot walk it safely, and it is never sent
+  unfiltered. An excluded part is dropped whatever its depth. Text nested
+  beyond the JSON parser (only an application can store it) is never sent
+  to a peer, whatever its grant (403 on a read, left out of the listing and
+  of diffs); the owner reads it as stored. A sub-path ``PUT`` into such a
+  value answers 409 (it cannot be merged into; replacing the whole would
+  lose what the write did not name), and a request body nested beyond the
+  parser is treated as invalid JSON (both answered 500; a list item
+  ``PUT ?index=`` stored such a body as text): 400 on the property,
+  method, action, resource and callback routes and the trust ``PUT``s;
+  ``POST /trust`` and ``POST /subscriptions`` fall back to form fields, as
+  for any invalid JSON. A sub-path ``PUT`` onto plain
+  text, or onto a JSON list or scalar, answers 409 too (it replaced the
+  whole value, or answered 500). **Behavior change:** a direct
+  ``GET /properties/<name>`` of a plain-text value runs the property's read
+  hook, as the listing does (a hook answering ``None`` is 404), and a
+  sub-path of plain text is 404 (it answered the whole text). A
+  peer gets 403 for a list it may not write whether it exists or not
+  (``PUT ?index=`` and a bulk ``items`` write answered 404/400 for a
+  missing one first). ``docs/migration/v3.16.rst`` ("Grants hold at every
+  level") has the details.
+- **A grant's rule that did not match a name let the access table serve
+  it.** A properties or resources rule in the ``allowed``/``denied`` shape,
+  or an empty one, answered "no rule" for a name it did not list, and the
+  handlers then asked the access table, which admits a whole category per
+  trust level: the type's rule was bypassed. **Behavior change:** a rule the
+  grant states decides every name; only a grant that does not mention the
+  category leaves a name to the access table, and never for an OAuth2/MCP
+  client. Property hooks and the developer views use the same decision; an
+  error in a hook's check denies (it allowed).
+- **A peer reached ``/resources``, methods and actions past its grant, and
+  subscribed to what it could not read.** ``/resources`` ignored the
+  ``resources`` grant (the access table alone decided, so a ``friend`` read
+  and deleted ``private/x``); a methods or actions rule that did not cover a
+  name, or an empty one (``"methods": []``), fell through to the access
+  table, which admits the whole category per trust level; an evaluator
+  error fell back to the table and a listing showed everything; the async
+  listings were not filtered; ``DELETE /methods/<name>`` and a JSON-RPC body
+  on the bare ``/methods`` were not decided by the grant; a subscription to
+  an excluded path was created; ``shared_properties`` named every property
+  the peer could not read and answered an unapproved peer; an unapproved
+  peer listed its subscriptions; a subscription the grant stopped admitting
+  kept delivering; a ``methods``, ``actions`` or ``resources`` request that
+  named nothing (``POST /methods`` without JSON-RPC, an empty JSON-RPC
+  ``method``, a bare ``/resources``) went to the access table whatever the
+  grant stated, so every ``*`` hook ran with an empty name.
+  **Behavior change:** all of these follow the one access decision; a
+  subscription is checked again at each delivery, push and pull: one to
+  ``properties``, ``resources``, ``methods`` or ``actions`` against its
+  creation check, one to an application's own target for an approved
+  trust; a request that names nothing is refused when the grant mentions
+  the category, except the ``GET`` listing of methods or actions, admitted
+  when the rule names anything and filtered per name, and JSON-RPC on the
+  bare ``/methods``, decided by the method its body names (an empty
+  ``method`` names nothing and is refused; a body with no ``method`` is
+  the JSON-RPC error ``-32600``, HTTP 200, where it was a 403).
+  **Behavior change:** a refused JSON-RPC method answers HTTP 403 with the
+  JSON-RPC error ``-32000`` (it answered 200).
+  ``docs/migration/v3.16.rst`` ("Every other way in") lists each.
+- **An MCP client could give itself any access level, ``admin``
+  included.** An anonymous ``POST /oauth/register`` stored the
+  ``trust_type`` it asked for and a ``client_credentials`` grant on the
+  OAuth2 system actor; the authorize form took any registered type from a
+  form field the client could post itself, with no form shown to the user,
+  and preselected the first type in the registry (``admin`` with no list
+  configured); a user signing in for such a request gave the client an
+  ``admin`` trust on their actor; a re-authorisation never changed an
+  existing row's type; a code was issued even when the trust could not be
+  written; the SPA authorize call created a trust of any type it named.
+  **Behavior change:** the client list (``configure_oauth2_trust_types``;
+  with none, every registered type except ``admin``) is enforced at
+  registration, the authorize POST, the callback, the confirmation and the
+  SPA authorize call; the form is bound to the browser by a nonce cookie,
+  and a sign-in it cannot bind waits for the user's Approve on a
+  confirmation page in the browser that signed in; a re-authorisation sets
+  the row to the level the user approved, up or down (an override it held
+  for another type stops applying; see "A client's level follows the
+  user's latest approval" under CHANGED); no code is issued without the trust, also when the row is deleted
+  during the authorisation. **Behavior change:** a redirect URI with a user
+  name or password is refused at registration (``invalid_client_metadata``),
+  and the confirmation page names the host the code goes to without one (it
+  showed ``claude.ai@evil.test``). The confirmation re-checks the client's
+  own ``allowed_trust_types`` at Approve, and any decision hook's answer
+  against the client list; a 503 keeps the page usable for a retry; the
+  form and confirmation pages send ``Referrer-Policy: same-origin`` (under
+  ``no-referrer`` a browser without Fetch Metadata had its own Approve
+  refused as cross-site). ``docs/migration/v3.16.rst`` ("An MCP client's
+  access level").
+- **A write three levels down reached subscribers past their grant.**
+  ``PUT /properties/a/b/c`` registered its diff as resource ``b`` holding the
+  bare value, so the filter checked ``a/b`` and an exclusion of ``a/b/c``
+  never applied (and the subscriber's copy of ``a.b`` was overwritten).
+  **Behavior change:** such a write or delete is diffed as resource ``b``
+  with its whole stored value, filtered at the true paths.
+
 - **Anyone who requested a trust was granted its relationship's
   permissions before the owner approved it.** ``POST
   /<actor>/trust/<relationship>`` is unauthenticated and stores a pending
@@ -92,7 +239,10 @@ SECURITY
   the row still holding the secret the request authenticated with
   (relationship, approval, base URI and grants stay; the answer follows the
   stored approval; no ``trust_request_received``); anything else answers
-  403 and changes nothing. A pending row is never re-paired: its holder's
+  403 and changes nothing. **Behavior change:** a request carrying a bearer
+  for a peer this actor holds no row for answers 403 ("No trust to
+  re-pair") and creates nothing; the initiator pairs afresh, without the
+  bearer, after removing its own row. A pending row is never re-paired: its holder's
   request is a creation request, which replaces it only if it verifies. A
   creation request is verified when the requester answers with its token
   from a relationship it approved (the one it created before sending the
@@ -697,6 +847,41 @@ SECURITY
   that peer may read). Other targets are served as stored, as their
   callbacks are.
 
+- **A trust delete could remove the row a re-pair had just written, and a
+  deleted grant left the peer believing it still held it.** ``DELETE
+  /trust/<rel>/<peer>`` deleted whatever row the peer id named when the
+  delete ran: a re-pair landing between the request's read and its delete
+  lost its new row, with its subscriptions, grant and OAuth2 client. ``DELETE
+  /trust/<rel>/<peer>/permissions`` sent the peer nothing, so the peer kept
+  acting on the grant it was last sent, and answered 204 also when there
+  was nothing to delete. **Behavior change:** the delete removes only the row
+  it was authorised against (its secret is compared on a consistent read
+  before the remote delete, again before the local cleanup, and by a
+  conditional row delete); a row replaced meanwhile is kept and the request
+  answers 404, and ``trust_deleted`` does not fire for it (it now fires
+  after the last comparison, before anything local goes, on the REST route
+  and when ``sync_peer`` finds a revocation, and not for a row another
+  delete already removed; ``sync_peer_async`` does the same, awaiting a
+  coroutine hook on its running loop, given up after 120 seconds, and
+  running a sync hook off it). A re-pair landing after the second
+  comparison keeps its row,
+  but the cleanup that ran (the subscriptions, the peer's stored data) is
+  gone; the peer's next sync re-creates the subscriptions. ``Trust.delete``,
+  ``Actor.delete_reciprocal_trust`` (and its async twin) and
+  ``TrustManager.delete_peer_trust`` take a keyword-only ``only_if_secret`` /
+  ``expected_secret``; the store's ``DbTrust.delete`` takes
+  ``only_if_secret`` and answers False for a row with another secret.
+  **Behavior change:** deleting a grant override sends the permission
+  callback with the peer's default grant for its trust type (through the
+  same sender, with the same resends, as a ``PUT`` of the grant, and only
+  when ``notify_peer_on_change`` is on); deleting a grant that does not
+  exist answers 404 and sends nothing. ``TrustPermissionStore.delete_permissions``
+  itself still sends nothing (its other callers delete the trust row with it
+  or store a new grant next). **Check:** a peer receiving permission
+  callbacks with ``auto_delete_on_revocation`` now sees a deleted override
+  as a change to the default (see the revocation entry under FIXED for what
+  that comparison acts on).
+
 REMOVED
 ~~~~~~~
 
@@ -728,6 +913,144 @@ REMOVED
 
 CHANGED
 ~~~~~~~
+
+- **Breaking: a custom trust store and an ``Actor`` subclass take new
+  keywords.** ``DbTrust.delete`` takes the keyword-only ``only_if_secret``
+  (delete only the row with that secret; False for a row with another one;
+  True when absent) and ``DbTrust.modify`` takes ``relationship``; the
+  library passes them on every trust ``DELETE`` and an MCP client's
+  re-authorisation at a new level. ``Actor.delete_reciprocal_trust`` (and
+  its async twin) takes the keyword-only ``expected_secret`` and
+  ``before_local_delete``, which the trust ``DELETE`` and ``sync_peer``
+  pass. A backend or subclass without them raises ``TypeError``.
+  **Check:** custom backends and overrides accept the keywords (or
+  ``**kwargs``); ``docs/migration/v3.16.rst`` ("Custom database backends").
+
+- **Trust hooks fire once, with the same arguments, on every route.** An
+  approval through ``PUT /trust/<rel>/<peer>`` or the web UI fired
+  ``trust_fully_approved_local``, ``TrustManager.approve_relationship``
+  fired ``trust_approved`` instead, and a repeated ``PUT`` with
+  ``approved=true`` fired again; ``trust_deleted`` got the row as
+  ``trust_data`` on some routes and an empty dict or no ``initiated_by_peer``
+  on others. **Behavior change:** every approving route (``PUT`` and the web
+  UI, ``approve_relationship`` and ``approve_relationship_async``,
+  approve-on-create) fires ``trust_fully_approved_local`` once, on the
+  transition to approved by both sides, with ``trust_data`` = the row; a
+  repeat approval fires nothing. ``trust_approved`` is deprecated: it runs
+  in its place, with the same arguments, only when no
+  ``trust_fully_approved_local`` hook is registered, and registering it
+  logs a warning once per process; an application that registered both now
+  sees only the canonical one. ``trust_deleted`` fires before the delete on every route
+  with the row as ``trust_data`` and ``initiated_by_peer``. A lifecycle hook
+  without ``**kwargs`` raises ``TypeError`` on the arguments it does not
+  name; that is now logged at ERROR naming the hook, once per process.
+  **Check:** rename ``trust_approved`` hooks to
+  ``trust_fully_approved_local`` and give every lifecycle hook ``**kwargs``
+  (migration guide, "Trust hooks fire once, with the same arguments").
+
+- **A ``PUT`` of a trust with new permissions writes the grant first.** The
+  trust was approved and the peer told before the grant was stored, so a
+  failed grant write left the peer approved on the grant it had.
+  **Behavior change:** the grant is written first; a failure answers 500
+  with the trust unchanged (unapproved, when the ``PUT`` approved it) and
+  the peer not told. The peer is sent the new grant only once the trust
+  write landed; when that write fails (404/400, or a store fault), the
+  grant as it was is restored (or the new one deleted) and the peer is told
+  nothing; when that restore fails too, the answer is 500 "Trust not
+  modified; the permissions change could not be undone". **Behavior
+  change:** a trust ``PUT`` body that is not a JSON object answers 400 (a
+  scalar was a 500, a list an empty edit), and ``"permissions": null``
+  changes nothing.
+
+- **Breaking: an anonymous registration may not ask for
+  ``client_credentials`` or a level the client list does not offer.**
+  ``POST /oauth/register`` answers 400 ``invalid_client_metadata`` for
+  either, names ``OAuth2ClientManager.create_client`` (which an actor's owner
+  uses for such a client), and stores the default client type on the
+  system actor. **Breaking:** ``client_credentials`` for a client registered
+  that way is ``unauthorized_client``, also for one stored before 3.16.
+- **The MCP authorize form is bound to the browser; otherwise the user
+  confirms.** **Behavior change:** the form sets a nonce cookie
+  (``__Host-aw_authz_nonce`` over https) and carries the nonce in a hidden
+  ``form_nonce`` input (a custom template must add it, or every sign-in asks
+  for confirmation) and in each provider link. A sign-in the library cannot
+  bind shows ``aw-oauth-confirm.html`` (new, overridable) and completes on
+  ``POST /oauth/authorize/confirm`` (new). The form, the confirmation and
+  their JSON answers send ``X-Frame-Options: DENY``, ``frame-ancestors
+  'none'``, ``Cache-Control: no-store`` and ``Referrer-Policy:
+  same-origin``. A refused or failed confirmation is the same page with an
+  ``error`` sentence for a browser (JSON for an API caller), with its
+  status (400, 403, 500 or 503). **Behavior change:** an OAuth2 page (the
+  form or the confirmation) whose template fails to render answers its JSON
+  fallback with the handler's error status, else 500 (it answered 200).
+  The form answers JSON for ``Accept: application/json``
+  under FastAPI too (the header was matched case-sensitively). The Apple
+  button on the form completes (its state was wrapped in JSON and never
+  matched).
+- **A client's level follows the user's latest approval.** **Behavior
+  change:** a re-authorisation re-types the client's existing row (up or
+  down); a client's permission override that names a type other than its
+  row's is not applied and is deleted at authorisation (a removal that
+  fails is logged and retried; it refuses only an approval of the
+  override's own type, which would bring it back, or when the override
+  cannot be read); the owner's edit of such an override replaces it with
+  one holding only that edit (``PUT .../permissions`` then answers 201);
+  the permissions views show only an override that applies; MCP caches of
+  the process are evicted (other processes until their cache TTL). The
+  default selected level is the client default (``mcp_client``), not the
+  first registered type. **Behavior change**, for every trust: ``GET
+  /trust/<type>/<peer>/permissions`` answers 404 when there is no row or
+  ``<type>`` is not the row's type (it answered the override or the type's
+  defaults). Rows a client obtained before 3.16 keep their type until it
+  authorises again.
+- **New:** ``AccessControlConfig.client_trust_type_acceptable()`` and
+  ``default_client_trust_type()`` (and module functions of the same names in
+  ``actingweb.permission_integration``); the ``oauth2_trust_requested``
+  lifecycle hook (fails closed; may decline or lower the level);
+  ``ActingWebOAuth2Server.complete_client_authorization()`` for a route that
+  signs the user in itself; ``DbTrust.modify(relationship=...)``
+  (keyword-only, both backends).
+
+- **Breaking: ``shared_properties`` no longer returns
+  ``excluded_properties``.** ``GET /trust/<rel>/<peer>/shared_properties``
+  lists the names the peer may read (decided as a read; it asked for an
+  operation no rule grants and listed nothing) and answers 403
+  ``{"error": "not_approved"}`` for a trust not yet approved.
+- **``/resources`` follows the ``resources`` grant.** **Behavior change:**
+  GET is ``read``, PUT and POST ``write``, DELETE ``delete``; ``friend`` and
+  ``partner`` lose DELETE and their excluded names, ``associate`` and
+  ``viewer`` gain GET on ``public/*``. A ``resources`` override written for
+  MCP URIs only now denies every ``/resources`` name for that peer.
+- **A subscription needs read access to what it carries.** **Behavior
+  change:** ``POST /subscriptions/<peer>`` answers 403 for a path the peer
+  may not read; a whole-target subscription needs a rule that reads at least
+  one name (or, with no rule for the category, the access table's GET).
+- **Method and action routes use the request's method for the access
+  table.** **Behavior change:** a grant that does not mention methods or
+  actions is decided with the request's method (it was always GET); a
+  stated rule (even empty) is the answer.
+
+- **A permission refusal answers ``{"error": "forbidden"}``.** **Behavior
+  change:** the 403 a peer gets from the property routes carries this body
+  (``{"error": "not_approved"}`` for a trust not yet approved); a refused
+  bulk ``POST /properties`` adds ``"refused"`` with the names it refused.
+  It never says that an exclusion caused the refusal.
+- **``POST /properties/<name>`` is 400.** **Behavior change:** it answered
+  400 and then wrote the body as if posted to ``/properties``; post to the
+  collection.
+- **``execute_property_hooks`` answers a permission denial with
+  ``PERMISSION_DENIED``.** **Behavior change:** a denied ``get`` used to
+  return the value unchanged; it now returns
+  ``actingweb.access_decision.PERMISSION_DENIED`` (falsy, distinct from
+  ``None``) for every operation, and the handlers answer 403. A caller that
+  runs property hooks itself with a peer in the context must check for it.
+- **The access table is a pure function.**
+  ``actingweb.access_table.access_table_admits`` and
+  ``matching_access_row`` (also importable from ``actingweb.auth``) answer
+  for a relationship without an ``Auth`` object;
+  ``actingweb.access_decision.decide`` is the one decision the routes ask.
+  ``PermissionEvaluator.evaluate_property_with_exclusions`` is removed
+  (``drop_excluded``, ``holds_excluded`` and ``path_excluded`` replace it).
 
 - **An access row authorises the method a request performs; a PUT or
   DELETE is no longer admitted by a GET row.** The subscription handler
@@ -1464,7 +1787,10 @@ CHANGED
   store fault) or 500 (anything else) with the old permissions still
   stored, so the peer's retry finishes it.
   Removing a trust also fails with 503 when that peer's callback state
-  cannot be listed.
+  cannot be listed. The comparison acts only on patterns that disappear from
+  the grant, not on an added exclusion, a dropped ``read``, scalar
+  properties or copies an application fetched by query
+  (``docs/quickstart/configuration.rst``).
 
 - **Behavior change: a write whose subscription diff cannot be registered
   answers 503.** The property write stays, but a fault reading the
@@ -1836,6 +2162,41 @@ ADDED
 
 FIXED
 ~~~~~
+
+- **A bulk ``POST /properties`` with a JSON body that is not an object
+  answered 500.** It answers 400. A bulk ``POST`` that stops part way (a
+  400, 413 or a hook's refusal) or faults in its form arguments now
+  registers the diffs of the keys it had already written, as a fault in a
+  JSON body did.
+
+- **The trust's shared properties refused a row without an approval
+  field.** ``GET /trust/<rel>/<peer>/shared_properties`` answered
+  ``not_approved`` for a row with no ``approved`` field, which every other
+  route treats as approved. A conditional trust delete of a row already
+  gone skipped the permission and cache cleanup an unconditional one runs.
+
+- **In a process serving two ActingWeb applications, a changed grant was
+  not seen.** The permission store is rebuilt when another application's
+  config asks for it, and the permission evaluator kept the store it was
+  built with: writes went to the new store while decisions read the old
+  one's cache, so a narrowed grant kept serving what it had excluded. The
+  evaluator now looks the store up on each use. A process with one
+  application was not affected.
+
+- **An approval that also moved the peer's base URI was announced at the
+  old one.** ``modify_trust_and_notify(approved=True, baseuri=...)`` sent
+  the approval to the URL the row had before the write. It goes to the base
+  URI the same call wrote, else to the row's as it stands after the write
+  when that row still holds this call's secret (a row a re-pair replaced
+  keeps the URL read before; a fault re-reading it no longer stops the
+  notice). **Behavior change:** the notice authenticates with the secret
+  the call wrote, when it wrote one (it sent the old one).
+
+- **An async trust creation that failed with an error other than an HTTP
+  one left its half-made row.** ``create_reciprocal_trust_async`` dropped
+  the attempt only on an ``httpx`` error (an invalid URL raised something
+  else), and the next attempt was taken for a re-pair. Any failure of the
+  request now drops the attempt, as the sync method does.
 
 - **A subscriber deleted a live trust when its peer deleted its
   subscriptions.** When every subscription to a peer answered 404,

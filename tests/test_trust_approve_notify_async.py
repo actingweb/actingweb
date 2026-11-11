@@ -47,6 +47,9 @@ def wired() -> Any:
         mock.patch.object(actor_module.requests, "post") as post,
     ):
         trust_cls.return_value.modify.return_value = True
+        # The row read again after the write (3.16: the notification goes
+        # to the base URI as it stands then).
+        trust_cls.return_value.get.return_value = dict(TRUST, verified=True)
         post.return_value = mock.Mock(status_code=204, content=b"")
         yield rels, trust_cls, post
 

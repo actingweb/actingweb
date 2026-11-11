@@ -307,7 +307,10 @@ with a specific permission level, include the ``trust_type`` parameter:
 
    - **Omitted or null**: Simple user login. Creates/looks up actor, no trust relationship.
    - **Specified (e.g., "mcp_client")**: MCP authorization. Creates actor AND trust relationship
-     with the specified permission level.
+     with the specified permission level. The level must be one the client
+     list offers (``configure_oauth2_trust_types``; with none, every
+     registered type except ``admin``): another is 400 at this call, and no
+     trust is created for it at the callback (3.16).
 
 3. Handle Callback
 ~~~~~~~~~~~~~~~~~~

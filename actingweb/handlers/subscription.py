@@ -5,27 +5,44 @@ from typing import Any
 from actingweb.actor import resync_marker_url
 from actingweb.handlers import base_handler
 
+from ..access_decision import (
+    evaluator_or_none,
+    forbidden_body,
+    subscription_allowed,
+)
+from ..permission_evaluator import get_permission_evaluator
+
 logger = logging.getLogger(__name__)
 
 
-def _as_permitted(myself: Any, peerid: str, sub_dict: dict[str, Any], raw: Any) -> Any:
+def _as_permitted(
+    myself: Any,
+    peerid: str,
+    sub_dict: dict[str, Any],
+    raw: Any,
+    snapshot: Any = None,
+) -> Any:
     """A stored diff as the subscriber may read it: diffs are stored whole,
     and a pulled one passes the same filter as the pushed callback
     (``Actor.filter_subscription_blob``). A diff the peer may read none of
     reads as ``{}``, a change that changes nothing (the library's
     subscriber merges it as a no-op), its sequence kept; the push sends
     nothing for it."""
-    filtered = myself.filter_subscription_blob(peerid, sub_dict, raw)
+    filtered = myself.filter_subscription_blob(peerid, sub_dict, raw, snapshot=snapshot)
     if filtered is None:
         return {}
     try:
         return json.loads(filtered)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, RecursionError):
         return filtered
 
 
 def _served(
-    myself: Any, peerid: str, sub_dict: dict[str, Any], raw: Any
+    myself: Any,
+    peerid: str,
+    sub_dict: dict[str, Any],
+    raw: Any,
+    snapshot: Any = None,
 ) -> dict[str, Any]:
     """A stored diff's served fields: ``data`` as the subscriber may read
     it, or, for a client's resync marker (``Actor.resync_marker``), ``type``
@@ -43,7 +60,7 @@ def _served(
         )
         if url:
             return {"type": "resync", "url": url, "data": {}}
-    return {"data": _as_permitted(myself, peerid, sub_dict, raw)}
+    return {"data": _as_permitted(myself, peerid, sub_dict, raw, snapshot)}
 
 
 def _authorize_subscription_write(
@@ -157,7 +174,7 @@ class SubscriptionRootHandler(base_handler.BaseHandler):
             subtarget = params.get("subtarget", "")
             resource = params.get("resource", "")
             granularity = params.get("granularity", "none")
-        except ValueError:
+        except (ValueError, RecursionError):
             peerid = self.request.get("peerid")
             target = self.request.get("target")
             subtarget = self.request.get("subtarget") or ""
@@ -222,7 +239,8 @@ class SubscriptionRelationshipHandler(base_handler.BaseHandler):
             subpath="<id>",
             method="GET",
             peerid=peerid,
-            approved=False,  # Allow access even if not fully approved
+            # A peer this actor has not approved is refused (3.16; it was
+            # admitted "even if not fully approved").
             path_peer=peerid,
         ):
             if self.response:
@@ -306,7 +324,7 @@ class SubscriptionRelationshipHandler(base_handler.BaseHandler):
                 granularity = params["granularity"]
             else:
                 granularity = "none"
-        except ValueError:
+        except (ValueError, RecursionError):
             if self.response:
                 self.response.set_status(400, "No json body")
             return
@@ -320,9 +338,25 @@ class SubscriptionRelationshipHandler(base_handler.BaseHandler):
             if self.response:
                 self.response.set_status(403, "Forbidden. Wrong peer id in request")
             return
-        # Subscription authorization is handled by ACL rules (e.g., ("subscriptions/<id>", "POST", "a"))
-        # The ACL check happens in authenticate_actor/authorize above
-        # Property-level filtering happens at callback time based on permission patterns
+        # The access row (("subscriptions/<id>", "POST", "a")) admits the
+        # route; the grant must let the peer read what it subscribes to
+        # (3.16, spec: subscription creation validates read access). What
+        # each diff carries is filtered again at delivery.
+        decision = subscription_allowed(
+            self.config,
+            actor_id,
+            peerid,
+            str(target or ""),
+            str(subtarget or ""),
+            str(resource or ""),
+            evaluator=evaluator_or_none(self.config, get_permission_evaluator),
+        )
+        if not decision.allowed:
+            if self.response:
+                self.response.set_status(403, "Forbidden")
+                self.response.headers["Content-Type"] = "application/json"
+                self.response.write(json.dumps(forbidden_body(decision)))
+            return
 
         # Use developer API - ActorInterface with SubscriptionManager
         actor_interface = self._get_actor_interface(myself)
@@ -418,13 +452,19 @@ class SubscriptionHandler(base_handler.BaseHandler):
 
         diffs = sub_with_diffs.get_diffs()
         sub_dict = sub_info.to_dict()
+        # One grant read serves every stored diff (3.16).
+        snapshot = (
+            myself.grant_for(peerid)
+            if diffs and sub_dict.get("target") == "properties"
+            else None
+        )
         pairs = []
         for diff in diffs:
             pairs.append(
                 {
                     "sequence": diff["sequence"],
                     "timestamp": diff["timestamp"].strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
-                    **_served(myself, peerid, sub_dict, diff.get("diff")),
+                    **_served(myself, peerid, sub_dict, diff.get("diff"), snapshot),
                 }
             )
 
@@ -471,7 +511,7 @@ class SubscriptionHandler(base_handler.BaseHandler):
                     400, "Error in json body and no GET parameters"
                 )
                 return
-        except (TypeError, ValueError, KeyError):
+        except (TypeError, ValueError, KeyError, RecursionError):
             seq = self.request.get("sequence")
             if len(seq) == 0:
                 self.response.set_status(

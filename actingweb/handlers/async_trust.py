@@ -56,7 +56,7 @@ class AsyncTrustHandler(TrustHandler):
                 relationship = params["relationship"]
             if "desc" in params:
                 desc = params["desc"]
-        except ValueError:
+        except (ValueError, RecursionError):
             url = self.request.get("url")
             relationship = self.request.get("relationship")
         if len(url) == 0:

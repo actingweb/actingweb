@@ -13,6 +13,11 @@ a resource URL with no stored diff, which a 3.16 subscriber never fetches (it
 builds the fetch from the trust's stored base URI as
 ``subscriptions/<own id>/<subid>/<sequence>``, ``handlers/callbacks.py``), so
 every redelivery failed and the peer's circuit opened.
+
+The manager sends the payload as given to every subscriber; it does not apply
+grants. The library's own diff and resync paths filter property data per
+peer before they hand it on (3.16); an application calling ``deliver()``
+directly sends the same data to every peer.
 """
 
 import asyncio

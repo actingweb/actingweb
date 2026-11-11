@@ -126,9 +126,14 @@ class OAuth2StateManager:
         code_challenge: str | None = None,
         code_challenge_method: str | None = None,
         provider: str | None = None,
+        form_nonce: str | None = None,
     ) -> str:
         """
         Create state parameter for MCP OAuth2 flow with trust type selection.
+
+        ``form_nonce``: the nonce of the authorize form the user saw (3.16);
+        the callback compares it with the browser's cookie to bind the
+        sign-in to the form.
 
         Args:
             client_id: MCP client identifier
@@ -155,6 +160,8 @@ class OAuth2StateManager:
         }
         if provider:
             mcp_context["provider"] = provider
+        if form_nonce:
+            mcp_context["form_nonce"] = form_nonce
 
         return self.create_state(mcp_context)
 

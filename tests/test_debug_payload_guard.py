@@ -52,6 +52,10 @@ def test_a_sync_subscription_callback_does_not_summarise(debug_off: Any) -> None
     with (
         mock.patch.object(actor_module, "summarize_payload", _boom),
         mock.patch.object(me, "get_trust_relationship", return_value=trust_rel),
+        # The transport is tested here, not the grant (3.16 re-check admits).
+        mock.patch.object(
+            me, "filter_subscription_blob", side_effect=lambda p, s, b, **k: b
+        ),
         mock.patch.object(actor_module.requests, "post") as post,
     ):
         post.return_value = mock.Mock(status_code=204, content=b"")

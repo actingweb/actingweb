@@ -14,6 +14,13 @@ if TYPE_CHECKING:
     from ..app import ActingWebApp
 
 
+def template_fallback_status(status: int | None) -> int:
+    """The status of the JSON answer sent when a template failed to render:
+    the handler's own error status (a refusal page keeps it), else 500 (a
+    page that could not be shown is not a 200; 3.16)."""
+    return status if status and status >= 400 else 500
+
+
 def default_templates_dir() -> str:
     """Absolute path to the library's built-in default web-UI templates.
 

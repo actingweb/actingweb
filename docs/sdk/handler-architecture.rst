@@ -139,7 +139,10 @@ TrustHandler
 - Trust relationship CRUD
 - Verification protocol (handshake)
 - Permission management
-- Lifecycle hooks (trust_approved, trust_deleted)
+- Lifecycle hooks: ``trust_fully_approved_local`` and ``trust_deleted``
+  through ``TrustManager`` (``fire_approved``, ``fire_deleted``; the trust
+  DELETE fires ``trust_deleted`` after its last secret check);
+  ``trust_fully_approved_remote`` when the peer's approval notice arrives
 
 SubscriptionHandler
 -------------------

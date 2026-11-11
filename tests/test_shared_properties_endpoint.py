@@ -5,6 +5,7 @@ from unittest.mock import Mock, patch
 
 from actingweb.handlers.trust import TrustSharedPropertiesHandler
 from actingweb.permission_evaluator import PermissionResult
+from tests._grant_fakes import StubEvaluator
 
 
 class TestSharedPropertiesEndpoint:
@@ -21,7 +22,7 @@ class TestSharedPropertiesEndpoint:
         self.mock_response.headers = {}
 
     def test_returns_permitted_properties(self):
-        """Endpoint returns only properties peer has subscribe permission on."""
+        """Endpoint returns only properties the peer may read."""
         # Create handler
         webobj = Mock()
         webobj.request = Mock()
@@ -39,7 +40,11 @@ class TestSharedPropertiesEndpoint:
 
         # Mock trust relationship
         mock_actor.get_trust_relationship = Mock(
-            return_value={"peerid": "peer-123", "relationship": "friend"}
+            return_value={
+                "peerid": "peer-123",
+                "relationship": "friend",
+                "approved": True,
+            }
         )
 
         # Mock properties
@@ -55,7 +60,7 @@ class TestSharedPropertiesEndpoint:
             with patch(
                 "actingweb.handlers.trust.get_permission_evaluator"
             ) as mock_get_eval:
-                mock_evaluator = Mock()
+                mock_evaluator = StubEvaluator()
                 mock_get_eval.return_value = mock_evaluator
 
                 # data_public allowed, others denied
@@ -91,9 +96,9 @@ class TestSharedPropertiesEndpoint:
                 assert "data_private" not in shared_names
                 assert "config_settings" not in shared_names
 
-                # Verify excluded list
-                assert "data_private" in response_data["excluded_properties"]
-                assert "config_settings" in response_data["excluded_properties"]
+                # A name the peer may not read is not listed at all (3.16:
+                # "excluded_properties" named them)
+                assert "excluded_properties" not in response_data
 
     def test_requires_matching_peer_authentication(self):
         """Endpoint rejects requests where authenticated peer != path peer."""
@@ -158,7 +163,9 @@ class TestSharedPropertiesEndpoint:
         mock_auth_result.auth_obj.acl = {"peerid": "peer-123"}
 
         # Mock trust relationship
-        mock_actor.get_trust_relationship = Mock(return_value={"peerid": "peer-123"})
+        mock_actor.get_trust_relationship = Mock(
+            return_value={"peerid": "peer-123", "approved": True}
+        )
 
         with patch.object(handler, "authenticate_actor", return_value=mock_auth_result):
             with patch(
@@ -189,7 +196,9 @@ class TestSharedPropertiesEndpoint:
         mock_auth_result.auth_obj.acl = {"peerid": "peer-123"}
 
         # Mock trust relationship
-        mock_actor.get_trust_relationship = Mock(return_value={"peerid": "peer-123"})
+        mock_actor.get_trust_relationship = Mock(
+            return_value={"peerid": "peer-123", "approved": True}
+        )
 
         # Mock multiple properties
         mock_actor.get_properties = Mock(
@@ -205,7 +214,7 @@ class TestSharedPropertiesEndpoint:
             with patch(
                 "actingweb.handlers.trust.get_permission_evaluator"
             ) as mock_get_eval:
-                mock_evaluator = Mock()
+                mock_evaluator = StubEvaluator()
                 mock_get_eval.return_value = mock_evaluator
 
                 # Allow props with "allowed", deny others
@@ -230,7 +239,57 @@ class TestSharedPropertiesEndpoint:
                 assert "allowed_prop2" in shared_names
                 assert len(shared_names) == 2
 
-                excluded_names = response_data["excluded_properties"]
-                assert "denied_prop1" in excluded_names
-                assert "denied_prop2" in excluded_names
-                assert len(excluded_names) == 2
+                assert "excluded_properties" not in response_data
+                assert "denied_prop1" not in json.dumps(response_data)
+
+    def test_a_row_without_the_approved_field_is_not_refused_as_unapproved(
+        self,
+    ) -> None:
+        """Verification 2026-11-10: the snapshot reads ``approved=None`` as
+        approved; this route refused it."""
+        webobj = Mock()
+        webobj.request = Mock()
+        handler = TrustSharedPropertiesHandler(webobj, self.mock_config)
+        handler.response = self.mock_response
+        mock_auth_result = Mock()
+        mock_auth_result.success = True
+        mock_actor = Mock()
+        mock_auth_result.actor = mock_actor
+        mock_auth_result.auth_obj = Mock()
+        mock_auth_result.auth_obj.acl = {"peerid": "peer-123"}
+        mock_actor.get_trust_relationship = Mock(
+            return_value={"peerid": "peer-123", "approved": None}
+        )
+        with (
+            patch.object(handler, "authenticate_actor", return_value=mock_auth_result),
+            # Past the approval check the next step is the evaluator: one
+            # that cannot be built answers 503, which shows the row passed.
+            patch(
+                "actingweb.handlers.trust.get_permission_evaluator",
+                side_effect=RuntimeError("stop here"),
+            ),
+        ):
+            handler.get("actor-123", "friend", "peer-123")
+        assert self.mock_response.set_status.call_args[0][0] == 503
+
+    def test_an_unapproved_peer_is_refused(self):
+        """A trust this actor has not approved lists nothing (3.16)."""
+        webobj = Mock()
+        webobj.request = Mock()
+        handler = TrustSharedPropertiesHandler(webobj, self.mock_config)
+        handler.response = self.mock_response
+        mock_auth_result = Mock()
+        mock_auth_result.success = True
+        mock_actor = Mock()
+        mock_auth_result.actor = mock_actor
+        mock_auth_result.auth_obj = Mock()
+        mock_auth_result.auth_obj.acl = {"peerid": "peer-123"}
+        mock_actor.get_trust_relationship = Mock(
+            return_value={"peerid": "peer-123", "approved": False}
+        )
+        with patch.object(handler, "authenticate_actor", return_value=mock_auth_result):
+            handler.get("actor-123", "friend", "peer-123")
+        assert self.mock_response.set_status.call_args[0][0] == 403
+        assert json.loads(self.mock_response.write.call_args[0][0]) == {
+            "error": "not_approved"
+        }

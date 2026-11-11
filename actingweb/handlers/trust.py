@@ -6,11 +6,13 @@ from typing import Any
 from actingweb import auth
 from actingweb.client_text import sanitize_client_name, sanitize_label
 from actingweb.handlers import base_handler
-from actingweb.permission_evaluator import PermissionResult, get_permission_evaluator
+from actingweb.permission_evaluator import get_permission_evaluator
 
 from ..db import get_actor
 from ..db.creator_rules import is_refused_from_callers, normalise_creator
 from ..db.exceptions import CreatorTaken, DbError
+from ..secret_compare import secret_equals
+from ..trust_permissions import override_applies, permission_updates_problem
 
 # Import permission system with fallback
 try:
@@ -161,7 +163,7 @@ class TrustHandler(base_handler.BaseHandler):
                 relationship = params["relationship"]
             if "desc" in params:
                 desc = params["desc"]
-        except ValueError:
+        except (ValueError, RecursionError):
             url = self.request.get("url")
             relationship = self.request.get("relationship")
         if len(url) == 0:
@@ -288,7 +290,7 @@ class TrustRelationshipHandler(base_handler.BaseHandler):
                 creator = params["creator"]
             else:
                 creator = None
-        except ValueError:
+        except (ValueError, RecursionError):
             if self.response:
                 self.response.set_status(400, "No json content")
             return
@@ -436,7 +438,7 @@ class TrustRelationshipHandler(base_handler.BaseHandler):
                 verification_token = params["verify"]
             else:
                 verification_token = None
-        except ValueError:
+        except (ValueError, RecursionError):
             if self.response:
                 self.response.set_status(400, "No json content")
             return
@@ -687,6 +689,10 @@ class TrustPeerHandler(base_handler.BaseHandler):
             # Add permission information to response
             permission_store = get_trust_permission_store(self.config)
             permissions = permission_store.get_permissions(actor_id, peerid)
+            if not override_applies(permissions, peerid, my_trust.get("relationship")):
+                # A client's override for another type is not applied
+                # (3.16): not shown as its grant either.
+                permissions = None
 
             if permissions:
                 my_trust["permissions"] = {
@@ -763,7 +769,7 @@ class TrustPeerHandler(base_handler.BaseHandler):
             if "approved" in params:
                 if params["approved"] and params["approved"] is True:
                     peer_approved = True
-        except ValueError:
+        except (ValueError, RecursionError):
             if self.response:
                 self.response.set_status(400, "No json content")
             return
@@ -890,6 +896,12 @@ class TrustPeerHandler(base_handler.BaseHandler):
             elif body is None:
                 body = "{}"
             params = json.loads(body)
+            if not isinstance(params, dict):
+                # 3.16: a scalar body raised in the lookups (a 500), and a list
+                # body was taken for an empty edit.
+                if self.response:
+                    self.response.set_status(400, "Body must be an object")
+                return
             if "baseuri" in params:
                 baseuri = params["baseuri"]
             else:
@@ -903,9 +915,18 @@ class TrustPeerHandler(base_handler.BaseHandler):
                     approved = True
 
             # Handle permission updates
-            if "permissions" in params and PERMISSION_SYSTEM_AVAILABLE:
+            if params.get("permissions") is not None and PERMISSION_SYSTEM_AVAILABLE:
+                # ``null`` is no change: the trust GET answers it for a row
+                # without an override, and a client sends it back.
                 permission_updates = params["permissions"]
-        except ValueError:
+                problem = permission_updates_problem(permission_updates)
+                if problem:
+                    # 3.16: a list or scalar failed in the store, a 500, and a
+                    # mistyped rule was stored.
+                    if self.response:
+                        self.response.set_status(400, problem)
+                    return
+        except (ValueError, RecursionError):
             if not self.request.get("_method") or self.request.get("_method") != "PUT":
                 if self.response:
                     self.response.set_status(400, "No json content")
@@ -1021,81 +1042,48 @@ class TrustPeerHandler(base_handler.BaseHandler):
                     self.response.set_status(500, "Internal error")
                 return
 
-        # Update trust relationship
-        trust_updated = actor_interface.trust.modify_and_notify(
-            peer_id=peerid,
-            relationship=relationship,
-            baseuri=baseuri,
-            approved=approved,
-            description=desc,
-        )
-
-        # Trigger trust_fully_approved_local lifecycle hook if this actor just approved and both are now approved
-        if approved is True and self.hooks:
-            try:
-                # Get the trust relationship data to check if both sides approved
-                relationships = myself.get_trust_relationships(
-                    relationship=relationship, peerid=peerid
-                )
-                if relationships:
-                    trust_data = relationships[0]
-                    # Only trigger hook if BOTH sides have approved
-                    if trust_data.get("approved") and trust_data.get("peer_approved"):
-                        logger.info(
-                            f"Trust fully approved locally via PUT: {actor_id} approved, completing relationship with {peerid}"
-                        )
-                        self.hooks.execute_lifecycle_hooks(
-                            "trust_fully_approved_local",
-                            actor=actor_interface,
-                            peer_id=peerid,
-                            relationship=relationship,
-                            trust_data=trust_data,
-                        )
-                        logger.info(
-                            f"trust_fully_approved_local hook triggered for {actor_id} <-> {peerid}"
-                        )
-            except Exception as e:  # folds DbError: hook after approval committed
-                logger.error(
-                    f"Error triggering trust_fully_approved_local hook in PUT handler: {e}"
-                )
-
-        # Update permissions if provided
-        permissions_updated = True
+        # The permissions first, then the trust (3.16): a peer told of an
+        # approval is never left on a grant that failed to store. The
+        # override as it was is kept to restore it if the trust write fails.
+        permission_store = None
+        previous_override = None
         if (
             permission_updates is not None
             and PERMISSION_SYSTEM_AVAILABLE
             and get_trust_permission_store
         ):
+            permission_store = get_trust_permission_store(self.config)
+            # From the store, not the cache (3.16): a failed trust write
+            # restores this, and a stale entry would write it back over a
+            # live override (or delete one).
+            previous_override = permission_store.get_permissions_uncached(
+                actor_id, peerid
+            )
             try:
-                permission_store = get_trust_permission_store(self.config)
-
-                # Check if permissions already exist
-                existing_permissions = permission_store.get_permissions(
-                    actor_id, peerid
-                )
-
-                if existing_permissions:
-                    # Update existing permissions
+                # Stored silently: the peer is told once the trust write
+                # landed (below), never of a grant a failed write rolls back.
+                # A client's override for another type is not applied (and
+                # not shown): the edit replaces it with one holding only what
+                # the owner wrote, for the row's type (3.16: merged into it,
+                # its unseen fields would have applied too).
+                if previous_override and override_applies(
+                    previous_override, peerid, relationship
+                ):
                     permissions_updated = permission_store.update_permissions(
-                        actor_id, peerid, permission_updates
+                        actor_id, peerid, permission_updates, notify_peer=False
                     )
                 elif create_permission_override:
-                    # Create new permission override
-                    permissions_obj = create_permission_override(
-                        actor_id=actor_id,
-                        peer_id=peerid,
-                        trust_type=relationship,  # Use relationship as trust type
-                        permission_updates=permission_updates,
-                    )
                     permissions_updated = permission_store.store_permissions(
-                        permissions_obj
+                        create_permission_override(
+                            actor_id=actor_id,
+                            peer_id=peerid,
+                            trust_type=relationship,  # Use relationship as trust type
+                            permission_updates=permission_updates,
+                        ),
+                        notify_peer=False,
                     )
-
-                if not permissions_updated:
-                    logger.error(
-                        f"Failed to update permissions for trust relationship {actor_id}:{peerid}"
-                    )
-
+                else:
+                    permissions_updated = False
             except DbError:
                 raise
             except Exception as e:
@@ -1103,33 +1091,87 @@ class TrustPeerHandler(base_handler.BaseHandler):
                     f"Error updating permissions for trust relationship {actor_id}:{peerid}: {e}"
                 )
                 permissions_updated = False
+            if not permissions_updated:
+                # Stopped before the trust write: the row stays as it was
+                # (unapproved when this was its approval), the peer is not told.
+                logger.warning(
+                    f"Permissions update failed for actor={actor_id}, peer={peerid}"
+                )
+                self.response.set_status(500, "Failed to update permissions")
+                return
 
-        if trust_updated and permissions_updated:
+        trust_updated = False
+        restore_failed = False
+        try:
+            trust_updated = actor_interface.trust.modify_and_notify(
+                peer_id=peerid,
+                relationship=relationship,
+                baseuri=baseuri,
+                approved=approved,
+                description=desc,
+            )
+        finally:
+            if permission_store is not None and not trust_updated:
+                # The trust was not written: the override goes back to what
+                # it was (an override on an unapproved row grants nothing).
+                restored = (
+                    permission_store.store_permissions(
+                        previous_override, notify_peer=False
+                    )
+                    if previous_override
+                    else permission_store.delete_permissions(actor_id, peerid)
+                )
+                if not restored:
+                    logger.error(
+                        f"The permission override for {actor_id}:{peerid} could "
+                        "not be restored after a failed trust write"
+                    )
+                    restore_failed = True
+
+        if trust_updated and permission_store is not None:
+            permission_store.notify_stored_grant(actor_id, peerid)
+
+        if trust_updated and approved is True:
+            # trust_fully_approved_local, once, on this approval completing
+            # the mutual trust (a repeat PUT fires nothing).
+            try:
+                after = myself.get_trust_relationships(
+                    relationship=relationship, peerid=peerid
+                )
+            except DbError as e:  # folds DbError: hook after the approval committed
+                logger.error(f"Approval hook for {peerid} skipped: {e}")
+                after = []
+            actor_interface.trust.fire_approved(
+                peerid, current, after[0] if after else None
+            )
+
+        if trust_updated:
             self.response.set_status(204, "Ok")
-        elif not trust_updated:
-            # Trust modification failed - check if it's because trust doesn't exist
-            # or because of a validation error
-            relationships = myself.get_trust_relationships(
-                relationship=relationship, peerid=peerid
+            return
+        if restore_failed:
+            # The trust was not written, but the new grant could not be
+            # taken back: say so, not "nothing changed" (3.16).
+            self.response.set_status(
+                500, "Trust not modified; the permissions change could not be undone"
             )
-            if not relationships:
-                logger.warning(
-                    f"Trust modification failed: no trust relationship found for "
-                    f"actor={actor_id}, peer={peerid}, relationship={relationship}"
-                )
-                self.response.set_status(404, "Trust relationship not found")
-            else:
-                logger.warning(
-                    f"Trust modification failed for actor={actor_id}, peer={peerid}, "
-                    f"relationship={relationship} (trust exists but modify failed)"
-                )
-                self.response.set_status(400, "Failed to modify trust relationship")
-        else:
-            # permissions_updated is False
+            return
+        # Trust modification failed - check if it's because trust doesn't
+        # exist or because of a validation error
+        relationships = myself.get_trust_relationships(
+            relationship=relationship, peerid=peerid
+        )
+        if not relationships:
             logger.warning(
-                f"Permissions update failed for actor={actor_id}, peer={peerid}"
+                f"Trust modification failed: no trust relationship found for "
+                f"actor={actor_id}, peer={peerid}, relationship={relationship}"
             )
-            self.response.set_status(500, "Failed to update permissions")
+            self.response.set_status(404, "Trust relationship not found")
+        else:
+            logger.warning(
+                f"Trust modification failed for actor={actor_id}, peer={peerid}, "
+                f"relationship={relationship} (trust exists but modify failed)"
+            )
+            self.response.set_status(400, "Failed to modify trust relationship")
 
     def delete(self, actor_id, relationship, peerid):
         # Use AuthResult for granular control since we need add_response=False and custom logic
@@ -1258,43 +1300,69 @@ class TrustPeerHandler(base_handler.BaseHandler):
                 self.response.set_status(500, "Internal error")
             return
 
-        # Trigger trust_deleted lifecycle hook BEFORE deleting
-        if self.hooks:
-            try:
-                # Pass relationship and trust_data for consistency with trust_approved hook
-                trust_data = relationships[0] if relationships else {}
-                if not trust_data:
-                    logger.warning(
-                        f"trust_deleted hook called for {actor_id} <-> {peerid}, "
-                        f"but trust relationship data not found (may have been deleted already)"
-                    )
-                self.hooks.execute_lifecycle_hooks(
-                    "trust_deleted",
-                    actor=actor_interface,
-                    peer_id=peerid,
-                    relationship=relationship,
-                    trust_data=trust_data,
-                    initiated_by_peer=is_peer,
-                )
-                logger.debug(
-                    f"trust_deleted hook triggered for {actor_id} <-> {peerid}, initiated_by_peer={is_peer}"
-                )
-            except DbError:
-                raise
-            except Exception as e:
-                logger.error(f"Error triggering trust_deleted hook: {e}")
+        # Delete the row this request was authorised against, and only that
+        # one (3.16): a re-pair that replaced it meanwhile keeps its row (the
+        # request answers 404). A peer's bearer names its row's secret; the
+        # creator acted on the row read above.
+        bearer_row = (
+            auth_result.auth_obj.trust
+            if auth_result.auth_obj
+            and auth_result.auth_obj.trust
+            and auth_result.auth_obj.trust.get("peerid") == peerid
+            else None
+        )
+        expected_secret = (
+            str((bearer_row or relationships[0]).get("secret") or "") or None
+        )
+        if expected_secret is not None and not secret_equals(
+            str(relationships[0].get("secret") or ""), expected_secret
+        ):
+            # The bearer authenticated against a row since replaced (a stale
+            # index entry): no hook fires for the new row, nothing is deleted.
+            if self.response:
+                self.response.set_status(404, "Not found")
+            return
 
-        # Delete trust relationship with appropriate peer notification setting
-        if local_only:
-            deleted = myself.delete_reciprocal_trust(peerid=peerid, notify_peers=False)
-        elif is_peer:
-            deleted = actor_interface.trust.delete_peer_trust(
-                peer_id=peerid, notify_peer=False
+        # trust_deleted fires through TrustManager.fire_deleted (the row as
+        # trust_data) after the delete's last secret check and before
+        # anything local goes (3.16): a delete that loses to a re-pair fires
+        # nothing for the row that stands.
+        def before_local_delete(row: dict[str, Any]) -> None:
+            # fire_deleted logs a hook's error and lets a DbError through.
+            if self.hooks:
+                actor_interface.trust.fire_deleted(row, initiated_by_peer=is_peer)
+
+        from ..actor import TrustReplaced
+
+        try:
+            if local_only:
+                deleted = myself.delete_reciprocal_trust(
+                    peerid=peerid,
+                    notify_peers=False,
+                    expected_secret=expected_secret,
+                    before_local_delete=before_local_delete,
+                )
+            elif is_peer:
+                deleted = actor_interface.trust.delete_peer_trust(
+                    peer_id=peerid,
+                    notify_peer=False,
+                    expected_secret=expected_secret,
+                    before_local_delete=before_local_delete,
+                )
+            else:
+                deleted = actor_interface.trust.delete_peer_trust(
+                    peer_id=peerid,
+                    notify_peer=True,
+                    expected_secret=expected_secret,
+                    before_local_delete=before_local_delete,
+                )
+        except TrustReplaced:
+            logger.info(
+                f"Trust {actor_id}:{peerid} was replaced while being deleted; kept"
             )
-        else:
-            deleted = actor_interface.trust.delete_peer_trust(
-                peer_id=peerid, notify_peer=True
-            )
+            if self.response:
+                self.response.set_status(404, "Not found")
+            return
         if not deleted:
             self.response.set_status(502, "Not able to delete relationship with peer.")
             return
@@ -1322,8 +1390,18 @@ class TrustPermissionHandler(base_handler.BaseHandler):
             return
 
         try:
+            # The path's type must be the row's, as the PUT requires (3.16):
+            # what applies is decided by the row's type.
+            myself = auth_result.actor
+            row = myself.get_trust_relationship(peerid=peerid) if myself else None
+            if not row or row.get("relationship") != relationship:
+                if self.response:
+                    self.response.set_status(404, "Trust relationship not found")
+                return
             permission_store = get_trust_permission_store(self.config)
             custom_permissions = permission_store.get_permissions(actor_id, peerid)
+            if not override_applies(custom_permissions, peerid, relationship):
+                custom_permissions = None  # not applied (3.16): the defaults
 
             if custom_permissions:
                 # Return custom permission overrides
@@ -1441,19 +1519,36 @@ class TrustPermissionHandler(base_handler.BaseHandler):
             elif body is None:
                 body = "{}"
             params = json.loads(body)
+            problem = permission_updates_problem(params)
+            if problem:
+                # 3.16: a list or scalar failed in the store, a 500, and a
+                # mistyped rule was stored.
+                if self.response:
+                    self.response.set_status(400, problem)
+                return
 
-            # Validate trust relationship exists
-            relationships = myself.get_trust_relationships(
-                relationship=relationship, peerid=peerid
-            )
-            if not relationships or len(relationships) == 0:
+            # The trust exists with the path's type (one row, as the GET)
+            row = myself.get_trust_relationship(peerid=peerid) if myself else None
+            if not row or row.get("relationship") != relationship:
                 if self.response:
                     self.response.set_status(404, "Trust relationship not found")
                 return
 
             permission_store = get_trust_permission_store(self.config)
-            existing_permissions = permission_store.get_permissions(actor_id, peerid)
+            # From the store, not the cache (3.16): replace-or-merge decides
+            # what is written, and another process may have deleted it.
+            existing_permissions = permission_store.get_permissions_uncached(
+                actor_id, peerid
+            )
 
+            # A client's override for another type is not applied (and not
+            # shown): it is replaced by one holding only this edit, for the
+            # row's type (3.16: merged into it, its unseen fields would have
+            # applied too).
+            if existing_permissions and not override_applies(
+                existing_permissions, peerid, relationship
+            ):
+                existing_permissions = None
             if existing_permissions:
                 # Update existing permissions
                 success = permission_store.update_permissions(actor_id, peerid, params)
@@ -1476,7 +1571,7 @@ class TrustPermissionHandler(base_handler.BaseHandler):
                 else:
                     self.response.set_status(500, "Failed to create permissions")
 
-        except ValueError as e:
+        except (ValueError, RecursionError) as e:
             logger.error(f"Invalid JSON in permission request: {e}")
             if self.response:
                 self.response.set_status(400, "Invalid JSON")
@@ -1511,12 +1606,23 @@ class TrustPermissionHandler(base_handler.BaseHandler):
 
         try:
             permission_store = get_trust_permission_store(self.config)
-            success = permission_store.delete_permissions(actor_id, peerid)
-
-            if success:
-                self.response.set_status(204, "Deleted")
-            else:
+            # Read first, from the store (3.16): a delete of nothing is 404
+            # and tells the peer nothing (the store answered True for an
+            # absent row, so the 404 never came).
+            existing = permission_store.get_permissions_uncached(actor_id, peerid)
+            if not existing:
                 self.response.set_status(404, "No permissions found")
+                return
+            if not permission_store.delete_permissions(actor_id, peerid):
+                self.response.set_status(500, "Failed to delete permissions")
+                return
+            # The peer's grant is back to its type's default: it is told, as
+            # a PUT of the grant tells it (spec: a permission change is
+            # pushed to the peer).
+            permission_store.notify_default_grant(
+                actor_id, peerid, existing.trust_type or relationship
+            )
+            self.response.set_status(204, "Deleted")
 
         except DbError:
             raise
@@ -1559,13 +1665,29 @@ class TrustSharedPropertiesHandler(base_handler.BaseHandler):
             if self.response:
                 self.response.set_status(404, "Trust relationship not found")
             return
+        # A peer this actor has not approved is granted nothing to list
+        # (3.16; it got the same answer as an approved one). Only an explicit
+        # False, as the grant snapshot reads it (a row from before the field
+        # is approved there, and every other route admits it).
+        if trust_rel.get("approved") is False:
+            if self.response:
+                self.response.set_status(403, "Forbidden")
+                self.response.headers["Content-Type"] = "application/json"
+                self.response.write(json.dumps({"error": "not_approved"}))
+            return
 
-        # Get permission evaluator
-        evaluator = (
-            get_permission_evaluator(self.config)
-            if PERMISSION_SYSTEM_AVAILABLE
-            else None
-        )
+        # Get permission evaluator (one that cannot be built is a 503)
+        try:
+            evaluator = (
+                get_permission_evaluator(self.config)
+                if PERMISSION_SYSTEM_AVAILABLE
+                else None
+            )
+        except DbError:
+            raise
+        except Exception as e:
+            logger.error(f"shared_properties: evaluator unavailable: {e}")
+            evaluator = None
         if not evaluator:
             if self.response:
                 self.response.set_status(503, "Permission system not available")
@@ -1605,15 +1727,33 @@ class TrustSharedPropertiesHandler(base_handler.BaseHandler):
         # Remove duplicates
         property_names = list(set(property_names))
 
-        # Filter by peer's permissions
-        shared = []
-        excluded = []
+        # The names the peer may read, decided as a read of each is (3.16:
+        # the operation was "subscribe", which no rule grants, so nothing was
+        # ever listed); one grant read for all.
+        from ..access_decision import decide
 
-        for prop_name in property_names:
-            result = evaluator.evaluate_property_access(
-                actor_id, peerid, prop_name, operation="subscribe"
-            )
-            if result == PermissionResult.ALLOWED:
+        shared = []
+        try:
+            snapshot = evaluator.snapshot(actor_id, peerid)
+        except DbError:
+            raise
+        except Exception as e:
+            logger.error(f"shared_properties: grant for {peerid} unreadable: {e}")
+            if self.response:
+                self.response.set_status(503, "Permission system not available")
+            return
+
+        for prop_name in sorted(property_names):
+            if decide(
+                self.config,
+                actor_id,
+                peerid,
+                "properties",
+                prop_name,
+                "read",
+                evaluator=evaluator,
+                snapshot=snapshot,
+            ).allowed:
                 # Get item count if it's a property list
                 item_count = 0
                 if prop_name in list_name_set and actor_interface is not None:
@@ -1636,15 +1776,14 @@ class TrustSharedPropertiesHandler(base_handler.BaseHandler):
                         "operations": ["read", "subscribe"],
                     }
                 )
-            else:
-                excluded.append(prop_name)
 
+        # The names the peer may not read are not listed: naming them told
+        # it what else the actor holds (3.16).
         response_data = {
             "actor_id": actor_id,
             "peer_id": peerid,
             "relationship": relationship,
             "shared_properties": shared,
-            "excluded_properties": excluded,
         }
 
         if self.response:

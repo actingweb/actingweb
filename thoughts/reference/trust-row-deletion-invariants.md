@@ -34,7 +34,7 @@ runs, and the other numbers were kept so references to them stay valid.
 
 | # | Step | Before the row? | On a fault | Retry reaches it by |
 | --- | --- | --- | --- | --- |
-| 0 | Lifecycle hook `trust_deleted`, before step 1, outside `Trust.delete`: `DELETE /<actor>/trust/<rel>/<peer>` and `TrustManager.delete_relationship`. The sweep (step 6) uses the latter, so sibling rows fire it on every route | yes | a `DbError` propagates (503), row stays; any other hook exception is logged and the delete goes on | the row; **the hook fires again on a retry** |
+| 0 | Lifecycle hook `trust_deleted`, outside `Trust.delete`. `TrustManager.delete_relationship` (and the sweep, step 6, which uses it) fires it before step 1. The REST `DELETE /<actor>/trust/<rel>/<peer>` and `sync_peer` fire it through `delete_reciprocal_trust(before_local_delete=)`, after step 1 and the second secret check, before step 2 (3.16): a delete that loses to a re-pair, or finds no row, fires nothing. `sync_peer_async` awaits it before step 1 with the row it read | yes | a `DbError` propagates (503), row stays (on the REST route the peer's side may be gone already: its retry DELETE answers 404, which counts as deleted); any other hook exception is logged and the delete goes on | the row; **the hook fires again on a retry** |
 | 1 | Remote DELETE to the peer (peer trusts only) | yes | a refusal or no answer is logged; with `delete_peer`, the call answers False and the row stays. A 404 counts as deleted (the peer has no row) | the row |
 | 2 | Subscriptions, remote-peer store, callback state, peer profile, capabilities, peer permissions | yes | a raised `DbError` stops it, row stays. Their return values are not checked: a store that answers False instead of raising lets the row go with its data left (subscriptions are non-strict: a fault leaves orphans) | the row (when it raised) |
 | 3a | Owner (the client row is in this actor's bucket, and the index names no other actor): `disable_client` (tokens, then index row, then client row; both rows confirmed) | yes | `DbError`, row stays, and the client row stays (a token store that cannot list every token raises before any row goes; an index row confirmed gone with the client row not is a failure) | the row; `client_owned_by` reads the client row and the missing index names nobody else, so the retry takes 3a again |
@@ -65,6 +65,45 @@ permission store's cache (`TrustPermissionStore._cache`) is per process and
 has no TTL: after a delete in one worker, another worker can serve its
 cached permissions for a row with the same peer id until it restarts. See
 `thoughts/todo/mcp-cache-lifecycle-and-revocation.md`.
+
+## The conditional delete (3.16)
+
+`DELETE /<actor>/trust/<rel>/<peer>` deletes only the row it was authorised
+against: the handler passes that row's secret (the bearer's row for a peer,
+the row as read for the creator) as `expected_secret` to
+`Actor.delete_reciprocal_trust` (or `TrustManager.delete_peer_trust`). A
+re-pair swaps the secret, so a different secret means a different row.
+
+1. **Before step 1** (the remote DELETE): each listed row's secret is
+   compared; a mismatch raises `TrustReplaced` (the handler answers 404).
+2. **Before step 2** (the local cleanup): the row is read again
+   (`Trust.get`, a consistent read on DynamoDB) and compared.
+3. **Step 7**: `Trust.delete(only_if_secret=)` compares on a fresh read
+   before steps 3-4, and `DbTrust.delete(only_if_secret=)` deletes on the
+   condition (DynamoDB `attribute_not_exists(id) OR secret = :s`;
+   PostgreSQL `... AND secret = %s`, then a re-read on rowcount 0 to tell
+   absent, True, from replaced, False). A False with a different row
+   standing raises `TrustReplaced`.
+
+**The remaining window.** A re-pair that lands after check 2 and before
+step 7 keeps its row, but step 2 has run (and step 0 fired for the old row,
+on the REST route): its subscriptions, remote-peer
+store, callback state and peer profile are gone, and steps 3-4 may have run
+for an OAuth2 row. The new row stands without them; the peer's next sync
+re-creates the subscriptions. Closing it would need the cleanup to run
+after the row delete, which breaks rule 2 (the row is the retry handle).
+`tests/test_trust_conditional_delete.py` holds both sides of check 2.
+
+The same window, smaller, on a retry that finds the row **absent** at
+step 7: it runs step 8 (permissions) at once. A re-pair that creates the
+row and writes a custom override between that read and step 8 loses the
+override (the row falls back to its type's default) and the retry answers
+True. Accepted (verification re-run 1, Issue D): a second read would only
+move the window, the new row's creator can write the override again, and
+answering True for a row already gone is the delete's idempotent answer.
+
+Without `expected_secret` (`TrustManager.delete_relationship`, the bulk
+routes) nothing changes: whatever row the peer id names is deleted.
 
 ## Known residue (accepted)
 

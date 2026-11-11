@@ -38,7 +38,22 @@ if TYPE_CHECKING:
 
 # TrustTypeRegistry imported locally where needed
 
+from ..permission_integration import (
+    client_trust_type_acceptable,
+    default_client_trust_type,
+)
+from ..secret_compare import secret_equals
+
 logger = logging.getLogger(__name__)
+
+# The cookies that bind an MCP client's sign-in to the browser (3.16). Over
+# https they carry the __Host- prefix (no Domain, Path=/, Secure: a sibling
+# subdomain cannot plant one); over http (development, the test apps) the
+# bare name without Secure.
+FORM_NONCE_COOKIE = "aw_authz_nonce"
+CONFIRM_COOKIE = "aw_authz_confirm"
+_FLOW_COOKIE_MAX_AGE = 600
+CONFIRM_TEMPLATE = "aw-oauth-confirm.html"
 
 # The cookies a logout clears, as ``(name, path)``. ``access_token`` and
 # ``oauth_token`` are the SPA cookie-mode pair, ``refresh_token`` is set at
@@ -52,6 +67,26 @@ _LOGOUT_COOKIES: tuple[tuple[str, str], ...] = (
     ("refresh_token", LEGACY_REFRESH_COOKIE_PATH),
     ("session_id", "/"),
 )
+
+
+_form_without_nonce_warned = False
+
+
+def _warn_form_without_nonce() -> None:
+    """A browser that was shown the authorize form (it holds the nonce
+    cookie) posted it without ``form_nonce`` (3.16): most likely a custom
+    ``aw-oauth-authorization-form.html`` without the hidden input, so every
+    sign-in goes through the confirmation page. Once per process."""
+    global _form_without_nonce_warned
+    if _form_without_nonce_warned:
+        return
+    _form_without_nonce_warned = True
+    logger.warning(
+        "An authorize form was posted without form_nonce: if the application "
+        "overrides aw-oauth-authorization-form.html, add "
+        '<input type="hidden" name="form_nonce" value="{{ form_nonce }}"> to '
+        "every form, or each sign-in asks for a confirmation"
+    )
 
 
 class OAuth2EndpointsHandler(BaseHandler):
@@ -105,6 +140,8 @@ class OAuth2EndpointsHandler(BaseHandler):
             return self._handle_token_request()
         elif path == "authorize":
             return self._handle_authorization_request("POST")
+        elif path == "authorize/confirm":
+            return self._handle_confirmation()
         elif path == "logout":
             return self._handle_logout_request("POST")
         else:
@@ -265,12 +302,13 @@ class OAuth2EndpointsHandler(BaseHandler):
                     "scope": form_data.get("scope", [""])[0],
                     "state": form_data.get("state", [""])[0],
                     "email": form_data.get("email", [""])[0],
-                    "trust_type": form_data.get("trust_type", ["mcp_client"])[
-                        0
-                    ],  # Default to mcp_client
+                    # None chosen: the client default (decided by the server)
+                    "trust_type": form_data.get("trust_type", [""])[0],
                     "provider": form_data.get("provider", [""])[
                         0
                     ],  # OAuth provider (google/github)
+                    # The form's nonce (3.16): rides in the state to the callback
+                    "form_nonce": form_data.get("form_nonce", [""])[0],
                     # PKCE, carried back by the form's hidden inputs
                     "code_challenge": form_data.get("code_challenge", [""])[0] or None,
                     "code_challenge_method": form_data.get(
@@ -278,6 +316,13 @@ class OAuth2EndpointsHandler(BaseHandler):
                     )[0]
                     or None,
                 }
+
+            if (
+                method == "POST"
+                and not params.get("form_nonce")
+                and self._flow_cookie(FORM_NONCE_COOKIE)
+            ):
+                _warn_form_without_nonce()
 
             # Debug logging for MCP OAuth2 flow
             if logger.isEnabledFor(logging.DEBUG):
@@ -518,33 +563,209 @@ class OAuth2EndpointsHandler(BaseHandler):
                 "error_description": self.request.get("error_description") or "",
             }
 
-            # Handle using OAuth2 server
-            callback_response = self.oauth2_server.handle_oauth_callback(params)
-
-            if callback_response.get("action") == "redirect":
-                # Redirect back to MCP client
-                redirect_url = callback_response.get("url")
-                if redirect_url:
-                    self.response.set_status(302, "Found")
-                    self.response.set_redirect(redirect_url)
-                    return {"status": "redirect", "location": redirect_url}
-                else:
-                    return self.error_response(
-                        500, "Failed to create callback redirect URL"
-                    )
-            else:
-                # Error response
-                error = callback_response.get("error", "server_error")
-                description = callback_response.get(
-                    "error_description", "OAuth2 callback failed"
-                )
-                return self.error_response(400, f"{error}: {description}")
+            # Handle using OAuth2 server: the browser's nonce cookie and the
+            # application's decision hook go with it (3.16).
+            callback_response = self.oauth2_server.handle_oauth_callback(
+                params,
+                form_nonce_cookie=self._flow_cookie(FORM_NONCE_COOKIE),
+                decide_trust=self._decide_trust(),
+            )
+            return self.answer_callback(callback_response)
 
         except DbError:
             raise
         except Exception as e:
             logger.error(f"Error in OAuth2 callback: {e}")
             return self.error_response(500, "Internal server error")
+
+    def _header(self, name: str) -> str:
+        """A request header, matched without regard to case (the integrations
+        pass them lowercased or as sent)."""
+        headers = (self.request.headers if self.request else None) or {}
+        for key, value in headers.items():
+            if key.lower() == name:
+                return str(value or "")
+        return ""
+
+    def _secure(self) -> bool:
+        return str(getattr(self.config, "proto", "")).startswith("https")
+
+    def _cookie_name(self, base: str) -> str:
+        return f"__Host-{base}" if self._secure() else base
+
+    def _set_flow_cookie(
+        self, base: str, value: str, *, max_age: int | None = None
+    ) -> None:
+        """A sign-in flow cookie: HttpOnly, ten minutes, ``SameSite=None``
+        over https (Apple returns by a cross-site POST), Lax over http."""
+        self.response.set_cookie(
+            self._cookie_name(base),
+            value,
+            max_age=_FLOW_COOKIE_MAX_AGE if max_age is None else max_age,
+            path="/",
+            secure=self._secure(),
+            httponly=True,
+            samesite="None" if self._secure() else "Lax",
+        )
+
+    def _flow_cookie(self, base: str) -> str | None:
+        cookies = (self.request.cookies if self.request else None) or {}
+        value = cookies.get(self._cookie_name(base))
+        return str(value) if value else None
+
+    def _set_page_headers(self) -> None:
+        """The form and the confirmation are not framed or cached, and refer
+        no other site (3.16). ``same-origin``, not ``no-referrer``: under
+        ``no-referrer`` a browser sends ``Origin: null`` on the page's own
+        POST, which a browser without Fetch Metadata then has refused as
+        cross-site (the confirmation's Approve)."""
+        self.response.headers["X-Frame-Options"] = "DENY"
+        self.response.headers["Content-Security-Policy"] = "frame-ancestors 'none'"
+        self.response.headers["Cache-Control"] = "no-store"
+        self.response.headers["Referrer-Policy"] = "same-origin"
+
+    def _decide_trust(self) -> Any:
+        """The application's ``oauth2_trust_requested`` hooks as a callable
+        for the server, or None when there are no hooks."""
+        hooks = self.hooks
+        if hooks is None:
+            return None
+        config = self.config
+
+        def decide(actor: Any, trust_type: str, **info: Any) -> str | None:
+            return hooks.decide_oauth2_trust(actor, trust_type, config, **info)
+
+        return decide
+
+    def _confirm_refusal(self, status: int, error: str, message: str) -> dict[str, Any]:
+        """A refused confirmation: the JSON error for an API caller, the
+        confirmation template with ``error`` (no form) for a browser (3.16;
+        a person saw raw JSON)."""
+        self.response.set_status(status)
+        if "application/json" in self._header("accept") or not self._header("accept"):
+            return {"error": error, "error_description": message}
+        self._set_page_headers()
+        self.response.template_name = CONFIRM_TEMPLATE
+        self.response.template_values = {"error": message}
+        return {}
+
+    def answer_callback(self, callback_response: dict[str, Any]) -> dict[str, Any]:
+        """A callback's (or confirmation's) answer as this handler sends it:
+        a redirect, the confirmation page (template ``aw-oauth-confirm.html``,
+        or JSON for ``Accept: application/json``), or an error. The form's
+        nonce cookie is cleared: it is single use."""
+        self._set_flow_cookie(FORM_NONCE_COOKIE, "", max_age=0)
+        action = callback_response.get("action")
+        if action == "redirect" and callback_response.get("url"):
+            redirect_url = str(callback_response["url"])
+            self.response.set_status(302, "Found")
+            self.response.set_redirect(redirect_url)
+            return {"status": "redirect", "location": redirect_url}
+        if action == "confirm":
+            token = str(callback_response.get("token") or "")
+            self._set_flow_cookie(CONFIRM_COOKIE, token)
+            self._set_page_headers()
+            values = {
+                "client_name": callback_response.get("client_name"),
+                "client_id": callback_response.get("client_id"),
+                "redirect_host": callback_response.get("redirect_host"),
+                "trust_type": callback_response.get("trust_type"),
+                "trust_type_display_name": callback_response.get(
+                    "trust_type_display_name"
+                ),
+                "trust_type_description": callback_response.get(
+                    "trust_type_description"
+                ),
+                "confirm_token": token,
+                "form_action": "/oauth/authorize/confirm",
+            }
+            if "application/json" in self._header("accept"):
+                return {"action": "confirm", **values}
+            self.response.template_name = CONFIRM_TEMPLATE
+            self.response.template_values = values
+            return {}
+        error = callback_response.get("error", "server_error")
+        description = callback_response.get(
+            "error_description", "OAuth2 callback failed"
+        )
+        status = 503 if error == "temporarily_unavailable" else 400
+        return self.error_response(status, f"{error}: {description}")
+
+    def _handle_confirmation(self) -> dict[str, Any]:
+        """``POST /oauth/authorize/confirm`` (3.16): the user approves or
+        declines a paused authorisation. Refused cross-site (evidence
+        required); the token must match the cookie set with the page."""
+        from urllib.parse import parse_qs
+
+        # The page's cookie is an ambient credential another site's form
+        # would carry, so the request must show it came from this app.
+        from actingweb import cross_site as cs
+
+        from ..oauth2_server.token_manager import TokenStoreUnavailable
+
+        if cs.cross_site(
+            self.request.get_header,
+            getattr(self.config, "root", "") or "",
+            require_evidence=True,
+            session_cookie=True,
+        ):
+            return self._confirm_refusal(
+                403,
+                "forbidden",
+                "This request did not come from this site's confirmation page.",
+            )
+        body = self.request.body
+        text = (
+            body.decode("utf-8", "ignore")
+            if isinstance(body, bytes)
+            else str(body or "")
+        )
+        form = parse_qs(text)
+        token = (form.get("token") or [""])[0]
+        decision = (form.get("decision") or [""])[0]
+        cookie = self._flow_cookie(CONFIRM_COOKIE)
+        if not token or not cookie or not secret_equals(token, cookie):
+            return self._confirm_refusal(
+                400,
+                "invalid_request",
+                "This confirmation was already answered, has expired, or was "
+                "opened in another browser. Start again from the application.",
+            )
+        if decision not in ("approve", "decline"):
+            return self._confirm_refusal(
+                400, "invalid_request", "Choose Approve or Decline."
+            )
+        try:
+            answer = self.oauth2_server.handle_confirmation(
+                token, decision == "approve", decide_trust=self._decide_trust()
+            )
+        except TokenStoreUnavailable:
+            # The pending record was not consumed: the cookie stays, so the
+            # user's retry of the same page can still answer (3.16).
+            return self._confirm_refusal(
+                503,
+                "temporarily_unavailable",
+                "The service could not answer just now. Reload this page to try again.",
+            )
+        # The pending record is spent (single use): so is the cookie.
+        self._set_flow_cookie(CONFIRM_COOKIE, "", max_age=0)
+        if answer.get("action") not in ("redirect", "confirm"):
+            # An expired or spent pending record, or a failure completing it:
+            # a page for a person, JSON for a client, as the refusals above
+            # (verification re-run 1: it reached the browser as JSON).
+            self._set_flow_cookie(FORM_NONCE_COOKIE, "", max_age=0)
+            error = str(answer.get("error") or "server_error")
+            status = {"temporarily_unavailable": 503, "server_error": 500}.get(
+                error, 400
+            )
+            return self._confirm_refusal(
+                status,
+                error,
+                "This confirmation could not be completed: "
+                f"{answer.get('error_description') or error}. Start again "
+                "from the application.",
+            )
+        return self.answer_callback(answer)
 
     def _render_authorization_form(
         self, form_data: dict[str, Any]
@@ -565,9 +786,15 @@ class OAuth2EndpointsHandler(BaseHandler):
         is_browser_request = (
             ui_or_mcp_enabled
             and self.request
-            and self.request.headers
-            and self.request.headers.get("Accept", "").find("application/json") == -1
+            and "application/json" not in self._header("accept")
         )
+        # The browser binding (3.16): the nonce is set as a cookie here and
+        # carried by the form and every provider link the form offers; the
+        # callback compares the two.
+        form_nonce = str(form_data.get("form_nonce") or "")
+        if form_nonce:
+            self._set_flow_cookie(FORM_NONCE_COOKIE, form_nonce)
+        self._set_page_headers()
 
         if is_browser_request:
             # Get available trust types for selection
@@ -621,10 +848,10 @@ class OAuth2EndpointsHandler(BaseHandler):
             for trust_type in trust_types:
                 should_include = True
 
-                # Option 1: Filter by developer configuration (highest priority)
-                if allowed_by_developer is not None:
-                    if trust_type.name not in allowed_by_developer:
-                        should_include = False
+                # Option 1: the client list (3.16: with no list, every
+                # registered type except admin; admin only when listed)
+                if not client_trust_type_acceptable(self.config, trust_type.name):
+                    should_include = False
 
                 # Option 2: Filter by OAuth2 scope if specified
                 # Skip scope filtering if no scope is requested (show all allowed types)
@@ -695,18 +922,13 @@ class OAuth2EndpointsHandler(BaseHandler):
                 )
                 # Don't provide hardcoded fallbacks - app must configure trust types
 
-            # Determine default trust type from app configuration (no hardcoded default)
-            default_trust_type = None
-            if oauth2_config:
-                configured_default = oauth2_config.get("default")
-                if configured_default and any(
-                    tt["name"] == configured_default for tt in available_trust_types
-                ):
-                    default_trust_type = configured_default
-
-            # If no default configured but trust types available, use first one
-            if default_trust_type is None and available_trust_types:
-                default_trust_type = available_trust_types[0]["name"]
+            # The preselected type: the client default when offered here
+            # (3.16; it was the first type in the registry, admin with no
+            # list configured), else the first offered.
+            offered = [tt["name"] for tt in available_trust_types]
+            default_trust_type = default_client_trust_type(self.config)
+            if default_trust_type not in offered:
+                default_trust_type = offered[0] if offered else None
 
             # Generate OAuth provider URLs (like factory handler does)
             oauth_enabled = False
@@ -750,6 +972,7 @@ class OAuth2EndpointsHandler(BaseHandler):
                             "trust_type": default_trust_type,
                             "flow_type": "mcp_oauth2",
                             "provider": prov_name,
+                            "form_nonce": form_nonce or None,
                             # PKCE binds the code the callback issues
                             "code_challenge": form_data.get("code_challenge"),
                             "code_challenge_method": form_data.get(
@@ -779,10 +1002,11 @@ class OAuth2EndpointsHandler(BaseHandler):
                         else:
                             state_param = encrypted_state
 
-                        auth_url = auth.create_authorization_url(
-                            state=state_param,
-                            trust_type=default_trust_type or "",
-                        )
+                        # The type rides in the state (the encrypted MCP
+                        # context, or the nonce's payload for Apple): passing
+                        # it here wrapped a short state in JSON, and Apple
+                        # posted back JSON no nonce matched (3.16).
+                        auth_url = auth.create_authorization_url(state=state_param)
                         oauth_providers.append(
                             {
                                 "name": prov_name,
@@ -821,6 +1045,9 @@ class OAuth2EndpointsHandler(BaseHandler):
                 "oauth2_trust_control_enabled": True,  # Indicate that trust type control is available
                 "oauth_enabled": oauth_enabled,  # Enable OAuth buttons
                 "oauth_providers": oauth_providers,  # OAuth provider list
+                # Every form posts it back (a hidden input): it binds the
+                # sign-in to this browser (3.16).
+                "form_nonce": form_nonce,
             }
             return None  # Template will be rendered by framework
 
@@ -836,6 +1063,7 @@ class OAuth2EndpointsHandler(BaseHandler):
                 "client_name": form_data.get("client_name", "MCP Client"),
                 "form_action": "/oauth/authorize",
                 "form_method": "POST",
+                "form_nonce": form_nonce,
             },
             "template": "oauth_authorization_form",  # Template to render
             "message": f"Authorize {form_data.get('client_name', 'MCP Client')} to access your ActingWeb data",

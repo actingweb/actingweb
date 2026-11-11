@@ -662,6 +662,17 @@ class OAuth2CallbackHandler(BaseHandler):
             f"About to check trust_type for relationship creation: trust_type='{trust_type}'"
         )
         if trust_type:
+            # Re-checked here: a state built before a list change, or by hand,
+            # creates no trust the client list does not offer (3.16).
+            from ..permission_integration import client_trust_type_acceptable
+
+            if not client_trust_type_acceptable(self.config, str(trust_type)):
+                logger.warning(
+                    f"SPA sign-in asked for trust_type {trust_type!r}, which is not "
+                    "offered to clients; no trust created"
+                )
+                trust_type = None
+        if trust_type:
             logger.info(
                 f"Creating trust relationship for trust_type='{trust_type}' and identifier='{identifier}'"
             )
@@ -1470,22 +1481,27 @@ class OAuth2AppleCallbackHandler(OAuth2CallbackHandler):
         """Complete an LLM-triggered (MCP) Apple flow via the MCP OAuth2 server."""
         if not code:
             return self.error_response(400, "Missing authorization code")
-        try:
-            from ..oauth2_server.oauth2_server import ActingWebOAuth2Server
+        # The same completion as the GET callback (3.16): the browser's nonce
+        # cookie, the decision hook, and the confirmation page when the
+        # sign-in is not bound to the browser that showed the form.
+        from .oauth2_endpoints import FORM_NONCE_COOKIE, OAuth2EndpointsHandler
 
-            server = ActingWebOAuth2Server(self.config)
-            result = server.handle_oauth_callback({"code": code, "state": mcp_state})
+        endpoints = OAuth2EndpointsHandler(config=self.config, hooks=self.hooks)
+        endpoints.request = self.request
+        endpoints.response = self.response
+        try:
+            result = endpoints.oauth2_server.handle_oauth_callback(
+                {"code": code, "state": mcp_state},
+                form_nonce_cookie=endpoints._flow_cookie(FORM_NONCE_COOKIE),  # pyright: ignore[reportPrivateUsage]
+                decide_trust=endpoints._decide_trust(),  # pyright: ignore[reportPrivateUsage]
+            )
         except DbError:
             raise
         except Exception as e:
             logger.error(f"Apple MCP callback dispatch failed: {e}")
             return self.error_response(500, "Internal server error")
 
-        if result.get("action") == "redirect" and result.get("url"):
-            self.response.set_status(302, "Found")
-            self.response.set_redirect(result["url"])
-            return {"redirect_required": True, "redirect_url": result["url"]}
-
-        error = result.get("error", "server_error")
-        description = result.get("error_description", "OAuth2 callback failed")
-        return self.error_response(400, f"{error}: {description}")
+        answer = endpoints.answer_callback(result)
+        if answer.get("status") == "redirect":
+            return {"redirect_required": True, "redirect_url": answer["location"]}
+        return answer

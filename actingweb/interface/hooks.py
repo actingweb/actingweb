@@ -22,17 +22,17 @@ from typing import (
     is_typeddict,
 )
 
+from ..access_decision import PERMISSION_DENIED, decide
 from ..db.exceptions import DbError
 
 # Import permission system for transparent permission checking
 try:
-    from ..permission_evaluator import PermissionResult, get_permission_evaluator
+    from ..permission_evaluator import get_permission_evaluator
 
     PERMISSION_SYSTEM_AVAILABLE = True
 except ImportError:
     # Fallback definitions for when permission system is not available
     get_permission_evaluator = None
-    PermissionResult = None
     PERMISSION_SYSTEM_AVAILABLE = False  # pyright: ignore[reportConstantRedefinition]
 
 
@@ -199,6 +199,24 @@ def _get_auto_schemas(
     return input_schema, output_schema
 
 
+_trust_approved_warned = False
+
+
+def _warn_trust_approved_deprecated() -> None:
+    """Registering ``trust_approved`` logs one deprecation warning per
+    process (3.16)."""
+    global _trust_approved_warned
+    if _trust_approved_warned:
+        return
+    _trust_approved_warned = True
+    logger.warning(
+        "The trust_approved hook is deprecated: register "
+        "trust_fully_approved_local (it fires on every approving route); "
+        "trust_approved runs only when no trust_fully_approved_local hook is "
+        "registered"
+    )
+
+
 class HookType(Enum):
     """Types of hooks available."""
 
@@ -232,6 +250,10 @@ class LifecycleEvent(Enum):
     # proved the address and the actor was replaced or cleaned.
     ACTOR_ADOPTED = "actor_adopted"
     OAUTH_SUCCESS = "oauth_success"
+    # An OAuth2/MCP client is about to get a trust (3.16): the application
+    # may decline or lower the type. Its own fail-closed dispatcher,
+    # HookRegistry.decide_oauth2_trust.
+    OAUTH2_TRUST_REQUESTED = "oauth2_trust_requested"
     TRUST_APPROVED = "trust_approved"
     TRUST_DELETED = "trust_deleted"
     SUBSCRIPTION_DELETED = "subscription_deleted"
@@ -373,77 +395,106 @@ class HookRegistry:
         Returns:
             True if access is permitted, False otherwise
         """
-        if not PERMISSION_SYSTEM_AVAILABLE:
-            # Permission system not available - allow access
-            return True
-
         if not auth_context or not auth_context.get("peer_id"):
             # No peer context - this is likely basic/oauth auth, allow access
             return True
 
+        if hook_type == "property":
+            return self._check_property_hook_permission(
+                resource_name, actor, auth_context
+            )
+
+        if hook_type not in ("method", "action"):
+            logger.warning(f"Unknown hook type for permission check: {hook_type}")
+            return True
+
+        # Methods and actions (3.16): the shared decision, as their routes
+        # ask it; a stated rule that does not match denies, an error or a
+        # missing actor or configuration denies (it allowed).
+        actor_id = getattr(actor, "id", None) or getattr(actor, "actor_id", None)
+        peer_id = str(auth_context.get("peer_id") or "")
+        config = auth_context.get("config")
+        if not actor_id or not config or get_permission_evaluator is None:
+            logger.warning(
+                f"{hook_type} hook refused: no actor, configuration or evaluator"
+            )
+            return False
         try:
-            # Extract context
-            actor_id = getattr(actor, "id", None) or getattr(actor, "actor_id", None)
-            if not actor_id:
-                logger.warning("Cannot determine actor ID for permission check")
-                return True  # Allow if we can't determine actor
-
-            peer_id = auth_context.get("peer_id", "")
-            config = auth_context.get("config")
-
-            if not peer_id or not config:
-                return True  # No peer relationship or config
-
-            # Get permission evaluator and check access
-            if PERMISSION_SYSTEM_AVAILABLE:
-                evaluator = get_permission_evaluator(config)  # type: ignore
-            else:
-                logger.warning(
-                    "Permission system is not available due to failed import."
-                )
-                return True
-
-            if hook_type == "property":
-                hook_operation = auth_context.get("operation", "get")
-                # Map hook operations to permission operations
-                operation_map = {
-                    "get": "read",
-                    "put": "write",
-                    "post": "write",
-                    "delete": "delete",
-                }
-                permission_operation = operation_map.get(hook_operation, "read")
-                result = evaluator.evaluate_property_access(
-                    actor_id, peer_id, resource_name, permission_operation
-                )
-            elif hook_type == "method":
-                result = evaluator.evaluate_method_access(
-                    actor_id, peer_id, resource_name
-                )
-            elif hook_type == "action":
-                result = evaluator.evaluate_action_access(
-                    actor_id, peer_id, resource_name
-                )
-            else:
-                logger.warning(f"Unknown hook type for permission check: {hook_type}")
-                return True
-
-            if result == PermissionResult.ALLOWED:  # type: ignore
-                return True
-            elif result == PermissionResult.DENIED:  # type: ignore
-                logger.info(
-                    f"Hook access denied: {hook_type}:{resource_name} for {actor_id} -> {peer_id}"
-                )
-                return False
-            else:  # NOT_FOUND
-                # No specific permission rule - allow for backward compatibility
-                return True
-
+            evaluator = get_permission_evaluator(config)
+            allowed = decide(
+                config,
+                str(actor_id),
+                peer_id,
+                "methods" if hook_type == "method" else "actions",
+                resource_name,
+                "call" if hook_type == "method" else "execute",
+                # The request's own verb (the handler passes it), as its
+                # route was decided with.
+                method=str(auth_context.get("method") or "POST"),
+                evaluator=evaluator,
+            ).allowed
         except DbError:
             raise
         except Exception as e:
             logger.error(f"Error in hook permission check: {e}")
-            return True  # Allow on errors to maintain compatibility
+            return False
+        if not allowed:
+            logger.info(
+                f"Hook access denied: {hook_type}:{resource_name} for {actor_id} -> {peer_id}"
+            )
+        return allowed
+
+    def _check_property_hook_permission(
+        self, property_path: str, actor: Any, auth_context: dict[str, Any]
+    ) -> bool:
+        """A peer's property hook runs only where the shared access decision
+        allows the operation (3.16).
+
+        The handler's own decision for the request rides in the context
+        (``decision``) and is used as it is; otherwise the decision is made
+        on ``permission_path`` (the property's true path), else on the path
+        built from the hook's arguments. A grant that does not mention
+        properties leaves it to the access table; an error, a peer with no
+        actor id or no configuration denies. A storage fault raises.
+        """
+        decision = auth_context.get("decision")
+        if decision is not None:
+            return bool(decision.allowed)
+        actor_id = getattr(actor, "id", None) or getattr(actor, "actor_id", None)
+        peer_id = str(auth_context.get("peer_id") or "")
+        config = auth_context.get("config")
+        if not actor_id or not config:
+            logger.warning(
+                "Property hook refused: the actor or the configuration is unknown"
+            )
+            return False
+        operation = {
+            "get": "read",
+            "put": "write",
+            "post": "write",
+            "delete": "delete",
+        }.get(str(auth_context.get("operation", "get")), "read")
+        path = str(auth_context.get("permission_path") or property_path)
+        try:
+            if get_permission_evaluator is None:
+                return False
+            # Resolved here, as the handlers resolve theirs (a patch on this
+            # module applies).
+            evaluator = get_permission_evaluator(config)
+            return decide(
+                config,
+                str(actor_id),
+                peer_id,
+                "properties",
+                path,
+                operation,
+                evaluator=evaluator,
+            ).allowed
+        except DbError:
+            raise
+        except Exception as e:
+            logger.error(f"Error in property hook permission check: {e}")
+            return False
 
     def register_property_hook(
         self, property_name: str, func: Callable[..., Any]
@@ -514,9 +565,60 @@ class HookRegistry:
             event: Lifecycle event name
             func: Function with signature ``(actor, **kwargs) -> Any``
         """
+        if event == "trust_approved":
+            _warn_trust_approved_deprecated()
         if event not in self._lifecycle_hooks:
             self._lifecycle_hooks[event] = []
         self._lifecycle_hooks[event].append(func)
+
+    def decide_oauth2_trust(
+        self, actor: Any, trust_type: str, config: Any, **kwargs: Any
+    ) -> str | None:
+        """The type an OAuth2/MCP client gets after the application's
+        ``oauth2_trust_requested`` hooks, or None when it is declined (3.16).
+
+        Each hook is called as ``hook(actor, trust_type=..., client_id=...,
+        client_name=..., redirect_uri=..., provider=..., email=...,
+        confirmed=..., **kwargs)`` and returns None (accept), a type name
+        (use it) or False (decline). Fail closed, unlike the other lifecycle
+        hooks: any False declines, an exception declines (logged), two hooks
+        naming different types decline, and a type the client list does not
+        accept declines. A storage fault (``DbError``) propagates.
+        """
+        from ..permission_integration import client_trust_type_acceptable
+
+        chosen: str | None = None
+        for hook in self._lifecycle_hooks.get(
+            LifecycleEvent.OAUTH2_TRUST_REQUESTED.value, []
+        ):
+            try:
+                result = self._execute_hook_in_sync_context(
+                    hook, actor, trust_type=trust_type, **kwargs
+                )
+            except DbError:
+                raise
+            except Exception as e:
+                logger.error(
+                    f"oauth2_trust_requested hook {getattr(hook, '__name__', hook)} "
+                    f"raised; the authorisation is declined: {e}"
+                )
+                return None
+            if result is False:
+                return None
+            if result is None:
+                continue
+            if not isinstance(result, str) or (chosen and chosen != result):
+                logger.warning("oauth2_trust_requested hooks disagree; declined")
+                return None
+            chosen = result
+        effective = chosen or trust_type
+        if not client_trust_type_acceptable(config, effective):
+            logger.warning(
+                f"oauth2_trust_requested chose {effective!r}, which the client "
+                "list does not accept; declined"
+            )
+            return None
+        return effective
 
     def register_method_hook(self, method_name: str, func: Callable[..., Any]) -> None:
         """
@@ -603,6 +705,9 @@ class HookRegistry:
     ) -> Any:
         """Execute property hooks with transparent permission checking.
 
+        A peer's hooks run only where its grant allows the operation; a
+        denial returns ``PERMISSION_DENIED`` (3.16), distinct from ``None``.
+
         Note: If you have async hooks and are in an async context,
         use execute_property_hooks_async() instead for proper async execution.
         Async hooks in this method will be executed via asyncio.run() which
@@ -619,7 +724,9 @@ class HookRegistry:
             "property", property_path, actor, auth_context
         ):
             logger.debug(f"Property hook permission denied for {property_path}")
-            return None if operation in ["put", "post"] else value
+            # Distinct from None (a hook hiding a value or rejecting a
+            # write): the caller answers 403 (3.16).
+            return PERMISSION_DENIED
 
         # Execute hooks for specific property
         if property_name in self._property_hooks:
@@ -774,22 +881,51 @@ class HookRegistry:
         Async hooks in this method will be executed via asyncio.run() which
         may cause issues if already in an event loop.
         """
+        return self._each_lifecycle_hook(
+            event,
+            lambda hook: self._execute_hook_in_sync_context(hook, actor, **kwargs),
+        )
+
+    def _each_lifecycle_hook(
+        self, event: str, run: Callable[[Callable[..., Any]], Any]
+    ) -> Any:
+        """Run ``event``'s lifecycle hooks with ``run(hook)``, in order, with
+        the one error policy (a ``DbError`` propagates, a bad signature is
+        reported once, anything else is logged and the next hook runs). The
+        result of the last hook that returned something."""
         result = None
-
-        if event in self._lifecycle_hooks:
-            for hook in self._lifecycle_hooks[event]:
-                try:
-                    hook_result = self._execute_hook_in_sync_context(
-                        hook, actor, **kwargs
-                    )
-                    if hook_result is not None:
-                        result = hook_result
-                except DbError:
-                    raise
-                except Exception as e:
-                    logger.error(f"Error in lifecycle hook for {event}: {e}")
-
+        for hook in self._lifecycle_hooks.get(event, []):
+            try:
+                hook_result = run(hook)
+                if hook_result is not None:
+                    result = hook_result
+            except DbError:
+                raise
+            except TypeError as e:
+                self._report_signature_error(event, hook, e)
+            except Exception as e:
+                logger.error(f"Error in lifecycle hook for {event}: {e}")
         return result
+
+    _signature_errors_reported: set[tuple[str, str]] = set()
+
+    @classmethod
+    def _report_signature_error(cls, event: str, hook: Any, error: TypeError) -> None:
+        """A lifecycle hook that raised ``TypeError``, most often one written
+        without ``**kwargs`` that is handed an argument it does not name
+        (3.16: ``trust_deleted`` gets ``initiated_by_peer`` on every route).
+        The first one per hook and event, per process, is logged with the
+        hook's name and the hint; every later one as any hook error."""
+        name = getattr(hook, "__qualname__", None) or repr(hook)
+        if (event, name) in cls._signature_errors_reported:
+            logger.error(f"Error in lifecycle hook for {event}: {error}")
+            return
+        cls._signature_errors_reported.add((event, name))
+        logger.error(
+            f"Lifecycle hook {name} for {event} raised TypeError ({error}); "
+            "if it does not take **kwargs, add it (a lifecycle hook must "
+            "accept **kwargs)"
+        )
 
     def execute_method_hooks(
         self,
@@ -1045,7 +1181,9 @@ class HookRegistry:
             auth_context: Optional authentication context
 
         Returns:
-            Modified property value or None if operation was rejected
+            Modified property value or None if operation was rejected;
+            ``PERMISSION_DENIED`` when the caller's grant does not allow the
+            operation (3.16; the caller answers 403)
         """
         path = path or []
 
@@ -1058,7 +1196,9 @@ class HookRegistry:
             "property", property_path, actor, auth_context
         ):
             logger.debug(f"Property hook permission denied for {property_path}")
-            return None if operation in ["put", "post"] else value
+            # Distinct from None (a hook hiding a value or rejecting a
+            # write): the caller answers 403 (3.16).
+            return PERMISSION_DENIED
 
         # Execute hooks for specific property
         if property_name in self._property_hooks:
@@ -1227,6 +1367,37 @@ class HookRegistry:
 
         return processed
 
+    LOOP_HOOK_TIMEOUT_SECONDS = 120.0
+    """How long a worker thread waits for a coroutine hook it scheduled on
+    the caller's loop (``execute_lifecycle_hooks_for_loop``)."""
+
+    def execute_lifecycle_hooks_for_loop(
+        self, event: str, loop: asyncio.AbstractEventLoop, actor: Any, **kwargs: Any
+    ) -> Any:
+        """``execute_lifecycle_hooks`` from a worker thread that an async
+        caller on ``loop`` is waiting on (3.16): a coroutine hook is awaited
+        on ``loop``, so its loop-bound resources work, and a sync hook runs
+        here, off the loop. Same error policy; a coroutine hook that does not
+        finish within ``LOOP_HOOK_TIMEOUT_SECONDS`` (or a loop that stopped)
+        is cancelled and logged, and the next hook runs. Cancelling asks the
+        task to stop; a hook that catches ``CancelledError`` keeps running
+        on ``loop`` while the caller goes on. Never call it on ``loop``'s
+        own thread: it would wait on itself."""
+
+        def run(hook: Callable[..., Any]) -> Any:
+            if not inspect.iscoroutinefunction(hook):
+                return hook(actor, **kwargs)
+            future = asyncio.run_coroutine_threadsafe(hook(actor, **kwargs), loop)
+            try:
+                return future.result(timeout=self.LOOP_HOOK_TIMEOUT_SECONDS)
+            except TimeoutError:
+                future.cancel()
+                raise RuntimeError(
+                    f"hook did not finish within {self.LOOP_HOOK_TIMEOUT_SECONDS}s"
+                ) from None
+
+        return self._each_lifecycle_hook(event, run)
+
     async def execute_lifecycle_hooks_async(
         self, event: str, actor: Any, **kwargs: Any
     ) -> Any:
@@ -1254,6 +1425,8 @@ class HookRegistry:
                         result = hook_result
                 except DbError:
                     raise
+                except TypeError as e:
+                    self._report_signature_error(event, hook, e)
                 except Exception as e:
                     logger.error(f"Error in lifecycle hook for {event}: {e}")
 

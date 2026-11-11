@@ -20,6 +20,14 @@ Signature: ``func(actor, operation: str, value: Any, path: List[str]) -> Optiona
 - ``path``: Subkeys for nested access (e.g., ``["settings", "theme"]``)
 - Return new value to allow/transform, or ``None`` to hide/deny
 - Matching: exact name first, then wildcard ``"*"`` handlers
+- A peer's hook runs only where its grant allows the operation (the same
+  decision as the route). On a denial ``execute_property_hooks`` returns
+  ``actingweb.access_decision.PERMISSION_DENIED`` for every operation and
+  the handlers answer 403; ``None`` keeps its meaning. An error in the check
+  denies. ``path`` is passed as it was before 3.16 (on some routes it starts
+  with the property name); a hook that reads a name from it keeps working.
+- In a bulk ``POST /properties`` every name is authorised before any hook
+  runs; a hook that rejects a later name does not undo earlier ones.
 
 Example:
 
@@ -130,6 +138,18 @@ Lifecycle Hooks
 Decorator: ``app.lifecycle_hook(event: str)``
 
 Signature: ``func(actor, **kwargs) -> Any``
+
+``oauth2_trust_requested`` (3.16): an OAuth2/MCP client is about to get a
+trust on ``actor``. Keyword arguments: ``trust_type``, ``client_id``,
+``client_name``, ``redirect_uri``, ``provider``, ``email``, ``confirmed``
+(the user approved on the confirmation page). Return ``None`` to accept, a
+type name to use it instead, or ``False`` to decline. A type other than the
+one the user chose is shown to the user on the confirmation page and
+granted only on Approve; at Approve (``confirmed=True``) and from
+``complete_client_authorization`` a different answer declines. Unlike the
+other lifecycle hooks it fails closed: any ``False``, an exception, two hooks
+naming different types, or a type the client list (or the client's own
+``allowed_trust_types``) does not offer declines.
 
 - Common events: ``actor_created``, ``actor_deleted``, ``actor_deleted_complete``, ``actor_adopted``, ``oauth_success``, ``trust_initiated``, ``trust_request_received``, ``trust_fully_approved_local``, ``trust_fully_approved_remote``, ``trust_deleted``, ``subscription_deleted``, ``email_verification_required``, ``email_sign_in_code_required``, ``email_verified``
 
@@ -382,9 +402,9 @@ and the next sign-in retries.
 
     **Use Cases**: UI notification "You approved! Relationship established", analytics, triggering subscriptions
 
-    **Note**: Fires when this actor's approval completes the mutual trust (peer had already approved): an approval through ``PUT /trust/<rel>/<peer>`` or the web UI, and (3.16) creating the trust toward a peer whose verified request was waiting (``POST /trust``, the web form, ``TrustManager.create_relationship``). ``TrustManager.approve_relationship`` fires ``trust_approved`` instead; the trustee path (``create_peer_trustee``) fires neither. A pending request replaced by a request that verifies, or by the owner's own, fires no ``trust_deleted``.
+    **Note**: Fires once, when this actor's approval completes the mutual trust (the peer had already approved), on every approving route: ``PUT /trust/<rel>/<peer>`` and the web UI, ``TrustManager.approve_relationship`` and ``approve_relationship_async``, and creating the trust toward a peer whose verified request was waiting (``POST /trust``, the web form, ``TrustManager.create_relationship``). A repeat approval of a trust already approved fires nothing (3.16). ``trust_data`` is the row as approved. The trustee path (``create_peer_trustee``) fires nothing. A pending request replaced by a request that verifies, or by the owner's own, fires no ``trust_deleted``.
 
-    **Built-in Behavior**: If peer profile caching is enabled (``with_peer_profile()``), the peer's profile is automatically fetched and cached when this hook fires.
+    **Built-in Behavior**: none on this hook. With ``with_peer_profile()`` the peer's profile is fetched and cached by the first sync (``sync_peer``) or ``refresh_peer_profile()``, not when this hook fires.
 
 ``trust_fully_approved_remote``
     Triggered when the PEER actor approves a trust relationship, completing mutual approval (both sides now approved).
@@ -402,21 +422,27 @@ and the next sign-in retries.
 
     **Note**: Fires when the peer's approval completes the mutual trust (this actor had already approved).
 
-    **Built-in Behavior**: If peer profile caching is enabled (``with_peer_profile()``), the peer's profile is automatically fetched and cached when this hook fires.
+    **Built-in Behavior**: none on this hook (the peer profile, as above, is cached by the first sync).
+
+``trust_approved`` (deprecated)
+    The pre-3.16 name of ``trust_fully_approved_local``. It runs in its place, with the same arguments, only when no ``trust_fully_approved_local`` hook is registered; registering it logs a deprecation warning (once per process). With both registered only ``trust_fully_approved_local`` runs. Rename the hook.
 
 ``trust_deleted``
-    Triggered when a trust relationship is deleted.
+    Triggered before a trust relationship's local data is deleted, on every route that deletes one: ``DELETE /trust/<rel>/<peer>`` (by the owner or the peer), ``TrustManager.delete_relationship`` and its async twin, and a peer's revocation found by ``sync_peer``. On the REST route and in ``sync_peer`` it fires after the delete has found the row (and, on REST, checked it is still the row the request was authorised against): a delete that loses to a re-pair, or that finds no row, fires nothing. ``sync_peer_async`` fires it the same way, from the delete's own read of the row: a coroutine hook is awaited on the caller's event loop (given up after 120 seconds), a sync hook runs in the delete's worker thread.
 
-    **Signature**: ``func(actor: ActorInterface, peer_id: str, relationship: str, trust_data: dict) -> None``
+    **Signature**: ``func(actor: ActorInterface, peer_id: str, relationship: str, trust_data: dict, initiated_by_peer: bool, **kwargs) -> None``
 
     **Parameters**:
 
     - ``actor``: The ActorInterface for the current actor
     - ``peer_id``: The ID of the peer in the trust relationship
     - ``relationship``: The type of trust relationship (e.g., "friend", "partner")
-    - ``trust_data``: Dictionary containing the trust relationship data (may be empty if trust was already deleted)
+    - ``trust_data``: The trust row as it was before the delete (3.16: on every route)
+    - ``initiated_by_peer``: True when the peer deleted the trust (its ``DELETE``, or its revocation found by a sync)
 
-    **Built-in Behavior**: If peer profile caching is enabled (``with_peer_profile()``), the cached peer profile is automatically deleted when this hook fires.
+    A hook must accept ``**kwargs``: one that names only some arguments raises ``TypeError``, which is logged (the hook named at ERROR once per process) and does not stop the delete.
+
+    **Built-in Behavior**: the hook runs before the row and its data are removed, so it can still read the cached peer profile (``actor.trust.get_peer_profile(peer_id)``); the delete then removes the profile, the subscriptions, the peer's stored data and the grant.
 
 ``subscription_deleted``
     Triggered when a subscription is deleted (inbound subscriptions only).

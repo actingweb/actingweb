@@ -101,6 +101,73 @@ class TrustPermissions:
         return True
 
 
+_EDITABLE_FIELDS = frozenset(
+    {"properties", "methods", "actions", "tools", "resources", "prompts", "notes"}
+)
+"""What ``update_permissions`` takes from an update."""
+
+_IDENTITY_FIELDS = frozenset(
+    {"actor_id", "peer_id", "trust_type", "created_by", "updated_at"}
+)
+"""What it never does: an override's identity and its bookkeeping."""
+
+
+_CATEGORIES = tuple(sorted(_EDITABLE_FIELDS - {"notes"}))
+PERMISSION_CATEGORIES = _CATEGORIES
+"""The permission categories an override holds (one list for the store, the
+intake check and the evaluator)."""
+_RULE_LIST_KEYS = ("patterns", "excluded_patterns", "operations", "allowed", "denied")
+
+
+def _is_name_list(value: Any) -> bool:
+    return isinstance(value, list) and all(isinstance(v, str) for v in value)
+
+
+def permission_updates_problem(updates: Any) -> str | None:
+    """Why ``updates`` (a grant edit from a request) cannot be stored, or
+    None (3.16). An edit is an object; each permission category is an object
+    or null; a rule's pattern and operation keys are lists of strings (a
+    string in their place replaced the trust type's list on merge, dropping
+    its base exclusions)."""
+    if not isinstance(updates, dict):
+        return "Permissions must be an object"
+    if updates.get("notes") is not None and not isinstance(updates["notes"], str):
+        return "notes must be text"
+    for category in _CATEGORIES:
+        rule = updates.get(category)
+        if rule is None:
+            continue
+        if category == "properties" and isinstance(rule, list):
+            # The shorthand list of property names.
+            if not all(isinstance(item, str) for item in rule):
+                return "properties must be names"
+            continue
+        if not isinstance(rule, dict):
+            return f"{category} must be an object"
+        for key in _RULE_LIST_KEYS:
+            if key in rule and not _is_name_list(rule[key]):
+                return f"{category}.{key} must be a list of strings"
+    return None
+
+
+def is_client_peer(peer_id: str) -> bool:
+    """An OAuth2/MCP client's peer id (``oauth2_client:...``), the rows a
+    client authorisation creates and re-types (3.16)."""
+    return str(peer_id or "").startswith("oauth2_client:")
+
+
+def override_applies(permissions: Any, peer_id: str, row_type: str | None) -> bool:
+    """Whether a stored override is applied for this trust (3.16, owner
+    decision 2026-11-11): always for a peer; for an OAuth2/MCP client only
+    when it names the row's type (its level is the one the user approved).
+    The evaluator, the owner's grant API and the views use this one rule."""
+    if permissions is None:
+        return False
+    if not is_client_peer(peer_id):
+        return True
+    return str(getattr(permissions, "trust_type", "") or "") == str(row_type or "")
+
+
 class TrustPermissionStore:
     """
     Storage manager for per-trust-relationship permissions.
@@ -606,8 +673,53 @@ class TrustPermissionStore:
             logger.error(f"Error listing trust permissions for actor {actor_id}: {e}")
             return []
 
+    def get_permissions_uncached(
+        self, actor_id: str, peer_id: str
+    ) -> TrustPermissions | None:
+        """The stored override, read from the store, not the cache (3.16: a
+        delete decides from what is there). A fault raises ``DbError``."""
+        self._cache.pop(f"{actor_id}:{peer_id}", None)
+        return self.get_permissions(actor_id, peer_id)
+
+    def notify_default_grant(
+        self, actor_id: str, peer_id: str, trust_type: str
+    ) -> None:
+        """Tell the peer its grant is back to its trust type's default (3.16:
+        the override was deleted), through the sender a store uses, with its
+        resends; when peer notification is on. Fire-and-forget."""
+        if not self._should_notify_peer(None):
+            return
+        try:
+            self._notify_peer(
+                create_permission_override(
+                    actor_id=actor_id,
+                    peer_id=peer_id,
+                    trust_type=trust_type,
+                    permission_updates={},
+                )
+            )
+        except Exception as e:  # folds DbError: notification after the delete
+            logger.warning(
+                f"Could not tell {peer_id} its grant from {actor_id} was reset: {e}"
+            )
+
+    def notify_stored_grant(self, actor_id: str, peer_id: str) -> None:
+        """Send the peer the grant stored for it now, when peer notification
+        is on (3.16: the trust ``PUT`` stores a grant silently and tells the
+        peer only once the trust write landed). Fire-and-forget."""
+        if not self._should_notify_peer(None):
+            return
+        try:
+            stored = self.get_permissions_uncached(actor_id, peer_id)
+            if stored:
+                self._notify_peer(stored)
+        except Exception as e:  # folds DbError: notification after the write
+            logger.warning(f"Could not tell {peer_id} its grant from {actor_id}: {e}")
+
     def delete_permissions(self, actor_id: str, peer_id: str) -> bool:
-        """Delete trust relationship permissions."""
+        """Delete trust relationship permissions. Sends nothing to the peer:
+        its callers delete a row's override with the row or before a new one
+        (the REST delete of a grant notifies, ``notify_default_grant``)."""
         bucket = self._get_permissions_bucket(actor_id)
         if not bucket:
             return False
@@ -640,7 +752,11 @@ class TrustPermissionStore:
             return False
 
     def update_permissions(
-        self, actor_id: str, peer_id: str, updates: dict[str, Any]
+        self,
+        actor_id: str,
+        peer_id: str,
+        updates: dict[str, Any],
+        notify_peer: bool | None = None,
     ) -> bool:
         """Update specific permission fields for a trust relationship.
 
@@ -661,7 +777,13 @@ class TrustPermissionStore:
 
             # Update only the specified fields, normalizing properties format
             for field, value in updates.items():
-                if hasattr(existing, field):
+                if field in _IDENTITY_FIELDS:
+                    # Which actor, peer and base type an override belongs to
+                    # is the store's, never the request's (3.16: the store
+                    # keys on these, so an owner's PUT could write into
+                    # another actor's grants).
+                    logger.warning(f"Refused to update permission field: {field}")
+                elif field in _EDITABLE_FIELDS:
                     # Normalize properties to spec-compliant format
                     if field == "properties":
                         from .peer_permissions import normalize_property_permission
@@ -675,7 +797,7 @@ class TrustPermissionStore:
             updated_permissions = TrustPermissions.from_dict(updated_data)
 
             # Store the updated permissions
-            return self.store_permissions(updated_permissions)
+            return self.store_permissions(updated_permissions, notify_peer=notify_peer)
 
         except DbError:
             raise
@@ -689,6 +811,52 @@ class TrustPermissionStore:
 
 
 # Permission helper functions
+
+
+_EXCLUSION_KEYS = ("excluded_patterns", "denied")
+_DENY_RULE: dict[str, Any] = {"patterns": [], "operations": [], "allowed": []}
+"""A rule that allows nothing, in both rule shapes (patterns/operations and
+allowed); it replaces the trust type's rule, never merges into it."""
+
+
+def _well_formed_rule(category: str, rule: Any) -> dict[str, Any]:
+    """An override's rule for ``category`` in the shape the evaluator reads,
+    failing toward less access (3.16; a row written before the intake check
+    or through the store API may hold anything):
+
+    - not an object: the ``properties`` shorthand list of names is
+      normalised; anything else is an empty rule, which denies (it replaced
+      the trust type's rule and denied before; falling back to the trust
+      type's rule granted more);
+    - an allow list (``patterns``, ``operations``, ``allowed``) that is not
+      a list of names is empty: for ``operations`` and ``allowed``, which
+      replace the trust type's, it allows nothing; ``patterns`` merges by
+      union, so an empty one leaves the trust type's patterns, as a valid
+      empty override does;
+    - an exclusion (``excluded_patterns``, ``denied``) given as one string
+      excludes that pattern; any other malformed one is dropped, so the
+      trust type's own exclusions stay (it replaced them).
+    """
+    if not isinstance(rule, dict):
+        if category == "properties" and _is_name_list(rule):
+            from .peer_permissions import normalize_property_permission
+
+            normalized = normalize_property_permission(rule)
+            if isinstance(normalized, dict):
+                return normalized
+        logger.debug(f"Override {category} is not an object; it allows nothing")
+        return dict(_DENY_RULE)
+    out: dict[str, Any] = {}
+    for key, value in rule.items():
+        if key not in _RULE_LIST_KEYS or _is_name_list(value):
+            out[key] = value
+        elif key in _EXCLUSION_KEYS:
+            if isinstance(value, str):
+                out[key] = [value]
+            # else: dropped, the trust type's exclusions apply
+        else:
+            out[key] = []
+    return out
 
 
 def merge_permissions(
@@ -720,7 +888,8 @@ def merge_permissions(
     Security Notes:
         - With merge_base=True: Cannot accidentally remove base security exclusions
         - With merge_base=False: Full override capability, use with caution
-        - Other fields (operations, allowed, denied) are always replaced by overrides
+        - Other fields (operations, allowed, denied) are replaced by overrides
+        - A malformed rule fails toward less access (``_well_formed_rule``)
     """
     if not override_permissions:
         return base_permissions.copy()
@@ -735,40 +904,38 @@ def merge_permissions(
         if overrides is None:
             # None means use base permissions for this category
             continue
+        replaces = not isinstance(overrides, dict) and not (
+            category == "properties" and _is_name_list(overrides)
+        )
+        overrides = _well_formed_rule(category, overrides)
 
-        if category in merged:
-            if isinstance(merged[category], dict) and isinstance(overrides, dict):
-                # Deep merge dictionaries
-                merged_category = merged[category].copy()
-                for key, value in overrides.items():
-                    if (
-                        merge_base
-                        and key in UNION_MERGE_FIELDS
-                        and isinstance(value, list)
-                    ):
-                        # Union merge: combine arrays, preserving base values
-                        # - Empty override arrays preserve base values (fail-safe)
-                        # - To clear base values entirely, use merge_base=False
-                        # - Pattern order: base patterns first, then new patterns
-                        #   (order doesn't affect evaluation; all patterns are matched)
-                        base_list = merged_category.get(key, [])
-                        if isinstance(base_list, list):
-                            # Combine and deduplicate, base values first
-                            combined = list(base_list) + [
-                                item for item in value if item not in base_list
-                            ]
-                            merged_category[key] = combined
-                        else:
-                            merged_category[key] = value
+        if replaces:
+            # Not a rule: it allows nothing, whatever the trust type allows.
+            merged[category] = overrides
+        elif category in merged and isinstance(merged[category], dict):
+            # Deep merge dictionaries
+            merged_category = merged[category].copy()
+            for key, value in overrides.items():
+                if merge_base and key in UNION_MERGE_FIELDS:
+                    # Union merge: combine arrays, preserving base values
+                    # - Empty override arrays preserve base values (fail-safe)
+                    # - To clear base values entirely, use merge_base=False
+                    # - Pattern order: base patterns first, then new patterns
+                    #   (order doesn't affect evaluation; all patterns are matched)
+                    base_list = merged_category.get(key, [])
+                    if isinstance(base_list, list):
+                        # Combine and deduplicate, base values first
+                        merged_category[key] = list(base_list) + [
+                            item for item in value if item not in base_list
+                        ]
                     else:
-                        # Replace: override value replaces base value
                         merged_category[key] = value
-                merged[category] = merged_category
-            else:
-                # Replace with override
-                merged[category] = overrides
+                else:
+                    # Replace: override value replaces base value
+                    merged_category[key] = value
+            merged[category] = merged_category
         else:
-            # Add new category
+            # Add new category (or replace a base that is not an object)
             merged[category] = overrides
 
     return merged
@@ -810,7 +977,9 @@ def create_permission_override(
         tools=permission_updates.get("tools"),
         resources=permission_updates.get("resources"),
         prompts=permission_updates.get("prompts"),
-        created_by=permission_updates.get("created_by", "system"),
+        # The store's bookkeeping, not the request's (3.16; an update
+        # refuses it too).
+        created_by="system",
         notes=permission_updates.get("notes"),
     )
 

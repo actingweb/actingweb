@@ -134,6 +134,47 @@ def test_a_secret_named_mid_row_is_replaced_and_its_bearer_resolves(monkeypatch)
     assert "fresh-secret" not in text
 
 
+@pytest.mark.parametrize("key", ["client_secret", "access_token", "refresh_token"])
+def test_an_oauth2_secret_nobody_named_fails_the_guard(monkeypatch, key):
+    """The ``wire_oauth`` rows: each OAuth2 secret a response carries is
+    named by the row, or the recording fails."""
+    recording = _recording(A1, B1, SUB1, SECRET1, 5561)
+    recording["steps"][0]["wire"][0]["response"] = {key: "fresh-oauth-value"}
+    with pytest.raises(AssertionError, match="unnamed secret"):
+        _normalise(monkeypatch, recording, A1, B1, SECRET1, 5561)
+    out = normalise(
+        recording, {A1: "A", B1: "B"}, {SECRET1: "trust:A-B", "fresh-oauth-value": "x"}
+    )
+    assert out["steps"][0]["wire"][0]["response"] == {key: "<secret:x>"}
+
+
+def test_an_unnamed_oauth2_client_id_fails_the_guard(monkeypatch):
+    """``mcp_`` and hex is no hex word to ``_HEX32`` (``_`` joins them)."""
+    recording = _recording(A1, B1, SUB1, SECRET1, 5561)
+    recording["steps"][0]["wire"][0]["request"]["note"] = "mcp_" + "ab" * 16
+    with pytest.raises(AssertionError, match="normaliser left"):
+        _normalise(monkeypatch, recording, A1, B1, SECRET1, 5561)
+
+
+def test_a_host_inside_an_encoded_url_is_named(monkeypatch):
+    recording = _recording(A1, B1, SUB1, SECRET1, 5561)
+    recording["steps"][0]["wire"][0]["request"]["note"] = (
+        "redirect_uri=http%3A%2F%2Flocalhost%3A5561%2Foauth%2Fcallback"
+    )
+    out = _normalise(monkeypatch, recording, A1, B1, SECRET1, 5561)
+    assert out["steps"][0]["wire"][0]["request"]["note"] == (
+        "redirect_uri=http%3A%2F%2F<wire_app>%2Foauth%2Fcallback"
+    )
+
+
+def test_set_cookie_keeps_name_and_attributes():
+    assert (
+        _wire._cookie("aw_n=abc123; Path=/; HttpOnly")  # pyright: ignore[reportPrivateUsage]
+        == "aw_n=<cookie>; Path=/; HttpOnly"
+    )
+    assert _wire._cookie("odd") == "odd"  # pyright: ignore[reportPrivateUsage]
+
+
 # ---------------------------------------------------------------------------
 # The comparer
 # ---------------------------------------------------------------------------
@@ -293,27 +334,29 @@ _ENTRY = """
 [rows."WX1"]
 test = "test_x.py::test_wx1"
 owners = {owners}
-exposure = false
+exposure = {exposure}
 expected = "something"
 reason = ["2026-11-07 first recording (p:0)"]
 """
 
 
 @pytest.mark.parametrize(
-    ("owners", "files", "problem"),
+    ("owners", "files", "problem", "exposure"),
     [
-        ("[]", ["WX1.json"], None),
-        ("[]", [], "no recording WX1.json"),
-        ("[]", ["WX1.json", "WX2.json"], "WX2.json: no row"),
-        ("[]", ["WX1.json", "WX1.actual.json"], "left over"),
-        ('["no-phase"]', ["WX1.json"], "owners must be"),
-        ('["q:1"]', ["WX1.json"], "not a [reserved] plan"),
+        ("[]", ["WX1.json"], None, "false"),
+        ("[]", [], "no recording WX1.json", "false"),
+        ("[]", ["WX1.json", "WX2.json"], "WX2.json: no row", "false"),
+        ("[]", ["WX1.json", "WX1.actual.json"], "left over", "false"),
+        ('["no-phase"]', ["WX1.json"], "owners must be", "false"),
+        ('["q:1"]', ["WX1.json"], "not a [reserved] plan", "false"),
+        ("[]", ["WX1.json"], "an exposure row must name an owner", "true"),
+        ('["p:1"]', ["WX1.json"], None, "true"),
     ],
 )
-def test_the_registry_check(tmp_path, owners, files, problem):
+def test_the_registry_check(tmp_path, owners, files, problem, exposure):
     wire_dir = tmp_path / "wire"
     wire_dir.mkdir()
-    (wire_dir / "rows.toml").write_text(_ENTRY.format(owners=owners))
+    (wire_dir / "rows.toml").write_text(_ENTRY.format(owners=owners, exposure=exposure))
     for name in files:
         (wire_dir / name).write_text("{}\n")
     (tmp_path / "test_x.py").write_text("def test_wx1():\n    pass\n")

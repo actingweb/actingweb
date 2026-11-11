@@ -8,8 +8,9 @@ to Google OAuth2.
 
 import logging
 import re
+import secrets
 from typing import TYPE_CHECKING, Any
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 from ..db.exceptions import DbError
 from ..oauth2 import create_oauth2_authenticator
@@ -25,6 +26,20 @@ logger = logging.getLogger(__name__)
 
 # RFC 7636 §4.2: a code_challenge is 43-128 unreserved characters.
 _PKCE_CHALLENGE_RE = re.compile(r"[A-Za-z0-9._~-]{43,128}")
+
+
+def _shown_host(redirect_uri: str) -> str:
+    """The host a confirmation page names as where the code goes (3.16):
+    host and port only. ``netloc`` carries userinfo, so
+    ``https://claude.ai@evil.test/cb`` read as claude.ai while the code went
+    to evil.test."""
+    parsed = urlparse(redirect_uri)
+    host = parsed.hostname or ""
+    try:
+        port = parsed.port
+    except ValueError:
+        port = None
+    return f"{host}:{port}" if host and port else host
 
 
 class ActingWebOAuth2Server:
@@ -94,8 +109,11 @@ class ActingWebOAuth2Server:
             # For MCP, we need an actor context
             # If no actor_id provided, we'll need to determine it from the request context
             if not actor_id:
-                # In practice, this might come from authentication or be a default
-                # For now, we'll create a system actor for the client
+                # An anonymous registration (RFC 7591): the client lives on the
+                # OAuth2 system actor, and a user grants it a level later, at
+                # sign-in. It may not choose its own level or a grant that
+                # needs no user (3.16).
+                registration_data = self._anonymous_registration(registration_data)
                 from .system_actor import ensure_oauth2_system_actor
 
                 actor_id = ensure_oauth2_system_actor(self.config)
@@ -116,6 +134,45 @@ class ActingWebOAuth2Server:
         except Exception as e:
             logger.error(f"Client registration error: {e}")
             raise ValueError("Internal server error during client registration") from e
+
+    def _anonymous_registration(
+        self, registration_data: dict[str, Any]
+    ) -> dict[str, Any]:
+        """An anonymous registration's data as stored (3.16): a requested
+        ``trust_type`` the client list does not accept, or ``grant_types``
+        asking for ``client_credentials``, is refused (``ValueError``, a 400
+        ``invalid_client_metadata``); the client's row on the system actor is
+        always the default client type, the requested one kept as
+        ``requested_trust_type``. An owner creates a client with another
+        level or ``client_credentials`` through
+        ``OAuth2ClientManager.create_client``."""
+        from ..permission_integration import (
+            client_trust_type_acceptable,
+            default_client_trust_type,
+        )
+
+        requested = registration_data.get("trust_type")
+        if requested and not client_trust_type_acceptable(self.config, requested):
+            raise ValueError(
+                f"trust_type {requested!r} is not offered to clients; an "
+                "actor's owner creates such a client with "
+                "OAuth2ClientManager.create_client"
+            )
+        grants = registration_data.get("grant_types") or []
+        if isinstance(grants, list) and "client_credentials" in grants:
+            raise ValueError(
+                "client_credentials is not offered to an anonymously "
+                "registered client; an actor's owner creates such a client "
+                "with OAuth2ClientManager.create_client"
+            )
+        default = default_client_trust_type(self.config)
+        if not default:
+            raise ValueError("no trust type is offered to clients")
+        data = dict(registration_data)
+        data["trust_type"] = default
+        if requested:
+            data["requested_trust_type"] = requested
+        return data
 
     def handle_authorization_request(
         self, params: dict[str, Any], method: str = "GET"
@@ -188,9 +245,12 @@ class ActingWebOAuth2Server:
                 )
 
             if method == "GET":
-                # Show email form (same UX as GET /)
+                # Show email form (same UX as GET /). The nonce binds the
+                # sign-in to the browser that shows the form (3.16): the
+                # caller sets it as a cookie and puts it in the form.
                 return {
                     "action": "show_form",
+                    "form_nonce": secrets.token_urlsafe(24),
                     "client_id": client_id,
                     "redirect_uri": redirect_uri,
                     "state": state,
@@ -211,8 +271,40 @@ class ActingWebOAuth2Server:
                         "invalid_request", "Email or provider is required"
                     )
 
-                # Get trust type from form submission
-                trust_type = params.get("trust_type", "mcp_client").strip()
+                # Get trust type from form submission: one the client list
+                # accepts, and the client's own allowed_trust_types when it
+                # has them (3.16; any registered type was taken).
+                from ..permission_integration import (
+                    client_trust_type_acceptable,
+                    default_client_trust_type,
+                )
+
+                trust_type = (params.get("trust_type") or "").strip() or (
+                    default_client_trust_type(self.config) or ""
+                )
+                per_client = client_data.get("allowed_trust_types")
+                if not client_trust_type_acceptable(self.config, trust_type) or (
+                    isinstance(per_client, list) and trust_type not in per_client
+                ):
+                    if trust_type == "admin":
+                        # The one a pre-3.16 form preselected: say how to
+                        # offer it, if that is what the application wants.
+                        logger.error(
+                            f"Authorization for client {client_id} asked for "
+                            "trust type 'admin', which is not offered to "
+                            "clients; declined. To offer it, list it: "
+                            "AccessControlConfig(config).configure_oauth2_trust_types("
+                            "allowed_trust_types=[..., 'admin'])"
+                        )
+                    else:
+                        logger.warning(
+                            f"Authorization for client {client_id} asked for "
+                            f"trust type {trust_type!r}, which is not offered; "
+                            "declined"
+                        )
+                    return self._error_response(
+                        "access_denied", "The requested access level is not offered"
+                    )
 
                 # Create state with MCP context including PKCE parameters and trust type
                 mcp_state = self.state_manager.create_mcp_state(
@@ -224,6 +316,7 @@ class ActingWebOAuth2Server:
                     code_challenge=code_challenge,
                     code_challenge_method=code_challenge_method,
                     provider=provider,
+                    form_nonce=(params.get("form_nonce") or "").strip() or None,
                 )
 
                 # Create OAuth2 authorization URL based on provider
@@ -289,7 +382,13 @@ class ActingWebOAuth2Server:
             logger.error(f"Authorization request error: {e}")
             return self._error_response("server_error", "Internal server error")
 
-    def handle_oauth_callback(self, params: dict[str, Any]) -> dict[str, Any]:
+    def handle_oauth_callback(
+        self,
+        params: dict[str, Any],
+        *,
+        form_nonce_cookie: str | None = None,
+        decide_trust: Any = None,
+    ) -> dict[str, Any]:
         """
         Handle OAuth2 callback from Google.
 
@@ -393,76 +492,63 @@ class ActingWebOAuth2Server:
                     "server_error", "Failed to create or retrieve user actor"
                 )
 
-            # Determine trust type and establishment source. mcp_context came
-            # from extract_mcp_context() above, which returns None (and this
-            # method already returned) unless flow_type == "mcp_oauth2" --
-            # so every trust reaching this line is the MCP client-credentials
-            # shape. There is no "oauth2_interactive" case on this path; a
-            # trust created here can never be matched by a resolver branch
-            # gated on an interactive establishment source.
-            trust_type = mcp_context.get("trust_type", "mcp_client")
-            established_via = "oauth2_client"
-
-            effective_trust_type = trust_type if trust_type else "mcp_client"
-
-            # Always create or update trust; select type based on flow
-            try:
-                from ..interface.actor_interface import ActorInterface
-                from ..oauth2 import create_oauth2_trust_relationship
-
-                registry = getattr(self.config, "service_registry", None)
-                actor_interface = ActorInterface(
-                    core_actor=actor_obj, service_registry=registry
-                )
-                trust_created = create_oauth2_trust_relationship(
-                    actor=actor_interface,
-                    email=email,
-                    trust_type=str(effective_trust_type),
-                    oauth_tokens=dict(token_data),
-                    established_via=established_via,
-                    client_id=client_id,
-                )
-                if not trust_created:
-                    logger.warning(
-                        f"Failed to create trust for actor {actor_obj.id} and user {email} (via={established_via}, type={effective_trust_type})"
-                    )
-            except DbError:
-                raise
-            except Exception as trust_error:
-                logger.error(
-                    f"Exception while creating trust for actor {actor_obj.id}: {trust_error}"
-                )
-
-            # Create authorization code for MCP client (store email and trust_type for later token exchange)
-            auth_code = self.token_manager.create_authorization_code(
-                actor_id=actor_obj.id,
-                client_id=client_id,
-                provider_token_data=token_data,
-                user_email=email,
-                trust_type=trust_type,
-                code_challenge=code_challenge,
-                code_challenge_method=code_challenge_method,
-                redirect_uri=redirect_uri,
+            # The level the user chose (or the default for a provider link),
+            # re-checked: a state minted before a list change, or by a client
+            # that skipped the form, gets no more than the list offers (3.16).
+            from .. import session_generation
+            from ..permission_integration import (
+                client_trust_type_acceptable,
+                default_client_trust_type,
             )
 
-            # Build redirect URL back to MCP client
-            redirect_params = {"code": auth_code}
-            if original_state:
-                redirect_params["state"] = original_state
-
-            callback_url = f"{redirect_uri}?{urlencode(redirect_params)}"
-
-            logger.info(
-                f"OAuth2 authorization completed for client {client_id}, user {email}"
+            client_data = self.client_registry.validate_client(client_id) or {}
+            if not client_data:
+                return self._error_response("invalid_client", "Unknown client")
+            requested = mcp_context.get("trust_type") or default_client_trust_type(
+                self.config
             )
+            per_client = client_data.get("allowed_trust_types")
+            if not client_trust_type_acceptable(self.config, requested) or (
+                isinstance(per_client, list) and requested not in per_client
+            ):
+                return self._denied(redirect_uri, original_state)
+            record: dict[str, Any] = {
+                "client_id": client_id,
+                "client_name": client_data.get("client_name") or "MCP Client",
+                "redirect_uri": redirect_uri,
+                "original_state": original_state,
+                "code_challenge": code_challenge,
+                "code_challenge_method": code_challenge_method,
+                "provider": provider_name,
+                "actor_id": str(actor_obj.id),
+                "email": email,
+                "token_data": dict(token_data),
+                "trust_type": str(requested),
+                "session_generation": client_data.get(session_generation.STAMP_FIELD),
+            }
+            effective = self._decided_type(actor_obj, record, decide_trust, False)
+            if not effective or (
+                isinstance(per_client, list) and effective not in per_client
+            ):
+                return self._denied(redirect_uri, original_state)
+            changed = effective != record["trust_type"]
+            record["trust_type"] = effective
 
-            # The trust row is named by the client's first authenticated
-            # initialize (handlers/mcp.py), not here: this callback is a
-            # browser redirect with nothing linking it to an MCP session, and
-            # picking a recent unauthenticated initialize from the cache wrote
-            # one user's client name into another user's trust row.
-
-            return {"action": "redirect", "url": callback_url}
+            # The same browser that showed the form (its cookie carries the
+            # nonce the state does), at the level the user chose: complete.
+            # Otherwise (another browser, a client that posted the form
+            # itself, or a hook that changed the level) the user confirms
+            # the level shown first.
+            state_nonce = str(mcp_context.get("form_nonce") or "")
+            if (
+                not changed
+                and state_nonce
+                and form_nonce_cookie
+                and secret_equals(state_nonce, form_nonce_cookie)
+            ):
+                return self._complete(actor_obj, record)
+            token = self.token_manager.store_pending_authorization(record)
+            return self._confirmation(token, record)
 
         except DbError:
             raise
@@ -664,6 +750,16 @@ class ActingWebOAuth2Server:
             logger.error(f"No actor_id found for client {client_id}")
             return self._error_response(
                 "invalid_client", "Client not properly configured"
+            )
+        # A client registered anonymously lives on the system actor: no user
+        # granted it anything, so it has no grant that needs no user (3.16).
+        # A client an actor's owner created keeps it.
+        from ..constants import OAUTH2_SYSTEM_ACTOR
+
+        if actor_id == OAUTH2_SYSTEM_ACTOR:
+            return self._error_response(
+                "unauthorized_client",
+                "An anonymously registered client may not use client_credentials",
             )
 
         # For client credentials flow, we need to determine the trust type
@@ -912,6 +1008,226 @@ class ActingWebOAuth2Server:
 
             logger.error(f"Full traceback: {traceback.format_exc()}")
             return ""
+
+    # ------------------------------------------------------------------
+    # Completing a client's authorisation (3.16)
+    # ------------------------------------------------------------------
+
+    def _denied(self, redirect_uri: str, original_state: str | None) -> dict[str, Any]:
+        """Back to the client with ``access_denied`` (RFC 6749 §4.1.2.1)."""
+        params = {"error": "access_denied"}
+        if original_state:
+            params["state"] = original_state
+        sep = "&" if "?" in redirect_uri else "?"
+        return {"action": "redirect", "url": f"{redirect_uri}{sep}{urlencode(params)}"}
+
+    def _decided_type(
+        self, actor_obj: Any, record: dict[str, Any], decide_trust: Any, confirmed: bool
+    ) -> str | None:
+        """The type after the application's ``oauth2_trust_requested`` hooks
+        (``decide_trust``), or the requested one when there are none; None
+        when declined or not acceptable."""
+        from ..permission_integration import client_trust_type_acceptable
+
+        requested = str(record.get("trust_type") or "")
+        if decide_trust is None:
+            return (
+                requested
+                if client_trust_type_acceptable(self.config, requested)
+                else None
+            )
+        from ..interface.actor_interface import ActorInterface
+
+        registry = getattr(self.config, "service_registry", None)
+        actor = ActorInterface(core_actor=actor_obj, service_registry=registry)
+        result = decide_trust(
+            actor,
+            requested,
+            client_id=record.get("client_id"),
+            client_name=record.get("client_name"),
+            redirect_uri=record.get("redirect_uri"),
+            provider=record.get("provider"),
+            email=record.get("email"),
+            confirmed=confirmed,
+        )
+        decided = str(result) if result else None
+        # Whatever answered (the registry's dispatcher re-checks, a caller's
+        # own ``decide_trust`` may not): only an acceptable type (3.16).
+        if decided and not client_trust_type_acceptable(self.config, decided):
+            return None
+        return decided
+
+    def _confirmation(self, token: str, record: dict[str, Any]) -> dict[str, Any]:
+        """What the user confirms: the client, where it goes, the level."""
+
+        from ..trust_type_registry import get_registry
+
+        trust_type = str(record.get("trust_type") or "")
+        type_info = get_registry(self.config).get_type(trust_type)
+        return {
+            "action": "confirm",
+            "token": token,
+            "client_name": record.get("client_name") or "MCP Client",
+            "client_id": record.get("client_id"),
+            "redirect_host": _shown_host(str(record.get("redirect_uri") or "")),
+            "trust_type": trust_type,
+            "trust_type_display_name": getattr(type_info, "display_name", trust_type),
+            "trust_type_description": getattr(type_info, "description", ""),
+        }
+
+    def _complete(self, actor_obj: Any, record: dict[str, Any]) -> dict[str, Any]:
+        """The trust at the approved type, then the code: no code when the
+        trust could not be written (3.16; it was issued anyway)."""
+        from ..interface.actor_interface import ActorInterface
+        from ..oauth2 import create_oauth2_trust_relationship
+
+        client_id = str(record["client_id"])
+        email = str(record.get("email") or "")
+        trust_type = str(record["trust_type"])
+        registry = getattr(self.config, "service_registry", None)
+        try:
+            created = create_oauth2_trust_relationship(
+                actor=ActorInterface(core_actor=actor_obj, service_registry=registry),
+                email=email,
+                trust_type=trust_type,
+                oauth_tokens=dict(record.get("token_data") or {}),
+                established_via="oauth2_client",
+                client_id=client_id,
+            )
+        except DbError:
+            raise
+        except Exception as e:
+            logger.error(f"Trust for client {client_id} could not be written: {e}")
+            created = False
+        if not created:
+            logger.error(
+                f"No trust for client {client_id} on actor {actor_obj.id}; no code issued"
+            )
+            return self._error_response(
+                "server_error", "The client's access could not be recorded"
+            )
+        auth_code = self.token_manager.create_authorization_code(
+            actor_id=str(actor_obj.id),
+            client_id=client_id,
+            provider_token_data=dict(record.get("token_data") or {}),
+            user_email=email,
+            trust_type=trust_type,
+            code_challenge=record.get("code_challenge"),
+            code_challenge_method=record.get("code_challenge_method"),
+            redirect_uri=record.get("redirect_uri"),
+        )
+        redirect_params = {"code": auth_code}
+        if record.get("original_state"):
+            redirect_params["state"] = str(record["original_state"])
+        logger.info(f"OAuth2 authorization completed for client {client_id}")
+        return {
+            "action": "redirect",
+            "url": f"{record['redirect_uri']}?{urlencode(redirect_params)}",
+        }
+
+    def handle_confirmation(
+        self, token: str, approve: bool, *, decide_trust: Any = None
+    ) -> dict[str, Any]:
+        """The user's answer to a paused authorisation (3.16).
+
+        The record is consumed once; an unknown, used or expired token is
+        ``invalid_request`` ("start again from the client"). Decline sends
+        the browser back to the client with ``access_denied``. Approve
+        re-checks the client (still registered, same ``session_generation``),
+        the actor (still there) and the level, runs the decision hook with
+        ``confirmed=True``, then writes the trust and issues the code. A
+        store that cannot answer raises (503)."""
+        from .. import actor as actor_module
+        from .. import session_generation
+
+        record = self.token_manager.consume_pending_authorization(token)
+        if not record:
+            return self._error_response(
+                "invalid_request",
+                "This confirmation has expired or was used; start again from the client",
+            )
+        redirect_uri = str(record.get("redirect_uri") or "")
+        if not approve:
+            return self._denied(redirect_uri, record.get("original_state"))
+        client_data = self.client_registry.validate_client(str(record["client_id"]))
+        if not client_data or client_data.get(
+            session_generation.STAMP_FIELD
+        ) != record.get("session_generation"):
+            return self._denied(redirect_uri, record.get("original_state"))
+        actor_obj = actor_module.Actor(config=self.config)
+        actor_obj.get(actor_id=str(record["actor_id"]))
+        if not actor_obj.id:
+            return self._denied(redirect_uri, record.get("original_state"))
+        # The level the page showed is the one granted: the hook may still
+        # decline (or answer differently, which declines), never change it.
+        effective = self._decided_type(actor_obj, record, decide_trust, True)
+        per_client = client_data.get("allowed_trust_types")
+        if effective != record.get("trust_type") or (
+            isinstance(per_client, list) and effective not in per_client
+        ):
+            # The client's own list may have narrowed since the page was
+            # shown (3.16).
+            return self._denied(redirect_uri, record.get("original_state"))
+        return self._complete(actor_obj, record)
+
+    def complete_client_authorization(
+        self,
+        actor: Any,
+        client_id: str,
+        redirect_uri: str,
+        trust_type: str | None = None,
+        *,
+        state: str | None = None,
+        code_challenge: str | None = None,
+        code_challenge_method: str | None = None,
+        email: str | None = None,
+        provider_token_data: dict[str, Any] | None = None,
+        decide_trust: Any = None,
+    ) -> dict[str, Any]:
+        """Authorise ``client_id`` for ``actor`` from a route that signed the
+        user in itself (3.16): the client list (and the client's own
+        ``allowed_trust_types``), the decision hook, the trust, then the
+        code, in one call. Returns ``{"action": "redirect", "url": ...}`` (a
+        code, or ``access_denied``) or an error dict. ``actor`` is the core
+        actor or an ``ActorInterface``."""
+        from .. import session_generation
+        from ..permission_integration import (
+            client_trust_type_acceptable,
+            default_client_trust_type,
+        )
+
+        core = getattr(actor, "core_actor", actor)
+        client_data = self.client_registry.validate_client(client_id)
+        if not client_data:
+            return self._error_response("invalid_client", "Unknown client")
+        if not self.client_registry.validate_redirect_uri(client_id, redirect_uri):
+            return self._error_response("invalid_request", "Invalid redirect_uri")
+        requested = trust_type or default_client_trust_type(self.config)
+        per_client = client_data.get("allowed_trust_types")
+        if not client_trust_type_acceptable(self.config, requested) or (
+            isinstance(per_client, list) and requested not in per_client
+        ):
+            return self._denied(redirect_uri, state)
+        record: dict[str, Any] = {
+            "client_id": client_id,
+            "client_name": client_data.get("client_name") or "MCP Client",
+            "redirect_uri": redirect_uri,
+            "original_state": state,
+            "code_challenge": code_challenge,
+            "code_challenge_method": code_challenge_method,
+            "provider": "",
+            "actor_id": str(core.id),
+            "email": email or getattr(core, "creator", "") or "",
+            "token_data": dict(provider_token_data or {}),
+            "trust_type": str(requested),
+            "session_generation": client_data.get(session_generation.STAMP_FIELD),
+        }
+        # The route's user approved ``requested``: the hook may decline it,
+        # and a different answer declines too (no level the user did not see).
+        effective = self._decided_type(core, record, decide_trust, True)
+        if effective != record["trust_type"]:
+            return self._denied(redirect_uri, state)
+        return self._complete(core, record)
 
     def _error_response(self, error: str, description: str) -> dict[str, Any]:
         """Create OAuth2 error response."""

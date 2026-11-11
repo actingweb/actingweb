@@ -14,6 +14,7 @@ from actingweb.handlers.actions import ActionsHandler
 from actingweb.handlers.methods import MethodsHandler
 from actingweb.handlers.properties import PropertiesHandler
 from actingweb.permission_evaluator import PermissionResult
+from tests._grant_fakes import StubEvaluator
 
 
 class TestHandlerPermissionIntegration(unittest.TestCase):
@@ -55,7 +56,7 @@ class TestHandlerPermissionIntegration(unittest.TestCase):
     def test_properties_handler_with_peer_permission(self, mock_get_evaluator):
         """Test properties handler uses permission evaluator for peer access."""
         # Setup mock permission evaluator
-        mock_evaluator = Mock()
+        mock_evaluator = StubEvaluator()
         mock_evaluator.evaluate_property_access = Mock(
             return_value=PermissionResult.ALLOWED
         )
@@ -80,7 +81,7 @@ class TestHandlerPermissionIntegration(unittest.TestCase):
     def test_properties_handler_permission_denied(self, mock_get_evaluator):
         """Test properties handler denies access when permission evaluator returns denied."""
         # Setup mock permission evaluator to deny access
-        mock_evaluator = Mock()
+        mock_evaluator = StubEvaluator()
         mock_evaluator.evaluate_property_access = Mock(
             return_value=PermissionResult.DENIED
         )
@@ -120,7 +121,7 @@ class TestHandlerPermissionIntegration(unittest.TestCase):
     def test_methods_handler_with_peer_permission(self, mock_get_evaluator):
         """Test methods handler uses permission evaluator for peer access."""
         # Setup mock permission evaluator
-        mock_evaluator = Mock()
+        mock_evaluator = StubEvaluator()
         mock_evaluator.evaluate_method_access = Mock(
             return_value=PermissionResult.ALLOWED
         )
@@ -145,7 +146,7 @@ class TestHandlerPermissionIntegration(unittest.TestCase):
     def test_actions_handler_with_peer_permission(self, mock_get_evaluator):
         """Test actions handler uses permission evaluator for peer access."""
         # Setup mock permission evaluator
-        mock_evaluator = Mock()
+        mock_evaluator = StubEvaluator()
         mock_evaluator.evaluate_action_access = Mock(
             return_value=PermissionResult.ALLOWED
         )
@@ -171,7 +172,7 @@ class TestHandlerPermissionIntegration(unittest.TestCase):
         """An evaluator error denies (3.16): no fallback to legacy auth,
         which used to turn an excluded_patterns denial into an allow."""
         # Setup mock permission evaluator to raise exception
-        mock_evaluator = Mock()
+        mock_evaluator = StubEvaluator()
         mock_evaluator.evaluate_property_access = Mock(
             side_effect=Exception("Database error")
         )
@@ -192,26 +193,30 @@ class TestHandlerPermissionIntegration(unittest.TestCase):
 
     @patch("actingweb.handlers.properties.get_permission_evaluator")
     def test_not_found_permission_fallback(self, mock_get_evaluator):
-        """Test handlers fall back to legacy auth when no permission rule found."""
-        # Setup mock permission evaluator to return NOT_FOUND
-        mock_evaluator = Mock()
+        """A grant that does not mention properties leaves the decision to
+        the access table (``config.access``) for the peer's relationship
+        (3.16: decided from the trust row, not the request's Auth object)."""
+        mock_evaluator = StubEvaluator(relationship="friend")
         mock_evaluator.evaluate_property_access = Mock(
             return_value=PermissionResult.NOT_FOUND
         )
         mock_get_evaluator.return_value = mock_evaluator
-
-        # Create handler and test permission check
         handler = PropertiesHandler(config=self.config)
         auth_obj = self._create_mock_auth_with_peer(self.actor_id, self.peer_id)
 
-        # Test permission check
-        result = handler._check_property_permission(
-            self.actor_id, auth_obj, "unconfigured", "read"
-        )
+        with patch(
+            "actingweb.access_decision.access_table_admits", return_value=True
+        ) as table:
+            result = handler._check_property_permission(
+                self.actor_id, auth_obj, "unconfigured", "read"
+            )
 
-        # Verify fallback to legacy authorization
-        self.assertTrue(result)  # Legacy auth should allow
-        auth_obj.check_authorisation.assert_called_once()
+        self.assertTrue(result)
+        table.assert_called_once()
+        self.assertEqual(table.call_args.kwargs["relationship"], "friend")
+        self.assertEqual(table.call_args.kwargs["path"], "properties")
+        self.assertEqual(table.call_args.kwargs["method"], "GET")
+        auth_obj.check_authorisation.assert_not_called()
 
 
 if __name__ == "__main__":

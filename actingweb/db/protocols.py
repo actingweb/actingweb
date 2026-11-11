@@ -776,6 +776,7 @@ class DbTrustProtocol(Protocol):
         *,
         only_if_verified: bool = False,
         only_if_secret: str | None = None,
+        relationship: str | None = None,
     ) -> bool:
         """
         Modify trust using self.handle, in one write conditioned on the row
@@ -835,13 +836,15 @@ class DbTrustProtocol(Protocol):
         """
         ...
 
-    def delete(self) -> bool:
+    def delete(self, *, only_if_secret: str | None = None) -> bool:
         """
         Delete trust using self.handle.
 
         Returns:
-            True on success; False only without a handle or arguments.
-            A fault raises ``DbError``.
+            True when the row is gone after the call (an absent row counts);
+            False without a handle or arguments, and (3.16) when
+            ``only_if_secret`` is given and a row with another secret is there
+            (left alone). A fault raises ``DbError``.
         """
         ...
 

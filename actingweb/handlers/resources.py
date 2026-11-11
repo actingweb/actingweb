@@ -1,10 +1,55 @@
 # Fixed imports after removing init_actingweb
 import json
+import logging
+from typing import Any
 
 from actingweb.handlers import base_handler
 
+from ..access_decision import decide, evaluator_or_none, forbidden_body, peer_of
+from ..permission_evaluator import PermissionType, get_permission_evaluator
+
+logger = logging.getLogger(__name__)
+
+# A resource route's operation for the grant (3.16).
+_OPERATION = {"GET": "read", "PUT": "write", "POST": "write", "DELETE": "delete"}
+
 
 class ResourcesHandler(base_handler.BaseHandler):
+    def _grant_allows(
+        self, actor_id: str, auth_result: Any, name: str, method: str
+    ) -> bool:
+        """A peer's ``/resources/<name>`` request is decided by its grant for
+        the ``resources`` category (3.16, spec: one grant for REST and MCP
+        resources): GET is ``read``, PUT and POST ``write``, DELETE
+        ``delete``; a grant that does not mention resources leaves it to the
+        access table with the request's method. A caller that is not a peer
+        is decided by the access table, as before. A refusal is 403 and the
+        hook does not run."""
+        peer_id = peer_of(auth_result.auth_obj)
+        if not peer_id:
+            return bool(auth_result.authorize(method, "resources", name))
+        decision = decide(
+            self.config,
+            actor_id,
+            peer_id,
+            PermissionType.RESOURCES,
+            name or "",
+            _OPERATION[method],
+            method=method,
+            evaluator=evaluator_or_none(self.config, get_permission_evaluator),
+        )
+        if decision.allowed:
+            return True
+        logger.debug(
+            f"Resource access denied: {actor_id} -> {peer_id} -> {name!r} "
+            f"({method}, {decision.reason})"
+        )
+        if self.response:
+            self.response.set_status(403, "Forbidden")
+            self.response.headers["Content-Type"] = "application/json"
+            self.response.write(json.dumps(forbidden_body(decision)))
+        return False
+
     def get(self, actor_id, name):
         auth_result = self._authenticate_dual_context(
             actor_id, "resources", "resources", name
@@ -12,7 +57,7 @@ class ResourcesHandler(base_handler.BaseHandler):
         if not auth_result.success:
             return
         myself = auth_result.actor
-        if not auth_result.authorize("GET", "resources", name):
+        if not self._grant_allows(actor_id, auth_result, name, "GET"):
             return
         # Execute callback hook for resource GET
         pair = None
@@ -39,7 +84,7 @@ class ResourcesHandler(base_handler.BaseHandler):
         if not auth_result.success:
             return
         myself = auth_result.actor
-        if not auth_result.authorize("DELETE", "resources", name):
+        if not self._grant_allows(actor_id, auth_result, name, "DELETE"):
             return
         # Execute callback hook for resource DELETE
         pair = None
@@ -69,7 +114,7 @@ class ResourcesHandler(base_handler.BaseHandler):
         if not auth_result.success:
             return
         myself = auth_result.actor
-        if not auth_result.authorize("PUT", "resources", name):
+        if not self._grant_allows(actor_id, auth_result, name, "PUT"):
             return
         try:
             body: str | bytes | None = self.request.body
@@ -80,7 +125,7 @@ class ResourcesHandler(base_handler.BaseHandler):
             else:
                 body_str = body
             params = json.loads(body_str)
-        except (TypeError, ValueError, KeyError):
+        except (TypeError, ValueError, KeyError, RecursionError):
             if self.response:
                 self.response.set_status(400, "Error in json body")
             return
@@ -115,7 +160,7 @@ class ResourcesHandler(base_handler.BaseHandler):
         if not auth_result.success:
             return
         myself = auth_result.actor
-        if not auth_result.authorize("POST", "resources", name):
+        if not self._grant_allows(actor_id, auth_result, name, "POST"):
             return
         try:
             body: str | bytes | None = self.request.body
@@ -126,7 +171,7 @@ class ResourcesHandler(base_handler.BaseHandler):
             else:
                 body_str = body
             params = json.loads(body_str)
-        except (TypeError, ValueError, KeyError):
+        except (TypeError, ValueError, KeyError, RecursionError):
             if self.response:
                 self.response.set_status(400, "Error in json body")
             return

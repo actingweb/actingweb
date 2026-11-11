@@ -5,7 +5,7 @@ from typing import Any
 
 from pynamodb.attributes import BooleanAttribute, UnicodeAttribute, UTCDateTimeAttribute
 from pynamodb.constants import PAY_PER_REQUEST_BILLING_MODE
-from pynamodb.exceptions import DoesNotExist, PutError, UpdateError
+from pynamodb.exceptions import DeleteError, DoesNotExist, PutError, UpdateError
 from pynamodb.indexes import AllProjection, GlobalSecondaryIndex
 from pynamodb.models import Model
 
@@ -244,6 +244,7 @@ class DbTrust:
         *,
         only_if_verified: bool = False,
         only_if_secret: str | None = None,
+        relationship: str | None = None,
     ):
         """Modify a trust
 
@@ -277,6 +278,10 @@ class DbTrust:
             given["verification_token"] = verification_token
         if peer_approved is not None:
             given["peer_approved"] = peer_approved
+        # The trust type (3.16: an OAuth2/MCP client's row follows the level
+        # the user approved at its latest authorisation).
+        if relationship:
+            given["relationship"] = relationship
 
         # Handle new unified trust attributes
         if peer_identifier is not None:
@@ -482,17 +487,27 @@ class DbTrust:
             raise DbError("trust create") from e
         return True
 
-    def delete(self):
+    def delete(self, *, only_if_secret: str | None = None):
         """Deletes the trust in the database.
 
         True when the row is gone after the call (an already-absent row
-        counts); a fault raises ``DbError``. False only without a handle.
+        counts); a fault raises ``DbError``. False without a handle, and
+        (3.16) when ``only_if_secret`` is given and a row with another secret
+        is there (a re-pair replaced it): that row is left alone.
         """
         if not self.handle:
             return False
+        condition = None
+        if only_if_secret is not None:
+            condition = Trust.id.does_not_exist() | (Trust.secret == only_if_secret)
         try:
-            self.handle.delete()
+            self.handle.delete(condition=condition)
         except Exception as e:
+            if (
+                isinstance(e, DeleteError)
+                and e.cause_response_code == "ConditionalCheckFailedException"
+            ):
+                return False
             raise DbError("trust delete") from e
         self.handle = None
         return True

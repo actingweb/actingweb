@@ -110,8 +110,10 @@ class TestWWWTemplates:
         """Create a simple property for testing properties template."""
         import requests
 
+        # POST /properties/<name> is a 400 (3.16): the collection takes the
+        # names in the body.
         response = requests.post(
-            f"{self.actor_url}/properties/test_prop",
+            f"{self.actor_url}/properties",
             json={"test_prop": "test_value"},
             auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
         )

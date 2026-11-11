@@ -445,6 +445,7 @@ class DbTrust:
         *,
         only_if_verified: bool = False,
         only_if_secret: str | None = None,
+        relationship: str | None = None,
     ) -> bool:
         """
         Modify a trust.
@@ -530,6 +531,13 @@ class DbTrust:
             updates.append("peer_approved = %s")
             params.append(peer_approved)
             self.handle["peer_approved"] = peer_approved
+
+        # The trust type (3.16: an OAuth2/MCP client's row follows the level
+        # the user approved at its latest authorisation).
+        if relationship:
+            updates.append("relationship = %s")
+            params.append(relationship)
+            self.handle["relationship"] = relationship
 
         # Handle unified trust attributes
         if peer_identifier is not None:
@@ -646,12 +654,15 @@ class DbTrust:
         except Exception as e:
             raise DbError("trust modify") from e
 
-    def delete(self) -> bool:
+    def delete(self, *, only_if_secret: str | None = None) -> bool:
         """
         Delete trust using self.handle.
 
         Returns:
-            True on success, False only for missing arguments or handle
+            True when the row is gone after the call (an absent row counts);
+            False for missing arguments or handle, and (3.16) when
+            ``only_if_secret`` is given and a row with another secret is
+            there (a re-pair replaced it), which is left alone
 
         Raises:
             DbError: on a backend fault
@@ -669,15 +680,35 @@ class DbTrust:
         try:
             with get_connection() as conn:
                 with conn.cursor() as cur:
-                    cur.execute(
-                        """
-                        DELETE FROM trusts
-                        WHERE id = %s AND peerid = %s
-                        """,
-                        (actor_id, peerid),
-                    )
+                    if only_if_secret is None:
+                        cur.execute(
+                            """
+                            DELETE FROM trusts
+                            WHERE id = %s AND peerid = %s
+                            """,
+                            (actor_id, peerid),
+                        )
+                        replaced = False
+                    else:
+                        cur.execute(
+                            """
+                            DELETE FROM trusts
+                            WHERE id = %s AND peerid = %s AND secret = %s
+                            """,
+                            (actor_id, peerid, only_if_secret),
+                        )
+                        replaced = False
+                        if cur.rowcount == 0:
+                            # Absent (gone already) or replaced: tell them apart.
+                            cur.execute(
+                                "SELECT 1 FROM trusts WHERE id = %s AND peerid = %s",
+                                (actor_id, peerid),
+                            )
+                            replaced = cur.fetchone() is not None
                 conn.commit()
 
+            if replaced:
+                return False
             self.handle = None
             return True
 

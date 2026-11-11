@@ -76,6 +76,9 @@ class ActingWebTokenManager:
         # Chain-revoked markers (single_use.mark_chain_revoked), under the
         # user's actor like the chains themselves.
         self.revoked_chains_bucket = "mcp_revoked_chains"
+        # Authorisations paused for the user's confirmation (3.16), on the
+        # OAuth2 system actor, keyed by a hash of their token.
+        self.pending_authorizations_bucket = "mcp_pending_authorizations"
         self.token_prefix = "aw_"  # Prefix to distinguish from Google tokens
         self.default_expires_in = 3600  # 1 hour
         self.refresh_token_expires_in = 2592000  # 30 days
@@ -149,6 +152,81 @@ class ActingWebTokenManager:
             f"Created authorization code for client {client_id}, actor {actor_id}"
         )
         return auth_code
+
+    # ------------------------------------------------------------------
+    # Pending authorisations (3.16): a sign-in the library could not bind to
+    # the browser that showed the form waits for the user's confirmation.
+    # ------------------------------------------------------------------
+
+    PENDING_AUTHORIZATION_TTL = 600
+
+    @staticmethod
+    def _pending_key(token: str) -> str:
+        return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+    def store_pending_authorization(self, record: dict[str, Any]) -> str:
+        """Store a paused authorisation and return its token (single use,
+        ten minutes). ``record`` holds what completing it needs: the client,
+        its redirect URI and ``state``, the PKCE challenge, the provider, the
+        actor and email, the provider token data, the effective type and the
+        client's ``session_generation``. A store fault raises."""
+        from .. import attribute
+
+        token = f"pa_{secrets.token_urlsafe(32)}"
+        data = dict(record)
+        now = int(time.time())
+        data.update(
+            {
+                "created_at": now,
+                "expires_at": now + self.PENDING_AUTHORIZATION_TTL,
+                "used": False,
+            }
+        )
+        attribute.Attributes(
+            actor_id=OAUTH2_SYSTEM_ACTOR,
+            bucket=self.pending_authorizations_bucket,
+            config=self.config,
+        ).set_attr(
+            name=self._pending_key(token),
+            data=data,
+            ttl_seconds=self.PENDING_AUTHORIZATION_TTL,
+        )
+        return token
+
+    def consume_pending_authorization(self, token: str) -> dict[str, Any] | None:
+        """The paused authorisation for ``token``, consumed (once), or None
+        when there is none, it was used, or it expired (``expires_at`` is
+        checked: a storage TTL hides a row only later). A store that cannot
+        answer raises ``TokenStoreUnavailable`` (a 503, not "already used")."""
+        from .. import attribute
+
+        if not token or not token.startswith("pa_"):
+            return None
+        name = self._pending_key(token)
+        store = attribute.Attributes(
+            actor_id=OAUTH2_SYSTEM_ACTOR,
+            bucket=self.pending_authorizations_bucket,
+            config=self.config,
+        )
+        try:
+            row = store.get_attr(name=name)
+        except DbError as e:
+            raise TokenStoreUnavailable("pending authorisation unreadable") from e
+        record = (row or {}).get("data") if isinstance(row, dict) else None
+        if not isinstance(record, dict) or record.get("used"):
+            return None
+        consumed, _ = self._consume(
+            OAUTH2_SYSTEM_ACTOR,
+            self.pending_authorizations_bucket,
+            name,
+            record,
+            consumed_ttl=60,
+        )
+        if not consumed:
+            return None
+        if int(time.time()) > int(record.get("expires_at") or 0):
+            return None
+        return record
 
     def exchange_authorization_code(
         self,
@@ -2043,6 +2121,7 @@ class ActingWebTokenManager:
                     ACCESS_TOKEN_INDEX_BUCKET,
                     REFRESH_TOKEN_INDEX_BUCKET,
                     AUTH_CODE_INDEX_BUCKET,
+                    self.pending_authorizations_bucket,
                 ]
             )
         except Exception as e:  # folds DbError: purge, retried next interval

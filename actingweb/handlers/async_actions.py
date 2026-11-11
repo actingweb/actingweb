@@ -59,7 +59,7 @@ class AsyncActionsHandler(ActionsHandler):
         myself = auth_result.actor
         check = auth_result.auth_obj
         # Use unified access control system for permission checking
-        if not self._check_action_permission(actor_id, check, name):
+        if not self._check_action_permission(actor_id, check, name, "GET"):
             if self.response:
                 self.response.set_status(403, "Forbidden")
             return
@@ -71,7 +71,7 @@ class AsyncActionsHandler(ActionsHandler):
             if actor_interface:
                 if not name:
                     # Return list of available actions with metadata
-                    result = {"actions": self.hooks.get_action_metadata_list()}
+                    result = {"actions": self._listable_actions(actor_id, check)}
                 else:
                     auth_context = self._create_auth_context(check)
                     # Use async hook execution
@@ -110,7 +110,7 @@ class AsyncActionsHandler(ActionsHandler):
         myself = auth_result.actor
         check = auth_result.auth_obj
         # Use unified access control system for permission checking
-        if not self._check_action_permission(actor_id, check, name):
+        if not self._check_action_permission(actor_id, check, name, "POST"):
             if self.response:
                 self.response.set_status(403, "Forbidden")
             return
@@ -125,7 +125,7 @@ class AsyncActionsHandler(ActionsHandler):
             else:
                 body_str = body
             params = json.loads(body_str)
-        except (TypeError, ValueError, KeyError):
+        except (TypeError, ValueError, KeyError, RecursionError):
             if self.response:
                 self.response.set_status(400, "Error in json body")
             return
@@ -173,7 +173,7 @@ class AsyncActionsHandler(ActionsHandler):
         myself = auth_result.actor
         check = auth_result.auth_obj
         # Use unified access control system for permission checking
-        if not self._check_action_permission(actor_id, check, name):
+        if not self._check_action_permission(actor_id, check, name, "PUT"):
             if self.response:
                 self.response.set_status(403, "Forbidden")
             return
@@ -188,7 +188,7 @@ class AsyncActionsHandler(ActionsHandler):
             else:
                 body_str = body
             params = json.loads(body_str)
-        except (TypeError, ValueError, KeyError):
+        except (TypeError, ValueError, KeyError, RecursionError):
             if self.response:
                 self.response.set_status(400, "Error in json body")
             return
@@ -225,7 +225,7 @@ class AsyncActionsHandler(ActionsHandler):
         myself = auth_result.actor
         check = auth_result.auth_obj
         # Use unified access control system for permission checking
-        if not self._check_action_permission(actor_id, check, name):
+        if not self._check_action_permission(actor_id, check, name, "DELETE"):
             if self.response:
                 self.response.set_status(403, "Forbidden")
             return

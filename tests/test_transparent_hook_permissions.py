@@ -10,9 +10,11 @@ import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
+from actingweb.access_decision import PERMISSION_DENIED
 from actingweb.config import Config
 from actingweb.interface.hooks import HookRegistry
 from actingweb.permission_evaluator import PermissionResult
+from tests._grant_fakes import StubEvaluator
 
 
 class TestTransparentHookPermissions(unittest.TestCase):
@@ -48,7 +50,7 @@ class TestTransparentHookPermissions(unittest.TestCase):
     def test_property_hook_permission_allowed(self, mock_get_evaluator):
         """Test property hook execution when permission is allowed."""
         # Setup mock permission evaluator
-        mock_evaluator = Mock()
+        mock_evaluator = StubEvaluator()
         mock_evaluator.evaluate_property_access = Mock(
             return_value=PermissionResult.ALLOWED
         )
@@ -78,7 +80,7 @@ class TestTransparentHookPermissions(unittest.TestCase):
     def test_property_hook_permission_denied(self, mock_get_evaluator):
         """Test property hook execution when permission is denied."""
         # Setup mock permission evaluator to deny access
-        mock_evaluator = Mock()
+        mock_evaluator = StubEvaluator()
         mock_evaluator.evaluate_property_access = Mock(
             return_value=PermissionResult.DENIED
         )
@@ -97,8 +99,9 @@ class TestTransparentHookPermissions(unittest.TestCase):
             "secret_prop", "get", actor, "secret_value", [], auth_context
         )
 
-        # Verify hook was NOT executed and original value returned
-        self.assertEqual(result, "secret_value")  # Original value returned
+        # The hook did not run and the value is not handed back: the
+        # denial is its own answer, a 403 at the handler (3.16)
+        self.assertIs(result, PERMISSION_DENIED)
         test_hook.assert_not_called()  # Hook should not have been called
         mock_evaluator.evaluate_property_access.assert_called_once()
 
@@ -106,7 +109,7 @@ class TestTransparentHookPermissions(unittest.TestCase):
     def test_method_hook_permission_allowed(self, mock_get_evaluator):
         """Test method hook execution when permission is allowed."""
         # Setup mock permission evaluator
-        mock_evaluator = Mock()
+        mock_evaluator = StubEvaluator()
         mock_evaluator.evaluate_method_access = Mock(
             return_value=PermissionResult.ALLOWED
         )
@@ -135,7 +138,7 @@ class TestTransparentHookPermissions(unittest.TestCase):
     def test_action_hook_permission_denied(self, mock_get_evaluator):
         """Test action hook execution when permission is denied."""
         # Setup mock permission evaluator to deny access
-        mock_evaluator = Mock()
+        mock_evaluator = StubEvaluator()
         mock_evaluator.evaluate_action_access = Mock(
             return_value=PermissionResult.DENIED
         )
@@ -196,9 +199,9 @@ class TestTransparentHookPermissions(unittest.TestCase):
 
     @patch("actingweb.interface.hooks.get_permission_evaluator")
     def test_hook_permission_error_fallback(self, mock_get_evaluator):
-        """Test hook execution falls back to allow on permission evaluator errors."""
+        """An evaluator error denies the hook (3.16; it used to allow)."""
         # Setup mock permission evaluator to raise exception
-        mock_evaluator = Mock()
+        mock_evaluator = StubEvaluator()
         mock_evaluator.evaluate_property_access = Mock(
             side_effect=Exception("Permission error")
         )
@@ -217,16 +220,16 @@ class TestTransparentHookPermissions(unittest.TestCase):
             "test_prop", "get", actor, "value", [], auth_context
         )
 
-        # Verify hook was executed (fallback on errors)
-        self.assertEqual(result, "result")
-        test_hook.assert_called_once()
+        # Denied: the caller answers 403, the hook does not run
+        self.assertIs(result, PERMISSION_DENIED)
+        test_hook.assert_not_called()
 
     @patch("actingweb.interface.hooks.get_permission_evaluator")
     def test_property_hook_permission_list_property_full_access(
         self, mock_get_evaluator
     ):
         """Verify property_path for full list access doesn't duplicate property name."""
-        mock_evaluator = Mock()
+        mock_evaluator = StubEvaluator()
         mock_evaluator.evaluate_property_access = Mock(
             return_value=PermissionResult.ALLOWED
         )
@@ -260,7 +263,7 @@ class TestTransparentHookPermissions(unittest.TestCase):
         self, mock_get_evaluator
     ):
         """Verify property_path for list item access is property_name/index."""
-        mock_evaluator = Mock()
+        mock_evaluator = StubEvaluator()
         mock_evaluator.evaluate_property_access = Mock(
             return_value=PermissionResult.ALLOWED
         )
@@ -292,7 +295,7 @@ class TestTransparentHookPermissions(unittest.TestCase):
     @patch("actingweb.interface.hooks.get_permission_evaluator")
     def test_property_hook_permission_nested_property_access(self, mock_get_evaluator):
         """Verify property_path for nested property is property_name/subpath."""
-        mock_evaluator = Mock()
+        mock_evaluator = StubEvaluator()
         mock_evaluator.evaluate_property_access = Mock(
             return_value=PermissionResult.ALLOWED
         )
@@ -326,7 +329,7 @@ class TestTransparentHookPermissions(unittest.TestCase):
         self, mock_get_evaluator
     ):
         """Verify list property pattern matches correctly without duplication."""
-        mock_evaluator = Mock()
+        mock_evaluator = StubEvaluator()
         mock_evaluator.evaluate_property_access = Mock(
             return_value=PermissionResult.DENIED
         )
@@ -354,8 +357,8 @@ class TestTransparentHookPermissions(unittest.TestCase):
             self.actor_id, self.peer_id, "memory_travel", "read"
         )
         test_hook.assert_not_called()
-        # For get operation, should return original value when denied
-        self.assertEqual(result, ["item1"])
+        # A denied get is the denial, not the value (3.16)
+        self.assertIs(result, PERMISSION_DENIED)
 
 
 if __name__ == "__main__":

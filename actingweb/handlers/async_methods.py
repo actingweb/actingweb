@@ -62,7 +62,7 @@ class AsyncMethodsHandler(MethodsHandler):
         myself = auth_result.actor
         check = auth_result.auth_obj
         # Use unified access control system for permission checking
-        if not self._check_method_permission(actor_id, check, name):
+        if not self._check_method_permission(actor_id, check, name, "GET"):
             if self.response:
                 self.response.set_status(403, "Forbidden")
             return
@@ -74,7 +74,7 @@ class AsyncMethodsHandler(MethodsHandler):
             if actor_interface:
                 if not name:
                     # Return list of available methods with metadata
-                    result = {"methods": self.hooks.get_method_metadata_list()}
+                    result = {"methods": self._listable_methods(actor_id, check)}
                 else:
                     auth_context = self._create_auth_context(check)
                     # Use async hook execution
@@ -113,29 +113,10 @@ class AsyncMethodsHandler(MethodsHandler):
             return
         myself = auth_result.actor
         check = auth_result.auth_obj
-        # Use unified access control system for permission checking
-        if not self._check_method_permission(actor_id, check, name):
-            if self.response:
-                self.response.set_status(403, "Forbidden")
+        gated = self._parse_and_gate(actor_id, check, name)
+        if gated is None:
             return
-
-        # Parse request body
-        try:
-            body: str | bytes | None = self.request.body
-            if body is None:
-                body_str = "{}"
-            elif isinstance(body, bytes):
-                body_str = body.decode("utf-8", "ignore")
-            else:
-                body_str = body
-            params = json.loads(body_str)
-        except (TypeError, ValueError, KeyError):
-            if self.response:
-                self.response.set_status(400, "Error in json body")
-            return
-
-        # Check if this is a JSON-RPC request
-        is_jsonrpc = "jsonrpc" in params and params["jsonrpc"] == "2.0"
+        params, is_jsonrpc = gated
 
         if is_jsonrpc:
             # Handle JSON-RPC request asynchronously
@@ -154,18 +135,16 @@ class AsyncMethodsHandler(MethodsHandler):
                         name, actor_interface, params, auth_context
                     )
 
-        if result is not None:
-            if self.response:
-                self.response.set_status(200, "OK")
-                self.response.headers["Content-Type"] = "application/json"
-                self.response.write(json.dumps(result))
-        else:
-            if self.response:
-                self.response.set_status(400, "Processing error")
+        self._write_post_result(result, jsonrpc=is_jsonrpc)
 
     async def put_async(self, actor_id: str, name: str = "") -> None:
-        """PUT requests are handled as POST for methods (async variant)."""
-        await self.post_async(actor_id, name)
+        """PUT requests are handled as POST for methods (async variant;
+        decided as PUT)."""
+        self._verb_override = "PUT"
+        try:
+            await self.post_async(actor_id, name)
+        finally:
+            self._verb_override = None
 
     async def delete_async(self, actor_id: str, name: str = "") -> None:
         """
@@ -179,6 +158,12 @@ class AsyncMethodsHandler(MethodsHandler):
         myself = auth_result.actor
         check = auth_result.auth_obj
         if not auth_result.authorize("DELETE", "methods", name):
+            return
+        # A peer is decided by its grant as well (3.16; DELETE was the one
+        # method verb the grant did not answer).
+        if not self._check_method_permission(actor_id, check, name, "DELETE"):
+            if self.response:
+                self.response.set_status(403, "Forbidden")
             return
 
         # Execute method delete hook asynchronously
@@ -237,6 +222,11 @@ class AsyncMethodsHandler(MethodsHandler):
                 },
                 "id": params.get("id"),
             }
+
+        if not method_name:
+            refused = self._body_method_refused(myself, auth_obj, params)
+            if refused is not None:
+                return refused
 
         # Extract method parameters
         method_params = params.get("params", {})

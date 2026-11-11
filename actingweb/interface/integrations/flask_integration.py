@@ -22,7 +22,11 @@ from ._errors import (
     log_db_error,
     map_db_error,
 )
-from .base_integration import BaseActingWebIntegration, default_templates_dir
+from .base_integration import (
+    BaseActingWebIntegration,
+    default_templates_dir,
+    template_fallback_status,
+)
 
 if TYPE_CHECKING:
     from ..app import ActingWebApp
@@ -260,6 +264,10 @@ class FlaskIntegration(BaseActingWebIntegration):
         @self.flask_app.route("/oauth/register", methods=["POST", "OPTIONS"])
         def oauth2_register() -> Response | WerkzeugResponse | str:  # pyright: ignore[reportUnusedFunction]
             return self._handle_oauth2_endpoint("register")
+
+        @self.flask_app.route("/oauth/authorize/confirm", methods=["POST"])
+        def oauth2_authorize_confirm() -> Response | WerkzeugResponse | str:  # pyright: ignore[reportUnusedFunction]
+            return self._handle_oauth2_endpoint("authorize/confirm")
 
         @self.flask_app.route("/oauth/authorize", methods=["GET", "POST", "OPTIONS"])
         def oauth2_authorize() -> Response | WerkzeugResponse | str:  # pyright: ignore[reportUnusedFunction]
@@ -1176,6 +1184,18 @@ class FlaskIntegration(BaseActingWebIntegration):
                 except Exception:  # folds DbError: no DB access: template rendering
                     pass  # Fall back to default response
 
+        if webobj.response.template_name:
+            # An MCP sign-in paused for the user's confirmation (3.16).
+            page = Response(
+                render_template(
+                    webobj.response.template_name, **webobj.response.template_values
+                )
+            )
+            for key, value in webobj.response.headers.items():
+                page.headers[key] = value
+            self._copy_cookies(page, webobj)
+            return page
+
         return self._create_flask_response(webobj)
 
     def _handle_oauth2_email(self) -> Response | WerkzeugResponse | str:
@@ -1384,6 +1404,15 @@ class FlaskIntegration(BaseActingWebIntegration):
             """
             return Response(fallback_html, mimetype="text/html", status=status_code)
 
+    @staticmethod
+    def _copy_cookies(response: Any, webobj: AWWebObj) -> None:
+        """The handler's cookies onto ``response``, every attribute kept."""
+        for cookie in webobj.response.cookies:
+            cookie_data = cookie.copy()
+            name = cookie_data.pop("name", None)
+            if name:
+                response.set_cookie(name, **cookie_data)
+
     def _handle_oauth2_endpoint(
         self, endpoint: str
     ) -> Response | WerkzeugResponse | str:
@@ -1415,25 +1444,39 @@ class FlaskIntegration(BaseActingWebIntegration):
             hasattr(webobj.response, "template_values")
             and webobj.response.template_values
         ):
-            # This is an HTML template response
+            # This is an HTML template response: the handler names it (the
+            # confirmation page, 3.16), else the authorization form.
             template_name = (
-                "aw-oauth-authorization-form.html"  # Default OAuth2 template
+                webobj.response.template_name or "aw-oauth-authorization-form.html"
             )
             try:
-                return Response(
-                    render_template(template_name, **webobj.response.template_values)
+                page = Response(
+                    render_template(template_name, **webobj.response.template_values),
+                    # A refusal page keeps its status (3.16).
+                    status=webobj.response.status_code or 200,
                 )
+                # The handler's cookies and headers reach the page (3.16).
+                for key, value in webobj.response.headers.items():
+                    page.headers[key] = value
+                self._copy_cookies(page, webobj)
+                return page
             except Exception as e:  # folds DbError: no DB access: template rendering
                 # Template not found or rendering error - fall back to JSON
                 from flask import jsonify
 
-                return jsonify(
+                answer = jsonify(
                     {
                         "error": "template_error",
                         "error_description": f"Failed to render template: {str(e)}",
                         "template_values": webobj.response.template_values,
                     }
                 )
+                # A refusal keeps its status; a page that failed is not a
+                # 200 (3.16).
+                answer.status_code = template_fallback_status(
+                    webobj.response.status_code
+                )
+                return answer
 
         # Handle redirect responses (e.g., OAuth2 callbacks)
         if isinstance(result, dict) and result.get("status") == "redirect":
@@ -1449,6 +1492,7 @@ class FlaskIntegration(BaseActingWebIntegration):
                 redirect_response.headers["Access-Control-Allow-Headers"] = (
                     "Authorization, Content-Type, mcp-protocol-version"
                 )
+                self._copy_cookies(redirect_response, webobj)
 
                 return redirect_response
 

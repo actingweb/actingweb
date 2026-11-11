@@ -2206,9 +2206,10 @@ Permission overrides SHOULD follow this structure to ensure interoperability:
   Controls MCP tool access with allowed and denied lists for tool-specific
   permissions.
 
-``resources`` (for MCP clients)
-  Controls MCP resource access with URI patterns and operations for
-  resource-specific permissions.
+``resources``
+  Controls resource access with patterns and operations: the ``/resources``
+  path of a peer request and MCP resources alike (one grant; GET is ``read``,
+  PUT and POST ``write``, DELETE ``delete``).
 
 ``prompts`` (for MCP clients)
   Controls MCP prompt access with allowed patterns for prompt-specific
@@ -2296,6 +2297,9 @@ When evaluating permissions for a trust relationship, the system SHOULD:
 3. Evaluate patterns using glob matching with ``*`` (any characters) and ``?`` (single character); a backslash escapes ``*``, ``?`` and itself (``\*`` is a literal ``*``), and matching is case-sensitive without character classes
 4. Apply precedence: explicit deny > explicit allow > trust type defaults
 5. Default to deny if no matching rule is found
+6. Treat an exclusion (a deny) of a path as covering its descendants, and
+   remove excluded descendants from data returned for an ancestor of the path
+   (a read of the parent, a listing, a subscription diff)
 
 This approach provides standardized per-relationship permission management
 while maintaining backward compatibility with existing trust relationship

@@ -228,20 +228,27 @@ def regression_test_app(docker_services, setup_database, worker_info):  # pylint
 
         time.sleep(0.1)
 
+    _REGRESSION_CONFIG["config"] = aw_app.get_config()
     yield test_app_url
+
+
+# The regression app's config (an owner's OAuth2 client is created through
+# the library: 3.16 refuses client_credentials to an anonymous registration).
+_REGRESSION_CONFIG: dict = {}
 
 
 @pytest.fixture(scope="module")
 def regression_oauth2_client(regression_test_app, worker_info):
     """
-    Create an authenticated OAuth2 client for regression tests.
-
-    Uses the OAuth2TestHelper to create a fully authenticated client.
+    Create an authenticated OAuth2 client for regression tests: an actor and
+    a client its owner created, with a client_credentials token.
     """
-    from .utils.oauth2_helper import create_authenticated_client
+    from .utils.oauth2_helper import create_owner_client
 
-    return create_authenticated_client(
-        base_url=regression_test_app, worker_id=worker_info["worker_id"]
+    return create_owner_client(
+        regression_test_app,
+        _REGRESSION_CONFIG["config"],
+        worker_id=worker_info["worker_id"],
     )
 
 

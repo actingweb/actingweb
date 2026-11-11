@@ -41,6 +41,11 @@ def mock_actor_sync():
             mock_property.PropertyStore.return_value = Mock()
 
             actor = Actor(actor_id="test_actor", config=mock_config)
+            # The transport is tested here, not the grant: the delivery
+            # re-check (3.16) admits.
+            actor.filter_subscription_blob = (  # type: ignore[method-assign]
+                lambda peerid, sub, blob, **kw: blob
+            )
             yield actor
 
 
@@ -70,6 +75,11 @@ def mock_actor_async():
             mock_property.PropertyStore.return_value = Mock()
 
             actor = Actor(actor_id="test_actor", config=mock_config)
+            # The transport is tested here, not the grant: the delivery
+            # re-check (3.16) admits.
+            actor.filter_subscription_blob = (  # type: ignore[method-assign]
+                lambda peerid, sub, blob, **kw: blob
+            )
             yield actor
 
 

@@ -1175,6 +1175,18 @@ The application provides an OAuth2 client generation endpoint:
 
 .. code-block:: python
 
+    # A route that signs the user in itself and grants an existing client
+    # access (3.16) calls the server's helper instead of writing the trust:
+    #
+    #     server = get_actingweb_oauth2_server(config)
+    #     answer = server.complete_client_authorization(
+    #         actor, client_id, redirect_uri, trust_type, state=state
+    #     )
+    #     # answer["url"]: the client's redirect, with a code or access_denied
+    #
+    # It applies the client list, the oauth2_trust_requested hook, the trust
+    # and the code, as the library's own sign-in does.
+
     @fastapi_app.post("/{actor_id}/api/generate-oauth-client")
     async def generate_oauth_client(actor_id: str, request: Request):
         """Generate OAuth2 client credentials for AI assistants."""

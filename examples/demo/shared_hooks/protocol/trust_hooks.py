@@ -5,8 +5,15 @@ Trust hooks handle trust relationship events in ActingWeb. These are triggered
 when trust relationships are created, modified, or deleted.
 
 Available Trust Lifecycle Events:
-- trust_approved: Called after a trust relationship is approved by both parties
-- trust_deleted: Called before a trust relationship is deleted
+- trust_fully_approved_local: Called once, when this actor's approval completes
+  a trust the peer had already approved (every approving route: the REST PUT,
+  the web UI, ``approve_relationship``, approve-on-create)
+- trust_fully_approved_remote: Called when the peer's approval completes it
+- trust_deleted: Called before a trust relationship is deleted, with the row
+  as ``trust_data`` and ``initiated_by_peer``
+
+``trust_approved`` is the deprecated name of ``trust_fully_approved_local``
+(3.16): it runs only when no ``trust_fully_approved_local`` hook is registered.
 
 These hooks are useful for:
 - Logging trust relationship changes
@@ -26,7 +33,7 @@ logger = logging.getLogger(__name__)
 def register_trust_hooks(app):
     """Register all trust hooks with the ActingWeb application."""
 
-    @app.lifecycle_hook("trust_approved")
+    @app.lifecycle_hook("trust_fully_approved_local")
     def on_trust_approved(
         actor: ActorInterface,
         peer_id: str = "",
@@ -37,7 +44,8 @@ def register_trust_hooks(app):
         """
         Handle trust approval event.
 
-        Triggered: Automatically when a trust relationship is approved by both parties
+        Triggered: once, when this actor's approval completes a trust the peer
+        had already approved (a repeat approval fires nothing)
 
         This hook is called when a trust relationship becomes fully established
         (both this actor and the peer have approved the relationship).

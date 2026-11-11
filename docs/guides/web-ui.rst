@@ -281,6 +281,18 @@ Available Templates
     - ``default_trust_type``: Default trust type selection
     - ``form_action``: Authorization form submission URL
     - ``email_hint``: Pre-filled email for authorization
+    - ``form_nonce``: post it back in every form as a hidden input (3.16)
+
+**aw-oauth-confirm.html**
+    Confirmation of an MCP client's access (3.16), shown when a sign-in is not
+    bound to the browser that showed the form. Post ``token`` and
+    ``decision`` (``approve`` or ``decline``) to ``form_action``.
+
+    Available variables:
+    - ``client_name`` (chosen by the client), ``client_id``
+    - ``redirect_host``: where the client receives the code
+    - ``trust_type``, ``trust_type_display_name``, ``trust_type_description``
+    - ``confirm_token``, ``form_action``
 
 **aw-oauth-email.html**
     Email input form for OAuth login when provider doesn't provide email.

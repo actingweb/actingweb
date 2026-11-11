@@ -19,6 +19,7 @@ is actually running.
 
 import sys
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
@@ -121,7 +122,12 @@ def test_demo_example_registers_all_shared_hook_categories():
     hooks = module.aw_app.hooks
 
     assert hooks._subscription_hooks, "subscription hook not registered"
-    assert hooks._lifecycle_hooks.get("trust_approved"), "trust hook not registered"
+    # 3.16: the canonical approval hook (trust_approved is its deprecated
+    # stand-in and runs only when no canonical hook is registered).
+    assert hooks._lifecycle_hooks.get("trust_fully_approved_local"), (
+        "trust hook not registered"
+    )
+    assert not hooks._lifecycle_hooks.get("trust_approved")
     assert hooks._lifecycle_hooks.get("actor_created"), "lifecycle hook not registered"
     assert hooks._method_hooks, "method hooks not registered"
     assert hooks._action_hooks, "action hooks not registered"
@@ -307,3 +313,24 @@ def test_demo_qa_mode_refuses_to_be_imported_by_a_wsgi_server(
     monkeypatch.setenv("APP_HOST_FQDN", "localhost:5055")
     with pytest.raises(RuntimeError, match="development server only"):
         _exec_demo_as("demo_application_qa_import")
+
+
+def test_the_demo_approval_hook_runs_on_an_approval() -> None:
+    """3.16: every approving route (the web UI goes through the REST PUT)
+    runs the demo's hook, once, through ``TrustManager.fire_approved``."""
+    from actingweb.interface.trust_manager import TrustManager
+
+    module = _import_demo_application()
+    hooks = module.aw_app.hooks
+    core = mock.Mock()
+    core.id = "demo-actor"
+    row = {"peerid": "p", "relationship": "friend", "approved": True}
+    with mock.patch.object(
+        hooks, "execute_lifecycle_hooks", wraps=hooks.execute_lifecycle_hooks
+    ) as run:
+        TrustManager(core, hooks=hooks).fire_approved(
+            "p",
+            {**row, "approved": False, "peer_approved": True},
+            {**row, "peer_approved": True},
+        )
+    assert [c.args[0] for c in run.call_args_list] == ["trust_fully_approved_local"]

@@ -9,7 +9,7 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from actingweb.handlers import base_handler
-from actingweb.trust_permissions import get_trust_permission_store
+from actingweb.trust_permissions import get_trust_permission_store, override_applies
 from actingweb.trust_type_registry import get_registry
 
 from ..db.exceptions import DbError
@@ -98,6 +98,12 @@ class PermissionsHandler(base_handler.BaseHandler):
         try:
             perm_store = get_trust_permission_store(self.config)
             custom_permissions = perm_store.get_permissions(actor_id, peer_id)
+            if not override_applies(
+                custom_permissions, peer_id, getattr(trust_rel, "relationship", "")
+            ):
+                # A client's override for another type is not applied
+                # (3.16): its type's defaults are its grant.
+                custom_permissions = None
 
             response_data: dict[str, Any] = {
                 "actor_id": actor_id,

@@ -711,7 +711,7 @@ class WwwHandler(base_handler.BaseHandler):
 
                     # Check if this relationship has custom permissions
                     t["has_custom_permissions"] = self._has_custom_permissions(
-                        myself.id or "", peerid
+                        myself.id or "", peerid, rel
                     )
 
                     connection_metadata.append(
@@ -734,7 +734,7 @@ class WwwHandler(base_handler.BaseHandler):
                         baseuri = getattr(t, "baseuri", "") or ""
                         t.peer_link = baseuri if is_valid_peer_baseuri(baseuri) else ""
                         t.has_custom_permissions = self._has_custom_permissions(
-                            myself.id or "", peerid
+                            myself.id or "", peerid, rel
                         )
                     except DbError:
                         raise
@@ -868,18 +868,24 @@ class WwwHandler(base_handler.BaseHandler):
             self.response.set_status(404, "Not found")
         return
 
-    def _has_custom_permissions(self, actor_id: str, peer_id: str) -> bool:
+    def _has_custom_permissions(
+        self, actor_id: str, peer_id: str, relationship: str = ""
+    ) -> bool:
         """Check if a trust relationship has custom permission overrides."""
         if not actor_id or not peer_id:
             return False
 
         try:
             # Import permission system with fallback
-            from ..trust_permissions import get_trust_permission_store
+            from ..trust_permissions import (
+                get_trust_permission_store,
+                override_applies,
+            )
 
             permission_store = get_trust_permission_store(self.config)
             permissions = permission_store.get_permissions(actor_id, peer_id)
-            return permissions is not None
+            # A client's override for another type is not applied (3.16).
+            return override_applies(permissions, peer_id, relationship)
         except DbError:
             raise
         except Exception:

@@ -3,6 +3,7 @@ Simplified trust relationship management for ActingWeb actors.
 """
 
 import logging
+from collections.abc import Callable
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -13,6 +14,8 @@ from ..actor import Actor as CoreActor
 from ..trust import canonical_connection_method
 
 if TYPE_CHECKING:
+    import asyncio
+
     from .hooks import HookRegistry
 
 
@@ -134,6 +137,11 @@ class TrustRelationship:
 
 logger = logging.getLogger(__name__)
 
+_UNKNOWN_OVERRIDE = "\x00unknown"
+"""``_clean_client_override``'s answer when the stored override could not be
+read: a re-type refuses on it (it may be an old override for the approved
+type)."""
+
 
 class TrustManager:
     """
@@ -167,8 +175,13 @@ class TrustManager:
         peer_id: str = "",
         relationship: str = "",
         trust_data: dict[str, Any] | None = None,
+        *,
+        loop: "asyncio.AbstractEventLoop | None" = None,
+        **extra: Any,
     ) -> None:
-        """Execute a lifecycle hook."""
+        """Execute a lifecycle hook. With ``loop`` (called from a worker
+        thread an async caller on that loop waits on), a coroutine hook is
+        awaited on ``loop`` and a sync hook runs in this thread."""
         if not self._hooks:
             return
 
@@ -176,18 +189,88 @@ class TrustManager:
             from .actor_interface import ActorInterface
 
             actor_interface = ActorInterface(self._core_actor, hooks=self._hooks)
-            self._hooks.execute_lifecycle_hooks(
-                event,
-                actor=actor_interface,
-                peer_id=peer_id,
-                relationship=relationship,
-                trust_data=trust_data or {},
-            )
+            kwargs: dict[str, Any] = {
+                "peer_id": peer_id,
+                "relationship": relationship,
+                "trust_data": trust_data or {},
+                **extra,
+            }
+            if loop is not None:
+                self._hooks.execute_lifecycle_hooks_for_loop(
+                    event, loop, actor_interface, **kwargs
+                )
+            else:
+                self._hooks.execute_lifecycle_hooks(
+                    event, actor=actor_interface, **kwargs
+                )
             logger.debug(f"Lifecycle hook '{event}' executed for peer {peer_id}")
         except DbError:
             raise
         except Exception as e:
             logger.error(f"Error executing lifecycle hook '{event}': {e}")
+
+    def _registered(self, event: str) -> bool:
+        hooks = getattr(self._hooks, "_lifecycle_hooks", None) or {}
+        return bool(hooks.get(event))
+
+    @staticmethod
+    def _fully_approved(row: Any) -> bool:
+        if row is None:
+            return False
+        if isinstance(row, dict):
+            return bool(row.get("approved")) and bool(row.get("peer_approved"))
+        return bool(getattr(row, "approved", False)) and bool(
+            getattr(row, "peer_approved", False)
+        )
+
+    def fire_approved(self, peer_id: str, before: Any, after: Any) -> None:
+        """The one approval hook path (3.16): ``trust_fully_approved_local``
+        once, when the row went from not fully approved (``before``) to
+        approved by both sides (``after``), with ``trust_data`` = the row. A
+        repeat approval fires nothing. ``trust_approved`` (deprecated;
+        registering it logs a warning) fires in its place only when no
+        ``trust_fully_approved_local`` hook is registered. A store fault after the approval committed is logged,
+        not raised (a retry would fire twice)."""
+        if not self._fully_approved(after) or self._fully_approved(before):
+            return
+        row = after if isinstance(after, dict) else after.to_dict()
+        event = "trust_fully_approved_local"
+        if not self._registered(event) and self._registered("trust_approved"):
+            # Deprecated (registering it logged the warning).
+            event = "trust_approved"
+        try:
+            self._execute_lifecycle_hook(
+                event,
+                peer_id=peer_id,
+                relationship=str(row.get("relationship") or ""),
+                trust_data=row,
+            )
+        except DbError as e:  # folds DbError: hook after the approval committed
+            logger.error(f"{event} for {peer_id} skipped on a store fault: {e}")
+
+    def fire_deleted(
+        self,
+        row: Any,
+        *,
+        initiated_by_peer: bool,
+        loop: "asyncio.AbstractEventLoop | None" = None,
+    ) -> None:
+        """The one deletion hook path (3.16): ``trust_deleted`` before the
+        delete, with ``peer_id``, ``relationship``, ``trust_data`` (the row,
+        so the hook can still read the peer's cached profile) and
+        ``initiated_by_peer``. ``loop``: the event loop of an async caller
+        waiting on this thread (its coroutine hooks are awaited there)."""
+        if not row:
+            return
+        data = row if isinstance(row, dict) else row.to_dict()
+        self._execute_lifecycle_hook(
+            "trust_deleted",
+            peer_id=str(data.get("peerid") or ""),
+            relationship=str(data.get("relationship") or ""),
+            trust_data=data,
+            loop=loop,
+            initiated_by_peer=initiated_by_peer,
+        )
 
     @property
     def relationships(self) -> list[TrustRelationship]:
@@ -274,20 +357,8 @@ class TrustManager:
         peer_id = self._core_actor.last_trust_approved_on_create
         if not peer_id or not isinstance(rel_data, dict):
             return
-        if not (rel_data.get("approved") and rel_data.get("peer_approved")):
-            return
-        try:
-            self._execute_lifecycle_hook(
-                "trust_fully_approved_local",
-                peer_id=peer_id,
-                relationship=str(rel_data.get("relationship") or ""),
-                trust_data=rel_data,
-            )
-        except DbError as e:  # folds DbError: hook after the approval committed
-            logger.error(
-                f"trust_fully_approved_local for {peer_id} skipped on a store "
-                f"fault after the approval committed: {e}"
-            )
+        # The waiting request was not approved here before this create.
+        self.fire_approved(peer_id, None, rel_data)
 
     def approve_relationship(self, peer_id: str) -> bool:
         """Approve a trust relationship with lifecycle hook execution."""
@@ -305,22 +376,10 @@ class TrustManager:
             # twice.
             try:
                 updated_trust = self.get_relationship(peer_id)
-                if (
-                    updated_trust
-                    and updated_trust.approved
-                    and updated_trust.peer_approved
-                ):
-                    self._execute_lifecycle_hook(
-                        "trust_approved",
-                        peer_id=peer_id,
-                        relationship=relationship.relationship,
-                        trust_data=updated_trust.to_dict(),
-                    )
             except DbError as e:  # folds DbError: hook after the approval committed
-                logger.error(
-                    f"trust_approved for {peer_id} skipped on a store fault "
-                    f"after the approval committed: {e}"
-                )
+                logger.error(f"Approval hook for {peer_id} skipped: {e}")
+                updated_trust = None
+            self.fire_approved(peer_id, relationship, updated_trust)
 
         return bool(result)
 
@@ -336,11 +395,7 @@ class TrustManager:
 
         # Execute lifecycle hook BEFORE deletion
         if relationship:
-            self._execute_lifecycle_hook(
-                "trust_deleted",
-                peer_id=peer_id,
-                relationship=relationship.relationship,
-            )
+            self.fire_deleted(relationship, initiated_by_peer=False)
 
         result = self._core_actor.delete_reciprocal_trust(
             peerid=peer_id, delete_peer=True
@@ -417,6 +472,69 @@ class TrustManager:
         """Create a standardized peer_id for non-actor peers (e.g., oauth2/mcp)."""
         normalized = identifier.replace("@", "_at_").replace(".", "_dot_")
         return f"{source}:{normalized}"
+
+    def _clean_client_override(
+        self, peer_id: str, row_type: str | None = None
+    ) -> str | None:
+        """Delete a client's permission override whose type differs from its
+        row's type (``row_type``, else the row as stored now): the evaluator
+        does not apply it (owner decision 2026-11-11), so this is cleanup.
+        Compared with the row, not with the type an authorisation approved,
+        so an overlapping authorisation's override for the type it wrote is
+        kept. Answers the stale type left in place when the removal failed
+        (logged), else None."""
+        from ..trust_permissions import get_trust_permission_store
+
+        config = self._core_actor.config
+        if config is None:
+            return None
+        actor_id = str(self._core_actor.id)
+        store = get_trust_permission_store(config)
+        stale_type = ""
+        try:
+            if row_type is None:
+                row = get_trust(config).get(actor_id=actor_id, peerid=peer_id)
+                if not row:
+                    return None
+                row_type = str(row.get("relationship") or "")
+            stored = store.get_permissions_uncached(actor_id, peer_id)
+            stale_type = str(getattr(stored, "trust_type", "") or "")
+            if stored is None or stale_type == row_type:
+                return None
+            removed = store.delete_permissions(actor_id, peer_id)
+        except DbError as e:  # folds DbError: cleanup of an unapplied override
+            logger.error(
+                f"OAuth2 client trust {peer_id}: its override for another type "
+                f"was not removed (it is not applied): {e}"
+            )
+            # Unknown when the read itself faulted: the caller treats it as
+            # an override it could not remove (3.16: it read as none).
+            return stale_type or _UNKNOWN_OVERRIDE
+        if not removed:
+            logger.error(
+                f"OAuth2 client trust {peer_id}: its override for "
+                f"'{stale_type}' was not removed (it is not applied)"
+            )
+            return stale_type
+        logger.warning(
+            f"OAuth2 client trust {peer_id}: its permission override for "
+            f"'{stale_type}' was removed; the row's type is '{row_type}' (a "
+            "client's override must name its row's type)"
+        )
+        return None
+
+    def _evict_retyped(self, peer_id: str, trust_type: str) -> None:
+        """After a client's row took a new type: the MCP caches for the actor
+        are evicted (single process; ``todo/mcp-cache-lifecycle-and-revocation``
+        covers the others)."""
+        from ..mcp.invalidation import evict_caches_for_actor
+
+        actor_id = str(self._core_actor.id)
+        evict_caches_for_actor(actor_id)
+        logger.info(
+            f"OAuth2 client trust {peer_id} re-typed to {trust_type} at its "
+            "authorisation"
+        )
 
     def create_or_update_oauth_trust(
         self,
@@ -532,7 +650,8 @@ class TrustManager:
                 if not db:
                     logger.error("Failed to instantiate database backend")
                     return False
-                if db.get(actor_id=self._core_actor.id, peerid=peer_id):
+                stored_row = db.get(actor_id=self._core_actor.id, peerid=peer_id)
+                if stored_row:
                     now_iso = datetime.utcnow().isoformat()
 
                     # Always update last_accessed and established_via for OAuth2 trusts
@@ -564,15 +683,59 @@ class TrustManager:
                         default_desc = f"OAuth2 client: {email}".strip().lower()
                         if client_name and normalized_desc == default_desc:
                             modify_kwargs["desc"] = f"OAuth2 client: {client_name}"
+                    # A client's row follows the level the user approved at
+                    # this authorisation, up or down (3.16; it kept the
+                    # first one forever). An override written for another
+                    # type is never applied (the evaluator), so it is
+                    # removed as cleanup after the write, with no rollback.
+                    # The row as just read (3.16: an earlier read could
+                    # miss an overlapping authorisation's write).
+                    old_type = str(stored_row.get("relationship") or "")
+                    type_changes = bool(
+                        source == "oauth2_client"
+                        and trust_type
+                        and old_type != trust_type
+                    )
+                    if source == "oauth2_client" and trust_type:
+                        # An override already inert (it names a type other
+                        # than the row's) goes first: once the row took its
+                        # type again it would apply. When it cannot go and
+                        # this approval is its type, no code (3.16).
+                        leftover = self._clean_client_override(peer_id, old_type)
+                        if type_changes and leftover in (
+                            trust_type,
+                            _UNKNOWN_OVERRIDE,
+                        ):
+                            logger.error(
+                                f"OAuth2 client trust {peer_id} not re-typed to "
+                                f"{trust_type}: an old override for that type "
+                                "could not be removed (or read)"
+                            )
+                            return False
+                    if type_changes:
+                        modify_kwargs["relationship"] = trust_type
 
                     if db.modify(**modify_kwargs):
                         logger.debug(
                             f"Updated existing OAuth trust: peer_id={peer_id}, established_via={source}"
                         )
+                        if type_changes:
+                            # The old type's override is inert now: cleanup,
+                            # against the row as stored (another
+                            # authorisation may have written its own type).
+                            self._clean_client_override(peer_id)
+                            self._evict_retyped(peer_id, trust_type)
                     else:
+                        # The row went between the read and the write: no
+                        # trust stands, so no code is issued (3.16).
                         logger.warning(
                             f"OAuth trust for {peer_id} was deleted while being updated"
                         )
+                        return False
+                else:
+                    # Gone since the read above: the same.
+                    logger.warning(f"OAuth trust for {peer_id} is gone")
+                    return False
             except DbError:
                 raise
             except Exception as e:
@@ -809,7 +972,14 @@ class TrustManager:
         )
         return bool(result)
 
-    def delete_peer_trust(self, peer_id: str, notify_peer: bool = True) -> bool:
+    def delete_peer_trust(
+        self,
+        peer_id: str,
+        notify_peer: bool = True,
+        *,
+        expected_secret: str | None = None,
+        before_local_delete: Callable[[dict[str, Any]], None] | None = None,
+    ) -> bool:
         """
         Delete a trust relationship, optionally notifying the peer.
 
@@ -826,8 +996,14 @@ class TrustManager:
             - Lifecycle hooks (trust_deleted) should be executed by the caller
             - Associated permissions are automatically deleted by the core method
         """
+        extra: dict[str, Any] = {}
+        # Passed only when given: keeps a subclass's older signature working.
+        if expected_secret is not None:
+            extra["expected_secret"] = expected_secret
+        if before_local_delete is not None:
+            extra["before_local_delete"] = before_local_delete
         result = self._core_actor.delete_reciprocal_trust(
-            peerid=peer_id, delete_peer=notify_peer
+            peerid=peer_id, delete_peer=notify_peer, **extra
         )
         return bool(result)
 

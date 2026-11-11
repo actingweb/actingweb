@@ -194,7 +194,7 @@ class TestGuardPrecedesPermissionLookup(unittest.TestCase):
 
     def _ev(self, perms):
         ev = _evaluator()
-        ev._get_effective_permissions = lambda actor_id, peer_id: perms  # type: ignore[method-assign]
+        ev._get_effective_permissions = lambda actor_id, peer_id, **kw: perms  # type: ignore[method-assign]
         return ev
 
     def test_single_path_with_no_effective_permissions(self) -> None:

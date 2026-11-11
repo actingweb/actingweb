@@ -796,3 +796,123 @@ class TestThePermissionSenderResendsA503:
         assert _retry_after("soon") == 1.0
         assert _retry_after("nan") == 1.0
         assert _retry_after("-3") == 0.0
+
+
+def test_an_update_cannot_change_whose_override_it_is() -> None:
+    """Re-run 6 (Issue 1): ``update_permissions`` copied any field the
+    request named; the store keys on ``actor_id`` and ``peer_id``, so an
+    owner's PUT with ``{"actor_id": "victim", ...}`` wrote a grant into
+    another actor's store, with the ``trust_type`` of its choice."""
+    from unittest import mock
+
+    from actingweb.trust_permissions import TrustPermissions, TrustPermissionStore
+
+    store = object.__new__(TrustPermissionStore)
+    existing = TrustPermissions(
+        actor_id="a1",
+        peer_id="p1",
+        trust_type="viewer",
+        properties={"patterns": ["public/*"], "operations": ["read"]},
+    )
+    written: list[TrustPermissions] = []
+    with (
+        mock.patch.object(store, "get_permissions", return_value=existing),
+        mock.patch.object(
+            store,
+            "store_permissions",
+            side_effect=lambda p, **kw: written.append(p) or True,
+        ),
+    ):
+        assert store.update_permissions(
+            "a1",
+            "p1",
+            {
+                "actor_id": "victim",
+                "peer_id": "attacker",
+                "trust_type": "admin",
+                "created_by": "x",
+                "notes": "ok",
+                "methods": {"allowed": ["m"]},
+            },
+        )
+    assert len(written) == 1
+    stored = written[0]
+    assert (stored.actor_id, stored.peer_id, stored.trust_type) == (
+        "a1",
+        "p1",
+        "viewer",
+    )
+    assert stored.created_by == "system"
+    assert stored.notes == "ok" and stored.methods == {"allowed": ["m"]}
+
+
+def test_a_rule_list_that_is_not_a_list_keeps_the_base_value() -> None:
+    """Re-run 9 (Issue 1): a ``null`` or a string in a rule list replaced the
+    trust type's list on merge, dropping its base exclusions; a row stored
+    before the intake check, or through the store API, is covered here."""
+    from actingweb.trust_permissions import (
+        merge_permissions,
+        permission_updates_problem,
+    )
+
+    base = {"properties": {"patterns": ["*"], "excluded_patterns": ["private/*"]}}
+    for bad in (None, "private/*", [1]):
+        merged = merge_permissions(base, {"properties": {"excluded_patterns": bad}})
+        assert merged["properties"]["excluded_patterns"] == ["private/*"]
+        assert permission_updates_problem({"properties": {"excluded_patterns": bad}})
+    assert permission_updates_problem({"properties": {"patterns": ["a"]}}) is None
+
+
+def test_a_malformed_override_allows_less_never_more() -> None:
+    """Re-run 10 (Issue 1): keeping the trust type's value is fail-closed
+    only for exclusions; for an allow list, or a category that is not an
+    object, it handed out the trust type's wider grant where the override
+    used to deny. Through the evaluator."""
+    from actingweb.permission_evaluator import (
+        PermissionEvaluator,
+        PermissionResult,
+        PermissionType,
+    )
+    from actingweb.trust_permissions import merge_permissions
+
+    base = {
+        "properties": {
+            "patterns": ["*"],
+            "operations": ["read", "write"],
+            "excluded_patterns": ["private/*"],
+        },
+        "methods": {"allowed": ["*"]},
+        "tools": {"allowed": ["*"]},
+    }
+    cases = [
+        (
+            {"properties": {"operations": "read"}},
+            PermissionType.PROPERTIES,
+            "x",
+            "write",
+        ),
+        ({"methods": {"allowed": None}}, PermissionType.METHODS, "m", "call"),
+        ({"methods": {"allowed": "get_x"}}, PermissionType.METHODS, "m", "call"),
+        ({"methods": ["x"]}, PermissionType.METHODS, "m", "call"),
+        ({"tools": []}, PermissionType.TOOLS, "search", "call"),
+        ({"properties": "everything"}, PermissionType.PROPERTIES, "x", "read"),
+        (
+            {"properties": {"excluded_patterns": "x"}},
+            PermissionType.PROPERTIES,
+            "x",
+            "read",
+        ),
+    ]
+    # (``patterns`` is a union field: no override narrows it, so a malformed
+    # one is an empty one, as a valid empty override is.)
+    ev = object.__new__(PermissionEvaluator)
+    ev.config = None  # type: ignore[misc]
+    for override, kind, target, op in cases:
+        merged = merge_permissions(base, override)
+        ev._get_effective_permissions = lambda a, p, m=merged, **k: m  # type: ignore[method-assign]
+        ev._approval = lambda a, p: (False, "friend")  # type: ignore[method-assign]
+        result = ev.evaluate_permission("a1", "p1", kind, target, op)
+        assert result == PermissionResult.DENIED, (override, result)
+    # A category it does not name is the trust type's, as before.
+    merged = merge_permissions(base, {"methods": ["x"]})
+    assert merged["tools"] == base["tools"]

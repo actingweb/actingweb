@@ -34,7 +34,11 @@ from ._errors import (
     log_db_error,
     map_db_error,
 )
-from .base_integration import BaseActingWebIntegration, default_templates_dir
+from .base_integration import (
+    BaseActingWebIntegration,
+    default_templates_dir,
+    template_fallback_status,
+)
 
 if TYPE_CHECKING:
     from ..app import ActingWebApp
@@ -97,7 +101,9 @@ def _db_error_handler(aw_app: Any) -> Callable[..., Any]:
 def _apply_cookies(response: Response, webobj: AWWebObj) -> None:
     """Copy the handler's cookies onto ``response`` with every attribute the
     handler set (path and SameSite included: a ``__Host-`` cookie needs
-    ``path=/``, the sign-in binding ``SameSite=Strict``)."""
+    ``path=/``; the sign-in binding's cookies are ``SameSite=None`` over
+    https, so a provider's form POST back carries them, and ``Lax`` over
+    http)."""
     for cookie in webobj.response.cookies:
         samesite = str(cookie.get("samesite") or "lax").lower()
         response.set_cookie(
@@ -485,7 +491,7 @@ async def get_json_body(request: Request) -> dict[str, Any]:
             return {}
         parsed_json = json.loads(body.decode("utf-8"))
         return parsed_json if isinstance(parsed_json, dict) else {}
-    except (json.JSONDecodeError, UnicodeDecodeError):
+    except (json.JSONDecodeError, UnicodeDecodeError, RecursionError):
         return {}
 
 
@@ -801,6 +807,10 @@ class FastAPIIntegration(BaseActingWebIntegration):
         @self.fastapi_app.options("/oauth/authorize")
         async def oauth2_authorize_get(request: Request) -> Response:  # pyright: ignore[reportUnusedFunction]
             return await self._handle_oauth2_endpoint(request, "authorize")
+
+        @self.fastapi_app.post("/oauth/authorize/confirm")
+        async def oauth2_authorize_confirm(request: Request) -> Response:  # pyright: ignore[reportUnusedFunction]
+            return await self._handle_oauth2_endpoint(request, "authorize/confirm")
 
         @self.fastapi_app.post("/oauth/authorize")
         async def oauth2_authorize_post(request: Request) -> Response:  # pyright: ignore[reportUnusedFunction]
@@ -1127,7 +1137,7 @@ class FastAPIIntegration(BaseActingWebIntegration):
             tags=["Trust"],
             responses={
                 200: {
-                    "description": "List of shared and excluded properties",
+                    "description": "The properties the peer may read",
                     "content": {
                         "application/json": {
                             "example": {
@@ -1142,7 +1152,6 @@ class FastAPIIntegration(BaseActingWebIntegration):
                                         "operations": ["read", "subscribe"],
                                     }
                                 ],
-                                "excluded_properties": ["memory_private"],
                             }
                         }
                     },
@@ -1495,7 +1504,9 @@ class FastAPIIntegration(BaseActingWebIntegration):
                     response = JSONResponse(
                         content=json_content, status_code=webobj.response.status_code
                     )
-                except (json.JSONDecodeError, TypeError):
+                except (json.JSONDecodeError, TypeError, RecursionError):
+                    # Not parseable here (RecursionError: nested beyond the
+                    # parser, 3.16): the body as the handler wrote it.
                     response = Response(
                         content=webobj.response.body,
                         status_code=webobj.response.status_code,
@@ -2002,6 +2013,18 @@ class FastAPIIntegration(BaseActingWebIntegration):
                     status_code=webobj.response.status_code,
                 )
 
+        if webobj.response.template_name and self.templates:
+            # An MCP sign-in paused for the user's confirmation (3.16).
+            page = self.templates.TemplateResponse(
+                request,
+                webobj.response.template_name,
+                context=webobj.response.template_values,
+            )
+            for key, value in webobj.response.headers.items():
+                page.headers[key] = value
+            _apply_cookies(page, webobj)
+            return page
+
         return self._create_fastapi_response(webobj, request)
 
     async def _handle_oauth2_email(self, request: Request) -> Response:
@@ -2257,17 +2280,26 @@ class FastAPIIntegration(BaseActingWebIntegration):
                     f"{summarize_payload(webobj.response.template_values)}"
                 )
             if self.templates:
-                # This is an HTML template response
+                # This is an HTML template response: the handler names it
+                # (the confirmation page, 3.16), else the authorization form.
                 template_name = (
-                    "aw-oauth-authorization-form.html"  # Default OAuth2 template
+                    webobj.response.template_name or "aw-oauth-authorization-form.html"
                 )
                 try:
                     self.logger.debug(f"Attempting to render template: {template_name}")
-                    return self.templates.TemplateResponse(
+                    page = self.templates.TemplateResponse(
                         request,
                         template_name,
                         context=webobj.response.template_values,
+                        # A refusal page keeps its status (3.16).
+                        status_code=webobj.response.status_code or 200,
                     )
+                    # The handler's cookies and headers reach the page (the
+                    # sign-in binding, the frame and cache headers; 3.16).
+                    for key, value in webobj.response.headers.items():
+                        page.headers[key] = value
+                    _apply_cookies(page, webobj)
+                    return page
                 except Exception as e:  # folds DbError: template render, no DB
                     # Template not found or rendering error - fall back to JSON
                     self.logger.error(f"Template rendering failed: {e}")
@@ -2278,7 +2310,12 @@ class FastAPIIntegration(BaseActingWebIntegration):
                             "error": "template_error",
                             "error_description": f"Failed to render template: {str(e)}",
                             "template_values": webobj.response.template_values,
-                        }
+                        },
+                        # A refusal keeps its status; a page that failed is
+                        # not a 200 (3.16).
+                        status_code=template_fallback_status(
+                            webobj.response.status_code
+                        ),
                     )
             else:
                 self.logger.warning(
@@ -2298,9 +2335,11 @@ class FastAPIIntegration(BaseActingWebIntegration):
                     "Access-Control-Allow-Headers": "Authorization, Content-Type, mcp-protocol-version",
                 }
 
-                return RedirectResponse(
+                redirected = RedirectResponse(
                     url=redirect_url, status_code=302, headers=cors_headers
                 )
+                _apply_cookies(redirected, webobj)
+                return redirected
 
         # Return the OAuth2 result as JSON with CORS headers
         from fastapi.responses import JSONResponse

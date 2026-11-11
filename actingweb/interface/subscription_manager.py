@@ -2,11 +2,17 @@
 Simplified subscription management for ActingWeb actors.
 """
 
+import contextvars
+import functools
 import logging
+import os
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from ..actor import Actor as CoreActor
+from ..actor import TrustReplaced
 from ..db.exceptions import DbError
 from ..subscription import Subscription as CoreSubscription
 
@@ -14,6 +20,34 @@ if TYPE_CHECKING:
     from ..subscription_config import SubscriptionProcessingConfig
 
 logger = logging.getLogger(__name__)
+
+_revocation_pool: ThreadPoolExecutor | None = None
+_revocation_pool_lock = threading.Lock()
+
+
+def _forget_revocation_pool() -> None:
+    """In a forked child the parent's pool threads do not exist: start a
+    new pool on first use (3.16)."""
+    global _revocation_pool, _revocation_pool_lock
+    _revocation_pool = None
+    _revocation_pool_lock = threading.Lock()
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_forget_revocation_pool)
+
+
+def _revocation_executor() -> ThreadPoolExecutor:
+    """The threads ``sync_peer_async`` deletes a revoked trust on (3.16):
+    apart from the event loop's default executor, which the ``trust_deleted``
+    hooks it waits on may need."""
+    global _revocation_pool
+    with _revocation_pool_lock:
+        if _revocation_pool is None:
+            _revocation_pool = ThreadPoolExecutor(
+                max_workers=4, thread_name_prefix="aw-revocation"
+            )
+        return _revocation_pool
 
 
 class SubscriptionInfo:
@@ -885,6 +919,13 @@ class SubscriptionManager:
             return "revoked"
         return "unknown"
 
+    @staticmethod
+    def _probed_secret(proxy: Any) -> str | None:
+        """The secret of the trust row the revocation probe was sent with:
+        the row the cleanup may delete (3.16)."""
+        secret = str((getattr(proxy, "trust", None) or {}).get("secret") or "")
+        return secret or None
+
     def _get_peer_proxy(self, peer_id: str) -> Any:
         """Get an AwProxy for communicating with a peer.
 
@@ -1638,53 +1679,26 @@ class SubscriptionManager:
                     f"Trust has been revoked. Cleaning up locally."
                 )
                 try:
-                    # Get trust data before deletion for hook
-                    relationships = self._core_actor.get_trust_relationships(
-                        peerid=peer_id
-                    )
-                    trust_data = relationships[0] if relationships else {}
+                    # trust_deleted fires through TrustManager.fire_deleted,
+                    # with the row the delete read, after the delete found it
+                    # and before anything local goes (3.16): a row already
+                    # gone fires nothing (it fired with {} and "friend").
+                    from .actor_interface import ActorInterface
 
-                    # Trigger trust_deleted lifecycle hook if configured
-                    hooks = (
-                        getattr(self._core_actor.config, "_hooks", None)
-                        if self._core_actor.config
-                        else None
-                    )
-                    if hooks:
-                        try:
-                            from .actor_interface import ActorInterface
+                    actor_interface = ActorInterface(self._core_actor)
 
-                            actor_interface = ActorInterface(self._core_actor)
-                            relationship = trust_data.get("relationship", "friend")
-                            logger.debug(
-                                f"Executing trust_deleted hook for revoked trust with {peer_id}"
-                            )
-                            hooks.execute_lifecycle_hooks(
-                                "trust_deleted",
-                                actor=actor_interface,
-                                peer_id=peer_id,
-                                relationship=relationship,
-                                trust_data=trust_data,
-                                initiated_by_peer=True,
-                            )
-                            logger.info(
-                                f"trust_deleted hook executed for revoked trust with {peer_id}"
-                            )
-                        except DbError:
-                            raise
-                        except Exception as e:
-                            logger.error(
-                                f"Error executing trust_deleted hook: {e}",
-                                exc_info=True,
-                            )
-                    else:
-                        logger.debug(
-                            f"No hooks configured, skipping trust_deleted hook for {peer_id}"
-                        )
+                    def before_local_delete(row: dict[str, Any]) -> None:
+                        # fire_deleted logs a hook's error, lets DbError through.
+                        actor_interface.trust.fire_deleted(row, initiated_by_peer=True)
 
-                    # Delete local trust relationship without notifying peer (already revoked)
+                    # Delete local trust relationship without notifying peer
+                    # (already revoked): only the row the probe used, so a
+                    # re-pair meanwhile keeps its row (3.16).
                     deleted = self._core_actor.delete_reciprocal_trust(
-                        peerid=peer_id, delete_peer=False
+                        peerid=peer_id,
+                        delete_peer=False,
+                        expected_secret=self._probed_secret(proxy),
+                        before_local_delete=before_local_delete,
                     )
                     if deleted:
                         logger.info(
@@ -1702,6 +1716,16 @@ class SubscriptionManager:
                         logger.warning(
                             f"Failed to delete trust relationship with {peer_id}"
                         )
+                except TrustReplaced:
+                    # Either before anything ran, or (the remaining window of
+                    # the deletion invariants) after trust_deleted fired and
+                    # the local cleanup ran: the new row stands either way.
+                    logger.warning(
+                        f"Trust with {peer_id} was re-paired during the "
+                        "revocation cleanup; the new row is kept (if "
+                        "trust_deleted already fired, the local cleanup "
+                        "it announced has run)"
+                    )
                 except DbError:
                     raise
                 except Exception as e:
@@ -2741,53 +2765,37 @@ class SubscriptionManager:
                     f"Trust has been revoked. Cleaning up locally."
                 )
                 try:
-                    # Get trust data before deletion for hook
-                    relationships = self._core_actor.get_trust_relationships(
-                        peerid=peer_id
-                    )
-                    trust_data = relationships[0] if relationships else {}
+                    # trust_deleted fires as in the sync twin: through
+                    # TrustManager, with the row the delete read, after the
+                    # delete found it and before anything local goes (3.16; a
+                    # row already gone fires nothing). The delete runs on a
+                    # thread of its own executor, not the default one, which
+                    # a coroutine hook awaited on this loop may need (its
+                    # *_async calls use it): revocations filling the default
+                    # pool would otherwise wait on hooks waiting on it. A
+                    # sync hook runs in that thread (off the loop).
+                    from .actor_interface import ActorInterface
 
-                    # Trigger trust_deleted lifecycle hook if configured (async)
-                    hooks = (
-                        getattr(self._core_actor.config, "_hooks", None)
-                        if self._core_actor.config
-                        else None
-                    )
-                    if hooks:
-                        try:
-                            from .actor_interface import ActorInterface
+                    trust = ActorInterface(self._core_actor).trust
+                    loop = asyncio.get_running_loop()
 
-                            actor_interface = ActorInterface(self._core_actor)
-                            relationship = trust_data.get("relationship", "friend")
-                            logger.debug(
-                                f"Executing trust_deleted hook (async) for revoked trust with {peer_id}"
-                            )
-                            await hooks.execute_lifecycle_hooks_async(
-                                "trust_deleted",
-                                actor=actor_interface,
-                                peer_id=peer_id,
-                                relationship=relationship,
-                                trust_data=trust_data,
-                                initiated_by_peer=True,
-                            )
-                            logger.info(
-                                f"trust_deleted hook executed (async) for revoked trust with {peer_id}"
-                            )
-                        except DbError:
-                            raise
-                        except Exception as e:
-                            logger.error(
-                                f"Error executing trust_deleted hook: {e}",
-                                exc_info=True,
-                            )
-                    else:
-                        logger.debug(
-                            f"No hooks configured, skipping trust_deleted hook for {peer_id}"
-                        )
+                    def before_local_delete(row: dict[str, Any]) -> None:
+                        trust.fire_deleted(row, initiated_by_peer=True, loop=loop)
 
-                    # Delete local trust relationship without notifying peer (already revoked)
-                    deleted = await self._core_actor.delete_reciprocal_trust_async(
-                        peerid=peer_id, delete_peer=False
+                    # Delete local trust relationship without notifying peer
+                    # (already revoked): only the row the probe used.
+                    # The request's context (correlation, runtime context)
+                    # goes with it, as asyncio.to_thread would carry it.
+                    deleted = await loop.run_in_executor(
+                        _revocation_executor(),
+                        contextvars.copy_context().run,
+                        functools.partial(
+                            self._core_actor.delete_reciprocal_trust,
+                            peerid=peer_id,
+                            delete_peer=False,
+                            expected_secret=self._probed_secret(proxy),
+                            before_local_delete=before_local_delete,
+                        ),
                     )
                     if deleted:
                         logger.info(
@@ -2805,6 +2813,16 @@ class SubscriptionManager:
                         logger.warning(
                             f"Failed to delete trust relationship with {peer_id}"
                         )
+                except TrustReplaced:
+                    # Either before anything ran, or (the remaining window of
+                    # the deletion invariants) after trust_deleted fired and
+                    # the local cleanup ran: the new row stands either way.
+                    logger.warning(
+                        f"Trust with {peer_id} was re-paired during the "
+                        "revocation cleanup; the new row is kept (if "
+                        "trust_deleted already fired, the local cleanup "
+                        "it announced has run)"
+                    )
                 except DbError:
                     raise
                 except Exception as e:

@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 from pynamodb.exceptions import DoesNotExist, PutError, UpdateError
 
 from actingweb import actor, request_context, trust
+from actingweb.access_table import access_table_admits, matching_access_row
 from actingweb.constants import TRUSTEE_CREATOR
 from actingweb.db.exceptions import DbError
 from actingweb.secret_compare import secret_equals
@@ -19,6 +20,17 @@ if TYPE_CHECKING:
 # included in the http request.
 
 logger = logging.getLogger(__name__)
+
+# The access table's pure functions live in access_table.py (3.16); named here
+# so ``from actingweb.auth import access_table_admits`` keeps working.
+__all__ = [
+    "Auth",
+    "access_table_admits",
+    "add_auth_response",
+    "check_and_verify_auth",
+    "check_and_verify_auth_async",
+    "matching_access_row",
+]
 
 
 def add_auth_response(appreq=None, auth_obj=None):
@@ -825,50 +837,30 @@ class Auth:
         self.acl["rights"] = "r"
         if len(path) == 0:
             return False
-        if not subpath:
-            subpath = ""
-        fullpath = path.lower() + "/" + subpath.lower()
-        # ACLs: ('role', 'path', 'METHODS', 'access')
         logger.debug(
-            "Testing access for ("
-            + relationship
-            + " "
-            + self.acl["peerid"]
-            + ") on ("
-            + fullpath
-            + " "
-            + peerid
-            + ") using method "
-            + method
+            "Testing access for (%s %s) on (%s/%s %s) using method %s",
+            relationship,
+            self.acl["peerid"],
+            path.lower(),
+            (subpath or "").lower(),
+            peerid,
+            method,
         )
-        for acl in self.config.access:
-            if acl[0] == "any" and not self.acl["authenticated"]:
-                continue
-            if (
-                len(acl[0]) > 0
-                and acl[0] != "any"
-                and acl[0] != relationship
-                and acl[0] != "owner"
-            ):
-                continue  # no match on relationship
-            if (
-                acl[0] == relationship
-                or acl[0] == "any"
-                or len(acl[0]) == 0
-                or (
-                    acl[0] == "owner"
-                    and len(peerid) > 0
-                    and self.acl["peerid"] == peerid
-                )
-            ):
-                if fullpath.find(acl[1]) == 0:
-                    if len(acl[2]) == 0 or acl[2].find(method) != -1:
-                        self.acl["rights"] = acl[3]
-                        logger.debug(
-                            "Granted " + acl[3] + " access with ACL:" + str(acl)
-                        )
-                        return True
-        return False
+        row = matching_access_row(
+            self.config,
+            relationship=relationship,
+            path=path,
+            subpath=subpath or "",
+            method=method,
+            authenticated=bool(self.acl["authenticated"]),
+            caller_peerid=self.acl["peerid"] or "",
+            path_peerid=peerid,
+        )
+        if row is None:
+            return False
+        self.acl["rights"] = row[3]
+        logger.debug("Granted " + row[3] + " access with ACL:" + str(row))
+        return True
 
 
 def check_and_verify_auth(

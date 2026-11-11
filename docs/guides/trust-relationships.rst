@@ -63,6 +63,29 @@ REST API
 - ``GET /{actor_id}/trust/{relationship}/{peer_id}/permissions``
 - ``DELETE /{actor_id}/trust/{relationship}/{peer_id}/permissions``
 
+**What changes and who is told (3.16).**
+
+- Deleting a peer's permission override puts the peer back on its trust
+  type's default grant, and the peer is sent the permission callback with
+  that grant (when ``notify_peer_on_change`` is on, as a ``PUT`` of the
+  grant is). Deleting an override that does not exist answers 404 and
+  sends nothing.
+- A ``PUT`` of the trust with ``permissions`` stores the grant first; the
+  peer is sent it only once the trust write landed, and a failed trust
+  write puts the previous grant back.
+- ``DELETE /{actor_id}/trust/{relationship}/{peer_id}`` removes only the
+  row the request was authorised against. When a re-pair replaced it in
+  the meantime (a new secret), the new row stays and the request answers
+  404; ``trust_deleted`` does not fire for it.
+- A trust request (``POST /{actor_id}/trust/{relationship}``) carrying a
+  bearer token for a peer this actor holds no row for answers 403 and
+  creates nothing: the initiator pairs afresh, without the bearer, after
+  removing its own row.
+- The owner may change a peer's base URI with a ``PUT``; that is not
+  checked against the peer's ``/meta`` by design (the owner is trusted with
+  its own rows). A peer moving its own row is checked, and another peer
+  (an ``admin`` one) may not move it at all.
+
 **What the list returns.** ``GET /{actor_id}/trust`` lists every
 relationship without its credentials: since 3.15 the rows carry no
 ``secret`` and no ``verification_token``. Creator and admin read them from
@@ -145,7 +168,7 @@ lifecycle hook (see :doc:`../reference/hooks-reference` for the full
    app.with_subscription_processing(auto_cleanup=False)
 
    @app.lifecycle_hook("trust_deleted")
-   def on_trust_deleted(actor, peer_id, relationship, trust_data):
+   def on_trust_deleted(actor, peer_id, relationship, trust_data, **kwargs):
        # Custom cleanup logic
        from actingweb.remote_storage import RemotePeerStore
        from actingweb.callback_processor import CallbackProcessor
@@ -202,21 +225,21 @@ auto-subscribe regardless of who approves last:
 .. code-block:: python
 
    @app.lifecycle_hook("trust_fully_approved_local")
-   def on_trust_approved_local(actor, peer_id, relationship, trust_data):
+   def on_trust_approved_local(actor, peer_id, relationship, trust_data, **kwargs):
        # This actor approved last -- trust is now mutual
        actor.subscriptions.subscribe_to_peer(
            peer_id=peer_id, target="properties"
        )
 
    @app.lifecycle_hook("trust_fully_approved_remote")
-   def on_trust_approved_remote(actor, peer_id, relationship, trust_data):
+   def on_trust_approved_remote(actor, peer_id, relationship, trust_data, **kwargs):
        # The peer approved last -- trust is now mutual
        actor.subscriptions.subscribe_to_peer(
            peer_id=peer_id, target="properties"
        )
 
    @app.lifecycle_hook("trust_deleted")
-   def on_trust_deleted(actor, peer_id, relationship, trust_data):
+   def on_trust_deleted(actor, peer_id, relationship, trust_data, **kwargs):
        # Application-specific cleanup (storage cleanup is automatic)
        notify_websocket_clients(f"Peer {peer_id} disconnected")
        log_audit_event("trust_deleted", peer_id=peer_id)

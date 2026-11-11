@@ -154,6 +154,14 @@ try:
 except Exception as e:
     LOG.error(f"Failed to configure OAuth2/trust settings: {e}")
 
+# The levels an OAuth2/MCP client may be given (ActingWeb 3.16): an explicit
+# list, mcp_client by default. Trusts between actors are not restricted by it.
+from actingweb.permission_integration import AccessControlConfig  # noqa: E402
+
+AccessControlConfig(aw_app.get_config()).configure_oauth2_trust_types(
+    allowed_trust_types=["mcp_client", "viewer"], default_trust_type="mcp_client"
+)
+
 # Initialize OAuth2 state manager at startup
 # This ensures the encryption key is created before any OAuth flows begin
 try:

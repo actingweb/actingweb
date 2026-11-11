@@ -296,3 +296,17 @@ class TestStaticMethods:
         )
 
         assert result == {}
+
+
+def test_a_template_that_fails_to_render_is_not_a_200() -> None:
+    """Re-run 2 of the grant-enforcement verification (Issue 13): the JSON
+    answer to a template that failed keeps the handler's error status, else
+    500 (it was 200)."""
+    from actingweb.interface.integrations.base_integration import (
+        template_fallback_status,
+    )
+
+    assert template_fallback_status(400) == 400
+    assert template_fallback_status(503) == 503
+    assert template_fallback_status(200) == 500
+    assert template_fallback_status(None) == 500

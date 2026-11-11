@@ -28,7 +28,7 @@ Core Actor Routes
 - `/<actor_id>`: Actor root endpoint (see :ref:`actor-root-endpoint`)
 - `/<actor_id>/meta`: Discovery metadata
 - `/<actor_id>/properties`: Get/update/delete properties
-- `/<actor_id>/resources`: Fetch external resources (read-only)
+- `/<actor_id>/resources`: Application resources answered by `resource_<name>` callback hooks; a peer is decided by its `resources` grant (GET `read`, PUT/POST `write`, DELETE `delete`), and no hook runs on a refusal
 - `/<actor_id>/methods`: RPC-style methods (GET returns metadata, POST invokes)
 - `/<actor_id>/actions`: Side-effecting actions (GET returns metadata, POST invokes)
 - `/<actor_id>/trust`: Trust relationships and permissions
@@ -79,7 +79,11 @@ JSON with actor information:
         "trustee_root": "optional-trustee-root"
     }
 
-If not authenticated, API clients receive a 401 or 403 error response.
+If not authenticated, API clients receive a 401 or 403 error response. A
+peer refused by its grant on a property route gets 403 with ``{"error":
+"forbidden"}`` (``{"error": "not_approved"}`` for a trust not yet approved);
+a refused bulk ``POST /properties`` also lists the names it refused
+(``"refused"``) and applies none of them. ``POST /properties/<name>`` is 400.
 
 Browser Redirect Behavior
 -------------------------
@@ -235,7 +239,20 @@ ActingWeb is the OAuth2 authorization server for MCP clients (enabled with
   provider. ``code_challenge`` with ``code_challenge_method=S256`` binds the
   code; ``plain`` or a missing method is 400 ``invalid_request``, and a
   public client must send a challenge. Errors on this endpoint are
-  pre-redirect validation failures.
+  pre-redirect validation failures. The form sets a nonce cookie
+  (``__Host-aw_authz_nonce`` over https) and carries the nonce in a hidden
+  ``form_nonce`` input and in each provider link; a ``trust_type`` the
+  client list does not offer is 400 ``access_denied`` (3.16).
+- ``GET /oauth/callback`` and ``POST /oauth/callback/apple`` — the provider
+  returns the browser. When the browser carries the form's nonce the trust
+  is written and the client gets its code; otherwise the browser gets the
+  confirmation page (``aw-oauth-confirm.html``, or JSON for ``Accept:
+  application/json``) and nothing is granted yet.
+- ``POST /oauth/authorize/confirm`` — the user's Approve or Decline
+  (``token``, ``decision``), from the same site and with the page's cookie;
+  Approve redirects to the client with a code, Decline with
+  ``access_denied``. An expired, used or unknown token is 400; a store
+  fault 503.
 - ``POST /oauth/token`` — ``authorization_code``, ``refresh_token`` and
   ``client_credentials`` grants. Client credentials in the body or an
   ``Authorization: Basic`` header (a body ``client_id`` that differs from the

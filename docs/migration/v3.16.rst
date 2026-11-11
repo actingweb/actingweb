@@ -1563,8 +1563,8 @@ showed everything). The async listings are filtered now (they were not).
 ``DELETE /methods/<name>`` and the JSON-RPC method named in a body posted to
 the bare ``/methods`` are decided too (a refused JSON-RPC method answers
 HTTP 403 with the JSON-RPC error ``-32000``, as ``/methods/<name>`` answers
-403). Method and action hooks use the same
-decision; an error in their check denies (it allowed).
+403). Method and action hooks use the same decision; an error in their
+check denies (it allowed).
 
 **Behavior change: a subscription needs read access.** ``POST
 /subscriptions/<peer>`` answers 403 for a ``properties``, ``resources``,
@@ -1651,7 +1651,9 @@ kept. The owner's ``PUT /trust/<type>/<client>/permissions`` replaces such an
 override with one holding only that edit, for the row's type (its other
 fields, never shown, do not come into force); ``GET .../permissions`` (404
 unless ``<type>`` is the row's type), ``GET /permissions/<client>`` and the
-web UI show only an override that applies. A peer's (not a client's) override is applied as before.
+web UI show only an override that applies. A peer's (not a client's)
+override is applied as before, but ``GET /trust/<type>/<peer>/permissions``
+answers 404 for every trust when ``<type>`` is not the row's type.
 
 **The decision hook.** ``@app.lifecycle_hook("oauth2_trust_requested")``
 receives ``trust_type``, ``client_id``, ``client_name``, ``redirect_uri``,

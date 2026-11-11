@@ -434,8 +434,10 @@ A ``methods``, ``actions`` or ``resources`` request that names nothing
 ``/resources``) has nothing to grant: when the grant mentions the category
 it is refused, except the ``GET`` listing of methods or actions, which is
 admitted when the rule names anything and then filtered per name, and
-JSON-RPC on the bare ``/methods``, decided by the method its body names. The
-protocol addresses each of these by its path. When the grant does not
+JSON-RPC on the bare ``/methods``, decided by the method its body names (so
+an empty ``method`` names nothing and is refused there, and a body with no
+``method`` is the JSON-RPC error ``-32600``). The protocol addresses each of
+these by its path. When the grant does not
 mention the category, the access table answers, as before.
 
 Precedence Rules
@@ -769,17 +771,21 @@ Create or update permission overrides for a trust relationship:
    }
 
 Only the permission categories and ``notes`` are taken from the body
-(3.16). ``actor_id``, ``peer_id`` and ``trust_type`` come from the path and
-the trust row, and ``created_by`` is set by the API; an update ignores these
-fields (and logs them). A category is an object (``properties`` may also be
+(3.16). ``actor_id`` and ``peer_id`` come from the path; a new override's
+``trust_type`` is the path's type (checked against the trust row), an
+update keeps the stored one, and ``created_by`` is set by the API; an update
+ignores these fields when a body names them (and logs them). A category is an object (``properties`` may also be
 a list of names) or ``null``; when present, its ``patterns``,
 ``excluded_patterns``, ``operations``, ``allowed`` and ``denied`` are lists
 of strings, and ``notes`` is text; otherwise the edit answers 400. Other
 keys inside a category are stored as they are; other top-level keys are
 ignored. An override stored another way (the store API) that holds a
 malformed rule is read as: a category that is not an object, or a malformed
-``operations`` or ``allowed``, allows nothing; a malformed exclusion leaves
-the trust type's exclusions in place; a malformed ``patterns`` acts as an
+``operations`` or ``allowed``, allows nothing; a malformed
+``excluded_patterns`` leaves the trust type's exclusions in place (a single
+string is taken as one pattern; a string ``denied`` is a one-item list,
+which replaces the type's ``denied`` as any override does); a malformed
+``patterns`` acts as an
 empty one and a ``properties`` list of names is normalised, both merged
 with the trust type's patterns as any override is. In a ``PUT
 /trust/{relationship}/{peerid}`` body, ``"permissions": null`` changes

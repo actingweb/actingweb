@@ -1,6 +1,6 @@
 ---
 status: done
-verified: thoughts/verifications/2026-11-11-grant-enforcement-per-route-reverify-10.md
+verified: thoughts/verifications/2026-11-11-grant-enforcement-per-route-reverify-11.md
 ---
 
 # Implementation Plan: a peer's grant is the answer on every route
@@ -3174,3 +3174,55 @@ are ignored.
 Full tier (2026-11-11): ruff, format, pyright clean; `verify_groups` OK;
 unit 5105 passed; DynamoDB 6560 passed; PostgreSQL 6357 passed; docs build
 with `-W`. No wire recording changed.
+
+#### 75. Closing check of the changelog and guides
+
+**Category**: Documentation (closing verification)
+
+**What changed**: a read of every touched changelog entry, the migration
+guide and the access-control, subscriptions and hooks reference pages
+against the final code found sentences left from withdrawn behaviour (the
+client re-type "removes its override first ... leaves the row as it was"),
+claims true only in part (a malformed `denied`, the routes that refuse a
+body beyond the parser, an update "taking the path's type"), two
+contradictions (subscription delivery checks; an empty JSON-RPC method)
+and behaviour changes without a **Behavior change:** sentence (the
+permissions GET's 404 for every trust, the trust PUT's 400 and 500, the
+hook refusal of a bulk update, a JSON-RPC body with no method, the 120 s
+hook timeout, the approval notice's secret). All corrected; the
+duplicated and ragged lines left by patching are rewritten. The merge's
+docstring says what a malformed `patterns` does.
+
+**Files affected**: `CHANGELOG.rst`, `docs/migration/v3.16.rst`,
+`docs/guides/access-control.rst`, `docs/guides/subscriptions.rst`,
+`docs/reference/hooks-reference.rst`, `actingweb/trust_permissions.py`
+(docstring).
+
+#### 76. Accepted at the close, with the reason (owner's stop rule)
+
+The closing verification of the whole branch (`10f9563..HEAD`) found no
+Medium-or-higher finding a peer or OAuth2/MCP client can reach. Recorded
+without code change:
+
+- **A hook's refusal part way through a POST or bulk list update keeps
+  what was written** (pre-existing; needs the application's hook; the grant
+  allowed the write). The changelog says the all-or-nothing rule is the
+  grant's, and that those keys' diffs reach subscribers.
+- **A JSON-RPC body with no `method` on the bare `/methods` is the
+  JSON-RPC error `-32600` (HTTP 200) for a caller the grant refuses**
+  (Low: it reveals request validation, not access).
+- **Owner, application or store-API only:** an application target's
+  delivery on approval alone (owner decision); a malformed stored
+  `patterns` or `properties` list merging with the type's patterns (in the
+  changelog and guide); a duplicate-key PUT body forwarded raw to
+  subscribers (the stored value is filtered; integrity of peer-authored
+  data only); a client's narrowing override lost across X→Y→X re-types
+  (each step the user's approval).
+- **Low:** a `CancelledError` from a coroutine hook at shutdown escapes the
+  hook loop; the two client tests (prefix vs `established_via`, entry 55);
+  `_is_unapproved` left as a thin wrapper; the cost of the
+  `as_json_object` check on every diff value and of the override cleanup
+  read on every client authorisation; the methods POST parsing its body
+  before the grant check; the override readers that do not apply
+  `override_applies` (`list_actor_permissions`, the grant callback),
+  which report what is stored.

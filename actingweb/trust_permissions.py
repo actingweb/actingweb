@@ -829,7 +829,10 @@ def _well_formed_rule(category: str, rule: Any) -> dict[str, Any]:
       the trust type's rule and denied before; falling back to the trust
       type's rule granted more);
     - an allow list (``patterns``, ``operations``, ``allowed``) that is not
-      a list of names is empty: it allows nothing;
+      a list of names is empty: for ``operations`` and ``allowed``, which
+      replace the trust type's, it allows nothing; ``patterns`` merges by
+      union, so an empty one leaves the trust type's patterns, as a valid
+      empty override does;
     - an exclusion (``excluded_patterns``, ``denied``) given as one string
       excludes that pattern; any other malformed one is dropped, so the
       trust type's own exclusions stay (it replaced them).

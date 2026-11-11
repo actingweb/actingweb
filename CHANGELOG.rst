@@ -19,8 +19,10 @@ SECURITY
   and logged; the grant API sets ``created_by`` itself, and answers 400
   for a rule whose pattern or operation keys are not lists of strings,
   ``null`` included. Such a value already stored (or written through the
-  store API) is read on merge as: a malformed exclusion keeps the trust
-  type's exclusions (a string or ``null`` replaced them); a malformed
+  store API) is read on merge as: a malformed ``excluded_patterns`` keeps
+  the trust type's exclusions (a string or ``null`` replaced them; a single
+  string is taken as one pattern, and a string ``denied`` as a one-item
+  list, which replaces the type's ``denied`` as any override does); a malformed
   ``operations`` or ``allowed``, or a category that is not an object,
   allows nothing; a malformed ``patterns`` acts as an empty one and a
   ``properties`` list of names is normalised, both merged with the trust
@@ -43,7 +45,10 @@ SECURITY
   diffs, the developer views); a non-admin peer's write or delete that would
   touch an excluded part is 403; a path under a list is decided by the
   list's grant; a bulk ``POST`` is validated and authorised whole and
-  refused whole. An object stored or written as JSON text (a form post, an
+  refused whole by the grant (an application hook that refuses part way
+  does not undo what was already written: those keys' diffs reach the
+  subscribers, then 403, where a hook's refusal of a bulk list update was
+  a 500). An object stored or written as JSON text (a form post, an
   SDK write of a JSON string, and every value the developer views read
   back from storage) is filtered as the object, and handed back as text;
   text counts as JSON when a JSON client would read it as JSON (behind a
@@ -54,17 +59,19 @@ SECURITY
   **Behavior change:** when the grant excludes anything, a kept part
   nested more than 100 levels deep (objects or arrays) is withheld from
   the peer (a direct read is 403, the name is left out of the listing and
-  of a diff, a developer view reads ``None``) and the peer's write of one
-  is 403: the filter cannot walk it safely, and it is never sent
+  of a diff, a developer view reads ``None``) and the peer's write of an
+  object that deep is 403: the filter cannot walk it safely, and it is never sent
   unfiltered. An excluded part is dropped whatever its depth. Text nested
   beyond the JSON parser (only an application can store it) is never sent
   to a peer, whatever its grant (403 on a read, left out of the listing and
   of diffs); the owner reads it as stored. A sub-path ``PUT`` into such a
   value answers 409 (it cannot be merged into; replacing the whole would
   lose what the write did not name), and a request body nested beyond the
-  parser is refused as invalid JSON on the property, method, action,
-  resource, subscription and trust routes (both answered 500; a list item
-  ``PUT ?index=`` stored such a body as text). A sub-path ``PUT`` onto plain
+  parser is treated as invalid JSON (both answered 500; a list item
+  ``PUT ?index=`` stored such a body as text): 400 on the property,
+  method, action, resource and callback routes and the trust ``PUT``s;
+  ``POST /trust`` and ``POST /subscriptions`` fall back to form fields, as
+  for any invalid JSON. A sub-path ``PUT`` onto plain
   text, or onto a JSON list or scalar, answers 409 too (it replaced the
   whole value, or answered 500). **Behavior change:** a direct
   ``GET /properties/<name>`` of a plain-text value runs the property's read
@@ -100,14 +107,17 @@ SECURITY
   ``method``, a bare ``/resources``) went to the access table whatever the
   grant stated, so every ``*`` hook ran with an empty name.
   **Behavior change:** all of these follow the one access decision; a
-  subscription to any target is asked its creation check again at each
-  delivery, push and pull (an application's own target needs an approved
-  trust); a request that names nothing is refused when the grant mentions
+  subscription is checked again at each delivery, push and pull: one to
+  ``properties``, ``resources``, ``methods`` or ``actions`` against its
+  creation check, one to an application's own target for an approved
+  trust; a request that names nothing is refused when the grant mentions
   the category, except the ``GET`` listing of methods or actions, admitted
   when the rule names anything and filtered per name, and JSON-RPC on the
-  bare ``/methods``, decided by the method its body names. **Behavior
-  change:** a refused JSON-RPC method answers HTTP 403 with the JSON-RPC
-  error ``-32000`` (it answered 200).
+  bare ``/methods``, decided by the method its body names (an empty
+  ``method`` names nothing and is refused; a body with no ``method`` is
+  the JSON-RPC error ``-32600``, HTTP 200, where it was a 403).
+  **Behavior change:** a refused JSON-RPC method answers HTTP 403 with the
+  JSON-RPC error ``-32000`` (it answered 200).
   ``docs/migration/v3.16.rst`` ("Every other way in") lists each.
 - **An MCP client could give itself any access level, ``admin``
   included.** An anonymous ``POST /oauth/register`` stored the
@@ -125,9 +135,9 @@ SECURITY
   SPA authorize call; the form is bound to the browser by a nonce cookie,
   and a sign-in it cannot bind waits for the user's Approve on a
   confirmation page in the browser that signed in; a re-authorisation sets
-  the row to the level the user approved, up or down, and removes its
-  permission override first (a removal that fails leaves the row as it
-  was); no code is issued without the trust, also when the row is deleted
+  the row to the level the user approved, up or down (an override it held
+  for another type stops applying; see "A client's level follows the
+  user's latest approval" under CHANGED); no code is issued without the trust, also when the row is deleted
   during the authorisation. **Behavior change:** a redirect URI with a user
   name or password is refused at registration (``invalid_client_metadata``),
   and the confirmation page names the host the code goes to without one (it
@@ -136,8 +146,7 @@ SECURITY
   against the client list; a 503 keeps the page usable for a retry; the
   form and confirmation pages send ``Referrer-Policy: same-origin`` (under
   ``no-referrer`` a browser without Fetch Metadata had its own Approve
-  refused as cross-site); a refused confirmation is a page for a person
-  (``aw-oauth-confirm.html`` with ``error``), JSON for an API caller. ``docs/migration/v3.16.rst`` ("An MCP client's
+  refused as cross-site). ``docs/migration/v3.16.rst`` ("An MCP client's
   access level").
 - **A write three levels down reached subscribers past their grant.**
   ``PUT /properties/a/b/c`` registered its diff as resource ``b`` holding the
@@ -853,7 +862,9 @@ SECURITY
   after the last comparison, before anything local goes, on the REST route
   and when ``sync_peer`` finds a revocation, and not for a row another
   delete already removed; ``sync_peer_async`` does the same, awaiting a
-  coroutine hook on its running loop and running a sync hook off it). A re-pair landing after the second comparison keeps its row,
+  coroutine hook on its running loop, given up after 120 seconds, and
+  running a sync hook off it). A re-pair landing after the second
+  comparison keeps its row,
   but the cleanup that ran (the subscriptions, the peer's stored data) is
   gone; the peer's next sync re-creates the subscriptions. ``Trust.delete``,
   ``Actor.delete_reciprocal_trust`` (and its async twin) and
@@ -945,7 +956,11 @@ CHANGED
   the peer not told. The peer is sent the new grant only once the trust
   write landed; when that write fails (404/400, or a store fault), the
   grant as it was is restored (or the new one deleted) and the peer is told
-  nothing.
+  nothing; when that restore fails too, the answer is 500 "Trust not
+  modified; the permissions change could not be undone". **Behavior
+  change:** a trust ``PUT`` body that is not a JSON object answers 400 (a
+  scalar was a 500, a list an empty edit), and ``"permissions": null``
+  changes nothing.
 
 - **Breaking: an anonymous registration may not ask for
   ``client_credentials`` or a level the client list does not offer.**
@@ -980,13 +995,13 @@ CHANGED
   override's own type, which would bring it back, or when the override
   cannot be read); the owner's edit of such an override replaces it with
   one holding only that edit (``PUT .../permissions`` then answers 201);
-  the permissions views show only an override
-  that applies, and ``GET /trust/<type>/<peer>/permissions`` answers 404
-  unless ``<type>`` is the row's type;
-  MCP caches of the process are evicted (other processes until their cache
-  TTL). The default selected
-  level is the client default (``mcp_client``), not the first registered
-  type. Rows a client obtained before 3.16 keep their type until it
+  the permissions views show only an override that applies; MCP caches of
+  the process are evicted (other processes until their cache TTL). The
+  default selected level is the client default (``mcp_client``), not the
+  first registered type. **Behavior change**, for every trust: ``GET
+  /trust/<type>/<peer>/permissions`` answers 404 when there is no row or
+  ``<type>`` is not the row's type (it answered the override or the type's
+  defaults). Rows a client obtained before 3.16 keep their type until it
   authorises again.
 - **New:** ``AccessControlConfig.client_trust_type_acceptable()`` and
   ``default_client_trust_type()`` (and module functions of the same names in
@@ -2171,7 +2186,11 @@ FIXED
 - **An approval that also moved the peer's base URI was announced at the
   old one.** ``modify_trust_and_notify(approved=True, baseuri=...)`` sent
   the approval to the URL the row had before the write. It goes to the base
-  URI the same call wrote.
+  URI the same call wrote, else to the row's as it stands after the write
+  when that row still holds this call's secret (a row a re-pair replaced
+  keeps the URL read before; a fault re-reading it no longer stops the
+  notice). **Behavior change:** the notice authenticates with the secret
+  the call wrote, when it wrote one (it sent the old one).
 
 - **An async trust creation that failed with an error other than an HTTP
   one left its half-made row.** ``create_reciprocal_trust_async`` dropped

@@ -11,10 +11,11 @@ requires): creating a subscription to a ``properties``, ``resources``,
 (``{"error": "forbidden"}``). A subscription to a whole target needs a rule
 that reads at least one name (or, when the grant does not mention the
 category, the access table's GET on it). What each diff carries is filtered
-again at delivery for ``properties``. For other targets the same creation
-check is asked again at delivery, push and pull: a subscription the grant no
-longer admits delivers nothing. An application's own target (any other
-name) needs only an approved trust at delivery: the grant has no category
+again at delivery for ``properties``. For ``resources``, ``methods`` and
+``actions`` the same creation check is asked again at delivery, push and
+pull: a subscription the grant no longer admits delivers nothing. An
+application's own target (any other name) needs only an approved trust at
+delivery: the grant has no category
 for it, and a subscription the application made itself never passed the
 route's creation row. So changing a peer's relationship to one whose access
 table would not let it create the subscription does not stop one it already

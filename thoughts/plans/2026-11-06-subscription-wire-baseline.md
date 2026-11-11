@@ -1,0 +1,800 @@
+---
+status: proposed
+---
+
+# Implementation Plan: the subscription wire between two actors, recorded as it is today
+
+**Date:** 2026-11-06
+**Research:** thoughts/research/2026-11-06-subscription-wire-baseline.md
+**Branch:** docs/3-16-rollup-records (written here; implement on `release/3.16.0-subscription-wire-baseline`, one PR, one commit per phase)
+
+## Update Log
+
+- **2026-11-06**: `WD9` moved here from the security plan (owner); `WL14`
+  split from `WL11.target`. Second review recorded in the Evaluation Notes,
+  not folded; a Readiness paragraph says what the plan needs before approval.
+- **2026-11-06**: The order, the dependencies between the six plans and
+  the gates between them moved to one copy in `thoughts/todo/INDEX.md`
+  (owner); the copy here is a pointer. Two gates there are this plan's to
+  meet: a recording joins the regression set only once it is byte-identical
+  over repeated runs on both backends, and the recordings shaped like Emm's
+  use, the import flow included, exist before the `subs_list` plan starts.
+  No Emm run for this plan: its diff under `actingweb/` is empty, which
+  Phase 2 already verifies. Which plan builds the wire harness, the security
+  plan's Phase 0 or this plan's spike, is open.
+- **2026-11-07**: The spike is decided (owner): it builds the harness and
+  records about four rows on both backends before either this plan or the
+  security plan is redrafted; the security plan's Phase 0 lands what the
+  spike built. Recorded in the Decisions, the Readiness paragraph and "What
+  Already Exists".
+- **2026-11-07, later**: The spike is done:
+  `thoughts/research/2026-11-07-subscription-wire-spike.md` (harness on
+  `spike/subscription-wire-harness`, four rows, one file per row on both
+  backends over nine runs). Two premises here are wrong and the redraft
+  takes them from the note: a `friend` grant only adds patterns, so a row
+  that restricts reads uses `excluded_patterns`; and the gap resync calls
+  no data hook. The three decisions are taken on that note. "What Already
+  Exists" and Phase 1's `WD9` are stale until the redraft.
+- **2026-11-07, decisions (owner)**, taken on the spike note, for the
+  redraft: (1) **full transcripts**, recorded from the first scenario step,
+  setup excluded; (2) **timestamp tokens carry the format class only**, one
+  file per row for both backends, `WD3`'s backend difference asserted
+  explicitly instead; (3) **one tier**: every row is in each later plan's
+  must-stay-identical list unless that plan names it for re-recording, and
+  each row's registry entry names the plan expected to change it; (4)
+  **retire** `test_subscription_suspension_flow.py`, the processor-less
+  classes of `test_subscription_processing_flow.py` and the
+  non-publish-path classes of `test_fanout_flow.py` once rows cover them,
+  each deletion naming its covering row or unit test; tighten the rest.
+- **2026-11-07, redraft (`/update_plan`)**: rewritten on the four decisions
+  above, the spike note and the security plan's redraft (`2303a51`), which
+  now lands the harness, `rows.toml` with an owner column, the
+  `subscriber` variants, a third recorded app and the CI step. Phase 1's
+  rows corrected from the spike (`WD9`'s exclusion grant and skipped data
+  hook, `WD18`'s order, `WP5`'s premise, `WD3` asserted, `WD5` without a
+  copied configuration) and extended with the rows the second review found
+  missing (`WS9`, `WL15` to `WL17`, `WM1`, `WP6`). Phase 2 retires the
+  three legacy files and no longer carries the CI step. One more decision
+  (owner): the gap resync's skipped data hook is `spec-1-5`'s to fix.
+- **2026-11-07, review of the redraft folded**: two evaluators and the
+  outside voice; under "Third review". Two decisions (owner): `rows.toml` is
+  the only copy of which phase may change which recording, by plan and
+  phase, checked by `verify_groups.py`; the old Phase 2 is split into
+  Phases 2 (retire), 3 (tighten) and 4 (documentation and records) in the
+  same PR. Row expectations and owners corrected; `WP5` merged into `WD20`.
+- **2026-11-08, from the security plan's implementation**: "What Already
+  Exists" points at `rows.toml` instead of listing rows. Landed beyond this
+  plan's text there: the snapshot already holds both sides' trust rows, the
+  publisher's grant and the subscriber's peer permissions (this plan's
+  Phase 1 first commit needs only the `WD18` hook and the async steps);
+  `WIRE_RECORD` takes row ids; the registry check covers `[reserved]`
+  owners and ranges, but not the `Wire-Phase` trailer, which stays this
+  plan's.
+
+## Overview
+
+No integration test writes to one actor over REST and then asserts what the
+other actor holds, so the wire changes the 3.16 plans make would turn no test
+red. This plan records what the library does today between a publisher and a
+subscriber, for every flow those plans touch, as one checked-in transcript
+per flow: every request that crossed the wire, the publisher's queue and the
+subscriber's replica. It then brings the existing subscription files to the
+point where a green run means something. It changes no library code. After
+it, a phase that changes wire behaviour re-records the transcripts of the
+rows it names, and the change is a file diff in the commit that makes it.
+Lands in 3.16 (tag held), second of the six plans of this date.
+
+## Implementation Order
+
+The order of the six 3.16 plans, what depends on what between them and the
+gates between them are kept in one place: `thoughts/todo/INDEX.md`, "Planned
+for 3.16: order, dependencies and gates". One PR per plan, one commit per
+phase, phases in the order written. What this plan uses from the others is
+below.
+
+**Readiness, 2026-11-07.** Redrafted after the spike
+(`research/2026-11-07-subscription-wire-spike.md`), on the owner's four
+decisions and the security plan's redraft, which lands the harness. The
+review of this redraft is under "Third review" in the Evaluation Notes. No
+open question remains; approval is the owner's.
+
+**This plan: second.** It needs the security plan merged: that plan's
+Phase 0 lands the harness (built by the spike), its rows and `rows.toml`;
+its Phases 1 to 3 add the access rows (`WA*`) and the trust rows (`WT*`).
+This plan adds every other flow on the same harness, retires the legacy
+files and tightens the rest. What follows it: each of the four plans after
+it may change only the recordings `rows.toml` assigns to its phase; every
+other recording stays byte-identical (one tier, gate 5).
+
+## Decisions Made
+
+- **The spike builds the harness; the security plan lands it** (owner,
+  2026-11-07). This plan stays its own PR after the fix.
+- **Today's behaviour is proven before it is changed** (owner, 2026-11-06).
+- **Its own plan and PR, after the security fix** (owner, 2026-11-06).
+- **Recorded transcripts, not hand-written expectations** (owner,
+  2026-11-06).
+- [New 2026-11-07] **Full transcripts** (owner): every request between the
+  actors and a snapshot of both sides after each step, recorded from the
+  first scenario step; setup is not recorded.
+- [New 2026-11-07] **Timestamp tokens carry the format class only**
+  (owner): one file per row for both backends. `WD3`'s backend difference
+  (DynamoDB stamps every diff with one value) is asserted explicitly in its
+  test, not by the recording.
+- [New 2026-11-07] **One tier** (owner): every row is in the regression set.
+  There is no "observed" state; the first draft's note that `WL12`, `WC6`
+  and parts of `WD5` are observations is withdrawn.
+- [New 2026-11-07] **`rows.toml` is the only copy of which phase may change
+  which recording** (owner, review of the redraft): each row variant names
+  its owners as `plan:phase`; `verify_groups.py` checks that every
+  recording a commit changes is owned by the phase the commit implements
+  (named in the commit message trailer `Wire-Phase: <plan>:<phase>`). The
+  later plans quote it and drop their own "Re-recorded" and "Identical"
+  lists at their next draft; their Update Logs say so from this redraft.
+- [New 2026-11-07] **Retire the legacy files** (owner): the files that test
+  nothing on the publish or receive path go once a row covers what they
+  meant to; each deletion names its covering row or unit test.
+- [New 2026-11-07] **Three phases after the recordings, one PR** (owner,
+  review of the redraft): retire, tighten, documentation and records, each
+  its own commit.
+- [New 2026-11-07] **The gap resync's skipped data hook is `spec-1-5`'s to
+  fix** (owner): `WD9` records it, owned by `spec-1-5:3` as well as
+  `attribute-list-v2-port:4`.
+- [New 2026-11-07] **Exposure rows are recorded here** (owner, 2026-11-06,
+  when `WD9` moved here): the security plan's rule that no test passes
+  because a hole is open is scoped to that PR. A row that records data
+  reaching a peer that may not read it is marked `exposure = true` in
+  `rows.toml` (`WD9`, `WS2.subtarget`, `WP6`, and `WL16` if its recording
+  shows it), and `verify_groups.py` lists them.
+- **A recording is what the library does, right or wrong**; its registry
+  entry says what is known to be wrong.
+- **The "Expected from reading" columns are not assertions**; each first
+  recording is reviewed against them and every difference goes into
+  "Recorded outcomes".
+- **One file per row variant**; a second file only for a declared backend
+  or topology difference with a reason.
+- **The registry lives under `tests/integration/wire/`.**
+- **Wire tests never rerun.**
+- **Later plans add rows** under ids reserved for them in `rows.toml`.
+
+Deduced; confirm at approval:
+
+- **Re-recording takes explicit row ids** (`WIRE_RECORD=WD9,WS1.target`),
+  never "all", and appends a dated reason line to the row's entry.
+- **A driver or harness change lands in its own commit with no recording
+  diff**; Phase 1 opens with one (the `WD18` hook and the snapshot
+  extension).
+- **Order inside a recording follows first appearance**; the permission
+  callback's follow-up fetches are recorded sorted by path.
+
+## What We're NOT Doing
+
+- **Changing any behaviour** - no diff under `actingweb/` or `examples/`.
+- **The access and trust rows** - the security plan's (`WA*`, `WT*`).
+- **Endpoints outside the subscription path** - the specification plan's.
+- **Fault injection over HTTP** - the unit suites have the seams.
+- **A mixed-version pair** - one suite runs one version.
+- **The consumer's identity options** - nothing they change travels between
+  two actors.
+- **Synchronous callbacks on the wire apps** - with the flag on, the
+  consumer's import flow deadlocks (spike note); the consumer sets it only on
+  Lambda.
+- **Rewriting the unit suites** - they stay.
+- **`WP5` as its own row** - `WD20` records the same subscribe-time profile
+  fetch with the wire apps' profile setting on; one row, one owner.
+
+## What Already Exists
+
+Landed by the security plan, which merges before this plan: its Phase 0
+lands the harness (from the spike, `spike/subscription-wire-harness`),
+`rows.toml` and its Phase 0 rows; its Phases 1 to 3 add `WA1` to `WA18` and
+`WT1` to `WT5`.
+
+- `tests/integration/_wire.py` - recorder, driver (`Scenario.step` with a
+  `settle` condition), snapshot (A's queue, B's replica as scalars and lists
+  read separately, callback state, both sides' subscription rows, A's
+  suspension rows), normaliser (format-class timestamp tokens, sorted keys,
+  ids, subscription ids, hosts, secrets, mid-row names; a guard that fails
+  on any 32-hex string, `localhost:55xx` or unknown bearer that survives),
+  comparer (`WIRE_RECORD`, refused under `CI`; a mismatch writes
+  `<row>.actual.json`).
+- `tests/integration/test_harness.py` - keyword options (the wire apps run
+  with processing, capabilities, permissions and profiles on, synchronous
+  callbacks off, a 2 s gap timeout, `max_pending` 5), recording hooks, the
+  `wire_import` method, the `subscriber` and `subscriber_adopted` types.
+- `tests/integration/conftest.py` - `wire_app` 5561, `wire_peer_app` 5562,
+  `wire_other_app` 5563 (the same worker's tables), `wire_pair`.
+- `tests/integration/wire/` with `rows.toml`, the list of rows and their
+  owners (the only copy; read it rather than a list here). The security
+  plan's rows are its Phase 0 flows, `WA1` to `WA18` and `WT1` to `WT5`;
+  the schema has a `topologies` key (one file per topology) beside
+  `second`, and `WIRE_RECORD` takes row ids.
+- The `wire` marker and its CI step (no reruns, its own junit file; the wire
+  step fits the 30-minute job at about 3.5 minutes per backend with this
+  plan's rows).
+
+Already in the tree:
+
+- `tests/integration/test_list_diff_peer_replica.py` - `WL11.target` and
+  `WL13` take its cases (its WARNING assertion moves to `WL13`'s test).
+- `tests/integration/test_subscription_callback_flows.py:199-224`,
+  `:339-368`, `:497-519` - kept, tightened.
+- `tests/integration/test_property_notifications.py:134-137` - kept.
+
+## Phase 1: the remaining flows, recorded
+
+Row identifiers continue the security plan's. A suffix is the variant:
+`.target`, `.subtarget`, `.resource` for the subscription level, `.high`,
+`.low` for granularity; "(three levels)" means all three variants. Unless a
+row says otherwise: granularity `high`, a grant of `*`, both topologies, a
+warm capability cache, writes over REST. "SDK" marks a step in the test
+process through an `ActorInterface` built from the wire app's
+configuration. A row that restricts reads grants with `excluded_patterns`.
+"Owners" is what `rows.toml` records (`plan:phase`; AL =
+`attribute-list-v2-port`, SL = `subs-list-cache-lifetime`, S = `spec-1-5`).
+
+### Changes
+
+First commit, no recording diff (a harness change):
+
+- `tests/integration/test_harness.py` - an asynchronous method hook that
+  appends to a list through the interface (`WD18`).
+- `tests/integration/_wire.py` - the snapshot gains both sides' trust rows
+  (secrets redacted by key) and B's stored peer permissions (`WC5`, `WP3`);
+  async steps (`Scenario.step` accepts a coroutine and awaits it, and a
+  `settle` that awaits the loop's pending tasks) for `WD5`.
+- `tests/integration/verify_groups.py` - the `rows.toml` checks: every
+  scenario has a recording and every recording a scenario; every second
+  file has a reason; every row variant has owners; the commit's changed
+  recordings are owned by its `Wire-Phase` trailer; exposure rows listed.
+- `tests/integration/wire/rows.toml` - the schema, documented at its top:
+
+  ```toml
+  [reserved]                      # id ranges a later plan may add
+  "attribute-list-v2-port" = ["WD21-WD29", "WL18-WL29"]
+  "spec-1-5" = ["WS10-WS19", "WL30-WL39", "WA19-WA29"]
+  "subs-list-cache-lifetime" = ["WM2-WM9"]
+  "email-as-creator-at-write-time" = ["WE1-WE9"]
+
+  [rows."WS1.subtarget"]
+  test = "test_wire_scalar_properties.py::test_ws1"
+  owners = ["attribute-list-v2-port:4"]
+  exposure = false
+  expected = "The object stored as one scalar per key; ..."
+  reason = ["2026-11-07 first recording (subscription-wire-baseline:1)"]
+  # a declared second file: second = { file = "WS1.subtarget.postgresql.json", why = "..." }
+  ```
+
+Second commit: the rows below, their files and entries.
+
+- `tests/integration/test_wire_scalar_properties.py`,
+  `test_wire_list_properties.py`, `test_wire_delivery.py`,
+  `test_wire_queue_and_lifecycle.py`, `test_wire_permissions.py`.
+
+Scalar properties:
+
+| Row | Steps on the publisher | Expected from reading | Owners |
+| --- | --- | --- | --- |
+| WS1.subtarget | `PUT /properties/<p>` with an object, then a string, then `""` | The object stored as one scalar per key; the string answers 400 at the subscriber and stores nothing; the empty value answers 204 | AL:4 |
+| WS2.subtarget | The same with a grant of exactly `<p>` | For the object: a sequence number spent and no callback; the string sent unfiltered. Exposure | AL:4 |
+| WS3 (three levels) | `PUT /properties/<p>/<k>`, then `PUT /properties/<p>/<k>/<j>` | Target `{p: {k: v}}`; the replica's `p` loses its other keys | `.target` S:3; `.subtarget`, `.resource` AL:4, S:3 |
+| WS4.target | `POST /properties` with two names | One diff, one callback | - |
+| WS5 (three levels) | `DELETE /properties/<p>`, then `DELETE /properties/<q>/<k>` | Target: `{p: ""}`, the replica's key deleted. Subtarget on `p`: nothing stored, no sequence spent (`subscription.py:155`) | `.target` -; `.subtarget`, `.resource` AL:4, S:3 |
+| WS6.target | `DELETE /properties` with three properties | Three diffs `{key: ""}`, one per key with its own sequence (`interface/property_store.py:126`, through `clear()`), and two registrations of `""` that store nothing (`property_store.py:215`, `handlers/properties.py:1770`) | S:3 |
+| WS7.target | `PUT /properties/transformed` (a hook upper-cases it) | The diff carries the raw request body (`handlers/properties.py:981`) | S:3 |
+| WS8.subtarget | A write to a property outside the subtarget | Nothing | - |
+| WS9.subtarget | SDK: `actor.properties[<p>]` set, then deleted | The set sends the hook-transformed value; the delete sends `'""'`, which is truthy, so it is stored and sent and passes the filter unfiltered (`actor.py:2904-2906`), unlike `WS5.subtarget` | AL:4, S:3 |
+
+Lists:
+
+| Row | Steps on the publisher | Expected from reading | Owners |
+| --- | --- | --- | --- |
+| WL1 to WL5 (`.target`, `.subtarget`) | `POST /properties {"<l>": {"_type": "list"}}`; `PUT /properties/<l>?index=N`; `POST …/items` add, update, delete; `PUT …/metadata` | `{"index", "value"}`, `{"action": …}`; no list at the subscriber: a scalar named after the list (target), scalars `action`, `index`, `value` (subtarget) | AL:4 |
+| WL6 (`.target`, `.subtarget`) | `DELETE /properties/<l>` after an SDK `append` | Target: `{l: ""}` sent; the subscriber deletes a scalar `l` and keeps the list. Subtarget: nothing | AL:4 |
+| WL7.target | `POST /properties` with `items`: 2, 25 and 26 changes, and one mixing a list and a scalar | A text summary under the list's key | AL:4 |
+| WL8 (`.target`, `.subtarget`) | `POST /properties` creating an empty list | A text marker; at subtarget level 400 | AL:4 |
+| WL9.target | `POST /properties/<l>` with an object body | 201, root properties written, the list untouched | S:1 |
+| WL10.target | The web-UI form routes (item add, update, delete; list create; metadata edit; property create and update) and the `/www` delete of a list and of a property | Nothing for the first seven; for the deletes an empty registration that stores nothing | AL:4 |
+| WL11.subtarget | SDK: the operations of `WL11.target` | Scalars `list`, `operation`, `item`, `index`, `length`; no list | AL:4 |
+| WL12.target | SDK: `append` of `0`, `""`, `False`, `None`, `[]`, `{}` | Not read | AL:2 |
+| WL13.target | SDK: an item over the span threshold (390,000 bytes on the wire apps), appended and updated | A reference diff; nothing applied; the test asserts the subscriber's WARNING | AL:4 |
+| WL14.target | SDK: three `append`s, then `pop(-2)` | Not applied; the replica one item longer | AL:4 |
+| WL15.target | With a grant excluding `x`: a property named `list:x` set over REST | The filter strips `list:` before evaluating (`actor.py:2910-2916`), so the excluded `x` is withheld; what listings and the baseline do with `list:x`: not read | AL:4 |
+| WL16.subtarget | `POST /properties` with two names, one the subtarget | The bulk diff narrowed to the subtarget's value (`actor.py:3999-4014`) | AL:4 |
+| WL17.target | SDK: `suspend("properties", "<l>")`, `delete` of the list, `resume` | B's baseline GET of `<l>` answers an error; the fetch returns nothing and `{}` is applied (`interface/subscription_manager.py:2191-2196`, `handlers/callbacks.py:589-595`); the replica keeps the list | AL:4 |
+
+Delivery:
+
+| Row | Steps | Expected from reading | Owners |
+| --- | --- | --- | --- |
+| WD2 | One write; the format classes of the callback's and both polls' timestamps | The callback `<ts:space>`; both polls `<ts:iso-z>` | S:3 |
+| WD3 | Two writes a second apart | One recording; the test asserts the stored timestamps are equal on DynamoDB and differ on PostgreSQL | S:3 |
+| WD5 | Async step, SDK on the test's running loop: `append` | The call returns before the callback is answered; the replica equal once the loop's pending tasks have run | S:4 |
+| WD7 | Granularity `none`: a write, then SDK `sync_peer` at the subscriber | No callback; the sync's profile, capability and permission fetches (`subscription_manager.py:1669-1720`); the replica has the value and a scalar `timestamp`; the queue cleared | - |
+| WD9 | Grant excluding `denied`: a write to `denied`, to `allowed`, a wait of 2.5 s, a third write | As the spike recorded: sequence 1 spent, nothing sent; 2 held; 3 triggers the resync, which polls the unfiltered queue, so `denied` and a scalar `timestamp` reach the replica; the queue cleared; no data hook for 2 or 3. Exposure | AL:4, S:3 |
+| WD11 | SDK suspend, a write, resume, with a `none` subscription | A resync callback is sent | S:3 |
+| WD13 | Two subscribers on the second host, one write | Two callbacks in sibling order, each from sequence 1 | S:4 |
+| WD14 (`.high`, `.low`) | Five subscribers on the publisher's own host, one REST write | All replicas equal; callbacks one after another (the write runs in the executor, `actor.py:2790-2793`); for `.low` each fetch and acknowledgement nested in its callback | - |
+| WD15 | One subscriber with a target-level and a subtarget-level subscription over one list; SDK `append` | Two callbacks; the item once in the list, plus the scalars of `WL11.subtarget` | AL:4, S:3 |
+| WD16 | SDK: the subscriber's callback row removed with `delete_subscription(callback=True)`; two writes | The subscriber's replica wiped with the row (`actor.py:2558-2580`); each callback 403 (the security plan's publisher-row rule; 404 before it); the publisher's row stays and each write posts again | - |
+| WD17 | SDK: the publisher's trust row pointed at an unbound port; a write | The write answers; the diff is stored; nothing recorded on the wire | - |
+| WD18 (two hosts) | `POST /methods/<name>` on the publisher; the hook appends on the server's loop | The method answers first; the callback a sibling after it (the spike's `WD10.import` shape); the replica equal after the settle | S:4 |
+| WD19 | Hand-posted callbacks with A's bearer, each one ahead, one more than `max_pending` (5) | 204 for each held one, then 400 | - |
+| WD20 | Subscribe with properties and a list present, no write | The permitted baseline, the list included; the profile, capability and permission fetches the wire apps' settings turn on (`subscription_manager.py:2419-2467`), run only because the baseline is non-empty (`:336-338`) | S:2 |
+
+The queue, and the life of a subscription:
+
+| Row | Steps | Expected from reading | Owners |
+| --- | --- | --- | --- |
+| WQ4 | `GET /subscriptions`, `?peerid=`, `?target=` as creator on both actors | Both directions listed | - |
+| WQ5 | Subscribe with granularity `medium`; a write | 201; a callback with neither `data` nor `url`; 204, and the sequence advances | S:3 |
+| WQ6 | `PUT …/<subid>` with `{"sequence": null}` | The `TypeError` is not caught by the handler (`handlers/subscription.py:405-411`) and is answered 500 by the integration's catch-all (`fastapi_integration.py:2759-2791`) | - |
+| WC5 | `DELETE /<A>/trust/friend/<B>` with a queued diff and a replica | Both sides' trust and subscription rows gone, the diffs gone; B's replica and callback state gone (`actor.py:2106-2146`) | - (run by hand in AL:3) |
+| WC6 | The publisher deleted, with a subscriber, a queued diff and a suspended target | Diffs go with their subscriptions; the suspension row stays | SL:2 |
+| WC7 | SDK: the publisher created again under the same id; a write | Starts suspended and registers nothing | SL:2 |
+| WC8 | `WC3` and `WC4` again, recording the lifecycle hooks | `subscription_deleted` with `initiated_by_peer` at each side | - |
+| WM1 | B1 subscribed. SDK, one `Actor` instance of A: a write (its memo becomes `[B1]`); B2 subscribes over REST; the same instance writes again | B2 gets no callback for the second write: the memo is reset only on that instance's own creates (`actor.py:2345-2353`, `:2468-2471`) | SL:2 |
+
+Permissions between peers:
+
+| Row | Steps | Expected from reading | Owners |
+| --- | --- | --- | --- |
+| WP2 | The grant shrunk while the subscriber holds a list it no longer covers | Not deleted (the consumer's default) | - |
+| WP3 | `DELETE /<A>/trust/<rel>/<B>/permissions` | No permission callback (`trust_permissions.py:563-594` does not notify); B's stored permissions unchanged and stale | S:2 |
+| WP4 | `WP1`'s body posted again after a newer one, with the bearer | Not stored (older timestamp); the change detection on the older body still runs and the hook payload carries its `permission_changes` (`handlers/callbacks.py:253-258`, `:329-336`) | S:2 |
+| WP6 | A baseline under a grant excluding one property | What B's baseline fetch returns for the excluded property. Exposure if it is returned | S:2 |
+
+### New Tests, both unit and integration tests
+
+- The rows above, integration, both backends, both topologies unless a row
+  says otherwise.
+- `WD3`'s timestamp assertion per backend; `WL13`'s WARNING assertion.
+- The `rows.toml` checks in `verify_groups.py`, each with a test that a
+  planted violation fails it.
+- The normaliser's guard over every new file: a planted secret, actor id,
+  `localhost:5563` or unknown bearer in any of them fails.
+
+### Failure Scenarios
+
+- A recording captures a harness artefact - the spike's rules (warm cache,
+  setup unrecorded, `settle` conditions); a row that still varies stops the
+  phase.
+- A timing-dependent recording - order is nesting and sibling order; the
+  only fixed wait is `WD9`'s. Five consecutive runs per backend before the
+  commit (a local, pre-commit step, about 35 minutes), never rerun in CI.
+- Someone re-records to make a red run green - explicit ids, the reason
+  line, and `verify_groups.py` refusing a changed recording the commit's
+  phase does not own.
+- A row cannot be made deterministic - dropped with the reason under
+  "Recorded outcomes".
+- `WD5`'s task outlives the step - the async `settle` awaits pending tasks.
+- `WM1` shows nothing because the memo was empty - the first write fills it
+  with `[B1]`; the test asserts that before B2 subscribes.
+
+### Verification
+
+- [ ] Run the contract's `### Checks` fast tier verbatim
+- [ ] Run the contract's `### Checks` full tier before each commit, one run
+      at a time, both backends
+- [ ] The first commit's `git show --stat HEAD -- tests/integration/wire` is
+      empty apart from `rows.toml`'s schema header
+- [ ] `poetry run pytest tests/ -m wire -p no:rerunfailures` passes five
+      times in a row on each backend, sequentially, and once under
+      `make test-all-parallel`
+- [ ] `git diff --stat master...HEAD -- actingweb examples` is empty
+- [ ] No recording the security plan made has changed
+- [ ] Sensitivity, on a scratch copy and not committed: each of these
+      changes at least one recording, and the rows are noted: the `/items`
+      add diff's key renamed; `callback_subscription` returning before it
+      sends; the `PUT` clear made a no-op; the permission filter returning
+      its input; `apply_callback_data` skipping list operations; one key
+      added to the callback body
+- [ ] "Recorded outcomes" filled; the row-variant count recorded (about 65
+      rows, 128 variants by the tables above)
+
+### Recorded outcomes
+
+Filled by the first recording. Known from the spike: `WL1.target`'s scalar
+replica, `WD9` as in the table, `WD10.import`'s shape.
+
+### Implementation Status: Not Started
+
+---
+
+## Phase 2: the legacy files retired
+
+### Changes
+
+Each deletion names its covering rows or unit tests in the verification
+document:
+
+- `tests/integration/test_subscription_suspension_flow.py` - it never
+  suspends (it posts to `/subscriptions/suspend`, which no handler serves;
+  six statuses at `:1138`). Its classes and their cover:
+  `TestResyncCallbacks` (`:584-823`; `WD6`, `WD10`, `WD12`),
+  `TestSubscriptionWithPeerCapabilities` (`:843-990`; `WD12`, `WD20`),
+  `TestMultipleSubscribersSuspension` (`:1316-`; `WD13`, `WD14`), the rest
+  (`WD10`, `WD10.import`, `WD11`, `WL17`, the unit suspension tests).
+- `tests/integration/test_subscription_processing_flow.py` - the classes
+  whose subscriber has no processor: `TestSubscriptionProcessingFlow`
+  (`:18-542`, subscriber on `peer_app` at `:71-77`), `TestResyncStateHandling`
+  (`:969-1227`), and the sequencing and back-pressure classes (`:565-`,
+  `:1249-1276`). Cover: `WD8`, `WD9`, `WD19`, `WQ1` to `WQ3` and
+  `tests/test_callback_processor.py`. Its remaining publisher-queue classes
+  stay (Phase 3).
+- `tests/integration/test_fanout_flow.py:412-1073` - the classes that test
+  `FanOutManager`, a granularity downgrade and a circuit breaker, none on the
+  publish path; the first class (`:16-410`) is kept, renamed for what it
+  does.
+- `tests/integration/test_property_list_notifications.py` - seven
+  placeholders; `WL1` to `WL8`.
+- `tests/integration/test_list_diff_peer_replica.py` - `WL11.target`,
+  `WL13`.
+- `tests/integration/XDIST_GROUPS.md` - the retired groups removed.
+
+### New Tests, both unit and integration tests
+
+- None; the rows of Phase 1 are the cover.
+
+### Failure Scenarios
+
+- A deleted test was the only cover for something - each deletion names
+  its cover; one with none is kept and moved to Phase 3's list.
+
+### Verification
+
+- [ ] Run the contract's `### Checks` full tier verbatim
+- [ ] `poetry run python tests/integration/verify_groups.py` passes
+- [ ] The verification document lists every deleted class with its cover
+
+### Implementation Status: Not Started
+
+---
+
+## Phase 3: the remaining subscription files tightened
+
+### Changes
+
+- In the remaining `test_subscription_*.py`, `test_property_notifications.py`,
+  `test_fanout_flow.py` and `test_trust_flow.py`: every `status_code in […]`
+  and every assertion guarded by `if …status_code` becomes one
+  unconditional status. Measured on 2026-11-07 after Phase 2's retirements:
+  125 status lists and 35 guarded assertions in nine files.
+- A status that truly differs between backends is asserted per backend
+  (`DATABASE_BACKEND`), with a `rows.toml`-style note in the test naming
+  the plan that owns the difference; never loosened.
+- `test_subscription_baseline_storage.py:77`, `:89` and
+  `test_subscription_sync_coverage.py:327` rely on the stray write `WL9`
+  records: tightened to the status the run shows, each with a comment
+  naming `spec-1-5:1`.
+- The `pytest.skip` calls for missing earlier state (41, measured) become
+  class-scoped fixtures, so a failed setup fails.
+  `test_subscription_sync_coverage.py:412`, `:444` skip because the SDK
+  cannot find the actor; they get an `ActorInterface` built from the app's
+  configuration, as the wire driver does.
+
+### New Tests, both unit and integration tests
+
+- None new; the changed files are the tests.
+
+### Failure Scenarios
+
+- A fixture conversion changes the order tests relied on - each converted
+  class passes alone (`-k <class>`) and in the file.
+- Class-scoped fixtures under CI's reruns - checked on one deliberately
+  failing test before the commit.
+
+### Verification
+
+- [ ] Run the contract's `### Checks` full tier verbatim
+- [ ] `grep -nE "status_code (in|not in) [\[\(]|if .*status_code" tests/integration/test_subscription_*.py tests/integration/test_property_notifications.py tests/integration/test_fanout_flow.py tests/integration/test_trust_flow.py`
+      returns nothing, apart from per-backend assertions, each with its note
+- [ ] `grep -c "pytest.skip(" tests/integration/test_subscription_*.py tests/integration/test_fanout_flow.py`
+      shows 0 for each file
+
+### Implementation Status: Not Started
+
+---
+
+## Phase 4: documentation and records
+
+### Changes
+
+- `tests/integration/README.md`, `XDIST_GROUPS.md`,
+  `docs/contributing/testing.rst` - the wire suite: what a recording holds;
+  re-recording one row (`WIRE_RECORD=<ids>`, refused under `CI`, the reason
+  line, `<row>.actual.json` on a mismatch); one tier; `rows.toml`'s schema,
+  owners and reserved ids; the `Wire-Phase` trailer; exposure rows; the
+  stale counts and file names go.
+- The later plans (`subs-list-cache-lifetime`, `attribute-list-v2-port`,
+  `spec-1-5`, `email-as-creator-at-write-time`) - a dated Update Log line
+  each: the recorded outcomes that contradict it, the line references into
+  `tests/integration/` that Phases 2 and 3 removed or moved (for example
+  `spec-1-5` citing `test_list_diff_peer_replica.py:103` and
+  `test_subscription_baseline_storage.py:71-93`).
+- `thoughts/todo/INDEX.md` - gate 4 met.
+
+### New Tests, both unit and integration tests
+
+- None beyond the docs build in the full tier.
+
+### Failure Scenarios
+
+- The testing guide drifts from `rows.toml`'s schema - the schema is
+  documented once, at the top of `rows.toml`, and the guide links to it.
+
+### Verification
+
+- [ ] Run the contract's `### Checks` full tier verbatim (docs build included)
+- [ ] `git diff --stat master...HEAD -- actingweb examples` is empty
+
+### Implementation Status: Not Started
+
+---
+
+## Evaluation Notes
+
+### Third review, 2026-11-07: the redraft
+
+Two evaluators (tests, code quality and architecture together; scalability,
+security and usability together, the plan being test-only) and the outside
+voice (Codex, outside the command sandbox, and a fresh-context reviewer).
+Nothing was run. Disposition:
+
+Taken to the owner and decided: `rows.toml` as the only copy of row owners,
+by plan and phase, checked by `verify_groups.py`; the old Phase 2 split into
+three phases in the same PR.
+
+Folded as mechanical:
+
+- Row expectations corrected: `WM1` (the memo is reset on the instance's own
+  create, so the second subscriber arrives over REST), `WP3` (a deleted
+  grant sends no callback), `WS6` (three diffs and two no-ops), `WS9` (only
+  the subtarget variant differs from `WS5`), `WD20` and `WP5` merged,
+  `WP4` (the hook payload), `WQ6` (500 by the integration), `WD16` (the
+  replica wipe and the security plan's 403), `WL15` and `WL17`
+  (preconditions), `WD17` (an unbound port), `WD5` (an async step), `WD14`
+  (a REST write), `WD7` (the sync's metadata fetches), `WL13` (its log
+  assertion).
+- The snapshot extended for `WC5` and `WP3`; a harness commit before the
+  rows.
+- Owners: the eight that named a phase which, in the later plan, keeps
+  them identical (`WL15`, `WL17`, `WC5`, `WM1`, `WL16`, `WS9`, `WD9`, `WP6`),
+  and per-variant owners for `WS3` and `WS5`; reserved id ranges.
+- No "observed" state (one tier); exposure rows marked; the secrets guard
+  over new files.
+- Phase 2's class lists, ranges and cover; the measured counts; greps that
+  can pass; per-backend statuses; the SDK-not-found skips; `INDEX.md`.
+- The contradiction about when the `WA` and `WT` rows land.
+
+Unverified notes:
+
+- Whether attribute-list Phase 4's receiver change alters `WL13`; owned by
+  `AL:4` so either outcome is allowed.
+- `WD18`'s ordering rests on the spike's `WD10.import` recording only.
+- What listings and the baseline do with a scalar named `list:x`
+  (`db/dynamodb/property.py:885` excludes `list:` names on DynamoDB).
+
+### Earlier reviews
+
+The sections below are the reviews of earlier drafts, kept as they were.
+
+Reviewed 2026-11-06 as "Phase 0" of the security plan, before the owner moved
+it here: one evaluator read every expectation against the code (tests,
+quality and architecture), and the outside voice ran Codex (outside the
+command sandbox) and a fresh-context reviewer. Security, scalability and
+usability evaluators were not run: the plan changes no library code and no
+public surface. What each finding led to:
+
+### Architecture
+
+- The recorder is feasible as a pure ASGI middleware added after
+  `integrate_fastapi`, and has to record an exception as a 500. It records
+  every request to the two wire apps, not only `/callbacks`: the fetch, the
+  acknowledgement and the peer-to-peer deletes are on other paths.
+- An `ActorInterface` built in the test process with a fresh `Config` (as
+  `test_list_diff_peer_replica.py:93-113` does) has the default host, no
+  synchronous flag and no peer options. The driver builds it from the wire
+  app's own configuration; `WD5` uses a copy with the flag off.
+- `with_peer_capabilities` is neither needed nor sufficient for a resync
+  callback: the trust row's capability and its fetch time decide
+  (`actingweb/peer_capabilities.py:81-145`). The fallback row sets both
+  through the library.
+- Five subscribers on the publisher's own host are safe with the serial
+  sender (two or three executor threads per chain, ten available,
+  `fastapi_integration.py:621`); `WD14.low` exists because a concurrent
+  sender would need eleven.
+
+### Tests and code quality
+
+- About a dozen first-draft expectations were wrong or true at one level
+  only; they are corrected in the tables and in the research, and are the
+  reason for recordings.
+- Rows whose outcome depends on the subscription level or the grant are
+  split per level, and the grant is stated.
+- The first draft's rule (a `Changes in:` line in each test's docstring,
+  checked by grep) could not tell rows in one file apart and only checked
+  that a plan file existed. One recording per row replaces it.
+- The first draft's counts (185, 62) were greps; the verified counts are 179
+  status lists, 47 guarded assertions and 61 skips.
+- Three consecutive runs do not find an infrequent flake and CI's reruns
+  hide one; five runs, and no reruns for the marker.
+- One commit was too large; the harness and fourteen rows are the security
+  plan's, the remaining rows are Phase 1 here, the existing files Phase 2.
+
+### Outside voice
+
+- **The baseline delayed the security fix and put passing exploit tests in
+  public history** (Codex and the fresh-context reviewer). The owner moved
+  the baseline here; the access rows are recorded secured.
+- **No release path delivers the fix before 3.16** (the consumer pins
+  `=3.15.1`; tags come from `master` only). Put to the owner: it stays in
+  3.16.
+- **A golden transcript is the simpler mechanism for "the run decides".**
+  Taken, by the owner's decision.
+- **A check that parses `thoughts/plans/` never runs in CI.** The registry
+  is under `tests/integration/wire/`.
+- **Stopping the phase to correct plans that are not approved would gate
+  everything on them.** Contradictions are recorded here and fixed in each
+  plan's next draft.
+- **Rows whose "after" is as open as their "before" constrain nothing**
+  (`WL12`, `WC6`, parts of `WD5`). Their registry entries say "observed";
+  they are not in any later phase's must-stay-identical list until the plan
+  that owns them states the outcome.
+- **The two topologies differ in cache warmth, and neither is Lambda.**
+  Stated as the known topology difference; a registry reason is required.
+- **Consumer paths the first draft missed**: a write from an asynchronous
+  hook on the server's loop (`WD18`), the peer-profile read (`WP5`), and the
+  data hook's payload (the recording hooks, in every row).
+- **Cleanup through HTTP swallows failures and cannot delete a recreated
+  actor** (`conftest.py:785-786`). The pair's teardown goes through the
+  library by id, removes suspension rows, and fails loudly.
+- **Line references into `tests/integration/` in the later plans go stale**
+  once this plan rewrites those files. Each later plan's Update Log says its
+  references there are by test and fixture name from now on.
+
+### Second review, 2026-11-06: recorded, not folded
+
+Two evaluators read the mechanism against the code (feasibility; tests and
+quality, with the security, cost and usability of the recordings), then the
+outside voice (Codex, outside the command sandbox, and a fresh-context
+reviewer) was given their findings. Nothing was run. `[decision]` and
+`[research]` as in the security plan.
+
+What is missing:
+
+- **The consumer's one bulk flow has no row.** Its import suspends and
+  resumes one subtarget, from an asynchronous handler, around a `clear` and
+  appends on a list, with a target-level subscriber
+  (`../actingweb_mcp/api/memory_import.py:434`, `:584`). `WD10` suspends the
+  whole target and never enters the branch that wraps a list as
+  `{subtarget: {"_list": True, "items": …}}` (`actingweb/actor.py:3168`);
+  the `ListAttribute` plan cites `WD10` as its list-baseline proof.
+- **No row can show a stale subscription memo**, the `subs_list` plan's
+  actual risk: every HTTP request builds a fresh `Actor`. It needs an SDK
+  row that creates a subscription and writes on one instance.
+- Wire-visible changes in the later plans that no row shows: refused list
+  names and `list:` scalar keys, a bulk POST at subtarget level, a
+  three-segment DELETE, a list removed during suspension, default deny on a
+  baseline under a narrow grant. The `ListAttribute` plan lists `WS3` to
+  `WS8` as identical though its subtarget-level receiver change would alter
+  `WS3` and `WS5` below target level. `[research]`
+- `WP5`'s premise is wrong: no profile is fetched when a trust is
+  established; it is fetched inside a subscribe when the publisher already
+  has data (`interface/subscription_manager.py:336-338`, `:2406-2434`),
+  together with capability and permission fetches. Rows have to state the
+  publisher's state at subscribe time.
+
+Determinism, all to be designed before a row is recorded:
+
+- Callback order and array order follow random ids: subscriptions come back
+  sorted by `peerid:subid` (`db/postgresql/subscription.py:445`,
+  `db/dynamodb/subscription.py:278`), so rows with several subscribers and
+  every `GET /subscriptions` array flip between runs. Name actors by first
+  appearance and sort siblings.
+- The permission callback's follow-up fetches iterate a set difference
+  (`peer_permissions.py:721-725`): hash-seed order.
+- The gap timeout is wall-clock since the oldest held callback
+  (`callback_processor.py:422-428`), so any row that holds a callback and
+  continues races the wire apps' 2 seconds (`WD19`, `WS2.subtarget`), not
+  only `WD9`. A long timeout on the apps, a short one for `WD9` alone.
+- The normaliser replaces timestamps with names, which contradicts `WD2`
+  (format) and `WD3` (distinct values); tokens have to keep format class and
+  equality, or one later change rewrites every recording.
+- Nesting by time is the only way to attribute a callback (only `AwProxy`
+  sends a correlation header, `aw_proxy.py:93-112`); it holds only while no
+  request arrives outside a step. The recorder should fail on that, and
+  under a concurrent sender it cannot attribute a low-granularity fetch.
+- The teardown as written cannot pass: `Actor.delete` leaves a tombstone for
+  30 days (`actingweb/deletion.py:160-172`) and sends peer DELETEs after the
+  last step. Per-row teardown is not isolation either: one table namespace
+  per worker, shared with every other integration test. `[research]`
+
+The contract and its size:
+
+- `[decision]` **Full transcripts or a projection.** A byte-identical record
+  of every request makes cache warmth, setup traffic and incidental fetches
+  contractual: a boolean in a trust response or a content type on `/meta`
+  rewrites every file and teaches reviewers to ignore diffs. Proposed: for
+  most rows record hook payloads, callback bodies and statuses, the queue's
+  change and the replica's change (what the consumer reads,
+  `../actingweb_mcp/hooks/actingweb/callback_hooks.py:95`, `:122`); the full
+  request list only where absence or choreography is the point (`WD6`,
+  `WD9`, `WC3`, `WC4`, `WP1`). Either way: record from the first scenario
+  step, not setup.
+- `[decision]` **Two tiers.** About thirty row-variants as the regression
+  net at full ceremony (the consumer's shape: target level, high
+  granularity, REST and interface list edits, the import flow, gap and
+  resync, several subscribers, the lifecycle rows, permission callbacks);
+  the rest recorded once as observations in one topology, in no
+  must-stay-identical list until the plan that owns them is approved. Two of
+  those plans will be redrafted, and a matrix pinned for them will change.
+  What it lets slip: drift below target level and at low granularity during
+  the `subs_list` and email PRs.
+- `[decision]` **Phase 2: retire, not tighten.**
+  `test_subscription_suspension_flow.py` never suspends anything (it posts
+  to `/subscriptions/suspend`, which no handler serves, and accepts six
+  statuses, `:205`, `:1133`); the sequencing and back-pressure classes of
+  `test_subscription_processing_flow.py` run against apps with no processor
+  (`:565-582`, `:1249-1262`); `test_fanout_flow.py:413-1058` tests features
+  that do not run. Those three files hold 100 of the 179 loose statuses and
+  38 of the 61 skips. Moving them to a processing app changes what they
+  test; deleting them once the rows exist leaves a small tightening of the
+  publisher-queue files. If any subscriber is moved, it goes to
+  `subscriber_app`, never to a recording app.
+- **Guarding against re-recording to green.** A stat read by a person is the
+  only guard. Proposed: a digest per file and an append-only reason line in
+  the registry; re-recording takes explicit row ids. Driver changes land in
+  their own commit with no recording diff, and the registry carries a driver
+  version, or a file can stay identical because the comparer changed with
+  the library (`thoughts/plans/2026-11-06-attribute-list-v2-port.md`, Phase
+  3).
+- **The fourteen cannot stay unchanged.** Every determinism fix above
+  rewrites them, and this plan forbids that. Proposed: the security plan's
+  Phase 0 is the spike with a handful of rows; this plan opens with a
+  driver-only commit that re-records them with no diff under `actingweb/`.
+- **Secrets.** Actor creation returns `passphrase`
+  (`handlers/factory.py:324-325`); trust creation and the single trust GET
+  return `secret` and `verification_token` (`handlers/trust.py:489`,
+  `:596-603`); the reciprocal request carries `secret` and `verify`
+  (`actor.py:1727-1729`). Redaction by known value misses library-generated
+  tokens: redact by key name, guard against token-shaped strings, and use
+  `example.test` creators.
+- **"Identical" is proven by a run, not by an empty stat.** The later plans'
+  phases cite the full tier, which today runs the wire rows only under
+  `-n auto` (`Makefile:58`). The checks need a sequential wire line without
+  reruns; a `flaky(reruns=0)` marker does override CI's reruns.
+- **Cost.** About 87 row-variants in two topologies is about 170 scenarios
+  per backend run; five consecutive runs pass a 5% flake 77% of the time and
+  cost about 1,700 scenario runs per phase behind "one test run at a time".
+  Repeat only the rows a phase records. `[research]` wall time: unmeasured,
+  with a 30-minute CI job limit.
+- Smaller: the replica snapshot must read lists and scalars separately (a
+  scalar hides a list of the same name, `remote_storage.py:255-281`); the
+  snapshot does not hold trust rows or stored permissions, which `WC5` and
+  `WP3` claim; `WD16`'s step also wipes the replica; a copied configuration
+  for `WD5` rebuilds six process-wide stores; handler exceptions never reach
+  the recorder; the form routes are not JSON; a mismatch should write the
+  actual recording beside the expected one; the guarded-assertion count is
+  48.
+
+Only a spike answers: whether a same-host callback nests inside its write;
+whether a target-level row matches across backends without a second file;
+how large a recording is; how long one wire run takes; whether a resume on
+the loop emits a capability fetch at an unpredictable time; whether the
+teardown can pass on both backends.
+
+### Unverified notes
+
+- Nothing in this plan has been run. Every expectation is from reading.
+- Whether a `flaky(reruns=0)` marker overrides CI's `--reruns 2`; if not, the
+  wire step is the only place the marker runs.
+- Whether `pytest-rerunfailures` re-creates a class-scoped fixture on a
+  rerun.
+- The recorder's list grows for a session; its entries are small, but no
+  bound was measured.
+- Whether the inbound permission store behaves differently with
+  `peer_permissions_caching` off; the wire apps have it on.
+- The suspension store's subtarget semantics were not read.
+- No REST route for suspend and resume was found in the handlers read; the
+  route table and `/devtest` were not searched to the end.

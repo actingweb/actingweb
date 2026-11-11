@@ -1,0 +1,542 @@
+# The wire rows: what each recording records and which plan phase may change it.
+#
+# The only copy of row ownership (thoughts/plans/2026-11-06-subscription-wire-baseline.md,
+# "rows.toml is the only copy"). tests/integration/verify_groups.py checks it.
+#
+# Schema
+#
+#   [reserved]                       id ranges a later plan may add rows under
+#   "<plan slug>" = ["WX1-WX9", ...]
+#
+#   [rows."<row>"]                   one entry per row (a variant suffix such as
+#                                    ".target" or ".subscriber" is part of <row>)
+#   test = "<file>::<function>"      the scenario that records it
+#   topologies = ["same_host", "two_hosts"]
+#                                    optional; when present the row has one file
+#                                    per topology, wire/<row>.<topology>.json (the
+#                                    transcripts name different hosts), otherwise
+#                                    one file, wire/<row>.json. One file serves
+#                                    both backends.
+#   owners = ["<plan slug>:<phase>"] the phases expected to change the recording;
+#                                    any other change to it is a regression
+#   exposure = false                 true when the row records data reaching a
+#                                    peer that may not read it
+#   expected = "..."                 what it records, and what is known to be wrong
+#   reason = ["<date> <why the file was written or rewritten> (<plan:phase>)"]
+#
+# A recording is what the library does, right or wrong. Re-record a row with
+# WIRE_RECORD=1 (refused under CI) and add a dated line to its `reason`.
+
+[reserved]
+"peer-authorisation-fixes" = ["WA1-WA18", "WT1-WT9"]
+"subscription-wire-baseline" = ["WS1-WS9", "WL1-WL17", "WD1-WD20", "WQ1-WQ9", "WC1-WC9", "WM1", "WP1-WP9"]
+"attribute-list-v2-port" = ["WD21-WD29", "WL18-WL29"]
+"spec-1-5" = ["WS10-WS19", "WL30-WL39", "WA19-WA29"]
+"subs-list-cache-lifetime" = ["WM2-WM9"]
+"email-as-creator-at-write-time" = ["WE1-WE9"]
+
+# ---------------------------------------------------------------------------
+# peer-authorisation-fixes, Phase 0: the flows over the paths the fix changes
+# ---------------------------------------------------------------------------
+
+[rows."WS1.target"]
+test = "test_wire_peer_paths.py::test_ws1_target"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "Each PUT's callback nested in it, the data hook nested in the callback; the replica holds an object as sent, a string and a number wrapped as {\"value\": ...}; the diffs stay queued at A."
+reason = [
+  "2026-11-07 first recording (peer-authorisation-fixes:0)",
+  "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
+]
+
+[rows."WL11.target"]
+test = "test_wire_peer_paths.py::test_wl11_target"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "One top-level callback per SDK list operation (append, insert, update, update_where, delete, extend, pop, pop(0), remove_where, metadata, clear, delete_all), each with its operation and length; the replica follows and is empty after the delete."
+reason = [
+  "2026-11-07 first recording (peer-authorisation-fixes:0)",
+  "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
+]
+
+[rows."WD6"]
+test = "test_wire_peer_paths.py::test_wd6_low_granularity"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "A low-granularity callback with a url and no data; B fetches the diff with its bearer (the GET consumes it), runs the data hook and acknowledges with PUT {\"sequence\": 1}, 204."
+reason = [
+  "2026-11-07 first recording (peer-authorisation-fixes:0)",
+  "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
+]
+
+[rows."WD6.subscriber"]
+test = "test_wire_peer_paths.py::test_wd6_subscriber"
+owners = ["peer-authorisation-fixes:2"]
+exposure = false
+expected = "WD6 in a pair of the consumer's subscriber type, without adoption rows: the acknowledgement PUT is admitted by the built-in owner row (the peer's own path), as in the adopted variant (204)."
+reason = [
+  "2026-11-07 first recording (peer-authorisation-fixes:0)",
+  "2026-11-07 the method rule: the acknowledgement PUT answers 403; the diff was already consumed by B's GET (peer-authorisation-fixes:2)",
+  "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
+  "2026-11-08 the owner rows bind to the path's peer (reverify-4, Issue 2, owner): admitted as in the adopted variant (peer-authorisation-fixes:2)",
+]
+
+[rows."WD6.subscriber_adopted"]
+test = "test_wire_peer_paths.py::test_wd6_subscriber"
+owners = []
+exposure = false
+expected = "WD6 in a subscriber pair with the two adoption rows: identical through every phase, the proof the migration step is enough."
+reason = [
+  "2026-11-07 first recording (peer-authorisation-fixes:0)",
+  "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
+]
+
+[rows."WD8"]
+test = "test_wire_peer_paths.py::test_wd8_duplicate"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "The append's callback posted again with the same bearer: 204, no data hook, the replica unchanged (a duplicate)."
+reason = [
+  "2026-11-07 first recording (peer-authorisation-fixes:0)",
+  "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
+]
+
+[rows."WD10"]
+test = "test_wire_peer_paths.py::test_wd10_suspend_resume"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "Writes while suspended send nothing and queue nothing; resume sends one resync callback (sequence 1, no data); B fetches GET /<A>/properties inside it and the data hook gets the baseline as type resync; the deleted property never reaches B."
+reason = [
+  "2026-11-07 first recording (peer-authorisation-fixes:0)",
+  "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
+]
+
+[rows."WD10.import"]
+test = "test_wire_peer_paths.py::test_wd10_import"
+owners = []
+exposure = false
+expected = "The consumer's import: the method answers {\"callbacks_sent\": 1, \"length\": 3} and then the resync for subtarget memories arrives as a top-level request with B's fetch of the list nested in it; A's queue keeps diffs 1 and 2."
+reason = [
+  "2026-11-07 first recording (peer-authorisation-fixes:0)",
+  "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
+]
+
+[rows."WD12"]
+test = "test_wire_peer_paths.py::test_wd12_full_state_fallback"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "A believes B lacks subscriptionresync: resume sends a low-granularity callback for a high-granularity subscription; B fetches the full-state diff and acknowledges it. Known wrong: B's replica gets the list's items again (an extend onto what it holds) and the object y stored as a JSON string wrapped as {\"value\": ...} (thoughts/todo/full-state-fallback-replica.md)."
+reason = [
+  "2026-11-07 first recording (peer-authorisation-fixes:0)",
+  "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
+]
+
+[rows."WQ1"]
+test = "test_wire_peer_paths.py::test_wq1_poll_queue"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "B's GET of its subscription at A lists both queued diffs with their sequence and timestamp; nothing is cleared."
+reason = [
+  "2026-11-07 first recording (peer-authorisation-fixes:0)",
+  "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
+]
+
+[rows."WQ2"]
+test = "test_wire_peer_paths.py::test_wq2_single_diff"
+topologies = ["same_host", "two_hosts"]
+owners = ["spec-1-5:3"]
+exposure = false
+expected = "The first GET of diff 1 answers 200 and consumes it; the second answers 404. The specification forbids a consuming GET (actingweb-spec.rst:1207, :2885-2887)."
+reason = [
+  "2026-11-07 first recording (peer-authorisation-fixes:0)",
+  "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
+]
+
+[rows."WQ3"]
+test = "test_wire_peer_paths.py::test_wq3_clear"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "PUT {\"sequence\": 1} 204 clears diff 1; {\"sequence\": 0} 204; no sequence 400; text 400; an unknown id 404; GET ?_method=PUT&sequence=2 204 clears the rest."
+reason = [
+  "2026-11-07 first recording (peer-authorisation-fixes:0)",
+  "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
+]
+
+[rows."WQ3.subscriber"]
+test = "test_wire_peer_paths.py::test_wq3_subscriber"
+owners = ["peer-authorisation-fixes:2"]
+exposure = false
+expected = "WQ3 in a subscriber pair without adoption rows: every clear is admitted by the built-in owner row, as in the adopted variant."
+reason = [
+  "2026-11-07 first recording (peer-authorisation-fixes:0)",
+  "2026-11-07 the method rule: every clear answers 403 and the queue keeps its diffs (peer-authorisation-fixes:2)",
+  "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
+  "2026-11-08 the owner rows bind to the path's peer (reverify-4, Issue 2, owner): admitted as in the adopted variant (peer-authorisation-fixes:2)",
+]
+
+[rows."WQ3.subscriber_adopted"]
+test = "test_wire_peer_paths.py::test_wq3_subscriber"
+owners = []
+exposure = false
+expected = "WQ3 in a subscriber pair with the two adoption rows: identical through every phase."
+reason = [
+  "2026-11-07 first recording (peer-authorisation-fixes:0)",
+  "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
+]
+
+[rows."WC1"]
+test = "test_wire_peer_paths.py::test_wc1_subscribe_through_own_actor"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "B's creator's POST /<B>/subscriptions answers 204 after B's POST /<A>/subscriptions/<B> (201) and B's baseline GET /<A>/properties, both nested in it."
+reason = [
+  "2026-11-07 first recording (peer-authorisation-fixes:0)",
+  "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
+]
+
+[rows."WC2"]
+test = "test_wire_peer_paths.py::test_wc2_subscribe_direct"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "B's bearer POST /<A>/subscriptions/<B>: 201 with the new subscription; A holds it, B holds nothing (it did not go through its own actor)."
+reason = [
+  "2026-11-07 first recording (peer-authorisation-fixes:0)",
+  "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
+]
+
+[rows."WC3"]
+test = "test_wire_peer_paths.py::test_wc3_subscriber_unsubscribes"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "B's creator deletes its subscription: B sends DELETE /<A>/callbacks/subscriptions/<B>/<subid> (204, A's subscription_deleted hook nested); both rows gone."
+reason = [
+  "2026-11-07 first recording (peer-authorisation-fixes:0)",
+  "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
+]
+
+[rows."WC4"]
+test = "test_wire_peer_paths.py::test_wc4_publisher_unsubscribes"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "A's creator deletes B's subscription: A sends DELETE /<B>/subscriptions/<A>/<subid> (204); both rows gone; A's subscription_deleted hook runs."
+reason = [
+  "2026-11-07 first recording (peer-authorisation-fixes:0)",
+  "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
+]
+
+[rows."WC4.subscriber"]
+test = "test_wire_peer_paths.py::test_wc4_subscriber"
+owners = ["peer-authorisation-fixes:2"]
+exposure = false
+expected = "WC4 in a subscriber pair without adoption rows: A's DELETE to B is admitted by the built-in owner row, as in the adopted variant."
+reason = [
+  "2026-11-07 first recording (peer-authorisation-fixes:0)",
+  "2026-11-07 the method rule: A's DELETE to B answers 403 and B keeps a dangling callback subscription (peer-authorisation-fixes:2)",
+  "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
+  "2026-11-08 the owner rows bind to the path's peer (reverify-4, Issue 2, owner): admitted as in the adopted variant (peer-authorisation-fixes:2)",
+]
+
+[rows."WC4.subscriber_adopted"]
+test = "test_wire_peer_paths.py::test_wc4_subscriber"
+owners = []
+exposure = false
+expected = "WC4 in a subscriber pair with the two adoption rows: identical through every phase."
+reason = [
+  "2026-11-07 first recording (peer-authorisation-fixes:0)",
+  "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
+]
+
+[rows."WP1"]
+test = "test_wire_peer_paths.py::test_wp1_permission_callback"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "A's permission PUT with an exclusion answers 200 with the permission callback to B nested (204, B's permissions hook nested); B fetches nothing after an exclusion and its replica keeps the excluded property (the wire apps leave auto_delete_on_revocation off, as the consumer does)."
+reason = [
+  "2026-11-07 first recording (peer-authorisation-fixes:0)",
+  "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
+]
+
+# ---------------------------------------------------------------------------
+# peer-authorisation-fixes, Phase 1: who may reach /callbacks (recorded with
+# the fix; the pre-fix runs are in the plan's verification document)
+# ---------------------------------------------------------------------------
+
+[rows."WA1"]
+test = "test_wire_access.py::test_wa1_unauthenticated_subscription_callback"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "No credentials: a subscription callback for B's subscription and for an unknown id both answer 401; nothing applied."
+reason = [
+  "2026-11-07 first recording (peer-authorisation-fixes:1)",
+  "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
+]
+
+[rows."WA2"]
+test = "test_wire_access.py::test_wa2_unauthenticated_permission_callback"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "No credentials: a permission callback for A and for a peer B has no trust with answer 401; nothing stored, no hook."
+reason = [
+  "2026-11-07 first recording (peer-authorisation-fixes:1)",
+  "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
+]
+
+[rows."WA3"]
+test = "test_wire_access.py::test_wa3_unauthenticated_generic_callback"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "No credentials: GET, POST, PUT and DELETE on /callbacks/<name> answer 401 with a challenge; the hook does not run."
+reason = [
+  "2026-11-07 first recording (peer-authorisation-fixes:1)",
+  "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
+]
+
+[rows."WA4"]
+test = "test_wire_access.py::test_wa4_unknown_bearer"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "A bearer that matches no trust answers 403 on the subscription, permission and generic callbacks (auth.py unchanged)."
+reason = [
+  "2026-11-07 first recording (peer-authorisation-fixes:1)",
+  "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
+]
+
+[rows."WA5"]
+test = "test_wire_access.py::test_wa5_other_peers_under_the_publishers_id"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "C (friend), S (subscriber) and D (admin), each with an approved trust to B, posting a subscription or permission callback under A's id: 403; nothing applied."
+reason = [
+  "2026-11-07 first recording (peer-authorisation-fixes:1)",
+  "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
+]
+
+[rows."WA6"]
+test = "test_wire_access.py::test_wa6_the_subscribers_creator"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "B's creator posting a subscription or permission callback: 403 (the peer branches admit only the peer they name)."
+reason = [
+  "2026-11-07 first recording (peer-authorisation-fixes:1)",
+  "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
+]
+
+[rows."WA7"]
+test = "test_wire_access.py::test_wa7_unapproved_peer"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "E, whose trust B has not approved, posting under its own id: 403 for both callbacks."
+reason = [
+  "2026-11-07 first recording (peer-authorisation-fixes:1)",
+  "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
+]
+
+[rows."WA8"]
+test = "test_wire_access.py::test_wa8_fetch_goes_to_the_stored_base_uri"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "A low-granularity callback whose body url names wire_other_app: B fetches the diff from A's stored base URI with its bearer and acknowledges it; wire_other_app receives nothing."
+reason = [
+  "2026-11-07 first recording (peer-authorisation-fixes:1)",
+  "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
+]
+
+[rows."WA9"]
+test = "test_wire_access.py::test_wa9_delete_the_subscription_callback"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "DELETE /<B>/callbacks/subscriptions/<A>/<subid> by C and by B's creator: 403; B keeps its subscription."
+reason = [
+  "2026-11-07 first recording (peer-authorisation-fixes:1)",
+  "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
+]
+
+[rows."WA10"]
+test = "test_wire_access.py::test_wa10_subscriber_posts_to_its_publisher"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "B, with its bearer, posting a callback to A under the id of its own subscription at A (A's row, callback false): 403; A holds nothing of B."
+reason = [
+  "2026-11-07 first recording (peer-authorisation-fixes:1)",
+  "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
+]
+
+[rows."WA11"]
+test = "test_wire_access.py::test_wa11_generic_and_reserved_names"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "A peer's GET, POST and DELETE: wire_ping runs its hook (200); an unhandled name answers 200 as before; permissions, subscription, www and resource_x answer 403 with no hook; a bare subscriptions answers 403 on GET and 400 on POST and DELETE (the subscription branch with its ids missing)."
+reason = [
+  "2026-11-07 first recording (peer-authorisation-fixes:1)",
+  "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
+]
+
+[rows."WA15"]
+test = "test_wire_access.py::test_wa15_callback_type"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "A's bearer, a subscription callback of type permission and of an unknown type: 400; nothing applied, B's sequence unchanged, no hook."
+reason = [
+  "2026-11-07 first recording (peer-authorisation-fixes:1)",
+  "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
+]
+
+[rows."WA17"]
+test = "test_wire_access.py::test_wa17_permission_timestamp"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "A's bearer, a permission callback a day ahead answers 400 (more than the allowed skew ahead; nothing stored), then a current one applies (excluded second); the stored fetched_at is never in the future."
+reason = [
+  "2026-11-07 first recording (peer-authorisation-fixes:1)",
+  "2026-11-07 the clamp replaced by a skew window and 400, owner decision on the Phase 1 review (peer-authorisation-fixes:1)",
+  "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
+]
+
+# ---------------------------------------------------------------------------
+# peer-authorisation-fixes, Phase 2: /subscriptions, /permissions and
+# /trust/<type>/<id> for the peer they name (recorded with the fix)
+# ---------------------------------------------------------------------------
+
+[rows."WA12"]
+test = "test_wire_access.py::test_wa12_another_peers_subscriptions"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "C (friend of A) lists, reads, consumes, clears and deletes B's subscription at A: 403 each; B's queue and subscription unchanged."
+reason = [
+  "2026-11-07 first recording (peer-authorisation-fixes:2)",
+  "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
+]
+
+[rows."WA13"]
+test = "test_wire_access.py::test_wa13_subscribe_under_another_peers_id"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "C creating a subscription at A under B's id: 403, as before the fix."
+reason = [
+  "2026-11-07 first recording (peer-authorisation-fixes:2)",
+  "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
+]
+
+[rows."WA14"]
+test = "test_wire_access.py::test_wa14_permission_query"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "GET /permissions/<peer> at A: B (friend), associate, partner, subscriber and admin peers each read their own (200); C reading B's 403; A's creator and an admin peer read B's (200); an unknown id the same 403 as another peer's."
+reason = [
+  "2026-11-07 first recording (peer-authorisation-fixes:2)",
+  "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
+]
+
+[rows."WA16"]
+test = "test_wire_access.py::test_wa16_application_trust_row"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "S, of the consumer's subscriber type (an application GET row on trust/<type>/<id>), reading B's trust row and its permissions at A: 403 each; its own: 200."
+reason = [
+  "2026-11-07 first recording (peer-authorisation-fixes:2)",
+  "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
+]
+
+[rows."WA18"]
+test = "test_wire_access.py::test_wa18_subscription_root_query"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "C listing A's subscriptions with ?peerid=<B>, and with no query: 403 (no built-in row admits a friend on the root; with one, a peer sees only its own rows, unit tests)."
+reason = [
+  "2026-11-07 first recording (peer-authorisation-fixes:2)",
+  "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
+]
+
+# ---------------------------------------------------------------------------
+# peer-authorisation-fixes, Phase 3: a trust request for a peer that already
+# has a row (recorded with the fix; the pre-fix runs are in the verification)
+# ---------------------------------------------------------------------------
+
+[rows."WT1"]
+test = "test_wire_trust.py::test_wt1_re_pair"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "B re-initiates through the SDK: its request carries the current secret as bearer, A answers 201 from its stored approval and swaps the secret only (approved, relationship and base URI kept, no trust_request_received), B stores the new secret; A's next callback carries it."
+reason = [
+  "2026-11-08 first recording (peer-authorisation-fixes:3)",
+  "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
+]
+
+[rows."WT2"]
+test = "test_wire_trust.py::test_wt2_request_naming_another_host"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "A creation request for B's id with no credentials and wire_other_app as its base URI: 403; A's row unchanged; nothing reaches wire_other_app or B."
+reason = [
+  "2026-11-08 first recording (peer-authorisation-fixes:3)",
+  "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
+]
+
+[rows."WT3"]
+test = "test_wire_trust.py::test_wt3_new_peer"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "A new peer N asks A for a trust: the verification GET to N with the new secret, then A's GET of N's /meta (its id must be N), 202, trust_request_received."
+reason = [
+  "2026-11-08 first recording (peer-authorisation-fixes:3)",
+  "2026-11-08 the receiver binds the claimed id to the base URI through /meta (verification Issue 4) (peer-authorisation-fixes:3)",
+  "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
+  "2026-11-09 the 202 answer to a request that waits carries no secret or verification_token (reverify-8 Issue 7, iteration 73) (peer-authorisation-fixes:3)",
+]
+
+[rows."WT4"]
+test = "test_wire_trust.py::test_wt4_re_pair_with_another_relationship"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "B re-initiates asking for admin: B refuses it itself (the trust is friend: delete and pair again) and sends A nothing; both rows unchanged; B's subscription intact. The receiver's own 403 for a different relationship is the unit tests'."
+reason = [
+  "2026-11-08 first recording (peer-authorisation-fixes:3)",
+  "2026-11-08 the initiator refuses a different relationship before sending (outside voice on Phase 3) (peer-authorisation-fixes:3)",
+  "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
+]
+
+[rows."WT5"]
+test = "test_wire_trust.py::test_wt5_local_delete"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "DELETE /trust/friend/<B>?notify=false: by B's bearer 403 (the creator's); by A's creator 204, A's row and subscription gone, trust_deleted ran, B contacted by nothing."
+reason = [
+  "2026-11-08 first recording (peer-authorisation-fixes:3)",
+  "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
+]

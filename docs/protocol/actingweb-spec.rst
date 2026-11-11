@@ -1158,6 +1158,17 @@ return 401 Authentication required, regardless of the callback URI
 exists or not. Requests for non-existent /callbacks URIs with
 authentication data SHOULD always return 403 Forbidden.
 
+.. note::
+
+   The ActingWeb library (3.16 and later) authenticates every /callbacks
+   request: one without credentials answers 401, including an anonymous
+   POST from a non-ActingWeb application. The callbacks the protocol defines
+   for a peer, ``/callbacks/subscriptions/<peerid>/…`` and
+   ``/callbacks/permissions/<peerid>``, MUST be accepted only from the peer
+   the path names, authenticated with that trust's secret; anyone else,
+   the actor's creator included, receives 403. A callback for a
+   subscription the actor did not make answers 403.
+
 Differentiating between various types of callbacks and authentication
 SHOULD be done be adding a path to callbacks/, e.g.
 callbacks/{callback\_type}.
@@ -1205,6 +1216,10 @@ The exposure of resources MUST follow the following rules:
    where the path identifies the part of the resource that the request
    targets
 -  GET requests MUST not change state
+
+
+   (The ActingWeb library's ``GET /subscriptions/<peerid>/<subid>/<seq>``
+   still clears the diff it returns; changing that is planned separately.)
 -  Any http method MAY be supported
 -  Non-GET/POST methods MAY be implemented using POST with the form
    variable \_method set to the real method requested
@@ -1576,6 +1591,31 @@ the URL of the newly created relationship MUST be returned in the
 Location header in the response. The URL MUST be formatted the following
 way: /<baseuri-with-actor-id>/trust/<trustlevel>/<requesting-actor-id>.
 
+If actor B already holds a verified or approved relationship with the
+requesting actor, the request MUST NOT replace it. B MUST accept it only as
+a re-pair from the requesting actor itself, authenticated with the current
+shared secret as bearer token, and then only replace the secret (an
+implementation SHOULD make the replacement conditional on the relationship
+still holding the secret the request authenticated with); the relationship, its
+approval and the base URI stay, and the response follows the stored
+approval (201 or 202). Otherwise B MUST answer 403 Forbidden and change
+nothing. B MUST treat a new relationship as verified only when the
+verification succeeds and the requesting actor's base URI serves its claimed
+id (its ``/meta`` ``id``). (A relationship B stored without verifying it, and has not
+approved, MAY be replaced by a request that verifies, and is not re-paired.)
+B MUST NOT approve a relationship automatically unless it verified. B MAY
+also refuse a manual approval of a relationship it has not verified, after
+repeating the verification (a request filed under another actor's id, with
+that actor's base URI, holds a secret only its requester knows, which the
+real actor's host does not answer to). Until B approves a relationship, B
+SHOULD grant the requesting actor no access beyond the relationship's own
+URL (its status and its deletion; never its verification token), unless the
+relationship type is one B allows unapproved (see the associate
+relationship). A verification proves that
+the requesting actor controls its base URI, not that it is the actor whose
+id it claims: actor ids are self-asserted, and the requesting actor answers
+its own ``/meta``.
+
 If the requested actor wants to do a verification of the requesting
 actor, it MUST use baseuri, id, secret, and verify attributes to do a
 GET request to <baseuri>/trust/<trustlevel>/<requested-actor-id> using
@@ -1586,6 +1626,16 @@ secret as sent in "verify" as part of the trust relationship request, in
 the "verificationToken" attribute. If verification is not supported, the
 regular trust relationship attributes should be returned in
 application/json content.
+
+The relationship that answers a verification is the one the requesting
+actor created, approved, before it sent its request (a ``200 OK``, see
+Verification below). A MUST NOT return the verification token from a
+relationship it has not approved, and B MUST NOT treat a verification as
+successful when the answering relationship is not approved (a ``202``, or
+``approved`` false). Otherwise a third party could file a request at B
+under A's id and a second request at A under B's id with the same secret:
+each actor's verification would read the relationship the third party
+filed at the other.
 
 B will later try to notify A about an approved trust relationship at the
 reverse URI /<requestor-id>/trust/<trustlevel/<requested-actor-id>, or a
@@ -1749,6 +1799,8 @@ sending a PUT request to the relationship URI with a application/json
 body with attribute/value pairs of the attributes that are to be
 changed. Normally, only baseuri, desc, and approved are the attributes
 that can be changed.
+The owning actor is its creator (or trustee). A peer MUST NOT change the
+approval of its relationship or the permissions granted to it.
 
 **Reading Trust Relationship Data**
 
@@ -2040,6 +2092,9 @@ push mechanism.
   - Requires trust relationship between ``{actorid}`` and ``{peerid}``
   - The requesting peer must authenticate as ``{peerid}``
   - Only the peer can query their own granted permissions
+  - The actor's creator and an ``admin`` peer may also query any peer's
+    permissions; any other caller, and a query for an unknown peer, receives
+    403
 
 **Request:**
 
@@ -2860,6 +2915,11 @@ the subscribing actor can retrieve a specific diff. It is RECOMMENDED
 that the URL is composed of the subscription URL with the sequence
 number trailing at the end.
 
+The subscribing actor MUST fetch the diff under the base URI stored for
+the trust relationship (the subscription URL at the publisher with the
+sequence number appended), and MUST NOT send its credentials to a URL taken
+from the callback body.
+
 The response content on this URL MUST be similar to a GET on the
 subscription following this example:
 
@@ -2944,6 +3004,18 @@ On receiving a resync callback, the peer SHOULD:
 2. Perform a GET on the provided URL to fetch the current state
 3. Update local sequence tracking to the callback's sequence number
 4. Respond with ``204 No Content``
+
+A subscriber with no callback endpoint (it reads its diffs by polling) MAY
+find its resync as a diff: a GET on the subscription (or on the diff's own
+URL) then shows that sequence with ``"type": "resync"``, the ``url`` and an
+empty ``data`` object. The ``url`` is the subscription's target or lies
+under it. The subscriber SHOULD act on it as on a resync callback (steps 1
+to 3), discarding only the cached state the ``url`` names. Its GET happens
+after every diff in the same answer was stored, so it already reflects the
+changes they make to what the ``url`` names: the subscriber SHOULD skip
+those parts of the diffs after the marker, apply the rest as usual, and
+take the answer's highest sequence as its own. One that does not know the
+type merges ``{}``, a change that changes nothing.
 
 Permission Callback (OPTIONAL)
 ------------------------------
@@ -3060,6 +3132,12 @@ On receiving a permission callback, the receiver SHOULD:
 3. Trigger any application-specific reactions (e.g., sync newly-granted data)
 4. Clean up local data for revoked permissions (OPTIONAL)
 5. Respond with ``204 No Content``
+
+A receiver that cannot store the callback for a transient reason (a
+concurrent update it lost, a storage fault, a failed cleanup of data the
+callback revokes) MAY answer ``503`` with
+``Retry-After``; the sender SHOULD then resend the same body, timestamp
+included, a bounded number of times.
 
 **Timestamp-Based Ordering**
 

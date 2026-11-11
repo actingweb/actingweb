@@ -11,6 +11,8 @@ References:
 
 from typing import Any
 
+import pytest
+
 
 class TestTrustPermissionsPatternMatching:
     """Test pattern matching with wildcards."""
@@ -687,3 +689,110 @@ class TestTrustPermissionStoreAsyncNotifications:
 
             assert result is True
             mock_notify.assert_not_called()
+
+
+class TestThePermissionSenderResendsA503:
+    """Verification reverify-2, Issue 1: a receiver answers 503 when it
+    cannot store a callback for now; the sender resends the same body (its
+    timestamp orders it), a bounded number of times."""
+
+    BODY = {"type": "permission", "timestamp": "2026-11-08T12:00:00+00:00"}
+
+    def _store(self) -> Any:
+        from unittest.mock import Mock
+
+        from actingweb.trust_permissions import TrustPermissionStore
+
+        config = Mock()
+        config.notify_peer_on_change = True
+        config.database = "dynamodb"
+        return TrustPermissionStore(config)
+
+    def _permissions(self) -> Any:
+        from actingweb.trust_permissions import TrustPermissions
+
+        return TrustPermissions(actor_id="a", peer_id="p", trust_type="friend")
+
+    def test_the_sync_sender_resends_the_same_body(self) -> None:
+        from unittest.mock import patch
+
+        store = self._store()
+        codes = iter([503, 204])
+        with (
+            patch("actingweb.aw_proxy.AwProxy") as proxy_class,
+            patch.object(store, "_build_callback_data", return_value=dict(self.BODY)),
+            patch("actingweb.trust_permissions.time.sleep") as sleep,
+        ):
+            proxy = proxy_class.return_value
+            proxy.trust = {"baseuri": "https://p.example.test/p"}
+
+            def answer(**_kwargs: Any) -> dict[str, Any]:
+                proxy.last_response_code = next(codes)
+                return {}
+
+            proxy.create_resource.side_effect = answer
+            store._notify_peer(self._permissions())  # noqa: SLF001
+        bodies = [c.kwargs["params"] for c in proxy.create_resource.call_args_list]
+        assert bodies == [self.BODY, self.BODY]
+        sleep.assert_called_once()
+
+    def test_the_sync_sender_gives_up_after_two_resends(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Reverify-3, Issue 2: the receiver's 503 has no body, which the
+        proxy returns as {}; the final failure is still a WARNING."""
+        import logging
+        from unittest.mock import patch
+
+        store = self._store()
+        with (
+            patch("actingweb.aw_proxy.AwProxy") as proxy_class,
+            patch.object(store, "_build_callback_data", return_value=dict(self.BODY)),
+            patch("actingweb.trust_permissions.time.sleep"),
+            caplog.at_level(logging.WARNING, logger="actingweb.trust_permissions"),
+        ):
+            proxy = proxy_class.return_value
+            proxy.trust = {"baseuri": "https://p.example.test/p"}
+            proxy.last_response_code = 503
+            proxy.create_resource.return_value = {}
+            store._notify_peer(self._permissions())  # noqa: SLF001
+        assert proxy.create_resource.call_count == 3
+        assert any(
+            "Failed to notify" in r.getMessage() and "status=503" in r.getMessage()
+            for r in caplog.records
+        )
+
+    async def test_the_async_sender_resends_after_retry_after(self) -> None:
+        from unittest.mock import AsyncMock, Mock, patch
+
+        store = self._store()
+        busy = Mock(status_code=503, headers={"Retry-After": "1"})
+        done = Mock(status_code=204, headers={})
+        client = AsyncMock()
+        client.post = AsyncMock(side_effect=[busy, done])
+        client.__aenter__.return_value = client
+        with (
+            patch("actingweb.trust.Trust") as trust_class,
+            patch("httpx.AsyncClient", return_value=client),
+            patch.object(store, "_build_callback_data", return_value=dict(self.BODY)),
+            patch(
+                "actingweb.trust_permissions.asyncio.sleep", new_callable=AsyncMock
+            ) as sleep,
+        ):
+            trust_class.return_value.get.return_value = {
+                "baseuri": "https://p.example.test/p",
+                "secret": "s",
+            }
+            await store._notify_peer_async(self._permissions())  # noqa: SLF001
+        bodies = [c.kwargs["json"] for c in client.post.call_args_list]
+        assert bodies == [self.BODY, self.BODY]
+        sleep.assert_awaited_once_with(1.0)
+
+    def test_retry_after_is_capped_and_defaulted(self) -> None:
+        from actingweb.trust_permissions import _retry_after
+
+        assert _retry_after("30") == 2.0
+        assert _retry_after(None) == 1.0
+        assert _retry_after("soon") == 1.0
+        assert _retry_after("nan") == 1.0
+        assert _retry_after("-3") == 0.0

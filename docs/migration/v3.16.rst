@@ -13,8 +13,9 @@ Start here
 
 3.16 closes a squat on the actor factory, makes a database fault an error
 instead of a guess, makes creator uniqueness (on by default) a guarantee the
-database enforces, and adds ``prompt`` to the SPA sign-in. Most applications need to
-check only the first three items and item 11.
+database enforces, binds every peer to its own paths, and adds ``prompt``
+to the SPA sign-in. Most applications need to check only the first three
+items, item 11 and item 18.
 
 .. warning::
 
@@ -59,9 +60,16 @@ check only the first three items and item 11.
 3. **An OAuth-only deployment should close the factory:**
    ``.with_open_factory(False)``.
 4. Code calling ``Actor.create`` or ``ActorInterface.create`` directly needs
-   nothing for new ids: the new ``auth_method`` keyword defaults to ``"app"``.
-   With a caller-supplied ``actor_id`` that is already taken, ``create`` now
-   returns ``False`` (``ActorInterface.create`` raises) instead of ``True``.
+   no new argument for new ids: the new ``auth_method`` keyword defaults to
+   ``"app"``. With a caller-supplied ``actor_id`` that is already taken,
+   ``create`` now returns ``False`` (``ActorInterface.create`` raises)
+   instead of ``True``. **A process that creates actors without
+   ``integrate_*``** (a worker, a restore or import script, a test harness
+   that builds ``Config()`` itself) must call ``check_ready()`` or run
+   against a store where ``actingweb-unique-creators enable --apply`` has
+   run, item 12 included: on a store without it, a fresh table prefix the
+   library auto-created for instance, every create raises ``DbError``
+   (see `Direct Actor.create and ActorInterface.create callers`_).
 5. MCP sign-ins now write the same actor fields as the other paths.
 6. A hook on ``actor_deleted`` or ``actor_deleted_complete`` may now see
    ``reason="replaced_at_adoption"``.
@@ -121,6 +129,15 @@ check only the first three items and item 11.
     ``actingweb-property-lookup backfill --apply``. An indexed property write
     whose lookup row cannot be written now fails with ``DbError`` (503).
     ``DbProperty`` and ``DbPropertyList`` require ``indexed_properties``.
+18. **Callbacks are authenticated, and a peer reaches only its own paths**
+    (see `Peer paths are bound to their peer`_). A ``/callbacks`` request
+    without credentials answers 401; an access row admits only the method a
+    request performs; a peer's own subscription and trust row are admitted
+    by the built-in ``owner`` rows, so a GET-only subscriber type needs no
+    new rows. A trust request for a peer that already has a
+    trust is a re-pair that must carry the current secret. After every
+    instance runs 3.16, run ``actingweb-peer-state report`` (then ``prune
+    --apply``) and restart.
 
 
 What changed and why
@@ -666,8 +683,15 @@ running without it means ``--apply``).
 
 - *DynamoDB:* the markers are reserved rows in the existing
   ``<prefix>_property_lookup_v2`` table (``#meta#backfill#<name>`` and
-  ``#meta#configured``); no new table. With auto-create off, the runtime role
-  also needs ``PutItem`` and ``BatchGetItem`` on that table. You can drop the
+  ``#meta#configured``); no new table. **The runtime role needs
+  ``BatchGetItem`` on that table** whatever the auto-create setting: the
+  startup check reads the markers with one ``BatchGetItem`` at every start,
+  and a role without it refuses to start with
+  ``PropertyLookupNotReady`` ("could not be checked"). It also needs
+  ``PutItem`` there, for the markers an empty store writes when it marks
+  itself ready. A policy that lists actions (``GetItem``, ``PutItem``,
+  ``Query``, ...) rather than granting ``dynamodb:*`` is the usual way to
+  miss ``BatchGetItem``: it was not needed before 3.16. You can drop the
   v1 ``<prefix>_property_lookup`` table and the ``property-index`` GSI on
   ``<prefix>_properties`` once the backfill is verified; nothing reads them.
 - *PostgreSQL:* a new table ``property_lookup_backfill``. Run
@@ -1244,6 +1268,171 @@ templates are); a proxy must not strip ``Sec-Fetch-Site``, ``Origin`` and
 ``Referer``, or set them to another origin; a script that relied on
 ``?_method=`` with the session cookie must send the real method; a page on
 another origin that posts the email form must send it as JSON.
+
+Peer paths are bound to their peer
+----------------------------------
+
+Before 3.16 a callback was accepted without authentication, a peer could
+reach another peer's subscriptions, permissions and trust row through any
+access row that admitted it, and a trust request for an existing peer
+replaced its trust row (see the 3.16 ``SECURITY`` entries in the changelog).
+3.16 closes each of these; what an application may need to do:
+
+**A row admits the method a request performs; a peer's own paths are the
+``owner`` rows'.** An access row now admits only the HTTP method a request
+performs: a PUT or DELETE (or a ``GET ?_method=PUT|DELETE``) is no longer
+admitted by a GET row. A peer's own subscription
+(``subscriptions/<id>/<subid>``) and its own trust row are admitted by the
+built-in ``owner`` rows, which now compare with the peer the path names, so
+a trust type whose ``acl_rules`` grant only GET on its subscription (the
+pattern ``actingweb_mcp``'s ``subscriber`` type used) needs nothing new: its
+subscribers clear their queue and are unsubscribed as before, and another
+peer's PUT or DELETE answers 403. PUT and DELETE rows an application added
+are harmless. The ``owner`` rows on subscriptions are now ``("owner",
+"subscriptions/<id>", "GET", "a")`` (a peer lists its own) and ``("owner",
+"subscriptions/<id>/<subid>", "GET,PUT,DELETE", "a")``: they never admit
+creating a subscription, which stays with the relationship's own rows. An
+application that reads ``config.access`` for the old ``("owner",
+"subscriptions", "", "a")`` row finds the new ones. Through the ``owner``
+rows a peer also reads its own trust's permissions and may ``PUT`` its own
+trust row (description, and a base URI whose ``/meta`` names it, 400
+otherwise; approval and permissions stay the owner's). What a peer polls of
+a ``properties`` subscription is filtered by its property permissions, as
+its callbacks are; a change it may not read polls as ``{}``.
+
+**Unapproved peers get nothing, and only a verified request is approved.**
+A trust row this actor has not approved is granted nothing by the
+permission evaluator (properties, methods, actions, MCP); it reaches only
+its own trust row. An owner's approval (``PUT /trust/<rel>/<peer>``, the web
+UI, ``TrustManager.approve_relationship``, ``modify_trust_and_notify``,
+``TrustManager.modify_trust``) lands only on a verified row: approving an
+unverified request repeats its verification and answers 403 when that
+fails (a JSON ``error``; the web UI's trust page marks such a request
+"unverified" and offers no Approve). Approving a row that is already
+approved changes nothing and needs no verification, so rows approved
+before 3.16 without one keep working. A PUT for a missing row answers 404,
+and one that approves a pending row and moves its base URI answers 400 (two
+requests). A peer id with no trust row is granted nothing, whatever
+permission override exists for it. An application that relied on
+unapproved peers reading data approves them; to pair with a peer that does
+not support verification, the owner creates the trust toward the peer's
+URL. A re-pair applies only to a verified or approved row.
+
+**A verification is answered by an approved relationship.** A trust
+request verifies only when the requester answers with its token from the
+relationship it created, approved, before sending the request; every
+released library creates it so. A pending row's own peer reads its status
+(202) without its verification token. A third party could otherwise file a
+request at each of two actors under the other's id with one secret, and
+each verification read the row filed at the other.
+
+**Creating a trust toward a peer whose request waits.** A verified pending
+request is approved (the peer is told and ``trust_fully_approved_local``
+runs, not ``trust_initiated``, from ``POST /trust``, the web form and
+``TrustManager``); a pending request that never verified, for the same
+relationship at the same URL, is verified again first and approved if that
+passes; any other is replaced by the owner's own request, with the owner's
+secret.
+
+**Callbacks are authenticated.** Every ``/callbacks`` request without
+credentials answers 401 with a challenge. The two library branches,
+``/callbacks/subscriptions/<peer>/<subid>`` and
+``/callbacks/permissions/<peer>``, admit only the peer they name (403 for
+anyone else, the actor's creator and an ``admin`` peer included). Only
+``diff`` and ``resync`` callbacks are accepted on the subscription branch
+(400). A low-granularity diff is fetched from the trust's stored base URI,
+never from the callback's ``url``; ``FanOutManager`` therefore no longer
+downgrades a large payload to a resource URL, it sends it in full and logs
+a WARNING above ``max_payload_for_high_granularity``. A permission callback's timestamp may be at most five minutes
+ahead of the receiver's clock (400 beyond, and for one that does not
+parse): check the sender's clock if you see ``Refused a permission
+callback``. A stored permission copy is written conditionally on the row
+read, by a callback and by a permission query alike; a callback that keeps
+losing to concurrent writers, or meets a storage fault, answers 503 with
+``Retry-After``, and the
+library's sender resends a 503 up to twice with the same body (a sender of
+your own should do the same). ``PeerPermissionStore.store_permissions``
+compares ``fetched_at`` with the stored row, not the process's cache, and
+raises ``DbError`` on a fault; a failed permission query no longer
+replaces a stored copy. On the generic branch, ``/callbacks/<name>``, any authenticated
+caller reaches the application's hook as before, except for the library's
+own names (``permissions``, ``subscription``, ``subscriptions``, ``www``,
+``resource_*``), which answer 403: only a direct request to such a name is
+affected, not the library's own dispatch. A third party that called
+``/callbacks/<name>`` anonymously (a webhook) now receives 401. A peer
+trustee's Basic retry after a refused bearer cannot succeed on the two peer
+branches.
+
+**Peers reach only their own rows.** ``/subscriptions/<peer>/…``,
+``/permissions/<peer>`` and ``/trust/<type>/<peer>`` admit a peer only when
+the path names it, whichever row admitted it (application ``acl_rules``
+included); an ``admin`` peer is exempt there. ``GET /permissions/<peer>``
+answers the same 403 for an unknown id and another peer's. ``GET
+/subscriptions?peerid=`` and the root listing show a peer its own rows; a
+peer view's and a client view's subscription listings show the accessor's
+own. A peer on its own trust row (where an application row admits it) can no
+longer approve the row or write its own permissions. The per-peer trust
+``GET`` no longer returns another peer's ``secret`` to an ``admin`` peer,
+and no peer changes another peer's base URI. An ``admin`` peer may still
+delete any peer's trust row and then request a new one under that peer's
+id; grant ``admin`` only to a peer you trust as much as the owner.
+
+**Re-pairing.** A trust request (``POST /<actor>/trust/<relationship>``)
+for a peer that already has a trust row is a re-pair: it is accepted only
+with the trust's current secret as its bearer, and then only the secret
+changes (the relationship, approval, base URI and grants stay, and no
+``trust_request_received`` hook runs). The library's initiator
+(``create_relationship``, ``create_reciprocal_trust``) does this itself for
+a peer it already trusts, and only toward the stored base URI. Everything
+else answers 403 and changes nothing:
+
+- **A peer that moved:** the owner updates the stored base URI
+  (``PUT /<actor>/trust/<relationship>/<peer>`` with ``{"baseuri": ...}``,
+  as creator or trustee); the peer then re-pairs, or simply carries on.
+- **A different relationship:** delete the trust and pair again.
+- **A dead peer:** the creator removes the row locally, without contacting
+  the peer: ``DELETE /<actor>/trust/<relationship>/<peer>?notify=false``.
+- **One side removed its row locally** (``?notify=false`` or ``?peer=true``)
+  and the other kept its own: the side without a row cannot prove the old
+  secret, so the other side's owner removes its row with ``?notify=false``
+  first, then they pair again.
+- **A development tunnel whose address changes on every start** is a moved
+  peer each time: give it a fixed domain, or delete and pair again.
+
+A creation request is verified only when the requester returns its token
+and its base URI's ``/meta`` names the peer id it claims. That catches a
+peer sending the wrong base URI; it does not prove the id, since the
+requester answers both, and actor ids are self-asserted. **With
+auto-accept** (``auto_accept_default_relationship``) only a request that
+verified is approved; any other is stored pending and answered 202, where
+3.15 answered 201. A pending trust row, one stored unverified (a request
+whose verification failed) and not yet approved by the owner, is replaced
+by a later request that verifies; its custom permissions are not kept. An
+approved row is the owner's, and only a re-pair with its secret changes it:
+a host that verified under another actor's id blocks the real peer until
+the owner removes the row (``?notify=false``). Where that matters, leave
+auto-accept off so the owner approves each request. The per-peer trust
+``GET`` now answers the row's own peer while the row is pending (202 with
+the row), where it answered 403; an initiator uses it to confirm a re-pair
+whose answer was lost. Trust rows replaced before 3.16 cannot be told
+apart from legitimate ones; a deployment that suspects one deletes the
+trust and pairs again, which also rotates its secret.
+
+**Remove what was written before.** After every instance runs 3.16, in a
+quiet period:
+
+.. code-block:: bash
+
+    actingweb-peer-state report          # what is stale
+    actingweb-peer-state prune --apply   # remove it
+    # A deployment that may have received forged permission copies for
+    # peers it trusts also drops every copy; each is rebuilt at once by a
+    # permission query to its peer ("rebuilt" / "not rebuilt"):
+    actingweb-peer-state prune --all-permissions --apply
+
+then restart the application's processes (they keep permissions they cached
+until restarted). See :doc:`../guides/database-maintenance` ("Peer State
+Written Before 3.16").
 
 What stays the same
 ===================

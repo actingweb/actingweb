@@ -1,6 +1,8 @@
+import dataclasses
 import json
 import logging
 from collections.abc import Callable
+from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
 from actingweb import auth
@@ -18,6 +20,43 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+# Callback names the library dispatches itself. On the generic branch
+# (``/callbacks/<name>``) they answer 403, so the hooks registered under them
+# only ever receive data the library built.
+RESERVED_CALLBACK_NAMES = frozenset(
+    {"permissions", "subscription", "subscriptions", "www"}
+)
+
+# How far ahead of the receiver's clock a permission callback's timestamp may
+# be: ordinary clock skew. Further ahead answers 400.
+PERMISSION_TIMESTAMP_SKEW = timedelta(minutes=5)
+# How often a permission callback reads and tries its conditional write
+# again when concurrent callbacks from the same peer keep winning.
+PERMISSION_STORE_ATTEMPTS = 5
+
+# The callback types the subscription path accepts; an absent type is a diff.
+ACCEPTED_SUBSCRIPTION_CALLBACK_TYPES = frozenset({"diff", "resync"})
+
+
+def is_reserved_callback_name(name: str) -> bool:
+    """Whether ``name`` (its first path segment) is one of the library's own
+    callback hook names: ``RESERVED_CALLBACK_NAMES`` or any ``resource_*``."""
+    first = (name or "").split("/", 1)[0].lower()
+    return first in RESERVED_CALLBACK_NAMES or first.startswith("resource_")
+
+
+def low_granularity_fetch_url(
+    baseuri: str, own_id: str, subscription_id: str, sequence: int
+) -> str:
+    """The diff a low-granularity callback announces, under the publisher's
+    stored base URI: ``<baseuri>/subscriptions/<own id>/<subid>/<sequence>``.
+
+    The callback body's ``url`` is never fetched: the receiver sends the
+    trust's secret with the fetch, so the host it goes to must be the one the
+    trust was made with."""
+    return f"{baseuri.rstrip('/')}/subscriptions/{own_id}/{subscription_id}/{sequence}"
+
+
 def _has_wildcard(pattern: str) -> bool:
     """Whether a pattern must go through the glob matcher rather than be
     read as one exact name: it holds an unescaped wildcard, or a backslash
@@ -25,7 +64,78 @@ def _has_wildcard(pattern: str) -> bool:
     return glob_has_wildcard(pattern) or "\\" in pattern
 
 
+def _still_granted(permissions: Any, patterns: list[str]) -> list[str]:
+    """The ``patterns`` that ``permissions`` (a stored copy, or None) still
+    grants, compared as ``detect_permission_changes`` compares them: by the
+    property patterns it lists."""
+    if not patterns or permissions is None:
+        return []
+    granted = set((getattr(permissions, "properties", None) or {}).get("patterns", []))
+    return list(dict.fromkeys(p for p in patterns if p in granted))
+
+
 class CallbacksHandler(base_handler.BaseHandler):
+    """``/<actor>/callbacks/<name>``.
+
+    Every request is authenticated (401 with a challenge when it carries no
+    credentials). The two peer branches, ``subscriptions/<peer>/<subid>`` and
+    ``permissions/<peer>``, admit only the peer they name (403 for anyone
+    else, the creator and an ``admin`` peer included). The generic branch
+    admits any authenticated caller to the application's callback hook,
+    except for the library's own hook names (``is_reserved_callback_name``),
+    which answer 403.
+    """
+
+    def _authenticate_callback(
+        self, actor_id: str, name: str
+    ) -> "base_handler.AuthResult | None":
+        """Authenticate a callback request; answer and return None on failure.
+
+        A request without an ``Authorization`` header answers 401 with a
+        challenge, whatever else it carries (a web UI session cookie that
+        would redirect to a login, or fail, included: a callback is never a
+        browser navigation); credentials that match nobody answer 403; an
+        unknown actor 404."""
+        auth_result = self._authenticate_dual_context(
+            actor_id, "callbacks", "callbacks", name, add_response=False
+        )
+        if not auth_result.actor or not auth_result.auth_obj:
+            if self.response:
+                self.response.set_status(404, "Actor not found")
+            return None
+        auth_obj = auth_result.auth_obj
+        code = auth_obj.response["code"]
+        if code == 200 and auth_obj.acl["authenticated"]:
+            return auth_result
+        headers = getattr(self.request, "headers", None) or {}
+        if code in (200, 302) or "Authorization" not in headers:
+            auth_obj.response["code"] = 401
+            auth_obj.response["text"] = "Authentication required"
+            auth_obj.response["headers"]["WWW-Authenticate"] = (
+                f'Basic realm="{getattr(self.config, "auth_realm", "")}"'
+            )
+        auth.add_auth_response(appreq=self, auth_obj=auth_obj)
+        return None
+
+    def _refuse_reserved_name(self, name: str) -> bool:
+        """Answer 403 for a library hook name on the generic branch."""
+        if not is_reserved_callback_name(name):
+            return False
+        logger.debug(f"Refused callback to the reserved name {name!r}")
+        if self.response:
+            self.response.set_status(403, "Forbidden")
+        return True
+
+    def _peer_segments(self, path: list[str], count: int) -> list[str] | None:
+        """The ``count`` segments after the branch name, all non-empty, or
+        None after answering 400."""
+        segments = path[1 : 1 + count]
+        if len(segments) < count or not all(segments):
+            if self.response:
+                self.response.set_status(400, "Missing peer or subscription id")
+            return None
+        return segments
+
     def get(self, actor_id, name):
         """Handles GETs to callbacks"""
         # A GET with a _method override changes state: refuse one a
@@ -38,20 +148,12 @@ class CallbacksHandler(base_handler.BaseHandler):
         if self.request.get("_method") == "POST":
             self.post(actor_id, name)
             return
-        auth_result = self._authenticate_dual_context(
-            actor_id, "callbacks", "callbacks", name, add_response=False
-        )
-        if (
-            not auth_result.actor
-            or not auth_result.auth_obj
-            or (
-                auth_result.auth_obj.response["code"] != 200
-                and auth_result.auth_obj.response["code"] != 401
-            )
-        ):
-            auth.add_auth_response(appreq=self, auth_obj=auth_result.auth_obj)
+        auth_result = self._authenticate_callback(actor_id, name)
+        if auth_result is None:
             return
         myself = auth_result.actor
+        if self._refuse_reserved_name(name):
+            return
         if not auth_result.authorize("GET", "callbacks", name):
             return
         # Execute callback hook for GET
@@ -72,27 +174,30 @@ class CallbacksHandler(base_handler.BaseHandler):
             self.response.set_status(403, "Forbidden")
 
     def put(self, actor_id, name):
-        """PUT requests are handled as POST for callbacks"""
-        self.post(actor_id, name)
+        """PUT requests are handled like POST, but authorised as PUT: an
+        access row admits the method a request performs."""
+        self.post(actor_id, name, method="PUT")
 
     def delete(self, actor_id, name):
         """Handles deletion of callbacks, like subscriptions"""
-        auth_result = self._authenticate_dual_context(
-            actor_id, "callbacks", "callbacks", name
-        )
-        if not auth_result.success:
+        auth_result = self._authenticate_callback(actor_id, name)
+        if auth_result is None:
             return
         myself = auth_result.actor
         check = auth_result.auth_obj
         path = name.split("/")
         if path[0] == "subscriptions":
-            peerid = path[1]
-            subid = path[2]
+            segments = self._peer_segments(path, 2)
+            if segments is None:
+                return
+            peerid, subid = segments
             if not check.check_authorisation(
                 path="callbacks",
                 subpath="subscriptions",
                 method="DELETE",
                 peerid=peerid,
+                path_peer=peerid,
+                peer_caller_only=True,
             ):
                 if self.response:
                     self.response.set_status(403, "Forbidden")
@@ -110,11 +215,14 @@ class CallbacksHandler(base_handler.BaseHandler):
             if self.hooks:
                 from ..subscription import Subscription
 
+                # The publisher ends our subscription to it: the row is the
+                # one we made (callback=True), the one delete_callback_
+                # subscription removes.
                 sub_obj = Subscription(
                     actor_id=actor_id,
                     peerid=peerid,
                     subid=subid,
-                    callback=False,  # Callback subscription is inbound (callback=False)
+                    callback=True,
                     config=myself.config,
                 )
                 sub_data = sub_obj.subscription if sub_obj.subscription else {}
@@ -123,7 +231,8 @@ class CallbacksHandler(base_handler.BaseHandler):
                 peer_id=peerid, subscription_id=subid
             ):
                 # Execute lifecycle hook after successful deletion
-                # This is a peer-initiated deletion (they're deleting their subscription to us)
+                # A peer-initiated deletion: the publisher ended our
+                # subscription to it
                 if self.hooks and peerid:
                     try:
                         logger.info(
@@ -150,6 +259,8 @@ class CallbacksHandler(base_handler.BaseHandler):
                 return
             self.response.set_status(404, "Not found")
             return
+        if self._refuse_reserved_name(name):
+            return
         if not check.check_authorisation(
             path="callbacks", subpath=name, method="DELETE"
         ):
@@ -173,35 +284,38 @@ class CallbacksHandler(base_handler.BaseHandler):
         else:
             self.response.set_status(403, "Forbidden")
 
-    def post(self, actor_id, name):
-        """Handles POST callbacks"""
-        auth_result = self._authenticate_dual_context(
-            actor_id, "callbacks", "callbacks", name, add_response=False
-        )
+    def post(self, actor_id: str, name: str, method: str = "POST") -> None:
+        """Handles POST callbacks (and PUT, authorised as ``method``)"""
+        auth_result = self._authenticate_callback(actor_id, name)
+        if auth_result is None:
+            return
         myself = auth_result.actor
         check = auth_result.auth_obj
-        # Allow unauthenticated requests to /callbacks/subscriptions and
-        # /callbacks/permissions, so do the auth check further below
         path = name.split("/")
 
         # Handle permission callbacks: /callbacks/permissions/{granting_actor_id}
         if path[0] == "permissions" and len(path) >= 2:
-            granting_actor_id = path[1]
-
-            actor_interface = self._get_actor_interface(myself) if myself else None
-            if not actor_interface:
-                self.response.set_status(404, "Not found")
+            segments = self._peer_segments(path, 1)
+            if segments is None:
                 return
+            granting_actor_id = segments[0]
 
-            # Verify trust relationship exists with granting actor
-            if not check or not check.check_authorisation(
+            # Only the granting peer itself, before anything is read.
+            if not check.check_authorisation(
                 path="callbacks",
                 subpath="permissions",
-                method="POST",
+                method=method,
                 peerid=granting_actor_id,
+                path_peer=granting_actor_id,
+                peer_caller_only=True,
             ):
                 if self.response:
                     self.response.set_status(403, "Forbidden")
+                return
+
+            actor_interface = self._get_actor_interface(myself)
+            if not actor_interface:
+                self.response.set_status(404, "Not found")
                 return
 
             # Parse request body
@@ -217,21 +331,34 @@ class CallbacksHandler(base_handler.BaseHandler):
             except (TypeError, ValueError, KeyError):
                 self.response.set_status(400, "Error in json body")
                 return
+            if not isinstance(params, dict) or not isinstance(
+                params.get("data", {}), dict
+            ):
+                self.response.set_status(400, "Error in json body")
+                return
 
             # Store permissions in PeerPermissionStore
             permission_changes: dict = {}
+            success = False
             try:
                 from datetime import UTC, datetime
 
                 from actingweb.peer_permissions import (
+                    SENDER_TIMESTAMP_KEY,
                     PeerPermissions,
+                    _parsed_time,
                     detect_permission_changes,
                     get_peer_permission_store,
                     normalize_property_permission,
                 )
 
                 perm_data = params.get("data", {})
-                timestamp = params.get("timestamp", datetime.now(UTC).isoformat())
+                timestamp, refusal = self._accepted_permission_timestamp(
+                    params.get("timestamp"), granting_actor_id
+                )
+                if timestamp is None:
+                    self.response.set_status(400, refusal)
+                    return
 
                 peer_perms = PeerPermissions(
                     actor_id=actor_id,
@@ -244,34 +371,131 @@ class CallbacksHandler(base_handler.BaseHandler):
                     tools=perm_data.get("tools"),
                     resources=perm_data.get("resources"),
                     prompts=perm_data.get("prompts"),
-                    fetched_at=timestamp,
+                    # This receiver's clock, as a copy fetched by query has:
+                    # the store orders every copy by it.
+                    fetched_at=datetime.now(UTC).isoformat(),
+                    # The sender's own timestamp orders its callbacks among
+                    # themselves (its clock, compared only with itself).
+                    extra_attributes=(
+                        {SENDER_TIMESTAMP_KEY: timestamp}
+                        if params.get("timestamp") is not None
+                        else {}
+                    ),
                 )
 
                 store = get_peer_permission_store(myself.config)
+                current = peer_perms.extra_attributes.get(SENDER_TIMESTAMP_KEY)
 
-                # Get old permissions before storing new ones (for comparison)
-                old_permissions = store.get_permissions(actor_id, granting_actor_id)
-
-                # Detect what changed
-                permission_changes = detect_permission_changes(
-                    old_permissions, peer_perms
-                )
-
-                # Delete the revoked peer data first, strictly, then store the
-                # new permissions: a fault answers 503 with the old
-                # permissions still stored, so the retried callback sees the
-                # revocation again and finishes the deletion.
-                if permission_changes.get("has_revocations") and getattr(
-                    myself.config, "auto_delete_on_revocation", False
-                ):
-                    self._delete_revoked_peer_data(
-                        actor_interface,
-                        granting_actor_id,
-                        permission_changes.get("revoked_patterns", []),
+                # Read, decide, delete, then store only if the row is still
+                # the one read: two callbacks handled at once (a grant and its
+                # revocation, say) never both win, and the loser decides again
+                # against the winner's row. What a losing attempt deleted and
+                # the copy finally stored still grants is fetched again from
+                # the granting peer (best effort; a failure is logged).
+                deleted: list[str] = []
+                for _attempt in range(PERMISSION_STORE_ATTEMPTS):
+                    expected, old_permissions = store.read_stored_permissions(
+                        actor_id, granting_actor_id
                     )
 
-                # Store new permissions
-                success = store.store_permissions(peer_perms)
+                    # A callback older, by the sender's clock, than the
+                    # sender's last stored callback changes nothing: no
+                    # deletion of revoked data, no sync, no hook. Only
+                    # callbacks are compared, each by its sender's own clock
+                    # (a copy fetched by query keeps the last callback's), so
+                    # a slow sender's next callback is never taken for older.
+                    previous = (
+                        (old_permissions.extra_attributes or {}).get(
+                            SENDER_TIMESTAMP_KEY
+                        )
+                        if old_permissions
+                        else None
+                    )
+                    if (
+                        isinstance(previous, str)
+                        and isinstance(current, str)
+                        and _parsed_time(current) < _parsed_time(previous)
+                    ):
+                        logger.info(
+                            f"Ignored a permission callback from {granting_actor_id} "
+                            f"older than its last one ({current} < {previous})"
+                        )
+                        if detect_permission_changes(old_permissions, peer_perms).get(
+                            "has_revocations"
+                        ):
+                            # Two sender instances with skewed clocks can make
+                            # a revocation look older than the grant before
+                            # it: the peer's current permissions decide.
+                            self._reconcile_with_granting_peer(
+                                myself, actor_interface, actor_id, granting_actor_id
+                            )
+                            # Restore against the copy the reconcile left.
+                            _, old_permissions = store.read_stored_permissions(
+                                actor_id, granting_actor_id
+                            )
+                        self._sync_permitted_patterns(
+                            myself,
+                            actor_interface,
+                            granting_actor_id,
+                            _still_granted(old_permissions, deleted),
+                        )
+                        self.response.set_status(204, "No Content")
+                        return
+
+                    permission_changes = detect_permission_changes(
+                        old_permissions, peer_perms
+                    )
+
+                    # Delete the revoked peer data first, strictly, then store
+                    # the new permissions: a fault answers 503 with the old
+                    # permissions still stored, so the retried callback sees
+                    # the revocation again and finishes the deletion.
+                    if permission_changes.get("has_revocations") and getattr(
+                        myself.config, "auto_delete_on_revocation", False
+                    ):
+                        revoked = permission_changes.get("revoked_patterns", [])
+                        self._delete_revoked_peer_data(
+                            actor_interface, granting_actor_id, revoked
+                        )
+                        deleted.extend(revoked)
+
+                    # A callback without a timestamp keeps the last one's, so
+                    # a later resend of an older callback stays older.
+                    to_store = peer_perms
+                    if current is None and isinstance(previous, str):
+                        to_store = dataclasses.replace(
+                            peer_perms,
+                            extra_attributes={
+                                **peer_perms.extra_attributes,
+                                SENDER_TIMESTAMP_KEY: previous,
+                            },
+                        )
+                    success = store.replace_permissions(to_store, expected)
+                    if success:
+                        break
+                else:
+                    # Concurrent writers won every time (a fault raises
+                    # DbError in replace_permissions, with the row read still
+                    # stored, so the resend repeats this revocation). The
+                    # sender resends (503) and decides again; what was deleted
+                    # and the copy now stored grants is fetched meanwhile.
+                    _, stored_now = store.read_stored_permissions(
+                        actor_id, granting_actor_id
+                    )
+                    self._sync_permitted_patterns(
+                        myself,
+                        actor_interface,
+                        granting_actor_id,
+                        _still_granted(stored_now, deleted),
+                    )
+                    logger.warning(
+                        f"A permission callback from {granting_actor_id} lost "
+                        f"{PERMISSION_STORE_ATTEMPTS} concurrent writes in a row; "
+                        "answered 503 for the sender to resend"
+                    )
+                    self.response.set_status(503, "Service Unavailable")
+                    self.response.headers["Retry-After"] = "1"
+                    return
 
                 logger.debug(
                     f"Stored permission callback from {granting_actor_id} "
@@ -279,57 +503,39 @@ class CallbacksHandler(base_handler.BaseHandler):
                     f"has_properties={peer_perms.properties is not None}"
                 )
 
-                # Auto-sync when new permissions are granted
-                # This fetches the newly accessible data immediately using
-                # incremental sync (only the newly granted properties, not full baseline)
-                subscription_config = getattr(
-                    myself.config, "_subscription_config", None
+                # Fetch what was newly granted, and what an earlier, losing
+                # attempt deleted that the stored copy grants, with an
+                # incremental sync (only those patterns).
+                to_sync = list(
+                    dict.fromkeys(
+                        [
+                            *permission_changes.get("granted_patterns", []),
+                            *_still_granted(peer_perms, deleted),
+                        ]
+                    )
                 )
-                if (
-                    permission_changes.get("granted_patterns")
-                    and subscription_config
-                    and subscription_config.enabled
-                    and subscription_config.auto_storage
-                ):
-                    granted_patterns = permission_changes["granted_patterns"]
-                    logger.info(
-                        f"Incremental sync for peer {granting_actor_id} after permissions granted: "
-                        f"{granted_patterns}"
-                    )
-                    try:
-                        self._incremental_sync_granted_properties(
-                            actor_interface=actor_interface,
-                            peer_id=granting_actor_id,
-                            granted_patterns=granted_patterns,
-                        )
-                        logger.info(
-                            f"Incremental sync completed for {granting_actor_id}: "
-                            f"{len(granted_patterns)} pattern(s) synced"
-                        )
-                    except Exception as sync_error:  # folds DbError: sync after the permissions were stored; a retried callback sees no new grant
-                        logger.error(
-                            f"Error during incremental sync for {granting_actor_id}: {sync_error}",
-                            exc_info=True,
-                        )
-                        # Don't fail the callback - sync is not critical
-                elif permission_changes.get("granted_patterns"):
-                    logger.debug(
-                        f"Skipping auto-sync for {granting_actor_id} "
-                        f"(subscription processing not enabled or auto_storage disabled)"
-                    )
+                self._sync_permitted_patterns(
+                    myself, actor_interface, granting_actor_id, to_sync
+                )
 
             except DbError:
                 raise
             except Exception as e:
+                # A 503, not a 500: the sender resends only a 503, and a
+                # failed deletion of revoked data must be retried (the
+                # permissions were not stored, so the resend sees the
+                # revocation again).
                 logger.error(f"Error storing permission callback: {e}")
-                self.response.set_status(500, "Internal error")
+                self.response.set_status(503, "Service Unavailable")
+                self.response.headers["Retry-After"] = "1"
                 return
 
-            # Execute permission callback hook for app-specific handling
-            if self.hooks:
+            # Execute permission callback hook for app-specific handling, only
+            # for an update the store accepted (an older one is ignored).
+            if self.hooks and success:
                 hook_data = params.copy()
                 hook_data["granting_actor_id"] = granting_actor_id
-                hook_data["method"] = "POST"
+                hook_data["method"] = method
                 hook_data["permission_changes"] = permission_changes
                 self.hooks.execute_callback_hooks(
                     "permissions", actor_interface, hook_data
@@ -339,15 +545,34 @@ class CallbacksHandler(base_handler.BaseHandler):
             return
 
         if path[0] == "subscriptions":
-            peerid = path[1]
-            subid = path[2]
+            segments = self._peer_segments(path, 2)
+            if segments is None:
+                return
+            peerid, subid = segments
+
+            # Only the publisher the path names, before the subscription is
+            # looked up, so another caller cannot tell a real id from an
+            # unknown one.
+            if not check.check_authorisation(
+                path="callbacks",
+                subpath="subscriptions",
+                method=method,
+                peerid=peerid,
+                path_peer=peerid,
+                peer_caller_only=True,
+            ):
+                if self.response:
+                    self.response.set_status(403, "Forbidden")
+                return
 
             # Use developer API to get callback subscription
-            actor_interface = self._get_actor_interface(myself) if myself else None
+            actor_interface = self._get_actor_interface(myself)
             if not actor_interface:
                 self.response.set_status(404, "Not found")
                 return
 
+            # Only a subscription this actor made (callback true): a peer
+            # cannot post to its publisher under its own subscription id.
             sub_info = actor_interface.subscriptions.get_callback_subscription(
                 peer_id=peerid, subscription_id=subid
             )
@@ -355,15 +580,6 @@ class CallbacksHandler(base_handler.BaseHandler):
                 # Convert to dict for hook compatibility
                 sub = sub_info.to_dict()
                 logger.debug(f"Found subscription {subid} for peer {peerid}")
-                if not check or not check.check_authorisation(
-                    path="callbacks",
-                    subpath="subscriptions",
-                    method="POST",
-                    peerid=peerid,
-                ):
-                    if self.response:
-                        self.response.set_status(403, "Forbidden")
-                    return
                 try:
                     body: str | bytes | None = self.request.body
                     if body is None:
@@ -375,6 +591,17 @@ class CallbacksHandler(base_handler.BaseHandler):
                     params = json.loads(body_str)
                 except (TypeError, ValueError, KeyError):
                     self.response.set_status(400, "Error in json body")
+                    return
+                if not isinstance(params, dict):
+                    self.response.set_status(400, "Error in json body")
+                    return
+                callback_type = params.get("type", "diff")
+                if callback_type not in ACCEPTED_SUBSCRIPTION_CALLBACK_TYPES:
+                    logger.warning(
+                        f"Refused subscription callback from {peerid} for {subid}: "
+                        f"type {callback_type!r} is not diff or resync"
+                    )
+                    self.response.set_status(400, "Unsupported callback type")
                     return
 
                 # Process subscription callback internally FIRST (if configured)
@@ -428,16 +655,11 @@ class CallbacksHandler(base_handler.BaseHandler):
                 else:
                     self.response.set_status(400, "Processing error")
                 return
-            self.response.set_status(404, "Not found")
+            self.response.set_status(403, "Forbidden")
             return
-        if (
-            not myself
-            or not check
-            or (check.response["code"] != 200 and check.response["code"] != 401)
-        ):
-            auth.add_auth_response(appreq=self, auth_obj=check)
+        if self._refuse_reserved_name(name):
             return
-        if not auth_result.authorize("POST", "callbacks", name):
+        if not auth_result.authorize(method, "callbacks", name):
             return
         # Execute callback hook for POST
         hook_result = None
@@ -457,7 +679,7 @@ class CallbacksHandler(base_handler.BaseHandler):
                 except (TypeError, ValueError, KeyError):
                     hook_data = {}
 
-                hook_data["method"] = "POST"
+                hook_data["method"] = method
                 hook_result = self.hooks.execute_callback_hooks(
                     name, actor_interface, hook_data
                 )
@@ -469,6 +691,41 @@ class CallbacksHandler(base_handler.BaseHandler):
                 self.response.write(json.dumps(hook_result))
         else:
             self.response.set_status(403, "Forbidden")
+
+    def _accepted_permission_timestamp(
+        self, value: Any, granting_actor_id: str
+    ) -> tuple[str | None, str]:
+        """The ``fetched_at`` to store for a permission callback, or None and
+        the reason it is refused (the caller answers 400).
+
+        The sender's own timestamp, in UTC, so updates keep the sender's
+        order even when they arrive out of order; absent, it is now. A
+        timestamp more than ``PERMISSION_TIMESTAMP_SKEW`` ahead of this
+        receiver's clock is refused: stored, it would make every later
+        update look older and be ignored."""
+        from datetime import UTC, datetime
+
+        now = datetime.now(UTC)
+        if value is None:
+            return now.isoformat(), ""
+        if not isinstance(value, str):
+            return None, "Invalid timestamp"
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=UTC)
+            parsed = parsed.astimezone(UTC)
+        except (ValueError, OverflowError):
+            return None, "Invalid timestamp"
+        if parsed > now + PERMISSION_TIMESTAMP_SKEW:
+            logger.warning(
+                f"Refused a permission callback from {granting_actor_id}: its "
+                f"timestamp {parsed.isoformat()} is more than "
+                f"{int(PERMISSION_TIMESTAMP_SKEW.total_seconds())} s ahead of this "
+                f"receiver's clock ({now.isoformat()}); check the sender's clock"
+            )
+            return None, "Timestamp in the future"
+        return parsed.isoformat(), ""
 
     def _process_subscription_callback_internal(
         self,
@@ -613,10 +870,26 @@ class CallbacksHandler(base_handler.BaseHandler):
                     )
                     trust_data = trust.get()
                     secret = trust_data.get("secret", "") if trust_data else ""
+                    baseuri = trust_data.get("baseuri", "") if trust_data else ""
+                    if not baseuri:
+                        logger.warning(
+                            f"Cannot fetch the low-granularity diff from {peer_id}: "
+                            "the trust has no base URI"
+                        )
+                        self._callback_retry_later = True
+                        return False
+                    # The stored base URI, never the body's url (the bearer
+                    # goes with the request).
+                    fetch_url = low_granularity_fetch_url(
+                        baseuri,
+                        actor_interface._core_actor.id or "",
+                        subscription_id,
+                        params["sequence"],
+                    )
 
                     with httpx.Client(timeout=10.0) as client:
                         response = client.get(
-                            callback_url,
+                            fetch_url,
                             headers={
                                 "Authorization": f"Bearer {secret}",
                             },
@@ -635,7 +908,9 @@ class CallbacksHandler(base_handler.BaseHandler):
                         # process nothing, so the sequence does not advance
                         # past data that was never applied.
                         logger.warning(
-                            f"Failed to fetch low-granularity data: {response.status_code}"
+                            f"Failed to fetch low-granularity data from {peer_id}'s "
+                            f"stored base URI: {response.status_code} (if the peer "
+                            "moved, update the trust's base URI)"
                         )
                         self._callback_retry_later = True
                         return False
@@ -832,9 +1107,18 @@ class CallbacksHandler(base_handler.BaseHandler):
                             path=path, params={"sequence": sequence}
                         )
                         if ack_response is None or "error" in (ack_response or {}):
-                            logger.warning(
+                            status = proxy.last_response_code
+                            log = logger.error if status == 403 else logger.warning
+                            log(
                                 f"Failed to send PUT acknowledgment to {peer_id} "
-                                f"for subscription {subscription_id} seq={sequence}"
+                                f"for subscription {subscription_id} seq={sequence}: "
+                                f"{status}"
+                                + (
+                                    " (refused: the publisher's access rows must "
+                                    "admit PUT on subscriptions/<id>/<subid>)"
+                                    if status == 403
+                                    else ""
+                                )
                             )
                         else:
                             logger.debug(
@@ -883,6 +1167,125 @@ class CallbacksHandler(base_handler.BaseHandler):
                 exc_info=True,
             )
             return False
+
+    def _reconcile_with_granting_peer(
+        self,
+        myself: Any,
+        actor_interface: "ActorInterface",
+        actor_id: str,
+        peer_id: str,
+    ) -> None:
+        """An ignored callback would have revoked part of the stored copy:
+        ask the peer for its current permissions (synchronously, before the
+        callback is answered), delete what they revoke (when
+        ``auto_delete_on_revocation`` is on), then store them, in the order
+        the callback's own path uses. A storage fault raises ``DbError`` (the
+        callback answers 503 and its resend repeats this); a newer copy stored
+        meanwhile wins, and what it still grants of the deleted data is
+        fetched again. A peer that does not answer is logged."""
+        from actingweb.peer_permissions import (
+            _parsed_time,
+            detect_permission_changes,
+            fetch_peer_permissions,
+            get_peer_permission_store,
+        )
+
+        logger.warning(
+            f"A permission callback from {peer_id} that revokes access was older "
+            "than the last one (sender clocks may differ); asking the peer for "
+            "its current permissions"
+        )
+        try:
+            fetched = fetch_peer_permissions(actor_id, peer_id, myself.config)
+        except DbError:
+            raise
+        except Exception as e:
+            logger.warning(f"Could not ask {peer_id} for its permissions: {e}")
+            return
+        if fetched.fetch_error:
+            logger.warning(
+                f"Could not ask {peer_id} for its permissions: {fetched.fetch_error}"
+            )
+            return
+        store = get_peer_permission_store(myself.config)
+        _, stored = store.read_stored_permissions(actor_id, peer_id)
+        revoked: list[str] = []
+        changes = detect_permission_changes(stored, fetched)
+        if changes.get("has_revocations") and getattr(
+            myself.config, "auto_delete_on_revocation", False
+        ):
+            revoked = list(changes.get("revoked_patterns", []))
+            self._delete_revoked_peer_data(actor_interface, peer_id, revoked)
+        if store.store_permissions(fetched):
+            return
+        _, now = store.read_stored_permissions(actor_id, peer_id)
+        try:
+            newer = bool(
+                now
+                and now.fetched_at
+                and fetched.fetched_at
+                and _parsed_time(now.fetched_at) > _parsed_time(fetched.fetched_at)
+            )
+        except (TypeError, ValueError):
+            newer = False
+        if not newer:
+            # Refused for another reason (the answer did not validate, or
+            # every attempt lost): the deletion stands, nothing is restored.
+            logger.warning(
+                f"The permissions {peer_id} answered were not stored; the "
+                "revoked data stays deleted"
+            )
+            return
+        # A newer copy was stored meanwhile: it decides, and what it still
+        # grants of the data just deleted is fetched again.
+        logger.info(
+            f"A newer permission copy for {peer_id} was stored during the "
+            "reconcile; it is kept"
+        )
+        self._sync_permitted_patterns(
+            myself, actor_interface, peer_id, _still_granted(now, revoked)
+        )
+
+    def _sync_permitted_patterns(
+        self,
+        myself: Any,
+        actor_interface: "ActorInterface",
+        peer_id: str,
+        patterns: list[str],
+    ) -> None:
+        """Fetch ``patterns`` from the granting peer (an incremental sync),
+        when subscription processing stores peer data. The peer answers by
+        its current permissions, so a pattern it no longer grants fetches
+        nothing. A failure is logged: the callback is already stored."""
+        if not patterns:
+            return
+        subscription_config = getattr(myself.config, "_subscription_config", None)
+        if not (
+            subscription_config
+            and subscription_config.enabled
+            and subscription_config.auto_storage
+        ):
+            logger.debug(
+                f"Skipping auto-sync for {peer_id} "
+                f"(subscription processing not enabled or auto_storage disabled)"
+            )
+            return
+        logger.info(f"Incremental sync for peer {peer_id}: {patterns}")
+        try:
+            self._incremental_sync_granted_properties(
+                actor_interface=actor_interface,
+                peer_id=peer_id,
+                granted_patterns=patterns,
+            )
+            logger.info(
+                f"Incremental sync completed for {peer_id}: "
+                f"{len(patterns)} pattern(s) synced"
+            )
+        except Exception as sync_error:  # folds DbError: sync after the permissions were stored; a retried callback sees no new grant
+            logger.error(
+                f"Error during incremental sync for {peer_id}: {sync_error}",
+                exc_info=True,
+            )
 
     def _incremental_sync_granted_properties(
         self,

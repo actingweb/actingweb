@@ -201,6 +201,9 @@ class PermissionEvaluator:
                 )
                 return PermissionResult.DENIED
 
+            if self._is_unapproved(actor_id, peer_id):
+                return PermissionResult.DENIED
+
             # Get the effective permissions for this trust relationship
             effective_perms = self._get_effective_permissions(actor_id, peer_id)
             if not effective_perms:
@@ -299,6 +302,10 @@ class PermissionEvaluator:
             )
 
         try:
+            if self._is_unapproved(actor_id, peer_id):
+                results.update(dict.fromkeys(clean_paths, PermissionResult.DENIED))
+                return results
+
             # Get the effective permissions once for all properties
             effective_perms = self._get_effective_permissions(actor_id, peer_id)
             if not effective_perms:
@@ -494,6 +501,8 @@ class PermissionEvaluator:
             List of allowed patterns/items
         """
         try:
+            if self._is_unapproved(actor_id, peer_id):
+                return []
             effective_perms = self._get_effective_permissions(actor_id, peer_id)
             if not effective_perms:
                 return []
@@ -526,6 +535,88 @@ class PermissionEvaluator:
                 f"Error getting allowed items for {actor_id}:{peer_id} -> {permission_type.value}: {e}"
             )
             return []
+
+    def evaluate_property_with_exclusions(
+        self,
+        actor_id: str,
+        peer_id: str,
+        property_path: str,
+        child_paths: list[str],
+        operation: str = "read",
+    ) -> tuple[PermissionResult, set[str]]:
+        """``property_path`` evaluated as ``evaluate_property_access`` does,
+        and the ``child_paths`` the peer's grant explicitly excludes (a
+        ``denied`` or ``excluded_patterns`` entry matches them, or they hold
+        a control character), from one read of the approval and the grant
+        (3.16). A child the grant merely does not name is not excluded: it is
+        part of a property the peer may read whole. A storage fault raises
+        ``DbError``; any other error denies."""
+        try:
+            if has_control_characters(property_path) or self._is_unapproved(
+                actor_id, peer_id
+            ):
+                return PermissionResult.DENIED, set(child_paths)
+            effective_perms = self._get_effective_permissions(actor_id, peer_id)
+            rules = (effective_perms or {}).get(PermissionType.PROPERTIES.value)
+            if not rules:
+                return PermissionResult.NOT_FOUND, set()
+            result = self._evaluate_rules(
+                rules, property_path, operation, suppress_logging=True
+            )
+            if result == PermissionResult.DENIED:
+                # A trace of the refusal (debug: this runs for every
+                # subscriber on every write, where a denial is routine).
+                logger.debug(
+                    f"Permission denied: {actor_id}:{peer_id} -> "
+                    f"properties:{property_path!r}:{operation}"
+                )
+            denied = list(rules.get("denied") or []) + list(
+                rules.get("excluded_patterns") or []
+            )
+            excluded = {
+                path
+                for path in child_paths
+                if has_control_characters(path)
+                or (denied and self._matches_any_pattern(path, denied))
+            }
+            return result, excluded
+        except DbError:
+            raise
+        except Exception as e:
+            logger.error(
+                f"Error evaluating {actor_id}:{peer_id} -> properties:"
+                f"{property_path!r}:{operation}: {e}"
+            )
+            return PermissionResult.DENIED, set(child_paths)
+
+    def _is_unapproved(self, actor_id: str, peer_id: str) -> bool:
+        """Whether the peer has no trust row, or one this actor has not
+        approved. Such a peer is granted nothing here (3.16): its secret
+        authenticates it (``auth.py``), and anyone can file a trust request
+        with a relationship of its choice, so a grant may only follow an
+        approval. The access table refuses it the same way
+        (``Auth._match_access_row``); its own trust row stays reachable there.
+        A storage fault raises ``DbError``."""
+        if not self.config or not hasattr(self.config, "DbTrust"):
+            return False
+        db_trust = get_trust(self.config)
+        if not db_trust:
+            return False
+        row = db_trust.get(actor_id=actor_id, peerid=peer_id)
+        approved = (
+            row.get("approved")
+            if isinstance(row, dict)
+            else getattr(row, "approved", None)
+        )
+        if not row:
+            # No trust at all: nothing it holds can grant (a permission
+            # override a failed delete left behind grants nothing either).
+            logger.warning(f"Permission denied: {actor_id}:{peer_id} has no trust")
+            return True
+        if approved is False:
+            logger.warning(f"Permission denied: {actor_id}:{peer_id} is not approved")
+            return True
+        return False
 
     def _get_effective_permissions(
         self, actor_id: str, peer_id: str

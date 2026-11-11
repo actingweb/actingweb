@@ -503,7 +503,12 @@ class TestSubscriptionActorFlow:
 
     def test_016_verify_callback_invalid_subid(self, http_client):
         """
-        Verify callback with invalid subscription ID returns 404.
+        Verify callback with invalid subscription ID returns 403.
+
+        A callback URI that does not exist, with authentication data, answers
+        403 (docs/protocol/actingweb-spec.rst, "/callbacks"); 3.16 answers the
+        same for an unknown id as for a subscription this actor does not hold
+        as subscriber (before: 404).
 
         Spec: docs/actingweb-spec.rst:1876-2308
         """
@@ -511,7 +516,7 @@ class TestSubscriptionActorFlow:
             f"{self.actor2_url}/callbacks/subscriptions/{self.actor1_id}/invalidsubid",
             headers={"Authorization": f"Bearer {self.trust1_secret}"},
         )
-        assert response.status_code == 404
+        assert response.status_code == 403
 
     def test_017_verify_callback_valid_subid(self, http_client):
         """
@@ -967,7 +972,10 @@ class TestSubscriptionActorFlow:
                 "Content-Type": "application/json",
             },
         )
-        assert response.status_code == 404
+        # The deleted peer's trust is gone, so its bearer matches nothing and
+        # is refused before the subscription is looked up (3.16: callbacks
+        # are authenticated; previously 404 from the lookup).
+        assert response.status_code == 403
 
     def test_039_delete_actors(self, http_client):
         """

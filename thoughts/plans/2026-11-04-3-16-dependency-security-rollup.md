@@ -1131,7 +1131,8 @@ None.
 ## Release
 
 One PR from `release/3.16.0-dependency-security` to `master` after Phase 3,
-three commits. CI on both backends. No version bump; 3.16.0 stays untagged.
+three commits. CI on both backends. As it landed: PR #170, after 34
+iterations and eight verifications, squashed as `5a7e07f`. No version bump; 3.16.0 stays untagged.
 Phases 1 and 3 both edit `actingweb/db/dynamodb/actor.py` and
 `CHANGELOG.rst`; one branch, one commit per phase, so only line numbers
 shift.
@@ -1329,6 +1330,11 @@ once with stdin closed) and a fresh-context Claude. What changed:
 **Test status:** All passing. Full tier on both backends after each phase;
 the last run had DynamoDB 5616 passed and PostgreSQL 5421 passed, with the
 docs build, `verify_groups`, ruff and pyright at 0 errors and 0 warnings.
+After the iterations, the last Full tier (`d08b469`) had DynamoDB 5742
+passed and PostgreSQL 5539 passed, and CI on PR #170 was green on Python
+3.11 and 3.14 for both backends.
+**Merged:** 2026-11-05, PR #170, squashed as `5a7e07f` on `master`.
+Untagged: 3.16.0 is held.
 
 ### Deviations from Plan
 - PostgreSQL's missing-index refusal raises `DbError(op)` (the plan said
@@ -1379,7 +1385,21 @@ docs build, `verify_groups`, ruff and pyright at 0 errors and 0 warnings.
 - After the fifth verification (Iterations 21-23), the steps of
   `Trust.delete` that can fail run before the row goes (the owner's
   client deletion, the token revocation and the provider tokens). Only
-  the permissions and the sibling sweep run after the row.
+  the permissions and the sibling sweep ran after the row; Iteration 30
+  moved the sweep before it too.
+- Iterations 24-34, from the convergence check (owner's request) through
+  the sixth to eighth verifications and the PR review:
+  - trust-row deletion is held to a written contract,
+    `thoughts/reference/trust-row-deletion-invariants.md`, with one test
+    that faults each step and retries the route;
+  - a new peer row starts without leftover permissions;
+  - the owner's disable is strict and needs both client rows gone;
+  - pre-3.4 rows have one origin gate, used by `Trust`, the deletion lookup
+    and the MCP resolver;
+  - the sibling sweep runs before the row, under a context-local guard, so
+    every route's retry handle is its own row;
+  - a client row that the index gives to another actor is ended as a
+    connection.
 
 ### Learnings
 - `make test-all-parallel` ends with `docker compose down -v`, so the next
@@ -2318,7 +2338,8 @@ changed root.
   paragraphs: which rows name a client (the one gate), and the rules'
   scope (the permission cache is per process with no TTL). New residue
   entries: step 2, the missing actor, the remote-DELETE skip.
-- `thoughts/todo/mcp-cache-lifecycle-and-revocation.md`: section 7, the
+- `thoughts/todo/mcp-cache-lifecycle-and-revocation.md`: section 8 (added
+  as 7, renumbered because this plan had removed a section 7), the
   permission cache, with its `INDEX.md` row.
 
 **Files affected**:

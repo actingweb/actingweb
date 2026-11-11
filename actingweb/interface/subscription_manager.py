@@ -171,6 +171,21 @@ class PeerSyncResult:
     error: str | None = None
 
 
+def _log_peer_clear_failure(proxy: Any, message: str) -> None:
+    """Log a failed clear or acknowledgement at the publisher with its status:
+    WARNING, or ERROR for a 403 (the publisher's access rows refuse it, so it
+    will keep failing and the publisher's queue keeps growing)."""
+    status = getattr(proxy, "last_response_code", None)
+    log = logger.error if status == 403 else logger.warning
+    hint = (
+        " (refused: the publisher's access rows must admit PUT on "
+        "subscriptions/<id>/<subid>)"
+        if status == 403
+        else ""
+    )
+    log(f"{message}: {status}{hint}")
+
+
 class SubscriptionManager:
     """
     Simplified interface for managing subscriptions.
@@ -524,7 +539,11 @@ class SubscriptionManager:
         sub_data = self._core_actor.get_subscription(
             peerid=peer_id, subid=subscription_id, callback=True
         )
-        if sub_data and isinstance(sub_data, dict):
+        # The backends look the row up by peer and id without filtering on
+        # the flag: a row this actor holds as publisher (callback false)
+        # must not be found here, or a subscriber could post callbacks to its
+        # publisher under its own subscription id.
+        if sub_data and isinstance(sub_data, dict) and sub_data.get("callback"):
             return SubscriptionInfo(sub_data)
         return None
 
@@ -835,6 +854,36 @@ class SubscriptionManager:
     # =========================================================================
     # Pull-Based Sync API
     # =========================================================================
+
+    def _own_trust_path(self, proxy: Any) -> str:
+        """Our own trust row at the peer: ``trust/<relationship>/<our id>``
+        (``trust/<our id>`` alone routes to the relationship handler, whose
+        GET answers 404 whatever the peer holds)."""
+        relationship = str(
+            (getattr(proxy, "trust", None) or {}).get("relationship") or ""
+        )
+        return f"trust/{relationship}/{self._core_actor.id}"
+
+    @staticmethod
+    def _peer_trust_state(peer_id: str, proxy: Any) -> str:
+        """What the probe of our own trust row at the peer says, by status:
+        ``exists`` (2xx), ``revoked`` (401, 403 or 404: the peer no longer
+        accepts the trust's secret, or holds no row) or ``unknown`` (no
+        answer, a server error: the trust is kept)."""
+        code = int(getattr(proxy, "last_response_code", 0) or 0)
+        if 200 <= code < 300:
+            logger.info(
+                f"Trust relationship with {peer_id} still exists. "
+                f"Subscriptions were deleted but trust is valid."
+            )
+            return "exists"
+        if code in (401, 403, 404):
+            logger.warning(
+                f"Peer {peer_id} answered {code} for our trust row there; "
+                "the trust appears revoked"
+            )
+            return "revoked"
+        return "unknown"
 
     def _get_peer_proxy(self, peer_id: str) -> Any:
         """Get an AwProxy for communicating with a peer.
@@ -1198,9 +1247,10 @@ class SubscriptionManager:
                     )
                     if clear_response is None or "error" in (clear_response or {}):
                         # Log warning but don't fail the sync
-                        logger.warning(
+                        _log_peer_clear_failure(
+                            proxy,
                             f"Failed to clear duplicate diffs on peer {peer_id} for subscription "
-                            f"{subscription_id}, sequence {final_seq}"
+                            f"{subscription_id}, sequence {final_seq}",
                         )
                     else:
                         logger.debug(
@@ -1223,9 +1273,10 @@ class SubscriptionManager:
             )
             if clear_response is None or "error" in (clear_response or {}):
                 # Log warning but don't fail the sync
-                logger.warning(
+                _log_peer_clear_failure(
+                    proxy,
                     f"Failed to clear diffs on peer {peer_id} for subscription "
-                    f"{subscription_id}, sequence {max_sequence}"
+                    f"{subscription_id}, sequence {max_sequence}",
                 )
 
         # Update local subscription sequence after processing diffs
@@ -1535,27 +1586,14 @@ class SubscriptionManager:
 
             # Verify trust relationship still exists from peer's perspective
             proxy = self._get_peer_proxy(peer_id)
-            trust_exists = False
+            state = "unknown"
             if proxy:
                 try:
-                    # Check if peer still has trust record for us
-                    our_actor_id = self._core_actor.id
-                    trust_response = proxy.get_resource(path=f"/trust/{our_actor_id}")
-                    # If we get a valid response (not an error), trust still exists
-                    if trust_response and "error" not in trust_response:
-                        trust_exists = True
-                        logger.info(
-                            f"Trust relationship with {peer_id} still exists. "
-                            f"Subscriptions were deleted but trust is valid."
-                        )
-                    elif trust_response and "error" in trust_response:
-                        error_code = trust_response["error"].get("code", 500)
-                        logger.warning(
-                            f"Peer {peer_id} returned error {error_code} when accessing trust. "
-                            f"Trust appears revoked."
-                        )
+                    proxy.get_resource(path=self._own_trust_path(proxy))
                 except Exception as e:  # folds DbError: peer HTTP only
                     logger.warning(f"Exception verifying trust with {peer_id}: {e}")
+                state = self._peer_trust_state(peer_id, proxy)
+            trust_exists = state == "exists"
 
             # Only delete trust if peer's trust record doesn't exist or we can't access it
             if trust_exists:
@@ -1589,9 +1627,14 @@ class SubscriptionManager:
                         f"Error cleaning up dead subscriptions for {peer_id}: {e}",
                         exc_info=True,
                     )
+            elif state == "unknown":
+                logger.warning(
+                    f"Could not tell whether {peer_id} still trusts this actor; "
+                    "the trust is kept and the next sync asks again"
+                )
             else:
                 logger.warning(
-                    f"Peer {peer_id} does not exist or is inaccessible. "
+                    f"Peer {peer_id} no longer holds this trust. "
                     f"Trust has been revoked. Cleaning up locally."
                 )
                 try:
@@ -2084,9 +2127,10 @@ class SubscriptionManager:
                     )
                     if clear_response is None or "error" in (clear_response or {}):
                         # Log warning but don't fail the sync
-                        logger.warning(
+                        _log_peer_clear_failure(
+                            proxy,
                             f"Failed to clear duplicate diffs on peer {peer_id} for subscription "
-                            f"{subscription_id}, sequence {final_seq}"
+                            f"{subscription_id}, sequence {final_seq}",
                         )
                     else:
                         logger.debug(
@@ -2108,9 +2152,10 @@ class SubscriptionManager:
                 path=path, params={"sequence": max_sequence}
             )
             if clear_response is None or "error" in (clear_response or {}):
-                logger.warning(
+                _log_peer_clear_failure(
+                    proxy,
                     f"Failed to clear diffs on peer {peer_id} for subscription "
-                    f"{subscription_id}, sequence {max_sequence}"
+                    f"{subscription_id}, sequence {max_sequence}",
                 )
 
         # Update local subscription sequence after processing diffs
@@ -2476,9 +2521,12 @@ class SubscriptionManager:
                     peer_id=peer_id,
                     config=actor_config,
                 )
-                store = get_peer_permission_store(actor_config)
-                store.store_permissions(permissions)
-                logger.debug(f"Refreshed peer permissions for {peer_id}")
+                # A failed fetch carries no permissions: it never replaces
+                # the stored copy (as in sync_peer).
+                if not permissions.fetch_error:
+                    store = get_peer_permission_store(actor_config)
+                    store.store_permissions(permissions)
+                    logger.debug(f"Refreshed peer permissions for {peer_id}")
             except Exception as e:  # folds DbError: cache warm after the subscription and baseline committed
                 logger.warning(f"Failed to refresh peer permissions: {e}")
 
@@ -2558,9 +2606,12 @@ class SubscriptionManager:
                     peer_id=peer_id,
                     config=actor_config,
                 )
-                store = get_peer_permission_store(actor_config)
-                store.store_permissions(permissions)
-                logger.debug(f"Refreshed peer permissions for {peer_id}")
+                # A failed fetch carries no permissions: it never replaces
+                # the stored copy (as in sync_peer).
+                if not permissions.fetch_error:
+                    store = get_peer_permission_store(actor_config)
+                    store.store_permissions(permissions)
+                    logger.debug(f"Refreshed peer permissions for {peer_id}")
             except Exception as e:  # folds DbError: cache warm after the subscription and baseline committed
                 logger.warning(f"Failed to refresh peer permissions: {e}")
 
@@ -2638,29 +2689,14 @@ class SubscriptionManager:
 
             # Verify trust relationship still exists from peer's perspective
             proxy = self._get_peer_proxy(peer_id)
-            trust_exists = False
+            state = "unknown"
             if proxy:
                 try:
-                    # Check if peer still has trust record for us
-                    our_actor_id = self._core_actor.id
-                    trust_response = await proxy.get_resource_async(
-                        path=f"/trust/{our_actor_id}"
-                    )
-                    # If we get a valid response (not an error), trust still exists
-                    if trust_response and "error" not in trust_response:
-                        trust_exists = True
-                        logger.info(
-                            f"Trust relationship with {peer_id} still exists. "
-                            f"Subscriptions were deleted but trust is valid."
-                        )
-                    elif trust_response and "error" in trust_response:
-                        error_code = trust_response["error"].get("code", 500)
-                        logger.warning(
-                            f"Peer {peer_id} returned error {error_code} when accessing trust. "
-                            f"Trust appears revoked."
-                        )
+                    await proxy.get_resource_async(path=self._own_trust_path(proxy))
                 except Exception as e:  # folds DbError: peer HTTP only
                     logger.warning(f"Exception verifying trust with {peer_id}: {e}")
+                state = self._peer_trust_state(peer_id, proxy)
+            trust_exists = state == "exists"
 
             # Only delete trust if peer's trust record doesn't exist or we can't access it
             if trust_exists:
@@ -2694,9 +2730,14 @@ class SubscriptionManager:
                         f"Error cleaning up dead subscriptions for {peer_id}: {e}",
                         exc_info=True,
                     )
+            elif state == "unknown":
+                logger.warning(
+                    f"Could not tell whether {peer_id} still trusts this actor; "
+                    "the trust is kept and the next sync asks again"
+                )
             else:
                 logger.warning(
-                    f"Peer {peer_id} does not exist or is inaccessible. "
+                    f"Peer {peer_id} no longer holds this trust. "
                     f"Trust has been revoked. Cleaning up locally."
                 )
                 try:

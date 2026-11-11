@@ -33,7 +33,7 @@ Core Actor Routes
 - `/<actor_id>/actions`: Side-effecting actions (GET returns metadata, POST invokes)
 - `/<actor_id>/trust`: Trust relationships and permissions
 - `/<actor_id>/subscriptions`: Subscriptions to peer updates
-- `/<actor_id>/callbacks`: Inbound callbacks (peer/webhooks)
+- `/<actor_id>/callbacks`: Inbound callbacks (peer/webhooks); every request is authenticated (401 without credentials), and the peer callbacks admit only the peer they name
 
 Web UI Routes (when with_web_ui(True))
 ======================================

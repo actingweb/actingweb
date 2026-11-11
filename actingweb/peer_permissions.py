@@ -11,7 +11,7 @@ PeerPermissions stores what PEERS grant to us (the cached received permissions).
 
 import json
 import logging
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Any
 
@@ -213,6 +213,29 @@ class PeerPermissions:
         return glob_match(name, pattern)
 
 
+# The key in ``PeerPermissions.extra_attributes`` holding the timestamp the
+# granting peer put in its permission callback: callbacks are ordered by it,
+# against the previous callback only (a copy fetched by query has none).
+SENDER_TIMESTAMP_KEY = "sender_timestamp"
+
+
+def _parsed_time(value: str) -> datetime:
+    """An ISO-8601 timestamp as an aware UTC time; one that does not parse
+    sorts first."""
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=UTC)
+        return parsed.astimezone(UTC)
+    except (ValueError, OverflowError):
+        return datetime.min.replace(tzinfo=UTC)
+
+
+# How often a write of a peer's permissions reads and tries its conditional
+# write again while concurrent writers of the same copy keep winning.
+STORE_ATTEMPTS = 5
+
+
 class PeerPermissionStore:
     """
     Storage manager for peer permission caching.
@@ -244,62 +267,126 @@ class PeerPermissionStore:
             return None
 
     def store_permissions(self, permissions: PeerPermissions) -> bool:
-        """
-        Store peer permissions with timestamp ordering.
+        """Store a copy fetched by query, unless the stored one is newer.
 
-        Only stores if the new permissions are newer than cached ones
-        (based on fetched_at timestamp).
+        ``fetched_at`` is this receiver's clock, stamped before the fetch
+        began, on every path (a query and a callback alike), and compared as
+        times, not strings (a row stored before 3.16 may carry a sender's
+        timestamp in another format). The comparison is against the row in
+        the database, not this process's cache, and the write is conditional
+        on that row (3.16): a query that began before a callback was stored,
+        in any process, never writes over it. False when the stored copy is
+        newer or concurrent writers kept winning; a fault raises ``DbError``.
         """
         if not permissions.validate():
             logger.error(
                 f"Invalid peer permissions definition: {permissions.get_permissions_key()}"
             )
             return False
-
-        # Check timestamp ordering - reject older updates
-        cache_key = f"{permissions.actor_id}:{permissions.peer_id}"
-        existing = self._cache.get(cache_key)
-        if existing and existing.fetched_at and permissions.fetched_at:
-            if permissions.fetched_at < existing.fetched_at:
+        key = f"{permissions.actor_id}:{permissions.peer_id}"
+        for _attempt in range(STORE_ATTEMPTS):
+            expected, stored = self.read_stored_permissions(
+                permissions.actor_id, permissions.peer_id
+            )
+            if (
+                stored
+                and stored.fetched_at
+                and permissions.fetched_at
+                and _parsed_time(permissions.fetched_at)
+                < _parsed_time(stored.fetched_at)
+            ):
                 logger.debug(
-                    f"Ignoring older permission update for {cache_key}: "
-                    f"{permissions.fetched_at} < {existing.fetched_at}"
+                    f"Ignoring older permission update for {key}: "
+                    f"{permissions.fetched_at} < {stored.fetched_at}"
                 )
                 return False
-
-        bucket = self._get_permissions_bucket(permissions.actor_id)
-        if not bucket:
-            logger.error(
-                f"Cannot access peer permissions bucket for actor {permissions.actor_id}"
+            # Keep the last callback's sender timestamp: a query carries
+            # none, and without it an older callback (a resend after a 503)
+            # would no longer be recognised as older.
+            to_store = permissions
+            last = (
+                (stored.extra_attributes or {}).get(SENDER_TIMESTAMP_KEY)
+                if stored
+                else None
             )
-            return False
-
-        try:
-            # Store permissions data in attribute bucket
-            perm_key = permissions.get_permissions_key()
-            perm_data = permissions.to_dict()
-
-            success = bucket.set_attr(name=perm_key, data=json.dumps(perm_data))
-
-            if success:
-                # Update cache
-                self._cache[cache_key] = permissions
+            if last and SENDER_TIMESTAMP_KEY not in (
+                permissions.extra_attributes or {}
+            ):
+                to_store = replace(
+                    permissions,
+                    extra_attributes={
+                        **(permissions.extra_attributes or {}),
+                        SENDER_TIMESTAMP_KEY: last,
+                    },
+                )
+            if self.replace_permissions(to_store, expected):
                 logger.debug(
-                    f"Stored peer permissions: {cache_key}, "
+                    f"Stored peer permissions: {key}, "
                     f"has_properties={permissions.properties is not None}"
                 )
                 return True
-            else:
-                logger.error(f"Failed to store peer permissions {perm_key}")
-                return False
+        logger.warning(
+            f"Peer permissions for {key} not stored: concurrent writes won "
+            f"{STORE_ATTEMPTS} times in a row"
+        )
+        return False
 
-        except DbError:
-            raise
-        except Exception as e:
-            logger.error(
-                f"Error storing peer permissions {permissions.get_permissions_key()}: {e}"
-            )
+    def read_stored_permissions(
+        self, actor_id: str, peer_id: str
+    ) -> tuple[Any, PeerPermissions | None]:
+        """The stored row as written (the value ``replace_permissions`` must
+        be given back) and its parsed copy, read from the database, never
+        the cache; ``(None, None)`` when there is none. A fault raises
+        ``DbError``."""
+        bucket = attribute.Attributes(
+            actor_id=actor_id, bucket=PEER_PERMISSIONS_BUCKET, config=self.config
+        )
+        row = bucket.get_attr(name=f"{actor_id}:{peer_id}")
+        if not row or row.get("data") is None:
+            return None, None
+        raw = row["data"]
+        try:
+            parsed = json.loads(raw) if isinstance(raw, str) else raw
+            return raw, PeerPermissions.from_dict(dict(parsed))
+        except (TypeError, ValueError):
+            # Unreadable: replaced like any other row, compared as absent.
+            return raw, None
+
+    def replace_permissions(self, permissions: PeerPermissions, expected: Any) -> bool:
+        """Store ``permissions`` only if the stored row is still ``expected``
+        (as ``read_stored_permissions`` returned it; ``None``: no row). One
+        conditional write on both backends: False when another writer got
+        there first, so the caller reads again and decides again; a fault
+        raises ``DbError``."""
+        if not permissions.validate():
             return False
+        bucket = attribute.Attributes(
+            actor_id=permissions.actor_id,
+            bucket=PEER_PERMISSIONS_BUCKET,
+            config=self.config,
+        )
+        name = permissions.get_permissions_key()
+        data = json.dumps(permissions.to_dict())
+        if expected is None:
+            won = bucket.create_attr_if_absent(name=name, data=data)
+        else:
+            won = bucket.conditional_update_attr(
+                name=name, old_data=expected, new_data=data
+            )
+        if won:
+            self._cache[f"{permissions.actor_id}:{permissions.peer_id}"] = permissions
+            return True
+        if expected is not None:
+            # A conditional update answers a fault with False too (both
+            # backends; a create raises): a row that still holds what was
+            # read was not written by anyone else, so this was a fault, not a
+            # lost race.
+            current, _ = self.read_stored_permissions(
+                permissions.actor_id, permissions.peer_id
+            )
+            if current == expected:
+                raise DbError("peer permissions write", permissions.actor_id)
+        return False
 
     def get_permissions(self, actor_id: str, peer_id: str) -> PeerPermissions | None:
         """Get cached peer permissions."""

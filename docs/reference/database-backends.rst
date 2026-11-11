@@ -457,9 +457,10 @@ Notes:
   marked, that stops at the first row belonging to an actor; it needs
   ``dynamodb:Scan`` on the properties table, and without it the check is
   refused as "could not be checked").
-  With auto-create off the runtime role therefore needs ``PutItem`` and
-  ``BatchGetItem`` on the v2 table in addition to the actions listed in
-  :doc:`../quickstart/configuration`.
+  The runtime role therefore needs ``BatchGetItem`` on the v2 table
+  whatever the auto-create setting (the marker read happens at every
+  start), and ``PutItem`` to write the markers, in addition to the actions
+  listed in :doc:`../quickstart/configuration`.
 - An indexed property write is one ``TransactWriteItems`` of up to three
   items (the property, its lookup row, and the old value's lookup row when
   the value changed), about twice the write units of a plain put. Writes of

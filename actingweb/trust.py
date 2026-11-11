@@ -117,6 +117,18 @@ def canonical_connection_method(method: str | None) -> str | None:
     return method
 
 
+def as_flag(value: Any) -> bool | None:
+    """A trust flag (``approved``, ``verified``, ``peer_approved``) from a
+    bool or its text form, ``"true"`` or ``"false"`` in any case; None stays
+    None. Anything else raises ``ValueError`` (3.16): ``1`` or ``"yes"`` was
+    stored as True, and reading it as False would revoke an approval."""
+    if value is None or isinstance(value, bool):
+        return value
+    if isinstance(value, str) and value.strip().lower() in ("true", "false"):
+        return value.strip().lower() == "true"
+    raise ValueError(f"A trust flag must be a bool, 'true' or 'false', not {value!r}")
+
+
 class Trust:
     def get(self) -> dict[str, Any] | None:
         """Retrieve a trust relationship with either peerid or token"""
@@ -337,11 +349,27 @@ class Trust:
         aw_supported: str | None = None,
         aw_version: str | None = None,
         capabilities_fetched_at: str | None = None,
+        *,
+        only_if_secret: str | None = None,
     ) -> bool:
+        """Write the attributes given, in one write conditioned on the row
+        existing. ``approved=True`` is written only to a row stored verified
+        or approved already (3.16): a row whose secret an unproven requester
+        chose is never approved, whatever route asks (``Actor.reverify_pending_trust`` first
+        re-runs the verification). ``only_if_secret`` writes only while the
+        row holds that secret (a re-pair's swap). False when nothing was
+        written; a fault raises ``DbError``."""
         if not self.handle:
             logger.debug("Attempted modifcation of trust without handle")
             return False
         assert self.trust is not None  # Always initialized in __init__
+        # Flags given as text ("true"/"false", as this object caches them)
+        # are flags: a string would skip the approval condition below and be
+        # stored as True whatever it says. Anything else raises (3.16).
+        approved = as_flag(approved)
+        verified = as_flag(verified)
+        peer_approved = as_flag(peer_approved)
+        before = dict(self.trust)
         if baseuri:
             self.trust["baseuri"] = baseuri
         if secret:
@@ -363,7 +391,7 @@ class Trust:
             self.trust["aw_version"] = aw_version
         if capabilities_fetched_at is not None:
             self.trust["capabilities_fetched_at"] = capabilities_fetched_at
-        return self.handle.modify(
+        modified = self.handle.modify(
             baseuri=baseuri,
             secret=secret,
             desc=desc,
@@ -386,7 +414,15 @@ class Trust:
             aw_supported=aw_supported,
             aw_version=aw_version,
             capabilities_fetched_at=capabilities_fetched_at,
+            only_if_verified=approved is True,
+            only_if_secret=only_if_secret,
         )
+        if not modified:
+            # Not written (the row is gone, or a condition failed): keep the
+            # copy as it was.
+            self.trust.clear()
+            self.trust.update(before)
+        return bool(modified)
 
     def create(
         self,
@@ -404,8 +440,26 @@ class Trust:
         created_at: str | None = None,
         last_accessed: str | None = None,
         last_connected_via: str | None = None,
+        *,
+        known_absent: bool = False,
+        only_if_absent: bool = False,
+        only_if_pending: bool = False,
     ) -> bool:
-        """Create a new trust relationship"""
+        """Create a new trust relationship.
+
+        ``known_absent``: the caller has just read that no row exists for the
+        peer, so the read that decides whether stale custom permissions are
+        cleared is skipped (one read per creation).
+
+        ``only_if_absent``: write only if no row exists for the peer, in one
+        conditional write; False when one does (a creation request never
+        replaces a row, even one created since the caller's read). Stale
+        custom permissions are cleared after the write succeeds, so a lost
+        race never touches the winner's.
+
+        ``only_if_pending``: the same, but the write also replaces a row that
+        is neither verified nor approved (a pending request nobody proved or
+        accepted); a lost condition answers False."""
         self.trust = {"baseuri": baseuri, "type": peer_type}
         if not relationship or len(relationship) == 0:
             self.trust["relationship"] = (
@@ -443,6 +497,27 @@ class Trust:
             )
         if not self.handle:
             return False
+        if only_if_absent or only_if_pending:
+            if not self._create_row(
+                approved,
+                verified,
+                peer_approved,
+                peer_identifier,
+                established_via,
+                created_at,
+                last_accessed,
+                last_connected_via,
+                only_if_absent=only_if_absent,
+                only_if_pending=only_if_pending and not only_if_absent,
+            ):
+                return False
+            if self.config and self.actor_id and self.peerid:
+                from .trust_permissions import get_trust_permission_store
+
+                permission_store = get_trust_permission_store(self.config)
+                if not permission_store.delete_permissions(self.actor_id, self.peerid):
+                    raise DbError("trust permissions delete", self.actor_id)
+            return True
         # A new row starts from its trust type's permissions. Trust.delete
         # deletes a row's custom permissions right after the row, and a fault
         # there raises with the row gone; the peer id is stable (a peer's
@@ -454,7 +529,10 @@ class Trust:
             self.config
             and self.actor_id
             and self.peerid
-            and self.handle.get(actor_id=self.actor_id, peerid=self.peerid) is None
+            and (
+                known_absent
+                or self.handle.get(actor_id=self.actor_id, peerid=self.peerid) is None
+            )
         ):
             from .trust_permissions import get_trust_permission_store
 
@@ -462,6 +540,32 @@ class Trust:
             permission_store = get_trust_permission_store(self.config)
             if not permission_store.delete_permissions(self.actor_id, self.peerid):
                 raise DbError("trust permissions delete", self.actor_id)
+        return self._create_row(
+            approved,
+            verified,
+            peer_approved,
+            peer_identifier,
+            established_via,
+            created_at,
+            last_accessed,
+            last_connected_via,
+        )
+
+    def _create_row(
+        self,
+        approved: bool,
+        verified: bool,
+        peer_approved: bool,
+        peer_identifier: str | None,
+        established_via: str | None,
+        created_at: str | None,
+        last_accessed: str | None,
+        last_connected_via: str | None,
+        *,
+        only_if_absent: bool = False,
+        only_if_pending: bool = False,
+    ) -> bool:
+        assert self.handle is not None and self.trust is not None
         return self.handle.create(
             actor_id=self.actor_id,
             peerid=self.peerid,
@@ -479,6 +583,8 @@ class Trust:
             created_at=created_at,
             last_accessed=last_accessed,
             last_connected_via=last_connected_via,
+            only_if_absent=only_if_absent,
+            only_if_pending=only_if_pending,
         )
 
     def __init__(

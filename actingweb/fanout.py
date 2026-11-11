@@ -5,8 +5,14 @@ Provides scalable callback delivery with:
 - Parallel HTTP requests with bounded concurrency
 - Circuit breaker pattern for failing peers, per process (persistence only
   seeds a new manager; workers do not share breaker state)
-- Automatic granularity downgrade for large payloads
 - Connection pooling via shared HTTP client
+
+A payload over ``max_payload_for_high_granularity`` is sent in full, with a
+WARNING (3.16, owner): the low-granularity downgrade it used to send carried
+a resource URL with no stored diff, which a 3.16 subscriber never fetches (it
+builds the fetch from the trust's stored base URI as
+``subscriptions/<own id>/<subid>/<sequence>``, ``handlers/callbacks.py``), so
+every redelivery failed and the peer's circuit opened.
 """
 
 import asyncio
@@ -183,6 +189,8 @@ class DeliveryResult:
     status_code: int | None = None
     error: str | None = None
     retry_after: int | None = None
+    # Always False since 3.16: a large payload is sent in full (kept for
+    # callers that read it).
     granularity_downgraded: bool = False
 
 
@@ -202,7 +210,8 @@ class FanOutManager:
     Manages callback delivery to multiple subscribers at scale.
 
     Implements protocol v1.4 features:
-    - Automatic granularity downgrade when payload > threshold
+    - A WARNING when a payload exceeds the high-granularity threshold (it is
+      still sent in full)
     - Circuit breaker pattern for handling 429/503 responses (per process)
     - Optional compression for large payloads
     - Connection pooling via shared HTTP client
@@ -228,7 +237,8 @@ class FanOutManager:
         Args:
             actor: The actor sending callbacks
             max_concurrent: Maximum concurrent HTTP requests
-            max_payload_for_high_granularity: Payload size limit before downgrade
+            max_payload_for_high_granularity: Payload size above which a
+                delivery logs a WARNING (it is sent in full; no downgrade)
             circuit_breaker_threshold: Failures before opening circuit
             circuit_breaker_cooldown: Seconds before testing recovery
             request_timeout: HTTP request timeout in seconds
@@ -364,6 +374,13 @@ class FanOutManager:
         payload_json = json.dumps(payload)
         payload_size = len(payload_json.encode("utf-8"))
         needs_downgrade = payload_size > self._max_payload_size
+        if needs_downgrade:
+            # Once per fan-out: every subscriber gets the payload in full.
+            logger.warning(
+                f"Callback payload for {target} is {payload_size} bytes, over "
+                f"{self._max_payload_size}; sent in full to "
+                f"{len(subscriptions)} subscriber(s)"
+            )
 
         # Create semaphore for bounded concurrency
         semaphore = asyncio.Semaphore(self._max_concurrent)
@@ -463,8 +480,49 @@ class FanOutManager:
         granularity: str,
         needs_downgrade: bool,
     ) -> DeliveryResult:
-        """Deliver callback to a single subscriber."""
+        """Deliver callback to a single subscriber.
+
+        Only with the trust's secret, and only to the trust's stored base URI
+        (``<baseuri>/callbacks/subscriptions/<own id>/<subid>``): a 3.16
+        receiver refuses an unauthenticated callback, and the bearer must go
+        to the host the trust was made with, not to a stored ``callback_url``.
+        ``callback_url`` is therefore ignored (kept for the signature).
+        """
         cb = self._get_circuit_breaker(peer_id)
+        try:
+            trust = self._actor.trust.get_trust(peer_id)
+        except DbError:  # folds DbError: delivery skipped, reported for this peer
+            # (not as an anonymous gather exception).
+            logger.warning(f"Callback to {peer_id} not sent: the trust read failed")
+            return DeliveryResult(
+                peer_id=peer_id,
+                subscription_id=subscription_id,
+                success=False,
+                error="trust read failed",
+            )
+        from .actor import _has_peer_endpoint
+
+        if trust and not _has_peer_endpoint(trust, self._actor.id):
+            # An OAuth2 client's trust row (its subscriptions are kept under
+            # it since 3.16): the client reads its diffs, nothing is pushed.
+            return DeliveryResult(
+                peer_id=peer_id,
+                subscription_id=subscription_id,
+                success=False,
+                error="the subscriber is an OAuth2 client; it reads its diffs",
+            )
+        secret = str((trust or {}).get("secret") or "")
+        baseuri = str((trust or {}).get("baseuri") or "").rstrip("/")
+        if not secret or not baseuri:
+            return DeliveryResult(
+                peer_id=peer_id,
+                subscription_id=subscription_id,
+                success=False,
+                error="no trust with a secret and a base URI for this peer",
+            )
+        callback_url = (
+            f"{baseuri}/callbacks/subscriptions/{self._actor.id}/{subscription_id}"
+        )
 
         try:
             # Build callback wrapper per protocol spec
@@ -481,16 +539,11 @@ class FanOutManager:
                 "Content-Type": "application/json",
             }
 
-            # Handle granularity downgrade
+            # Always the data: a downgrade to a URL is not fetchable by a 3.16
+            # subscriber (module docstring); the size is logged in deliver().
+            # ``granularity_downgraded`` stays in the result, always False.
             granularity_downgraded = False
-            if needs_downgrade and granularity == "high":
-                # Downgrade to low granularity - send URL instead of data
-                callback_wrapper["granularity"] = "low"
-                callback_wrapper["url"] = self._build_resource_url(target)
-                headers["X-ActingWeb-Granularity-Downgraded"] = "true"
-                granularity_downgraded = True
-            else:
-                callback_wrapper["data"] = payload
+            callback_wrapper["data"] = payload
 
             body = json.dumps(callback_wrapper)
             body_bytes = body.encode("utf-8")
@@ -503,10 +556,7 @@ class FanOutManager:
                     body_bytes = gzip.compress(body_bytes)
                     headers["Content-Encoding"] = "gzip"
 
-            # Add auth token
-            trust = self._actor.trust.get_trust(peer_id)
-            if trust:
-                headers["Authorization"] = f"Bearer {trust.get('secret', '')}"
+            headers["Authorization"] = f"Bearer {secret}"
 
             # Make HTTP request using shared client for connection pooling
             client = await get_shared_client(self._request_timeout)
@@ -616,11 +666,6 @@ class FanOutManager:
     def _get_timestamp(self) -> str:
         """Get ISO timestamp for callback."""
         return datetime.now(UTC).isoformat()
-
-    def _build_resource_url(self, target: str) -> str:
-        """Build URL for low granularity callbacks."""
-        config = self._actor.config
-        return f"{config.proto}{config.fqdn}/{self._actor.id}/{target}"
 
     def _get_peer_capabilities(self, peer_id: str) -> "PeerCapabilities | None":
         """Get peer capabilities if available."""

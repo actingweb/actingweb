@@ -50,6 +50,12 @@ def register_callback_hooks(app):
         containing a token. When the user clicks the link, this callback is
         triggered to verify their email address.
 
+        Every /callbacks request is authenticated (ActingWeb 3.16): the link
+        works for a user signed in to the web UI, whose session authenticates
+        it, or for an API call with the actor's credentials. An anonymous
+        click answers 401; a link that must work without a session belongs
+        on an application route, not under /callbacks.
+
         Parameters:
             token: Verification token from the email link
             method: HTTP method used (GET for link clicks, POST for API calls)
@@ -118,6 +124,11 @@ def register_callback_hooks(app):
         Example:
             Register https://your-app.com/{actor_id}/callbacks/sms_webhook
             with Twilio. Incoming SMS to your number triggers this callback.
+
+        Since ActingWeb 3.16 every /callbacks request is authenticated, so a
+        provider calling without the actor's credentials receives 401 and this
+        hook does not run. Point a third-party webhook at an application route
+        that verifies the provider's signature, not at /callbacks.
         """
         sender = data.get("From", data.get("from", "unknown"))
         body = data.get("Body", data.get("body", ""))
@@ -169,6 +180,11 @@ def register_callback_hooks(app):
             Acknowledgment response for the payment provider
 
         Security note: In production, verify webhook signatures!
+
+        Since ActingWeb 3.16 every /callbacks request is authenticated, so a
+        provider calling without the actor's credentials receives 401 and this
+        hook does not run. Point a third-party webhook at an application route
+        that verifies the provider's signature, not at /callbacks.
         """
         event_type = data.get("type", "unknown")
 

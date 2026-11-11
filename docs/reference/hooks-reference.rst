@@ -51,6 +51,12 @@ Signature: ``func(actor, name: str, data: dict) -> bool | dict``
 
 - Return ``True`` when processed; optionally return a ``dict`` as response payload
 - Used for custom endpoints registered by the framework (e.g., ``bot``, ``www``)
+- ``/callbacks/<name>`` requests are authenticated (3.16): without
+  credentials they answer 401, and any authenticated caller reaches the
+  hook. The library's own names (``permissions``, ``subscription``,
+  ``subscriptions``, ``www`` and any ``resource_*``) answer 403 on a direct
+  ``/callbacks/<name>`` request, so their hooks only receive data the
+  library built (the web UI still dispatches ``www``)
 
 Template Rendering for WWW Hooks
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -376,7 +382,7 @@ and the next sign-in retries.
 
     **Use Cases**: UI notification "You approved! Relationship established", analytics, triggering subscriptions
 
-    **Note**: Fires when this actor's approval completes the mutual trust (peer had already approved).
+    **Note**: Fires when this actor's approval completes the mutual trust (peer had already approved): an approval through ``PUT /trust/<rel>/<peer>`` or the web UI, and (3.16) creating the trust toward a peer whose verified request was waiting (``POST /trust``, the web form, ``TrustManager.create_relationship``). ``TrustManager.approve_relationship`` fires ``trust_approved`` instead; the trustee path (``create_peer_trustee``) fires neither. A pending request replaced by a request that verifies, or by the owner's own, fires no ``trust_deleted``.
 
     **Built-in Behavior**: If peer profile caching is enabled (``with_peer_profile()``), the peer's profile is automatically fetched and cached when this hook fires.
 

@@ -189,6 +189,9 @@ be able to create subscriptions or receive callbacks.
        # ACL rules allow HTTP endpoint access
        acl_rules=[
            ("subscriptions/<id>", "POST", "a"),  # Can create subscriptions
+           # Its own subscription: poll (the built-in owner row admits
+           # clearing the queue and being unsubscribed)
+           ("subscriptions/<id>/<subid>", "GET", "a"),
            ("properties", "GET", "a"),           # Can read properties
            ("callbacks", "", "a"),               # Can receive callbacks (all methods)
        ]
@@ -197,8 +200,15 @@ be able to create subscriptions or receive callbacks.
 **ACL Rule Format**: Each rule is ``(path, methods, access)``:
 
 * ``path`` - HTTP path (e.g., ``subscriptions/<id>``, ``properties``)
-* ``methods`` - HTTP methods (``GET``, ``POST``, etc., or ``""`` for all)
-* ``access`` - ``a`` for allow, ``r`` for reject
+* ``methods`` - HTTP methods (``GET``, ``POST``, etc., or ``""`` for all);
+  a row admits only the method a request performs (a GET row never admits
+  a PUT or DELETE)
+* ``access`` - ``a`` (a matching row admits whatever this value is; leave a
+  method out to refuse it)
+
+A peer is admitted only to paths that name it (its own subscriptions,
+permissions and trust row), whichever row matched. See
+:doc:`access-control` ("How rows match").
 
 **Common ACL Rules**:
 
@@ -206,6 +216,10 @@ be able to create subscriptions or receive callbacks.
 
    # Allow creating subscriptions (actor-to-actor data sharing)
    ("subscriptions/<id>", "POST", "a")
+
+   # A subscriber's own subscription: poll (PUT and DELETE on it are the
+   # built-in owner row's)
+   ("subscriptions/<id>/<subid>", "GET", "a")
 
    # Allow reading properties
    ("properties", "GET", "a")

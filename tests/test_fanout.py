@@ -1,3 +1,4 @@
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -135,7 +136,11 @@ class TestFanOutManager:
         self.mock_actor.id = "actor123"
         self.mock_actor.config.proto = "https://"
         self.mock_actor.config.fqdn = "example.com"
-        self.mock_actor.trust.get_trust.return_value = {"secret": "test_token"}
+        # A trust with a secret and a base URI: delivery goes there (3.16).
+        self.mock_actor.trust.get_trust.return_value = {
+            "secret": "test_token",
+            "baseuri": "https://peer1.example.com/peer1",
+        }
 
         self.manager = FanOutManager(
             actor=self.mock_actor,
@@ -186,11 +191,6 @@ class TestFanOutManager:
         cb = self.manager._get_circuit_breaker("peer1")
         assert cb.failure_count == 0
         assert cb.state == CircuitState.CLOSED
-
-    def test_build_resource_url(self) -> None:
-        """Build resource URL correctly."""
-        url = self.manager._build_resource_url("properties")
-        assert url == "https://example.com/actor123/properties"
 
     @pytest.mark.asyncio
     async def test_deliver_to_empty_subscribers(self) -> None:
@@ -474,8 +474,9 @@ class TestFanOutManager:
         assert result.results[0].error == "circuit_open"
 
     @pytest.mark.asyncio
-    async def test_granularity_downgrade(self) -> None:
-        """Large payload triggers granularity downgrade."""
+    async def test_a_large_payload_is_sent_in_full(self) -> None:
+        """Reverify-4, Issue 4 (owner): no downgrade to a URL a 3.16
+        subscriber cannot fetch; the data is sent, with a WARNING."""
         # Create manager with small threshold
         manager = FanOutManager(
             actor=self.mock_actor,
@@ -506,12 +507,56 @@ class TestFanOutManager:
                 subscriptions, large_payload, "properties", 1
             )
 
-            # Check that downgrade header was set
             call_args = mock_client.post.call_args
             headers = call_args.kwargs.get("headers", {})
-            assert headers.get("X-ActingWeb-Granularity-Downgraded") == "true"
+            assert "X-ActingWeb-Granularity-Downgraded" not in headers
+            content = call_args.kwargs["content"]
+            if headers.get("Content-Encoding") == "gzip":
+                import gzip
 
-        assert result.results[0].granularity_downgraded is True
+                content = gzip.decompress(content)
+            sent = json.loads(content)
+            assert sent["granularity"] == "high" and "url" not in sent
+            assert sent["data"] == large_payload
+
+        assert result.results[0].granularity_downgraded is False
+
+    @pytest.mark.asyncio
+    async def test_the_size_warning_is_logged_once_per_fan_out(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Reverify-5, Issue 9: one WARNING for the payload, not one per
+        subscriber."""
+        import logging
+
+        manager = FanOutManager(
+            actor=self.mock_actor, max_payload_for_high_granularity=10
+        )
+        subscriptions = [
+            {
+                "peerid": f"peer{i}",
+                "subid": f"sub{i}",
+                "callback_url": f"https://peer{i}.example.com/callback",
+                "granularity": "high",
+            }
+            for i in range(3)
+        ]
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        with (
+            patch("httpx.AsyncClient") as mock_client_class,
+            caplog.at_level(logging.WARNING, logger="actingweb.fanout"),
+        ):
+            mock_client = AsyncMock()
+            mock_client.post.return_value = mock_response
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=None)
+            mock_client_class.return_value = mock_client
+            await manager.deliver_to_subscribers(
+                subscriptions, {"data": "x" * 100}, "properties", 1
+            )
+        sized = [r for r in caplog.records if "sent in full" in r.getMessage()]
+        assert len(sized) == 1
 
     @pytest.mark.asyncio
     async def test_no_downgrade_for_low_granularity(self) -> None:
@@ -683,10 +728,15 @@ class TestFanOutManager:
             call_args = mock_client.post.call_args
             headers = call_args.kwargs.get("headers", {})
             assert headers.get("Authorization") == "Bearer test_token"
+            # To the trust's stored base URI, not the stored callback_url.
+            assert call_args.args[0] == (
+                "https://peer1.example.com/peer1/callbacks/subscriptions/actor123/sub1"
+            )
 
     @pytest.mark.asyncio
-    async def test_no_auth_when_no_trust(self) -> None:
-        """No authorization when trust doesn't exist."""
+    async def test_nothing_is_sent_without_a_trust(self) -> None:
+        """No trust (or no secret): nothing is sent; a 3.16 receiver would
+        refuse an unauthenticated callback."""
         self.mock_actor.trust.get_trust.return_value = None
 
         subscriptions = [
@@ -698,23 +748,77 @@ class TestFanOutManager:
             }
         ]
 
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-
         with patch("httpx.AsyncClient") as mock_client_class:
             mock_client = AsyncMock()
-            mock_client.post.return_value = mock_response
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
             mock_client.__aexit__ = AsyncMock(return_value=None)
             mock_client_class.return_value = mock_client
 
-            await self.manager.deliver_to_subscribers(
+            result = await self.manager.deliver_to_subscribers(
                 subscriptions, {"data": "test"}, "properties", 1
             )
 
-            call_args = mock_client.post.call_args
-            headers = call_args.kwargs.get("headers", {})
-            assert "Authorization" not in headers
+            mock_client.post.assert_not_called()
+            assert result.failed == 1
+
+    @pytest.mark.asyncio
+    async def test_nothing_is_pushed_to_an_oauth2_clients_row(self) -> None:
+        """Reverify-11 Issue 1: an interactive OAuth2 client's row has a
+        secret and this actor's own URL as base URI; nothing is pushed to it
+        (the client reads its diffs)."""
+        self.mock_actor.trust.get_trust.return_value = {
+            "peerid": "oauth2_interactive:user@example.test:c1",
+            "secret": "client_secret",
+            "baseuri": "https://example.com/actor123",
+            "established_via": "oauth2_interactive",
+        }
+        subscriptions = [
+            {
+                "peerid": "oauth2_interactive:user@example.test:c1",
+                "subid": "sub1",
+                "granularity": "high",
+            }
+        ]
+
+        with patch("httpx.AsyncClient") as mock_client_class:
+            mock_client = AsyncMock()
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=None)
+            mock_client_class.return_value = mock_client
+
+            result = await self.manager.deliver_to_subscribers(
+                subscriptions, {"data": "test"}, "properties", 1
+            )
+
+            mock_client.post.assert_not_called()
+            assert result.results[0].error is not None
+            assert "OAuth2 client" in result.results[0].error
+
+    @pytest.mark.asyncio
+    async def test_a_trust_read_fault_is_reported_for_its_peer(self) -> None:
+        """Reverify-1, Issue 8: a fault reading the trust is a failed delivery
+        for that peer, not an anonymous exception."""
+        from actingweb.db.exceptions import DbError
+
+        self.mock_actor.trust.get_trust.side_effect = DbError("trust get", "a1")
+        subscriptions = [
+            {
+                "peerid": "peer1",
+                "subid": "sub1",
+                "callback_url": "https://peer1.example.com/callback",
+                "granularity": "high",
+            }
+        ]
+        with patch("httpx.AsyncClient") as mock_client_class:
+            mock_client = AsyncMock()
+            mock_client_class.return_value = mock_client
+            result = await self.manager.deliver_to_subscribers(
+                subscriptions, {"data": "test"}, "properties", 1
+            )
+            mock_client.post.assert_not_called()
+        assert result.failed == 1
+        assert result.results[0].peer_id == "peer1"
+        assert "trust read failed" in (result.results[0].error or "")
 
 
 class TestFanOutResult:

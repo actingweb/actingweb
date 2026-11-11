@@ -231,6 +231,7 @@ class TrustManager:
         rel_data = self._core_actor.create_reciprocal_trust(
             url=peer_url, secret=secret, desc=description, relationship=relationship
         )
+        self._fire_approved_on_create(rel_data)
 
         if rel_data and isinstance(rel_data, dict):
             return TrustRelationship(rel_data)
@@ -256,10 +257,37 @@ class TrustManager:
         rel_data = await self._core_actor.create_reciprocal_trust_async(
             url=peer_url, secret=secret, desc=description, relationship=relationship
         )
+        # The application's hook may do peer HTTP: off the event loop.
+        import asyncio
+
+        await asyncio.to_thread(self._fire_approved_on_create, rel_data)
 
         if rel_data and isinstance(rel_data, dict):
             return TrustRelationship(rel_data)
         return None
+
+    def _fire_approved_on_create(self, rel_data: Any) -> None:
+        """Creating a trust toward a peer whose verified request waited
+        approved it: this actor's approval completed the mutual trust, as an
+        approval through ``PUT /trust/<rel>/<peer>`` does, so the same
+        ``trust_fully_approved_local`` hook runs."""
+        peer_id = self._core_actor.last_trust_approved_on_create
+        if not peer_id or not isinstance(rel_data, dict):
+            return
+        if not (rel_data.get("approved") and rel_data.get("peer_approved")):
+            return
+        try:
+            self._execute_lifecycle_hook(
+                "trust_fully_approved_local",
+                peer_id=peer_id,
+                relationship=str(rel_data.get("relationship") or ""),
+                trust_data=rel_data,
+            )
+        except DbError as e:  # folds DbError: hook after the approval committed
+            logger.error(
+                f"trust_fully_approved_local for {peer_id} skipped on a store "
+                f"fault after the approval committed: {e}"
+            )
 
     def approve_relationship(self, peer_id: str) -> bool:
         """Approve a trust relationship with lifecycle hook execution."""
@@ -537,10 +565,14 @@ class TrustManager:
                         if client_name and normalized_desc == default_desc:
                             modify_kwargs["desc"] = f"OAuth2 client: {client_name}"
 
-                    db.modify(**modify_kwargs)
-                    logger.debug(
-                        f"Updated existing OAuth trust: peer_id={peer_id}, established_via={source}"
-                    )
+                    if db.modify(**modify_kwargs):
+                        logger.debug(
+                            f"Updated existing OAuth trust: peer_id={peer_id}, established_via={source}"
+                        )
+                    else:
+                        logger.warning(
+                            f"OAuth trust for {peer_id} was deleted while being updated"
+                        )
             except DbError:
                 raise
             except Exception as e:
@@ -847,7 +879,19 @@ class TrustManager:
 
         Returns:
             True if modification succeeded, False otherwise
+
+        Raises:
+            ValueError: ``approved``, ``verified`` or ``peer_approved`` is
+                not a bool, ``"true"`` or ``"false"`` (3.16).
         """
+        from ..trust import as_flag
+
+        # Flags given as text are flags, and must meet the approval gate
+        # below; anything but a bool, "true" or "false" raises ValueError
+        # (3.16), before anything is read or written.
+        for flag in ("approved", "verified", "peer_approved"):
+            if flag in kwargs:
+                kwargs[flag] = as_flag(kwargs[flag])
         if not self._core_actor.config or not hasattr(
             self._core_actor.config, "DbTrust"
         ):
@@ -862,10 +906,31 @@ class TrustManager:
                 peerid=peer_id,
                 config=self._core_actor.config,
             )
-            if not trust.get():
+            row = trust.get()
+            if not row:
                 logger.warning(f"Trust not found for peer {peer_id}")
                 return False
+            if (
+                kwargs.get("approved") is True
+                and not row.get("approved")
+                and not row.get("verified")
+                and not self._core_actor.reverify_pending_trust(peer_id)
+            ):
+                # As every approval route (3.16): an unverified request is
+                # approved only after its verification repeats and passes.
+                logger.warning(
+                    f"Refused to approve the trust with {peer_id}: the request "
+                    "is not verified"
+                )
+                return False
 
+            if kwargs.get("approved") is True and not row.get("approved"):
+                # The approval lands on the row read and re-verified above,
+                # or not at all (a row replaced meanwhile is not approved
+                # unseen).
+                kwargs.setdefault(
+                    "only_if_secret", str(row.get("secret") or "") or None
+                )
             return trust.modify(
                 aw_supported=aw_supported,
                 aw_version=aw_version,

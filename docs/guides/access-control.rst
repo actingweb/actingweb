@@ -124,7 +124,23 @@ Each rule is a tuple of ``(path, methods, access)`` where:
 
 * ``path`` - HTTP path pattern (e.g., ``subscriptions/<id>``, ``properties``)
 * ``methods`` - HTTP methods (``GET``, ``POST``, ``PUT``, ``DELETE``, or ``""`` for all methods)
-* ``access`` - ``a`` for allow, ``r`` for reject
+* ``access`` - ``a``; a matching row admits the request whatever this
+  value is, so leave a method out to refuse it
+
+**How rows match.** A request is checked against the rows of its caller's
+relationship, an application's ``acl_rules`` first, then the built-in rows,
+and the first row whose path is a prefix of the request's and whose methods
+include **the HTTP method the request performs** admits it: a GET row never
+admits a PUT or DELETE, nor a ``GET ?_method=PUT|DELETE`` (since 3.16). The
+``<id>``, ``<subid>`` and ``<type>`` in a path are literal templates, not
+compared with the caller. Instead, on every path that names a peer
+(``subscriptions/<id>…``, ``permissions/<id>``, ``trust/<type>/<id>``), a
+caller authenticated as a peer is admitted only when the path names that
+peer itself, whichever row matched (an ``admin`` peer is exempt there); the
+two peer callback paths (``callbacks/subscriptions/<id>…`` and
+``callbacks/permissions/<id>``) admit only the peer they name, never the
+creator or an ``admin`` peer. A peer may read and delete its own trust row
+but never approve it or write its own permissions.
 
 .. code-block:: python
 
@@ -137,7 +153,10 @@ Each rule is a tuple of ``(path, methods, access)`` where:
 
 **Common ACL Paths:**
 
-* ``subscriptions/<id>`` - Creating/managing subscriptions (POST to create)
+* ``subscriptions/<id>`` - Creating subscriptions (POST)
+* ``subscriptions/<id>/<subid>`` - A subscriber's own subscription: GET to
+  poll its queue (PUT to clear it and DELETE to end it are admitted by the
+  built-in ``owner`` row)
 * ``properties`` - Property access (GET/PUT)
 * ``trust/<type>/<id>`` - Trust relationship management
 * ``callbacks`` - Receiving subscription callbacks
@@ -209,10 +228,22 @@ For actor-to-actor subscription scenarios, you need to specify ACL rules:
        # ACL rules enable HTTP endpoint access
        acl_rules=[
            ("subscriptions/<id>", "POST", "a"),  # Create subscriptions
+           # Its own subscription: poll (clearing the queue and being
+           # unsubscribed are the built-in ``owner`` row's)
+           ("subscriptions/<id>/<subid>", "GET", "a"),
            ("properties", "GET", "a"),           # Read properties
            ("callbacks", "", "a"),               # Receive callbacks (all methods)
        ]
    )
+
+A row admits only the method a request performs. A peer's PUT and DELETE
+on its own subscription (clearing its queue, being unsubscribed by its
+publisher) are admitted by the built-in ``("owner",
+"subscriptions/<id>/<subid>", "GET,PUT,DELETE", "a")`` row, which compares
+with the peer the path names; no other peer reaches that subscription.
+The row never admits creating a subscription: that is the relationship's
+own rows'. What a peer polls of a ``properties`` subscription is filtered by
+its property permissions, as its callbacks are.
 
 Architecture
 ============

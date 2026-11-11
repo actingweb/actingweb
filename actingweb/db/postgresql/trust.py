@@ -12,6 +12,32 @@ from actingweb.trust import canonical_connection_method
 logger = logging.getLogger(__name__)
 
 
+_TRUST_UPSERT = """
+ON CONFLICT (id, peerid) DO UPDATE SET
+    baseuri = EXCLUDED.baseuri,
+    type = EXCLUDED.type,
+    relationship = EXCLUDED.relationship,
+    secret = EXCLUDED.secret,
+    "desc" = EXCLUDED."desc",
+    approved = EXCLUDED.approved,
+    peer_approved = EXCLUDED.peer_approved,
+    verified = EXCLUDED.verified,
+    verification_token = EXCLUDED.verification_token,
+    peer_identifier = EXCLUDED.peer_identifier,
+    established_via = EXCLUDED.established_via,
+    created_at = EXCLUDED.created_at,
+    last_accessed = EXCLUDED.last_accessed,
+    last_connected_via = EXCLUDED.last_connected_via,
+    client_name = EXCLUDED.client_name,
+    client_version = EXCLUDED.client_version,
+    client_platform = EXCLUDED.client_platform,
+    oauth_client_id = EXCLUDED.oauth_client_id,
+    aw_supported = EXCLUDED.aw_supported,
+    aw_version = EXCLUDED.aw_version,
+    capabilities_fetched_at = EXCLUDED.capabilities_fetched_at
+"""
+
+
 def _parse_timestamp(value: str | datetime | None) -> datetime:
     """
     Parse timestamp value consistently, handling both string and datetime inputs.
@@ -218,6 +244,9 @@ class DbTrust:
         aw_supported: str | None = None,
         aw_version: str | None = None,
         capabilities_fetched_at: str | datetime | None = None,
+        *,
+        only_if_absent: bool = False,
+        only_if_pending: bool = False,
     ) -> bool:
         """
         Create a new trust.
@@ -283,7 +312,18 @@ class DbTrust:
         try:
             with get_connection() as conn:
                 with conn.cursor() as cur:
-                    # Use upsert to match DynamoDB behavior (PutItem overwrites)
+                    # Use upsert to match DynamoDB behavior (PutItem overwrites);
+                    # only_if_absent keeps an existing row and reports it.
+                    if only_if_absent:
+                        conflict = "ON CONFLICT (id, peerid) DO NOTHING"
+                    elif only_if_pending:
+                        conflict = (
+                            _TRUST_UPSERT
+                            + " WHERE trusts.verified = false"
+                            + " AND trusts.approved = false"
+                        )
+                    else:
+                        conflict = _TRUST_UPSERT
                     cur.execute(
                         """
                         INSERT INTO trusts (
@@ -296,28 +336,8 @@ class DbTrust:
                             %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                             %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                         )
-                        ON CONFLICT (id, peerid) DO UPDATE SET
-                            baseuri = EXCLUDED.baseuri,
-                            type = EXCLUDED.type,
-                            relationship = EXCLUDED.relationship,
-                            secret = EXCLUDED.secret,
-                            "desc" = EXCLUDED."desc",
-                            approved = EXCLUDED.approved,
-                            peer_approved = EXCLUDED.peer_approved,
-                            verified = EXCLUDED.verified,
-                            verification_token = EXCLUDED.verification_token,
-                            peer_identifier = EXCLUDED.peer_identifier,
-                            established_via = EXCLUDED.established_via,
-                            last_accessed = EXCLUDED.last_accessed,
-                            last_connected_via = EXCLUDED.last_connected_via,
-                            client_name = EXCLUDED.client_name,
-                            client_version = EXCLUDED.client_version,
-                            client_platform = EXCLUDED.client_platform,
-                            oauth_client_id = EXCLUDED.oauth_client_id,
-                            aw_supported = EXCLUDED.aw_supported,
-                            aw_version = EXCLUDED.aw_version,
-                            capabilities_fetched_at = EXCLUDED.capabilities_fetched_at
-                        """,
+                        """
+                        + conflict,
                         (
                             actor_id,
                             peerid,
@@ -344,7 +364,10 @@ class DbTrust:
                             caps_timestamp,
                         ),
                     )
+                    inserted = cur.rowcount
                 conn.commit()
+            if (only_if_absent or only_if_pending) and inserted == 0:
+                return False
 
             # Build handle
             self.handle = {
@@ -419,11 +442,17 @@ class DbTrust:
         aw_supported: str | None = None,
         aw_version: str | None = None,
         capabilities_fetched_at: str | datetime | None = None,
+        *,
+        only_if_verified: bool = False,
+        only_if_secret: str | None = None,
     ) -> bool:
         """
         Modify a trust.
 
-        If bools are None, they will not be changed.
+        If bools are None, they will not be changed. ``only_if_verified``
+        also requires the stored row to be verified (or approved already), ``only_if_secret`` its
+        secret to be that value: a condition that fails answers False and
+        writes nothing.
 
         Args:
             baseuri: New base URI
@@ -444,7 +473,9 @@ class DbTrust:
             oauth_client_id: OAuth2 client ID
 
         Returns:
-            True on success, False only for missing arguments or handle
+            True on success; False for missing arguments or handle, or when
+            the row is gone (deleted meanwhile: not modified, not recreated,
+            and this handle keeps what it had)
 
         Raises:
             DbError: on a backend fault
@@ -452,6 +483,7 @@ class DbTrust:
         if not self.handle:
             logger.debug("Attempted modification of DbTrust without db handle")
             return False
+        before = dict(self.handle)
 
         actor_id = self.handle.get("id")
         peerid = self.handle.get("peerid")
@@ -581,6 +613,14 @@ class DbTrust:
 
         # Add WHERE clause parameters
         params.extend([actor_id, peerid])
+        conditions = ["id = %s", "peerid = %s"]
+        if only_if_verified:
+            # Verified, or approved already (a row approved before 3.16
+            # without a verification: approving it again changes nothing).
+            conditions.append("(verified = true OR approved = true)")
+        if only_if_secret is not None:
+            conditions.append("secret = %s")
+            params.append(only_if_secret)
 
         try:
             with get_connection() as conn:
@@ -589,12 +629,19 @@ class DbTrust:
                         f"""
                         UPDATE trusts
                         SET {", ".join(updates)}
-                        WHERE id = %s AND peerid = %s
+                        WHERE {" AND ".join(conditions)}
                         """,
                         tuple(params),
                     )
+                    updated = cur.rowcount
                 conn.commit()
-            return True
+            # A row deleted meanwhile, or one a condition refuses, is not
+            # modified (and not recreated).
+            if updated > 0:
+                return True
+            self.handle.clear()
+            self.handle.update(before)
+            return False
 
         except Exception as e:
             raise DbError("trust modify") from e

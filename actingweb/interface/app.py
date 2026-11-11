@@ -1365,7 +1365,8 @@ class ActingWebApp:
             max_pending: Maximum pending callbacks before back-pressure (429)
             storage_prefix: Bucket prefix for RemotePeerStore
             max_concurrent_callbacks: Max concurrent callback deliveries
-            max_payload_for_high_granularity: Payload size before granularity downgrade
+            max_payload_for_high_granularity: Payload size above which a callback
+                delivery logs a WARNING (sent in full; no downgrade since 3.16)
             circuit_breaker_threshold: Failures before opening circuit
             circuit_breaker_cooldown: Seconds before testing recovery
 

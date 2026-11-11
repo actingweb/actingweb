@@ -1,0 +1,320 @@
+{
+ "steps": [
+  {
+   "after": {
+    "publisher": {
+     "grants": {
+      "B": {
+       "actions": null,
+       "actor_id": "<A>",
+       "created_by": "system",
+       "methods": null,
+       "notes": null,
+       "peer_id": "<B>",
+       "prompts": null,
+       "properties": {
+        "operations": [
+         "read"
+        ],
+        "patterns": [
+         "*"
+        ]
+       },
+       "resources": null,
+       "tools": null,
+       "trust_type": "friend",
+       "updated_at": null
+      }
+     },
+     "queue": [
+      {
+       "diffs": [],
+       "granularity": "high",
+       "peer": "<B>",
+       "sequence": 0,
+       "subscriptionid": "<sub1>",
+       "subtarget": "",
+       "target": "properties"
+      }
+     ],
+     "subscriptions": [
+      {
+       "callback": false,
+       "granularity": "high",
+       "peerid": "<B>",
+       "resource": "",
+       "sequence": 0,
+       "subscriptionid": "<sub1>",
+       "subtarget": "",
+       "target": "properties"
+      }
+     ],
+     "suspensions": [],
+     "trust": {
+      "B": {
+       "approved": true,
+       "baseuri": "http://<wire_peer_app>/<B>",
+       "established_via": "trust",
+       "has_verification_token": true,
+       "peer_approved": true,
+       "relationship": "friend",
+       "secret": "<secret:trust:A-B>",
+       "verified": true
+      }
+     }
+    },
+    "subscribers": {
+     "B": {
+      "callback_state": [
+       {
+        "last_seq": 0,
+        "pending_count": 0,
+        "pending_sequences": [],
+        "resync_pending": false,
+        "subscriptionid": "<sub1>",
+        "version": 0
+       }
+      ],
+      "peer_permissions": {
+       "actions": {
+        "allowed": [
+         "*"
+        ],
+        "denied": [
+         "delete_*",
+         "admin_*",
+         "system_*"
+        ]
+       },
+       "actor_id": "<B>",
+       "extra_attributes": {
+        "sender_timestamp": "<ts:iso-offset>"
+       },
+       "fetch_error": null,
+       "fetched_at": "<ts:iso-offset>",
+       "methods": {
+        "allowed": [
+         "*"
+        ],
+        "denied": [
+         "delete_*",
+         "admin_*",
+         "system_*"
+        ]
+       },
+       "peer_id": "<A>",
+       "prompts": null,
+       "properties": {
+        "excluded_patterns": [
+         "private/*",
+         "security/*",
+         "_internal/*"
+        ],
+        "operations": [
+         "read"
+        ],
+        "patterns": [
+         "*"
+        ]
+       },
+       "resources": {
+        "excluded_patterns": [
+         "private/*",
+         "security/*"
+        ],
+        "operations": [
+         "read",
+         "write"
+        ],
+        "patterns": [
+         "*"
+        ]
+       },
+       "tools": {
+        "allowed": [
+         "*"
+        ],
+        "denied": [
+         "admin_*",
+         "system_*"
+        ]
+       }
+      },
+      "replica": {
+       "lists": {},
+       "scalars": {}
+      },
+      "subscriptions": [
+       {
+        "callback": true,
+        "granularity": "high",
+        "peerid": "<A>",
+        "resource": "",
+        "sequence": 0,
+        "subscriptionid": "<sub1>",
+        "subtarget": "",
+        "target": "properties"
+       }
+      ],
+      "trust": {
+       "approved": true,
+       "baseuri": "http://<wire_app>/<A>",
+       "established_via": "trust",
+       "has_verification_token": true,
+       "peer_approved": true,
+       "relationship": "friend",
+       "secret": "<secret:trust:A-B>",
+       "verified": true
+      }
+     }
+    }
+   },
+   "result": {
+    "approved": true
+   },
+   "step": "N asks A for a trust",
+   "wire": [
+    {
+     "auth": null,
+     "children": [],
+     "headers": {
+      "content-type": "application/json"
+     },
+     "host": "wire_app",
+     "method": "GET",
+     "path": "/<A>/meta",
+     "query": "",
+     "request": null,
+     "response": {
+      "aw_formats": "json",
+      "aw_supported": "actions,callbacks,listproperties,mcp,methods,nestedproperties,permissioncallback,permissionquery,resources,subscriptionbatch,subscriptionresync,subscriptions,trust,trustpermissions,www",
+      "aw_trust_types": [
+       "admin",
+       "associate",
+       "friend",
+       "mcp_client",
+       "partner",
+       "subscriber",
+       "subscriber_adopted",
+       "viewer"
+      ],
+      "aw_version": "1.0",
+      "desc": "ActingWeb app: urn:actingweb:test:integration",
+      "id": "<A>",
+      "info": "http://actingweb.org/",
+      "specification": "",
+      "trustee_root": "",
+      "type": "urn:actingweb:test:integration",
+      "version": "3.15.1"
+     },
+     "status": 200
+    },
+    {
+     "auth": null,
+     "children": [
+      {
+       "auth": "bearer:trust:N-A",
+       "children": [],
+       "headers": {
+        "content-type": "application/json"
+       },
+       "host": "wire_app",
+       "method": "GET",
+       "path": "/<N>/trust/friend/<A>",
+       "query": "",
+       "request": null,
+       "response": {
+        "approved": true,
+        "baseuri": "http://<wire_app>/<A>",
+        "created_at": "<ts:iso-offset>",
+        "desc": "",
+        "established_via": "trust",
+        "id": "<N>",
+        "last_accessed": "<ts:iso-offset>",
+        "last_connected_at": "<ts:iso-offset>",
+        "last_connected_via": "trust",
+        "peer_approved": false,
+        "peerid": "<A>",
+        "relationship": "friend",
+        "secret": "<secret:trust:N-A>",
+        "type": "urn:actingweb:test:integration",
+        "verification_token": "<secret:token:N-A#1>",
+        "verified": true
+       },
+       "status": 200
+      },
+      {
+       "auth": null,
+       "children": [],
+       "headers": {
+        "content-type": "application/json"
+       },
+       "host": "wire_app",
+       "method": "GET",
+       "path": "/<N>/meta",
+       "query": "",
+       "request": null,
+       "response": {
+        "aw_formats": "json",
+        "aw_supported": "actions,callbacks,listproperties,mcp,methods,nestedproperties,permissioncallback,permissionquery,resources,subscriptionbatch,subscriptionresync,subscriptions,trust,trustpermissions,www",
+        "aw_trust_types": [
+         "admin",
+         "associate",
+         "friend",
+         "mcp_client",
+         "partner",
+         "subscriber",
+         "subscriber_adopted",
+         "viewer"
+        ],
+        "aw_version": "1.0",
+        "desc": "ActingWeb app: urn:actingweb:test:integration",
+        "id": "<N>",
+        "info": "http://actingweb.org/",
+        "specification": "",
+        "trustee_root": "",
+        "type": "urn:actingweb:test:integration",
+        "version": "3.15.1"
+       },
+       "status": 200
+      },
+      {
+       "actor": "<A>",
+       "event": "trust_request_received",
+       "peer": "<N>",
+       "relationship": "friend"
+      }
+     ],
+     "headers": {
+      "content-type": "application/json",
+      "location": "http://<wire_app>/<A>/trust/friend/<N>"
+     },
+     "host": "wire_app",
+     "method": "POST",
+     "path": "/<A>/trust/friend",
+     "query": "",
+     "request": {
+      "baseuri": "http://<wire_app>/<N>",
+      "desc": "",
+      "id": "<N>",
+      "secret": "<secret:trust:N-A>",
+      "type": "urn:actingweb:test:integration",
+      "verify": "<secret:token:N-A#1>"
+     },
+     "response": {
+      "approved": "false",
+      "baseuri": "http://<wire_app>/<N>",
+      "desc": "",
+      "id": "<A>",
+      "peer_approved": "true",
+      "peerid": "<N>",
+      "relationship": "friend",
+      "type": "urn:actingweb:test:integration",
+      "verified": "true"
+     },
+     "status": 202
+    }
+   ]
+  }
+ ]
+}

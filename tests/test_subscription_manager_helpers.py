@@ -492,6 +492,8 @@ class TestSyncPeerTrustVerification:
 
         # Mock proxy that shows trust still exists
         mock_proxy = MagicMock()
+        mock_proxy.trust = {"relationship": "friend"}
+        mock_proxy.last_response_code = 200
         mock_proxy.get_resource = MagicMock(
             return_value={"relationship": "friend", "verified": True}
         )

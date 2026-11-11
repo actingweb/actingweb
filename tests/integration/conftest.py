@@ -14,6 +14,7 @@ These fixtures provide:
 import os
 import subprocess
 import time
+from typing import Any
 
 import filelock
 import pytest
@@ -974,6 +975,291 @@ def subscriber_app(docker_services, setup_database, worker_info):  # pylint: dis
         time.sleep(0.1)
 
     return subscriber_url
+
+
+# The wire apps (the subscription wire harness, tests/integration/_wire.py):
+# two apps shaped like the consumer, both recording. 5561 and 5562.
+BASE_WIRE_PORT = 5561
+BASE_WIRE_PEER_PORT = 5562
+BASE_WIRE_OTHER_PORT = 5563
+
+
+def _start_wire_app(name: str, port: int):
+    """Start one recording wire app on ``port``; return its ``WireHost``."""
+    from threading import Thread
+
+    import uvicorn
+
+    from ._wire import WireHost
+    from .test_harness import create_test_app
+
+    url = f"http://{TEST_APP_HOST}:{port}"
+    fastapi_app, aw_app = create_test_app(
+        fqdn=f"{TEST_APP_HOST}:{port}",
+        proto="http://",
+        enable_oauth=False,
+        enable_mcp=False,
+        enable_devtest=True,
+        enable_subscription_processing=True,
+        subscription_config={
+            "auto_sequence": True,
+            "auto_storage": True,
+            "auto_cleanup": True,
+            "gap_timeout_seconds": 2.0,
+            "max_pending": 5,
+        },
+        sync_callbacks=False,  # the consumer's shape off Lambda
+        peer_capabilities=True,
+        peer_permissions=True,
+        peer_profile=True,
+        record=name,
+    )
+
+    def run_app():
+        uvicorn.run(fastapi_app, host="0.0.0.0", port=port, log_level="error")
+
+    Thread(target=run_app, daemon=True).start()
+    for _ in range(60):
+        try:
+            if requests.get(f"{url}/", timeout=2).status_code in (200, 404):
+                break
+        except requests.exceptions.ConnectionError:
+            pass
+        time.sleep(0.5)
+    else:
+        raise RuntimeError(f"{name} failed to start on port {port}")
+    return WireHost(name, url, aw_app.get_config())
+
+
+@pytest.fixture(scope="session")
+def wire_app(docker_services, setup_database, test_app, worker_info):  # pylint: disable=unused-argument
+    """The first wire app (the environment is set by ``test_app``)."""
+    return _start_wire_app("wire_app", BASE_WIRE_PORT + worker_info["port_offset"])
+
+
+@pytest.fixture(scope="session")
+def wire_peer_app(docker_services, setup_database, test_app, worker_info):  # pylint: disable=unused-argument
+    """The second wire app, for the two-host topology."""
+    return _start_wire_app(
+        "wire_peer_app", BASE_WIRE_PEER_PORT + worker_info["port_offset"]
+    )
+
+
+@pytest.fixture(scope="session")
+def wire_other_app(docker_services, setup_database, test_app, worker_info):  # pylint: disable=unused-argument
+    """A third recorded wire app: a host a request names, which must receive
+    nothing (the security plan's access and trust rows)."""
+    return _start_wire_app(
+        "wire_other_app", BASE_WIRE_OTHER_PORT + worker_info["port_offset"]
+    )
+
+
+@pytest.fixture
+def wire_pair(wire_app, wire_peer_app, worker_info):
+    """A factory for a publisher A and a subscriber B with trust, grant and
+    subscription, in one of two topologies; torn down through the library.
+
+    Returns a ``WirePairFactory``: calling it, ``make(topology, *, grant,
+    subtarget, granularity, warm_capabilities, relationship, subscribe)``,
+    returns a ``Scenario``; ``relationship`` is ``friend`` or one of the
+    consumer's types (``subscriber``, ``subscriber_adopted``),
+    ``subscribe=False`` stops before B subscribes. ``topology`` is
+    ``same_host`` (both on ``wire_app``) or ``two_hosts`` (B on
+    ``wire_peer_app``). ``add_peer(scenario, name, relationship, *,
+    approve, to)`` adds a third actor on ``wire_app`` with a trust to B
+    (``to="B"``) or to A (``to="A"``), named in the scenario (its id,
+    creator and trust secret), and returns it with its trust secret.
+    """
+    import uuid
+
+    from actingweb.db import get_subscription_suspension
+
+    from ._wire import Scenario, WireActor, WireHost, all_names
+
+    created: list[WireActor] = []
+
+    def create(name: str, host: WireHost) -> WireActor:
+        creator = f"{name.lower()}_{uuid.uuid4().hex[:8]}@example.test"
+        response = requests.post(f"{host.url}/", json={"creator": creator})
+        assert response.status_code == 201, response.text
+        actor = WireActor(name, host, response.json())
+        created.append(actor)
+        return actor
+
+    def make(
+        topology: str = "same_host",
+        *,
+        grant: list[str] | dict[str, Any] | None = None,
+        subtarget: str = "",
+        granularity: str = "high",
+        warm_capabilities: bool = True,
+        relationship: str = "friend",
+        subscribe: bool = True,
+    ) -> Scenario:
+        a = create("A", wire_app)
+        b = create("B", wire_app if topology == "same_host" else wire_peer_app)
+        secrets: dict[str, str] = {
+            a.passphrase: "A.passphrase",
+            b.passphrase: "B.passphrase",
+        }
+
+        # B asks A for trust; both sides approve (the trust helper's shape).
+        response = requests.post(
+            f"{b.url}/trust",
+            json={"url": a.url, "relationship": relationship},
+            auth=b.basic,
+        )
+        assert response.status_code == 201, response.text
+        trust = response.json()
+        secrets[trust["secret"]] = "trust:A-B"
+        assert (
+            requests.put(
+                f"{a.url}/trust/{relationship}/{b.id}",
+                json={"approved": True},
+                auth=a.basic,
+            ).status_code
+            == 204
+        )
+        response = requests.put(
+            f"{b.url}/trust/{relationship}/{a.id}",
+            json={"approved": True},
+            auth=b.basic,
+        )
+        assert response.status_code in (200, 204), response.text
+
+        # A grants B what it may read (the permission callback reaches B now).
+        if grant is not None:
+            response = requests.put(
+                f"{a.url}/trust/{relationship}/{b.id}/permissions",
+                json={"properties": grant},
+                auth=a.basic,
+            )
+            assert response.status_code in (200, 201, 204), response.text
+
+        # B subscribes at A (the consumer's lifecycle hook does this).
+        response = (
+            None
+            if not subscribe
+            else requests.post(
+                f"{b.url}/subscriptions",
+                json={
+                    "peerid": a.id,
+                    "target": "properties",
+                    "subtarget": subtarget,
+                    "granularity": granularity,
+                },
+                auth=b.basic,
+            )
+        )
+        assert response is None or response.status_code in (201, 204), response.text
+
+        # A's cache of B's capabilities, as a mutual pair would have it. Cold,
+        # a resume schedules a background refresh that races the resync
+        # callback and the recording's nesting flips between runs.
+        if warm_capabilities:
+            from actingweb.peer_capabilities import PeerCapabilities
+
+            assert PeerCapabilities(a.interface(), b.id).refresh()
+
+        names = all_names([a, b])
+        names[a.creator] = "A.creator"
+        names[b.creator] = "B.creator"
+        scenario = Scenario(a, [b], names, secrets)
+        scenario.relationship = relationship
+        scenario.trust_secret = trust["secret"]
+        return scenario
+
+    def add_peer(
+        scenario: Scenario,
+        name: str,
+        relationship: str = "friend",
+        *,
+        approve: bool = True,
+        to: str = "B",
+    ) -> tuple[WireActor, str]:
+        other = scenario.subscribers[0] if to == "B" else scenario.publisher
+        peer = create(name, wire_app)
+        response = requests.post(
+            f"{peer.url}/trust",
+            json={"url": other.url, "relationship": relationship},
+            auth=peer.basic,
+        )
+        assert response.status_code == 201, response.text
+        secret = response.json()["secret"]
+        if approve:
+            assert (
+                requests.put(
+                    f"{other.url}/trust/{relationship}/{peer.id}",
+                    json={"approved": True},
+                    auth=other.basic,
+                ).status_code
+                == 204
+            )
+            response = requests.put(
+                f"{peer.url}/trust/{relationship}/{other.id}",
+                json={"approved": True},
+                auth=peer.basic,
+            )
+            assert response.status_code in (200, 204), response.text
+        scenario.name(peer.id, name)
+        scenario.name(peer.creator, f"{name}.creator")
+        scenario.name(peer.passphrase, f"{name}.passphrase", secret=True)
+        scenario.name(secret, f"trust:{name}-{to}", secret=True)
+        return peer, secret
+
+    def add_actor(scenario: Scenario, name: str) -> WireActor:
+        actor = create(name, wire_app)
+        scenario.name(actor.id, name)
+        scenario.name(actor.creator, f"{name}.creator")
+        scenario.name(actor.passphrase, f"{name}.passphrase", secret=True)
+        return actor
+
+    class WirePairFactory:
+        """``wire_pair``'s value: call it for a pair; ``add_peer`` for a third
+        actor with a trust, ``add_actor`` for one without."""
+
+        def add_actor(self, scenario: Scenario, name: str) -> WireActor:
+            return add_actor(scenario, name)
+
+        def __call__(self, *args: Any, **kwargs: Any) -> Scenario:
+            return make(*args, **kwargs)
+
+        def add_peer(
+            self,
+            scenario: Scenario,
+            name: str,
+            relationship: str = "friend",
+            *,
+            approve: bool = True,
+            to: str = "B",
+        ) -> tuple[WireActor, str]:
+            return add_peer(scenario, name, relationship, approve=approve, to=to)
+
+    yield WirePairFactory()
+
+    # Teardown through the library, by id: suspension rows first (actor
+    # deletion leaves them), then the actors. Fails loudly on a leftover.
+    leftovers: list[str] = []
+    for actor in created:
+        suspension_store = get_subscription_suspension(actor.host.config, actor.id)
+        for target, subtarget in suspension_store.get_all_suspended():
+            suspension_store.resume(target, subtarget or None)
+    for actor in created:
+        try:
+            actor.interface().delete()
+        except AssertionError:
+            leftovers.append(f"{actor.name} already gone")
+    from actingweb.actor import Actor
+
+    for actor in created:
+        probe = Actor(config=actor.host.config)
+        probe.get(actor_id=actor.id)
+        if probe.id:
+            leftovers.append(f"{actor.name} still loads")
+        store = get_subscription_suspension(actor.host.config, actor.id)
+        if store.get_all_suspended():
+            leftovers.append(f"{actor.name} has suspension rows")
+    assert not leftovers, leftovers
 
 
 @pytest.fixture

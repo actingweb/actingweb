@@ -1,3 +1,4 @@
+import html
 import json
 import logging
 from typing import Any
@@ -86,6 +87,18 @@ def _public_trust_row(row: Any) -> Any:
 
 
 # Handling requests to trust/
+def _is_non_admin_peer(auth_obj: Any) -> bool:
+    """Whether the caller is a peer other than an ``admin`` one. A peer may
+    read and delete its own trust row, but never approve it or write its own
+    permissions, whatever an application row admits."""
+    acl = getattr(auth_obj, "acl", None)
+    if not isinstance(acl, dict):
+        return False
+    peer = acl.get("peerid") or ""
+    relationship = str(acl.get("relationship") or "").lower()
+    return isinstance(peer, str) and bool(peer) and relationship != "admin"
+
+
 class TrustHandler(base_handler.BaseHandler):
     def get(self, actor_id):
         # A GET with a _method override changes state: refuse one a
@@ -176,7 +189,9 @@ class TrustHandler(base_handler.BaseHandler):
         new_trust = new_trust_rel.to_dict()
 
         # Trigger trust_initiated lifecycle hook to notify application of outgoing trust request
-        if self.hooks:
+        # (none when the create approved the peer's waiting request instead:
+        # no request went out, and trust_fully_approved_local ran)
+        if self.hooks and not actor_interface.core_actor.last_trust_approved_on_create:
             try:
                 peerid = new_trust.get("peerid", "")
                 logger.debug(
@@ -208,6 +223,19 @@ class TrustHandler(base_handler.BaseHandler):
         self.response.write(out)
         self.response.headers["Content-Type"] = "application/json"
         self.response.set_status(201, "Created")
+
+
+def _trust_request_answer(row: dict[str, Any]) -> dict[str, Any]:
+    """The body of the answer to a trust request (a creation or a re-pair):
+    the row, without its verification token and secret while this actor
+    has not approved it (3.16). Whoever filed a request under another
+    actor's id could otherwise answer that actor's verification with the
+    token; the secret is the requester's own."""
+    answer = dict(row)
+    if str(answer.get("approved")).lower() != "true":
+        answer.pop("verification_token", None)
+        answer.pop("secret", None)
+    return answer
 
 
 # Handling requests to /trust/*, e.g. /trust/friend
@@ -424,6 +452,39 @@ class TrustRelationshipHandler(base_handler.BaseHandler):
             # and plainly a base URL.
             self.response.set_status(400, "Invalid id or baseuri")
             return
+        # A peer that already has a row re-pairs: a credential swap, never a
+        # replacement of the row (read once here). A pending row (neither
+        # verified nor approved) is left to the creation path, which replaces
+        # it only with a request that verifies.
+        existing = myself.get_trust_relationship(peerid=peerid)
+        acl = getattr(auth_result.auth_obj, "acl", None)
+        proven = (
+            isinstance(acl, dict)
+            and bool(acl.get("authenticated"))
+            and acl.get("peerid") == peerid
+        )
+        if existing and (existing.get("verified") or existing.get("approved")):
+            # A re-pair applies to a verified or approved row only (audit A2):
+            # a pending row's holder proves only the secret it chose, and the
+            # row is replaced only by a request that verifies (below).
+            bearer = getattr(auth_result.auth_obj, "token", None) if proven else None
+            self._re_pair(
+                myself, proven, peerid, relationship, secret, str(bearer or "")
+            )
+            return
+        headers = getattr(self.request, "headers", None) or {}
+        if not existing and str(headers.get("Authorization", "")).lower().startswith(
+            "bearer "
+        ):
+            # A re-pair for a trust this actor does not hold: the initiator
+            # pairs afresh (it removes its own row first), never by creating
+            # a row here that the bearer could not have proven.
+            logger.warning(
+                f"Refused a re-pair for {peerid} at {myself.id}: no trust row"
+            )
+            self.response.set_status(403, "No trust to re-pair")
+            return
+
         if (
             self.config.auto_accept_default_relationship
             and self.config.default_relationship == relationship
@@ -486,10 +547,64 @@ class TrustRelationshipHandler(base_handler.BaseHandler):
             + "/"
             + new_trust["peerid"]
         )
-        out = json.dumps(new_trust)
+        out = json.dumps(_trust_request_answer(new_trust))
         self.response.write(out)
         self.response.headers["Content-Type"] = "application/json"
-        if approved:
+        # The stored approval: auto-accept approves only a request that
+        # verified (create_verified_trust). The created row's copy carries its
+        # flags as the strings "true"/"false" (Trust.create).
+        if str(new_trust.get("approved")).lower() == "true":
+            self.response.set_status(201, "Created")
+        else:
+            self.response.set_status(202, "Accepted")
+
+    def _re_pair(
+        self,
+        myself: Any,
+        proven: bool,
+        peerid: str,
+        relationship: str,
+        secret: str,
+        bearer: str = "",
+    ) -> None:
+        """A trust request for a peer that already has a row.
+
+        Accepted only from the peer itself, authenticated with the trust's
+        current secret; then only the secret is swapped
+        (``Actor.replace_trust_secret``). The answer follows the stored
+        approval (201 or 202) and no ``trust_request_received`` hook runs: no
+        new relationship was requested. Anything else answers 403 and
+        changes nothing. ``proven``: the request authenticated as this peer
+        (its bearer is the trust's current secret)."""
+        reason = "the request did not carry the trust's current secret"
+        new_trust = None
+        if proven:
+            new_trust, reason = myself.replace_trust_secret(
+                peerid=peerid,
+                relationship=relationship,
+                secret=secret,
+                proven_secret=bearer or None,
+            )
+        if not new_trust:
+            # Never the body's base URI in the log: it is the requester's.
+            logger.warning(
+                f"Refused a re-pair for {peerid} at {myself.id}: {reason}; the "
+                "trust is unchanged"
+            )
+            self.response.set_status(403, "Existing trust not verified")
+            return
+        logger.info(f"Re-paired {myself.id} with {peerid}: the secret was replaced")
+        self.response.headers["Location"] = str(
+            self.config.root
+            + (myself.id or "")
+            + "/trust/"
+            + new_trust["relationship"]
+            + "/"
+            + new_trust["peerid"]
+        )
+        self.response.write(json.dumps(_trust_request_answer(new_trust)))
+        self.response.headers["Content-Type"] = "application/json"
+        if new_trust.get("approved"):
             self.response.set_status(201, "Created")
         else:
             self.response.set_status(202, "Accepted")
@@ -537,6 +652,7 @@ class TrustPeerHandler(base_handler.BaseHandler):
             method="GET",
             peerid=peerid,
             approved=False,  # Allow access even if not fully approved
+            path_peer=peerid,
         ):
             if self.response:
                 self.response.set_status(403)
@@ -587,21 +703,41 @@ class TrustPeerHandler(base_handler.BaseHandler):
             else:
                 my_trust["permissions"] = None
 
+        caller_peer = ""
+        if isinstance(auth_result.auth_obj.acl, dict):
+            caller_peer = auth_result.auth_obj.acl.get("peerid") or ""
         if not my_trust["approved"] and is_peer_token:
-            # Peer with token but unapproved trust - deny access
-            if self.response:
-                self.response.set_status(403, "Trust relationship not approved")
-            return
+            if caller_peer != peerid:
+                # Another peer (an ``admin`` one) on an unapproved row.
+                if self.response:
+                    self.response.set_status(403, "Trust relationship not approved")
+                return
+            # The row's own peer reads its status while the owner has not
+            # approved it ("approved, pending", the spec's trust GET); an
+            # initiator whose re-pair answer was lost reads it with the new
+            # secret to learn that the swap happened (3.16).
 
         # Unlike the list route, this response keeps ``secret`` and
-        # ``verification_token``: the spec says the shared secret SHOULD be
-        # readable here by creator and admin (actingweb-spec.rst, "Reading
-        # Trust Relationship Data"), and peer verification reads
-        # ``verification_token`` from this route (Actor.create_verified_trust,
-        # actor.py). Do not strip them here. Client-supplied text is
-        # sanitised as on the list route.
+        # ``verification_token`` for the creator, the trustee and the peer the
+        # row belongs to, the token to that peer only while the row is
+        # approved: peer verification reads ``verification_token`` from this
+        # route (Actor.create_verified_trust, actor.py), and only from an
+        # approved row (3.16, the mirrored request). Any other peer,
+        # an ``admin`` one included, never receives them: with another peer's
+        # secret it could act as that peer, re-pair its trust and lock it
+        # out (3.16). Client-supplied text is sanitised as on the list route.
         if isinstance(my_trust, dict):
             my_trust = _sanitize_trust_text(dict(my_trust))
+            if caller_peer and caller_peer != peerid:
+                my_trust.pop("secret", None)
+                my_trust.pop("verification_token", None)
+            elif caller_peer and not my_trust.get("approved"):
+                # A pending row's own peer reads its status, never its token:
+                # whoever filed the row chose its secret, and the token would
+                # let it answer another actor's verification of a request it
+                # filed there under our id (3.16). A verification reads an
+                # initiator's own row, which is approved.
+                my_trust.pop("verification_token", None)
         out = json.dumps(my_trust)
         self.response.write(out)
         self.response.headers["Content-Type"] = "application/json"
@@ -640,12 +776,15 @@ class TrustPeerHandler(base_handler.BaseHandler):
                 method="POST",
                 peerid=peerid,
                 approved=False,
+                path_peer=peerid,
             ):
                 if self.response:
                     self.response.set_status(403)
                 return
         else:
-            if not auth_result.authorize("POST", "trust", "<type>/<id>"):
+            if not auth_result.authorize(
+                "POST", "trust", "<type>/<id>", path_peer=peerid
+            ):
                 return
 
         # Use developer API - ActorInterface with TrustManager
@@ -708,12 +847,38 @@ class TrustPeerHandler(base_handler.BaseHandler):
         else:
             self.response.set_status(500, "Not modified")
 
+    def _refuse_unverified_approval(self, actor_id: str) -> None:
+        """403 for an approval of an unverified request, with a body that
+        says why: the web UI's Approve form (``_method=PUT``) gets a page
+        with a way back to the trust list, an API client a JSON error."""
+        if not self.response:
+            return
+        message = (
+            "The trust request is not verified, so it cannot be approved. "
+            "To pair with this peer, create the trust toward its URL."
+        )
+        self.response.set_status(
+            403, "The trust request is not verified; it cannot be approved"
+        )
+        if self.request.get("_method") == "PUT":
+            back = html.escape(self._www_path(actor_id, "/trust"), quote=True)
+            self.response.headers["Content-Type"] = "text/html; charset=utf-8"
+            self.response.write(
+                f"<!doctype html><html><head><title>Not approved</title></head>"
+                f"<body><p>{html.escape(message)}</p>"
+                f'<p><a href="{back}">Back to trust relationships</a></p>'
+                f"</body></html>"
+            )
+        else:
+            self.response.headers["Content-Type"] = "application/json"
+            self.response.write(json.dumps({"error": message}))
+
     def put(self, actor_id, relationship, peerid):
         auth_result = self.authenticate_actor(actor_id, "trust", subpath=relationship)
         if not auth_result.success:
             return
         myself = auth_result.actor
-        if not auth_result.authorize("PUT", "trust", "<type>/<id>"):
+        if not auth_result.authorize("PUT", "trust", "<type>/<id>", path_peer=peerid):
             return
         approved = None
         permission_updates = None
@@ -734,7 +899,7 @@ class TrustPeerHandler(base_handler.BaseHandler):
             else:
                 desc = ""
             if "approved" in params:
-                if params["approved"] is True or params["approved"].lower() == "true":
+                if str(params["approved"]).lower() == "true":
                     approved = True
 
             # Handle permission updates
@@ -758,12 +923,95 @@ class TrustPeerHandler(base_handler.BaseHandler):
                 desc = ""
         from actingweb.trust import is_valid_peer_baseuri
 
+        # Another peer's row (an ``admin`` peer is admitted to it) keeps its
+        # base URI: it is where the trust's secret goes.
+        put_acl = getattr(auth_result.auth_obj, "acl", None)
+        put_caller = put_acl.get("peerid") if isinstance(put_acl, dict) else ""
+        if (
+            isinstance(put_caller, str)
+            and put_caller
+            and put_caller != peerid
+            and baseuri
+        ):
+            logger.warning(
+                f"Refused a peer's base URI change on another peer's trust row at "
+                f"{actor_id}"
+            )
+            if self.response:
+                self.response.set_status(403, "Forbidden")
+            return
+        # A peer on its own row (an application row may admit it) never
+        # approves the relationship or writes its own permissions: those are
+        # the owner's.
+        if _is_non_admin_peer(auth_result.auth_obj) and (
+            approved is not None or permission_updates is not None
+        ):
+            logger.warning(
+                f"Refused a peer's PUT on its own trust row for {actor_id}: "
+                "approval and permissions are the owner's"
+            )
+            if self.response:
+                self.response.set_status(403, "Forbidden")
+            return
         if baseuri and not is_valid_peer_baseuri(baseuri):
             # The peer may PUT its own row: the base URI it moves to must be
             # as plain as the one it was admitted with (it is fetched and
-            # shown).
+            # shown). Checked before the row is read, compared or fetched.
             if self.response:
                 self.response.set_status(400, "Invalid baseuri")
+            return
+        current = myself.get_trust_relationship(peerid=peerid)
+        if not current or str(current.get("relationship") or "") != str(
+            relationship or ""
+        ):
+            # The relationship in the path must be the row's: nothing is
+            # verified or written for a PUT that names another.
+            if self.response:
+                self.response.set_status(404, "Trust relationship not found")
+            return
+        if approved is True and not current.get("approved"):
+            if baseuri and baseuri.rstrip("/") != str(
+                current.get("baseuri") or ""
+            ).rstrip("/"):
+                # The second verification asks the stored base URI; a move in
+                # the same request would approve a row checked elsewhere.
+                if self.response:
+                    self.response.set_status(
+                        400, "Approve and change the base URI in two requests"
+                    )
+                return
+            if not myself.reverify_pending_trust(peerid):
+                # Only a verified request is approved (3.16): an unverified
+                # row's secret is whatever its requester chose, and anyone can
+                # file a request under a peer's id. Pair by creating the
+                # trust toward the peer's URL instead.
+                logger.warning(
+                    f"Refused to approve the trust with {peerid} at {actor_id}: "
+                    "the request is not verified"
+                )
+                self._refuse_unverified_approval(actor_id)
+                return
+        if (
+            isinstance(put_caller, str)
+            and put_caller
+            and put_caller == peerid
+            and baseuri
+            and baseuri.rstrip("/")
+            != str(
+                (myself.get_trust_relationship(peerid=peerid) or {}).get("baseuri")
+                or ""
+            ).rstrip("/")
+            and not myself._base_uri_serves(baseuri, peerid)
+        ):
+            # A peer moving its own row: the new base URI must name it on
+            # /meta, as a creation's must (Actor.create_verified_trust), or
+            # the trust's traffic would go to a host nobody checked.
+            logger.warning(
+                f"Refused a base URI move for {peerid} at {actor_id}: its /meta "
+                "does not name the peer"
+            )
+            if self.response:
+                self.response.set_status(400, "The base URI does not serve this peer")
             return
         # Use developer API - ActorInterface with TrustManager
         if actor_interface is None:
@@ -967,6 +1215,7 @@ class TrustPeerHandler(base_handler.BaseHandler):
             method="DELETE",
             peerid=peerid,
             approved=False,
+            path_peer=peerid,
         ):
             if self.response:
                 self.response.set_status(403)
@@ -978,6 +1227,15 @@ class TrustPeerHandler(base_handler.BaseHandler):
                 self.response.set_status(
                     400, "Cannot delete trust relationship with self"
                 )
+            return
+        # ?notify=false: the creator removes the local row and its cascade
+        # without contacting the peer (a dead or unreachable peer).
+        local_only = (self.request.get("notify") or "").lower() == "false"
+        if local_only and (
+            str(auth_result.auth_obj.acl.get("relationship") or "").lower() != "creator"
+        ):
+            if self.response:
+                self.response.set_status(403, "Forbidden")
             return
         is_peer = False
         if (
@@ -1027,7 +1285,9 @@ class TrustPeerHandler(base_handler.BaseHandler):
                 logger.error(f"Error triggering trust_deleted hook: {e}")
 
         # Delete trust relationship with appropriate peer notification setting
-        if is_peer:
+        if local_only:
+            deleted = myself.delete_reciprocal_trust(peerid=peerid, notify_peers=False)
+        elif is_peer:
             deleted = actor_interface.trust.delete_peer_trust(
                 peer_id=peerid, notify_peer=False
             )
@@ -1058,7 +1318,7 @@ class TrustPermissionHandler(base_handler.BaseHandler):
             return
 
         # Same authorization as trust endpoint
-        if not auth_result.authorize("GET", "trust", "<type>/<id>"):
+        if not auth_result.authorize("GET", "trust", "<type>/<id>", path_peer=peerid):
             return
 
         try:
@@ -1166,7 +1426,12 @@ class TrustPermissionHandler(base_handler.BaseHandler):
         myself = auth_result.actor
 
         # Same authorization as trust endpoint
-        if not auth_result.authorize("PUT", "trust", "<type>/<id>"):
+        if not auth_result.authorize("PUT", "trust", "<type>/<id>", path_peer=peerid):
+            return
+        # A peer never writes its own permissions (they are the owner's grant).
+        if _is_non_admin_peer(auth_result.auth_obj):
+            if self.response:
+                self.response.set_status(403, "Forbidden")
             return
 
         try:
@@ -1234,7 +1499,14 @@ class TrustPermissionHandler(base_handler.BaseHandler):
             return
 
         # Same authorization as trust endpoint
-        if not auth_result.authorize("DELETE", "trust", "<type>/<id>"):
+        if not auth_result.authorize(
+            "DELETE", "trust", "<type>/<id>", path_peer=peerid
+        ):
+            return
+        # A peer never resets its own permissions (they are the owner's grant).
+        if _is_non_admin_peer(auth_result.auth_obj):
+            if self.response:
+                self.response.set_status(403, "Forbidden")
             return
 
         try:

@@ -137,6 +137,68 @@ window, and on PostgreSQL expired ones until purged) and, per unfinished
 tombstone, one point read of the tombstone (an expired one is skipped) and
 one actor-row read; ``resume`` adds one full wipe per stalled actor.
 
+Peer State Written Before 3.16
+------------------------------
+
+Before 3.16 a callback was accepted without authentication and a peer could
+reach another peer's paths (see the 3.16 ``SECURITY`` entries in the
+changelog). What such requests wrote survives the upgrade.
+``actingweb-peer-state`` finds it and, with ``--apply``, removes it.
+
+.. code-block:: bash
+
+    # With the same environment as the application, after every instance
+    # runs 3.16, in a quiet period:
+    actingweb-peer-state report                 # every actor
+    actingweb-peer-state report ACTOR_ID
+    actingweb-peer-state prune                  # dry run
+    actingweb-peer-state prune --apply          # remove what report lists
+    actingweb-peer-state prune ACTOR_ID --apply --rps 50
+
+What it lists, per actor (names compared whole; a peer id may contain
+``:``):
+
+- ``peer-permissions``: a stored copy of permissions for a peer the actor has
+  no trust with;
+- ``future-permissions``: a trusted peer's stored copy whose timestamp is
+  more than five minutes ahead (or does not parse), which made every later
+  update look older; with ``--apply`` it is rebuilt as below;
+- ``callback-state``: sequence or pending state for a subscription the actor
+  never made;
+- ``remote-data``: peer data (``remote:<peer>``) for a peer with no trust,
+  or with no subscription the actor made to it;
+- ``remote-unknown``: a ``remote:`` bucket whose name the library does not
+  build for a peer id; reported, never removed;
+- ``permissions-copy``, only with ``--all-permissions``: every other stored
+  permission copy. A forged copy for a peer the actor trusts (a pre-3.16
+  unauthenticated callback with a current timestamp) looks like a real one.
+  With ``--apply`` the command rebuilds each removed copy right after
+  removing it, before the next removal, by a permission query to its peer,
+  and prints ``rebuilt`` or ``not rebuilt``.
+  Without a copy, the peer's next permission callback is taken for its first
+  and a pattern revoked in it deletes no stored peer data; for a peer listed
+  as ``not rebuilt``, run the query again once it answers (``fetch_peer_permissions``
+  and ``PeerPermissionStore.store_permissions``).
+
+``remote-data`` covers data an application stored for a trusted peer through
+``RemotePeerStore`` without a subscription the actor made to it: the library
+removes that data too when the last subscription to the peer goes, so an
+application that keeps peer data that way runs ``report`` first.
+
+It never rebuilds a replica: removed peer data comes back with the next
+subscription callback or sync. It runs no application hook. Running
+application processes keep the permissions they cached until restarted:
+restart them after ``prune --apply``. A row created between the command's
+read and its delete (a trust or subscription made at that moment) is misread
+as stale and removed; the next callback writes it again, which is why it is
+run in a quiet period. Exit codes: 0 nothing found, 1 rows found (report or
+dry run) or removed, 2 a store could not be read, a delete failed, or a
+removed copy was not rebuilt.
+
+Cost, per actor: one read each of its trust rows, its subscriptions, its
+attribute bucket names and the two buckets; ``--rps`` (default 10, ``0`` for
+no limit) bounds reads and deletes per second.
+
 DynamoDB Billing Mode for Auto-Created Tables
 ---------------------------------------------
 

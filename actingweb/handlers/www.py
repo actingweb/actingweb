@@ -985,13 +985,22 @@ class WwwHandler(base_handler.BaseHandler):
             # Create reciprocal trust relationship
             # The 'relationship' parameter in create_reciprocal_trust is the trust type requested from peer
             secret = self.config.new_token()
-            new_trust = myself.create_reciprocal_trust(
-                url=peer_url,
-                secret=secret,
-                desc=description,
-                relationship=trust_type,  # Trust type requested from peer (goes in URL)
-                trust_type="",  # Empty allows any mini-application type - trust registry type is separate
+            # Through TrustManager, so creating a trust toward a peer whose
+            # verified request waits runs trust_fully_approved_local, as the
+            # API does. The trust type requested from the peer goes in the URL;
+            # any mini-application type is accepted.
+            actor_interface = self._get_actor_interface(myself)
+            new_trust_rel = (
+                actor_interface.trust.create_relationship(
+                    peer_url=peer_url,
+                    relationship=trust_type,
+                    secret=secret,
+                    description=description,
+                )
+                if actor_interface
+                else None
             )
+            new_trust = new_trust_rel.to_dict() if new_trust_rel else None
 
             # TODO: Store human-readable relationship name separately if different from trust_type
             # For now, the relationship field will contain the trust type used in the protocol

@@ -202,13 +202,16 @@ class TestPermissionsHandler:
 
         handler.get("actor123", "peer456")
 
-        # Verify authorization was checked with correct parameters
+        # Verify authorization was checked with correct parameters: before the
+        # trust lookup, and bound to the peer the path names (3.16)
         mock_auth_obj.check_authorisation.assert_called_once_with(
             path="permissions",
             subpath="<id>",
             method="GET",
             peerid="peer456",
+            path_peer="peer456",
         )
+        mock_actor_interface.trust.get_relationship.assert_not_called()
 
         # Verify 403 response was set
         handler.response.set_status.assert_called_with(403, "Forbidden")

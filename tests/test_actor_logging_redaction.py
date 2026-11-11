@@ -13,6 +13,11 @@ import httpx
 import pytest
 
 from actingweb.actor import Actor
+from tests._verification_fakes import (
+    verification_through_requests_get as verification_through_requests_get,
+)
+
+pytestmark = pytest.mark.usefixtures("verification_through_requests_get")
 
 SECRET = "s3cr3t-trust-secret"
 VERIFY = "v3rify-token"
@@ -39,7 +44,15 @@ async def test_async_trust_request_logs_no_secret(
     }
     dbtrust = mock.Mock()
     dbtrust.create.return_value = True
-    dbtrust.get.return_value = {"verification_token": VERIFY}
+    # No row for the peer yet (3.16: a peer with a row re-pairs instead),
+    # then the row just created.
+    # The existence check, the created row, then the failed attempt's
+    # cleanup reading the row back (it removes only its own attempt).
+    dbtrust.get.side_effect = [
+        None,
+        {"verification_token": VERIFY, "secret": SECRET},
+        {"secret": SECRET},
+    ]
 
     class _FailingClient:
         def __init__(self, *args: Any, **kwargs: Any) -> None:

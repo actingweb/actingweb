@@ -410,6 +410,21 @@ class TestTrustActorFlow:
 
         Spec: docs/actingweb-spec.rst:1092-1857
         """
+        # test_018 deleted actor1's row only (?peer=true), so actor2 still
+        # holds one for actor1. Since 3.16 a request for a peer that has a
+        # row is a re-pair, accepted only with the current secret, which
+        # actor1 no longer has: actor2's owner removes the stale row first
+        # (locally, ?notify=false), then the two pair again.
+        stale = requests.get(
+            f"{self.actor2_url}/trust/friend/{self.actor1_id}",
+            auth=(self.creator2, self.passphrase2),  # type: ignore[arg-type]
+        )
+        if stale.status_code in (200, 202):
+            response = requests.delete(
+                f"{self.actor2_url}/trust/friend/{self.actor1_id}?notify=false",
+                auth=(self.creator2, self.passphrase2),  # type: ignore[arg-type]
+            )
+            assert response.status_code == 204
         response = requests.post(
             f"{self.actor1_url}/trust",
             json={

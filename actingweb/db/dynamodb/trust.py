@@ -5,7 +5,7 @@ from typing import Any
 
 from pynamodb.attributes import BooleanAttribute, UnicodeAttribute, UTCDateTimeAttribute
 from pynamodb.constants import PAY_PER_REQUEST_BILLING_MODE
-from pynamodb.exceptions import DoesNotExist
+from pynamodb.exceptions import DoesNotExist, PutError, UpdateError
 from pynamodb.indexes import AllProjection, GlobalSecondaryIndex
 from pynamodb.models import Model
 
@@ -241,79 +241,116 @@ class DbTrust:
         aw_supported=None,
         aw_version=None,
         capabilities_fetched_at=None,
+        *,
+        only_if_verified: bool = False,
+        only_if_secret: str | None = None,
     ):
         """Modify a trust
 
-        If bools are none, they will not be changed.
+        If bools are none, they will not be changed. Only the attributes given
+        are written, in one update conditioned on the row still existing: a
+        concurrent change to another attribute (a re-pair's secret swap, say)
+        is never written back over, and a row deleted meanwhile is not
+        recreated (False). ``only_if_verified`` also requires the stored row
+        to be verified (or approved already), ``only_if_secret`` its secret to be that value: a
+        condition that fails answers False and writes nothing.
         """
         if not self.handle:
             logger.debug("Attempted modification of DbTrust without db handle")
             return False
+        before = dict(self.handle.attribute_values)
+        # Every attribute the caller passed is written, whatever this handle
+        # last read: comparing with the handle would skip a write the
+        # database needs when another process changed the row.
+        given: dict[str, Any] = {}
         if baseuri and len(baseuri) > 0:
-            self.handle.baseuri = baseuri
+            given["baseuri"] = baseuri
         if secret and len(secret) > 0:
-            self.handle.secret = secret
+            given["secret"] = secret
         if desc and len(desc) > 0:
-            self.handle.desc = desc
+            given["desc"] = desc
         if approved is not None:
-            self.handle.approved = approved
+            given["approved"] = approved
         if verified is not None:
-            self.handle.verified = verified
+            given["verified"] = verified
         if verification_token and len(verification_token) > 0:
-            self.handle.verification_token = verification_token
+            given["verification_token"] = verification_token
         if peer_approved is not None:
-            self.handle.peer_approved = peer_approved
+            given["peer_approved"] = peer_approved
 
         # Handle new unified trust attributes
         if peer_identifier is not None:
-            self.handle.peer_identifier = peer_identifier
+            given["peer_identifier"] = peer_identifier
         if established_via is not None:
-            self.handle.established_via = established_via
+            given["established_via"] = established_via
         if created_at is not None:
             try:
-                self.handle.created_at = _parse_timestamp(created_at)
+                given["created_at"] = _parse_timestamp(created_at)
             except ValueError as e:
                 logger.warning(f"Invalid created_at timestamp: {e}")
                 # Keep existing value if parsing fails
         if last_accessed is not None:
             try:
-                self.handle.last_accessed = _parse_timestamp(last_accessed)
+                given["last_accessed"] = _parse_timestamp(last_accessed)
             except ValueError as e:
                 logger.warning(f"Invalid last_accessed timestamp: {e}")
                 # Keep existing value if parsing fails
 
         if last_connected_via is not None:
-            self.handle.last_connected_via = canonical_connection_method(
+            given["last_connected_via"] = canonical_connection_method(
                 last_connected_via
             )
 
         # Handle client metadata for OAuth2 clients
         if client_name is not None:
-            self.handle.client_name = client_name
+            given["client_name"] = client_name
         if client_version is not None:
-            self.handle.client_version = client_version
+            given["client_version"] = client_version
         if client_platform is not None:
-            self.handle.client_platform = client_platform
+            given["client_platform"] = client_platform
         if oauth_client_id is not None:
-            self.handle.oauth_client_id = oauth_client_id
+            given["oauth_client_id"] = oauth_client_id
 
         # Handle peer capability tracking fields
         if aw_supported is not None:
-            self.handle.aw_supported = aw_supported
+            given["aw_supported"] = aw_supported
         if aw_version is not None:
-            self.handle.aw_version = aw_version
+            given["aw_version"] = aw_version
         if capabilities_fetched_at is not None:
             try:
-                self.handle.capabilities_fetched_at = _parse_timestamp(
+                given["capabilities_fetched_at"] = _parse_timestamp(
                     capabilities_fetched_at
                 )
             except ValueError as e:
                 logger.warning(f"Invalid capabilities_fetched_at timestamp: {e}")
                 # Keep existing value if parsing fails
 
+        if not given:
+            return True
+        for name, value in given.items():
+            setattr(self.handle, name, value)
+        actions = [getattr(Trust, name).set(value) for name, value in given.items()]
+        condition = Trust.id.exists()
+        if only_if_verified:
+            # Verified, or approved already (a row approved before 3.16
+            # without a verification: approving it again changes nothing).
+            condition = condition & (
+                (Trust.verified == True) | (Trust.approved == True)  # noqa: E712
+            )
+        if only_if_secret is not None:
+            condition = condition & (Trust.secret == only_if_secret)
         try:
-            self.handle.save()
+            self.handle.update(actions=actions, condition=condition)
         except Exception as e:
+            # Nothing is known to be written: the handle keeps what it read.
+            self.handle.attribute_values.clear()
+            self.handle.attribute_values.update(before)
+            if (
+                isinstance(e, UpdateError)
+                and e.cause_response_code == "ConditionalCheckFailedException"
+            ):
+                # The row is gone, or a condition failed.
+                return False
             raise DbError("trust modify") from e
         return True
 
@@ -345,8 +382,13 @@ class DbTrust:
         aw_supported=None,
         aw_version=None,
         capabilities_fetched_at=None,
+        *,
+        only_if_absent: bool = False,
+        only_if_pending: bool = False,
     ):
-        """Create a new trust"""
+        """Create a new trust (an upsert; ``only_if_absent`` writes only when
+        no row exists for the actor and peer, and answers False when one
+        does)."""
         if not actor_id or not peerid:
             return False
         # Create trust with existing attributes
@@ -421,7 +463,21 @@ class DbTrust:
 
         self.handle = Trust(**trust_kwargs)
         try:
-            self.handle.save()
+            if only_if_absent:
+                self.handle.save(condition=Trust.id.does_not_exist())
+            elif only_if_pending:
+                self.handle.save(
+                    condition=Trust.id.does_not_exist()
+                    | ((Trust.verified == False) & (Trust.approved == False))  # noqa: E712
+                )
+            else:
+                self.handle.save()
+        except PutError as e:
+            if (only_if_absent or only_if_pending) and e.cause_response_code == (
+                "ConditionalCheckFailedException"
+            ):
+                return False
+            raise DbError("trust create") from e
         except Exception as e:
             raise DbError("trust create") from e
         return True

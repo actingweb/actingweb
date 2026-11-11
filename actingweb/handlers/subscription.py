@@ -1,9 +1,69 @@
 import json
 import logging
+from typing import Any
 
+from actingweb.actor import resync_marker_url
 from actingweb.handlers import base_handler
 
 logger = logging.getLogger(__name__)
+
+
+def _as_permitted(myself: Any, peerid: str, sub_dict: dict[str, Any], raw: Any) -> Any:
+    """A stored diff as the subscriber may read it: diffs are stored whole,
+    and a pulled one passes the same filter as the pushed callback
+    (``Actor.filter_subscription_blob``). A diff the peer may read none of
+    reads as ``{}``, a change that changes nothing (the library's
+    subscriber merges it as a no-op), its sequence kept; the push sends
+    nothing for it."""
+    filtered = myself.filter_subscription_blob(peerid, sub_dict, raw)
+    if filtered is None:
+        return {}
+    try:
+        return json.loads(filtered)
+    except (TypeError, ValueError):
+        return filtered
+
+
+def _served(
+    myself: Any, peerid: str, sub_dict: dict[str, Any], raw: Any
+) -> dict[str, Any]:
+    """A stored diff's served fields: ``data`` as the subscriber may read
+    it, or, for a client's resync marker (``Actor.resync_marker``), ``type``
+    ``"resync"`` and the ``url`` to re-read under its own grant, as a resync
+    callback carries them. Its ``data`` is ``{}``, a no-op change for a
+    reader that does not know the type."""
+    config = getattr(myself, "config", None)
+    if config:
+        url = resync_marker_url(
+            raw,
+            config,
+            myself.id,
+            str(sub_dict.get("target") or ""),
+            sub_dict.get("subtarget"),
+        )
+        if url:
+            return {"type": "resync", "url": url, "data": {}}
+    return {"data": _as_permitted(myself, peerid, sub_dict, raw)}
+
+
+def _authorize_subscription_write(
+    auth_result: "base_handler.AuthResult", method: str, peerid: str
+) -> bool:
+    """Authorise a PUT or DELETE on ``subscriptions/<id>/<subid>`` as the
+    method it is, for the peer the path names. The built-in ``owner`` row
+    admits a peer to its own subscriptions whatever its relationship's rows
+    say (3.16); another peer is refused by the path binding."""
+    return auth_result.authorize(
+        method, "subscriptions", "<id>/<subid>", path_peer=peerid
+    )
+
+
+def _own_subscriptions_only(auth_obj: Any, requested: str | None) -> str | None:
+    """The peer whose subscriptions the root listing may show: a peer caller
+    sees only its own, whatever the query names; creator and trustee keep
+    the query."""
+    caller = str((auth_obj.acl.get("peerid") if auth_obj else "") or "")
+    return caller or requested
 
 
 class SubscriptionRootHandler(base_handler.BaseHandler):
@@ -17,9 +77,12 @@ class SubscriptionRootHandler(base_handler.BaseHandler):
         if self.request.get("_method") == "POST":
             self.post(actor_id)
             return
-        myself = self.require_authenticated_actor(actor_id, "subscriptions", "GET")
-        if not myself:
+        auth_result = self.authenticate_actor(actor_id, "subscriptions")
+        if not auth_result.success:
             return
+        if not auth_result.authorize("GET", "subscriptions"):
+            return
+        myself = auth_result.actor
 
         # Use developer API - ActorInterface with SubscriptionManager
         actor_interface = self._get_actor_interface(myself)
@@ -28,7 +91,10 @@ class SubscriptionRootHandler(base_handler.BaseHandler):
                 self.response.set_status(500, "Internal error")
             return
 
-        peerid = self.request.get("peerid")
+        # A peer caller lists only its own rows, whatever ?peerid= names.
+        peerid = _own_subscriptions_only(
+            auth_result.auth_obj, self.request.get("peerid")
+        )
         target = self.request.get("target")
         subtarget = self.request.get("subtarget")
         resource = self.request.get("resource")
@@ -65,9 +131,12 @@ class SubscriptionRootHandler(base_handler.BaseHandler):
             self.response.set_status(200, "Ok")
 
     def post(self, actor_id):
-        myself = self.require_authenticated_actor(actor_id, "subscriptions", "POST")
-        if not myself:
+        auth_result = self.authenticate_actor(actor_id, "subscriptions")
+        if not auth_result.success:
             return
+        if not auth_result.authorize("POST", "subscriptions"):
+            return
+        myself = auth_result.actor
 
         # Use developer API - ActorInterface with SubscriptionManager
         actor_interface = self._get_actor_interface(myself)
@@ -98,6 +167,14 @@ class SubscriptionRootHandler(base_handler.BaseHandler):
         if not peerid or len(peerid) == 0:
             if self.response:
                 self.response.set_status(400, "Missing peer URL")
+            return
+        # A peer caller (an application row may admit one here) can make
+        # this actor subscribe only to itself, never to another peer.
+        acl = getattr(auth_result.auth_obj, "acl", None)
+        caller = acl.get("peerid") if isinstance(acl, dict) else ""
+        if isinstance(caller, str) and caller and peerid != caller:
+            if self.response:
+                self.response.set_status(403, "Forbidden")
             return
         if not target or len(target) == 0:
             if self.response:
@@ -146,6 +223,7 @@ class SubscriptionRelationshipHandler(base_handler.BaseHandler):
             method="GET",
             peerid=peerid,
             approved=False,  # Allow access even if not fully approved
+            path_peer=peerid,
         ):
             if self.response:
                 self.response.set_status(403)
@@ -201,7 +279,7 @@ class SubscriptionRelationshipHandler(base_handler.BaseHandler):
         if not auth_result.success:
             return
         myself = auth_result.actor
-        if not auth_result.authorize("POST", "subscriptions", "<id>"):
+        if not auth_result.authorize("POST", "subscriptions", "<id>", path_peer=peerid):
             return
         try:
             body = self.request.body
@@ -311,7 +389,9 @@ class SubscriptionHandler(base_handler.BaseHandler):
         if not auth_result.success:
             return
         myself = auth_result.actor
-        if not auth_result.authorize("GET", "subscriptions", "<id>/<subid>"):
+        if not auth_result.authorize(
+            "GET", "subscriptions", "<id>/<subid>", path_peer=peerid
+        ):
             return
 
         # Use developer API - ActorInterface with SubscriptionManager
@@ -337,24 +417,20 @@ class SubscriptionHandler(base_handler.BaseHandler):
             return
 
         diffs = sub_with_diffs.get_diffs()
+        sub_dict = sub_info.to_dict()
         pairs = []
         for diff in diffs:
-            try:
-                d = json.loads(diff["diff"])
-            except (TypeError, ValueError, KeyError):
-                d = diff["diff"]
             pairs.append(
                 {
                     "sequence": diff["sequence"],
                     "timestamp": diff["timestamp"].strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
-                    "data": d,
+                    **_served(myself, peerid, sub_dict, diff.get("diff")),
                 }
             )
 
         # Always return subscription metadata with current sequence,
         # even when there are no new diffs. This allows subscribers
         # to synchronize their sequence number with the publisher.
-        sub_dict = sub_info.to_dict()
         data = {
             "id": myself.id,
             "peerid": peerid,
@@ -378,7 +454,8 @@ class SubscriptionHandler(base_handler.BaseHandler):
         if not auth_result.success:
             return
         myself = auth_result.actor
-        if not auth_result.authorize("GET", "subscriptions", "<id>/<subid>"):
+        # The method the request performs (a GET ?_method=PUT included).
+        if not _authorize_subscription_write(auth_result, "PUT", peerid):
             return
         try:
             body = self.request.body
@@ -437,7 +514,8 @@ class SubscriptionHandler(base_handler.BaseHandler):
         if not auth_result.success:
             return
         myself = auth_result.actor
-        if not auth_result.authorize("GET", "subscriptions", "<id>/<subid>"):
+        # The method the request performs (a GET ?_method=DELETE included).
+        if not _authorize_subscription_write(auth_result, "DELETE", peerid):
             return
         # Do not delete remote subscription if this is from our peer
         acl_peerid = auth_result.auth_obj.acl.get("peerid", "")
@@ -545,7 +623,10 @@ class SubscriptionDiffHandler(base_handler.BaseHandler):
         if not auth_result.success:
             return
         myself = auth_result.actor
-        if not auth_result.authorize("GET", "subscriptions", "<id>/<subid>"):
+        # A GET that consumes the diff is still a GET.
+        if not auth_result.authorize(
+            "GET", "subscriptions", "<id>/<subid>", path_peer=peerid
+        ):
             return
 
         # Use developer API - ActorInterface with SubscriptionManager
@@ -578,12 +659,8 @@ class SubscriptionDiffHandler(base_handler.BaseHandler):
             self.response.set_status(404, "No diffs available")
             return
 
-        try:
-            d = json.loads(diff["data"])
-        except (TypeError, ValueError, KeyError):
-            d = diff["data"]
-
         sub_dict = sub_info.to_dict()
+        served = _served(myself, peerid, sub_dict, diff.get("data"))
         pairs = {
             "id": myself.id,
             "peerid": peerid,
@@ -593,7 +670,7 @@ class SubscriptionDiffHandler(base_handler.BaseHandler):
             "subtarget": sub_dict["subtarget"],
             "resource": sub_dict["resource"],
             "sequence": seqnr,
-            "data": d,
+            **served,
         }
         sub_with_diffs.clear_diff(seqnr)
         out = json.dumps(pairs)

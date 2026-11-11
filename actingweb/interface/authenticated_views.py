@@ -30,6 +30,26 @@ class PermissionError(Exception):
 logger = logging.getLogger(__name__)
 
 
+def _client_trust_peer_id(actor: "ActorInterface", client_id: str) -> str:
+    """The peer id of the trust row that authorises ``client_id`` (3.16),
+    as MCP authentication resolves it (``find_client_trust``); never a peer
+    id the caller passed, which could name another row. "" when the client
+    has no trust row."""
+    if not client_id or not getattr(actor, "id", None):
+        return ""
+    from ..oauth2_server.trust_lookup import find_client_trust
+
+    try:
+        trust = find_client_trust(actor.trust.relationships, client_id, actor.id)
+    except DbError:
+        raise
+    except Exception as e:
+        # Fails closed: evaluated as the client id, which has no trust row.
+        logger.debug(f"Could not resolve the trust row of client {client_id}: {e}")
+        return ""
+    return str(getattr(trust, "peerid", "") or "") if trust is not None else ""
+
+
 class AuthContext:
     """Authentication context for permission evaluation."""
 
@@ -42,11 +62,31 @@ class AuthContext:
         self.peer_id = peer_id
         self.client_id = client_id
         self.trust_relationship = trust_relationship or {}
+        # The peer id of the client's trust row, which permissions are kept
+        # under (``oauth2_client:<email>:<client>``, not the client id).
+        # Resolved on first use, by the resolver ``AuthenticatedActorView``
+        # sets: a view nobody checks a permission on reads no trust.
+        self.client_peer_id = ""
+        self._client_resolver: Any = None
 
     @property
     def accessor_id(self) -> str:
         """Get the accessor identifier (peer_id or client_id)."""
         return self.peer_id or self.client_id
+
+    @property
+    def permission_id(self) -> str:
+        """The id permissions are evaluated for: the peer id, or for a
+        client the peer id of its trust row (the client id when it has none,
+        which is then granted nothing)."""
+        if self.peer_id:
+            return self.peer_id
+        if self.client_id and not self.client_peer_id and self._client_resolver:
+            # The resolver is dropped only once it answered: a fault (a
+            # DbError, which propagates) leaves the next check to try again.
+            self.client_peer_id = self._client_resolver()
+            self._client_resolver = None
+        return self.client_peer_id or self.client_id
 
     @property
     def is_peer(self) -> bool:
@@ -91,7 +131,7 @@ class AuthenticatedPropertyStore:
             evaluator = get_permission_evaluator(self._config)
             result = evaluator.evaluate_property_access(
                 self._actor_id,
-                self._auth_context.accessor_id,
+                self._auth_context.permission_id,
                 key,
                 operation,
             )
@@ -433,7 +473,7 @@ class AuthenticatedPropertyListStore:
             # No "list:" prefix - that's an internal storage detail only
             result = evaluator.evaluate_property_access(
                 self._actor_id,
-                self._auth_context.accessor_id,
+                self._auth_context.permission_id,
                 list_name,
                 operation,
             )
@@ -515,7 +555,7 @@ class AuthenticatedPropertyListStore:
             evaluator = get_permission_evaluator(self._config)
             results = evaluator.evaluate_bulk_property_access(
                 self._actor_id,
-                self._auth_context.accessor_id,
+                self._auth_context.permission_id,
                 list(names),
                 "read",
             )
@@ -646,7 +686,7 @@ class AuthenticatedSubscriptionManager:
             property_path = f"{target}/{subtarget}" if subtarget else target
             result = evaluator.evaluate_property_access(
                 self._actor_id,
-                self._auth_context.accessor_id,
+                self._auth_context.permission_id,
                 property_path,
                 "read",
             )
@@ -681,28 +721,49 @@ class AuthenticatedSubscriptionManager:
 
         # Create subscription with the accessor as the peer
         return self._manager._core_actor.create_subscription(
-            peerid=self._auth_context.accessor_id,
+            # A client's subscription is kept under its trust's peer id, the
+            # id its diffs are filtered for (3.16).
+            peerid=self._auth_context.permission_id,
             target=target,
             subtarget=subtarget or None,
             resource=resource or None,
             granularity=granularity,
         )
 
-    # Delegate read-only operations without permission checks
+    def _own_rows(self, subscriptions: list[Any]) -> list[Any]:
+        """Only the subscriptions of the accessor's own trust.
+
+        Owner mode (no accessor) sees every row. A peer view sees the rows
+        whose peer is the peer itself; a client view the rows whose peer is
+        its trust's peer id or its client id (where subscriptions were filed
+        before 3.16), never a peer id a passed trust dict names."""
+        if not self._auth_context.accessor_id:
+            return subscriptions
+        if self._auth_context.is_peer:
+            own = {self._auth_context.peer_id}
+        else:
+            own = {
+                self._auth_context.permission_id,
+                self._auth_context.accessor_id,
+            }
+        own.discard("")
+        return [sub for sub in subscriptions if getattr(sub, "peer_id", None) in own]
+
+    # Read-only listings, limited to the accessor's own trust
     @property
     def all_subscriptions(self) -> list[Any]:
-        """Get all subscriptions."""
-        return self._manager.all_subscriptions
+        """Get the subscriptions this view may see (all of them in owner mode)."""
+        return self._own_rows(self._manager.all_subscriptions)
 
     @property
     def outbound_subscriptions(self) -> list[Any]:
-        """Get outbound subscriptions."""
-        return self._manager.outbound_subscriptions
+        """Get outbound subscriptions this view may see."""
+        return self._own_rows(self._manager.outbound_subscriptions)
 
     @property
     def inbound_subscriptions(self) -> list[Any]:
-        """Get inbound subscriptions."""
-        return self._manager.inbound_subscriptions
+        """Get inbound subscriptions this view may see."""
+        return self._own_rows(self._manager.inbound_subscriptions)
 
 
 class AuthenticatedActorView:
@@ -735,6 +796,10 @@ class AuthenticatedActorView:
         self._auth_context = auth_context
         self._hooks = hooks
         self._config = getattr(actor._core_actor, "config", None)
+        if auth_context.is_client and not auth_context.client_peer_id:
+            auth_context._client_resolver = lambda: _client_trust_peer_id(
+                actor, auth_context.client_id
+            )
 
         # Cached authenticated stores
         self._properties: AuthenticatedPropertyStore | None = None

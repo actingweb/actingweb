@@ -285,8 +285,11 @@ class Config:
             ("", "oauth", "", "a"),
             # Allow owners on subscriptions
             ("owner", "callbacks/subscriptions", "POST", "a"),
-            # Allow anybody callbacks witout auth
-            ("", "callbacks", "", "a"),
+            # Any authenticated caller on callbacks; the two peer branches
+            # (callbacks/subscriptions/<peer>/..., callbacks/permissions/<peer>)
+            # also require the caller to be the peer they name
+            # (handlers/callbacks.py)
+            ("any", "callbacks", "", "a"),
             # Allow only creator access to /www
             ("creator", "www", "", "a"),
             # Allow creator access to /properties
@@ -312,10 +315,10 @@ class Config:
             ("friend", "actions", "", "a"),
             ("partner", "actions", "", "a"),
             ("admin", "actions", "", "a"),
-            # Allow peers to query permissions granted to them
-            ("associate", "permissions/<id>", "GET", "a"),
-            ("friend", "permissions/<id>", "GET", "a"),
-            ("partner", "permissions/<id>", "GET", "a"),
+            # A peer of any relationship type queries the permissions granted
+            # to it (owner); the creator and an admin peer query any peer's
+            ("owner", "permissions/<id>", "GET", "a"),
+            ("creator", "permissions", "GET", "a"),
             ("admin", "permissions/<id>", "GET", "a"),
             # Allow service management for actor owners and administrators
             ("creator", "services", "", "a"),
@@ -330,8 +333,12 @@ class Config:
             # creator/trustee/admin
             ("trustee", "trust", "", "a"),
             ("admin", "trust", "", "a"),
-            # Owner can create++ own subscriptions
-            ("owner", "subscriptions", "", "a"),
+            # A peer reads, clears and ends its own subscription (owner: the
+            # caller is the peer the path names). Creating one is its
+            # relationship's rows' (3.16: this row never admitted creation).
+            # Listing its own (GET subscriptions/<id>), as before 3.16.
+            ("owner", "subscriptions/<id>", "GET", "a"),
+            ("owner", "subscriptions/<id>/<subid>", "GET,PUT,DELETE", "a"),
             # Owner can create subscriptions
             ("friend", "subscriptions/<id>", "", "a"),
             # Creator can do everything

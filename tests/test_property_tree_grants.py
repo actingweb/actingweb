@@ -224,3 +224,62 @@ def test_the_full_state_fallback_drops_excluded_children_at_their_paths() -> Non
     with mock.patch.object(Actor, "grant_for", return_value=None):
         # No grant to read: left to the pull filter, which sends nothing.
         assert actor._filter_full_state("p1", "", whole, set()) == whole
+
+
+def _nested(depth: int) -> dict[str, Any]:
+    value: dict[str, Any] = {"leaf": 1}
+    for _ in range(depth):
+        value = {"a": value}
+    return value
+
+
+def test_the_full_state_fallback_leaves_out_a_value_too_deep() -> None:
+    """Re-run 2 of the grant-enforcement verification (Issue 2): a value too
+    deep to filter was sent as ``null``, which wipes the subscriber's copy.
+    It is left out; the rest is sent."""
+    import json as _json
+    from unittest import mock
+
+    from actingweb.actor import Actor
+
+    actor = object.__new__(Actor)
+    rules = _rules("settings/private")
+    deep = _nested(150)
+    with mock.patch.object(Actor, "grant_for", return_value=_grant(rules)):
+        kept = actor._filter_full_state(
+            "p1", "", {"deep": deep, "text": _json.dumps(deep), "color": "b"}, set()
+        )
+        assert kept == {"color": "b"}
+        assert actor._filter_full_state("p1", "deep", {"deep": deep}, set()) == {}
+    with mock.patch.object(
+        Actor, "grant_for", return_value=_grant({"patterns": ["*"]})
+    ):
+        # Nothing excluded: nothing walked, sent whole.
+        assert actor._filter_full_state("p1", "", {"deep": deep}, set()) == {
+            "deep": deep
+        }
+
+
+def test_a_diff_with_no_exclusion_passes_whatever_its_depth() -> None:
+    """Re-run 2 (Issue 1): with no exclusion, the prune after the filter
+    still recursed; a value ~1500 deep raised and the subscriber got no
+    diff. It passes unwalked."""
+    from actingweb.actor import Actor
+
+    deep = _nested(1500)
+    assert Actor._diff_part({"patterns": ["*"]}, "settings", deep) is deep
+    assert Actor._diff_part(None, "settings", deep) is deep
+
+
+def test_one_walk_drops_a_deep_excluded_part_and_keeps_the_rest() -> None:
+    """Re-run 2 (Issue 13): the depth is measured in the filter's own walk;
+    an excluded part is dropped unwalked, whatever its depth."""
+    value = {"private": _nested(1500), "ok": 1}
+    assert drop_excluded(_rules("settings/private"), "settings", value) == {"ok": 1}
+    assert (
+        drop_excluded(_rules("settings/private"), "settings", {"ok": _nested(150)})
+        is None
+    )
+    assert drop_excluded(_rules("settings/private"), "settings", {"ok": [[[]]]}) == {
+        "ok": [[[]]]
+    }

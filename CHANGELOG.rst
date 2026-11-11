@@ -24,10 +24,12 @@ SECURITY
   refused whole. An object stored or written as JSON text (a form post, an
   SDK write of a JSON string, and every value the developer views read
   back from storage) is filtered as the object, and handed back as text.
-  When the grant excludes anything, a value nested more than 100 levels
-  deep (objects or arrays) is withheld from the peer (``null`` on a read,
-  left out of a diff) and the peer's write of one is 403: the filter
-  cannot walk it safely, and it is never sent unfiltered. A
+  **Behavior change:** when the grant excludes anything, a kept part
+  nested more than 100 levels deep (objects or arrays) is withheld from
+  the peer (a direct read is 403, the name is left out of the listing and
+  of a diff, a developer view reads ``None``) and the peer's write of one
+  is 403: the filter cannot walk it safely, and it is never sent
+  unfiltered. An excluded part is dropped whatever its depth. A
   peer gets 403 for a list it may not write whether it exists or not
   (``PUT ?index=`` and a bulk ``items`` write answered 404/400 for a
   missing one first). ``docs/migration/v3.16.rst`` ("Grants hold at every
@@ -63,8 +65,9 @@ SECURITY
   trust); a request that names nothing is refused when the grant mentions
   the category, except the ``GET`` listing of methods or actions, admitted
   when the rule names anything and filtered per name, and JSON-RPC on the
-  bare ``/methods``, decided by the method its body names (a refused one
-  answers HTTP 403 with the JSON-RPC error ``-32000``).
+  bare ``/methods``, decided by the method its body names. **Behavior
+  change:** a refused JSON-RPC method answers HTTP 403 with the JSON-RPC
+  error ``-32000`` (it answered 200).
   ``docs/migration/v3.16.rst`` ("Every other way in") lists each.
 - **An MCP client could give itself any access level, ``admin``
   included.** An anonymous ``POST /oauth/register`` stored the
@@ -920,7 +923,12 @@ CHANGED
   ``POST /oauth/authorize/confirm`` (new). The form, the confirmation and
   their JSON answers send ``X-Frame-Options: DENY``, ``frame-ancestors
   'none'``, ``Cache-Control: no-store`` and ``Referrer-Policy:
-  no-referrer``. The form answers JSON for ``Accept: application/json``
+  same-origin``. A refused or failed confirmation is the same page with an
+  ``error`` sentence for a browser (JSON for an API caller), with its
+  status (400, 403, 500 or 503). **Behavior change:** an OAuth2 page (the
+  form or the confirmation) whose template fails to render answers its JSON
+  fallback with the handler's error status, else 500 (it answered 200).
+  The form answers JSON for ``Accept: application/json``
   under FastAPI too (the header was matched case-sensitively). The Apple
   button on the form completes (its state was wrapped in JSON and never
   matched).

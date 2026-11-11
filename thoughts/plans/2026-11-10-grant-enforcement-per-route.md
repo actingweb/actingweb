@@ -1,6 +1,6 @@
 ---
 status: done
-verified: thoughts/verifications/2026-11-10-grant-enforcement-per-route-reverify-1.md
+verified: thoughts/verifications/2026-11-10-grant-enforcement-per-route-reverify-2.md
 ---
 
 # Implementation Plan: a peer's grant is the answer on every route
@@ -2513,3 +2513,116 @@ unit 5054 passed before the guard marker on `_put_type_back`
 (`test_no_broad_except_folds_a_db_fault_unmarked` caught it; passes after);
 DynamoDB 6507 passed; PostgreSQL 6304 passed; docs build with `-W`. No
 wire recording changed.
+
+### 2026-11-11, after verification thoughts/verifications/2026-11-10-grant-enforcement-per-route-reverify-2.md
+
+Each fix has a test that fails on `6f2becd` unless noted; the tests drive
+the route where one exists (re-run 2 found helper-level tests missing the
+bug they were for).
+
+#### 37. A client's override for another type is removed on its own read, logged
+
+**Category**: Decision changed / Bug fix (re-run 2, Issues 4, 5, 6)
+
+**What changed**: owner decision 2026-11-10 ("keep rule, log, document"):
+an OAuth2/MCP client's override naming a type other than the one the user
+approves is removed at the authorisation, now decided on a read right
+before the delete (an owner's override for the approved type written
+meanwhile is kept) and logged at WARNING. The rollback puts the old type
+back only while the row still holds the type this call wrote (a concurrent
+authorisation's type stays). The migration guide says a client's override
+must name its row's type.
+
+**Files affected**: `actingweb/interface/trust_manager.py`
+(`_drop_client_override`, `_put_type_back`), `docs/migration/v3.16.rst`;
+`tests/test_client_trust_update.py`
+(`test_an_override_for_another_type_is_removed_with_a_warning`,
+`test_an_owner_s_override_written_during_the_check_is_kept`,
+`test_the_rollback_leaves_a_type_another_authorisation_wrote`).
+
+#### 38. The async revocation delete runs on its own executor; hooks are bounded
+
+**Category**: Bug fix (re-run 2, Issues 3, 7, 13)
+
+**What changed**: `sync_peer_async` deletes on a small executor of its own
+(`_revocation_executor`, with the request's context copied), so a
+coroutine `trust_deleted` hook that needs the default executor is never
+waiting on a thread the delete holds (reproduced with a one-worker default
+pool). `execute_lifecycle_hooks_for_loop` waits at most
+`LOOP_HOOK_TIMEOUT_SECONDS` (120) for a coroutine hook, then cancels and
+logs it; the sync and loop-bridged executors share one hook loop and error
+policy (`_each_lifecycle_hook`). Both `sync_peer` twins pass the probe's
+secret as `expected_secret`: a trust re-paired since the probe is kept
+(`TrustReplaced`, logged at INFO) and fires no hook.
+
+**Files affected**: `actingweb/interface/subscription_manager.py`,
+`actingweb/interface/hooks.py`; `tests/test_revoked_trust_detection.py`
+(`test_a_hook_needing_the_default_pool_does_not_deadlock`,
+`test_a_coroutine_hook_that_never_finishes_is_given_up`,
+`test_a_trust_re_paired_since_the_probe_is_kept`, both twins assert
+`expected_secret`).
+
+#### 39. "Withheld" is left out; one walk; no exclusion, no walk
+
+**Category**: Bug fix (re-run 2, Issues 1, 2, 8, 13)
+
+**What changed**: `_diff_part` returns the value untouched when nothing is
+excluded (its prune recursed: a 1500-deep value lost the diff). The
+filter measures depth in its own walk (`_drop` with a depth, kept arrays
+measured once); an excluded part is dropped unwalked whatever its depth.
+A value too deep to filter is left out of the full-state diff and the REST
+listing (it was `null`, which wipes a subscriber's copy), and a direct
+read of one is 403. Text beyond the parser: `_parsed` answers `TOO_DEEP`
+(a peer write touching it is 403), the direct read sends it as stored
+unless the grant excludes something (then 403), the listing leaves it out
+for such a peer, and a diff blob that cannot be parsed is not sent.
+
+**Files affected**: `actingweb/permission_evaluator.py`,
+`actingweb/actor.py` (`_diff_part`, `_filter_full_state`, the blob
+parse), `actingweb/handlers/properties.py`; `tests/test_property_tree_grants.py`
+(three tests), `tests/integration/test_property_grants_flow.py`
+(`test_a_value_too_deep_to_filter_is_withheld_not_null`, over HTTP).
+
+#### 40. A hook refusing a later POST key: the earlier keys reach subscribers
+
+**Category**: Bug fix (re-run 2, Issue 9)
+
+**What changed**: the JSON and form POST branches register the diffs of
+the keys written before a hook's PERMISSION_DENIED (`_HookDenied`), then
+answer 403, as they do on a `DbError`.
+
+**Files affected**: `actingweb/handlers/properties.py`;
+`tests/test_grant_edges.py`
+(`test_a_hook_refusing_a_later_key_registers_what_was_applied`, through
+`post()`, both shapes).
+
+#### 41. Statuses, the notice's secret, the JSON-RPC 403 signal
+
+**Category**: Bug fix and refactor (re-run 2, Issues 10, 11, 12, 13)
+
+**What changed**: a `server_error` completing a confirmation is 500. The
+approval notice's `Authorization` carries the secret the row holds now
+(the one the call wrote). The JSON-RPC refusal's 403 is read from the
+result's error code (`JSONRPC_FORBIDDEN`), not handler state. Changelog:
+bold **Behavior change:** leads for the depth rule, the JSON-RPC 403 and
+the OAuth2 page's render fallback (500, not 200), and the confirm entry's
+`Referrer-Policy` corrected to `same-origin`.
+
+**Files affected**: `actingweb/handlers/oauth2_endpoints.py`,
+`actingweb/actor.py`, `actingweb/handlers/methods.py`, `CHANGELOG.rst`;
+`tests/test_oauth2_confirm_refusal.py` (500 case),
+`tests/test_trust_notify_url.py` (the header),
+`tests/test_base_integration.py`
+(`test_a_template_that_fails_to_render_is_not_a_200`; a guard, no
+previous behaviour to fail on).
+
+#### 42. The Full tier on this batch
+
+Full tier (2026-11-11): ruff, format, pyright clean; `verify_groups` OK;
+unit 5068 passed; DynamoDB 6520 passed and PostgreSQL 6317 passed, each
+failing only `test_a_retype_whose_override_cannot_be_removed_issues_no_code`,
+whose premise entry 37 changed: it made the removal fail with no override
+stored, and the removal now reads first and has nothing to do. The test
+stores an override for the old type (its point stands: no code when it
+cannot be removed); the file passes on both backends. Docs build with
+`-W`. No wire recording changed.

@@ -450,11 +450,21 @@ def test_a_callers_own_decision_cannot_grant_an_unoffered_type(flow: Flow) -> No
 
 
 def test_a_retype_whose_override_cannot_be_removed_issues_no_code(flow: Flow) -> None:
-    from actingweb.trust_permissions import TrustPermissionStore
+    from actingweb.trust_permissions import TrustPermissions, TrustPermissionStore
 
     assert flow.code_of(flow.honest("mcp_client"))
-    with mock.patch.object(
-        TrustPermissionStore, "delete_permissions", return_value=False
+    # An override written for the old type stands (re-run 2: with none, the
+    # removal has nothing to do and the re-type completes).
+    old_override = TrustPermissions(
+        actor_id="a", peer_id="p", trust_type="mcp_client", properties={}
+    )
+    with (
+        mock.patch.object(
+            TrustPermissionStore, "get_permissions_uncached", return_value=old_override
+        ),
+        mock.patch.object(
+            TrustPermissionStore, "delete_permissions", return_value=False
+        ),
     ):
         r = flow.honest("viewer")
     assert flow.code_of(r) is None

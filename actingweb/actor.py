@@ -2079,9 +2079,11 @@ class Actor:
             else:
                 baseuri_now = baseuri
             requrl = baseuri_now + "/trust/" + relationship + "/" + self.id
-            if this_trust["secret"]:
+            # The secret the row holds now: the one this call wrote, if any.
+            bearer = str(secret or this_trust["secret"] or "")
+            if bearer:
                 headers = {
-                    "Authorization": "Bearer " + this_trust["secret"],
+                    "Authorization": "Bearer " + bearer,
                     "Content-Type": "application/json",
                 }
             data = json.dumps(params)
@@ -4016,8 +4018,11 @@ class Actor:
         A value that is JSON text of an object (a form-posted property, an
         SDK write of a JSON string: what a direct read parses) is filtered
         as the object and sent as text again. A value too deep for the filter
-        to walk is withheld (``_EMPTIED``)."""
-        if isinstance(value, str) and exclusion_patterns(rules):
+        to walk is withheld (``_EMPTIED``). With no exclusion stated the
+        value passes as it is, unwalked (its depth does not matter)."""
+        if not exclusion_patterns(rules):
+            return value
+        if isinstance(value, str):
             as_object = as_json_object(value)
             if as_object is not None:
                 filtered = drop_excluded(rules, path, as_object)
@@ -4096,6 +4101,13 @@ class Actor:
             return None
         try:
             parsed: Any = json.loads(as_text)
+        except RecursionError:
+            # Nested beyond the parser: it cannot be filtered, so nothing is
+            # sent (3.16).
+            logger.warning(
+                f"A diff for {peerid} is nested too deep to filter; not sent"
+            )
+            return None
         except (TypeError, ValueError):
             parsed = as_text
         subtarget = str(sub.get("subtarget") or "")
@@ -4265,24 +4277,31 @@ class Actor:
         rules = snapshot.rules(PermissionType.PROPERTIES)
 
         def kept(path: str, value: Any) -> Any:
-            if path in list_keys:
+            """The value filtered; ``_EMPTIED`` when it is too deep to
+            filter: the key is left out (a ``null`` would wipe the
+            subscriber's copy)."""
+            if path in list_keys or not exclusion_patterns(rules):
                 return value
             if isinstance(value, str):
                 parsed = as_json_object(value)
                 if parsed is None:
-                    return drop_excluded(rules, path, value)
+                    return value
                 filtered = drop_excluded(rules, path, parsed)
                 if filtered is None:
-                    return None  # too deep to filter: withheld
+                    return _EMPTIED
                 return value if filtered == parsed else json.dumps(filtered)
-            return drop_excluded(rules, path, value)
+            filtered = drop_excluded(rules, path, value)
+            return _EMPTIED if filtered is None and value is not None else filtered
 
-        if subtarget:
-            return {
-                k: kept(subtarget, v) if k == subtarget else v
-                for k, v in full_state.items()
-            }
-        return {k: kept(k, v) for k, v in full_state.items()}
+        out: dict[str, Any] = {}
+        for k, v in full_state.items():
+            if subtarget and k != subtarget:
+                out[k] = v
+                continue
+            part = kept(subtarget or k, v)
+            if part is not _EMPTIED:
+                out[k] = part
+        return out
 
     # =========================================================================
     # Subscription Suspension Management

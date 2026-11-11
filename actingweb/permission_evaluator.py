@@ -226,9 +226,12 @@ def drop_excluded(rules: Any, path: str, value: Any) -> Any:
     patterns = exclusion_patterns(rules)
     if not patterns:
         return value
-    if value is TOO_DEEP or _deeper_than(value, MAX_FILTER_DEPTH):
+    if value is TOO_DEEP:
         return None
-    return _drop(patterns, path, value)
+    try:
+        return _drop(patterns, path, value, 1)
+    except _TooDeepToWalk:
+        return None
 
 
 MAX_FILTER_DEPTH = 100
@@ -269,15 +272,28 @@ def _deeper_than(value: Any, limit: int) -> bool:
     return False
 
 
-def _drop(patterns: list[str], path: str, value: Any) -> Any:
+class _TooDeepToWalk(Exception):
+    """A kept part of the value nests deeper than :data:`MAX_FILTER_DEPTH`."""
+
+
+def _drop(patterns: list[str], path: str, value: Any, depth: int) -> Any:
+    """One walk (3.16): objects are filtered, kept arrays only measured; a
+    kept part deeper than :data:`MAX_FILTER_DEPTH` raises (an excluded part
+    is dropped unwalked, whatever its depth)."""
+    if isinstance(value, list):
+        if _deeper_than(value, MAX_FILTER_DEPTH - depth + 1):
+            raise _TooDeepToWalk()
+        return value
     if not isinstance(value, dict):
         return value
+    if depth > MAX_FILTER_DEPTH:
+        raise _TooDeepToWalk()
     kept: dict[str, Any] = {}
     for key, child in value.items():
         child_path = f"{path}/{key}" if path else str(key)
         if _excluded_by(patterns, child_path):
             continue
-        kept[key] = _drop(patterns, child_path, child)
+        kept[key] = _drop(patterns, child_path, child, depth + 1)
     return kept
 
 

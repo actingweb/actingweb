@@ -254,3 +254,26 @@ def test_an_admin_peer_deletes_a_parent_holding_an_excluded_part(world: World) -
         ).status_code
         == 404
     )
+
+
+def _nested(depth: int) -> dict[str, Any]:
+    value: dict[str, Any] = {"leaf": 1}
+    for _ in range(depth):
+        value = {"a": value}
+    return value
+
+
+def test_a_value_too_deep_to_filter_is_withheld_not_null(world: World) -> None:
+    """Re-run 2 of the grant-enforcement verification (Issue 2): a value
+    nested beyond the filter's depth was answered ``null`` (a read) and
+    listed as ``null``. A peer whose grant excludes something gets 403 for
+    it and does not see it listed; a peer whose grant excludes nothing (the
+    admin) and the owner read it whole; a peer's write of one is 403."""
+    deep = _nested(150)
+    world.put_owner("deep", deep)
+    assert world.as_f("GET", "/deep").status_code == 403
+    listing = world.as_f("GET", "").json()
+    assert "deep" not in listing and listing["color"] == "blue"
+    assert world.as_d("GET", "/deep").json() == deep
+    assert world.stored("deep") == deep
+    assert world.as_f("PUT", "/color", json=deep).status_code == 403

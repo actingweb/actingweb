@@ -194,3 +194,8 @@ def test_a_secret_written_with_the_approval_is_this_call_s_own() -> None:
     ):
         assert _approve(w, approved=True, secret="a-rotated-secret-0123456789")
     assert _sent_to(post) == f"{moved}/trust/friend/{aid(w.a)}"
+    # Re-run 2 (Issue 11): and with the secret the row holds now.
+    assert (
+        post.call_args.kwargs["headers"]["Authorization"]
+        == "Bearer a-rotated-secret-0123456789"
+    )

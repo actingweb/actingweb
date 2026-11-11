@@ -18,6 +18,9 @@ from ..permission_evaluator import PermissionType, get_permission_evaluator
 
 logger = logging.getLogger(__name__)
 
+JSONRPC_FORBIDDEN = -32000
+"""The JSON-RPC error code of a method the caller's grant refuses (3.16)."""
+
 
 class MethodsHandler(base_handler.BaseHandler):
     """Handler for /<actor_id>/methods endpoint."""
@@ -187,7 +190,6 @@ class MethodsHandler(base_handler.BaseHandler):
         the JSON-RPC handler decides (:meth:`_body_method_refused`); every
         other request is decided by the name in its path (a nameless call is
         refused when the grant states a methods rule)."""
-        self._jsonrpc_refused = False
         params: Any
         try:
             body: str | bytes | None = self.request.body
@@ -227,10 +229,9 @@ class MethodsHandler(base_handler.BaseHandler):
             "POST",
         ):
             return None
-        self._jsonrpc_refused = True
         return {
             "jsonrpc": "2.0",
-            "error": {"code": -32000, "message": "Forbidden"},
+            "error": {"code": JSONRPC_FORBIDDEN, "message": "Forbidden"},
             "id": params.get("id"),
         }
 
@@ -238,7 +239,10 @@ class MethodsHandler(base_handler.BaseHandler):
         if not self.response:
             return
         if result is not None:
-            if getattr(self, "_jsonrpc_refused", False):
+            error = result.get("error") if isinstance(result, dict) else None
+            if isinstance(error, dict) and error.get("code") == JSONRPC_FORBIDDEN:
+                # The body's method was refused (only the check answers this
+                # code): 403, as the named path answers.
                 self.response.set_status(403, "Forbidden")
             else:
                 self.response.set_status(200, "OK")

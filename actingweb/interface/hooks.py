@@ -881,23 +881,30 @@ class HookRegistry:
         Async hooks in this method will be executed via asyncio.run() which
         may cause issues if already in an event loop.
         """
+        return self._each_lifecycle_hook(
+            event,
+            lambda hook: self._execute_hook_in_sync_context(hook, actor, **kwargs),
+        )
+
+    def _each_lifecycle_hook(
+        self, event: str, run: Callable[[Callable[..., Any]], Any]
+    ) -> Any:
+        """Run ``event``'s lifecycle hooks with ``run(hook)``, in order, with
+        the one error policy (a ``DbError`` propagates, a bad signature is
+        reported once, anything else is logged and the next hook runs). The
+        result of the last hook that returned something."""
         result = None
-
-        if event in self._lifecycle_hooks:
-            for hook in self._lifecycle_hooks[event]:
-                try:
-                    hook_result = self._execute_hook_in_sync_context(
-                        hook, actor, **kwargs
-                    )
-                    if hook_result is not None:
-                        result = hook_result
-                except DbError:
-                    raise
-                except TypeError as e:
-                    self._report_signature_error(event, hook, e)
-                except Exception as e:
-                    logger.error(f"Error in lifecycle hook for {event}: {e}")
-
+        for hook in self._lifecycle_hooks.get(event, []):
+            try:
+                hook_result = run(hook)
+                if hook_result is not None:
+                    result = hook_result
+            except DbError:
+                raise
+            except TypeError as e:
+                self._report_signature_error(event, hook, e)
+            except Exception as e:
+                logger.error(f"Error in lifecycle hook for {event}: {e}")
         return result
 
     _signature_errors_reported: set[tuple[str, str]] = set()
@@ -1360,31 +1367,34 @@ class HookRegistry:
 
         return processed
 
+    LOOP_HOOK_TIMEOUT_SECONDS = 120.0
+    """How long a worker thread waits for a coroutine hook it scheduled on
+    the caller's loop (``execute_lifecycle_hooks_for_loop``)."""
+
     def execute_lifecycle_hooks_for_loop(
         self, event: str, loop: asyncio.AbstractEventLoop, actor: Any, **kwargs: Any
     ) -> Any:
         """``execute_lifecycle_hooks`` from a worker thread that an async
         caller on ``loop`` is waiting on (3.16): a coroutine hook is awaited
         on ``loop``, so its loop-bound resources work, and a sync hook runs
-        here, off the loop. Same error policy."""
-        result = None
-        for hook in self._lifecycle_hooks.get(event, []):
+        here, off the loop. Same error policy; a coroutine hook that does not
+        finish within ``LOOP_HOOK_TIMEOUT_SECONDS`` (or a loop that stopped)
+        is cancelled and logged, and the next hook runs. Never call it on
+        ``loop``'s own thread: it would wait on itself."""
+
+        def run(hook: Callable[..., Any]) -> Any:
+            if not inspect.iscoroutinefunction(hook):
+                return hook(actor, **kwargs)
+            future = asyncio.run_coroutine_threadsafe(hook(actor, **kwargs), loop)
             try:
-                if inspect.iscoroutinefunction(hook):
-                    hook_result = asyncio.run_coroutine_threadsafe(
-                        hook(actor, **kwargs), loop
-                    ).result()
-                else:
-                    hook_result = hook(actor, **kwargs)
-                if hook_result is not None:
-                    result = hook_result
-            except DbError:
-                raise
-            except TypeError as e:
-                self._report_signature_error(event, hook, e)
-            except Exception as e:
-                logger.error(f"Error in lifecycle hook for {event}: {e}")
-        return result
+                return future.result(timeout=self.LOOP_HOOK_TIMEOUT_SECONDS)
+            except TimeoutError:
+                future.cancel()
+                raise RuntimeError(
+                    f"hook did not finish within {self.LOOP_HOOK_TIMEOUT_SECONDS}s"
+                ) from None
+
+        return self._each_lifecycle_hook(event, run)
 
     async def execute_lifecycle_hooks_async(
         self, event: str, actor: Any, **kwargs: Any

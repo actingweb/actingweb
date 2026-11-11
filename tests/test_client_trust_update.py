@@ -19,6 +19,7 @@ import pytest
 
 from actingweb.db import get_trust
 from actingweb.interface.actor_interface import ActorInterface
+from actingweb.interface.trust_manager import TrustManager
 from actingweb.trust import Trust
 from actingweb.trust_permissions import (
     TrustPermissions,
@@ -233,3 +234,91 @@ def test_an_override_for_the_approved_type_stays() -> None:
     peer, store = _friend_with_override(w)
     assert w.authorise("friend")
     assert store.get_permissions_uncached(aid(w.actor), peer) is not None
+
+
+def test_an_override_for_another_type_is_removed_with_a_warning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Owner decision 2026-11-10 (re-run 2, Issue 4): a client's override
+    naming another type is removed at the next authorisation, the type
+    unchanged, and the removal is logged."""
+    w = World()
+    assert w.authorise("mcp_client")
+    peer = str(w.row()["peerid"])
+    store = get_trust_permission_store(w.config)
+    assert store.store_permissions(
+        TrustPermissions(
+            actor_id=aid(w.actor),
+            peer_id=peer,
+            trust_type="viewer",
+            properties={"patterns": ["public/*"], "operations": ["read"]},
+        ),
+        notify_peer=False,
+    )
+    with caplog.at_level("WARNING", logger="actingweb.interface.trust_manager"):
+        assert w.authorise("mcp_client")
+    assert store.get_permissions_uncached(aid(w.actor), peer) is None
+    assert any("'viewer' was removed" in r.getMessage() for r in caplog.records)
+
+
+def test_an_owner_s_override_written_during_the_check_is_kept() -> None:
+    """Re-run 2 (Issue 5): the stale check and the delete were separate
+    reads; an owner's override for the approved type written in between
+    was deleted. The delete decides on its own read."""
+    w = World()
+    assert w.authorise("viewer")
+    peer = str(w.row()["peerid"])
+    store = get_trust_permission_store(w.config)
+    assert store.store_permissions(
+        TrustPermissions(
+            actor_id=aid(w.actor),
+            peer_id=peer,
+            trust_type="friend",
+            properties={"patterns": ["*"], "operations": ["read", "write"]},
+        ),
+        notify_peer=False,
+    )
+    real_stale = TrustManager._stale_client_override
+
+    def owner_writes_meanwhile(self: Any, peer_id: str, trust_type: str) -> bool:
+        out = real_stale(self, peer_id, trust_type)
+        assert store.store_permissions(
+            TrustPermissions(
+                actor_id=aid(w.actor),
+                peer_id=peer,
+                trust_type="viewer",
+                properties={"patterns": ["public/*"], "operations": ["read"]},
+            ),
+            notify_peer=False,
+        )
+        return out
+
+    with mock.patch.object(
+        TrustManager, "_stale_client_override", owner_writes_meanwhile
+    ):
+        assert w.authorise("viewer")
+    kept = store.get_permissions_uncached(aid(w.actor), peer)
+    assert kept is not None and kept.trust_type == "viewer"
+
+
+def test_the_rollback_leaves_a_type_another_authorisation_wrote() -> None:
+    """Re-run 2 (Issue 6): the rollback overwrote the type unconditionally;
+    a concurrent authorisation's type is left as it wrote it."""
+    from actingweb.db.exceptions import DbError
+
+    w = World()
+    peer, _ = _friend_with_override(w)
+
+    def other_tab_then_fault(self: Any, *a: Any, **kw: Any) -> Any:
+        # Another authorisation re-types the row to admin meanwhile.
+        db = get_trust(w.config)
+        assert db.get(actor_id=aid(w.actor), peerid=peer)
+        assert db.modify(relationship="admin")
+        raise DbError("down")
+
+    with mock.patch.object(
+        TrustPermissionStore, "delete_permissions", other_tab_then_fault
+    ):
+        with pytest.raises(DbError):
+            w.authorise("viewer")
+    assert w.row()["relationship"] == "admin"

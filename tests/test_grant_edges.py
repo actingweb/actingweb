@@ -302,3 +302,33 @@ def test_a_bulk_items_update_a_hook_denies_is_403_with_its_diff() -> None:
     assert ok is False
     assert handler.response.status_code == 403
     assert "notes" in pair
+
+
+@pytest.mark.parametrize("shape", ["json", "form"])
+def test_a_hook_refusing_a_later_key_registers_what_was_applied(shape: str) -> None:
+    """Re-run 2 of the grant-enforcement verification (Issue 9): a hook's
+    PERMISSION_DENIED for a later key (``_HookDenied``) answered 403 through
+    the decorator, but the keys written before it got no diff. Through
+    ``post()``, both body shapes."""
+    from actingweb.access_decision import PERMISSION_DENIED
+
+    if shape == "json":
+        handler, myself, result = _bulk_handler(None, {"a": 1, "b": 2}, "")
+        expected = {"a": 1}
+    else:
+        handler, myself, result = _bulk_handler({"a": "1", "b": "2"}, None, "")
+        expected = {"a": "1"}
+    handler.hooks = mock.Mock()
+    handler.hooks.execute_property_hooks.side_effect = lambda name, *a, **k: (
+        PERMISSION_DENIED if name == "b" else a[2]
+    )
+    with (
+        mock.patch.object(handler, "authenticate_actor", return_value=result),
+        mock.patch.object(handler, "_get_actor_interface", return_value=mock.Mock()),
+    ):
+        handler.post("a1", "")
+    assert handler.response.status_code == 403
+    assert myself.property.written == expected
+    myself.register_diffs.assert_called_once_with(
+        target="properties", blob=json.dumps(expected)
+    )

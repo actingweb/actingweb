@@ -1640,6 +1640,15 @@ to review: trust rows with ``established_via = "oauth2_client"`` whose
 'oauth2_client' AND relationship NOT IN ('mcp_client', ...);`` and delete or
 re-type them.
 
+**A client's permission override names its row's type.** The override's own
+``trust_type`` is the base its rules extend, so at each authorisation the
+level the user approves replaces it: an override for an OAuth2 or MCP
+client that names another type (written before a re-type, or set that way
+with ``create_permission_override(..., trust_type=...)``) is removed, and
+the removal is logged at WARNING. An override for the approved type is
+kept. To narrow a client's access, write its override with the client
+row's own type.
+
 **The decision hook.** ``@app.lifecycle_hook("oauth2_trust_requested")``
 receives ``trust_type``, ``client_id``, ``client_name``, ``redirect_uri``,
 ``provider``, ``email`` and ``confirmed``; return ``None``, a type name, or

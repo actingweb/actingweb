@@ -7,6 +7,7 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 
+from actingweb.actor import TrustReplaced
 from actingweb.interface.hooks import HookRegistry
 from actingweb.interface.subscription_manager import (
     SubscriptionManager,
@@ -14,32 +15,65 @@ from actingweb.interface.subscription_manager import (
 )
 
 
-@pytest.mark.asyncio
-async def test_sync_peer_detects_and_cleans_up_revoked_trust():
-    """Test that sync_peer_async detects revoked trust (all 404s) and cleans up."""
-    # Setup mock core actor
+def _all_404(n: int) -> list[SubscriptionSyncResult]:
+    return [
+        SubscriptionSyncResult(
+            subscription_id=f"sub{i}",
+            success=False,
+            diffs_fetched=0,
+            diffs_processed=0,
+            final_sequence=0,
+            error="Not found",
+            error_code=404,
+        )
+        for i in range(n)
+    ]
+
+
+async def _revoke(
+    registry: HookRegistry, order: list[str], *, re_paired: bool = False
+) -> tuple[Any, MagicMock, Any]:
+    """``sync_peer_async`` against a peer that answers 404 everywhere; the
+    core delete calls its callback with the row it re-read, as the real one
+    does (3.16)."""
     mock_actor = MagicMock()
     mock_actor.id = "actor123"
     mock_actor.config = MagicMock()
     mock_actor.config.peer_profile_attributes = None
     mock_actor.config.peer_capabilities_caching = False
     mock_actor.config.peer_permissions_caching = False
+    mock_actor.config._hooks = registry
+    row = {"peerid": "peer456", "relationship": "friend", "secret": "s1"}
 
-    # The delete runs in a worker thread, as the real one does, and calls
-    # the callback with the row it re-read (3.16).
-    order: list[str] = []
-    row = {"peerid": "peer456", "relationship": "friend"}
-
-    def delete_in_thread(**kw: Any) -> bool:
+    def delete(**kw: Any) -> bool:
+        if re_paired:
+            raise TrustReplaced("peer456")
         kw["before_local_delete"](dict(row))
         order.append("delete")
         return True
 
-    async def delete_async(**kw: Any) -> bool:
-        return await asyncio.to_thread(delete_in_thread, **kw)
+    mock_actor.delete_reciprocal_trust = MagicMock(side_effect=delete)
+    manager = SubscriptionManager(mock_actor)
+    mock_proxy = MagicMock()
+    mock_proxy.trust = dict(row)
+    mock_proxy.last_response_code = 404
+    mock_proxy.get_resource_async = AsyncMock(
+        return_value={"error": {"code": 404, "message": "Not found"}}
+    )
+    manager._get_peer_proxy = MagicMock(return_value=mock_proxy)
+    subs = [MagicMock(is_outbound=True, subscription_id=f"sub{i}") for i in range(2)]
+    with (
+        patch.object(manager, "get_subscriptions_to_peer", return_value=subs),
+        patch.object(manager, "sync_subscription_async", side_effect=_all_404(2)),
+    ):
+        result = await manager.sync_peer_async("peer456")
+    return result, mock_actor, mock_proxy
 
-    mock_actor.delete_reciprocal_trust_async = AsyncMock(side_effect=delete_async)
 
+@pytest.mark.asyncio
+async def test_sync_peer_detects_and_cleans_up_revoked_trust() -> None:
+    """Test that sync_peer_async detects revoked trust (all 404s) and cleans up."""
+    order: list[str] = []
     registry = HookRegistry()
     seen: dict[str, Any] = {}
     main_loop = asyncio.get_running_loop()
@@ -55,84 +89,89 @@ async def test_sync_peer_detects_and_cleans_up_revoked_trust():
 
     registry.register_lifecycle_hook("trust_deleted", async_hook)
     registry.register_lifecycle_hook("trust_deleted", sync_hook)
-    mock_actor.config._hooks = registry
+    result, mock_actor, mock_proxy = await _revoke(registry, order)
 
-    # Create manager
-    manager = SubscriptionManager(mock_actor)
-
-    # Mock _get_peer_proxy to return a proxy that simulates peer not existing
-    mock_proxy = MagicMock()
-    mock_proxy.trust = {"relationship": "friend"}
-    mock_proxy.last_response_code = 404
-    mock_proxy.get_resource_async = AsyncMock(
-        return_value={"error": {"code": 404, "message": "Not found"}}
+    # Re-run 2 (Issue 7): only the row the probe used is deleted, so a
+    # re-pair meanwhile keeps its row.
+    mock_actor.delete_reciprocal_trust.assert_called_once_with(
+        peerid="peer456",
+        delete_peer=False,
+        expected_secret="s1",
+        before_local_delete=ANY,
     )
-    manager._get_peer_proxy = MagicMock(return_value=mock_proxy)
+    # Verification re-run 1 (Issue B): the hooks fire from the delete's
+    # re-read (a row already gone fires nothing), before it deletes; a
+    # coroutine hook on the caller's loop, a sync hook off it.
+    assert order == ["async_hook", "sync_hook", "delete"]
+    assert seen["async_loop"] is main_loop
+    assert seen["sync_thread"] is not threading.main_thread()
+    assert seen["kw"]["trust_data"]["peerid"] == "peer456"
+    assert seen["kw"]["initiated_by_peer"] is True
+    # Audit A9: our own trust row at the peer, not trust/<our id>.
+    mock_proxy.get_resource_async.assert_called_once_with(path="trust/friend/actor123")
+    assert not result.success
+    assert result.subscriptions_synced == 0
+    assert result.error == "Trust relationship has been revoked by peer"
 
-    # Mock subscriptions to peer
-    mock_sub1 = MagicMock()
-    mock_sub1.is_outbound = True
-    mock_sub1.subscription_id = "sub1"
 
-    mock_sub2 = MagicMock()
-    mock_sub2.is_outbound = True
-    mock_sub2.subscription_id = "sub2"
+@pytest.mark.asyncio
+async def test_a_hook_needing_the_default_pool_does_not_deadlock() -> None:
+    """Re-run 2 (Issue 3): the delete held a default-pool thread while the
+    coroutine hook it waited on needed one (``*_async`` calls use
+    ``to_thread``); with the pool full, both waited for ever. The delete
+    runs on its own executor."""
+    from concurrent.futures import ThreadPoolExecutor
 
-    with patch.object(
-        manager,
-        "get_subscriptions_to_peer",
-        return_value=[mock_sub1, mock_sub2],
-    ):
-        # Mock sync_subscription_async to return 404 errors for all subscriptions
-        mock_result1 = SubscriptionSyncResult(
-            subscription_id="sub1",
-            success=False,
-            diffs_fetched=0,
-            diffs_processed=0,
-            final_sequence=0,
-            error="Not found",
-            error_code=404,
-        )
-        mock_result2 = SubscriptionSyncResult(
-            subscription_id="sub2",
-            success=False,
-            diffs_fetched=0,
-            diffs_processed=0,
-            final_sequence=0,
-            error="Not found",
-            error_code=404,
-        )
+    loop = asyncio.get_running_loop()
+    loop.set_default_executor(ThreadPoolExecutor(max_workers=1))
+    order: list[str] = []
+    registry = HookRegistry()
 
-        with patch.object(
-            manager,
-            "sync_subscription_async",
-            side_effect=[mock_result1, mock_result2],
-        ):
-            # Execute sync
-            result = await manager.sync_peer_async("peer456")
+    async def hook_using_the_pool(actor: Any, **kw: Any) -> None:
+        await asyncio.to_thread(order.append, "hook")
 
-            # Verify trust deletion was called
-            mock_actor.delete_reciprocal_trust_async.assert_called_once_with(
-                peerid="peer456", delete_peer=False, before_local_delete=ANY
-            )
-            # Verification re-run 1 (Issue B): the hooks fire from the
-            # delete's re-read (a row already gone fires nothing), before it
-            # deletes; a coroutine hook on the caller's loop, a sync hook off
-            # it.
-            assert order == ["async_hook", "sync_hook", "delete"]
-            assert seen["async_loop"] is main_loop
-            assert seen["sync_thread"] is not threading.main_thread()
-            assert seen["kw"]["trust_data"]["peerid"] == "peer456"
-            assert seen["kw"]["initiated_by_peer"] is True
-            # Audit A9: our own trust row at the peer, not trust/<our id>.
-            mock_proxy.get_resource_async.assert_called_once_with(
-                path="trust/friend/actor123"
-            )
+    registry.register_lifecycle_hook("trust_deleted", hook_using_the_pool)
+    result, _, _ = await asyncio.wait_for(_revoke(registry, order), timeout=10)
+    assert order == ["hook", "delete"]
+    assert result.error == "Trust relationship has been revoked by peer"
 
-            # Verify result
-            assert not result.success
-            assert result.subscriptions_synced == 0
-            assert result.error == "Trust relationship has been revoked by peer"
+
+@pytest.mark.asyncio
+async def test_a_trust_re_paired_since_the_probe_is_kept() -> None:
+    """Re-run 2 (Issue 7): the delete refuses a row whose secret is not the
+    probe's; the sync reports no revocation and fires no hook."""
+    order: list[str] = []
+    registry = HookRegistry()
+    registry.register_lifecycle_hook(
+        "trust_deleted", lambda actor, **kw: order.append("hook")
+    )
+    result, _, _ = await _revoke(registry, order, re_paired=True)
+    assert order == []
+    assert result.error != "Trust relationship has been revoked by peer"
+
+
+def test_a_coroutine_hook_that_never_finishes_is_given_up() -> None:
+    """Re-run 2 (Issue 3): the worker thread waited with no bound; a loop
+    that stopped, or a hook that hangs, is given up after the timeout and
+    the next hook still runs."""
+    registry = HookRegistry()
+    registry.LOOP_HOOK_TIMEOUT_SECONDS = 0.2
+    ran: list[str] = []
+    loop = asyncio.new_event_loop()  # never run: the coroutine never starts
+
+    async def never(actor: Any, **kw: Any) -> None:
+        ran.append("never")
+
+    def after(actor: Any, **kw: Any) -> None:
+        ran.append("after")
+
+    registry.register_lifecycle_hook("trust_deleted", never)
+    registry.register_lifecycle_hook("trust_deleted", after)
+    try:
+        registry.execute_lifecycle_hooks_for_loop("trust_deleted", loop, None)
+    finally:
+        loop.close()
+    assert ran == ["after"]
 
 
 @pytest.mark.asyncio
@@ -219,7 +258,7 @@ def test_sync_peer_sync_detects_and_cleans_up_revoked_trust():
 
     # Mock _get_peer_proxy to return a proxy that simulates peer not existing
     mock_proxy = MagicMock()
-    mock_proxy.trust = {"relationship": "friend"}
+    mock_proxy.trust = {"relationship": "friend", "secret": "s1"}
     mock_proxy.last_response_code = 404
     mock_proxy.get_resource = MagicMock(
         return_value={"error": {"code": 404, "message": "Not found"}}
@@ -270,7 +309,10 @@ def test_sync_peer_sync_detects_and_cleans_up_revoked_trust():
 
             # Verify trust deletion was called
             mock_actor.delete_reciprocal_trust.assert_called_once_with(
-                peerid="peer456", delete_peer=False, before_local_delete=ANY
+                peerid="peer456",
+                delete_peer=False,
+                expected_secret="s1",
+                before_local_delete=ANY,
             )
             # The hook fires through the delete's callback (3.16), with the
             # row the delete read and initiated_by_peer.

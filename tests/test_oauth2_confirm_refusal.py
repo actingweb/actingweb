@@ -41,7 +41,12 @@ def _handler(accept: str, answer: dict[str, Any]) -> OAuth2EndpointsHandler:
 
 @pytest.mark.parametrize(
     ("error", "status"),
-    [("invalid_request", 400), ("temporarily_unavailable", 503)],
+    [
+        ("invalid_request", 400),
+        ("temporarily_unavailable", 503),
+        # Re-run 2 (Issue 10): a server failure is not the client's 400.
+        ("server_error", 500),
+    ],
 )
 def test_an_error_completing_it_is_a_page_for_a_browser(
     error: str, status: int

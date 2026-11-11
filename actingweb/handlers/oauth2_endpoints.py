@@ -755,8 +755,11 @@ class OAuth2EndpointsHandler(BaseHandler):
             # (verification re-run 1: it reached the browser as JSON).
             self._set_flow_cookie(FORM_NONCE_COOKIE, "", max_age=0)
             error = str(answer.get("error") or "server_error")
+            status = {"temporarily_unavailable": 503, "server_error": 500}.get(
+                error, 400
+            )
             return self._confirm_refusal(
-                503 if error == "temporarily_unavailable" else 400,
+                status,
                 error,
                 "This confirmation could not be completed: "
                 f"{answer.get('error_description') or error}. Start again "

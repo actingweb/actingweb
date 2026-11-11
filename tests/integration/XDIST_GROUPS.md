@@ -33,16 +33,16 @@ Feature-specific tests that logically belong together.
 | Group | Description | Files |
 |-------|-------------|-------|
 | `subscription_callback_flows` | Subscription callback flow variations | test_subscription_callback_flows.py |
-| `wire_peer_paths` | Wire recordings over the peer paths (`wire/rows.toml`) | test_wire_peer_paths.py, test_wire_access.py, test_wire_trust.py, test_wire_grants.py, test_wire_harness.py, test_peer_state_flow.py |
+| `wire_peer_paths` | The wire recordings (`wire/rows.toml`), and the files that use the wire apps | test_oauth2_trust_binding.py, test_peer_state_flow.py, test_wire_access.py, test_wire_delivery.py, test_wire_grants.py, test_wire_harness.py, test_wire_list_properties.py, test_wire_peer_paths.py, test_wire_permissions.py, test_wire_queue_and_lifecycle.py, test_wire_scalar_properties.py, test_wire_trust.py |
 | `property_grants_flow` | A peer's grant at every level of a property | test_property_grants_flow.py |
 | `subscription_grants_flow` | Pushed and pulled diffs follow the grant at every level | test_subscription_grants_flow.py |
 | `resources_grant` | `/resources` follows the peer's grant | test_resources_grant.py |
-| `subscription_sync_dataclasses` | Subscription sync data structures | test_subscription_sync_dataclasses.py |
-| `cached_capabilities` | Capability caching behavior | test_cached_capabilities.py |
-| `cleanup_verification` | Cleanup verification tests | test_cleanup_verification.py |
+| `subscription_sync_dataclasses` | Subscription sync data structures | test_subscription_sync_flow.py |
+| `cached_capabilities` | Capability caching behavior | test_peer_capabilities_integration.py |
+| `cleanup_verification` | Cleanup verification tests | test_subscription_processing_flow.py |
 | `peer_capabilities` | Peer capability discovery | test_peer_capabilities_integration.py |
-| `peer_capabilities_subscription` | Subscription with peer capabilities | test_peer_capabilities_subscription.py |
-| `peer_profile_trust_flow` | Peer profile trust operations | test_peer_profile_trust_flow.py |
+| `peer_capabilities_subscription` | Subscription with peer capabilities | test_subscription_processing_flow.py |
+| `peer_profile_trust_flow` | Peer profile trust operations | test_peer_profile.py |
 | `property_list_collision` | Property list collision handling | test_property_list_collision.py |
 | `baseline_storage` | Baseline sync storage of simple and list properties | test_subscription_baseline_storage.py |
 | `callback_processor_cas` | Two threads deliver one in-order callback against the real store; the handler runs once | test_callback_processor_concurrency.py |
@@ -51,23 +51,17 @@ Feature-specific tests that logically belong together.
 | `subscription_lifecycle_hooks` | Subscription deleted hook execution (peer-initiated and owner-initiated) | test_subscription_lifecycle_hooks.py |
 | `revoke_peer_subscription` | Revoking inbound subscriptions via revoke_peer_subscription() | test_subscription_lifecycle_hooks.py |
 | `unsubscribe_vs_revoke` | Difference between unsubscribe() and revoke_peer_subscription() | test_subscription_lifecycle_hooks.py |
-| `devtest_attributes_flow` | DevTest attributes operations | test_devtest_attributes_flow.py |
-| `mcp_integration` | MCP (Model Context Protocol) integration tests | test_mcp_integration.py |
-| `oauth2_integration` | OAuth2 authentication and token flow | test_oauth2_integration.py |
+| `devtest_attributes_flow` | DevTest attributes operations | test_devtest_attributes.py |
 | `mcp_refresh_rotation_backend` | MCP refresh-token rotation, reuse detection and the 3.15 backend protocol keywords on the real backends | test_mcp_refresh_rotation_backend.py |
 | `spa_chain_revocation_backend` | SPA refresh-chain revocation (`delete_by_chain`, `revoke_session`) on the real backends | test_spa_chain_revocation_backend.py |
-| `www_templates` | Web UI template rendering | test_www_templates.py |
-| `flask_integration` | Flask framework integration | test_flask_integration.py |
-| `fastapi_integration` | FastAPI framework integration | test_fastapi_integration.py |
-| `devtest_endpoints` | Development and testing endpoints | test_devtest_endpoints.py |
 
 ### Isolation Groups (Technical Requirements)
 Tests with technical isolation needs to prevent conflicts.
 
 | Group | Reason | Files |
 |-------|--------|-------|
-| `attribute_patching` | Both patch `actingweb.attribute.Attributes` | test_callback_processor.py, test_remote_storage.py |
-| `fanout_tests` | Asyncio event loop conflicts | test_fanout.py |
+| `attribute_patching` | Both patch `actingweb.attribute.Attributes` | ../test_callback_processor.py, ../test_remote_storage.py |
+| `fanout_tests` | Asyncio event loop conflicts | ../test_fanout.py |
 
 ### Test Class Groups (Auto-Generated)
 Groups automatically created from test class names to ensure class-level isolation.
@@ -82,7 +76,7 @@ Groups automatically created from test class names to ensure class-level isolati
 | `spa_api_TestPropertiesMetadataAPI` | SPA properties metadata API | test_spa_api.py |
 | `spa_api_TestPropertyMetadataEndpoint` | SPA property metadata endpoint | test_spa_api.py |
 | `spa_api_TestTrustWithOAuth2Data` | SPA trust with OAuth2 data | test_spa_api.py |
-| `unique_creator` | Creator uniqueness on an isolated store: the fixtures swap the process-wide table names (DynamoDB) or schema (PostgreSQL), so no other test may run beside them | test_unique_creator_backend.py, test_unique_creators_command.py, test_unique_creator_http.py, test_unique_creator_adoption.py, test_property_lookup_readiness.py, test_unique_creator_default.py, test_deletion_resume_http.py |
+| `unique_creator` | Creator uniqueness on an isolated store: the fixtures swap the process-wide table names (DynamoDB) or schema (PostgreSQL), so no other test may run beside them | test_deletion_resume_http.py, test_property_lookup_readiness.py, test_unique_creator_adoption.py, test_unique_creator_backend.py, test_unique_creator_default.py, test_unique_creator_http.py, test_unique_creator_states.py, test_unique_creators_command.py |
 | `www_templates_TestWWWCustomTemplateRendering` | WWW custom template rendering | test_www_templates.py |
 | `www_templates_TestWWWTemplateURLConsistency` | WWW template URL consistency | test_www_templates.py |
 | `www_templates_TestWWWTemplates` | WWW templates test class | test_www_templates.py |

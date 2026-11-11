@@ -159,6 +159,43 @@ Running Specific Tests
    # Run tests matching pattern
    poetry run pytest tests/ -k "oauth" -v
 
+Wire Recordings
+~~~~~~~~~~~~~~~
+
+The ``tests/integration/test_wire_*.py`` files record what crosses the wire
+between two actors, and what each side holds afterwards, as one checked-in
+transcript per row under ``tests/integration/wire/``. A recording holds every
+request the row's steps caused (nested by what started it, with ids, hosts,
+secrets and timestamps replaced by names), the hooks the wire apps ran, and a
+snapshot of the publisher's queue and the subscriber's replica after every
+step. One file serves both backends. A run compares each row with its file
+byte for byte, so a change to what travels between two actors shows as a file
+diff in the commit that makes it.
+
+- ``tests/integration/wire/rows.toml`` is the only list of rows. Each entry
+  names the scenario that records it, what it records (known faults
+  included), and the plan phases allowed to change it (``owners``). The
+  schema is documented at the top of that file.
+- Every row is in the regression set. A recording that differs is a
+  behaviour change, not a flake, and the wire tests never rerun
+  (``-m wire -p no:rerunfailures``; CI runs them in their own step).
+- Re-record on purpose only, by row id, and add a dated line to the row's
+  ``reason``:
+
+  .. code-block:: bash
+
+     WIRE_RECORD=WS1.subtarget,WD9 poetry run pytest tests/integration/test_wire_delivery.py -p no:rerunfailures
+
+  ``WIRE_RECORD`` is refused under ``CI`` and has no "all". A mismatch leaves
+  ``<row>.actual.json`` beside the expected file; delete it once read.
+- A commit that changes or removes a recording carries one
+  ``Wire-Phase: <plan>:<phase>`` trailer naming a phase among that row's
+  owners. ``tests/integration/verify_groups.py`` checks the branch's commits
+  since ``master``; CI's shallow checkout skips that check, so run it before
+  committing.
+- A row marked ``exposure = true`` records data reaching a peer that may not
+  read it; ``verify_groups.py`` lists them.
+
 Performance Benchmarks
 ~~~~~~~~~~~~~~~~~~~~~~
 

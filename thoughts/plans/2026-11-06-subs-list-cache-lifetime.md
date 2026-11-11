@@ -39,6 +39,16 @@ status: proposed
   at its next draft. Rows owned here: `WC6`, `WC7` and `WM1` (the stale
   memo, the risk this plan addresses), all in Phase 2. Reserved ids:
   `WM2`-`WM9`.
+- **2026-11-11, from the wire baseline's recordings**
+  (`subscription-wire-baseline`, Phase 1; `tests/integration/wire/rows.toml`
+  is the list of rows and owners): `WM1` confirms the stale memo (the second
+  write through one instance reaches B only). `WC6`: A's suspension row
+  survives its deletion. `WC7`: the re-created actor starts with that row,
+  but its write sends nothing because no trust or subscription survives,
+  so the recording cannot tell "suspended" from "nobody to send to"; the
+  row needs a subscriber that survives (or the suspension asserted from the
+  snapshot, which it already holds) when this plan re-records it. No test
+  file this plan cites was retired.
 
 ## Overview
 

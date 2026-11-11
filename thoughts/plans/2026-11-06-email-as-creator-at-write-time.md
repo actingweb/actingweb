@@ -29,6 +29,11 @@ Evaluation Notes say how.
   "Re-recorded" and "Identical" lists are superseded by it and are dropped
   at its next draft. No row is owned here; every recording must stay
   identical. Reserved ids: `WE1`-`WE9`.
+- **2026-11-11, from the wire baseline** (`subscription-wire-baseline`):
+  no recorded outcome contradicts this plan and none of the test files it
+  cites was retired. Its soft dependency is met: the recordings exist, and
+  a commit that changes one names its phase in a `Wire-Phase:` trailer
+  (`tests/integration/wire/rows.toml`).
 
 ## Overview
 

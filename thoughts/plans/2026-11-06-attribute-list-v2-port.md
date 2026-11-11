@@ -101,6 +101,20 @@ status: proposed
   `remote:<peer>$aux` side bucket must be added to `actingweb-peer-state`'s
   whitelist (security plan, Phase 4). Reserved ids: `WD21`-`WD29`,
   `WL18`-`WL29`.
+- **2026-11-11, from the wire baseline's recordings**
+  (`subscription-wire-baseline`, Phase 1; `tests/integration/wire/rows.toml`
+  is the list of rows and owners): since the security PRs `WS2.subtarget`
+  is identical to `WS1.subtarget` (a subtarget diff is judged once by its
+  name, so no key is filtered and no sequence spent), and `WD9`'s poll is
+  answered filtered: `denied` never reaches B; what remains is the
+  sequence spent on it and the gap. `WL12`: from the first falsy append B's
+  replica list cannot be read at all. `WL15`: `PUT /properties/list:x`
+  answers 500, so no `list:` scalar can be made over REST. `WL16` sends only
+  the subtarget's value (no exposure). `WL7` shows no threshold at 25 items.
+  `WL10`: the `/www` deletes send `{name: ""}`. Phase 2 of the baseline
+  retired `test_list_diff_peer_replica.py` (cover `WL11.target`,
+  `WL13.target`) and the integration `test_property_list_notifications.py`
+  (cover `WL1` to `WL8`): references to them here are to those rows now.
 
 ## Overview
 

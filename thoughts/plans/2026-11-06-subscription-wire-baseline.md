@@ -1,5 +1,5 @@
 ---
-status: active
+status: done
 ---
 
 # Implementation Plan: the subscription wire between two actors, recorded as it is today
@@ -715,10 +715,26 @@ Retired, each with its cover (rows in `wire/rows.toml`, unit files under
 
 ### Verification
 
-- [ ] Run the contract's `### Checks` full tier verbatim (docs build included)
-- [ ] `git diff --stat master...HEAD -- actingweb examples` is empty
+- [x] Run the contract's `### Checks` full tier verbatim (docs build included)
+- [x] `git diff --stat master...HEAD -- actingweb examples` is empty
 
-### Implementation Status: Not Started
+### Implementation notes (Phase 4)
+
+- `tests/integration/README.md`: the stale test counts, file list, a
+  missing `FUTURE_WORK.md` link and a nonexistent workflow name replaced;
+  a "Wire recordings" section. `docs/contributing/testing.rst`: a "Wire
+  Recordings" section; both point at `rows.toml`'s header for the schema.
+- `XDIST_GROUPS.md`: every row's file column regenerated from the
+  `xdist_group` markers (thirteen named files that no longer exist); six
+  rows for groups no test uses removed.
+- The four later plans each have a dated Update Log line: the recorded
+  outcomes that contradict them and the `tests/integration/` references the
+  baseline removed or moved.
+- `thoughts/todo/INDEX.md`: gate 4 met, plan 1 implemented, #172 merged.
+- Checks: docs-only, so the docs build (strict) and the fast tier, both
+  green; Phase 3's Full tier covers the code.
+
+### Implementation Status: Complete
 
 ---
 
@@ -988,3 +1004,42 @@ teardown can pass on both backends.
 - The suspension store's subtarget semantics were not read.
 - No REST route for suspend and resume was found in the handlers read; the
   route table and `/devtest` were not searched to the end.
+
+## Implementation Summary
+
+**Completed:** 2026-11-11
+**All phases:** Complete (five commits on
+`release/3.16.0-subscription-wire-baseline`, local; no PR yet)
+**Test status:** All passing: the Full tier on both backends at Phases 1
+to 3, five consecutive wire runs per backend at Phase 1, the fast tier and
+the strict docs build at Phase 4. `git diff master...HEAD -- actingweb
+examples` is empty.
+
+### Deviations from Plan
+
+- The `Wire-Phase` trailer check runs locally only: CI's test job checks
+  out at depth 1. Running it in CI needs `fetch-depth: 0` there (owner's
+  call, not made).
+- `WC8` dropped (`WC3`/`WC4` already record the hooks); `WS3`/`WS5` in both
+  topologies; `WL1` to `WL5` split one per REST list route.
+- `WD18` uses `wire_import` with `"suspend": false` instead of a new
+  method, which would have changed `WG6`'s recorded method listing.
+- Skips became asserts, not class-scoped fixtures, except where fixture
+  scope was the fault (`class_actor_factory`).
+- No row is an exposure: the two security PRs closed what the tables
+  expected (`WS2`, `WD9`, `WP6`, `WL16`).
+
+### Learnings
+
+- Rows with several subscribers or subscriptions are only deterministic if
+  sibling callbacks are sorted: the publisher sends in random-id order.
+- The legacy skips hid five real test faults, one a fixture-scope bug
+  (`actor_factory` deleting a class's actors after its first method).
+- A harness addition can change existing recordings indirectly (a new
+  method shows in a recorded `/methods` listing): run every existing row
+  after any harness change, not only the new ones.
+- Today's faults the recordings now pin, for their owners: `WS7` (A stores
+  the hook value as JSON text, B gets the raw body), `WL12` (unreadable
+  replica after a falsy append), `WL15` (500 on a `list:` name), `WM1`
+  (stale memo), `WQ6` (500 on a null sequence).
+

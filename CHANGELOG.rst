@@ -19,9 +19,12 @@ SECURITY
   and logged; the grant API sets ``created_by`` itself, and answers 400
   for a rule whose pattern or operation keys are not lists of strings,
   ``null`` included. Such a value already stored (or written through the
-  store API) allows less on merge, never more: a malformed exclusion keeps
-  the trust type's exclusions (a string or ``null`` replaced them), a
-  malformed allow list or a category that is not an object allows nothing.
+  store API) is read on merge as: a malformed exclusion keeps the trust
+  type's exclusions (a string or ``null`` replaced them); a malformed
+  ``operations`` or ``allowed``, or a category that is not an object,
+  allows nothing; a malformed ``patterns`` acts as an empty one and a
+  ``properties`` list of names is normalised, both merged with the trust
+  type's patterns as any override is (before 3.16 these two denied).
   **Check:** the fix stops new writes, not grants already written. On a
   host that serves actors of more than one owner, review each actor's
   overrides (``TrustPermissionStore.list_actor_permissions``) for peers it

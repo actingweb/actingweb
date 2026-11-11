@@ -776,10 +776,12 @@ a list of names) or ``null``; when present, its ``patterns``,
 ``excluded_patterns``, ``operations``, ``allowed`` and ``denied`` are lists
 of strings, and ``notes`` is text; otherwise the edit answers 400. Other
 keys inside a category are stored as they are; other top-level keys are
-ignored. An override stored another way that holds a malformed rule allows
-less, never more: a category that is not an object allows nothing, a
-malformed allow list allows nothing, and a malformed exclusion leaves the
-trust type's exclusions in place. In a ``PUT
+ignored. An override stored another way (the store API) that holds a
+malformed rule is read as: a category that is not an object, or a malformed
+``operations`` or ``allowed``, allows nothing; a malformed exclusion leaves
+the trust type's exclusions in place; a malformed ``patterns`` acts as an
+empty one and a ``properties`` list of names is normalised, both merged
+with the trust type's patterns as any override is. In a ``PUT
 /trust/{relationship}/{peerid}`` body, ``"permissions": null`` changes
 nothing.
 

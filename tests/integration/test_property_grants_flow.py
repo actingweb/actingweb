@@ -348,3 +348,38 @@ def test_writes_over_text_beyond_the_parser(world: World) -> None:
     for path in ("n/x", "a_list/x/y"):
         r = requests.delete(f"{world.a['url']}/properties/{path}", auth=world.owner)
         assert r.status_code == 404
+
+
+def test_a_grant_edit_cannot_name_another_actor(world: World) -> None:
+    """Re-run 6, Issue 1 (on master before 3.16): the store took
+    ``actor_id``/``peer_id``/``trust_type`` from a permissions PUT, and keys
+    on them, so A's owner wrote a grant into another actor's store. Over
+    HTTP on real storage: nothing lands in the other actor's store, and A's
+    override keeps its identity."""
+    from actingweb.trust_permissions import TrustPermissionStore
+
+    from .conftest import TEST_APP_CONFIG
+
+    config = TEST_APP_CONFIG["config"]
+    store = TrustPermissionStore(config)
+    victim, attacker = world.d["id"], world.a["id"]
+    assert store.get_permissions_uncached(victim, attacker) is None
+    r = requests.put(
+        f"{world.a['url']}/trust/friend/{world.f['id']}/permissions",
+        json={
+            "actor_id": victim,
+            "peer_id": attacker,
+            "trust_type": "admin",
+            "properties": {"patterns": ["*"], "operations": ["read", "write"]},
+        },
+        auth=world.owner,
+    )
+    assert r.status_code in (200, 201), r.text
+    assert store.get_permissions_uncached(victim, attacker) is None
+    own = store.get_permissions_uncached(world.a["id"], world.f["id"])
+    assert own is not None
+    assert (own.actor_id, own.peer_id, own.trust_type) == (
+        world.a["id"],
+        world.f["id"],
+        "friend",
+    )

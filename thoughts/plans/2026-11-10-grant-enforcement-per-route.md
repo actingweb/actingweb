@@ -133,6 +133,30 @@ decision rests on.
 - **Release shape:** part of the unreleased 3.16.0 minor. Entries under
   `Unreleased` (`SECURITY`, `CHANGED`, `FIXED`), a section in
   `docs/migration/v3.16.rst` for each behaviour change, no version bump.
+- **[Added 2026-11-10] An application's own subscription target needs only
+  an approved trust at delivery** (owner, re-run 1 Issue F): the grant has
+  no category for it; a relationship downgrade does not stop a
+  subscription it already has (entry 35).
+- **[Added 2026-11-10] A client's override that names another type is
+  removed at authorisation, logged** (owner, re-run 2 Issue 4; entry 37).
+- **[Added 2026-11-11] A client's override that names another type is
+  inert** (owner, re-run 3 Issue 2): the evaluator uses the row's type; the
+  re-type has no rollback, the removal is cleanup (entry 43).
+- **[Added 2026-11-11] The verify/iterate loop's stop rule** (owner): clean
+  means no Medium-or-higher finding a peer or OAuth2/MCP client can reach;
+  owner-only, application-stored-data and Low findings are recorded as
+  accepted, with no code change. One closing verification on the whole
+  branch diff.
+- **[Added 2026-11-11] The cross-actor grant write (entry 57) ships with
+  this branch**, not as a separate patch (owner).
+- **[Added 2026-11-11] The parse and encoding hardening (entries 30, 39,
+  44, 48, 54, 62, 66, 69-72) stays in this plan** (owner); no more of that
+  kind is added here.
+- **[Added 2026-11-11] Behaviour changes made on review are kept** (owner):
+  the read hook on a plain-text direct GET, 409 on a sub-path PUT to a value
+  with no parts, the owner-side BOM/UTF-16 normalisation, and the grant-edit
+  validation (400s, the permissions GET's 404, `created_by` set by the API),
+  each with a changelog line.
 
 ## What We're NOT Doing
 
@@ -3101,7 +3125,7 @@ with `-W`. No wire recording changed.
 
 ### 2026-11-11, after verification thoughts/verifications/2026-11-11-grant-enforcement-per-route-reverify-10.md
 
-#### 72. A malformed override allows less, never more
+#### 72. A malformed override fails toward less access
 
 **Category**: Bug fix (re-run 10, Issue 1; corrects entry 69)
 
@@ -3115,7 +3139,12 @@ excludes that pattern, any other malformed one is dropped so the trust
 type's exclusions stay. Entry 69 kept the trust type's value for every
 key, which for allow keys and whole categories handed out the trust type's
 wider grant where the override used to deny. (`patterns` merges by union:
-no override narrows it, so a malformed one acts as an empty one.) The
+no override narrows it, so a malformed one acts as an empty one. Checked
+against `master` for the same stored row: a malformed `patterns`, and a
+`properties` list stored through the store API, denied there and now
+merge with the trust type's patterns as a well-formed override does; both
+need the owner's or application's own write, and the changelog and guide
+say exactly this rather than "never more".) The
 evaluator takes the category list from `trust_permissions`; the merge logs
 at debug, not on every evaluation at warning.
 

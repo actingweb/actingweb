@@ -489,12 +489,21 @@ def _add_recording_hooks(aw_app: ActingWebApp) -> None:
 
     @aw_app.method_hook("wire_import")
     async def wire_import(actor, method_name, data):
-        """Suspend one list's subtarget, clear and refill it, resume."""
+        """Suspend one list's subtarget, clear and refill it, resume.
+
+        With ``"suspend": false`` it only appends ``items``: a plain write
+        from an asynchronous handler on the server's loop (``WD18``). One
+        method for both, so the wire apps' method listing stays as the
+        recordings have it."""
         name = data["list"]
         items = data.get("items", [])
+        lst = getattr(actor.property_lists, name)
+        if data.get("suspend", True) is False:
+            for item in items:
+                lst.append(item)
+            return {"length": len(lst)}
         actor.subscriptions.suspend(target="properties", subtarget=name)
         try:
-            lst = getattr(actor.property_lists, name)
             if data.get("clear", True):
                 lst.clear()
             for item in items:
@@ -505,3 +514,12 @@ def _add_recording_hooks(aw_app: ActingWebApp) -> None:
             "callbacks_sent": sent,
             "length": len(getattr(actor.property_lists, name)),
         }
+
+    @aw_app.property_hook("transformed")
+    def wire_transformed(actor, operation, value, path):
+        """Upper-cases a string written to ``transformed``: what a subscriber
+        receives shows whether the diff carries the hook's value or the
+        request's."""
+        if operation == "put" and isinstance(value, str):
+            return value.upper()
+        return value

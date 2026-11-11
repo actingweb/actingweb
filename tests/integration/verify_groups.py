@@ -5,16 +5,33 @@ The wire check (``check_wire_rows``): every recording under
 ``tests/integration/wire/`` belongs to a row in ``wire/rows.toml``, every row
 has its recordings, and every row names an existing scenario, its owners,
 whether it is an exposure, what it records and why its file was written.
+
+The phase check (``check_wire_phase``): every commit on the branch since it
+left ``master`` that changes or removes a recording names, in a
+``Wire-Phase: <plan>:<phase>`` trailer, a phase ``rows.toml`` lists among
+that row's owners. A new recording needs no owner: it is the first. The
+check needs the branch's history; on a shallow checkout (CI's test job) it
+reports that it was skipped, so it is a local, pre-commit gate.
 """
 
 import re
+import subprocess
 import sys
 import tomllib
 from pathlib import Path
 from typing import Any
 
 WIRE_TOPOLOGIES = ("same_host", "two_hosts")
-WIRE_ROW_KEYS = {"test", "topologies", "owners", "exposure", "expected", "reason"}
+WIRE_ROW_KEYS = {
+    "test",
+    "topologies",
+    "owners",
+    "exposure",
+    "expected",
+    "reason",
+    "second",
+}
+WIRE_DIR = "tests/integration/wire"
 
 
 def collect_groups() -> dict[str, list[str]]:
@@ -64,9 +81,18 @@ def _in_ranges(row_id: str, ranges: list[str]) -> bool:
 
 def _expected_files(row: str, entry: dict[str, Any]) -> list[str]:
     topologies = entry.get("topologies")
-    if topologies:
-        return [f"{row}.{t}.json" for t in topologies]
-    return [f"{row}.json"]
+    files = [f"{row}.{t}.json" for t in topologies] if topologies else [f"{row}.json"]
+    second = entry.get("second")
+    if isinstance(second, dict) and isinstance(second.get("file"), str):
+        files.append(second["file"])
+    return files
+
+
+def recording_rows(rows: dict[str, dict[str, Any]]) -> dict[str, str]:
+    """Each recording file a registry names, mapped to its row."""
+    return {
+        name: row for row, entry in rows.items() for name in _expected_files(row, entry)
+    }
 
 
 def check_wire_rows(
@@ -126,6 +152,16 @@ def check_wire_rows(
         reason = entry.get("reason")
         if not isinstance(reason, list) or not reason:
             problems.append(f"{row}: reason must be a non-empty list")
+        second = entry.get("second")
+        if second is not None and (
+            not isinstance(second, dict)
+            or not isinstance(second.get("file"), str)
+            or not str(second.get("file", "")).startswith(f"{row}.")
+            or not second.get("why")
+        ):
+            problems.append(
+                f'{row}: second must be {{ file = "{row}.<...>.json", why = "..." }}'
+            )
         topologies = entry.get("topologies")
         if topologies is not None and (
             not topologies or any(t not in WIRE_TOPOLOGIES for t in topologies)
@@ -143,6 +179,104 @@ def check_wire_rows(
             problems.append(f"{path.name}: no row in rows.toml")
 
     return problems, exposures
+
+
+def wire_phase_problems(
+    commit: str,
+    changes: list[tuple[str, str]],
+    trailers: list[str],
+    rows_after: dict[str, dict[str, Any]],
+    rows_before: dict[str, dict[str, Any]],
+) -> list[str]:
+    """What is wrong with one commit's recording changes.
+
+    ``changes``: ``(status, file name)`` for each recording the commit
+    touches (``A`` added, ``M`` modified, ``D`` deleted). ``trailers``: its
+    ``Wire-Phase`` values. ``rows_after`` and ``rows_before``: the registry's
+    rows at the commit and at its parent (a deleted file's row is read from
+    the parent)."""
+    problems: list[str] = []
+    short = commit[:10]
+    touched = [(st, name) for st, name in changes if st in ("M", "D")]
+    if not touched:
+        return problems
+    if len(trailers) != 1:
+        names = ", ".join(sorted(name for _, name in touched))
+        problems.append(
+            f"{short}: changes {names} and must carry exactly one"
+            f" 'Wire-Phase: <plan>:<phase>' trailer (has {len(trailers)})"
+        )
+        return problems
+    phase = trailers[0].strip()
+    after, before = recording_rows(rows_after), recording_rows(rows_before)
+    for status, name in touched:
+        rows = rows_after if status == "M" else rows_before
+        row = (after if status == "M" else before).get(name)
+        if row is None:
+            problems.append(f"{short}: {name} belongs to no row in rows.toml")
+            continue
+        owners = rows[row].get("owners") or []
+        if phase not in owners:
+            problems.append(
+                f"{short}: {name} ({row}) changed under Wire-Phase {phase},"
+                f" which is not among its owners {owners}"
+            )
+    return problems
+
+
+def _git(*args: str) -> str:
+    return subprocess.run(
+        ["git", *args], check=True, capture_output=True, text=True
+    ).stdout
+
+
+def _rows_at(revision: str) -> dict[str, dict[str, Any]]:
+    try:
+        text = _git("show", f"{revision}:{WIRE_DIR}/rows.toml")
+    except subprocess.CalledProcessError:
+        return {}
+    return tomllib.loads(text).get("rows", {})
+
+
+def check_wire_phase(base: str = "master") -> tuple[list[str], str | None]:
+    """Check the ``Wire-Phase`` trailers of the commits since ``base``.
+
+    Returns (problems, why it was skipped or None)."""
+    try:
+        merge_base = _git("merge-base", "HEAD", base).strip()
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return [], f"no merge base with {base} (a shallow checkout?)"
+    commits = _git("rev-list", "--no-merges", "--reverse", f"{merge_base}..HEAD")
+    problems: list[str] = []
+    for commit in commits.split():
+        listing = _git(
+            "diff-tree",
+            "--no-commit-id",
+            "-r",
+            "--name-status",
+            "--no-renames",
+            commit,
+            "--",
+            WIRE_DIR,
+        )
+        changes = []
+        for line in listing.splitlines():
+            status, _, path = line.partition("\t")
+            if path.endswith(".json"):
+                changes.append((status[:1], Path(path).name))
+        if not any(status in ("M", "D") for status, _ in changes):
+            continue
+        trailers = [
+            t
+            for t in _git(
+                "log", "-1", "--format=%(trailers:key=Wire-Phase,valueonly)", commit
+            ).splitlines()
+            if t.strip()
+        ]
+        problems += wire_phase_problems(
+            commit, changes, trailers, _rows_at(commit), _rows_at(f"{commit}^")
+        )
+    return problems, None
 
 
 def main():
@@ -173,6 +307,17 @@ def main():
         print("✓ Wire rows registry consistent")
     if exposures:
         print(f"  Exposure rows ({len(exposures)}): {', '.join(exposures)}")
+
+    phase_problems, skipped = check_wire_phase()
+    if skipped:
+        print(f"- Wire-Phase trailers not checked: {skipped}")
+    elif phase_problems:
+        print(f"✗ Wire-Phase trailers ({len(phase_problems)}):")
+        for problem in phase_problems:
+            print(f"  - {problem}")
+        failed = True
+    else:
+        print("✓ Wire-Phase trailers match the owners of every changed recording")
 
     sys.exit(1 if failed else 0)
 

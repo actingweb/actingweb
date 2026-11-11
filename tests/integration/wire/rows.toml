@@ -23,9 +23,22 @@
 #                                    peer that may not read it
 #   expected = "..."                 what it records, and what is known to be wrong
 #   reason = ["<date> <why the file was written or rewritten> (<plan:phase>)"]
+#   second = { file = "<row>.<what>.json", why = "..." }
+#                                    optional: a second file for a declared
+#                                    backend or topology difference, with why
 #
-# A recording is what the library does, right or wrong. Re-record a row with
-# WIRE_RECORD=1 (refused under CI) and add a dated line to its `reason`.
+# A recording is what the library does, right or wrong. Re-record rows by id
+# with WIRE_RECORD=<row>,<row> (there is no "all"; refused under CI) and add a
+# dated line to each row's `reason`. A commit that changes or removes a
+# recording carries one trailer, `Wire-Phase: <plan>:<phase>`, naming a phase
+# among that row's owners; a new recording needs none. verify_groups.py
+# checks the trailers of the branch's commits since master when it has the
+# history (not on CI's shallow checkout: a local, pre-commit gate).
+#
+# Variant suffixes: .target, .subtarget, .resource (the subscription level),
+# .high, .low (granularity), .subscriber, .subscriber_adopted (the
+# relationship); otherwise the row's own name. Exposure rows are listed by
+# verify_groups.py.
 
 [reserved]
 "peer-authorisation-fixes" = ["WA1-WA18", "WT1-WT9"]

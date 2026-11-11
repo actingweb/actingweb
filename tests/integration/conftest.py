@@ -1103,6 +1103,11 @@ def wire_pair(wire_app, wire_peer_app, worker_info):
     approve, to)`` adds a third actor on ``wire_app`` with a trust to B
     (``to="B"``) or to A (``to="A"``), named in the scenario (its id,
     creator and trust secret), and returns it with its trust secret.
+    ``add_subscriber(scenario, name, *, host, ...)`` adds another subscriber
+    of A (trust, grant, subscription, warm cache) on ``"app"`` or
+    ``"peer"``; ``subscribe(scenario, subscriber, ...)`` gives a subscriber
+    one more subscription; ``deleted(actor)`` tells the teardown a row
+    deleted that actor itself.
     """
     import uuid
 
@@ -1111,6 +1116,8 @@ def wire_pair(wire_app, wire_peer_app, worker_info):
     from ._wire import Scenario, WireActor, WireHost, all_names
 
     created: list[WireActor] = []
+    # Actors a row deleted on purpose: the teardown does not miss them.
+    gone: set[str] = set()
 
     def create(name: str, host: WireHost) -> WireActor:
         creator = f"{name.lower()}_{uuid.uuid4().hex[:8]}@example.test"
@@ -1129,6 +1136,7 @@ def wire_pair(wire_app, wire_peer_app, worker_info):
         warm_capabilities: bool = True,
         relationship: str = "friend",
         subscribe: bool = True,
+        resource: str = "",
     ) -> Scenario:
         a = create("A", wire_app)
         b = create("B", wire_app if topology == "same_host" else wire_peer_app)
@@ -1136,7 +1144,40 @@ def wire_pair(wire_app, wire_peer_app, worker_info):
             a.passphrase: "A.passphrase",
             b.passphrase: "B.passphrase",
         }
+        secret = connect(
+            a,
+            b,
+            relationship=relationship,
+            grant=grant,
+            subscribe=subscribe,
+            subtarget=subtarget,
+            resource=resource,
+            granularity=granularity,
+            warm_capabilities=warm_capabilities,
+        )
+        secrets[secret] = "trust:A-B"
 
+        names = all_names([a, b])
+        names[a.creator] = "A.creator"
+        names[b.creator] = "B.creator"
+        scenario = Scenario(a, [b], names, secrets)
+        scenario.relationship = relationship
+        scenario.trust_secret = secret
+        return scenario
+
+    def connect(
+        a: WireActor,
+        b: WireActor,
+        *,
+        relationship: str,
+        grant: list[str] | dict[str, Any] | None,
+        subscribe: bool,
+        subtarget: str,
+        resource: str,
+        granularity: str,
+        warm_capabilities: bool,
+    ) -> str:
+        """B trusts A, both approve, A grants, B subscribes; the trust secret."""
         # B asks A for trust; both sides approve (the trust helper's shape).
         response = requests.post(
             f"{b.url}/trust",
@@ -1144,8 +1185,7 @@ def wire_pair(wire_app, wire_peer_app, worker_info):
             auth=b.basic,
         )
         assert response.status_code == 201, response.text
-        trust = response.json()
-        secrets[trust["secret"]] = "trust:A-B"
+        secret = response.json()["secret"]
         assert (
             requests.put(
                 f"{a.url}/trust/{relationship}/{b.id}",
@@ -1171,21 +1211,10 @@ def wire_pair(wire_app, wire_peer_app, worker_info):
             assert response.status_code in (200, 201, 204), response.text
 
         # B subscribes at A (the consumer's lifecycle hook does this).
-        response = (
-            None
-            if not subscribe
-            else requests.post(
-                f"{b.url}/subscriptions",
-                json={
-                    "peerid": a.id,
-                    "target": "properties",
-                    "subtarget": subtarget,
-                    "granularity": granularity,
-                },
-                auth=b.basic,
+        if subscribe:
+            add_subscription(
+                a, b, subtarget=subtarget, resource=resource, granularity=granularity
             )
-        )
-        assert response is None or response.status_code in (201, 204), response.text
 
         # A's cache of B's capabilities, as a mutual pair would have it. Cold,
         # a resume schedules a background refresh that races the resync
@@ -1194,14 +1223,56 @@ def wire_pair(wire_app, wire_peer_app, worker_info):
             from actingweb.peer_capabilities import PeerCapabilities
 
             assert PeerCapabilities(a.interface(), b.id).refresh()
+        return secret
 
-        names = all_names([a, b])
-        names[a.creator] = "A.creator"
-        names[b.creator] = "B.creator"
-        scenario = Scenario(a, [b], names, secrets)
-        scenario.relationship = relationship
-        scenario.trust_secret = trust["secret"]
-        return scenario
+    def add_subscription(
+        a: WireActor,
+        b: WireActor,
+        *,
+        subtarget: str = "",
+        resource: str = "",
+        granularity: str = "high",
+    ) -> None:
+        body: dict[str, Any] = {
+            "peerid": a.id,
+            "target": "properties",
+            "subtarget": subtarget,
+            "granularity": granularity,
+        }
+        if resource:
+            body["resource"] = resource
+        response = requests.post(f"{b.url}/subscriptions", json=body, auth=b.basic)
+        assert response.status_code in (201, 204), response.text
+
+    def add_subscriber(
+        scenario: Scenario,
+        name: str,
+        *,
+        host: str = "app",
+        grant: list[str] | dict[str, Any] | None = None,
+        subtarget: str = "",
+        resource: str = "",
+        granularity: str = "high",
+        subscribe: bool = True,
+    ) -> WireActor:
+        sub = create(name, wire_app if host == "app" else wire_peer_app)
+        secret = connect(
+            scenario.publisher,
+            sub,
+            relationship=scenario.relationship,
+            grant=grant,
+            subscribe=subscribe,
+            subtarget=subtarget,
+            resource=resource,
+            granularity=granularity,
+            warm_capabilities=True,
+        )
+        scenario.subscribers.append(sub)
+        scenario.name(sub.id, name)
+        scenario.name(sub.creator, f"{name}.creator")
+        scenario.name(sub.passphrase, f"{name}.passphrase", secret=True)
+        scenario.name(secret, f"trust:A-{name}", secret=True)
+        return sub
 
     def add_peer(
         scenario: Scenario,
@@ -1250,7 +1321,22 @@ def wire_pair(wire_app, wire_peer_app, worker_info):
 
     class WirePairFactory:
         """``wire_pair``'s value: call it for a pair; ``add_peer`` for a third
-        actor with a trust, ``add_actor`` for one without."""
+        actor with a trust, ``add_actor`` for one without, ``add_subscriber``
+        for another subscriber of A, ``subscribe`` for one more subscription,
+        ``deleted`` for an actor the row deletes itself."""
+
+        def add_subscriber(
+            self, scenario: Scenario, name: str, **kwargs: Any
+        ) -> WireActor:
+            return add_subscriber(scenario, name, **kwargs)
+
+        def subscribe(
+            self, scenario: Scenario, subscriber: WireActor, **kwargs: Any
+        ) -> None:
+            add_subscription(scenario.publisher, subscriber, **kwargs)
+
+        def deleted(self, actor: WireActor) -> None:
+            gone.add(actor.id)
 
         def add_actor(self, scenario: Scenario, name: str) -> WireActor:
             return add_actor(scenario, name)
@@ -1282,7 +1368,8 @@ def wire_pair(wire_app, wire_peer_app, worker_info):
         try:
             actor.interface().delete()
         except AssertionError:
-            leftovers.append(f"{actor.name} already gone")
+            if actor.id not in gone:
+                leftovers.append(f"{actor.name} already gone")
     from actingweb.actor import Actor
 
     for actor in created:

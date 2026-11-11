@@ -17,9 +17,11 @@ with names so that two runs with different actors produce the same bytes.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import contextlib
 import copy
+import inspect
 import json
 import os
 import re
@@ -395,7 +397,14 @@ def _snapshot_replica(subscriber: WireActor, publisher: WireActor) -> dict[str, 
         actor=subscriber.interface(), peer_id=publisher.id, validate_peer_id=False
     )
     scalars = {name: store.get_value(name) for name in sorted(store.list_all_scalars())}
-    lists = {name: store.get_list(name) for name in sorted(store.list_all_lists())}
+    lists: dict[str, Any] = {}
+    for name in sorted(store.list_all_lists()):
+        # A replica list whose metadata and items disagree raises on read:
+        # what a reader of the replica meets, so recorded as such.
+        try:
+            lists[name] = store.get_list(name)
+        except IndexError as exc:
+            lists[name] = {"read_error": f"IndexError: {exc}"}
     return {"scalars": scalars, "lists": lists}
 
 
@@ -482,6 +491,10 @@ class Scenario:
         # Optional: what else a row snapshots after each step (the
         # publisher's properties, an OAuth2 client's rows), under "extra".
         self.extra_snapshot: Callable[[], Any] | None = None
+        # Several subscribers: the publisher sends to them in the order of
+        # their (random) subscription ids, so a row that has them sorts each
+        # run of sibling callbacks by the subscriber's name.
+        self.sort_callbacks = False
         # Set by the ``wire_pair`` fixture.
         self.relationship: str = ""
         self.trust_secret: str = ""
@@ -501,16 +514,26 @@ class Scenario:
 
         The recorder opens when no wire request is in flight and closes when
         the action, its settle condition and every request they started have
-        finished."""
+        finished.
+
+        An ``async`` action is an asynchronous step: it runs on an event loop
+        of its own in the test thread (the SDK on a running loop, the
+        consumer's shape off Lambda), and the step settles only when every
+        task the action left on that loop has finished."""
         wait_for_quiet()
         start_recording()
         try:
-            result = action()
+            if inspect.iscoroutinefunction(action):
+                result = asyncio.run(_run_and_drain(action))
+            else:
+                result = action()
             if settle is not None:
                 settle()
             wait_for_quiet()
         finally:
             wire = stop_recording()
+        if self.sort_callbacks:
+            wire = _sort_callback_runs(wire, self.names)
         after = snapshot(self.publisher, self.subscribers, self.names)
         if self.extra_snapshot is not None:
             after["extra"] = self.extra_snapshot()
@@ -526,6 +549,53 @@ class Scenario:
 
     def recording(self) -> dict[str, Any]:
         return normalise({"steps": self.steps}, self.names, self.secrets)
+
+
+_CALLBACK_PATH = re.compile(r"^/([0-9a-f]{32})/callbacks/subscriptions/")
+
+
+def _sort_callback_runs(
+    entries: list[dict[str, Any]], names: dict[str, str]
+) -> list[dict[str, Any]]:
+    """Each run of consecutive subscription callbacks sorted by the receiving
+    actor's name, then by what the subscription covers (stable), at every
+    level; nothing else moves."""
+
+    def key(entry: dict[str, Any]) -> tuple[str, ...]:
+        match = _CALLBACK_PATH.match(entry.get("path", ""))
+        if not match:
+            return ()
+        body = entry.get("request")
+        body = body if isinstance(body, dict) else {}
+        return (
+            names.get(match.group(1), match.group(1)),
+            str(body.get("subtarget") or ""),
+            str(body.get("resource") or ""),
+        )
+
+    out: list[dict[str, Any]] = []
+    run: list[dict[str, Any]] = []
+    for entry in entries:
+        if "children" in entry:
+            entry = {**entry, "children": _sort_callback_runs(entry["children"], names)}
+        if key(entry):
+            run.append(entry)
+            continue
+        out += sorted(run, key=key)
+        run = []
+        out.append(entry)
+    return out + sorted(run, key=key)
+
+
+async def _run_and_drain(action: Callable[[], Any]) -> Any:
+    """Await ``action``, then every task it left on the loop (and theirs)."""
+    result = await action()
+    current = asyncio.current_task()
+    while True:
+        pending = [t for t in asyncio.all_tasks() if t is not current and not t.done()]
+        if not pending:
+            return result
+        await asyncio.gather(*pending)
 
 
 def _describe_result(result: Any) -> Any:

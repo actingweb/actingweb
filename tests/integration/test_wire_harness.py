@@ -365,3 +365,100 @@ def test_the_registry_check(tmp_path, owners, files, problem, exposure):
         assert problems == []
     else:
         assert any(problem in p for p in problems), problems
+
+
+@pytest.mark.parametrize(
+    ("second", "problem"),
+    [
+        ('{ file = "WX1.postgresql.json", why = "a backend difference" }', None),
+        ('{ file = "WX1.postgresql.json" }', "second must be"),
+        ('{ file = "WY1.postgresql.json", why = "x" }', "second must be"),
+        ('"WX1.postgresql.json"', "second must be"),
+    ],
+)
+def test_a_second_file_needs_its_reason(tmp_path, second, problem):
+    wire_dir = tmp_path / "wire"
+    wire_dir.mkdir()
+    entry = _ENTRY.format(owners="[]", exposure="false") + f"second = {second}\n"
+    (wire_dir / "rows.toml").write_text(entry)
+    for name in ("WX1.json", "WX1.postgresql.json"):
+        (wire_dir / name).write_text("{}\n")
+    (tmp_path / "test_x.py").write_text("def test_wx1():\n    pass\n")
+    problems, _ = _verify_groups().check_wire_rows(wire_dir, tmp_path)
+    if problem is None:
+        assert problems == []
+    else:
+        assert any(problem in p for p in problems), problems
+
+
+_PHASE_ROWS: dict[str, dict[str, Any]] = {
+    "WX1": {"owners": ["p:2"]},
+    "WX2": {"owners": [], "topologies": ["same_host", "two_hosts"]},
+}
+
+
+@pytest.mark.parametrize(
+    ("changes", "trailers", "problem"),
+    [
+        # A new recording is the first: no owner needed.
+        ([("A", "WX1.json")], [], None),
+        # Re-recorded by its owner.
+        ([("M", "WX1.json")], ["p:2"], None),
+        # Re-recorded by a phase that does not own it.
+        ([("M", "WX1.json")], ["p:3"], "not among its owners"),
+        # Re-recorded with no trailer, or two.
+        ([("M", "WX1.json")], [], "exactly one"),
+        ([("M", "WX1.json")], ["p:2", "p:3"], "exactly one"),
+        # A row nobody owns is changed by nobody.
+        ([("M", "WX2.two_hosts.json")], ["p:2"], "not among its owners"),
+        # A deletion is read against the parent's registry.
+        ([("D", "WX1.json")], ["p:2"], None),
+        ([("M", "WZ9.json")], ["p:2"], "belongs to no row"),
+    ],
+)
+def test_the_wire_phase_check(changes, trailers, problem):
+    problems = _verify_groups().wire_phase_problems(
+        "0123456789abcdef", changes, trailers, _PHASE_ROWS, _PHASE_ROWS
+    )
+    if problem is None:
+        assert problems == []
+    else:
+        assert any(problem in p for p in problems), problems
+
+
+def test_an_async_step_waits_for_the_tasks_it_left_on_the_loop():
+    """An asynchronous step settles only when the fire-and-forget tasks it
+    started, and the tasks those started, have finished."""
+    done: list[str] = []
+
+    async def later(name: str, then: str | None = None) -> None:
+        await asyncio.sleep(0.01)
+        done.append(name)
+        if then:
+            asyncio.get_running_loop().create_task(later(then))
+
+    async def action() -> str:
+        asyncio.get_running_loop().create_task(later("first", then="second"))
+        return "returned before either"
+
+    assert asyncio.run(_wire._run_and_drain(action)) == "returned before either"
+    assert done == ["first", "second"]
+
+
+def test_sibling_callbacks_sort_by_the_receivers_name_and_nothing_else_moves():
+    b, c = "b" * 32, "c" * 32
+
+    def cb(actor: str, children: list[Any] | None = None) -> dict[str, Any]:
+        return {
+            "path": f"/{actor}/callbacks/subscriptions/x/y",
+            "children": children or [],
+        }
+
+    write = {
+        "path": "/a/properties/x",
+        "children": [cb(c, [cb(c)]), cb(b), {"event": "e"}, cb(c), cb(b)],
+    }
+    out = _wire._sort_callback_runs([write], {b: "B", c: "C"})
+    paths = [e.get("path", e.get("event"))[:2] for e in out[0]["children"]]
+    assert paths == ["/b", "/c", "e", "/b", "/c"]
+    assert out[0]["children"][1]["children"] == [cb(c)]

@@ -288,6 +288,12 @@ def _nested(depth: int) -> dict[str, Any]:
     return value
 
 
+def _nested_text(depth: int) -> str:
+    """The JSON text of ``_nested(depth)``, built without ``json.dumps``
+    (whose encoder stops at the recursion limit on Python 3.11)."""
+    return '{"a": ' * depth + "{}" + "}" * depth
+
+
 def test_text_nested_beyond_the_parser_is_withheld() -> None:
     """Outside voice 2026-11-10: ``RecursionError`` from very deep JSON text
     escaped the filter; verification re-run 1 (Issue C): treated as text, it
@@ -306,7 +312,7 @@ def test_objects_nested_beyond_the_walk_are_withheld() -> None:
     from actingweb.permission_evaluator import drop_excluded, holds_excluded
 
     deep = _nested(5000)
-    text = json.dumps(deep)
+    text = _nested_text(5000)
     assert drop_excluded(EXCLUDES, "settings", deep) is None
     assert holds_excluded(EXCLUDES, "settings", deep)
     assert Actor._diff_part(EXCLUDES, "settings", deep) is _EMPTIED
@@ -329,7 +335,7 @@ def test_a_view_withholds_and_refuses_a_value_too_deep(actor: Any) -> None:
     (it held excluded parts the filter cannot see)."""
     w, peer = _world()
     assert w.a.property is not None
-    w.a.property["settings"] = json.dumps(_nested(5000))
+    w.a.property["settings"] = _nested_text(5000)
     view = _fresh_view(w, peer)
     assert view["settings"] is None
     with pytest.raises(PermissionError):

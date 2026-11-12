@@ -61,14 +61,15 @@ a run compares against it byte for byte.
 - Re-record a row only on purpose, by id, never all at once:
   `WIRE_RECORD=WD9,WD19 poetry run pytest tests/integration/test_wire_delivery.py`
   (refused under `CI`), and add a dated line to the row's `reason`. A
-  mismatch leaves `wire/<row>.actual.json` beside the expected file;
-  delete it once read.
+  mismatch leaves `wire/<row>.actual.json` beside the expected file
+  (git ignores it); delete it once read.
 - A commit that changes or removes a recording that exists on `master`
   carries a `Wire-Phase: <plan>:<phase>` trailer naming one of the row's
   owners as `master` has them (an ownership change lands on `master`
   first). `verify_groups.py` checks the branch's commits since the merge
   base, merges included; it checks commits already made, so run it after
-  committing and amend if it fails (CI's shallow checkout skips it).
+  committing and amend if it fails. CI runs it too, so a PR whose commits
+  break the rule fails.
 - `exposure = true` marks a row that records data reaching a peer that may
   not read it; `verify_groups.py` lists them.
 - The harness is `_wire.py` (recorder, driver, snapshot, normaliser,

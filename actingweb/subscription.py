@@ -7,6 +7,7 @@ from actingweb.db import (
     get_subscription_diff,
     get_subscription_diff_list,
     get_subscription_list,
+    get_subscription_suspension,
 )
 
 from .db.exceptions import DbError
@@ -282,14 +283,12 @@ class Subscriptions:
             logger.debug("Already deleted list in subscriptions")
             return False
         if self.subscriptions is None:
-            self.fetch()  # strict: the diffs are found through this list
-        if self.subscriptions:
-            for sub in self.subscriptions:
-                if not self.config:
-                    continue
-                diff_list = get_subscription_diff_list(self.config)
-                diff_list.fetch(actor_id=self.actor_id, subid=sub["subscriptionid"])
-                diff_list.delete()
+            self.fetch()  # strict: a fault raises before anything is removed
+        if self.subscriptions and self.config:
+            # Every caller wipes the whole actor (deletion, purge, adoption):
+            # its diffs go by actor id, unread (3.16; before, one diff read
+            # per subscription).
+            get_subscription_diff_list(self.config).delete_all_of_actor(self.actor_id)
         self.list.delete()
         self.list = None
         self.subscriptions = None
@@ -316,3 +315,34 @@ class Subscriptions:
             self.fetch()
         except DbError:  # folds DbError: the caller's fetch() re-reads and decides
             pass
+
+
+def delete_actor_subscription_rows(actor_id: str, config: Any) -> None:
+    """Every subscription row of ``actor_id``, by actor id (3.16): the rows
+    only, their diffs go with :func:`delete_actor_diffs_and_suspensions`. A
+    fault raises ``DbError``."""
+    rows = get_subscription_list(config)
+    if rows.fetch(actor_id=actor_id):
+        rows.delete()
+
+
+def clear_actor_suspensions(actor_id: str, config: Any) -> None:
+    """Every subscription suspension of ``actor_id`` (3.16). Raises
+    ``DbError`` unless the store confirms it, also when building the store
+    fails (the DynamoDB store checks its table first), so a caller's rollback
+    or resumable delete runs."""
+    try:
+        cleared = get_subscription_suspension(config, actor_id).delete_all()
+    except DbError:
+        raise
+    except Exception as e:  # the store's table check or a backend error
+        raise DbError("suspension clear", actor_id) from e
+    if not cleared:
+        raise DbError("suspension clear", actor_id)
+
+
+def delete_actor_diffs_and_suspensions(actor_id: str, config: Any) -> None:
+    """Every subscription diff of ``actor_id`` (by actor id, without reading
+    the diffs) and every suspension (3.16). A fault raises ``DbError``."""
+    get_subscription_diff_list(config).delete_all_of_actor(actor_id)
+    clear_actor_suspensions(actor_id, config)

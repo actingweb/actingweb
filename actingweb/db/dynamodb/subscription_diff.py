@@ -222,6 +222,16 @@ class DbSubscriptionDiffList:
         self.handle = None
         return True
 
+    def delete_all_of_actor(self, actor_id: str) -> bool:
+        """Delete every diff of ``actor_id`` (one query by the hash key, then
+        a delete per item); a fault raises ``DbError``."""
+        try:
+            for p in SubscriptionDiff.query(actor_id, consistent_read=True):
+                p.delete()
+        except Exception as e:
+            raise DbError("subscription diff list delete") from e
+        return True
+
     def __init__(self):
         self.handle = None
         self.diffs = []

@@ -542,8 +542,9 @@ class TestSubscriptionsCollection:
 
         assert result is True
         mock_db_sub_list.delete.assert_called_once()
-        # Verify diffs were fetched and deleted for each subscription
-        assert mock_diff_list.delete.call_count == 2
+        # The actor's diffs go in one delete by actor id, unread (3.16)
+        mock_diff_list.delete_all_of_actor.assert_called_once_with("test_actor")
+        mock_diff_list.fetch.assert_not_called()
 
     def test_subscriptions_delete_without_list(self):
         """Test subscriptions.delete() returns False when list is None."""

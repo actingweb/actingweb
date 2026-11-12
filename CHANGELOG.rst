@@ -940,22 +940,26 @@ CHANGED
   change:** an instance memoises whatever its first read answered; code that
   keeps one instance across many writes sees subscriptions created elsewhere
   only on a new instance. The instance reads again after its own creates and
-  deletes, after a resume (``resume_subscriptions``), and after a trust call
-  that sent a request to the peer (``modify_trust_and_notify``,
-  ``create_reciprocal_trust`` and its async form), where the peer may
-  subscribe back. A fault folded by ``strict=False`` is not kept. Every
-  instance the library builds lives for one request. **Check:** code that
+  deletes, after a resume (``resume_subscriptions``), and after every call of
+  the trust methods that can send a request to the peer
+  (``modify_trust_and_notify``, ``create_reciprocal_trust`` and its async
+  form), where the peer may subscribe back. A fault folded by
+  ``strict=False`` is not kept. Every instance the library builds lives for
+  one request, except the system actor, which has no subscribers.
+  **Check:** code that
   holds an ``Actor`` or ``ActorInterface`` across requests and expects new
   subscribers to get its diffs.
 
 - **Deleting an actor, purging its relationships and creating one under an
   explicit id touch the subscription stores.** **Behavior change:**
   ``Actor.delete()`` also removes every subscription diff of the actor (one
-  actor-wide read and delete), a subscription a peer created during the
-  wipe, and the actor's subscription suspensions (one delete), and raises
-  ``DbError`` when the suspensions cannot be confirmed removed (the row
-  stays and a repeated call finishes, as with any fault in the resumable
-  delete). ``purge_relationships()`` removes the same diffs and suspensions
+  delete by actor id, unread; the per-subscription diff reads are gone), a
+  subscription a peer created during the wipe, and the actor's subscription
+  suspensions (one delete), and raises ``DbError`` when the suspensions
+  cannot be confirmed removed (the row stays and a repeated call finishes,
+  as with any fault in the resumable delete); a missing suspensions table
+  counts as holding none, on both backends. ``actingweb-deletions resume``
+  removes the same for a deletion whose row is already gone. ``purge_relationships()`` removes the same diffs and suspensions
   and answers ``confirmed: False`` when it cannot. ``Actor.create(actor_id=
   ...)`` clears that id's suspensions once the row is written and raises
   ``DbError`` (the new row removed) when it cannot. **Check:** code that
@@ -2237,7 +2241,9 @@ FIXED
   holding its MCP token kept serving the deleted actor's cached state.**
   (Distinct from the ``SECURITY`` entry on a cached token bringing a
   deleted actor back.) A cached token whose actor row is gone is now
-  dropped and validated against storage, and never creates the actor.
+  dropped and the token validated against storage: only a token that
+  validates there can lead to the OAuth2 bridge creating the actor (as on
+  any first request), never the cached entry.
 
 - **A trust lookup on a cached MCP token could re-cache a trust revoked
   while it was being read, and an eviction could land between a cache

@@ -8,6 +8,8 @@ targets/subtargets during bulk operations (imports, migrations).
 import logging
 from datetime import UTC, datetime
 
+import psycopg
+
 from ..exceptions import DbError
 from .connection import get_connection
 
@@ -158,6 +160,10 @@ class DbSubscriptionSuspension:
                         (self._actor_id,),
                     )
                 conn.commit()
+            return True
+        except psycopg.errors.UndefinedTable:
+            # A schema without the table holds no suspension (as DynamoDB
+            # answers for a missing table, 3.16).
             return True
         except Exception as e:
             logger.error(f"Error deleting suspensions for {self._actor_id}: {e}")

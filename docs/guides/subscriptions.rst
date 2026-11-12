@@ -72,7 +72,7 @@ Properties
 An actor reads its subscription list once per instance, an empty list too
 (3.16): these listings, and every diff the instance registers, use that
 read. The instance reads again after its own creates and deletes, a resume,
-and a trust call that sent a request to the peer. An instance kept across
+and every call of the trust methods that can send a request to the peer. An instance kept across
 requests does not see subscriptions created elsewhere; the actors the
 library hands to hooks and handlers are built per request.
 

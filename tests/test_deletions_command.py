@@ -120,6 +120,37 @@ class TestResume:
             deletion.clear_actor_tombstone(actor_id, config)
 
 
+class TestTheUnfinishedPath:
+    def test_what_a_late_subscriber_left_goes_too(
+        self, config: Any, capsys: Any
+    ) -> None:
+        """Verification 2026-11-12 of subs-list-cache-lifetime, Issue 3: a
+        deletion whose row is already gone still loses the subscription
+        rows, diffs and suspensions left under its id."""
+        from actingweb.db import get_subscription_suspension
+        from actingweb.subscription import Subscription, Subscriptions
+
+        actor_id = _stalled(config)
+        sub = Subscription(
+            actor_id=actor_id,
+            peerid="late-peer",
+            subid="late-sub",
+            callback=False,
+            config=config,
+        )
+        assert sub.create(target="properties", granularity="high")
+        assert sub.add_diff(blob="{}")
+        assert get_subscription_suspension(config, actor_id).suspend("properties")
+        handle = Actor(actor_id=actor_id, config=config).handle
+        assert handle is not None and handle.delete()  # the row went last
+
+        code, out = _run(capsys, "resume", actor_id, "--apply")
+        assert code == 0, out
+        assert not Subscriptions(actor_id=actor_id, config=config).fetch()
+        assert not sub.get_diffs()
+        assert get_subscription_suspension(config, actor_id).get_all_suspended() == []
+
+
 class TestClear:
     def test_dry_run_then_apply(self, config: Any, capsys: Any) -> None:
         actor_id = aid(create_core_actor(config, uuid_email()))

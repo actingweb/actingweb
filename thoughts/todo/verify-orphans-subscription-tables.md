@@ -2,7 +2,9 @@
 
 **Origin:** `thoughts/plans/2026-11-06-subs-list-cache-lifetime.md` (the
 redraft of 2026-11-12, "What We're NOT Doing", "Finding rows the deletion
-race leaves"; found by the outside voice on that redraft).
+race leaves"; found by the outside voice on that redraft). Still open after
+its implementation: `thoughts/verifications/2026-11-12-subs-list-cache-lifetime.md`
+(Issue 3 is the related `actingweb-deletions` resume path).
 
 `actingweb-verify-orphans` sweeps property, attribute and trust rows across
 the whole table for rows whose actor no longer exists

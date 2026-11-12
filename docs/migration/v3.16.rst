@@ -1271,8 +1271,9 @@ only the validated-token and trust caches (per process, five minutes).
   subscription list, an empty one too: code that keeps one instance across
   many writes sees subscriptions created elsewhere only on a new instance.
   The instance reads again after its own creates and deletes, after
-  ``resume_subscriptions``, and after a trust call that sent a request to
-  the peer.
+  ``resume_subscriptions``, and after every call of the trust methods that
+  can send a request to the peer (``modify_trust_and_notify``,
+  ``create_reciprocal_trust`` and its async form).
 - **Grouped by peer.** ``actor.subscriptions.get_subscriptions_by_peer()``
   returns every subscription grouped by peer id from that one read, as
   ``PeerSubscriptions`` (``peer_id``, ``outbound``, ``inbound``); through a

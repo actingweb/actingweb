@@ -179,7 +179,7 @@ def test_wm1_memo(wire_pair, topology):
 
 
 @pytest.mark.parametrize("topology", TOPOLOGIES)
-def test_wm2_empty_memo(wire_pair, topology):
+def test_wm2_empty_memo(wire_pair: Any, topology: str) -> None:
     """WM2: one ``Actor`` instance of A writes with no subscriber (its memo
     becomes ``[]``, asserted); B subscribes over REST; the same instance
     writes again; then a second instance writes."""
@@ -199,7 +199,7 @@ def test_wm2_empty_memo(wire_pair, topology):
 
 
 @pytest.mark.parametrize("topology", TOPOLOGIES)
-def test_wm3_recreated_publisher_sends(wire_pair, topology):
+def test_wm3_recreated_publisher_sends(wire_pair: Any, topology: str) -> None:
     """WM3: WC6's setup and delete, A created again under its id through the
     SDK, a new subscriber B2 (set up, not recorded), a write of ``y`` (the
     target that was suspended)."""
@@ -230,7 +230,7 @@ def test_wm3_recreated_publisher_sends(wire_pair, topology):
 
 
 @pytest.mark.parametrize("topology", TOPOLOGIES)
-def test_wm4_subscriber_during_suspension(wire_pair, topology):
+def test_wm4_subscriber_during_suspension(wire_pair: Any, topology: str) -> None:
     """WM4: one instance of A suspends ``properties`` and writes (its memo
     becomes ``[]``); B subscribes over REST; the same instance resumes."""
     s = wire_pair(topology, grant=["*"], subscribe=False)

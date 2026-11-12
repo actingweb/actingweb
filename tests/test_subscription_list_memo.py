@@ -810,7 +810,9 @@ class TestDeletion:
     def test_a_diff_delete_fault_stops_the_delete(self, bare: World) -> None:
         real = type(subscription_module.get_subscription_diff_list(bare.config))
         with (
-            mock.patch.object(real, "delete", side_effect=DbError("diff delete")),
+            mock.patch.object(
+                real, "delete_all_of_actor", side_effect=DbError("diff delete")
+            ),
             pytest.raises(DbError),
         ):
             bare.a.delete(notify_peers=False)
@@ -909,6 +911,70 @@ class TestCreateUnderAnExplicitId:
         finally:
             get_subscription_suspension(cfg, actor_id).delete_all()
 
+    def test_a_failed_clear_keeps_the_deleted_actors_tombstone(self) -> None:
+        """Verification 2026-11-12, Issue 2: the suspensions are cleared
+        before the tombstone, so a create that fails on them leaves the
+        deleted actor's tombstone in place."""
+        from actingweb import deletion
+
+        cfg = _config()
+        actor_id = uuid.uuid4().hex
+        deletion.mark_actor_deleted(actor_id, cfg)
+        self._leftover(cfg, actor_id)
+        store_cls = type(get_subscription_suspension(cfg, actor_id))
+        try:
+            with (
+                mock.patch.object(store_cls, "delete_all", return_value=False),
+                pytest.raises(DbError),
+            ):
+                Actor(config=cfg).create(
+                    url="https://test.example.com/",
+                    creator=uuid_email(),
+                    passphrase="pw",
+                    actor_id=actor_id,
+                )
+            assert Actor(actor_id, cfg).id is None
+            assert deletion.get_deletion_status(actor_id, cfg) == (
+                deletion.DeletionStatus.DELETED
+            )
+        finally:
+            deletion.clear_actor_tombstone(actor_id, cfg)
+            get_subscription_suspension(cfg, actor_id).delete_all()
+
+    def test_an_error_building_the_store_rolls_the_create_back(self) -> None:
+        """Verification 2026-11-12, Issue 1: any error from the suspension
+        store (the DynamoDB table check raises the raw botocore error) is a
+        DbError, so the row is rolled back."""
+        cfg = _config()
+        actor_id = uuid.uuid4().hex
+        with (
+            mock.patch(
+                "actingweb.subscription.get_subscription_suspension",
+                side_effect=RuntimeError("AccessDeniedException: CreateTable"),
+            ),
+            pytest.raises(DbError),
+        ):
+            Actor(config=cfg).create(
+                url="https://test.example.com/",
+                creator=uuid_email(),
+                passphrase="pw",
+                actor_id=actor_id,
+            )
+        assert Actor(actor_id, cfg).id is None
+
+    def test_an_error_building_the_store_stops_a_delete_with_503(
+        self, bare: World
+    ) -> None:
+        with (
+            mock.patch(
+                "actingweb.subscription.get_subscription_suspension",
+                side_effect=RuntimeError("AccessDeniedException: CreateTable"),
+            ),
+            pytest.raises(DbError),
+        ):
+            bare.a.delete(notify_peers=False)
+        assert bare.fresh().id == bare.id
+
     def test_a_create_under_a_live_actors_id_leaves_its_suspensions(
         self, bare: World
     ) -> None:
@@ -928,7 +994,9 @@ class TestCreateUnderAnExplicitId:
 
     def test_a_generated_id_makes_no_suspension_call(self) -> None:
         cfg = _config()
-        with mock.patch("actingweb.actor.get_subscription_suspension") as suspension:
+        with mock.patch(
+            "actingweb.subscription.get_subscription_suspension"
+        ) as suspension:
             a = Actor(config=cfg)
             assert a.create(
                 url="https://test.example.com/", creator=uuid_email(), passphrase="pw"
@@ -1020,6 +1088,39 @@ class TestPhase2ReviewFixes:
             assert get_subscription_suspension(bare.config, bare.id).delete_all()
             assert bare.a.delete(notify_peers=False)
         assert bare.fresh().id is None
+
+    def test_a_missing_postgresql_table_holds_no_suspension(self, bare: World) -> None:
+        """Verification 2026-11-12, Issue 10."""
+        if backend_of(bare.config) != "postgresql":
+            pytest.skip("the DynamoDB answer is tested above")
+        import psycopg
+
+        from actingweb.db.postgresql import subscription_suspension as pg
+
+        def missing(*_a: Any, **_k: Any) -> Any:
+            raise psycopg.errors.UndefinedTable("subscription_suspensions")
+
+        with mock.patch.object(pg, "get_connection", missing):
+            assert get_subscription_suspension(bare.config, bare.id).delete_all()
+
+    def test_the_diff_wipe_reads_no_diff(self, bare: World) -> None:
+        """Verification 2026-11-12, Issue 8: deletion deletes the diffs by
+        actor id without fetching them."""
+        bare.trust("p")
+        subid = bare.subscribe("p")
+        Subscription(
+            actor_id=bare.id,
+            peerid="p",
+            subid=subid,
+            callback=False,
+            config=bare.config,
+        ).add_diff(blob="{}")
+        real = type(subscription_module.get_subscription_diff_list(bare.config))
+        with mock.patch.object(
+            real, "fetch", side_effect=AssertionError("diffs fetched")
+        ):
+            assert bare.a.delete(notify_peers=False)
+        assert bare.diffs("p", subid) == []
 
     def test_a_faulting_create_still_resets_the_memo(self, bare: World) -> None:
         assert bare.a.get_subscriptions() == []

@@ -23,7 +23,6 @@ from actingweb.constants import (
 from actingweb.db import (
     get_actor,
     get_actor_list,
-    get_subscription_diff_list,
     get_subscription_suspension,
     get_trust,
 )
@@ -1227,19 +1226,16 @@ class Actor:
             # stalled deletion. A fault fails the create (503); the swap's row
             # is kept, as the marker rollback below keeps it.
             try:
-                deletion.clear_actor_tombstone(self.id, self.config, strict=True)
                 # Suspensions a deletion before 3.16 (or one that faulted
                 # after its row went) left under this id would make the new
                 # actor send no diffs. After the row, never before: a create
                 # under a live actor's id answers False and must not touch
-                # that actor's suspensions.
-                if (
-                    self.config is not None
-                    and not get_subscription_suspension(
-                        self.config, actor_id
-                    ).delete_all()
-                ):
-                    raise DbError("suspension clear", actor_id)
+                # that actor's suspensions. Before the tombstone: a clear
+                # that fails rolls the row back, and the deleted actor's
+                # tombstone must still be there then.
+                if self.config is not None:
+                    subscription.clear_actor_suspensions(actor_id, self.config)
+                deletion.clear_actor_tombstone(self.id, self.config, strict=True)
             except DbError:
                 logger.error(
                     f"Actor {self.id}: its deletion tombstone or suspensions "
@@ -1643,7 +1639,9 @@ class Actor:
         (one created between the list read and its wipe has no row to be
         found through), and the suspension rows. A fault raises ``DbError``,
         so a resumable delete stops before the actor row goes."""
-        subscription.Subscriptions(actor_id=self.id, config=self.config).delete()
+        if not self.config or not self.id:
+            return
+        subscription.delete_actor_subscription_rows(self.id, self.config)
         self.subs_list = None
         self._wipe_diffs_and_suspensions()
 
@@ -1652,11 +1650,7 @@ class Actor:
         id; ``DbError`` when the suspensions cannot be confirmed removed."""
         if not self.config or not self.id:
             return
-        diffs = get_subscription_diff_list(self.config)
-        diffs.fetch(actor_id=self.id)
-        diffs.delete()
-        if not get_subscription_suspension(self.config, self.id).delete_all():
-            raise DbError("suspension delete", self.id)
+        subscription.delete_actor_diffs_and_suspensions(self.id, self.config)
 
     def _row_strict(self) -> dict[str, Any] | None:
         """This actor's row, read strictly (``DbError`` on a fault)."""

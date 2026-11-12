@@ -73,38 +73,42 @@ Implementation Pattern
 
 .. code-block:: python
 
-    def authenticate_and_get_actor_cached(self) -> Any:
-        """Cached version of authentication with ~1ms response time"""
-
-        # Extract and validate token
+    def authenticate(self) -> Any:
+        """Cache what validation resolved, never the actor (3.16)."""
         token = self.extract_token()
         if not token:
             return None
 
-        # Check token cache first
-        token_key = f"{hashlib.sha256(token.encode()).hexdigest()[:16]}:{self.actor_id}"
+        generation = _current_cache_generation()  # before any storage read
+        entry = _token_cache.get(token)
+        if (
+            entry is not None
+            and time.time() - entry["cached_at"] < _cache_ttl
+            and entry["config"] is self.config  # this application's entry
+        ):
+            actor = load_actor(entry["actor_id"])  # one row read per request
+            if actor is not None:
+                return actor
+            _token_cache.pop(token, None)  # the actor is gone: validate again
 
-        if token_key in _token_cache:
-            entry = _token_cache[token_key]
-            if time.time() - entry['timestamp'] < entry['ttl']:
-                # Cache hit - return cached data
-                return entry['data']
-            else:
-                # Cache expired - remove entry
-                del _token_cache[token_key]
+        validated = self.validate_token_in_storage(token)
+        if not validated:
+            return None
+        actor = load_actor(validated.actor_id)
+        if actor is None:
+            return None
 
-        # Cache miss - perform full authentication
-        result = self.authenticate_and_get_actor_uncached()
-
-        # Store in cache if successful
-        if result:
-            _token_cache[token_key] = {
-                'data': result,
-                'timestamp': time.time(),
-                'ttl': _cache_ttl
-            }
-
-        return result
+        # Only what validation resolved, and only if no revocation landed
+        # while it was being read (check and write under the eviction's lock).
+        with _cache_generation_lock:
+            if _cache_fill_still_valid(generation):
+                _token_cache[token] = {
+                    "actor_id": validated.actor_id,
+                    "client_id": validated.client_id,
+                    "cached_at": time.time(),
+                    "config": self.config,
+                }
+        return actor
 
 2. Cached Database Queries
 ----------------------------

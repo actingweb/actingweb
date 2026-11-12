@@ -1,5 +1,6 @@
 ---
 status: done
+verified: thoughts/verifications/2026-11-12-subs-list-cache-lifetime.md
 ---
 
 # Implementation Plan: per-request actors on the MCP path, and a subscription list that caches empty
@@ -242,7 +243,10 @@ this plan leaves.
 - **A create under an explicit id clears that id's suspension rows** [Added
   2026-11-12, owner]: `Actor.create(actor_id=…)` calls `delete_all()` for the
   id once the row is persisted, beside the tombstone clear and under its
-  rule (`actor.py:1216-1245`): only when `created and actor_id`. Before the
+  rule (`actor.py:1216-1245`): only when `created and actor_id`. [Updated
+  2026-11-12, verification Issue 2] Before the tombstone clear, so a clear
+  that fails leaves the deleted actor's tombstone; any error from the store
+  is a `DbError` (Iteration 1). Before the
   row would be wrong: `create()` answers `False` for an id a live actor
   holds, and a clear ahead of that would wipe the live actor's suspensions
   in the middle of its import. Deletion and purge clear them from 3.16 on,
@@ -1444,3 +1448,137 @@ Phase 3's.
 - A wire step that adds a peer leaves the peer's trust secret unnamed in
   the transcript; peers are set up outside the recorded steps.
 
+
+## Iterations
+
+### 2026-11-12, after verification thoughts/verifications/2026-11-12-subs-list-cache-lifetime.md
+
+Owner: fix all ten issues, Issue 10 included.
+
+#### 1. Any error from the suspension store is a `DbError` (Issue 1)
+
+**Category**: Verification fix (bug)
+
+**What changed**: `subscription.clear_actor_suspensions(actor_id, config)`
+builds the store and calls `delete_all()`; a `DbError` passes, any other
+exception (the DynamoDB store's `ensure_table` re-raises a raw
+`create_table` error, `_ensure.py:104`) becomes `DbError`, and `False` does
+too. `Actor.create(actor_id=…)` and the deletion wipes use it, so the
+create's rollback runs and a delete answers 503.
+
+**Files affected**:
+- `actingweb/subscription.py`: `clear_actor_suspensions`,
+  `delete_actor_diffs_and_suspensions`, `delete_actor_subscription_rows`.
+- `actingweb/actor.py`: `create` and the two wipe helpers call them.
+- `tests/test_subscription_list_memo.py`:
+  `test_an_error_building_the_store_rolls_the_create_back`,
+  `test_an_error_building_the_store_stops_a_delete_with_503`.
+
+**Rationale**: the store's constructor ran inside a `try` that caught
+`DbError` only, so a first MCP sign-in on a DynamoDB deployment without the
+table (and without `CreateTable`) left an orphan row and answered 401.
+
+#### 2. The suspensions are cleared before the tombstone (Issue 2)
+
+**Category**: Verification fix (bug)
+
+**What changed**: in `create`'s `if created and actor_id:` branch the
+suspension clear runs first, then the tombstone clear; both still follow the
+persisted row, so a create under a live actor's id touches neither.
+
+**Files affected**:
+- `actingweb/actor.py`: the order and the comment.
+- `tests/test_subscription_list_memo.py`:
+  `test_a_failed_clear_keeps_the_deleted_actors_tombstone` (the tombstone
+  still reads `DELETED` after a failed clear).
+
+**Rationale**: the rollback removes the row but cannot restore a cleared
+tombstone; before this plan the tombstone clear was the last step that could
+fail. Decisions, "A create under an explicit id clears that id's suspension
+rows": [Updated 2026-11-12] before the tombstone clear.
+
+#### 3. `actingweb-deletions` finishes the subscription stores too (Issue 3)
+
+**Category**: Verification fix
+
+**What changed**: the `UNFINISHED` path (row gone) removes the actor's
+subscription rows, diffs and suspensions by actor id before it marks the
+tombstone finished; the comment says so.
+
+**Files affected**:
+- `actingweb/maintenance/deletions.py`: `_finish_one`.
+- `tests/test_deletions_command.py`:
+  `TestTheUnfinishedPath.test_what_a_late_subscriber_left_goes_too`.
+
+**Rationale**: a subscription or diff a peer created after the last wipe, or
+a suspension a faulted wipe left, stayed for ever once the tombstone was
+marked finished.
+
+#### 4. Diffs are deleted by actor id, unread (Issue 8)
+
+**Category**: Verification fix (cost)
+
+**What changed**: `delete_all_of_actor(actor_id)` on
+`DbSubscriptionDiffListProtocol` and both backends (DynamoDB: one query by
+the hash key and a delete per item; PostgreSQL: one `DELETE`).
+`Subscriptions.delete()` (whose every caller wipes the whole actor:
+deletion, purge, adoption) and the final wipe use it; the per-subscription
+diff reads are gone, and the final wipe deletes the subscription rows only
+before it.
+
+**Files affected**:
+- `actingweb/db/protocols.py`, `actingweb/db/dynamodb/subscription_diff.py`,
+  `actingweb/db/postgresql/subscription_diff.py`: the method.
+- `actingweb/subscription.py`: `Subscriptions.delete()`.
+- `tests/test_subscription_core.py`: the collection test asserts the one
+  delete by actor id and no fetch.
+- `tests/test_subscription_list_memo.py`: `test_the_diff_wipe_reads_no_diff`
+  (a fetch raises), the diff-fault test now faults `delete_all_of_actor`.
+
+**Rationale**: a deletion read every queued diff body, on DynamoDB once per
+subscription, to delete rows it could delete by actor id.
+
+#### 5. A missing PostgreSQL suspensions table holds none (Issue 10)
+
+**Category**: Verification fix
+
+**What changed**: the PostgreSQL `delete_all` answers `True` on
+`psycopg.errors.UndefinedTable`, as DynamoDB does for a missing table.
+
+**Files affected**:
+- `actingweb/db/postgresql/subscription_suspension.py`.
+- `tests/test_subscription_list_memo.py`:
+  `test_a_missing_postgresql_table_holds_no_suspension` (PostgreSQL only).
+
+**Rationale**: owner's choice; the same answer on both backends.
+
+#### 6. Changelog, migration guide and guides say what the code does (Issues 4-7)
+
+**Category**: Verification fix (docs)
+
+**What changed**: the cached-token `FIXED` entry says only a token that
+validates against storage can lead to a create; the memo entry names the
+system actor as the instance that outlives a request and says the reset
+follows every call of the three trust methods (also in the migration section
+and `docs/guides/subscriptions.rst`); the deletion entry says the diffs go
+in one delete by actor id, that a missing table counts as empty on both
+backends, and that `actingweb-deletions resume` removes the same; the
+caching guide's authentication sample caches the validation result, never
+the actor, with the generation check and lock.
+
+**Files affected**: `CHANGELOG.rst`, `docs/migration/v3.16.rst`,
+`docs/guides/subscriptions.rst`, `docs/guides/caching.rst`.
+
+**Rationale**: each sentence promised more, or less, than the code.
+
+#### 7. Type hints on the new wire tests (Issue 9)
+
+**Category**: Verification fix
+
+**What changed**: `test_wm2_empty_memo`, `test_wm3_recreated_publisher_sends`
+and `test_wm4_subscriber_during_suspension` annotated.
+
+**Files affected**: `tests/integration/test_wire_queue_and_lifecycle.py`.
+
+**Rationale**: `CLAUDE.md`, Checks: type hints on all functions. No
+recording changes.

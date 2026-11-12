@@ -1258,6 +1258,16 @@ class DbSubscriptionDiffListProtocol(Protocol):
         """
         ...
 
+    def delete_all_of_actor(self, actor_id: str) -> bool:
+        """
+        Delete every subscription diff of an actor, by actor id, without
+        reading the diffs first (actor deletion and purge, 3.16).
+
+        Returns:
+            True when none is left. A fault raises ``DbError``.
+        """
+        ...
+
 
 # =============================================================================
 # Attribute Protocols

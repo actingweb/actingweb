@@ -185,8 +185,17 @@ def _finish_one(config: Any, finding: Finding, notify_peers: bool) -> None:
 
     if finding.state == UNFINISHED:
         # The row is gone; what can remain is the client index rows the
-        # tombstone recorded. Remove them and record the end.
+        # tombstone recorded, and what a peer's subscription created after
+        # the last wipe left (rows, diffs) or a faulted wipe left
+        # (suspensions). Remove them by actor id and record the end.
         from actingweb.oauth2 import _delete_actor_clients
+        from actingweb.subscription import (
+            delete_actor_diffs_and_suspensions,
+            delete_actor_subscription_rows,
+        )
+
+        delete_actor_subscription_rows(finding.actor_id, config)
+        delete_actor_diffs_and_suspensions(finding.actor_id, config)
 
         ids = finding.data.get("client_ids")
         _delete_actor_clients(

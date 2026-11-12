@@ -1138,9 +1138,9 @@ class DbSubscriptionListProtocol(Protocol):
 
         Args:
             actor_id: The actor ID
-            strict: Raise on a backend read fault instead of answering with
-                an empty list (PostgreSQL catches faults; DynamoDB raises
-                either way).
+            strict: Raise ``DbError`` on a backend read fault; with
+                ``strict=False`` both backends answer the fault with an
+                empty list.
 
         Returns:
             List of subscription dicts, or empty list
@@ -1667,5 +1667,15 @@ class SubscriptionSuspensionProtocol(Protocol):
 
         Returns:
             List of (target, subtarget) tuples
+        """
+        ...
+
+    def delete_all(self) -> bool:
+        """Delete every suspension of this actor (actor deletion, relationship
+        purge, a create under an explicit id).
+
+        Returns:
+            True when none is left, also when there were none; False on a
+            backend fault (logged)
         """
         ...

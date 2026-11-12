@@ -1170,24 +1170,48 @@ test = "test_wire_queue_and_lifecycle.py::test_wc6_publisher_deleted"
 topologies = ["same_host", "two_hosts"]
 owners = ["subs-list-cache-lifetime:2"]
 exposure = false
-expected = "A's creator deletes A (a queued diff, a subscriber, a suspended subtarget y): A's trust delete reaches B, which wipes its replica; the diffs go with the subscriptions; A's suspension row for y stays. The snapshot also reads both actors' stores directly: no queued diff and no callback-state entry survives."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-12 the stores read directly (subscription-wire-baseline iteration 4)"]
+expected = "A's creator deletes A (a queued diff, a subscriber, a suspended subtarget y): A's trust delete reaches B, which wipes its replica; the diffs go with the subscriptions; A's suspension row for y goes with it (3.16). The snapshot also reads both actors' stores directly: no queued diff and no callback-state entry survives."
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-12 the stores read directly (subscription-wire-baseline iteration 4)", "2026-11-12 deletion clears the suspension rows (subs-list-cache-lifetime:2)"]
 
 [rows."WC7"]
 test = "test_wire_queue_and_lifecycle.py::test_wc7_publisher_recreated"
 topologies = ["same_host", "two_hosts"]
 owners = ["subs-list-cache-lifetime:2"]
 exposure = false
-expected = "After WC6, A created again under its id through the SDK: it starts with the old suspension row for y; an SDK write sends nothing (no trust or subscription survived). The snapshot also reads both actors' stores directly: empty throughout."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-12 the stores read directly (subscription-wire-baseline iteration 4)"]
+expected = "After WC6, A created again under its id through the SDK: it starts with no suspension row (3.16); an SDK write sends nothing (no trust or subscription survived; what a recreated actor sends to a new subscriber is WM3). The snapshot also reads both actors' stores directly: empty throughout."
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-12 the stores read directly (subscription-wire-baseline iteration 4)", "2026-11-12 deletion clears the suspension rows (subs-list-cache-lifetime:2)"]
 
 [rows."WM1"]
 test = "test_wire_queue_and_lifecycle.py::test_wm1_memo"
 topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "One Actor instance of A writes (its subs_list memo becomes [B], asserted); B2 subscribes over REST (baseline fetched, B2 holds x = 1); the same instance writes again and only B gets the callback: B2 keeps the old value. By design: an instance reads its subscription list once (3.16); an instance the library builds lives for one request."
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-12 given up by subs-list-cache-lifetime:2: the per-instance rule, not a fault (text only)"]
+
+[rows."WM2"]
+test = "test_wire_queue_and_lifecycle.py::test_wm2_empty_memo"
+topologies = ["same_host", "two_hosts"]
 owners = ["subs-list-cache-lifetime:2"]
 exposure = false
-expected = "One Actor instance of A writes (its subs_list memo becomes [B], asserted); B2 subscribes over REST (baseline fetched, B2 holds x = 1); the same instance writes again and only B gets the callback: B2 keeps the old value. Known wrong: the memo is not refreshed."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)"]
+expected = "A pair with no subscription. One Actor instance of A writes x (its memo becomes [], asserted); B subscribes over REST (baseline fetched); the same instance writes again and B gets no callback: B keeps the baseline. A second instance then writes and B gets the diff. The per-instance rule (3.16): before 3.16 an empty list was read again on every write, so B got the first instance's second diff too. An instance the library builds lives for one request."
+reason = ["2026-11-12 first recording (subs-list-cache-lifetime:2)"]
+
+[rows."WM3"]
+test = "test_wire_queue_and_lifecycle.py::test_wm3_recreated_publisher_sends"
+topologies = ["same_host", "two_hosts"]
+owners = ["subs-list-cache-lifetime:2"]
+exposure = false
+expected = "WC6's setup and delete (a suspended subtarget y), then A created again under its id through the SDK (no trust, no subscription, asserted); a new subscriber B2 trusts and subscribes (set up, not recorded); a fresh instance of A writes y and B2 gets the diff. Before 3.16 the inherited suspension dropped it."
+reason = ["2026-11-12 first recording (subs-list-cache-lifetime:2)"]
+
+[rows."WM4"]
+test = "test_wire_queue_and_lifecycle.py::test_wm4_subscriber_during_suspension"
+topologies = ["same_host", "two_hosts"]
+owners = ["subs-list-cache-lifetime:2"]
+exposure = false
+expected = "A pair with no subscription. One instance of A suspends properties and writes x (its memo becomes [], asserted; nothing is sent); B subscribes over REST (baseline fetched); the same instance resumes and B gets the resync callback. The resume reads the list again (3.16); identical before 3.16, where an empty list was always read again."
+reason = ["2026-11-12 first recording (subs-list-cache-lifetime:2)"]
 
 [rows."WP2"]
 test = "test_wire_permissions.py::test_wp2_grant_shrunk"

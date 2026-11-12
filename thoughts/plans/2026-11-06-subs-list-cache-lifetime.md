@@ -633,6 +633,27 @@ Notes (2026-11-12):
 - **Test edits beyond the list**: none; `tests/test_mcp_revocation_evicts_caches.py`
   gained a sibling token in the token-keyed eviction test, since the actor
   entry it asserted on is gone.
+- **Phase review** (2026-11-12, outside voice: Codex and a fresh-context
+  reviewer, on `0f7b8f7`; fixed in the commit after it):
+  - A revocation could still land between a fill's validity check and its
+    write (the eviction popped, then bumped; the fill checked, then wrote),
+    so a revoked token or trust entry could outlive its eviction by its TTL.
+    Older than this plan (it was there with `_actor_cache`), reachable by a
+    client timing a request against a logout. Fixed: the fills check and
+    write, and the evictions pop and bump, under one re-entrant lock
+    (`_cache_generation_lock`); a test runs the eviction from inside a fill
+    and fails without the lock.
+  - No test failed without the trust cache's per-application check. Added:
+    a token entry of one application over a trust entry of another.
+  - A bridge create whose row is gone on the reload returned an interface
+    with no id. It now answers `None`; tested.
+  - Two comments in `oauth2_server/token_manager.py` named the actor
+    wrapper; rewritten.
+  - Accepted, Low: the periodic sweep pops by key and can remove an entry a
+    request refilled after the scan (a re-validation, never a bypass; the
+    token loop always did this). Accepted, already in Failure Scenarios: a
+    cached token is served while its actor is being deleted, until the row
+    goes.
 
 ---
 
@@ -964,12 +985,49 @@ are used only where the test names operations.
 - [ ] `git show --stat HEAD -- tests/integration/wire` lists `rows.toml` and
       the `WC6`, `WC7` and `WM2` to `WM4` files only (two topologies each), and
       the commit carries `Wire-Phase: subs-list-cache-lifetime:2`
-- [ ] `poetry run python tests/integration/verify_groups.py` passes after
+- [x] `poetry run python tests/integration/verify_groups.py` passes after
       the commit (it reads commits already made)
-- [ ] The wire step (`pytest tests/ -m wire -p no:rerunfailures`,
+- [x] The wire step (`pytest tests/ -m wire -p no:rerunfailures`,
       sequential) passes on both backends and on `.venv311`
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+Notes (2026-11-12):
+
+- **New tests**: `tests/test_subscription_list_memo.py` (52). Against the
+  old `actor.py` (the rest of the phase kept), 25 fail; with the resets in
+  `resume_subscriptions` and the three trust methods removed, the six
+  resume and trust-call tests fail. The 21 others that pass on the old
+  `actor.py` pin what held already (every creation path resets, a rows
+  memo, the accessor).
+- **Wire rows**: `WC6` and `WC7` re-recorded (the suspension fields only, as
+  planned); `WM2` to `WM4` recorded; `WM1` given up in `rows.toml`. Gate 3:
+  five sequential runs per backend, byte-identical. In `WM3` B2's trust and
+  subscription are set up unrecorded, as every added peer is (an actor
+  added inside a step leaves its trust secret unnamed in the transcript);
+  the recording is the write and B2's callback.
+- **`delete_all` added to `SubscriptionSuspensionProtocol`**
+  (`db/protocols.py`): both backends had it, the protocol did not, so the
+  calls did not type-check. Read on both backends: `False` only on a fault
+  (the unverified note is answered).
+- **Two helpers on `Actor`**: `_wipe_subscription_leftovers` (the final
+  subscription wipe, then the next) and `_wipe_diffs_and_suspensions` (the
+  actor-wide diff delete and the suspension `delete_all`), shared by
+  `delete()` and `purge_relationships()`.
+- **The trust calls' tests**: the approval paths (`modify_trust_and_notify`,
+  approve-on-create in both `create_reciprocal_trust` forms) run with the
+  peer's request mocked to subscribe through another instance and then
+  assert the diff. The request branches cannot finish without a peer; their
+  tests subscribe inside the mocked request, fail it, and assert the memo is
+  unread on that exit.
+- **Other peer requests in `actor.py`** (the grep the plan asked for):
+  `_re_pair_unknown` and its async twin run inside the create methods and
+  are covered by their `finally`; `get_peer_trustee` creates an actor at
+  another service, not a trust, and `create_remote_subscription` resets
+  through `create_subscription`. No other trust method sends to the peer.
+- **`purge_relationships`** folds the leftovers' `DbError` into
+  `confirmed: False` with the `# folds DbError:` marker the guard test asks
+  for.
 
 ---
 
@@ -1213,9 +1271,10 @@ of 2026-11-12" below. What each finding of the first run led to:
   `AuthenticatedSubscriptionManager` is `_own_rows`
   (`interface/authenticated_views.py:848-866`); the accessor's delegation
   names it.
-- Whether the PostgreSQL suspension `delete_all()` can answer `False` for a
-  reason other than a fault; it was read (`:148-163`), not run. If it cannot,
-  raising on `False` is exact.
+- [Answered 2026-11-12, Phase 2] Whether the PostgreSQL suspension
+  `delete_all()` can answer `False` for a reason other than a fault: it
+  cannot (only its `except` answers `False`, on both backends), so raising
+  on `False` is exact.
 - Whether a finisher-driven delete (`deletion_finish.py`, with `_pre_reads`)
   expects the steps this plan adds to tolerate rows that are already gone;
   each added step is a delete by actor id, which does.

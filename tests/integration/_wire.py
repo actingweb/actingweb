@@ -26,6 +26,7 @@ import json
 import os
 import re
 import threading
+import time
 from collections.abc import Callable, Iterable
 from datetime import datetime
 from pathlib import Path
@@ -118,8 +119,6 @@ def stop_recording() -> list[dict[str, Any]]:
 
 def wait_for_quiet(timeout: float = 15.0) -> None:
     """Wait until no wire app is serving a request."""
-    import time
-
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         with _LOCK:
@@ -753,7 +752,10 @@ async def _run_and_drain(action: Callable[[], Any]) -> Any:
     errors = sorted(
         type(t.exception()).__name__
         for t in created
-        # Read before ``exception()``, which clears it.
+        # ``_log_traceback`` is CPython's own flag (both the C and the Python
+        # task carry it; checked on 3.11 and 3.14): set when a task fails,
+        # cleared when anyone retrieves the exception. Read it before
+        # ``exception()``, which clears it.
         if not t.cancelled() and getattr(t, "_log_traceback", False)
     )
     if errors:
@@ -780,7 +782,9 @@ _HEX32 = re.compile(r"\b[0-9a-f]{32}\b")
 # An OAuth2 client id (``mcp_`` and hex): ``_`` is a word character, so the
 # ``\b`` of ``_HEX32`` never fires on one.
 _MCP_CLIENT_ID = re.compile(r"mcp_[0-9a-f]{8,}")
-_PORT = re.compile(r"localhost:5[5-9]\d\d")
+# Any localhost port left after the wire hosts are named is a leak: workers
+# shift every test port by 10 each, so no fixed range covers them all.
+_PORT = re.compile(r"localhost:\d+")
 # Timestamp shapes the library produces, each kept as its own class so a
 # format change shows as a diff and equal values stay equal.
 _TS_SHAPES: list[tuple[str, re.Pattern[str]]] = [
@@ -1041,8 +1045,6 @@ def wait_until(
     condition: Callable[[], bool], timeout: float = 10.0, interval: float = 0.05
 ) -> None:
     """Poll ``condition`` until true; used only where a callback is fire-and-forget."""
-    import time
-
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if condition():

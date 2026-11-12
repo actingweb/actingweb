@@ -1505,3 +1505,33 @@ for worktrees.
 **Files affected**: `conf.py`.
 
 **Rationale**: the third verification's Issue 5.
+
+
+### 2026-11-12, after the PR #173 review (Claude reviewer)
+
+#### 21. Review comments: ignored `.actual.json`, a port guard for every worker, small cleanups
+
+**Category**: Verification fix (PR review)
+
+**What changed**:
+- **`.gitignore`** ignores `tests/integration/wire/*.actual.json`, the
+  file `check()` leaves beside a recording that does not match, so it
+  cannot be committed by accident.
+- **The leak guard's port pattern** is now any `localhost:<port>`, not
+  `localhost:55xx`–`59xx`. Each xdist worker shifts the test ports by 10,
+  so with enough workers a wire port leaves that range and a leaked port
+  would pass the guard. The wire step passes with the wider pattern, and
+  no recording carries a raw localhost port.
+- **`_run_and_drain`** says in a comment that `_log_traceback` is
+  CPython's own flag, checked on 3.11 and 3.14.
+- **`import time`** moves to the top of `_wire.py`.
+
+**Not changed, answered on the PR**: the "most recently opened" nesting
+under concurrency. The CI wire step runs sequentially without reruns, the
+two rows that race use `settle=` and the hoist, and a parallel failure is
+re-run sequentially first (`CLAUDE.md`). The coverage of the retired files
+is the plan's Phase 2 table.
+
+**Files affected**: `.gitignore`, `tests/integration/_wire.py`.
+
+**Rationale**: the PR's automated review.

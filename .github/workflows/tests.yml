@@ -176,6 +176,11 @@ jobs:
       - name: Checkout code
         if: needs.changes.outputs.code == 'true'
         uses: actions/checkout@v5
+        with:
+          # Full history: verify_groups.py checks the Wire-Phase trailers of
+          # every commit since the merge base with master, which a depth-1
+          # checkout lacks (the check then reports itself skipped).
+          fetch-depth: 0
 
       - name: Set up Python
         if: needs.changes.outputs.code == 'true'

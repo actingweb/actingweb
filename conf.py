@@ -83,6 +83,10 @@ exclude_patterns = [
     'dist',
     '.venv',
     '.venv/**',
+    # Other local virtualenvs at the root (.venv311 for Python 3.11 runs)
+    # carry Sphinx's own .rst templates.
+    '.venv*',
+    '.venv*/**',
     'venv',
     'venv/**',
     # Git worktrees of this repository live under .claude/worktrees/ and

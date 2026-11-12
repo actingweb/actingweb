@@ -1,0 +1,86 @@
+{
+ "steps": [
+  {
+   "after": {
+    "publisher": {
+     "grants": {
+      "B": null
+     },
+     "queue": [],
+     "stores": {
+      "callback_state": [],
+      "diffs": []
+     },
+     "subscriptions": [],
+     "suspensions": [],
+     "trust": {
+      "B": null
+     }
+    },
+    "subscribers": {
+     "B": {
+      "callback_state": [],
+      "peer_permissions": null,
+      "replica": {
+       "lists": {},
+       "scalars": {}
+      },
+      "stores": {
+       "callback_state": [],
+       "diffs": []
+      },
+      "subscriptions": [],
+      "trust": null
+     }
+    }
+   },
+   "result": {
+    "body": "",
+    "status": 204
+   },
+   "step": "A's creator deletes the trust",
+   "wire": [
+    {
+     "auth": "basic:<A.creator>",
+     "children": [
+      {
+       "auth": "bearer:trust:A-B",
+       "children": [
+        {
+         "actor": "<B>",
+         "event": "trust_deleted",
+         "initiated_by_peer": true,
+         "peer": "<A>",
+         "relationship": "friend"
+        }
+       ],
+       "headers": {},
+       "host": "wire_peer_app",
+       "method": "DELETE",
+       "path": "/<B>/trust/friend/<A>",
+       "query": "",
+       "request": null,
+       "response": null,
+       "status": 204
+      },
+      {
+       "actor": "<A>",
+       "event": "trust_deleted",
+       "initiated_by_peer": false,
+       "peer": "<B>",
+       "relationship": "friend"
+      }
+     ],
+     "headers": {},
+     "host": "wire_app",
+     "method": "DELETE",
+     "path": "/<A>/trust/friend/<B>",
+     "query": "",
+     "request": null,
+     "response": null,
+     "status": 204
+    }
+   ]
+  }
+ ]
+}

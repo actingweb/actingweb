@@ -1,0 +1,419 @@
+{
+ "steps": [
+  {
+   "after": {
+    "extra": {
+     "A.transformed": "BLUE"
+    },
+    "publisher": {
+     "grants": {
+      "B": {
+       "actions": null,
+       "actor_id": "<A>",
+       "created_by": "system",
+       "methods": null,
+       "notes": null,
+       "peer_id": "<B>",
+       "prompts": null,
+       "properties": {
+        "operations": [
+         "read"
+        ],
+        "patterns": [
+         "*"
+        ]
+       },
+       "resources": null,
+       "tools": null,
+       "trust_type": "friend",
+       "updated_at": null
+      }
+     },
+     "queue": [
+      {
+       "diffs": [
+        {
+         "data": "\"BLUE\"",
+         "sequence": 1,
+         "timestamp": "<ts:stored>"
+        }
+       ],
+       "granularity": "high",
+       "peer": "<B>",
+       "sequence": 1,
+       "subscriptionid": "<sub1>",
+       "subtarget": "transformed",
+       "target": "properties"
+      }
+     ],
+     "subscriptions": [
+      {
+       "callback": false,
+       "granularity": "high",
+       "peerid": "<B>",
+       "resource": "",
+       "sequence": 1,
+       "subscriptionid": "<sub1>",
+       "subtarget": "transformed",
+       "target": "properties"
+      }
+     ],
+     "suspensions": [],
+     "trust": {
+      "B": {
+       "approved": true,
+       "baseuri": "http://<wire_peer_app>/<B>",
+       "established_via": "trust",
+       "has_verification_token": true,
+       "peer_approved": true,
+       "relationship": "friend",
+       "secret": "<secret:trust:A-B>",
+       "verified": true
+      }
+     }
+    },
+    "subscribers": {
+     "B": {
+      "callback_state": [
+       {
+        "last_seq": 0,
+        "pending_count": 0,
+        "pending_sequences": [],
+        "resync_pending": false,
+        "subscriptionid": "<sub1>",
+        "version": 0
+       }
+      ],
+      "peer_permissions": {
+       "actions": {
+        "allowed": [
+         "*"
+        ],
+        "denied": [
+         "delete_*",
+         "admin_*",
+         "system_*"
+        ]
+       },
+       "actor_id": "<B>",
+       "extra_attributes": {
+        "sender_timestamp": "<ts:iso-offset>"
+       },
+       "fetch_error": null,
+       "fetched_at": "<ts:iso-offset>",
+       "methods": {
+        "allowed": [
+         "*"
+        ],
+        "denied": [
+         "delete_*",
+         "admin_*",
+         "system_*"
+        ]
+       },
+       "peer_id": "<A>",
+       "prompts": null,
+       "properties": {
+        "excluded_patterns": [
+         "private/*",
+         "security/*",
+         "_internal/*"
+        ],
+        "operations": [
+         "read"
+        ],
+        "patterns": [
+         "*"
+        ]
+       },
+       "resources": {
+        "excluded_patterns": [
+         "private/*",
+         "security/*"
+        ],
+        "operations": [
+         "read",
+         "write"
+        ],
+        "patterns": [
+         "*"
+        ]
+       },
+       "tools": {
+        "allowed": [
+         "*"
+        ],
+        "denied": [
+         "admin_*",
+         "system_*"
+        ]
+       }
+      },
+      "replica": {
+       "lists": {},
+       "scalars": {}
+      },
+      "subscriptions": [
+       {
+        "callback": true,
+        "granularity": "high",
+        "peerid": "<A>",
+        "resource": "",
+        "sequence": 0,
+        "subscriptionid": "<sub1>",
+        "subtarget": "transformed",
+        "target": "properties"
+       }
+      ],
+      "trust": {
+       "approved": true,
+       "baseuri": "http://<wire_app>/<A>",
+       "established_via": "trust",
+       "has_verification_token": true,
+       "peer_approved": true,
+       "relationship": "friend",
+       "secret": "<secret:trust:A-B>",
+       "verified": true
+      }
+     }
+    }
+   },
+   "result": null,
+   "step": "set (SDK)",
+   "wire": [
+    {
+     "auth": "bearer:trust:A-B",
+     "children": [],
+     "headers": {},
+     "host": "wire_peer_app",
+     "method": "POST",
+     "path": "/<B>/callbacks/subscriptions/<A>/<sub1>",
+     "query": "",
+     "request": {
+      "data": "BLUE",
+      "granularity": "high",
+      "id": "<A>",
+      "sequence": 1,
+      "subscriptionid": "<sub1>",
+      "subtarget": "transformed",
+      "target": "properties",
+      "timestamp": "<ts:space>"
+     },
+     "response": null,
+     "status": 400
+    }
+   ]
+  },
+  {
+   "after": {
+    "extra": {
+     "A.transformed": null
+    },
+    "publisher": {
+     "grants": {
+      "B": {
+       "actions": null,
+       "actor_id": "<A>",
+       "created_by": "system",
+       "methods": null,
+       "notes": null,
+       "peer_id": "<B>",
+       "prompts": null,
+       "properties": {
+        "operations": [
+         "read"
+        ],
+        "patterns": [
+         "*"
+        ]
+       },
+       "resources": null,
+       "tools": null,
+       "trust_type": "friend",
+       "updated_at": null
+      }
+     },
+     "queue": [
+      {
+       "diffs": [
+        {
+         "data": "\"BLUE\"",
+         "sequence": 1,
+         "timestamp": "<ts:stored>"
+        },
+        {
+         "data": "\"\"",
+         "sequence": 2,
+         "timestamp": "<ts:stored>"
+        }
+       ],
+       "granularity": "high",
+       "peer": "<B>",
+       "sequence": 2,
+       "subscriptionid": "<sub1>",
+       "subtarget": "transformed",
+       "target": "properties"
+      }
+     ],
+     "subscriptions": [
+      {
+       "callback": false,
+       "granularity": "high",
+       "peerid": "<B>",
+       "resource": "",
+       "sequence": 2,
+       "subscriptionid": "<sub1>",
+       "subtarget": "transformed",
+       "target": "properties"
+      }
+     ],
+     "suspensions": [],
+     "trust": {
+      "B": {
+       "approved": true,
+       "baseuri": "http://<wire_peer_app>/<B>",
+       "established_via": "trust",
+       "has_verification_token": true,
+       "peer_approved": true,
+       "relationship": "friend",
+       "secret": "<secret:trust:A-B>",
+       "verified": true
+      }
+     }
+    },
+    "subscribers": {
+     "B": {
+      "callback_state": [
+       {
+        "last_seq": 0,
+        "pending_count": 1,
+        "pending_sequences": [
+         2
+        ],
+        "resync_pending": false,
+        "subscriptionid": "<sub1>",
+        "version": 0
+       }
+      ],
+      "peer_permissions": {
+       "actions": {
+        "allowed": [
+         "*"
+        ],
+        "denied": [
+         "delete_*",
+         "admin_*",
+         "system_*"
+        ]
+       },
+       "actor_id": "<B>",
+       "extra_attributes": {
+        "sender_timestamp": "<ts:iso-offset>"
+       },
+       "fetch_error": null,
+       "fetched_at": "<ts:iso-offset>",
+       "methods": {
+        "allowed": [
+         "*"
+        ],
+        "denied": [
+         "delete_*",
+         "admin_*",
+         "system_*"
+        ]
+       },
+       "peer_id": "<A>",
+       "prompts": null,
+       "properties": {
+        "excluded_patterns": [
+         "private/*",
+         "security/*",
+         "_internal/*"
+        ],
+        "operations": [
+         "read"
+        ],
+        "patterns": [
+         "*"
+        ]
+       },
+       "resources": {
+        "excluded_patterns": [
+         "private/*",
+         "security/*"
+        ],
+        "operations": [
+         "read",
+         "write"
+        ],
+        "patterns": [
+         "*"
+        ]
+       },
+       "tools": {
+        "allowed": [
+         "*"
+        ],
+        "denied": [
+         "admin_*",
+         "system_*"
+        ]
+       }
+      },
+      "replica": {
+       "lists": {},
+       "scalars": {}
+      },
+      "subscriptions": [
+       {
+        "callback": true,
+        "granularity": "high",
+        "peerid": "<A>",
+        "resource": "",
+        "sequence": 0,
+        "subscriptionid": "<sub1>",
+        "subtarget": "transformed",
+        "target": "properties"
+       }
+      ],
+      "trust": {
+       "approved": true,
+       "baseuri": "http://<wire_app>/<A>",
+       "established_via": "trust",
+       "has_verification_token": true,
+       "peer_approved": true,
+       "relationship": "friend",
+       "secret": "<secret:trust:A-B>",
+       "verified": true
+      }
+     }
+    }
+   },
+   "result": null,
+   "step": "delete (SDK)",
+   "wire": [
+    {
+     "auth": "bearer:trust:A-B",
+     "children": [],
+     "headers": {},
+     "host": "wire_peer_app",
+     "method": "POST",
+     "path": "/<B>/callbacks/subscriptions/<A>/<sub1>",
+     "query": "",
+     "request": {
+      "data": "",
+      "granularity": "high",
+      "id": "<A>",
+      "sequence": 2,
+      "subscriptionid": "<sub1>",
+      "subtarget": "transformed",
+      "target": "properties",
+      "timestamp": "<ts:space>"
+     },
+     "response": null,
+     "status": 204
+    }
+   ]
+  }
+ ]
+}

@@ -17,13 +17,16 @@ with names so that two runs with different actors produce the same bytes.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import contextlib
 import copy
+import inspect
 import json
 import os
 import re
 import threading
+import time
 from collections.abc import Callable, Iterable
 from datetime import datetime
 from pathlib import Path
@@ -116,8 +119,6 @@ def stop_recording() -> list[dict[str, Any]]:
 
 def wait_for_quiet(timeout: float = 15.0) -> None:
     """Wait until no wire app is serving a request."""
-    import time
-
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         with _LOCK:
@@ -395,7 +396,19 @@ def _snapshot_replica(subscriber: WireActor, publisher: WireActor) -> dict[str, 
         actor=subscriber.interface(), peer_id=publisher.id, validate_peer_id=False
     )
     scalars = {name: store.get_value(name) for name in sorted(store.list_all_scalars())}
-    lists = {name: store.get_list(name) for name in sorted(store.list_all_lists())}
+    lists: dict[str, Any] = {}
+    for name in sorted(store.list_all_lists()):
+        # A replica list whose metadata and items disagree raises on read:
+        # what a reader of the replica meets, so recorded as such.
+        try:
+            lists[name] = store.get_list(name)
+        except IndexError as exc:
+            # The stored length still moves with each later step.
+            try:
+                length: Any = len(getattr(store._get_list_store(), name))
+            except IndexError as len_exc:
+                length = f"IndexError: {len_exc}"
+            lists[name] = {"read_error": f"IndexError: {exc}", "length": length}
     return {"scalars": scalars, "lists": lists}
 
 
@@ -423,11 +436,80 @@ def _snapshot_suspensions(actor: WireActor) -> list[dict[str, Any]]:
     ]
 
 
-def snapshot(
-    publisher: WireActor, subscribers: list[WireActor], names: dict[str, str]
-) -> dict[str, Any]:
-    """What both sides hold: the queue, the replicas, the callback state, the rows."""
+# Wall-clock fields the callback processor and diff store write
+# (``claimed_at``, ``_received_at``, ``timestamp``): left out of a sort key,
+# or two leftovers would sort by when they were claimed or received.
+_CLOCK_FIELDS = frozenset({"claimed_at", "_received_at", "timestamp"})
+
+
+def _without_clock(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            k: _without_clock(v) for k, v in value.items() if k not in _CLOCK_FIELDS
+        }
+    if isinstance(value, list):
+        return [_without_clock(v) for v in value]
+    return value
+
+
+def _content_key(value: Any) -> str:
+    """A value's content as a sortable string: keys sorted, clock fields
+    left out (a JSON string, as a diff is stored, is read first)."""
+    if isinstance(value, str):
+        with contextlib.suppress(ValueError):
+            value = json.loads(value)
+    return json.dumps(_without_clock(value), sort_keys=True, default=str)
+
+
+def _snapshot_stores(actor: WireActor, names: dict[str, str]) -> dict[str, Any]:
+    """What the actor's stores hold, read directly and not through its live
+    subscription rows: every queued diff and every callback-state entry. A
+    cleanup that removes the rows but leaves either behind shows here.
+
+    Both are ordered by content and named peers before the (random)
+    subscription id, so two leftovers keep their order from run to run."""
+    from actingweb.db import get_subscription_diff_list
+
+    diffs = get_subscription_diff_list(actor.host.config).fetch(actor_id=actor.id)
+    bucket = Attributes(
+        actor_id=actor.id, bucket="_callback_state", config=actor.host.config
+    ).get_bucket()
+    keyed = []
+    for key, value in (bucket or {}).items():
+        kind, _, rest = key.partition(":")
+        peer, _, subid = rest.partition(":")
+        entry = {"kind": kind, "peer": peer, "subscriptionid": subid}
+        content = value.get("data") if isinstance(value, dict) else value
+        keyed.append(
+            ((kind, names.get(peer, peer), _content_key(content), subid), entry)
+        )
+    diffs_keyed = [
+        (
+            (
+                d.get("sequence") or 0,
+                _content_key(d.get("diff")),
+                str(d.get("subscriptionid")),
+            ),
+            {"subscriptionid": d.get("subscriptionid"), "sequence": d.get("sequence")},
+        )
+        for d in diffs or []
+    ]
     return {
+        "diffs": [e for _, e in sorted(diffs_keyed, key=lambda p: p[0])],
+        "callback_state": [e for _, e in sorted(keyed, key=lambda p: p[0])],
+    }
+
+
+def snapshot(
+    publisher: WireActor,
+    subscribers: list[WireActor],
+    names: dict[str, str],
+    *,
+    stores: bool = False,
+) -> dict[str, Any]:
+    """What both sides hold: the queue, the replicas, the callback state, the
+    rows; with ``stores``, also each actor's stores read directly."""
+    out = {
         "publisher": {
             "queue": _snapshot_queue(publisher, names),
             "subscriptions": _snapshot_subscriptions(publisher, names),
@@ -455,6 +537,11 @@ def snapshot(
             for s in subscribers
         },
     }
+    if stores:
+        out["publisher"]["stores"] = _snapshot_stores(publisher, names)
+        for s in subscribers:
+            out["subscribers"][s.name]["stores"] = _snapshot_stores(s, names)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -482,6 +569,18 @@ class Scenario:
         # Optional: what else a row snapshots after each step (the
         # publisher's properties, an OAuth2 client's rows), under "extra".
         self.extra_snapshot: Callable[[], Any] | None = None
+        # Several subscribers: the publisher sends to them in the order of
+        # their (random) subscription ids, so a row that has them sorts each
+        # run of sibling callbacks by the subscriber's name.
+        self.sort_callbacks = False
+        # Rows about cleanup: also snapshot each actor's stores directly
+        # (``_snapshot_stores``), not only through its live rows.
+        self.snapshot_stores = False
+        # Paths of requests whose fire-and-forget callbacks may still be open
+        # when the callback arrives (an async method on the server's loop):
+        # a subscription callback recorded under one is moved out to follow
+        # it, so the recording does not depend on that race.
+        self.hoist_callbacks_from: tuple[str, ...] = ()
         # Set by the ``wire_pair`` fixture.
         self.relationship: str = ""
         self.trust_secret: str = ""
@@ -501,17 +600,31 @@ class Scenario:
 
         The recorder opens when no wire request is in flight and closes when
         the action, its settle condition and every request they started have
-        finished."""
+        finished.
+
+        An ``async`` action is an asynchronous step: it runs on an event loop
+        of its own in the test thread (the SDK on a running loop, the
+        consumer's shape off Lambda), and the step settles only when every
+        task the action left on that loop has finished."""
         wait_for_quiet()
         start_recording()
         try:
-            result = action()
+            if inspect.iscoroutinefunction(action):
+                result = asyncio.run(_run_and_drain(action))
+            else:
+                result = action()
             if settle is not None:
                 settle()
             wait_for_quiet()
         finally:
             wire = stop_recording()
-        after = snapshot(self.publisher, self.subscribers, self.names)
+        if self.hoist_callbacks_from:
+            wire = _hoist_callbacks(wire, self.hoist_callbacks_from)
+        if self.sort_callbacks:
+            wire = _sort_callback_runs(wire, self.names)
+        after = snapshot(
+            self.publisher, self.subscribers, self.names, stores=self.snapshot_stores
+        )
         if self.extra_snapshot is not None:
             after["extra"] = self.extra_snapshot()
         self.steps.append(
@@ -526,6 +639,128 @@ class Scenario:
 
     def recording(self) -> dict[str, Any]:
         return normalise({"steps": self.steps}, self.names, self.secrets)
+
+
+_CALLBACK_PATH = re.compile(r"^/([0-9a-f]{32})/callbacks/subscriptions/")
+
+
+def _sort_callback_runs(
+    entries: list[dict[str, Any]], names: dict[str, str]
+) -> list[dict[str, Any]]:
+    """Each run of consecutive subscription callbacks sorted by the receiving
+    actor's name, then by what the subscription covers (target, subtarget,
+    resource, granularity; stable), at every level; nothing else moves."""
+
+    def key(entry: dict[str, Any]) -> tuple[str, ...]:
+        match = _CALLBACK_PATH.match(entry.get("path", ""))
+        if not match:
+            return ()
+        body = entry.get("request")
+        body = body if isinstance(body, dict) else {}
+        return (
+            names.get(match.group(1), match.group(1)),
+            str(body.get("target") or ""),
+            str(body.get("subtarget") or ""),
+            str(body.get("resource") or ""),
+            str(body.get("granularity") or ""),
+        )
+
+    out: list[dict[str, Any]] = []
+    run: list[dict[str, Any]] = []
+    for entry in entries:
+        if "children" in entry:
+            entry = {**entry, "children": _sort_callback_runs(entry["children"], names)}
+        if key(entry):
+            run.append(entry)
+            continue
+        out += sorted(run, key=key)
+        run = []
+        out.append(entry)
+    return out + sorted(run, key=key)
+
+
+def _hoist_callbacks(
+    entries: list[dict[str, Any]], paths: tuple[str, ...]
+) -> list[dict[str, Any]]:
+    """Top-level requests whose path contains one of ``paths`` lose their
+    subscription-callback children, which follow them instead, in order."""
+    out: list[dict[str, Any]] = []
+    for entry in entries:
+        if not any(p in entry.get("path", "") for p in paths):
+            out.append(entry)
+            continue
+        children = entry.get("children", [])
+        moved = [c for c in children if _CALLBACK_PATH.match(c.get("path", ""))]
+        kept = [c for c in children if c not in moved]
+        out.append({**entry, "children": kept})
+        out.extend(moved)
+    return out
+
+
+_DRAIN_TIMEOUT = 30.0
+
+
+async def _run_and_drain(action: Callable[[], Any]) -> Any:
+    """Await ``action``, then every task it left on the loop (and theirs),
+    for at most ``_DRAIN_TIMEOUT`` seconds. A task that fails is recorded,
+    not raised: production only logs a fire-and-forget task's error, so
+    the step's result carries ``task_errors`` (exception names, sorted)
+    instead.
+
+    Every task the step creates is captured through the loop's task factory,
+    so a task that has already failed when the drain starts (``all_tasks``
+    no longer lists it) is still recorded. Only an error nobody retrieved is
+    recorded: a task awaited, or gathered with ``return_exceptions`` (as
+    fanout does with its deliveries), had its error handled by the caller.
+    A cancelled task is not an error. The drain waits in the caller's task
+    (``asyncio.timeout``): 3.11's ``wait_for`` would run it in a task of its
+    own, which then waits for itself. On a timeout, or when the action
+    raises, the tasks still running are cancelled before the error goes up."""
+    loop = asyncio.get_running_loop()
+    previous = loop.get_task_factory()
+    created: list[asyncio.Future[Any]] = []
+
+    def factory(
+        loop: asyncio.AbstractEventLoop, coro: Any, **kwargs: Any
+    ) -> asyncio.Future[Any]:
+        task = (
+            previous(loop, coro, **kwargs)
+            if previous is not None
+            else asyncio.Task(coro, loop=loop, **kwargs)
+        )
+        created.append(task)
+        return task
+
+    loop.set_task_factory(factory)
+    try:
+        result = await action()
+        async with asyncio.timeout(_DRAIN_TIMEOUT):
+            while pending := [t for t in created if not t.done()]:
+                await asyncio.wait(pending)
+    except BaseException:
+        leftover = [t for t in created if not t.done()]
+        for task in leftover:
+            task.cancel()
+        if leftover:
+            await asyncio.wait(leftover, timeout=1.0)
+        for task in created:
+            if task.done() and not task.cancelled():
+                task.exception()  # retrieved: no "never retrieved" noise
+        raise
+    finally:
+        loop.set_task_factory(previous)
+    errors = sorted(
+        type(t.exception()).__name__
+        for t in created
+        # ``_log_traceback`` is CPython's own flag (both the C and the Python
+        # task carry it; checked on 3.11 and 3.14): set when a task fails,
+        # cleared when anyone retrieves the exception. Read it before
+        # ``exception()``, which clears it.
+        if not t.cancelled() and getattr(t, "_log_traceback", False)
+    )
+    if errors:
+        return {"result": result, "task_errors": errors}
+    return result
 
 
 def _describe_result(result: Any) -> Any:
@@ -547,7 +782,9 @@ _HEX32 = re.compile(r"\b[0-9a-f]{32}\b")
 # An OAuth2 client id (``mcp_`` and hex): ``_`` is a word character, so the
 # ``\b`` of ``_HEX32`` never fires on one.
 _MCP_CLIENT_ID = re.compile(r"mcp_[0-9a-f]{8,}")
-_PORT = re.compile(r"localhost:5[5-9]\d\d")
+# Any localhost port left after the wire hosts are named is a leak: workers
+# shift every test port by 10 each, so no fixed range covers them all.
+_PORT = re.compile(r"localhost:\d+")
 # Timestamp shapes the library produces, each kept as its own class so a
 # format change shows as a diff and equal values stay equal.
 _TS_SHAPES: list[tuple[str, re.Pattern[str]]] = [
@@ -808,8 +1045,6 @@ def wait_until(
     condition: Callable[[], bool], timeout: float = 10.0, interval: float = 0.05
 ) -> None:
     """Poll ``condition`` until true; used only where a callback is fire-and-forget."""
-    import time
-
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if condition():

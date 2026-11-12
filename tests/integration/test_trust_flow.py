@@ -102,8 +102,8 @@ class TestTrustActorFlow:
             auth=(self.creator1, self.passphrase1),  # type: ignore[arg-type,union-attr,attr-defined,return-value]
         )
 
-        # With mock, should succeed with 201 or 202
-        assert response.status_code in [201, 202], (
+        # 201: created
+        assert response.status_code == 201, (
             f"Got {response.status_code}: {response.text}"
         )
 
@@ -151,8 +151,8 @@ class TestTrustActorFlow:
             self.trust1_url,  # type: ignore[arg-type]
             headers={"Authorization": f"Bearer {self.secret1}"},
         )
-        # Should succeed with correct token, but may show unapproved status
-        assert response.status_code in [200, 202, 403]
+        # 200 with the correct token
+        assert response.status_code == 200
 
     def test_006_get_reciprocal_trust_before_approval(self, http_client):
         """
@@ -164,16 +164,13 @@ class TestTrustActorFlow:
             f"{self.actor2_url}/trust/friend/{self.actor1_id}",
             auth=(self.creator2, self.passphrase2),  # type: ignore[arg-type]
         )
-        # Should see the trust relationship with approved=false
-        if response.status_code == 200:
-            data = response.json()
-            assert data["peerid"] == self.actor1_id
-            assert data["id"] == self.actor2_id
-            if "verified" in data:
-                assert data["verified"] in [True, "true"]
-            if "approved" in data:
-                # Should not be approved yet
-                assert data["approved"] in [False, "false"]
+        # 202: the trust exists and this side has not approved it yet
+        assert response.status_code == 202
+        data = response.json()
+        assert data["peerid"] == self.actor1_id
+        assert data["id"] == self.actor2_id
+        assert data["verified"] in [True, "true"]
+        assert data["approved"] in [False, "false"]
 
     def test_007_get_trust_from_actor1_before_approval(self, http_client):
         """
@@ -209,8 +206,8 @@ class TestTrustActorFlow:
             json={"approved": True},
             auth=(self.creator2, self.passphrase2),  # type: ignore[arg-type]
         )
-        # Accept 200, 204, or 500 (approval might not work in test environment)
-        assert response.status_code in [200, 204, 500]
+        # 204: approved
+        assert response.status_code == 204
 
     def test_009_get_trust_after_approval(self, http_client):
         """
@@ -246,10 +243,10 @@ class TestTrustActorFlow:
         )
 
         # Current behavior: may succeed (overwrite) or fail (duplicate)
-        if response.status_code in [201, 202]:
-            data = response.json()
-            TestTrustActorFlow.trust2_url = response.headers.get("Location")
-            TestTrustActorFlow.secret2 = data.get("secret")
+        assert response.status_code == 201
+        data = response.json()
+        TestTrustActorFlow.trust2_url = response.headers.get("Location")
+        TestTrustActorFlow.secret2 = data.get("secret")
 
     def test_011_try_access_trust1_with_trust2_secret(self, http_client):
         """
@@ -341,7 +338,7 @@ class TestTrustActorFlow:
             json={"desc": "Changed", "baseuri": self.actor2_url},
             auth=(self.creator1, self.passphrase1),  # type: ignore[arg-type]
         )
-        assert response.status_code in [200, 204]
+        assert response.status_code == 204
 
     def test_017_get_modified_trust(self, http_client):
         """
@@ -353,8 +350,8 @@ class TestTrustActorFlow:
             self.trust1_url,  # type: ignore[arg-type]
             auth=(self.creator1, self.passphrase1),  # type: ignore[arg-type]
         )
-        # Might return 200 or 202 depending on approval status
-        assert response.status_code in [200, 202]
+        # 200: the trust is approved
+        assert response.status_code == 200
         data = response.json()
         if "desc" in data:
             assert data["desc"] == "Changed"
@@ -373,7 +370,7 @@ class TestTrustActorFlow:
             auth=(self.creator1, self.passphrase1),  # type: ignore[arg-type]
         )
         # Should succeed
-        assert response.status_code in [200, 204]
+        assert response.status_code == 204
 
     def test_019_verify_trust_deleted(self, http_client):
         """
@@ -401,8 +398,8 @@ class TestTrustActorFlow:
             },
             auth=(self.creator1, self.passphrase1),  # type: ignore[arg-type]
         )
-        # Should fail with 408 (timeout) or other error
-        assert response.status_code in [408, 400, 500, 502, 503, 504]
+        # 408: the peer cannot be reached
+        assert response.status_code == 408
 
     def test_021_initiate_trust_with_correct_url(self, http_client):
         """
@@ -419,12 +416,12 @@ class TestTrustActorFlow:
             f"{self.actor2_url}/trust/friend/{self.actor1_id}",
             auth=(self.creator2, self.passphrase2),  # type: ignore[arg-type]
         )
-        if stale.status_code in (200, 202):
-            response = requests.delete(
-                f"{self.actor2_url}/trust/friend/{self.actor1_id}?notify=false",
-                auth=(self.creator2, self.passphrase2),  # type: ignore[arg-type]
-            )
-            assert response.status_code == 204
+        assert stale.status_code == 200
+        response = requests.delete(
+            f"{self.actor2_url}/trust/friend/{self.actor1_id}?notify=false",
+            auth=(self.creator2, self.passphrase2),  # type: ignore[arg-type]
+        )
+        assert response.status_code == 204
         response = requests.post(
             f"{self.actor1_url}/trust",
             json={
@@ -435,7 +432,7 @@ class TestTrustActorFlow:
             auth=(self.creator1, self.passphrase1),  # type: ignore[arg-type]
         )
 
-        assert response.status_code in [201, 202]
+        assert response.status_code == 201
         data = response.json()
         TestTrustActorFlow.trust3_url = response.headers.get("Location")
         TestTrustActorFlow.secret3 = data["secret"]
@@ -450,10 +447,10 @@ class TestTrustActorFlow:
             f"{self.actor2_url}/trust/friend/{self.actor1_id}",
             auth=(self.creator2, self.passphrase2),  # type: ignore[arg-type]
         )
-        if response.status_code == 200:
-            data = response.json()
-            assert data["peerid"] == self.actor1_id
-            assert data["id"] == self.actor2_id
+        assert response.status_code == 202
+        data = response.json()
+        assert data["peerid"] == self.actor1_id
+        assert data["id"] == self.actor2_id
 
     def test_023_approve_reciprocal_trust(self, http_client):
         """
@@ -466,7 +463,7 @@ class TestTrustActorFlow:
             json={"approved": True},
             auth=(self.creator2, self.passphrase2),  # type: ignore[arg-type]
         )
-        assert response.status_code in [200, 204]
+        assert response.status_code == 204
 
     def test_024_delete_reciprocal_trust(self, http_client):
         """
@@ -478,7 +475,7 @@ class TestTrustActorFlow:
             f"{self.actor2_url}/trust/friend/{self.actor1_id}",
             auth=(self.creator2, self.passphrase2),  # type: ignore[arg-type]
         )
-        assert response.status_code in [200, 204]
+        assert response.status_code == 204
 
     def test_025_verify_both_sides_deleted(self, http_client):
         """
@@ -518,7 +515,7 @@ class TestTrustActorFlow:
         )
 
         # Should succeed
-        assert response.status_code in [201, 202]
+        assert response.status_code == 201
         data = response.json()
         assert data.get("relationship") == "lover"
         if "peer_approved" in data:
@@ -536,7 +533,7 @@ class TestTrustActorFlow:
             json={"approved": True},
             auth=(self.creator2, self.passphrase2),  # type: ignore[arg-type]
         )
-        assert response.status_code in [200, 204]
+        assert response.status_code == 204
 
     def test_028_verify_lover_relationship_approved(self, http_client):
         """
@@ -549,22 +546,22 @@ class TestTrustActorFlow:
             f"{self.actor1_url}/trust",
             auth=(self.creator1, self.passphrase1),  # type: ignore[arg-type]
         )
-        if response.status_code == 200:
-            trusts = response.json()
-            # Should have at least one lover relationship
-            found_lover = False
-            if isinstance(trusts, dict):
-                for _, val in trusts.items():  # type: ignore[arg-type]
-                    if isinstance(val, dict) and val.get("relationship") == "lover":
-                        found_lover = True
-                        break
-            elif isinstance(trusts, list):
-                for t in trusts:
-                    if t.get("relationship") == "lover":
-                        found_lover = True
-                        break
-            # Lover relationship should exist
-            assert found_lover or len(str(trusts)) > 0
+        assert response.status_code == 200
+        trusts = response.json()
+        # Should have at least one lover relationship
+        found_lover = False
+        if isinstance(trusts, dict):
+            for _, val in trusts.items():  # type: ignore[arg-type]
+                if isinstance(val, dict) and val.get("relationship") == "lover":
+                    found_lover = True
+                    break
+        elif isinstance(trusts, list):
+            for t in trusts:
+                if t.get("relationship") == "lover":
+                    found_lover = True
+                    break
+        # The lover relationship test_027 approved
+        assert found_lover, trusts
 
     def test_029_create_selfproxy(self, http_client):
         """

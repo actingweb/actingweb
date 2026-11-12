@@ -473,7 +473,8 @@ were written.
 - **Deviation: the `Wire-Phase` check is local only.** CI's test job
   checks out at depth 1, so the check finds no merge base there and says
   it was skipped. Making it run in CI means a `fetch-depth: 0` checkout in
-  that job: the owner's call, not made here.
+  that job: the owner's call, not made here. [Updated 2026-11-12: the
+  owner chose it; the check runs in CI, iteration 22.]
 - **Deviation: `WC8` dropped.** `WC3` and `WC4` already record the
   `subscription_deleted` hook and its `initiated_by_peer`. The subscriber's
   side runs no such hook in either row, so `WC8` would add nothing.
@@ -1535,3 +1536,30 @@ is the plan's Phase 2 table.
 **Files affected**: `.gitignore`, `tests/integration/_wire.py`.
 
 **Rationale**: the PR's automated review.
+
+### 2026-11-12, after the owner's decision on the trailer check in CI
+
+#### 22. The Wire-Phase trailer check runs in CI
+
+**Category**: Decision changed
+
+**What changed**: the `tests` job's checkout in
+`.github/workflows/tests.yml` fetches full history (`fetch-depth: 0`).
+`verify_groups.py` already runs in that job; with the merge base now
+reachable it checks every commit's `Wire-Phase` trailers instead of
+reporting itself skipped. The todo `wire-phase-check-in-ci.md` is deleted
+and its `INDEX.md` row removed.
+
+**Files affected**:
+- `.github/workflows/tests.yml`: `fetch-depth: 0`, with a comment why.
+- `thoughts/todo/wire-phase-check-in-ci.md`: deleted.
+- `thoughts/todo/INDEX.md`: its row removed, row 1 updated.
+
+**Rationale**: the owner (2026-11-12) wants the recordings kept as a
+lasting regression net, so the rule that only a row's owning phase may
+change it should hold for every PR, not only where someone runs the
+script. The history costs seconds (862 commits, an 11 MiB pack). CI checks
+out the PR merged into `master`; that synthetic merge commit is read
+against its first parent less what it took unchanged from the PR head,
+so it needs no trailer (`test_merging_master_in_does_not_need_master_s_trailers`).
+This PR's own CI run is the first proof on the real checkout.

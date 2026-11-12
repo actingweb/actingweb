@@ -1,6 +1,6 @@
 ---
 status: done
-verified: thoughts/verifications/2026-11-12-subscription-wire-baseline-2.md
+verified: thoughts/verifications/2026-11-12-subscription-wire-baseline-3.md
 ---
 
 # Implementation Plan: the subscription wire between two actors, recorded as it is today

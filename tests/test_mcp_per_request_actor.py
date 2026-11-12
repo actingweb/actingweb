@@ -9,6 +9,7 @@ with every key the cached-token branch reads.
 
 from __future__ import annotations
 
+import threading
 import time
 import uuid
 from collections.abc import Iterator
@@ -527,3 +528,76 @@ class TestNoSecondLoad:
         # Read the row itself: Actor(id, cfg) would run the rename.
         row = get_actor(cfg).get(actor_id=aid(actor))
         assert row is not None and row["creator"] == actor.creator
+
+
+class TestPhase1ReviewFixes:
+    """The Phase 1 review (2026-11-12)."""
+
+    def test_another_applications_trust_entry_is_a_miss(
+        self, cfg: Config, actor: Actor
+    ) -> None:
+        """The trust half of the per-application binding: a token entry of
+        application B and a trust entry of application A for the same pair."""
+        other = _config()
+        token = _token()
+        _seed_token(other, token, aid(actor))
+        _seed_trust(cfg, aid(actor), trust=mock.Mock(peerid="from-a"))
+        fresh = mock.Mock(peerid="from-b", oauth_client_id=CLIENT)
+
+        with mock.patch.object(
+            mcp_mod.MCPHandler, "_lookup_mcp_trust_relationship", return_value=fresh
+        ) as lookup:
+            iface = _auth(other, token)
+
+        lookup.assert_called_once()
+        ctx = RuntimeContext(iface).get_mcp_context()
+        assert ctx is not None and ctx.peer_id == "from-b"
+        assert mcp_mod._trust_cache[(aid(actor), CLIENT)]["config"] is other
+
+    def test_an_eviction_cannot_land_between_a_fills_check_and_write(
+        self, cfg: Config, actor: Actor
+    ) -> None:
+        """The eviction runs while the fill holds the lock: it waits, and
+        then removes what the fill wrote."""
+        token = _token()
+        _seed_token(cfg, token, aid(actor))
+        real_put = mcp_mod._trust_cache_put
+        evictor: list[threading.Thread] = []
+
+        def put_while_evicting(*a: Any, **k: Any) -> None:
+            t = threading.Thread(
+                target=mcp_mod.evict_mcp_caches_for_actor, args=(aid(actor),)
+            )
+            t.start()
+            t.join(timeout=0.2)
+            # Without the lock the eviction has finished by now and the write
+            # below would outlive it.
+            evictor.append(t)
+            real_put(*a, **k)
+
+        with (
+            mock.patch.object(
+                mcp_mod.MCPHandler, "_lookup_mcp_trust_relationship", return_value=None
+            ),
+            mock.patch.object(mcp_mod, "_trust_cache_put", put_while_evicting),
+        ):
+            assert _auth(cfg, token) is not None
+        for t in evictor:
+            t.join(timeout=5)
+        assert evictor and not evictor[0].is_alive()
+        assert (aid(actor), CLIENT) not in mcp_mod._trust_cache
+
+    def test_a_bridge_create_whose_row_is_gone_on_reload_answers_none(
+        self, cfg: Config
+    ) -> None:
+        token = _token()
+        actor_id = f"mcp{uuid.uuid4().hex}"
+        server = _Server((actor_id, CLIENT, {"email": uuid_email()}))
+        with (
+            mock.patch(SERVER, return_value=server),
+            # The create reports success, but no row is there to load (a
+            # delete landed in between).
+            mock.patch.object(Actor, "create", return_value=True),
+        ):
+            assert _auth(cfg, token) is None
+        assert token not in mcp_mod._token_cache

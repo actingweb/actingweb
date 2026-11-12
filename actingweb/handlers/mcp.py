@@ -336,7 +336,10 @@ def _reset_unsupported_version_telemetry() -> None:
 # still succeeds, it just pays full price. Revocations are rare and cache
 # misses are cheap; a resurrected credential is neither.
 _cache_generation = 0
-_cache_generation_lock = threading.Lock()
+# Re-entrant: an eviction holds it across its pops and its bump (which takes
+# it again), and a fill holds it across its validity check and its write, so
+# no fill can check before an eviction's bump and write after its pops.
+_cache_generation_lock = threading.RLock()
 
 
 def _current_cache_generation() -> int:
@@ -427,22 +430,27 @@ def evict_mcp_caches_for_actor(actor_id: str) -> int:
     """
     evicted = 0
 
-    for token in [
-        token
-        for token, data in _token_cache.copy().items()
-        if data.get("actor_id") == actor_id
-    ]:
-        _token_cache.pop(token, None)
-        evicted += 1
+    # Under the lock fills take for their check and write: otherwise a fill
+    # that checked before the bump could write after the pops, and the
+    # revoked entry would live for its TTL.
+    with _cache_generation_lock:
+        for token in [
+            token
+            for token, data in _token_cache.copy().items()
+            if data.get("actor_id") == actor_id
+        ]:
+            _token_cache.pop(token, None)
+            evicted += 1
 
-    trust_keys = [k for k in _trust_cache.copy() if k[0] == actor_id]
-    _evict_trust_entries_for_actor(actor_id)
-    evicted += len(trust_keys)
+        trust_keys = [k for k in _trust_cache.copy() if k[0] == actor_id]
+        _evict_trust_entries_for_actor(actor_id)
+        evicted += len(trust_keys)
 
-    # Bumped unconditionally, not only when something was evicted: an
-    # in-flight request may be about to insert an entry that did not exist yet
-    # when this ran, which is exactly the race the counter exists to stop.
-    _bump_cache_generation()
+        # Bumped unconditionally, not only when something was evicted: an
+        # in-flight request may be about to insert an entry that did not exist
+        # yet when this ran, which is exactly the race the counter exists to
+        # stop.
+        _bump_cache_generation()
 
     if evicted:
         logger.debug("Evicted %d MCP cache entries for actor %s", evicted, actor_id)
@@ -2354,8 +2362,11 @@ class MCPHandler(BaseHandler):
                         trust_relationship = self._lookup_mcp_trust_relationship(
                             actor_interface, client_id, token_data
                         )
-                        if _cache_fill_still_valid(generation_at_read):
-                            _trust_cache_put(trust_key, trust_relationship, self.config)
+                        with _cache_generation_lock:
+                            if _cache_fill_still_valid(generation_at_read):
+                                _trust_cache_put(
+                                    trust_key, trust_relationship, self.config
+                                )
                     self._check_trust_client_invariant(
                         actor_id, client_id, trust_relationship
                     )
@@ -2407,27 +2418,29 @@ class MCPHandler(BaseHandler):
                 return None
 
             # Cache the token validation result, now that it has an actor
-            if _cache_fill_still_valid(generation_at_read) and _token_fill_still_valid(
-                bearer_token, token_seq_at_read
-            ):
-                _token_cache[bearer_token] = {
-                    "actor_id": actor_id,
-                    "client_id": client_id,
-                    "token_data": token_data,
-                    "cached_at": current_time,
-                    "config": self.config,
-                }
+            with _cache_generation_lock:
+                if _cache_fill_still_valid(
+                    generation_at_read
+                ) and _token_fill_still_valid(bearer_token, token_seq_at_read):
+                    _token_cache[bearer_token] = {
+                        "actor_id": actor_id,
+                        "client_id": client_id,
+                        "token_data": token_data,
+                        "cached_at": current_time,
+                        "config": self.config,
+                    }
 
             # Lookup and cache trust relationship per (actor, client) pair
             trust_relationship = self._lookup_mcp_trust_relationship(
                 actor_interface, client_id, token_data
             )
-            if _cache_fill_still_valid(generation_at_read):
-                _trust_cache_put(
-                    _trust_cache_key(actor_id, client_id),
-                    trust_relationship,
-                    self.config,
-                )
+            with _cache_generation_lock:
+                if _cache_fill_still_valid(generation_at_read):
+                    _trust_cache_put(
+                        _trust_cache_key(actor_id, client_id),
+                        trust_relationship,
+                        self.config,
+                    )
             self._check_trust_client_invariant(actor_id, client_id, trust_relationship)
 
             # Mark client as peer_approved on successful authentication (if not already)
@@ -2564,6 +2577,8 @@ class MCPHandler(BaseHandler):
                     # A concurrent request created it first.
                     core_actor = _load_actor(actor_id, self.config)
                 else:
+                    core_actor = None
+                if core_actor is None or not core_actor.id:
                     logger.error(f"Failed to create ActingWeb actor {actor_id}")
                     return None
 
@@ -3022,13 +3037,23 @@ class MCPHandler(BaseHandler):
         token_found = False
 
         if not actor_wide:
-            token_found = _token_cache.pop(token, None) is not None
-            # An in-flight authentication must not re-cache what it read just
-            # before the delete; only a fill of this token is refused.
-            _record_token_eviction(token)
+            # Under the fills' lock, as evict_mcp_caches_for_actor() is.
+            with _cache_generation_lock:
+                token_found = _token_cache.pop(token, None) is not None
+                # An in-flight authentication must not re-cache what it read
+                # just before the delete; only a fill of this token is refused.
+                _record_token_eviction(token)
             return token_found
 
         # Remove token from cache
+        with _cache_generation_lock:
+            return cls._clear_token_actor_wide(token)
+
+    @classmethod
+    def _clear_token_actor_wide(cls, token: str) -> bool:
+        """The actor-wide half of :meth:`clear_token_from_cache`, run under
+        the cache lock."""
+        token_found = False
         if token in _token_cache:
             # Get actor_id before removing token data to clean associated caches
             cached_data = _token_cache[token]

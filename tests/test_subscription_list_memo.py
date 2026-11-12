@@ -30,12 +30,12 @@ from actingweb.db import get_subscription_suspension
 from actingweb.db.exceptions import DbError
 from actingweb.handlers.subscription import SubscriptionRelationshipHandler
 from actingweb.interface.actor_interface import ActorInterface
-from actingweb.interface.authenticated_views import AuthContext
 from actingweb.interface.subscription_manager import (
     PeerSubscriptions,
     SubscriptionManager,
     SubscriptionSyncResult,
 )
+from actingweb.oauth2_server.trust_lookup import normalize_client_id
 from actingweb.subscription import Subscription, Subscriptions
 from actingweb.trust import Trust
 from actingweb.trust_permissions import initialize_trust_permission_store
@@ -976,15 +976,67 @@ class TestByPeer:
         iface = ActorInterface(world.fresh())
         assert set(iface.as_peer(a).subscriptions.get_subscriptions_by_peer()) == {a}
 
+        # A real client trust row, in the client-credentials shape the view
+        # resolves (find_client_trust), whose peer id is not the client id.
         client_id = f"mcp_{uuid.uuid4().hex[:12]}"
+        normalized = normalize_client_id(client_id)
+        trust_peer = f"oauth2_client:{normalized}:{normalized}"
+        assert Trust(actor_id=world.id, peerid=trust_peer, config=world.config).create(
+            relationship="mcp_client",
+            secret=uuid.uuid4().hex,
+            approved=True,
+            verified=True,
+            peer_approved=True,
+            established_via="oauth2_client",
+        )
+        world.subscribe(trust_peer)
         world.subscribe(client_id)
-        # A new instance: the one above read its list before this row.
         view = ActorInterface(world.fresh()).as_client(client_id)
-        with mock.patch.object(
-            AuthContext, "permission_id", new_callable=mock.PropertyMock
-        ) as permission_id:
-            permission_id.return_value = b
-            keys = set(view.subscriptions.get_subscriptions_by_peer())
-        assert keys == {b, client_id}
+        assert set(view.subscriptions.get_subscriptions_by_peer()) == {
+            trust_peer,
+            client_id,
+        }
         owner = ActorInterface(world.fresh()).subscriptions.get_subscriptions_by_peer()
-        assert set(owner) == {a, b, c, client_id}
+        assert set(owner) == {a, b, c, trust_peer, client_id}
+
+
+class TestPhase2ReviewFixes:
+    """The Phase 2 review (2026-11-12)."""
+
+    def test_a_missing_suspensions_table_does_not_block_deletion(
+        self, bare: World
+    ) -> None:
+        if backend_of(bare.config) != "dynamodb":
+            pytest.skip("PostgreSQL creates the table in its migrations")
+        from pynamodb.exceptions import TableDoesNotExist
+
+        from actingweb.db.dynamodb import subscription_suspension as dyn
+
+        with mock.patch.object(
+            dyn.SubscriptionSuspension,
+            "query",
+            side_effect=TableDoesNotExist("test_subscription_suspensions"),
+        ):
+            assert get_subscription_suspension(bare.config, bare.id).delete_all()
+            assert bare.a.delete(notify_peers=False)
+        assert bare.fresh().id is None
+
+    def test_a_faulting_create_still_resets_the_memo(self, bare: World) -> None:
+        assert bare.a.get_subscriptions() == []
+        with (
+            mock.patch.object(Subscription, "create", side_effect=DbError("x")),
+            pytest.raises(DbError),
+        ):
+            bare.subscribe("p", through=bare.a)
+        assert bare.a.subs_list is None
+
+    def test_a_faulting_delete_still_resets_the_memo(self, bare: World) -> None:
+        bare.trust("p")
+        subid = bare.subscribe("p", through=bare.a)
+        assert len(bare.a.get_subscriptions() or []) == 1
+        with (
+            mock.patch.object(Subscription, "delete", side_effect=DbError("x")),
+            pytest.raises(DbError),
+        ):
+            bare.a.delete_subscription(peerid="p", subid=subid)
+        assert bare.a.subs_list is None

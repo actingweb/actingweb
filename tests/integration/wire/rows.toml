@@ -1202,7 +1202,7 @@ test = "test_wire_queue_and_lifecycle.py::test_wm3_recreated_publisher_sends"
 topologies = ["same_host", "two_hosts"]
 owners = ["subs-list-cache-lifetime:2"]
 exposure = false
-expected = "WC6's setup and delete (a suspended subtarget y), then A created again under its id through the SDK (no trust, no subscription, asserted); a new subscriber B2 trusts and subscribes (set up, not recorded); a fresh instance of A writes y and B2 gets the diff. Before 3.16 the inherited suspension dropped it."
+expected = "WC6's setup and delete (a suspended subtarget y), then A created again under its id through the SDK (no trust, no subscription, asserted); a new subscriber B2 trusts and subscribes (set up, not recorded); a fresh instance of A writes y and B2 gets the diff. Before 3.16 the inherited suspension dropped it. The deletion removes the row (WC6), so the create-time clear of a row left by a pre-3.16 deletion has nothing to remove here; a unit test pins that case (test_subscription_list_memo.py)."
 reason = ["2026-11-12 first recording (subs-list-cache-lifetime:2)"]
 
 [rows."WM4"]

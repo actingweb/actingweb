@@ -3554,18 +3554,21 @@ class Actor:
             callback=callback,
             config=self.config,
         )
-        new_sub.create(
-            target=target,
-            subtarget=subtarget,
-            resource=resource,
-            granularity=granularity,
-        )
-        # Invalidate the memoised subscription list so register_diffs() on this
-        # instance sees the new subscription; every creation path (REST, the
-        # interface layer) comes through here. This refreshes *this* instance
-        # only: another instance keeps the list it read (3.16, see
-        # get_subscriptions()).
-        self.subs_list = None
+        try:
+            new_sub.create(
+                target=target,
+                subtarget=subtarget,
+                resource=resource,
+                granularity=granularity,
+            )
+        finally:
+            # Invalidate the memoised subscription list so register_diffs() on
+            # this instance sees the new subscription; every creation path
+            # (REST, the interface layer) comes through here. In a finally: a
+            # fault may follow a write that landed. This refreshes *this*
+            # instance only: another instance keeps the list it read (3.16,
+            # see get_subscriptions()).
+            self.subs_list = None
         return new_sub.get()
 
     def create_remote_subscription(
@@ -3835,10 +3838,12 @@ class Actor:
             callback=callback,
             config=self.config,
         )
-        result = sub.delete()
-
-        # Clear subscription cache after deletion to ensure fresh data on next access
-        self.subs_list = None
+        try:
+            result = sub.delete()
+        finally:
+            # Clear the memo on every exit: a fault may follow a delete that
+            # landed (3.16).
+            self.subs_list = None
 
         # Clean up RemotePeerStore AFTER successful deletion to avoid data loss
         # Note: should_cleanup_remote_peer_store is only True when peerid is not None

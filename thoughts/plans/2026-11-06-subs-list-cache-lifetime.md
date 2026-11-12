@@ -1028,6 +1028,33 @@ Notes (2026-11-12):
 - **`purge_relationships`** folds the leftovers' `DbError` into
   `confirmed: False` with the `# folds DbError:` marker the guard test asks
   for.
+- **Phase review** (2026-11-12, outside voice: Codex and a fresh-context
+  reviewer, on `011865b`; fixed in the commit after it):
+  - **Medium, reachable by a user's own delete or an MCP bridge create:** on
+    a DynamoDB deployment that never created the suspensions table (the docs
+    called it optional; auto-creation off), `delete_all()` folded the missing
+    table to `False`, so every `Actor.delete()`, every purge and every
+    `Actor.create(actor_id=…)` failed. A missing table holds no suspension:
+    the DynamoDB `delete_all()` answers `True` for it (tested). The
+    `docs/reference/database-backends.rst` note is corrected: since 3.16 a
+    suspension check that cannot read the table answers 503 for a write with
+    subscribers (older than this plan), and deletion and create treat a
+    missing table as empty. PostgreSQL creates the table in its migrations.
+  - `create_subscription` and `delete_subscription` reset the memo in a
+    `finally`: a fault after a write that landed would otherwise keep an
+    empty memo the old falsy guard would have read again (tested).
+  - The client-view accessor test builds a real client trust row (the
+    client-credentials shape `find_client_trust` resolves) instead of
+    mocking `permission_id`.
+  - `WM3`'s registry text says the create-time clear has nothing to remove
+    in that recording (the deletion already removed the row) and names the
+    unit test that pins it.
+  - Accepted, Low: the actor-wide diff wipe reads the diff bodies once more
+    with no lease step inside it (the step before it runs); a lease that
+    lapses there is taken over and the wipe, a delete by actor id, is
+    repeated. Accepted, Low: a failed suspension clear with
+    `replace_holder` keeps the new row; no library caller passes both
+    `replace_holder` and `actor_id` (the Decisions already state it).
 
 ---
 

@@ -872,8 +872,8 @@ class TestSubscriptionActorFlow:
         assert "data" in sub_data and len(sub_data["data"]) > 0
         # Verify nested structure
         first_data = sub_data["data"][0]["data"]
-        if isinstance(first_data, dict) and "data1" in first_data:
-            assert first_data["data1"]["str2"] == "initial"
+        assert isinstance(first_data, dict) and "data1" in first_data, first_data
+        assert first_data["data1"]["str2"] == "initial"
         assert sub_data["data"][0]["sequence"] == 1
 
     def test_035_delete_subscription_wrong_secret(self, http_client):

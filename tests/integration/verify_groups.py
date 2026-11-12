@@ -266,7 +266,8 @@ def check_wire_phase(
     bases: tuple[str, ...] = ("origin/master", "master"),
 ) -> tuple[list[str], str | None]:
     """Check the ``Wire-Phase`` trailers of the commits since the merge base
-    (merges included, each read against its first parent). It checks
+    (merges included: a merge is read against its first parent, less what
+    it took unchanged from its other parents). It checks
     commits already made, so run it after committing and amend if needed.
 
     Returns (problems, why it was skipped or None)."""
@@ -305,6 +306,19 @@ def check_wire_phase(
             status, _, path = line.partition("\t")
             if path.endswith(".json"):
                 changes.append((status[:1], Path(path).name))
+        # A merge's own change is what differs from every parent. A file
+        # taken unchanged from another parent (``master`` merged in, or a
+        # side branch) was checked where that parent changed it: on
+        # ``master``, or at its own commit in this range.
+        parents = _git("rev-list", "--parents", "-n", "1", commit).split()[1:]
+        for other in parents[1:]:
+            differs = {
+                Path(path).name
+                for path in _git(
+                    "diff", "--name-only", "--no-renames", other, commit, "--", WIRE_DIR
+                ).splitlines()
+            }
+            changes = [(st, name) for st, name in changes if name in differs]
         if not any(status in ("M", "D") for status, _ in changes):
             continue
         trailers = [

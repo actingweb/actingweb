@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import json
+import types
 from pathlib import Path
 from typing import Any
 
@@ -528,15 +529,44 @@ def test_the_wire_phase_check_reads_merges_and_runs_from_anywhere(
     (wire / "WX1.json").write_text('{"x": 1}\n')
     git("commit", "-qam", "side change\n\nWire-Phase: p:2")
     git("checkout", "-q", "branch")
-    git("merge", "-q", "--no-ff", "side", "-m", "merge\n\nWire-Phase: p:3")
+    # The merge re-records the row itself (as a conflict resolution would):
+    # its content matches neither parent.
+    git("merge", "-q", "--no-ff", "--no-commit", "side")
+    (wire / "WX1.json").write_text('{"x": 2}\n')
+    git("commit", "-qam", "merge\n\nWire-Phase: p:3")
     monkeypatch.setattr(vg, "_REPO", tmp_path)
     monkeypatch.chdir(tmp_path / "tests")
     problems, skipped = vg.check_wire_phase(("master",))
     assert skipped is None
-    # The side commit (p:2) passes; the merge brings the change in under
+    # The side commit (p:2) passes; the merge's own re-recording is under
     # p:3, an owner only on the branch.
     assert any("not among its owners" in p and "p:3" in p for p in problems), problems
     assert len(problems) == 1, problems
+
+
+def test_merging_master_in_does_not_need_master_s_trailers(tmp_path, monkeypatch):
+    """master re-records a row under its owner; a branch that merges master
+    in took that file unchanged, so the merge needs no trailer for it."""
+    vg = _verify_groups()
+    git = _git_repo(tmp_path)
+    wire = tmp_path / "tests/integration/wire"
+    wire.mkdir(parents=True)
+    git("init", "-q", "-b", "master")
+    (wire / "rows.toml").write_text('[rows."WX1"]\nowners = ["p:1"]\n')
+    (wire / "WX1.json").write_text("{}\n")
+    git("add", "-A")
+    git("commit", "-qm", "base")
+    git("checkout", "-qb", "branch")
+    (tmp_path / "other.txt").write_text("branch work\n")
+    git("add", "-A")
+    git("commit", "-qm", "branch work")
+    git("checkout", "-q", "master")
+    (wire / "WX1.json").write_text('{"x": 1}\n')
+    git("commit", "-qam", "re-record\n\nWire-Phase: p:1")
+    git("checkout", "-q", "branch")
+    git("merge", "-q", "--no-edit", "master")
+    monkeypatch.setattr(vg, "_REPO", tmp_path)
+    assert vg.check_wire_phase(("master",)) == ([], None)
 
 
 def test_an_unparsable_registry_at_the_merge_base_is_a_problem(tmp_path, monkeypatch):
@@ -581,6 +611,50 @@ def test_an_async_steps_failing_task_is_recorded_not_raised():
     }
 
 
+def test_a_task_that_failed_before_the_action_returned_is_recorded():
+    """The action awaits after starting the task, so the task has already
+    failed (and left ``all_tasks``) when the drain begins."""
+
+    async def boom() -> None:
+        raise ValueError("peer gone")
+
+    async def action() -> str:
+        asyncio.get_running_loop().create_task(boom())
+        await asyncio.sleep(0.01)
+        return "returned"
+
+    assert asyncio.run(_wire._run_and_drain(action)) == {
+        "result": "returned",
+        "task_errors": ["ValueError"],
+    }
+
+
+def test_the_drain_does_not_depend_on_wait_for_running_it_in_a_task(monkeypatch):
+    """Python 3.11's ``asyncio.wait_for`` runs its coroutine in a task of its
+    own; a drain run that way finds itself among the pending tasks and
+    waits for itself. Here ``wait_for`` is given 3.11's shape: the drain
+    must still settle."""
+    real_wait_for = asyncio.wait_for
+
+    async def wait_for_311(aw: Any, timeout: float | None) -> Any:
+        return await real_wait_for(asyncio.ensure_future(aw), timeout)
+
+    monkeypatch.setattr(asyncio, "wait_for", wait_for_311)
+    monkeypatch.setattr(_wire, "_DRAIN_TIMEOUT", 2.0)
+    done: list[str] = []
+
+    async def later() -> None:
+        await asyncio.sleep(0.01)
+        done.append("later")
+
+    async def action() -> str:
+        asyncio.get_running_loop().create_task(later())
+        return "returned"
+
+    assert asyncio.run(_wire._run_and_drain(action)) == "returned"
+    assert done == ["later"]
+
+
 def test_an_async_step_that_never_settles_times_out(monkeypatch):
     monkeypatch.setattr(_wire, "_DRAIN_TIMEOUT", 0.05)
 
@@ -589,3 +663,50 @@ def test_an_async_step_that_never_settles_times_out(monkeypatch):
 
     with pytest.raises(TimeoutError):
         asyncio.run(_wire._run_and_drain(action))
+
+
+def test_store_leftovers_keep_their_order_whatever_their_ids(monkeypatch):
+    """Two leftover diffs and two callback-state entries are ordered by
+    content and peer name, not by their random subscription ids."""
+    import actingweb.db as db
+
+    def stores(sub_x: str, sub_y: str) -> dict[str, Any]:
+        diffs = [
+            {"subscriptionid": sub_y, "sequence": 1, "diff": '{"y": 1}'},
+            {"subscriptionid": sub_x, "sequence": 1, "diff": '{"x": 1}'},
+        ]
+        bucket = {
+            f"state:{'p' * 32}:{sub_y}": {"data": {"last": "y"}},
+            f"state:{'p' * 32}:{sub_x}": {"data": {"last": "x"}},
+        }
+
+        class Diffs:
+            def fetch(self, actor_id: str) -> list[dict[str, Any]]:
+                return diffs
+
+        class Bucket:
+            def __init__(self, **_: Any) -> None:
+                pass
+
+            def get_bucket(self) -> dict[str, Any]:
+                return bucket
+
+        monkeypatch.setattr(db, "get_subscription_diff_list", lambda config: Diffs())
+        monkeypatch.setattr(_wire, "Attributes", Bucket)
+        actor = types.SimpleNamespace(
+            id="a" * 32, host=types.SimpleNamespace(config=None)
+        )
+        out = _wire._snapshot_stores(actor, {"p" * 32: "B"})  # type: ignore[arg-type]
+        named = {sub_x: "X", sub_y: "Y"}
+        return {
+            "diffs": [named[d["subscriptionid"]] for d in out["diffs"]],
+            "callback_state": [
+                named[e["subscriptionid"]] for e in out["callback_state"]
+            ],
+        }
+
+    assert stores("1" * 32, "9" * 32) == stores("9" * 32, "1" * 32)
+    assert stores("1" * 32, "9" * 32) == {
+        "diffs": ["X", "Y"],
+        "callback_state": ["X", "Y"],
+    }

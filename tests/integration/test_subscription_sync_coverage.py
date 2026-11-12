@@ -140,30 +140,39 @@ class TestSyncPeerTrustRevocation:
         )
 
     def test_003_delete_subscription_on_peer(self) -> None:
-        """Delete subscription on peer side (B deletes subscription for A).
+        """B loses its subscription row for A without telling A.
 
-        This simulates the scenario where the peer deletes the subscription
-        but trust still exists.
-        """
+        Deleted through the library at B, not over REST: B's REST delete
+        also removes A's side, which would leave A nothing dead to clean.
+        A keeps its callback subscription, now dead at B, with the trust
+        intact on both sides."""
         assert (
             self.actor_a
             and self.actor_b
             and TestSyncPeerTrustRevocation.subscription_id
         ), "Previous test failed"
 
-        # Delete the local subscription on peer (B) that corresponds to A's callback subscription
-        # The subscription on B has A as the subscriber
-        response = requests.delete(
+        sdk_actor_b = _sdk_actor(self.actor_b["id"])
+        sub = sdk_actor_b.get_subscription_obj(
+            peerid=self.actor_a["id"], subid=self.subscription_id, callback=False
+        )
+        assert sub and sub.get(), "B holds no subscription row for A"
+        sub.delete()
+
+        response = requests.get(
             f"{self.actor_b['url']}/subscriptions/{self.actor_a['id']}/{self.subscription_id}",
             auth=(self.actor_b["creator"], self.actor_b["passphrase"]),
             timeout=5,
         )
-        assert response.status_code == 204, (
-            f"Failed to delete subscription: {response.status_code}"
-        )
+        assert response.status_code == 404, response.text
+        assert [
+            r["subscriptionid"] for r in _subscriptions_of(self.actor_a, self.actor_b)
+        ] == [self.subscription_id]
 
     def test_004_sync_cleans_dead_subscription_preserves_trust(self) -> None:
-        """Test sync_peer cleans dead subscription but preserves trust when trust exists."""
+        """sync_peer finds A's subscription gone at B (404), checks that B
+        still holds the trust, deletes A's dead subscription and keeps the
+        trust."""
         assert self.actor_a and self.actor_b, "Previous test failed"
 
         from actingweb.interface.actor_interface import ActorInterface
@@ -171,12 +180,11 @@ class TestSyncPeerTrustRevocation:
         sdk_actor_a = _sdk_actor(self.actor_a["id"])
 
         actor_interface = ActorInterface(sdk_actor_a)
-        # Run sync - result may or may not be successful depending on subscription state
         result = actor_interface.subscriptions.sync_peer(self.actor_b["id"])
-        # B's delete in test_003 already removed A's side of the dead
-        # subscription: nothing is left to sync, and A lists none for B.
-        assert result.success, result.error
-        assert result.subscriptions_synced == 0, result
+        assert [
+            (r.subscription_id, r.success, r.error_code)
+            for r in result.subscription_results
+        ] == [(self.subscription_id, False, 404)], result
         assert _subscriptions_of(self.actor_a, self.actor_b) == []
 
         # When subscription is gone but trust exists, the sync will fail
@@ -356,6 +364,7 @@ class TestSyncSubscriptionBaseline:
             enabled=True, auto_storage=True, auto_sequence=True
         )
 
+        (before,) = _subscriptions_of(self.actor_a, self.actor_b)
         result = actor_interface.subscriptions.sync_subscription(
             peer_id=self.actor_b["id"],
             subscription_id=self.subscription_id,  # type: ignore[arg-type]
@@ -363,6 +372,7 @@ class TestSyncSubscriptionBaseline:
         )
 
         assert result.success, f"Sync failed: {result.error}"
+        (after,) = _subscriptions_of(self.actor_a, self.actor_b)
 
         # Verify list items were stored
         remote_store = RemotePeerStore(
@@ -374,8 +384,11 @@ class TestSyncSubscriptionBaseline:
         # as a list operation (wire row WL1): A's replica list stays empty.
         # attribute-list-v2-port:4 owns the change.
         # The four queued diffs (the list created, three items added) are
-        # what the sync applied, not a baseline.
+        # what the sync applied, not a baseline: the counter says four, and
+        # A's subscription moved four sequences on (the counter alone counts
+        # a diff whatever its handler stored).
         assert result.diffs_processed == 4, result
+        assert after["sequence"] == before["sequence"] + 4, (before, after)
         assert remote_store.get_list("items") == []
 
     def test_004_cleanup(self) -> None:

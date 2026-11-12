@@ -437,33 +437,47 @@ def _snapshot_suspensions(actor: WireActor) -> list[dict[str, Any]]:
     ]
 
 
-def _snapshot_stores(actor: WireActor) -> dict[str, Any]:
+def _content_key(value: Any) -> str:
+    """A value's content as a sortable string (keys sorted)."""
+    return json.dumps(value, sort_keys=True, default=str)
+
+
+def _snapshot_stores(actor: WireActor, names: dict[str, str]) -> dict[str, Any]:
     """What the actor's stores hold, read directly and not through its live
     subscription rows: every queued diff and every callback-state entry. A
-    cleanup that removes the rows but leaves either behind shows here."""
+    cleanup that removes the rows but leaves either behind shows here.
+
+    Both are ordered by content and named peers before the (random)
+    subscription id, so two leftovers keep their order from run to run."""
     from actingweb.db import get_subscription_diff_list
 
     diffs = get_subscription_diff_list(actor.host.config).fetch(actor_id=actor.id)
     bucket = Attributes(
         actor_id=actor.id, bucket="_callback_state", config=actor.host.config
     ).get_bucket()
-    entries = []
-    for key in sorted(bucket or {}):
+    keyed = []
+    for key, value in (bucket or {}).items():
         kind, _, rest = key.partition(":")
         peer, _, subid = rest.partition(":")
-        entries.append({"kind": kind, "peer": peer, "subscriptionid": subid})
-    return {
-        "diffs": sorted(
+        entry = {"kind": kind, "peer": peer, "subscriptionid": subid}
+        content = value.get("data") if isinstance(value, dict) else value
+        keyed.append(
+            ((kind, names.get(peer, peer), _content_key(content), subid), entry)
+        )
+    diffs_keyed = [
+        (
             (
-                {
-                    "subscriptionid": d.get("subscriptionid"),
-                    "sequence": d.get("sequence"),
-                }
-                for d in diffs or []
+                d.get("sequence") or 0,
+                _content_key(d.get("diff")),
+                str(d.get("subscriptionid")),
             ),
-            key=lambda d: (str(d["subscriptionid"]), d["sequence"] or 0),
-        ),
-        "callback_state": entries,
+            {"subscriptionid": d.get("subscriptionid"), "sequence": d.get("sequence")},
+        )
+        for d in diffs or []
+    ]
+    return {
+        "diffs": [e for _, e in sorted(diffs_keyed, key=lambda p: p[0])],
+        "callback_state": [e for _, e in sorted(keyed, key=lambda p: p[0])],
     }
 
 
@@ -505,9 +519,9 @@ def snapshot(
         },
     }
     if stores:
-        out["publisher"]["stores"] = _snapshot_stores(publisher)
+        out["publisher"]["stores"] = _snapshot_stores(publisher, names)
         for s in subscribers:
-            out["subscribers"][s.name]["stores"] = _snapshot_stores(s)
+            out["subscribers"][s.name]["stores"] = _snapshot_stores(s, names)
     return out
 
 
@@ -671,23 +685,42 @@ async def _run_and_drain(action: Callable[[], Any]) -> Any:
     """Await ``action``, then every task it left on the loop (and theirs),
     for at most ``_DRAIN_TIMEOUT`` seconds. A task that fails is recorded,
     not raised: production only logs a fire-and-forget task's error, so
-    the step's result carries ``task_errors`` (exception names) instead."""
-    result = await action()
-    current = asyncio.current_task()
-    errors: list[str] = []
+    the step's result carries ``task_errors`` (exception names, sorted)
+    instead.
 
-    async def drain() -> None:
-        while True:
-            pending = [
-                t for t in asyncio.all_tasks() if t is not current and not t.done()
-            ]
-            if not pending:
-                return
-            for outcome in await asyncio.gather(*pending, return_exceptions=True):
-                if isinstance(outcome, BaseException):
-                    errors.append(type(outcome).__name__)
+    Every task the step creates is captured through the loop's task factory,
+    so a task that has already failed when the drain starts (``all_tasks``
+    no longer lists it) is still recorded. The drain waits in the caller's
+    task (``asyncio.timeout``): 3.11's ``wait_for`` would run it in a task of
+    its own, which then waits for itself."""
+    loop = asyncio.get_running_loop()
+    previous = loop.get_task_factory()
+    created: list[asyncio.Future[Any]] = []
 
-    await asyncio.wait_for(drain(), _DRAIN_TIMEOUT)
+    def factory(
+        loop: asyncio.AbstractEventLoop, coro: Any, **kwargs: Any
+    ) -> asyncio.Future[Any]:
+        task = (
+            previous(loop, coro, **kwargs)
+            if previous is not None
+            else asyncio.Task(coro, loop=loop, **kwargs)
+        )
+        created.append(task)
+        return task
+
+    loop.set_task_factory(factory)
+    try:
+        result = await action()
+        async with asyncio.timeout(_DRAIN_TIMEOUT):
+            while pending := [t for t in created if not t.done()]:
+                await asyncio.wait(pending)
+    finally:
+        loop.set_task_factory(previous)
+    errors = sorted(
+        "CancelledError" if t.cancelled() else type(t.exception()).__name__
+        for t in created
+        if t.cancelled() or t.exception() is not None
+    )
     if errors:
         return {"result": result, "task_errors": errors}
     return result

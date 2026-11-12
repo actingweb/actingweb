@@ -136,7 +136,7 @@ reason = [
 test = "test_wire_peer_paths.py::test_wd10_import"
 owners = []
 exposure = false
-expected = "The consumer's import: the method answers {\"callbacks_sent\": 1, \"length\": 3} and then the resync for subtarget memories arrives as a top-level request with B's fetch of the list nested in it; A's queue keeps diffs 1 and 2."
+expected = "The consumer's import: the method answers {\"callbacks_sent\": 1, \"length\": 3} and then the resync for subtarget memories arrives as a top-level request with B's fetch of the list nested in it; A's queue keeps diffs 1 and 2. A callback recorded under the method is moved to follow it (subscription-wire-baseline iteration 5), so the row cannot tell a callback sent inside the method request from one sent after it."
 reason = [
   "2026-11-07 first recording (peer-authorisation-fixes:0)",
   "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
@@ -1102,7 +1102,7 @@ reason = ["2026-11-11 first recording (subscription-wire-baseline:1)"]
 test = "test_wire_delivery.py::test_wd18_async_method_on_the_loop"
 owners = ["spec-1-5:4"]
 exposure = false
-expected = "POST /methods/wire_import with suspend false (an async method on A's loop) answers first; its callback to B is a sibling after it, and B holds the item once the step settles. A callback recorded under the method (the race an async method can lose) is moved to follow it, so the bytes do not depend on that race."
+expected = "POST /methods/wire_import with suspend false (an async method on A's loop) answers first; its callback to B is a sibling after it, and B holds the item once the step settles. A callback recorded under the method (the race an async method can lose) is moved to follow it, so the bytes do not depend on that race; the row therefore cannot tell a callback sent inside the method request from one sent after it."
 reason = ["2026-11-11 first recording (subscription-wire-baseline:1)"]
 
 [rows."WD4"]
@@ -1119,7 +1119,7 @@ topologies = ["same_host", "two_hosts"]
 owners = []
 exposure = false
 expected = "Callbacks posted by hand with A's bearer, sequences 2 to 7 (1 never sent): the first five answered 204 and held as pending, the sixth answered 400 (max_pending 5); nothing applied."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-12 the six posts in one step, inside the gap timeout on any runner (subscription-wire-baseline iteration 5)"]
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-12 the six posts in one step, with no snapshot between them: they must still land within the 2 s gap timeout of the first, a few HTTP posts rather than five snapshots (subscription-wire-baseline iteration 5)"]
 
 [rows."WD20"]
 test = "test_wire_delivery.py::test_wd20_subscribe_with_data"

@@ -1283,3 +1283,146 @@ the owner's call; this iteration follows the files' existing convention.
 
 **Rationale**: the verification's Issue 11; out of the owner's chosen
 scope for this iteration.
+
+
+### 2026-11-12, after verification thoughts/verifications/2026-11-12-subscription-wire-baseline-2.md
+
+Scope (owner, 2026-11-12): all eight issues of the second verification.
+
+#### 10. The async drain settles on Python 3.11 and records every failed task
+
+**Category**: Bug fix (Issues 1 and 2)
+
+**What changed**: `_run_and_drain` no longer uses `asyncio.wait_for`.
+- **The 3.11 bug:** 3.11's `wait_for` runs its coroutine in a task of its
+  own. The drain, which waits for every task but the caller's, found that
+  task, waited for itself, and timed out after 30 s. The bug came from
+  iteration 6 and broke `WD5` and two harness tests on CI's required 3.11
+  contexts. It was invisible locally, where Python is 3.14.
+- **The fix:** the drain waits in the caller's task, under `async with
+  asyncio.timeout(...)`.
+- **Failed tasks:** the step captures every task it creates through the
+  loop's task factory. A task that failed before the drain began, and so
+  no longer appears in `all_tasks()`, is now recorded in `task_errors`.
+  The names are sorted.
+- **Regression tests:**
+  - `test_the_drain_does_not_depend_on_wait_for_running_it_in_a_task`
+    gives `wait_for` 3.11's shape. It hung on the old code and passes now.
+  - `test_a_task_that_failed_before_the_action_returned_is_recorded`
+    failed on the old code.
+
+**Files affected**:
+- `tests/integration/_wire.py`: `_run_and_drain`.
+- `tests/integration/test_wire_harness.py`: the two tests.
+
+**Rationale**: the second verification's Issues 1 (High) and 2.
+
+#### 11. `test_004` exercises the dead-subscription cleanup
+
+**Category**: Verification fix (Issue 3)
+
+**What changed**:
+- **`test_003`:** it now deletes B's subscription row for A through the
+  library at B, not over REST. B's REST delete also removes A's side,
+  which left A with nothing dead. The test asserts that B answers 404 for
+  the subscription and that A still lists it.
+- **`test_004`:** it asserts that `sync_peer` got a 404 for that one
+  subscription, deleted A's dead subscription, and kept the trust (200).
+- **Sensitivity:** a scratch mutation of
+  `actingweb/interface/subscription_manager.py` left out the cleanup's
+  `sub_obj.delete()`. It turned `test_004` red and was reverted.
+
+**Files affected**:
+- `tests/integration/test_subscription_sync_coverage.py`:
+  `TestSyncPeerTrustRevocation.test_003`, `test_004`.
+
+**Rationale**: the second verification's Issue 3. Iteration 3 had only
+relabelled the gap.
+
+#### 12. The Wire-Phase check accepts a branch that merges `master` in
+
+**Category**: Bug fix (Issue 4)
+
+**What changed**: a merge commit's changes are still read against its
+first parent, less every file whose content equals its version on another
+parent. Such a file was taken over unchanged, and it was checked where
+that parent changed it: on `master`, or at its own commit in the range.
+What a merge changes itself, such as a conflict resolution, is still
+checked.
+- **New test:** `test_merging_master_in_does_not_need_master_s_trailers`
+  failed on the old check.
+- **Updated test:** the merge test's merge now re-records the row itself,
+  so it is still flagged.
+
+**Files affected**:
+- `tests/integration/verify_groups.py`: `check_wire_phase`.
+- `tests/integration/test_wire_harness.py`: the two scratch-repository
+  tests.
+
+**Rationale**: the second verification's Issue 4. The check rejected a
+correct history and could not be satisfied by a single trailer.
+
+#### 13. The last conditional assert in `test_subscription_flow.py`
+
+**Category**: Verification fix (Issue 5)
+
+**What changed**: `test_034`'s `if isinstance(first_data, dict) and
+"data1" in first_data:` is now an assert. It holds on both backends.
+Iteration 3's claim that every guard had become unconditional is true from
+here on.
+
+**Files affected**: `tests/integration/test_subscription_flow.py`.
+
+**Rationale**: the second verification's Issue 5.
+
+#### 14. The list-sync test shows the diffs were applied, not only counted
+
+**Category**: Verification fix (Issue 6)
+
+**What changed**:
+- **New assert:** `TestSyncSubscriptionBaseline.test_003` also asserts
+  that A's subscription moved four sequences on during the sync.
+- **Correction to iteration 3:** it said `diffs_processed == 4` makes "a
+  sync that stores nothing" fail. It does not, because the counter
+  counts a diff whatever its handler stored. The replica list itself
+  stays empty today (`WL1`'s known fault, owned by
+  `attribute-list-v2-port:4`).
+
+**Files affected**: `tests/integration/test_subscription_sync_coverage.py`.
+
+**Rationale**: the second verification's Issue 6.
+
+#### 15. Store leftovers keep their order whatever their ids
+
+**Category**: Verification fix (Issue 7)
+
+**What changed**: `_snapshot_stores(actor, names)` orders queued diffs by
+sequence and content, and callback-state entries by kind, peer name and
+content. The random subscription id comes only last, as a tie-break. A
+harness test swaps two leftovers' ids and gets the same order. The
+recordings are unchanged: every store is empty today.
+
+**Files affected**:
+- `tests/integration/_wire.py`: `_content_key`, `_snapshot_stores`,
+  `snapshot`.
+- `tests/integration/test_wire_harness.py`:
+  `test_store_leftovers_keep_their_order_whatever_their_ids`.
+
+**Rationale**: the second verification's Issue 7. The defect was latent:
+it would have made a cleanup regression show as a flake, not as a diff.
+
+#### 16. What `WD19` and the hoisted rows can and cannot show
+
+**Category**: Verification fix (Issue 8)
+
+**What changed**: wording only, in `rows.toml`.
+- **`WD19`'s reason:** "on any runner" is gone. The six posts must still
+  land within 2 s of the first.
+- **`WD18` and `WD10.import` `expected`:** each now says the row cannot
+  tell a callback sent inside the method request from one sent after it.
+
+No recording changed, so the commit needs no trailer.
+
+**Files affected**: `tests/integration/wire/rows.toml`.
+
+**Rationale**: the second verification's Issue 8.

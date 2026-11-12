@@ -251,6 +251,7 @@ def test_wd18_async_method_on_the_loop(wire_pair):
     asynchronous method on the server's loop appends through the interface.
     Two hosts."""
     s = wire_pair("two_hosts", grant=["*"])
+    s.hoist_callbacks_from = ("/methods/",)
     a = s.publisher
     s.step(
         "method appends (async, server loop)",
@@ -264,31 +265,55 @@ def test_wd18_async_method_on_the_loop(wire_pair):
     check("WD18", s.recording())
 
 
+def _post_callback(s: Scenario, sequence: int) -> requests.Response:
+    """A high-granularity callback from A to B with A's bearer, posted by
+    hand: ``{"x": {"v": sequence}}`` at ``sequence``."""
+    a, b = s.publisher, s.subscribers[0]
+    subid = _subid(s)
+    return requests.post(
+        f"{b.url}/callbacks/subscriptions/{a.id}/{subid}",
+        json={
+            "id": a.id,
+            "subscriptionid": subid,
+            "target": "properties",
+            "granularity": "high",
+            "sequence": sequence,
+            "timestamp": "2026-11-11 10:00:00.000000",
+            "data": {"x": {"v": sequence}},
+        },
+        headers=_bearer(s),
+    )
+
+
+@pytest.mark.parametrize("topology", TOPOLOGIES)
+def test_wd4_held_callbacks_drain(wire_pair, topology):
+    """WD4: callbacks posted to B by hand with A's bearer: sequences 2 and 3
+    (held behind the missing 1), then 1, which releases them in order."""
+    s = wire_pair(topology, grant=["*"])
+    s.step(
+        "post sequences 2 and 3",
+        lambda: [
+            {"sequence": n, "status": _post_callback(s, n).status_code} for n in (2, 3)
+        ],
+    )
+    s.step("post sequence 1", lambda: _post_callback(s, 1))
+    check("WD4", s.recording(), variant=topology)
+
+
 @pytest.mark.parametrize("topology", TOPOLOGIES)
 def test_wd19_held_callbacks(wire_pair, topology):
     """WD19: callbacks posted to B by hand with A's bearer, sequences 2 to 7
     (1 never arrives): one more than ``max_pending`` (5)."""
     s = wire_pair(topology, grant=["*"])
-    a, b = s.publisher, s.subscribers[0]
-    subid = _subid(s)
-
-    def post(sequence: int) -> requests.Response:
-        return requests.post(
-            f"{b.url}/callbacks/subscriptions/{a.id}/{subid}",
-            json={
-                "id": a.id,
-                "subscriptionid": subid,
-                "target": "properties",
-                "granularity": "high",
-                "sequence": sequence,
-                "timestamp": "2026-11-11 10:00:00.000000",
-                "data": {"x": {"v": sequence}},
-            },
-            headers=_bearer(s),
-        )
-
-    for sequence in range(2, 8):
-        s.step(f"post sequence {sequence}", lambda n=sequence: post(n))
+    # One step: the six posts must all land inside the wire apps' 2 s gap
+    # timeout, which a snapshot after each would make depend on the runner.
+    s.step(
+        "post sequences 2 to 7",
+        lambda: [
+            {"sequence": n, "status": _post_callback(s, n).status_code}
+            for n in range(2, 8)
+        ],
+    )
     check("WD19", s.recording(), variant=topology)
 
 

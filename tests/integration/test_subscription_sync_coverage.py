@@ -7,12 +7,23 @@ Tests end-to-end flows for:
 - Trust verification when all subscriptions return 404
 """
 
-import os
-
 import pytest
 import requests
 
 pytestmark = pytest.mark.xdist_group(name="sync_coverage")
+
+
+def _subscriptions_of(subscriber: dict | None, publisher: dict | None) -> list:
+    """``subscriber``'s subscriptions at ``publisher``, from its own listing."""
+    assert subscriber and publisher
+    response = requests.get(
+        f"{subscriber['url']}/subscriptions",
+        params={"peerid": publisher["id"]},
+        auth=(subscriber["creator"], subscriber["passphrase"]),
+        timeout=5,
+    )
+    assert response.status_code == 200, response.text
+    return response.json()["data"]
 
 
 def _subscription_id(subscriber: dict | None, publisher: dict | None) -> str:
@@ -117,15 +128,9 @@ class TestSyncPeerTrustRevocation:
         """Test sync_peer succeeds with valid trust."""
         assert self.actor_a and self.actor_b, "Previous test failed to create actors"
 
-        from actingweb.actor import Actor
-        from actingweb.config import Config
         from actingweb.interface.actor_interface import ActorInterface
 
-        database_backend = os.environ.get("DATABASE_BACKEND", "dynamodb")
-        config = Config(database=database_backend)
-
-        sdk_actor_a = Actor(config=config)
-        sdk_actor_a.get(actor_id=self.actor_a["id"])
+        sdk_actor_a = _sdk_actor(self.actor_a["id"])
 
         actor_interface = ActorInterface(sdk_actor_a)
         result = actor_interface.subscriptions.sync_peer(self.actor_b["id"])
@@ -161,19 +166,18 @@ class TestSyncPeerTrustRevocation:
         """Test sync_peer cleans dead subscription but preserves trust when trust exists."""
         assert self.actor_a and self.actor_b, "Previous test failed"
 
-        from actingweb.actor import Actor
-        from actingweb.config import Config
         from actingweb.interface.actor_interface import ActorInterface
 
-        database_backend = os.environ.get("DATABASE_BACKEND", "dynamodb")
-        config = Config(database=database_backend)
-
-        sdk_actor_a = Actor(config=config)
-        sdk_actor_a.get(actor_id=self.actor_a["id"])
+        sdk_actor_a = _sdk_actor(self.actor_a["id"])
 
         actor_interface = ActorInterface(sdk_actor_a)
         # Run sync - result may or may not be successful depending on subscription state
-        _ = actor_interface.subscriptions.sync_peer(self.actor_b["id"])
+        result = actor_interface.subscriptions.sync_peer(self.actor_b["id"])
+        # B's delete in test_003 already removed A's side of the dead
+        # subscription: nothing is left to sync, and A lists none for B.
+        assert result.success, result.error
+        assert result.subscriptions_synced == 0, result
+        assert _subscriptions_of(self.actor_a, self.actor_b) == []
 
         # When subscription is gone but trust exists, the sync will fail
         # but trust should be preserved
@@ -278,17 +282,11 @@ class TestSyncSubscriptionBaseline:
             and TestSyncSubscriptionBaseline.subscription_id
         ), "Previous test failed"
 
-        from actingweb.actor import Actor
-        from actingweb.config import Config
         from actingweb.interface.actor_interface import ActorInterface
         from actingweb.remote_storage import RemotePeerStore
         from actingweb.subscription_config import SubscriptionProcessingConfig
 
-        database_backend = os.environ.get("DATABASE_BACKEND", "dynamodb")
-        config = Config(database=database_backend)
-
-        sdk_actor_a = Actor(config=config)
-        sdk_actor_a.get(actor_id=self.actor_a["id"])
+        sdk_actor_a = _sdk_actor(self.actor_a["id"])
 
         actor_interface = ActorInterface(sdk_actor_a)
 
@@ -345,17 +343,11 @@ class TestSyncSubscriptionBaseline:
             )
             assert response.status_code == 201, response.text
 
-        from actingweb.actor import Actor
-        from actingweb.config import Config
         from actingweb.interface.actor_interface import ActorInterface
         from actingweb.remote_storage import RemotePeerStore
         from actingweb.subscription_config import SubscriptionProcessingConfig
 
-        database_backend = os.environ.get("DATABASE_BACKEND", "dynamodb")
-        config = Config(database=database_backend)
-
-        sdk_actor_a = Actor(config=config)
-        sdk_actor_a.get(actor_id=self.actor_a["id"])
+        sdk_actor_a = _sdk_actor(self.actor_a["id"])
 
         actor_interface = ActorInterface(sdk_actor_a)
 
@@ -381,6 +373,9 @@ class TestSyncSubscriptionBaseline:
         # them rather than the baseline, and a REST list diff is not applied
         # as a list operation (wire row WL1): A's replica list stays empty.
         # attribute-list-v2-port:4 owns the change.
+        # The four queued diffs (the list created, three items added) are
+        # what the sync applied, not a baseline.
+        assert result.diffs_processed == 4, result
         assert remote_store.get_list("items") == []
 
     def test_004_cleanup(self) -> None:

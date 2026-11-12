@@ -149,6 +149,7 @@
       "replica": {
        "lists": {
         "notes": {
+         "length": 1,
          "read_error": "IndexError: List item at index 0 not found in database"
         }
        },
@@ -384,6 +385,7 @@
       "replica": {
        "lists": {
         "notes": {
+         "length": 2,
          "read_error": "IndexError: List item at index 0 not found in database"
         }
        },
@@ -624,6 +626,7 @@
       "replica": {
        "lists": {
         "notes": {
+         "length": 3,
          "read_error": "IndexError: List item at index 0 not found in database"
         }
        },
@@ -869,6 +872,7 @@
       "replica": {
        "lists": {
         "notes": {
+         "length": 4,
          "read_error": "IndexError: List item at index 0 not found in database"
         }
        },
@@ -1119,6 +1123,7 @@
       "replica": {
        "lists": {
         "notes": {
+         "length": 5,
          "read_error": "IndexError: List item at index 0 not found in database"
         }
        },
@@ -1374,6 +1379,7 @@
       "replica": {
        "lists": {
         "notes": {
+         "length": 6,
          "read_error": "IndexError: List item at index 0 not found in database"
         }
        },

@@ -61,30 +61,26 @@ def test_baseline_stores_simple_and_list_properties(
     )
     assert response.status_code == 204, f"Failed to set email: {response.text}"
 
-    # Create a test list property
-    # Written to the collection: POST /properties/<name> is a 400 since
-    # 3.16 (it used to answer 400 and write the body anyway).
+    # A list property test_items with two items (created, then added to:
+    # the REST shape a list takes).
+    b_auth = (actor_b["creator"], actor_b["passphrase"])
     response = requests.post(
         f"{actor_b['url']}/properties",
-        json={"value": "Item 1"},
-        auth=(actor_b["creator"], actor_b["passphrase"]),
+        json={"test_items": {"_type": "list"}},
+        auth=b_auth,
         timeout=5,
     )
-    assert response.status_code == 201, (
-        f"Failed to append Item 1 (status {response.status_code}): {response.text}"
-    )
-
-    # Written to the collection: POST /properties/<name> is a 400 since
-    # 3.16 (it used to answer 400 and write the body anyway).
-    response = requests.post(
-        f"{actor_b['url']}/properties",
-        json={"value": "Item 2"},
-        auth=(actor_b["creator"], actor_b["passphrase"]),
-        timeout=5,
-    )
-    assert response.status_code == 201, (
-        f"Failed to append Item 2 (status {response.status_code}): {response.text}"
-    )
+    assert response.status_code == 201, response.text
+    for item in ("Item 1", "Item 2"):
+        response = requests.post(
+            f"{actor_b['url']}/properties/test_items/items",
+            json={"action": "add", "item_value": item},
+            auth=b_auth,
+            timeout=5,
+        )
+        assert response.status_code == 201, (
+            f"Failed to add {item} (status {response.status_code}): {response.text}"
+        )
 
     # Establish trust from actor_a to actor_b using trust_helper
     trust_helper.establish(actor_a, actor_b, "friend", approve=True)
@@ -118,26 +114,28 @@ def test_baseline_stores_simple_and_list_properties(
         f"Failed to create subscription (status {response.status_code}): {response.text}"
     )
 
-    # Handle 204 No Content response
-    assert response.status_code == 204
-    print("\nWARNING: Subscription creation returned 204 (No Content)")
-    print("This test needs to retrieve subscription ID differently")
-    # For now, skip the sync test since we don't have sub_id
-    return
-
-    sub_data = response.json()
-    sub_id = sub_data.get("subscriptionid")
-    assert sub_id, "Subscription ID should be returned"
+    # 204 carries no body: the id is read from actor_a's own listing.
+    response = requests.get(
+        f"{actor_a['url']}/subscriptions",
+        params={"peerid": actor_b["id"]},
+        auth=(actor_a["creator"], actor_a["passphrase"]),
+        timeout=5,
+    )
+    assert response.status_code == 200, response.text
+    rows = response.json()["data"]
+    assert len(rows) == 1, rows
+    sub_id = rows[0]["subscriptionid"]
 
     # Trigger baseline sync using the SDK
     from actingweb.actor import Actor
     from actingweb.interface.actor_interface import ActorInterface
-    from actingweb.interface.subscription_manager import SubscriptionProcessingConfig
     from actingweb.remote_storage import RemotePeerStore
+    from actingweb.subscription_config import SubscriptionProcessingConfig
 
     # Load actor_a (config was created earlier with peer_profile_attributes enabled)
     sdk_actor_a = Actor(config=config)
     sdk_actor_a.get(actor_id=actor_a["id"])
+    assert sdk_actor_a.id == actor_a["id"], "actor_a not found through the SDK"
 
     actor_a_interface = ActorInterface(sdk_actor_a)
     sync_config = SubscriptionProcessingConfig(
@@ -146,15 +144,13 @@ def test_baseline_stores_simple_and_list_properties(
     )
 
     # Sync the subscription (this should fetch baseline data)
-    sync_result = actor_a_interface.subscriptions.sync_subscription(
-        peer_id=actor_b["id"],
-        subscription_id=sub_id,
-        config=sync_config,
+    # sync_peer: the subscription's baseline sync, then the peer-profile
+    # refresh (sync_subscription alone stores no profile).
+    sync_result = actor_a_interface.subscriptions.sync_peer(
+        actor_b["id"], config=sync_config
     )
-    print(
-        f"\nDEBUG: Sync result: success={sync_result.success}, error={sync_result.error}"
-    )
-    assert sync_result.success, f"Subscription sync failed: {sync_result.error}"
+    assert sync_result.success, f"Peer sync failed: {sync_result.error}"
+    assert [r.subscription_id for r in sync_result.subscription_results] == [sub_id]
 
     # Verify RemotePeerStore has all data
     remote_store = RemotePeerStore(

@@ -245,12 +245,12 @@ class TestSubscriptionActorFlow:
         )
         assert get_response.status_code == 200
         data = get_response.json()
-        if "data" in data and len(data["data"]) > 0:
-            subid = data["data"][0]["subscriptionid"]
-            requests.delete(
-                f"{self.actor1_url}/subscriptions/{self.actor2_id}/{subid}",
-                headers={"Authorization": f"Bearer {self.trust1_secret}"},
-            )
+        assert "data" in data and len(data["data"]) > 0
+        subid = data["data"][0]["subscriptionid"]
+        requests.delete(
+            f"{self.actor1_url}/subscriptions/{self.actor2_id}/{subid}",
+            headers={"Authorization": f"Bearer {self.trust1_secret}"},
+        )
 
     def test_005d_subscription_to_any_target_succeeds_with_acl(self, http_client):
         """
@@ -279,12 +279,12 @@ class TestSubscriptionActorFlow:
         )
         assert get_response.status_code == 200
         data = get_response.json()
-        if "data" in data and len(data["data"]) > 0:
-            subid = data["data"][0]["subscriptionid"]
-            requests.delete(
-                f"{self.actor1_url}/subscriptions/{self.actor2_id}/{subid}",
-                headers={"Authorization": f"Bearer {self.trust1_secret}"},
-            )
+        assert "data" in data and len(data["data"]) > 0
+        subid = data["data"][0]["subscriptionid"]
+        requests.delete(
+            f"{self.actor1_url}/subscriptions/{self.actor2_id}/{subid}",
+            headers={"Authorization": f"Bearer {self.trust1_secret}"},
+        )
 
     def test_005e_actor3_subscription_succeeds_with_acl(self, http_client):
         """
@@ -314,12 +314,12 @@ class TestSubscriptionActorFlow:
         )
         assert get_response.status_code == 200
         data = get_response.json()
-        if "data" in data and len(data["data"]) > 0:
-            subid = data["data"][0]["subscriptionid"]
-            requests.delete(
-                f"{self.actor1_url}/subscriptions/{self.actor3_id}/{subid}",
-                headers={"Authorization": f"Bearer {self.trust2_secret}"},
-            )
+        assert "data" in data and len(data["data"]) > 0
+        subid = data["data"][0]["subscriptionid"]
+        requests.delete(
+            f"{self.actor1_url}/subscriptions/{self.actor3_id}/{subid}",
+            headers={"Authorization": f"Bearer {self.trust2_secret}"},
+        )
 
     def test_006_create_subscription_no_auth(self, http_client):
         """
@@ -369,8 +369,8 @@ class TestSubscriptionActorFlow:
         assert response.status_code == 200
 
         data = response.json()
-        if "data" in data and len(data["data"]) > 0:
-            TestSubscriptionActorFlow.subid1 = data["data"][0]["subscriptionid"]
+        assert "data" in data and len(data["data"]) > 0
+        TestSubscriptionActorFlow.subid1 = data["data"][0]["subscriptionid"]
 
     def test_009_create_subscription2(self, http_client):
         """
@@ -457,8 +457,8 @@ class TestSubscriptionActorFlow:
         assert response.status_code == 200
 
         data = response.json()
-        if "data" in data and len(data["data"]) >= 2:
-            TestSubscriptionActorFlow.subid5 = data["data"][1]["subscriptionid"]
+        assert "data" in data and len(data["data"]) >= 2
+        TestSubscriptionActorFlow.subid5 = data["data"][1]["subscriptionid"]
 
     def test_014_create_subscription6(self, http_client):
         """
@@ -514,9 +514,10 @@ class TestSubscriptionActorFlow:
         )
         assert response.status_code == 403
 
-    def test_017_verify_callback_valid_subid(self, http_client):
+    def test_017_verify_callback_valid_subid_malformed_body(self, http_client):
         """
-        Verify callback with valid subscription ID.
+        A callback to a subscription id B holds, with a body that is not a
+        callback: past the 403 an unknown id gets (test_016), refused 400.
 
         Spec: docs/actingweb-spec.rst:1876-2308
         """
@@ -663,11 +664,11 @@ class TestSubscriptionActorFlow:
         assert response.status_code == 200
         data = response.json()
 
-        if "data" in data:
-            # Verify all subscriptions have target=properties
-            assert len(data["data"]) >= 1
-            for sub in data["data"]:
-                assert sub["target"] == "properties"
+        assert "data" in data
+        # Verify all subscriptions have target=properties
+        assert len(data["data"]) >= 1
+        for sub in data["data"]:
+            assert sub["target"] == "properties"
 
     def test_027_search_subscriptions_by_peer_and_target(self, http_client):
         """
@@ -721,22 +722,22 @@ class TestSubscriptionActorFlow:
         assert "sequence" in data, "Response must include top-level 'sequence' field"
         assert isinstance(data["sequence"], int), "sequence must be an integer"
 
-        if "data" in data:
-            # Should have 6 data entries (initial + 5 changes)
-            assert len(data["data"]) >= 5
+        assert "data" in data
+        # Should have 6 data entries (initial + 5 changes)
+        assert len(data["data"]) >= 5
 
-            # Verify sequence numbers in diffs
-            assert data["data"][0]["sequence"] == 1
-            if len(data["data"]) > 1:
-                assert data["data"][1]["sequence"] == 2
+        # Verify sequence numbers in diffs
+        assert data["data"][0]["sequence"] == 1
+        assert len(data["data"]) > 1
+        assert data["data"][1]["sequence"] == 2
 
-            # Top-level sequence should match or exceed highest diff sequence
-            max_diff_seq = max(d["sequence"] for d in data["data"])
-            assert data["sequence"] >= max_diff_seq
+        # Top-level sequence should match or exceed highest diff sequence
+        max_diff_seq = max(d["sequence"] for d in data["data"])
+        assert data["sequence"] >= max_diff_seq
 
-            # Verify some data values
-            if "data" in data["data"][0] and isinstance(data["data"][0]["data"], dict):
-                assert data["data"][0]["data"].get("resource") == "initial"
+        # Verify some data values
+        assert "data" in data["data"][0] and isinstance(data["data"][0]["data"], dict)
+        assert data["data"][0]["data"].get("resource") == "initial"
 
     def test_030_get_subscription7_data(self, http_client):
         """
@@ -751,31 +752,31 @@ class TestSubscriptionActorFlow:
         )
         assert response.status_code == 200
         data = response.json()
-        if "data" in data:
-            # Find subscription with resource field
-            for sub in data["data"]:
-                if sub.get("resource") == "resource":
-                    subid7 = sub["subscriptionid"]
+        assert "data" in data
+        # Find subscription with resource field
+        matches = [sub for sub in data["data"] if sub.get("resource") == "resource"]
+        assert len(matches) == 1, data["data"]
+        sub = matches[0]
+        subid7 = sub["subscriptionid"]
 
-                    # Now get the subscription data
-                    response = requests.get(
-                        f"{self.actor1_url}/subscriptions/{self.actor2_id}/{subid7}",
-                        headers={"Authorization": f"Bearer {self.trust1_secret}"},
-                    )
-                    assert response.status_code == 200
+        # Now get the subscription data
+        response = requests.get(
+            f"{self.actor1_url}/subscriptions/{self.actor2_id}/{subid7}",
+            headers={"Authorization": f"Bearer {self.trust1_secret}"},
+        )
+        assert response.status_code == 200
 
-                    sub_data = response.json()
+        sub_data = response.json()
 
-                    # Verify top-level sequence field (spec v1.4 requirement)
-                    assert "sequence" in sub_data, "Response must include 'sequence'"
-                    assert isinstance(sub_data["sequence"], int)
+        # Verify top-level sequence field (spec v1.4 requirement)
+        assert "sequence" in sub_data, "Response must include 'sequence'"
+        assert isinstance(sub_data["sequence"], int)
 
-                    if "data" in sub_data and len(sub_data["data"]) >= 2:
-                        assert sub_data["data"][0]["sequence"] == 1
-                        assert sub_data["data"][0]["data"] == "initial"
-                        assert sub_data["data"][1]["sequence"] == 2
-                        assert sub_data["data"][1]["data"] == "change4"
-                    break
+        assert "data" in sub_data and len(sub_data["data"]) >= 2
+        assert sub_data["data"][0]["sequence"] == 1
+        assert sub_data["data"][0]["data"] == "initial"
+        assert sub_data["data"][1]["sequence"] == 2
+        assert sub_data["data"][1]["data"] == "change4"
 
     def test_031_get_specific_diff(self, http_client):
         """
@@ -828,10 +829,10 @@ class TestSubscriptionActorFlow:
         assert "sequence" in data, "Response must include top-level 'sequence' field"
         assert isinstance(data["sequence"], int), "sequence must be an integer"
 
-        if "data" in data and len(data["data"]) > 0:
-            # First remaining entry should be sequence 3
-            assert data["data"][0]["sequence"] >= 3
-            assert data["data"][0]["data"] == "change2"
+        assert "data" in data and len(data["data"]) > 0
+        # First remaining entry should be sequence 3
+        assert data["data"][0]["sequence"] >= 3
+        assert data["data"][0]["data"] == "change2"
 
     def test_034_get_subscription6_nested_data(self, http_client):
         """
@@ -845,31 +846,35 @@ class TestSubscriptionActorFlow:
         )
         assert response.status_code == 200
         data = response.json()
-        if "data" in data:
-            # Find subscription 6 (granularity=none)
-            for sub in data["data"]:
-                if sub.get("granularity") == "none" and sub.get("subtarget") == "":
-                    subid6 = sub["subscriptionid"]
+        assert "data" in data
+        # Find subscription 6 (granularity=none)
+        matches = [
+            sub
+            for sub in data["data"]
+            if sub.get("granularity") == "none" and sub.get("subtarget") == ""
+        ]
+        assert len(matches) == 1, data["data"]
+        sub = matches[0]
+        subid6 = sub["subscriptionid"]
 
-                    # Get the subscription data
-                    response = requests.get(
-                        f"{self.actor1_url}/subscriptions/{self.actor3_id}/{subid6}",
-                        headers={"Authorization": f"Bearer {self.trust2_secret}"},
-                    )
-                    assert response.status_code == 200
-                    sub_data = response.json()
+        # Get the subscription data
+        response = requests.get(
+            f"{self.actor1_url}/subscriptions/{self.actor3_id}/{subid6}",
+            headers={"Authorization": f"Bearer {self.trust2_secret}"},
+        )
+        assert response.status_code == 200
+        sub_data = response.json()
 
-                    # Verify top-level sequence (spec v1.4 requirement)
-                    assert "sequence" in sub_data, "Response must include 'sequence'"
-                    assert isinstance(sub_data["sequence"], int)
+        # Verify top-level sequence (spec v1.4 requirement)
+        assert "sequence" in sub_data, "Response must include 'sequence'"
+        assert isinstance(sub_data["sequence"], int)
 
-                    if "data" in sub_data and len(sub_data["data"]) > 0:
-                        # Verify nested structure
-                        first_data = sub_data["data"][0]["data"]
-                        if isinstance(first_data, dict) and "data1" in first_data:
-                            assert first_data["data1"]["str2"] == "initial"
-                        assert sub_data["data"][0]["sequence"] == 1
-                    break
+        assert "data" in sub_data and len(sub_data["data"]) > 0
+        # Verify nested structure
+        first_data = sub_data["data"][0]["data"]
+        if isinstance(first_data, dict) and "data1" in first_data:
+            assert first_data["data1"]["str2"] == "initial"
+        assert sub_data["data"][0]["sequence"] == 1
 
     def test_035_delete_subscription_wrong_secret(self, http_client):
         """
@@ -883,15 +888,15 @@ class TestSubscriptionActorFlow:
         )
         assert response.status_code == 200
         data = response.json()
-        if "data" in data and len(data["data"]) > 1:
-            # Try to delete subscription 2
-            subid2 = data["data"][1]["subscriptionid"]
+        assert "data" in data and len(data["data"]) > 1
+        # Try to delete subscription 2
+        subid2 = data["data"][1]["subscriptionid"]
 
-            response = requests.delete(
-                f"{self.actor1_url}/subscriptions/{self.actor2_id}/{subid2}",
-                headers={"Authorization": "Bearer wrongsecret"},
-            )
-            assert response.status_code == 403
+        response = requests.delete(
+            f"{self.actor1_url}/subscriptions/{self.actor2_id}/{subid2}",
+            headers={"Authorization": "Bearer wrongsecret"},
+        )
+        assert response.status_code == 403
 
     def test_036_delete_subscription4(self, http_client):
         """
@@ -905,25 +910,29 @@ class TestSubscriptionActorFlow:
         )
         assert response.status_code == 200
         data = response.json()
-        if "data" in data:
-            # Find subscription 4 (granularity=low, no subtarget)
-            for sub in data["data"]:
-                if sub.get("granularity") == "low" and sub.get("subtarget") == "":
-                    subid4 = sub["subscriptionid"]
+        assert "data" in data
+        # Find subscription 4 (granularity=low, no subtarget)
+        matches = [
+            sub
+            for sub in data["data"]
+            if sub.get("granularity") == "low" and sub.get("subtarget") == ""
+        ]
+        assert len(matches) == 1, data["data"]
+        sub = matches[0]
+        subid4 = sub["subscriptionid"]
 
-                    response = requests.delete(
-                        f"{self.actor1_url}/subscriptions/{self.actor3_id}/{subid4}",
-                        headers={"Authorization": f"Bearer {self.trust2_secret}"},
-                    )
-                    assert response.status_code == 204
+        response = requests.delete(
+            f"{self.actor1_url}/subscriptions/{self.actor3_id}/{subid4}",
+            headers={"Authorization": f"Bearer {self.trust2_secret}"},
+        )
+        assert response.status_code == 204
 
-                    # Verify deletion
-                    response = requests.get(
-                        f"{self.actor1_url}/subscriptions/{self.actor3_id}/{subid4}",
-                        headers={"Authorization": f"Bearer {self.trust2_secret}"},
-                    )
-                    assert response.status_code == 404
-                    break
+        # Verify deletion
+        response = requests.get(
+            f"{self.actor1_url}/subscriptions/{self.actor3_id}/{subid4}",
+            headers={"Authorization": f"Bearer {self.trust2_secret}"},
+        )
+        assert response.status_code == 404
 
     def test_037_delete_actor3(self, http_client):
         """

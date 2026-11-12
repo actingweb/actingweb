@@ -404,7 +404,12 @@ def _snapshot_replica(subscriber: WireActor, publisher: WireActor) -> dict[str, 
         try:
             lists[name] = store.get_list(name)
         except IndexError as exc:
-            lists[name] = {"read_error": f"IndexError: {exc}"}
+            # The stored length still moves with each later step.
+            try:
+                length: Any = len(getattr(store._get_list_store(), name))
+            except IndexError as len_exc:
+                length = f"IndexError: {len_exc}"
+            lists[name] = {"read_error": f"IndexError: {exc}", "length": length}
     return {"scalars": scalars, "lists": lists}
 
 
@@ -432,11 +437,46 @@ def _snapshot_suspensions(actor: WireActor) -> list[dict[str, Any]]:
     ]
 
 
-def snapshot(
-    publisher: WireActor, subscribers: list[WireActor], names: dict[str, str]
-) -> dict[str, Any]:
-    """What both sides hold: the queue, the replicas, the callback state, the rows."""
+def _snapshot_stores(actor: WireActor) -> dict[str, Any]:
+    """What the actor's stores hold, read directly and not through its live
+    subscription rows: every queued diff and every callback-state entry. A
+    cleanup that removes the rows but leaves either behind shows here."""
+    from actingweb.db import get_subscription_diff_list
+
+    diffs = get_subscription_diff_list(actor.host.config).fetch(actor_id=actor.id)
+    bucket = Attributes(
+        actor_id=actor.id, bucket="_callback_state", config=actor.host.config
+    ).get_bucket()
+    entries = []
+    for key in sorted(bucket or {}):
+        kind, _, rest = key.partition(":")
+        peer, _, subid = rest.partition(":")
+        entries.append({"kind": kind, "peer": peer, "subscriptionid": subid})
     return {
+        "diffs": sorted(
+            (
+                {
+                    "subscriptionid": d.get("subscriptionid"),
+                    "sequence": d.get("sequence"),
+                }
+                for d in diffs or []
+            ),
+            key=lambda d: (str(d["subscriptionid"]), d["sequence"] or 0),
+        ),
+        "callback_state": entries,
+    }
+
+
+def snapshot(
+    publisher: WireActor,
+    subscribers: list[WireActor],
+    names: dict[str, str],
+    *,
+    stores: bool = False,
+) -> dict[str, Any]:
+    """What both sides hold: the queue, the replicas, the callback state, the
+    rows; with ``stores``, also each actor's stores read directly."""
+    out = {
         "publisher": {
             "queue": _snapshot_queue(publisher, names),
             "subscriptions": _snapshot_subscriptions(publisher, names),
@@ -464,6 +504,11 @@ def snapshot(
             for s in subscribers
         },
     }
+    if stores:
+        out["publisher"]["stores"] = _snapshot_stores(publisher)
+        for s in subscribers:
+            out["subscribers"][s.name]["stores"] = _snapshot_stores(s)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -495,6 +540,14 @@ class Scenario:
         # their (random) subscription ids, so a row that has them sorts each
         # run of sibling callbacks by the subscriber's name.
         self.sort_callbacks = False
+        # Rows about cleanup: also snapshot each actor's stores directly
+        # (``_snapshot_stores``), not only through its live rows.
+        self.snapshot_stores = False
+        # Paths of requests whose fire-and-forget callbacks may still be open
+        # when the callback arrives (an async method on the server's loop):
+        # a subscription callback recorded under one is moved out to follow
+        # it, so the recording does not depend on that race.
+        self.hoist_callbacks_from: tuple[str, ...] = ()
         # Set by the ``wire_pair`` fixture.
         self.relationship: str = ""
         self.trust_secret: str = ""
@@ -532,9 +585,13 @@ class Scenario:
             wait_for_quiet()
         finally:
             wire = stop_recording()
+        if self.hoist_callbacks_from:
+            wire = _hoist_callbacks(wire, self.hoist_callbacks_from)
         if self.sort_callbacks:
             wire = _sort_callback_runs(wire, self.names)
-        after = snapshot(self.publisher, self.subscribers, self.names)
+        after = snapshot(
+            self.publisher, self.subscribers, self.names, stores=self.snapshot_stores
+        )
         if self.extra_snapshot is not None:
             after["extra"] = self.extra_snapshot()
         self.steps.append(
@@ -558,8 +615,8 @@ def _sort_callback_runs(
     entries: list[dict[str, Any]], names: dict[str, str]
 ) -> list[dict[str, Any]]:
     """Each run of consecutive subscription callbacks sorted by the receiving
-    actor's name, then by what the subscription covers (stable), at every
-    level; nothing else moves."""
+    actor's name, then by what the subscription covers (target, subtarget,
+    resource, granularity; stable), at every level; nothing else moves."""
 
     def key(entry: dict[str, Any]) -> tuple[str, ...]:
         match = _CALLBACK_PATH.match(entry.get("path", ""))
@@ -569,8 +626,10 @@ def _sort_callback_runs(
         body = body if isinstance(body, dict) else {}
         return (
             names.get(match.group(1), match.group(1)),
+            str(body.get("target") or ""),
             str(body.get("subtarget") or ""),
             str(body.get("resource") or ""),
+            str(body.get("granularity") or ""),
         )
 
     out: list[dict[str, Any]] = []
@@ -587,15 +646,51 @@ def _sort_callback_runs(
     return out + sorted(run, key=key)
 
 
+def _hoist_callbacks(
+    entries: list[dict[str, Any]], paths: tuple[str, ...]
+) -> list[dict[str, Any]]:
+    """Top-level requests whose path contains one of ``paths`` lose their
+    subscription-callback children, which follow them instead, in order."""
+    out: list[dict[str, Any]] = []
+    for entry in entries:
+        if not any(p in entry.get("path", "") for p in paths):
+            out.append(entry)
+            continue
+        children = entry.get("children", [])
+        moved = [c for c in children if _CALLBACK_PATH.match(c.get("path", ""))]
+        kept = [c for c in children if c not in moved]
+        out.append({**entry, "children": kept})
+        out.extend(moved)
+    return out
+
+
+_DRAIN_TIMEOUT = 30.0
+
+
 async def _run_and_drain(action: Callable[[], Any]) -> Any:
-    """Await ``action``, then every task it left on the loop (and theirs)."""
+    """Await ``action``, then every task it left on the loop (and theirs),
+    for at most ``_DRAIN_TIMEOUT`` seconds. A task that fails is recorded,
+    not raised: production only logs a fire-and-forget task's error, so
+    the step's result carries ``task_errors`` (exception names) instead."""
     result = await action()
     current = asyncio.current_task()
-    while True:
-        pending = [t for t in asyncio.all_tasks() if t is not current and not t.done()]
-        if not pending:
-            return result
-        await asyncio.gather(*pending)
+    errors: list[str] = []
+
+    async def drain() -> None:
+        while True:
+            pending = [
+                t for t in asyncio.all_tasks() if t is not current and not t.done()
+            ]
+            if not pending:
+                return
+            for outcome in await asyncio.gather(*pending, return_exceptions=True):
+                if isinstance(outcome, BaseException):
+                    errors.append(type(outcome).__name__)
+
+    await asyncio.wait_for(drain(), _DRAIN_TIMEOUT)
+    if errors:
+        return {"result": result, "task_errors": errors}
+    return result
 
 
 def _describe_result(result: Any) -> Any:

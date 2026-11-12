@@ -216,6 +216,7 @@ def test_wd10_import(wire_pair):
     that suspends one subtarget, clears and refills a list, and resumes; the
     resync arrives after the method answers. Two hosts."""
     s = wire_pair("two_hosts", grant=["*"])
+    s.hoist_callbacks_from = ("/methods/",)
     a = s.publisher
 
     def seed():

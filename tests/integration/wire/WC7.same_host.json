@@ -15,6 +15,10 @@
       "B": null
      },
      "queue": [],
+     "stores": {
+      "callback_state": [],
+      "diffs": []
+     },
      "subscriptions": [],
      "suspensions": [
       {
@@ -33,6 +37,10 @@
       "replica": {
        "lists": {},
        "scalars": {}
+      },
+      "stores": {
+       "callback_state": [],
+       "diffs": []
       },
       "subscriptions": [],
       "trust": null
@@ -58,6 +66,10 @@
       "B": null
      },
      "queue": [],
+     "stores": {
+      "callback_state": [],
+      "diffs": []
+     },
      "subscriptions": [],
      "suspensions": [
       {
@@ -76,6 +88,10 @@
       "replica": {
        "lists": {},
        "scalars": {}
+      },
+      "stores": {
+       "callback_state": [],
+       "diffs": []
       },
       "subscriptions": [],
       "trust": null

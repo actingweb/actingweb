@@ -1,5 +1,6 @@
 ---
 status: done
+verified: thoughts/verifications/2026-11-12-subscription-wire-baseline.md
 ---
 
 # Implementation Plan: the subscription wire between two actors, recorded as it is today
@@ -568,7 +569,7 @@ Retired, each with its cover (rows in `wire/rows.toml`, unit files under
 | same file, `TestResyncOnResume` | a hand-sent resync | `WD10`, `WD11` |
 | same file, `TestMultipleSubscribersSuspension` | one write to three subscribers | `WD13`, `WD14.high` |
 | `test_subscription_processing_flow.py`, `TestSubscriptionProcessingFlow` | in-order, duplicate, list and resync callbacks; cleanup on trust delete | `WS1.target`, `WD8`, `WL11.target`, `WD10`, `WC5`; the kept `TestCleanupOnTrustDeletion` |
-| same file, `TestCallbackSequencing` | out-of-order delivery and gaps, a filled gap draining the held callbacks | `WD9`, `WD19`; `tests/test_callback_processor.py` (`test_gap_adds_to_pending`, `test_fill_gap_processes_pending`, `test_pending_callbacks_sorted`) |
+| same file, `TestCallbackSequencing` | out-of-order delivery and gaps, a filled gap draining the held callbacks | `WD4` (added by iteration 7), `WD9`, `WD19`; `tests/test_callback_processor.py` (`test_gap_adds_to_pending`, `test_fill_gap_processes_pending`, `test_pending_callbacks_sorted`) |
 | same file, `TestResyncStateHandling` | the publisher's queue after a resync | `WD9`, `WQ1` to `WQ3` |
 | same file, `TestBackPressure` | many out-of-order callbacks | `WD19`; `tests/test_callback_processor.py` |
 | `test_fanout_flow.py`, `TestGranularityDowngrade`, `TestCircuitBreakerBehavior`, `TestCircuitBreakerRecovery` | `FanOutManager` features, none on the publish path | `tests/test_fanout.py`; `WD13`, `WD14` |
@@ -1020,6 +1021,9 @@ examples` is empty.
 
 ### Deviations from Plan
 
+(Owner, 2026-11-12: the skips as asserts and `WC8` dropped are accepted;
+the trailer check stays local for now, `thoughts/todo/wire-phase-check-in-ci.md`.)
+
 - The `Wire-Phase` trailer check runs locally only: CI's test job checks
   out at depth 1. Running it in CI needs `fetch-depth: 0` there (owner's
   call, not made).
@@ -1046,3 +1050,236 @@ examples` is empty.
   replica after a falsy append), `WL15` (500 on a `list:` name), `WM1`
   (stale memo), `WQ6` (500 on a null sequence).
 
+## Iterations
+
+
+### 2026-11-12, after verification thoughts/verifications/2026-11-12-subscription-wire-baseline.md
+
+Scope (owner, 2026-11-12): the five Medium issues and the cheap Low ones
+(6, 7, 8, 10), a drain row for Issue 9; Issue 11 (type hints) recorded as a
+decision. Deviations (a) skips as asserts and (b) `WC8` dropped are accepted;
+(c) the trailer check stays local for now (`thoughts/todo/wire-phase-check-in-ci.md`).
+
+
+#### 1. The Wire-Phase check reads owners at the merge base, merges included
+
+**Category**: Verification fix (Issue 4)
+
+**What changed**:
+- Owners come from `rows.toml` at the merge base. An owner added on the
+  branch, in the re-recording commit or an earlier one, does not count; an
+  ownership change lands on `master` first.
+- A recording absent at the merge base was added on the branch and may
+  change freely there.
+- Merge commits are checked against their first parent.
+- git runs from the repository root, so the working directory no longer
+  matters.
+- The base is the newer of `origin/master` and `master`.
+- An unparsable registry at the merge base is reported as a problem.
+- The docs say it checks commits already made, not "pre-commit".
+
+**Files affected**:
+- `tests/integration/verify_groups.py`: `wire_phase_problems(commit,
+  changes, trailers, rows_base, base_files)`, `_merge_base`, the rewritten
+  `check_wire_phase`.
+- `tests/integration/test_wire_harness.py`: the table test, plus an owner
+  added on the branch and two scratch-repository tests (a merge re-recording
+  under a branch-only owner, checked from a subdirectory; an unparsable
+  registry).
+- `tests/integration/wire/rows.toml` (header), `tests/integration/README.md`,
+  `docs/contributing/testing.rst`: the rule as it now is.
+
+**Rationale**: the verification's Issue 4. The check was bypassable in two
+commits and blind to merges. Reading owners at the merge base also lets
+this branch revise its own new rows (Issues 2, 5, 8) without owning them.
+
+#### 2. The baseline-storage test runs past its subscribe
+
+**Category**: Verification fix (Issue 1)
+
+**What changed**: `test_baseline_stores_simple_and_list_properties` no
+longer returns after the 204 subscribe; it reads the subscription id from
+actor A's own listing, and everything after it now runs. Running it showed
+three more faults, all in the test, each fixed:
+- **No list:** the two "list" writes posted `{"value": "Item n"}` to the
+  collection, which writes a scalar named `value`. The test now creates
+  `test_items` and adds two items with `action: add`.
+- **Wrong module:** `SubscriptionProcessingConfig` is imported from
+  `actingweb.subscription_config`.
+- **Wrong call:** the profile assertion expected `sync_subscription` to
+  store a peer profile; only `sync_peer` refreshes it
+  (`actingweb/interface/subscription_manager.py`, the refresh after the
+  per-subscription syncs). The test calls `sync_peer` and checks it synced
+  the one subscription.
+
+It also asserts the SDK actor loaded. It now checks what its name says:
+both scalars, both list items and the profile.
+
+**Files affected**:
+- `tests/integration/test_subscription_baseline_storage.py`
+
+**Rationale**: the verification's Issue 1. On `master` the early return
+already ran every time; Phase 3 had made it unconditional instead of
+fixing it.
+
+#### 3. Tightened tests that could not fail now can
+
+**Category**: Verification fix (Issue 3)
+
+**What changed**:
+- **Guards in `test_subscription_flow.py`:** each condition was logged on a
+  run per backend. Every one held every time, and each lookup loop matched
+  exactly once, so they were rewritten:
+  - the 16 `if "data" in data …` / `if len(...)` guards are unconditional
+    asserts;
+  - the three `for sub in …: if <match>:` loops are
+    `matches = [...]; assert len(matches) == 1; sub = matches[0]`, so a
+    missing subscription fails the test.
+- **`test_017` renamed** `…_valid_subid_malformed_body`. Its 400 pins a
+  valid id with a non-callback body, against `test_016`'s 403 for an
+  unknown id.
+- **`test_trust_flow.py` `test_028`:** `assert found_lover or
+  len(str(trusts)) > 0` is now `assert found_lover`.
+- **`test_subscription_sync_coverage.py`:**
+  - `test_004` asserts its `sync_peer` result: success, nothing synced, and
+    A lists no subscription for B, because B's delete in `test_003`
+    already cleaned A's side.
+  - `TestSyncSubscriptionBaseline.test_003` asserts `diffs_processed == 4`
+    beside the empty list, so a sync that stores nothing fails.
+  - All four SDK lookups go through `_sdk_actor`, which fails if the actor
+    is not found.
+
+**Files affected**:
+- `tests/integration/test_subscription_flow.py`
+- `tests/integration/test_trust_flow.py`
+- `tests/integration/test_subscription_sync_coverage.py`
+
+**Rationale**: the verification's Issue 3. Phase 3's greps covered status
+guards only; these assertions passed whatever the code did.
+
+#### 4. The cleanup rows read the stores, not only the live rows
+
+**Category**: Verification fix (Issue 2)
+
+**What changed**: `Scenario.snapshot_stores`, opt-in, adds `stores` to
+each actor's snapshot, read directly: every queued diff
+(`get_subscription_diff_list(...).fetch(actor_id=...)`) and every
+`_callback_state` entry, with peer and subscription named. It is on for
+`WC5`, `WC6` and `WC7`, re-recorded on both backends. Today every store is
+empty after the cleanup. A scratch mutation (the subscription delete not
+clearing its diffs) turns `WC5` red on its `stores.diffs`.
+
+**Files affected**:
+- `tests/integration/_wire.py`: `_snapshot_stores`, `snapshot(..., stores=)`,
+  `Scenario.snapshot_stores`.
+- `tests/integration/test_wire_queue_and_lifecycle.py`: the three rows opt
+  in.
+- `tests/integration/wire/WC5.*.json`, `WC6.*.json`, `WC7.*.json`;
+  `rows.toml` (`expected` and `reason` for the three).
+
+**Rationale**: the verification's Issue 2. The queue and callback state
+were read only through live subscription rows, so leftovers of a deleted
+subscription were invisible to the rows that claim they are gone.
+
+#### 5. The timing-sensitive rows no longer depend on the runner
+
+**Category**: Verification fix (Issue 5)
+
+**What changed**:
+- **`WD19`** posts sequences 2 to 7 in one step and snapshots once. The
+  step's result lists each status (204 five times, then 400), and the
+  recording was re-recorded on both backends. The six posts now fit inside
+  the 2 s gap timeout however slow the snapshots are.
+- **`WD18` and `WD10.import`** set `Scenario.hoist_callbacks_from =
+  ("/methods/",)`. A subscription callback recorded under the method
+  request is moved to follow it, so the recording is the same whichever
+  side of the race the callback lands on. Neither recording changed:
+  `WD10.import` is the security plan's, and its bytes are identical.
+
+**Files affected**:
+- `tests/integration/_wire.py`: `_hoist_callbacks` and
+  `Scenario.hoist_callbacks_from`.
+- `tests/integration/test_wire_delivery.py` (`WD19`, `WD18`),
+  `tests/integration/test_wire_peer_paths.py` (`WD10.import`, opt-in only).
+- `tests/integration/test_wire_harness.py`: a hoist test (nested and
+  sibling give the same result).
+- `tests/integration/wire/WD19.*.json`; `rows.toml` (`WD19` reason, `WD18`
+  expected).
+
+**Rationale**: the verification's Issue 5. These rows had been green
+throughout, but each depended on timing that a slower runner could flip.
+
+#### 6. The harness's sort key, async drain and unreadable-list snapshot
+
+**Category**: Verification fix (Issues 6, 7, 8)
+
+**What changed**:
+- **Sort key:** `_sort_callback_runs` now sorts by receiver, target,
+  subtarget, resource and granularity, so a subscriber's sibling callbacks
+  that differ only in target or granularity are ordered too. `WD13` to
+  `WD15` are unchanged.
+- **Async drain:** `_run_and_drain` gives up after 30 s (`TimeoutError`).
+  A failing fire-and-forget task is recorded in the step's result as
+  `task_errors` instead of raised, as production only logs it. `WD5` is
+  unchanged. Two harness tests pin both.
+- **Unreadable list:** a replica list that cannot be read is recorded with
+  its stored length beside `read_error`. `WL12.target` was re-recorded:
+  the length grows 1 to 6 while the items stay unreadable.
+
+**Files affected**:
+- `tests/integration/_wire.py`: `_sort_callback_runs`, `_run_and_drain`,
+  `_snapshot_replica`.
+- `tests/integration/test_wire_harness.py`: the two drain tests.
+- `tests/integration/wire/WL12.target.*.json`; `rows.toml` (`WL12.target`).
+
+**Rationale**: the verification's Issues 6 to 8, the cheap Low items. They
+were in scope because each was minutes of work.
+
+#### 7. A row for held callbacks draining (`WD4`)
+
+**Category**: Verification fix (Issue 9)
+
+**What changed**: new row `WD4`, both topologies, recorded on DynamoDB and
+compared on PostgreSQL. Sequences 2 and 3 are posted to B by hand with
+A's bearer and held behind the missing 1. Sequence 1 then releases them in
+order, one data hook each, and B ends with `x = 3`, `last_seq` 3 and
+nothing pending. `WD19` shares its post helper (`_post_callback`).
+
+**Files affected**:
+- `tests/integration/test_wire_delivery.py`: `_post_callback`,
+  `test_wd4_held_callbacks_drain`.
+- `tests/integration/wire/WD4.*.json`; `rows.toml` (`WD4`, owners none).
+- The plan's Phase 2 table: `WD4` added to `TestCallbackSequencing`'s cover.
+
+**Rationale**: the verification's Issue 9. The retired
+`TestCallbackSequencing` covered the drain over HTTP; only unit tests did
+afterwards.
+
+#### 8. One status assert per subscription setup, and a strict Location read
+
+**Category**: Verification fix (Issue 10)
+
+**What changed**: each of the six subscription setups in
+`test_property_notifications.py` asserted 204 twice (a Phase 3 artefact:
+the dedupe missed pairs split by a comment). It now asserts once, and
+reads the id with `response.headers["Location"]` plus `assert
+subscription_id`, so a missing header fails where it happens, not as a
+confusing status later.
+
+**Files affected**:
+- `tests/integration/test_property_notifications.py`
+
+**Rationale**: the verification's Issue 10.
+
+#### 9. Type hints on test functions: recorded, not added
+
+**Category**: Decision (Issue 11)
+
+**What changed**: nothing in code. The new test functions and harness
+hooks carry no annotations, like every existing wire test and test hook,
+and pyright is clean on `tests`. Whether `CLAUDE.md`'s "type hints are
+required on all functions" covers pytest test functions and fixtures is
+the owner's call; this iteration follows the files' existing convention.
+
+**Rationale**: the verification's Issue 11; out of the owner's chosen
+scope for this iteration.

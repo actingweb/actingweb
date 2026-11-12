@@ -397,6 +397,9 @@ _PHASE_ROWS: dict[str, dict[str, Any]] = {
 }
 
 
+_BASE_FILES = {"WX1.json", "WX2.same_host.json", "WX2.two_hosts.json", "WZ9.json"}
+
+
 @pytest.mark.parametrize(
     ("changes", "trailers", "problem"),
     [
@@ -411,14 +414,19 @@ _PHASE_ROWS: dict[str, dict[str, Any]] = {
         ([("M", "WX1.json")], ["p:2", "p:3"], "exactly one"),
         # A row nobody owns is changed by nobody.
         ([("M", "WX2.two_hosts.json")], ["p:2"], "not among its owners"),
-        # A deletion is read against the parent's registry.
+        # A deletion needs an owner too.
         ([("D", "WX1.json")], ["p:2"], None),
+        ([("D", "WX1.json")], ["p:3"], "not among its owners"),
+        # A file at the merge base that no row names.
         ([("M", "WZ9.json")], ["p:2"], "belongs to no row"),
+        # A recording added on this branch may change on this branch.
+        ([("M", "WX7.json")], [], None),
+        ([("D", "WX7.json")], [], None),
     ],
 )
 def test_the_wire_phase_check(changes, trailers, problem):
     problems = _verify_groups().wire_phase_problems(
-        "0123456789abcdef", changes, trailers, _PHASE_ROWS, _PHASE_ROWS
+        "0123456789abcdef", changes, trailers, _PHASE_ROWS, _BASE_FILES
     )
     if problem is None:
         assert problems == []
@@ -464,12 +472,120 @@ def test_sibling_callbacks_sort_by_the_receivers_name_and_nothing_else_moves():
     assert out[0]["children"][1]["children"] == [cb(c)]
 
 
-def test_a_commit_cannot_make_itself_an_owner_and_re_record():
-    """Owners are read from the parent: adding an owner and re-recording in
-    one commit fails."""
-    before = {"WX1": {"owners": []}}
-    after = {"WX1": {"owners": ["p:3"]}}
+def test_an_owner_added_on_the_branch_does_not_count():
+    """Owners are read at the merge base: a branch that adds its own phase to
+    a row's owners (in that commit or an earlier one) and re-records the row
+    fails, so an ownership change lands on master first."""
+    at_base = {"WX1": {"owners": []}}
     problems = _verify_groups().wire_phase_problems(
-        "0123456789abcdef", [("M", "WX1.json")], ["p:3"], after, before
+        "0123456789abcdef", [("M", "WX1.json")], ["p:3"], at_base, {"WX1.json"}
     )
     assert any("not among its owners" in p for p in problems), problems
+
+
+def _git_repo(path: Path) -> Any:
+    import subprocess
+
+    def git(*args: str) -> str:
+        return subprocess.run(
+            ["git", "-C", str(path), *args],
+            check=True,
+            capture_output=True,
+            text=True,
+            env={
+                "GIT_AUTHOR_NAME": "t",
+                "GIT_AUTHOR_EMAIL": "t@example.test",
+                "GIT_COMMITTER_NAME": "t",
+                "GIT_COMMITTER_EMAIL": "t@example.test",
+                "PATH": __import__("os").environ["PATH"],
+                "HOME": str(path),
+            },
+        ).stdout
+
+    return git
+
+
+def test_the_wire_phase_check_reads_merges_and_runs_from_anywhere(
+    tmp_path, monkeypatch
+):
+    """End to end on a scratch repository: a merge commit that re-records a
+    row is checked against its first parent, an owner added on the branch
+    does not count, and the result does not depend on the working
+    directory."""
+    vg = _verify_groups()
+    git = _git_repo(tmp_path)
+    wire = tmp_path / "tests/integration/wire"
+    wire.mkdir(parents=True)
+    git("init", "-q", "-b", "master")
+    (wire / "rows.toml").write_text('[rows."WX1"]\nowners = ["p:2"]\n')
+    (wire / "WX1.json").write_text("{}\n")
+    git("add", "-A")
+    git("commit", "-qm", "base")
+    git("checkout", "-qb", "branch")
+    (wire / "rows.toml").write_text('[rows."WX1"]\nowners = ["p:2", "p:3"]\n')
+    git("commit", "-qam", "make p:3 an owner on the branch")
+    git("checkout", "-qb", "side")
+    (wire / "WX1.json").write_text('{"x": 1}\n')
+    git("commit", "-qam", "side change\n\nWire-Phase: p:2")
+    git("checkout", "-q", "branch")
+    git("merge", "-q", "--no-ff", "side", "-m", "merge\n\nWire-Phase: p:3")
+    monkeypatch.setattr(vg, "_REPO", tmp_path)
+    monkeypatch.chdir(tmp_path / "tests")
+    problems, skipped = vg.check_wire_phase(("master",))
+    assert skipped is None
+    # The side commit (p:2) passes; the merge brings the change in under
+    # p:3, an owner only on the branch.
+    assert any("not among its owners" in p and "p:3" in p for p in problems), problems
+    assert len(problems) == 1, problems
+
+
+def test_an_unparsable_registry_at_the_merge_base_is_a_problem(tmp_path, monkeypatch):
+    vg = _verify_groups()
+    git = _git_repo(tmp_path)
+    wire = tmp_path / "tests/integration/wire"
+    wire.mkdir(parents=True)
+    git("init", "-q", "-b", "master")
+    (wire / "rows.toml").write_text("[rows.\n")
+    git("add", "-A")
+    git("commit", "-qm", "base")
+    monkeypatch.setattr(vg, "_REPO", tmp_path)
+    problems, _ = vg.check_wire_phase(("master",))
+    assert any("does not parse" in p for p in problems), problems
+
+
+def test_a_callback_nested_under_a_method_is_hoisted_to_follow_it():
+    """The race an async method's callback can win: recorded under the
+    method or after it, the hoisted recording is the same."""
+    a, b = "a" * 32, "b" * 32
+    callback = {"path": f"/{b}/callbacks/subscriptions/{a}/x", "children": []}
+    other = {"path": f"/{a}/properties/y", "children": []}
+    method = {"path": f"/{a}/methods/wire_import", "children": []}
+    nested = [{**method, "children": [other, callback]}]
+    sibling = [{**method, "children": [other]}, callback]
+    hoisted = _wire._hoist_callbacks(nested, ("/methods/",))
+    assert hoisted == sibling
+    assert _wire._hoist_callbacks(sibling, ("/methods/",)) == sibling
+
+
+def test_an_async_steps_failing_task_is_recorded_not_raised():
+    async def boom() -> None:
+        raise ValueError("peer gone")
+
+    async def action() -> str:
+        asyncio.get_running_loop().create_task(boom())
+        return "returned"
+
+    assert asyncio.run(_wire._run_and_drain(action)) == {
+        "result": "returned",
+        "task_errors": ["ValueError"],
+    }
+
+
+def test_an_async_step_that_never_settles_times_out(monkeypatch):
+    monkeypatch.setattr(_wire, "_DRAIN_TIMEOUT", 0.05)
+
+    async def action() -> None:
+        asyncio.get_running_loop().create_task(asyncio.sleep(10))
+
+    with pytest.raises(TimeoutError):
+        asyncio.run(_wire._run_and_drain(action))

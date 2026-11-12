@@ -31,10 +31,10 @@ class TestPropertyNotifications:
         )
         assert response.status_code == 204, f"Subscription failed: {response.text}"
 
-        # Get subscription ID from response or Location header
-        assert response.status_code == 204
-        location = response.headers.get("Location", "")
+        # The subscription's id, from the 204's Location header
+        location = response.headers["Location"]
         subscription_id = location.split("/")[-1]
+        assert subscription_id, location
 
         # Actor2 modifies a property
         response = requests.put(
@@ -98,10 +98,10 @@ class TestPropertyNotifications:
         )
         assert response.status_code == 204
 
-        # Get subscription ID from response or Location header
-        assert response.status_code == 204
-        location = response.headers.get("Location", "")
+        # The subscription's id, from the 204's Location header
+        location = response.headers["Location"]
         subscription_id = location.split("/")[-1]
+        assert subscription_id, location
 
         # Clear initial diff from property creation
         requests.get(
@@ -153,10 +153,10 @@ class TestPropertyNotifications:
         )
         assert response.status_code == 204
 
-        # Get subscription ID from response or Location header
-        assert response.status_code == 204
-        location = response.headers.get("Location", "")
+        # The subscription's id, from the 204's Location header
+        location = response.headers["Location"]
         subscription_id = location.split("/")[-1]
+        assert subscription_id, location
 
         # Actor2 creates multiple properties via POST
         response = requests.post(
@@ -208,10 +208,10 @@ class TestPropertyNotifications:
         )
         assert response.status_code == 204
 
-        # Get subscription ID from response or Location header
-        assert response.status_code == 204
-        location = response.headers.get("Location", "")
+        # The subscription's id, from the 204's Location header
+        location = response.headers["Location"]
         subscription_id = location.split("/")[-1]
+        assert subscription_id, location
 
         # Set a complex property value
         complex_value = {"nested": {"data": 123}, "array": [1, 2, 3]}
@@ -258,10 +258,10 @@ class TestPropertyNotifications:
         )
         assert response.status_code == 204
 
-        # Get subscription ID from response or Location header
-        assert response.status_code == 204
-        location = response.headers.get("Location", "")
+        # The subscription's id, from the 204's Location header
+        location = response.headers["Location"]
         subscription_id = location.split("/")[-1]
+        assert subscription_id, location
 
         # Make multiple updates
         for i in range(3):
@@ -302,10 +302,10 @@ class TestPropertyNotifications:
         )
         assert response.status_code == 204
 
-        # Get subscription ID from response or Location header
-        assert response.status_code == 204
-        location = response.headers.get("Location", "")
+        # The subscription's id, from the 204's Location header
+        location = response.headers["Location"]
         subscription_id = location.split("/")[-1]
+        assert subscription_id, location
 
         # Update property
         requests.put(

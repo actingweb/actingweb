@@ -560,8 +560,8 @@ class TestTrustActorFlow:
                 if t.get("relationship") == "lover":
                     found_lover = True
                     break
-        # Lover relationship should exist
-        assert found_lover or len(str(trusts)) > 0
+        # The lover relationship test_027 approved
+        assert found_lover, trusts
 
     def test_029_create_selfproxy(self, http_client):
         """

@@ -188,11 +188,13 @@ diff in the commit that makes it.
 
   ``WIRE_RECORD`` is refused under ``CI`` and has no "all". A mismatch leaves
   ``<row>.actual.json`` beside the expected file; delete it once read.
-- A commit that changes or removes a recording carries one
-  ``Wire-Phase: <plan>:<phase>`` trailer naming a phase among that row's
-  owners. ``tests/integration/verify_groups.py`` checks the branch's commits
-  since ``master``; CI's shallow checkout skips that check, so run it before
-  committing.
+- A commit that changes or removes a recording that exists on ``master``
+  carries one ``Wire-Phase: <plan>:<phase>`` trailer naming a phase among
+  that row's owners as ``master`` has them; an ownership change lands on
+  ``master`` first. ``tests/integration/verify_groups.py`` checks the
+  branch's commits since the merge base, merges included. It checks commits
+  already made, so run it after committing and amend if it fails; CI's
+  shallow checkout skips it.
 - A row marked ``exposure = true`` records data reaching a peer that may not
   read it; ``verify_groups.py`` lists them.
 

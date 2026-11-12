@@ -79,6 +79,7 @@ def test_wc5_trust_deleted(wire_pair, topology):
     """WC5: ``DELETE /<A>/trust/friend/<B>`` as A's creator, with a queued
     diff and B's replica."""
     s = wire_pair(topology, grant=["*"])
+    s.snapshot_stores = True
     a, b = s.publisher, s.subscribers[0]
     assert _put(a, "x", {"v": 1}).status_code == 204
     s.step(
@@ -107,6 +108,7 @@ def test_wc6_publisher_deleted(wire_pair, topology):
     """WC6: A deleted over REST by its creator, with a subscriber, a queued
     diff and a suspended subtarget."""
     s = wire_pair(topology, grant=["*"])
+    s.snapshot_stores = True
     a = s.publisher
     _wc6_setup(s)
     wire_pair.deleted(a)
@@ -126,6 +128,7 @@ def test_wc7_publisher_recreated(wire_pair, topology):
     from actingweb.interface.actor_interface import ActorInterface
 
     s = wire_pair(topology, grant=["*"])
+    s.snapshot_stores = True
     a = s.publisher
     _wc6_setup(s)
     response = requests.delete(f"{a.url}", auth=a.basic)

@@ -7,6 +7,10 @@
       "B": null
      },
      "queue": [],
+     "stores": {
+      "callback_state": [],
+      "diffs": []
+     },
      "subscriptions": [],
      "suspensions": [],
      "trust": {
@@ -20,6 +24,10 @@
       "replica": {
        "lists": {},
        "scalars": {}
+      },
+      "stores": {
+       "callback_state": [],
+       "diffs": []
       },
       "subscriptions": [],
       "trust": null

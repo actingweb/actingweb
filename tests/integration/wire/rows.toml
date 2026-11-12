@@ -30,10 +30,12 @@
 # A recording is what the library does, right or wrong. Re-record rows by id
 # with WIRE_RECORD=<row>,<row> (there is no "all"; refused under CI) and add a
 # dated line to each row's `reason`. A commit that changes or removes a
-# recording carries one trailer, `Wire-Phase: <plan>:<phase>`, naming a phase
-# among that row's owners; a new recording needs none. verify_groups.py
-# checks the trailers of the branch's commits since master when it has the
-# history (not on CI's shallow checkout: a local, pre-commit gate).
+# recording that exists on master carries one trailer, `Wire-Phase:
+# <plan>:<phase>`, naming a phase among that row's owners as master has them
+# (an ownership change lands on master first); a recording added on the
+# branch needs none. verify_groups.py checks the branch's commits since the
+# merge base, merges included, when it has the history: a local check of
+# commits already made (CI's shallow checkout skips it).
 #
 # Variant suffixes: .target, .subtarget, .resource (the subscription level),
 # .high, .low (granularity), .subscriber, .subscriber_adopted (the
@@ -956,8 +958,8 @@ test = "test_wire_list_properties.py::test_wl12_target"
 topologies = ["same_host", "two_hosts"]
 owners = ["attribute-list-v2-port:2"]
 exposure = false
-expected = "SDK appends of 0, \"\", False, None, [] and {}: each sent and answered 204, but from the first one B's replica list cannot be read (IndexError: item at index 0 not found), recorded as read_error. Known wrong."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)"]
+expected = "SDK appends of 0, \"\", False, None, [] and {}: each sent and answered 204, but from the first one B's replica list cannot be read (IndexError: item at index 0 not found), recorded as read_error. Known wrong. Beside the read error, the replica list's stored length is recorded: it grows 1 to 6, so each append lands in the metadata while the items stay unreadable."
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-12 the stored length beside the read error (subscription-wire-baseline iteration 6)"]
 
 [rows."WL13.target"]
 test = "test_wire_list_properties.py::test_wl13_target"
@@ -1100,8 +1102,16 @@ reason = ["2026-11-11 first recording (subscription-wire-baseline:1)"]
 test = "test_wire_delivery.py::test_wd18_async_method_on_the_loop"
 owners = ["spec-1-5:4"]
 exposure = false
-expected = "POST /methods/wire_import with suspend false (an async method on A's loop) answers first; its callback to B is a sibling after it, and B holds the item once the step settles."
+expected = "POST /methods/wire_import with suspend false (an async method on A's loop) answers first; its callback to B is a sibling after it, and B holds the item once the step settles. A callback recorded under the method (the race an async method can lose) is moved to follow it, so the bytes do not depend on that race."
 reason = ["2026-11-11 first recording (subscription-wire-baseline:1)"]
+
+[rows."WD4"]
+test = "test_wire_delivery.py::test_wd4_held_callbacks_drain"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "Callbacks posted by hand with A's bearer: sequences 2 and 3 answered 204 and held as pending behind the missing 1; sequence 1 answered 204, and inside it B applies 1, then releases 2 and 3 in order, one data hook each; B holds x = 3, last_seq 3, nothing pending."
+reason = ["2026-11-12 first recording: the drain over HTTP the retired TestCallbackSequencing covered (subscription-wire-baseline iteration 7)"]
 
 [rows."WD19"]
 test = "test_wire_delivery.py::test_wd19_held_callbacks"
@@ -1109,7 +1119,7 @@ topologies = ["same_host", "two_hosts"]
 owners = []
 exposure = false
 expected = "Callbacks posted by hand with A's bearer, sequences 2 to 7 (1 never sent): the first five answered 204 and held as pending, the sixth answered 400 (max_pending 5); nothing applied."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)"]
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-12 the six posts in one step, inside the gap timeout on any runner (subscription-wire-baseline iteration 5)"]
 
 [rows."WD20"]
 test = "test_wire_delivery.py::test_wd20_subscribe_with_data"
@@ -1152,24 +1162,24 @@ test = "test_wire_queue_and_lifecycle.py::test_wc5_trust_deleted"
 topologies = ["same_host", "two_hosts"]
 owners = []
 exposure = false
-expected = "A's creator deletes the trust: A sends DELETE /<B>/trust/friend/<A> inside its own; trust_deleted at each side (initiated_by_peer at B); both sides' trust and subscription rows, A's queued diff, and B's replica and callback state are gone."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)"]
+expected = "A's creator deletes the trust: A sends DELETE /<B>/trust/friend/<A> inside its own; trust_deleted at each side (initiated_by_peer at B); both sides' trust and subscription rows, A's queued diff, and B's replica and callback state are gone. The snapshot also reads both actors' stores directly (every queued diff, every callback-state entry): both empty after the delete."
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-12 the stores read directly (subscription-wire-baseline iteration 4)"]
 
 [rows."WC6"]
 test = "test_wire_queue_and_lifecycle.py::test_wc6_publisher_deleted"
 topologies = ["same_host", "two_hosts"]
 owners = ["subs-list-cache-lifetime:2"]
 exposure = false
-expected = "A's creator deletes A (a queued diff, a subscriber, a suspended subtarget y): A's trust delete reaches B, which wipes its replica; the diffs go with the subscriptions; A's suspension row for y stays."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)"]
+expected = "A's creator deletes A (a queued diff, a subscriber, a suspended subtarget y): A's trust delete reaches B, which wipes its replica; the diffs go with the subscriptions; A's suspension row for y stays. The snapshot also reads both actors' stores directly: no queued diff and no callback-state entry survives."
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-12 the stores read directly (subscription-wire-baseline iteration 4)"]
 
 [rows."WC7"]
 test = "test_wire_queue_and_lifecycle.py::test_wc7_publisher_recreated"
 topologies = ["same_host", "two_hosts"]
 owners = ["subs-list-cache-lifetime:2"]
 exposure = false
-expected = "After WC6, A created again under its id through the SDK: it starts with the old suspension row for y; an SDK write sends nothing (no trust or subscription survived)."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)"]
+expected = "After WC6, A created again under its id through the SDK: it starts with the old suspension row for y; an SDK write sends nothing (no trust or subscription survived). The snapshot also reads both actors' stores directly: empty throughout."
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-12 the stores read directly (subscription-wire-baseline iteration 4)"]
 
 [rows."WM1"]
 test = "test_wire_queue_and_lifecycle.py::test_wm1_memo"

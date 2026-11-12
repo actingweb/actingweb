@@ -7,11 +7,12 @@ has its recordings, and every row names an existing scenario, its owners,
 whether it is an exposure, what it records and why its file was written.
 
 The phase check (``check_wire_phase``): every commit on the branch since it
-left ``master`` that changes or removes a recording names, in a
-``Wire-Phase: <plan>:<phase>`` trailer, a phase ``rows.toml`` lists among
-that row's owners. A new recording needs no owner: it is the first. The
-check needs the branch's history; on a shallow checkout (CI's test job) it
-reports that it was skipped, so it is a local, pre-commit gate.
+left ``master`` (merges included) that changes or removes a recording that
+exists at the merge base names, in a ``Wire-Phase: <plan>:<phase>`` trailer,
+a phase that ``rows.toml`` at the merge base lists among that row's owners.
+A recording added on the branch needs no owner. The check needs the
+branch's history; on a shallow checkout (CI's test job) it reports that it
+was skipped, so it is a local gate over commits already made.
 """
 
 import re
@@ -185,20 +186,26 @@ def wire_phase_problems(
     commit: str,
     changes: list[tuple[str, str]],
     trailers: list[str],
-    rows_after: dict[str, dict[str, Any]],
-    rows_before: dict[str, dict[str, Any]],
+    rows_base: dict[str, dict[str, Any]],
+    base_files: set[str],
 ) -> list[str]:
     """What is wrong with one commit's recording changes.
 
     ``changes``: ``(status, file name)`` for each recording the commit
     touches (``A`` added, ``M`` modified, ``D`` deleted). ``trailers``: its
-    ``Wire-Phase`` values. ``rows_after`` and ``rows_before``: the registry's
-    rows at the commit and at its parent. A changed or deleted file's owners
-    are read from the parent, so a commit cannot make itself an owner and
-    re-record in one go: ownership changes in a commit of its own."""
+    ``Wire-Phase`` values. ``rows_base``: the registry's rows at the merge
+    base with ``master``; ``base_files``: the recordings that exist there.
+
+    Owners are read at the merge base, never on the branch, so no commit on
+    a branch can make its own phase an owner: an ownership change lands on
+    ``master`` first. A recording that does not exist at the merge base was
+    added on this branch and is not in the regression set yet, so the
+    branch may change it freely."""
     problems: list[str] = []
     short = commit[:10]
-    touched = [(st, name) for st, name in changes if st in ("M", "D")]
+    touched = [
+        (st, name) for st, name in changes if st in ("M", "D") and name in base_files
+    ]
     if not touched:
         return problems
     if len(trailers) != 1:
@@ -209,52 +216,86 @@ def wire_phase_problems(
         )
         return problems
     phase = trailers[0].strip()
-    after, before = recording_rows(rows_after), recording_rows(rows_before)
-    for status, name in touched:
-        row = before.get(name) or (after.get(name) if status == "M" else None)
+    base = recording_rows(rows_base)
+    for _status, name in touched:
+        row = base.get(name)
         if row is None:
             problems.append(f"{short}: {name} belongs to no row in rows.toml")
             continue
-        owners = (rows_before.get(row) or {}).get("owners") or []
+        owners = rows_base[row].get("owners") or []
         if phase not in owners:
             problems.append(
                 f"{short}: {name} ({row}) changed under Wire-Phase {phase},"
-                f" which is not among its owners {owners}"
+                f" which is not among its owners {owners} at the merge base"
             )
     return problems
 
 
+_REPO = Path(__file__).resolve().parents[2]
+
+
 def _git(*args: str) -> str:
+    """Run git at the repository root, wherever this script is run from."""
     return subprocess.run(
-        ["git", *args], check=True, capture_output=True, text=True
+        ["git", "-C", str(_REPO), *args], check=True, capture_output=True, text=True
     ).stdout
 
 
-def _rows_at(revision: str) -> dict[str, dict[str, Any]]:
-    try:
-        text = _git("show", f"{revision}:{WIRE_DIR}/rows.toml")
-    except subprocess.CalledProcessError:
-        return {}
-    return tomllib.loads(text).get("rows", {})
+def _merge_base(bases: tuple[str, ...]) -> tuple[str | None, str]:
+    """The newest merge base of HEAD with any of ``bases`` that exists (a
+    stale local ``master`` must not pull upstream commits into the range)."""
+    found: list[str] = []
+    for base in bases:
+        try:
+            found.append(_git("merge-base", "HEAD", base).strip())
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            continue
+    if not found:
+        return None, " or ".join(bases)
+    newest = found[0]
+    for candidate in found[1:]:
+        try:
+            _git("merge-base", "--is-ancestor", newest, candidate)
+            newest = candidate
+        except subprocess.CalledProcessError:
+            pass
+    return newest, ""
 
 
-def check_wire_phase(base: str = "master") -> tuple[list[str], str | None]:
-    """Check the ``Wire-Phase`` trailers of the commits since ``base``.
+def check_wire_phase(
+    bases: tuple[str, ...] = ("origin/master", "master"),
+) -> tuple[list[str], str | None]:
+    """Check the ``Wire-Phase`` trailers of the commits since the merge base
+    (merges included, each read against its first parent). It checks
+    commits already made, so run it after committing and amend if needed.
 
     Returns (problems, why it was skipped or None)."""
+    merge_base, tried = _merge_base(bases)
+    if merge_base is None:
+        return [], f"no merge base with {tried} (a shallow checkout?)"
     try:
-        merge_base = _git("merge-base", "HEAD", base).strip()
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        return [], f"no merge base with {base} (a shallow checkout?)"
-    commits = _git("rev-list", "--no-merges", "--reverse", f"{merge_base}..HEAD")
+        rows_base = tomllib.loads(
+            _git("show", f"{merge_base}:{WIRE_DIR}/rows.toml")
+        ).get("rows", {})
+    except subprocess.CalledProcessError:
+        rows_base = {}
+    except tomllib.TOMLDecodeError as exc:
+        return [f"rows.toml at the merge base does not parse: {exc}"], None
+    base_files = {
+        Path(path).name
+        for path in _git(
+            "ls-tree", "-r", "--name-only", merge_base, "--", WIRE_DIR
+        ).splitlines()
+        if path.endswith(".json")
+    }
+    commits = _git("rev-list", "--reverse", f"{merge_base}..HEAD")
     problems: list[str] = []
     for commit in commits.split():
         listing = _git(
-            "diff-tree",
-            "--no-commit-id",
-            "-r",
+            "diff",
             "--name-status",
             "--no-renames",
+            f"{commit}^1",
             commit,
             "--",
             WIRE_DIR,
@@ -274,7 +315,7 @@ def check_wire_phase(base: str = "master") -> tuple[list[str], str | None]:
             if t.strip()
         ]
         problems += wire_phase_problems(
-            commit, changes, trailers, _rows_at(commit), _rows_at(f"{commit}^")
+            commit, changes, trailers, rows_base, base_files
         )
     return problems, None
 

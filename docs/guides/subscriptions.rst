@@ -63,6 +63,18 @@ Properties
 - ``all_subscriptions``: all inbound/outbound
 - ``outbound_subscriptions``: to other actors
 - ``inbound_subscriptions``: from other actors
+- ``get_subscriptions_by_peer()`` (3.16): every subscription grouped by peer
+  id, as ``PeerSubscriptions`` (``peer_id``, ``outbound``, ``inbound``); a
+  peer with none has no key. Through a peer view only that peer's key;
+  through a client view its trust's peer id and its client id (a client's
+  subscriptions filed before 3.16 are under the client id).
+
+An actor reads its subscription list once per instance, an empty list too
+(3.16): these listings, and every diff the instance registers, use that
+read. The instance reads again after its own creates and deletes, a resume,
+and a trust call that sent a request to the peer. An instance kept across
+requests does not see subscriptions created elsewhere; the actors the
+library hands to hooks and handlers are built per request.
 
 Callback Modes
 --------------

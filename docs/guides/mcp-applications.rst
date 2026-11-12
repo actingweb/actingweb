@@ -914,13 +914,13 @@ Performance
 MCP Performance Optimization
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-ActingWeb v3.3+ includes intelligent caching for MCP endpoints that provides significant performance improvements:
+ActingWeb caches what MCP authentication resolves, so a warm request skips
+the token-store reads and the trust lookup:
 
-**Automatic Performance Gains:**
-
-- **50x faster authentication** for repeated requests (50ms → 1ms)
-- **90%+ cache hit rates** for typical MCP usage patterns
-- **Sub-millisecond response times** after cache warmup
+- **One actor read per warm request.** The validated token and the client's
+  trust relationship come from memory; the actor itself is loaded for every
+  request (one strongly consistent row read, since 3.16), so a hook always
+  sees current values. A backend throttle on that read answers 503.
 - **Zero configuration required** - caching is automatic and transparent
 
 **Permission Initialization (Automatic):**
@@ -953,24 +953,32 @@ The MCP handler automatically logs cache statistics:
 
 .. code-block:: text
 
-    MCP cache stats - Token hits: 13, Actor hits: 13, Trust hits: 12
+    MCP cache stats - Token hits: 13, Trust hits: 12
 
 **Cache Behavior:**
 
-- **First request**: Full authentication (~50ms) - populates cache
-- **Subsequent requests**: Cached authentication (~1ms) - serves from memory
-- **Cache TTL**: 5 minutes; expired entries are cleaned up periodically
-  (at most once every 20 seconds, checked on each authentication request)
-- **Memory efficient**: Only active sessions cached
+- **First request**: Full authentication (two token-store reads, the actor
+  read, the trust lookup) - populates the token and trust caches
+- **Subsequent requests**: the actor read only; the token and trust come
+  from memory
+- **Cache TTL**: 5 minutes for a token and a resolved trust, 10 seconds for
+  a cached "no trust"; expired entries are cleaned up periodically (at most
+  once every 20 seconds, checked on each authentication request)
+- **Per process, per application**: each worker keeps its own entries, and
+  an entry another application in the process filled is a miss
 
 **What Gets Cached:**
 
 1. **Token validation** - OAuth2 server lookups eliminated; keyed by token
-2. **Actor loading** - DynamoDB actor retrieval cached; keyed by actor ID
-3. **Trust relationships** - Permission context cached per
+2. **Trust relationships** - Permission context cached per
    **(actor, client)** pair, so each MCP client's trust relationship — and
    therefore its permission set — is isolated from other clients on the
    same actor. Trust hit/miss statistics are per pair.
+
+The actor is not cached: a hook gets a fresh ``ActorInterface`` on every
+request, so its first read or first write of each property and its first
+touch of ``_internal`` cost a storage read per request. A hook that keeps the
+actor in a global recreates the stale reads the per-request actor avoids.
 
 This optimization is particularly beneficial for AI assistants making multiple consecutive requests, which is the typical MCP usage pattern.
 

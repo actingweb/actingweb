@@ -311,8 +311,9 @@ Context Types
 
 The runtime context is request-scoped and automatically managed by the framework: it
 is stored in a ``contextvars.ContextVar`` keyed by actor id, not as state on the
-actor object, so it is isolated per request even when the same cached actor object
-is reused across many requests (as ActingWeb's MCP handler does). Flask and FastAPI
+actor object, so it is isolated per request even when an application reuses one
+actor object across many requests. (ActingWeb's own handlers, MCP included since
+3.16, build the actor per request.) Flask and FastAPI
 integrations clear it at the end of every request -- including when a handler raises
 -- so nothing survives onto a request that reuses the same worker thread.
 
@@ -320,7 +321,7 @@ integrations clear it at the end of every request -- including when a handler ra
    **Semantic change for custom context.** Before this ContextVar migration,
    ``set_custom_context()`` data was stored as an attribute on the actor object and
    therefore persisted across requests for any actor object your application held
-   onto (e.g. a hot cached actor), until something else overwrote or cleared it. It
+   onto (e.g. one kept in a global), until something else overwrote or cleared it. It
    is now genuinely per-request: a value set with ``set_custom_context()`` during one
    request is gone by the time the next request runs, even against the same actor. If
    your hooks used custom context as a cross-request cache rather than purely

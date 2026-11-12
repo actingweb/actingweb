@@ -1,5 +1,5 @@
 ---
-status: active
+status: done
 ---
 
 # Implementation Plan: per-request actors on the MCP path, and a subscription list that caches empty
@@ -1164,18 +1164,35 @@ Notes (2026-11-12):
 
 ### Verification
 
-- [ ] Run the contract's `### Checks` full tier verbatim (docs build included)
-- [ ] `grep -rniw "_actor_cache\|invalidate_actor_cache\|actor_hits" docs` and
+- [x] Run the contract's `### Checks` full tier verbatim (docs build included)
+- [x] `grep -rniw "_actor_cache\|invalidate_actor_cache\|actor_hits" docs` and
       `grep -rni "actor hits\|actor loading\|cached actor\|actor cache" docs`
       return nothing outside released migration guides
-- [ ] `grep -rn "rewrite_email" CHANGELOG.rst docs` returns nothing
-- [ ] `thoughts/todo/INDEX.md` has no row for a file that no longer exists
+- [x] `grep -rn "rewrite_email" CHANGELOG.rst docs` returns nothing
+- [x] `thoughts/todo/INDEX.md` has no row for a file that no longer exists
 - [ ] Emm's suite on this branch, before the PR opens, run as
       `thoughts/todo/emm-suite-against-master.md` describes: no failure the
       run on `master` did not have, and the result recorded in this plan's
       verification document
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+Notes (2026-11-12):
+
+- **Measured** for the `FIXED` entry (DynamoDB Local, an actor with no
+  subscribers, `tests/_read_counters.count_reads`): three property writes on
+  one instance read the subscription list 3 times before, once after; five
+  peers' `get_subscriptions_to_peer` and `get_subscriptions_from_peer` 10
+  times before, once after.
+- **Beyond the list**: a `FIXED` entry for the fill/eviction race the Phase 1
+  review found; `docs/contributing/architecture.rst` ("Actor loading", which
+  the verification grep catches); `docs/reference/database-backends.rst`
+  went with the Phase 2 review fix. The migration guide item is 23, as
+  planned.
+- **Left for the verification**: `verify-orphans-subscription-tables.md`'s
+  "Origin" gains the verification document once it exists; Emm's suite runs
+  before the PR (the last box above).
+
 
 ---
 
@@ -1389,3 +1406,41 @@ not re-run; nothing they judged changed.
   harness's connect steps (`conftest.py:1184-1256`; a `WM4` row for the
   subscribe-back was dropped as unrecordable). `/implement_plan`'s phase
   review is the first independent look at them.
+
+
+## Implementation Summary
+
+**Completed:** 2026-11-12
+**All phases:** Complete (Emm's suite still to run before the PR, Phase 3's
+last box)
+**Test status:** All passing: the Full tier on DynamoDB and PostgreSQL after
+every phase and review fix, the wire step on Python 3.11 on both backends.
+
+Commits on `release/3.16.0-subs-list-cache-lifetime`: `c9813b1` (the
+redraft), `0f7b8f7` (Phase 1), `bdcc70a` (its review), `011865b` (Phase 2,
+`Wire-Phase: subs-list-cache-lifetime:2`), the Phase 2 review commit, and
+Phase 3's.
+
+### Deviations from Plan
+- Phase 1: one helper, `_set_mcp_runtime_context`, for the two branches'
+  runtime-context write; the adoption test's counter left where it is.
+- Phase 1 review: the cache fills and evictions share one re-entrant lock
+  (a pre-existing race, reachable by a client); a bridge reload that finds
+  no row answers `None`.
+- Phase 2: `delete_all` added to `SubscriptionSuspensionProtocol`; two
+  `Actor` helpers for the leftovers wipe; `WM3`'s new subscriber set up
+  unrecorded.
+- Phase 2 review: a missing DynamoDB suspensions table counts as holding
+  none; `create_subscription` and `delete_subscription` reset in a
+  `finally`.
+
+### Learnings
+- The memo rule bit this plan's own test: a view built on an instance that
+  had already read its list did not see a subscription added afterwards.
+  The rule is easy to forget wherever an instance is kept.
+- Hardening one path (deletion now fails closed on a suspension fault) can
+  turn an optional table into a required one; the review caught it because
+  it read the docs' promises against the new failure.
+- A wire step that adds a peer leaves the peer's trust secret unnamed in
+  the transcript; peers are set up outside the recorded steps.
+

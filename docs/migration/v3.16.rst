@@ -159,6 +159,11 @@ items, item 11 and item 18.
     fire once, with the same arguments`_): rename ``trust_approved`` to
     ``trust_fully_approved_local`` and give every lifecycle hook
     ``**kwargs``.
+23. **MCP actors are built per request** (see `MCP actors are built per
+    request`_): a hook is handed a fresh actor on every MCP request, a warm
+    request reads the actor row (a throttle answers 503), an ``Actor`` reads
+    its subscription list once, and an override of
+    ``Actor.delete_reciprocal_trust`` must accept keyword arguments.
 
 
 What changed and why
@@ -1236,6 +1241,50 @@ and its two windows; what a consumer does:
   conditional create retried by the SDK answers ``False`` after landing.
   Unkeyed ``append()``, ``extend()``, ``insert()`` and ``pop()`` still
   cannot; use ``append_once`` where a duplicate matters.
+
+MCP actors are built per request
+--------------------------------
+
+The MCP handler used to keep one ``ActorInterface`` per actor for five
+minutes and hand that same object to every request, so a hook saw the actor
+row, ``_internal``, properties and the subscription list as an earlier
+request had left them. It now loads the actor for each request and keeps
+only the validated-token and trust caches (per process, five minutes).
+
+- **What a request costs.** A warm MCP request reads the actor row (one
+  strongly consistent read); a hook's first read or first write of each
+  property, its first touch of ``_internal`` and each ``actor.services``
+  client cost a read per request where the shared object served them from
+  memory. A session of *k* tool calls costs about *k* + 2 authentications'
+  worth of actor loads (the ``initialize`` and ``tools/list`` requests
+  included). A backend throttle on the actors table now answers 503 on a
+  warm request that used to succeed from memory; under FastAPI that read
+  runs on the event loop for every authenticated MCP request.
+- **What a hook should check.** A hook that reads and rewrites a property on
+  every call pays two reads and a write each time; batch it or keep the
+  value elsewhere. ``actor.creator`` is not re-synced to the stored email on
+  an MCP request (MCP authentication never compares it). A hook that keeps
+  the actor in a global recreates the old lifetime and its stale reads.
+  Designs premised on a shared five-minute actor object can assume one per
+  request.
+- **One subscription read per instance.** An ``Actor`` memoises its
+  subscription list, an empty one too: code that keeps one instance across
+  many writes sees subscriptions created elsewhere only on a new instance.
+  The instance reads again after its own creates and deletes, after
+  ``resume_subscriptions``, and after a trust call that sent a request to
+  the peer.
+- **Grouped by peer.** ``actor.subscriptions.get_subscriptions_by_peer()``
+  returns every subscription grouped by peer id from that one read, as
+  ``PeerSubscriptions`` (``peer_id``, ``outbound``, ``inbound``); through a
+  peer or client view it holds only the keys that view may see.
+- **Subclasses.** ``Actor.delete()`` and ``purge_relationships()`` pass the
+  keyword-only ``_subscriptions`` to ``delete_reciprocal_trust`` on every
+  call: an override with a fixed parameter list raises ``TypeError``; give
+  it ``**kwargs``.
+- **Deletion and create.** ``Actor.delete()`` and ``purge_relationships()``
+  also remove the actor's subscription diffs and suspensions, and
+  ``Actor.create(actor_id=...)`` clears that id's suspensions; each raises
+  ``DbError`` (purge: ``confirmed: False``) when that cannot be confirmed.
 
 
 Cross-site requests

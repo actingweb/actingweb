@@ -6,6 +6,11 @@ question: "Does `handlers/mcp.py`'s `_actor_cache` hold instance state, and what
 
 # `_actor_cache` holds instance state — so eviction is actor-wide
 
+> **Correction, 2026-11-12** (`thoughts/plans/2026-11-06-subs-list-cache-lifetime.md`):
+> the cached object did not carry the trust list (`Actor` keeps no trust
+> memo); the rest stands. `_actor_cache` was removed in 3.16: the MCP path
+> builds its actor per request.
+
 `thoughts/todo/INDEX.md` §0 requires this answered **on paper before writing row
 6's eviction wiring**, because what the cache holds decides what eviction has to
 touch. It is item 4 of `thoughts/todo/subs-list-cache-asymmetry.md`, and row 7's

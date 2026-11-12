@@ -90,6 +90,7 @@ often.
 
 ## Related
 
-- `thoughts/todo/subs-list-cache-asymmetry.md` — the subscription-list memo
-  costs one strongly-consistent Query per property write for actors with no
-  subscribers. Its fetch is also one of item 2's relaxation candidates.
+- `thoughts/plans/2026-11-06-subs-list-cache-lifetime.md` — the
+  subscription-list memo, which cost one strongly-consistent Query per
+  property write for actors with no subscribers, keeps an empty list too
+  since 3.16. Its fetch is still one of item 2's relaxation candidates.

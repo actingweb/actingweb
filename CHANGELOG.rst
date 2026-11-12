@@ -914,6 +914,54 @@ REMOVED
 CHANGED
 ~~~~~~~
 
+- **An MCP hook is handed an actor built for that request.** The MCP
+  handler kept one ``ActorInterface`` per actor for five minutes and handed
+  it to every request, so a hook read the row, ``_internal``, properties and
+  the subscription list as an earlier request left them, and a subscription
+  created in another process could go without diffs. **Behavior change:**
+  every authenticated MCP request loads the actor row and gets a fresh
+  ``ActorInterface``; values read through it are current. The first read or
+  first write of each property, the first touch of ``_internal`` and each
+  ``actor.services`` client cost a storage read per request; a warm MCP
+  request reads the actor row, so a backend throttle answers 503 where it
+  used to succeed from memory, and under FastAPI that read runs on the event
+  loop for every authenticated MCP request. ``actor.creator`` is not
+  re-synced to the stored email on an MCP request. The validated-token and
+  trust caches stay (per process, 5 minutes; a resolved trust entry now
+  expires after 300 seconds too), and the periodic debug line no longer
+  reports actor hits. **Check:** hooks that read-modify-write a property on
+  every call, hooks that keep the actor in a global (that recreates the old
+  lifetime), and MCP clients that do not retry a 503
+  (``docs/migration/v3.16.rst``, "MCP actors are built per request").
+
+- **An ``Actor`` reads its subscription list once, an empty one too.** An
+  empty list was read again on every subscription read, so the same instance
+  saw a subscription created elsewhere as soon as it existed. **Behavior
+  change:** an instance memoises whatever its first read answered; code that
+  keeps one instance across many writes sees subscriptions created elsewhere
+  only on a new instance. The instance reads again after its own creates and
+  deletes, after a resume (``resume_subscriptions``), and after a trust call
+  that sent a request to the peer (``modify_trust_and_notify``,
+  ``create_reciprocal_trust`` and its async form), where the peer may
+  subscribe back. A fault folded by ``strict=False`` is not kept. Every
+  instance the library builds lives for one request. **Check:** code that
+  holds an ``Actor`` or ``ActorInterface`` across requests and expects new
+  subscribers to get its diffs.
+
+- **Deleting an actor, purging its relationships and creating one under an
+  explicit id touch the subscription stores.** **Behavior change:**
+  ``Actor.delete()`` also removes every subscription diff of the actor (one
+  actor-wide read and delete), a subscription a peer created during the
+  wipe, and the actor's subscription suspensions (one delete), and raises
+  ``DbError`` when the suspensions cannot be confirmed removed (the row
+  stays and a repeated call finishes, as with any fault in the resumable
+  delete). ``purge_relationships()`` removes the same diffs and suspensions
+  and answers ``confirmed: False`` when it cannot. ``Actor.create(actor_id=
+  ...)`` clears that id's suspensions once the row is written and raises
+  ``DbError`` (the new row removed) when it cannot. **Check:** code that
+  calls ``delete()`` or ``create(actor_id=...)`` without handling
+  ``DbError``.
+
 - **Breaking: a custom trust store and an ``Actor`` subclass take new
   keywords.** ``DbTrust.delete`` takes the keyword-only ``only_if_secret``
   (delete only the row with that secret; False for a row with another one;
@@ -922,7 +970,8 @@ CHANGED
   re-authorisation at a new level. ``Actor.delete_reciprocal_trust`` (and
   its async twin) takes the keyword-only ``expected_secret`` and
   ``before_local_delete``, which the trust ``DELETE`` and ``sync_peer``
-  pass. A backend or subclass without them raises ``TypeError``.
+  pass, and the sync method the keyword-only ``_subscriptions``, which
+  ``Actor.delete()`` and ``purge_relationships()`` pass on every call. A backend or subclass without them raises ``TypeError``.
   **Check:** custom backends and overrides accept the keywords (or
   ``**kwargs``); ``docs/migration/v3.16.rst`` ("Custom database backends").
 
@@ -1821,6 +1870,14 @@ CHANGED
 ADDED
 ~~~~~
 
+- **``SubscriptionManager.get_subscriptions_by_peer()``** returns every
+  subscription of the actor grouped by peer id, as ``PeerSubscriptions``
+  (``peer_id``, ``outbound``, ``inbound``), from one subscription read; a
+  peer with none has no key. Through a peer view it holds that peer's key
+  only, through a client view its trust's peer id and its client id.
+  ``PeerSubscriptions`` and ``SubscriptionInfo`` are exported from
+  ``actingweb.interface``.
+
 - **``actingweb-peer-state``** (``report | prune [--apply] [ACTOR_ID]
   --rps``) finds and removes peer state written before 3.16: permission
   copies for peers with no trust or stamped in the future, callback state
@@ -2162,6 +2219,45 @@ ADDED
 
 FIXED
 ~~~~~
+
+- **One actor instance read its subscription list again on every write
+  when the actor had no subscribers.** Each property written, each list
+  mutation and each per-peer subscription accessor issued its own strongly
+  consistent list read. The second and later reads on an instance are now
+  served from the first: writing three properties on one instance of an
+  actor with no subscribers reads the list once (three before), and five
+  peers' ``get_subscriptions_to_peer`` and ``get_subscriptions_from_peer``
+  once (ten before). A request that writes once still reads it once.
+
+- **A subscription created in another process could go without diffs from
+  a long-lived MCP actor.** The actor an MCP request used was kept for five
+  minutes with its subscription list; it is now built per request.
+
+- **For up to 300 seconds after an actor's row was removed, a worker
+  holding its MCP token kept serving the deleted actor's cached state.**
+  (Distinct from the ``SECURITY`` entry on a cached token bringing a
+  deleted actor back.) A cached token whose actor row is gone is now
+  dropped and validated against storage, and never creates the actor.
+
+- **A trust lookup on a cached MCP token could re-cache a trust revoked
+  while it was being read, and an eviction could land between a cache
+  fill's check and its write.** Every fill is now checked against the
+  revocation counter, and fills and evictions run under one lock.
+
+- **In a process hosting more than one application, a token or a trust one
+  application had validated could be accepted by another that had the same
+  actor id.** Each MCP cache entry records the application that filled it.
+
+- **A trust deletion left deleted subscriptions in the instance's list**,
+  also when the trust row was kept (a re-pair, a fault); later writes on
+  that instance registered diffs for them. Each relationship's
+  subscriptions are read for it, and the list is read again afterwards.
+
+- **Deleting an actor, or purging its relationships, left its subscription
+  suspensions and could leave subscription diffs;** an actor created again
+  under the same id started suspended and sent no diffs. Suspensions left
+  by a deletion on an earlier version are cleared when the id is created
+  again.
 
 - **A bulk ``POST /properties`` with a JSON body that is not an object
   answered 500.** It answers 400. A bulk ``POST`` that stops part way (a

@@ -639,6 +639,10 @@ class TestListFiltersFailClosedOnEvaluatorErrors(unittest.TestCase):
                 self.assertEqual(handler.response.status_code, 503)
 
 
+#: The application a trust entry is filled and read under.
+CFG = object()
+
+
 class TestNegativeTTL(unittest.TestCase):
     """A cached ``None`` trust re-resolves after the negative TTL, not the
     full 5-minute positive TTL.
@@ -656,7 +660,7 @@ class TestNegativeTTL(unittest.TestCase):
     def test_cached_none_expires_after_negative_ttl_not_full_ttl(self) -> None:
         mcp_mod = self.mcp_mod
         key = ("actor-1", "client-A")
-        mcp_mod._trust_cache_put(key, None)
+        mcp_mod._trust_cache_put(key, None, CFG)
 
         # Just past the negative TTL, but nowhere near the 5-minute
         # positive-cache window: must be a miss (fresh lookup required).
@@ -667,7 +671,7 @@ class TestNegativeTTL(unittest.TestCase):
         )
         mcp_mod._trust_cache[key]["cached_at"] = past_negative_ttl
 
-        hit, trust = mcp_mod._trust_cache_get(key)
+        hit, trust = mcp_mod._trust_cache_get(key, CFG)
         self.assertFalse(hit)
         self.assertIsNone(trust)
         self.assertNotIn(key, mcp_mod._trust_cache)
@@ -675,9 +679,9 @@ class TestNegativeTTL(unittest.TestCase):
     def test_fresh_cached_none_is_still_a_hit(self) -> None:
         mcp_mod = self.mcp_mod
         key = ("actor-1", "client-A")
-        mcp_mod._trust_cache_put(key, None)
+        mcp_mod._trust_cache_put(key, None, CFG)
 
-        hit, trust = mcp_mod._trust_cache_get(key)
+        hit, trust = mcp_mod._trust_cache_get(key, CFG)
         self.assertTrue(hit)
         self.assertIsNone(trust)
 

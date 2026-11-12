@@ -503,20 +503,9 @@ class TestOperationProfile:
 
     @staticmethod
     def _counter(monkeypatch):
-        import collections
+        from tests._read_counters import count_dynamodb_operations
 
-        import botocore.client
-
-        counts = collections.Counter()
-        original = botocore.client.BaseClient._make_api_call
-
-        def _counting(self, operation_name, api_params):
-            if self.meta.service_model.service_name == "dynamodb":
-                counts[operation_name] += 1
-            return original(self, operation_name, api_params)
-
-        monkeypatch.setattr(botocore.client.BaseClient, "_make_api_call", _counting)
-        return counts
+        return count_dynamodb_operations(monkeypatch)
 
     def test_status_check_is_a_single_get_item(self, config, actor_id, monkeypatch):
         counts = self._counter(monkeypatch)

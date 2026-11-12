@@ -1,7 +1,7 @@
 """Revocation must evict the MCP caches, not wait out their TTL.
 
-``MCPHandler`` caches validated tokens, actor wrappers and resolved trust
-relationships in module globals on a five-minute TTL. Until this landed,
+``MCPHandler`` caches validated tokens and resolved trust relationships in
+module globals on a five-minute TTL. Until this landed,
 ``clear_token_from_cache()`` had exactly **one** caller — the logout handler.
 Token revocation, revoke-all, trust deletion and permission downgrade all
 missed it, so a revoked credential or a narrowed permission kept working from
@@ -14,7 +14,7 @@ design because the tuple-keyed ``_trust_cache`` already supported it.
 
 **Single process only.** Every cache here is a module global, so eviction
 clears the process that served the revocation. Other workers keep their own
-entries until TTL — §2 of
+entries until TTL — §1 of
 ``thoughts/todo/mcp-cache-lifecycle-and-revocation.md``, out of scope.
 """
 
@@ -31,20 +31,20 @@ OTHER_ACTOR = "an-unrelated-actor"
 @pytest.fixture(autouse=True)
 def _clean_caches() -> None:
     mcp_module._token_cache.clear()
-    mcp_module._actor_cache.clear()
     mcp_module._trust_cache.clear()
 
 
 def _seed(actor_id: str = ACTOR, token: str = "aw_token") -> None:
-    """Populate all three caches for one actor, the way a live request would."""
+    """Populate both caches for one actor, the way a live request would."""
     mcp_module._token_cache[token] = {"actor_id": actor_id, "cached_at": 0.0}
-    mcp_module._actor_cache[actor_id] = {
-        "actor": object(),
-        "last_accessed": 0.0,
-        "config": None,
+    mcp_module._trust_cache[(actor_id, "client-a")] = {
+        "trust": object(),
+        "cached_at": 0.0,
     }
-    mcp_module._trust_cache[(actor_id, "client-a")] = {"trust": object()}
-    mcp_module._trust_cache[(actor_id, "client-b")] = {"trust": object()}
+    mcp_module._trust_cache[(actor_id, "client-b")] = {
+        "trust": object(),
+        "cached_at": 0.0,
+    }
 
 
 class TestActorWideEviction:
@@ -55,10 +55,9 @@ class TestActorWideEviction:
         evicted = mcp_module.evict_mcp_caches_for_actor(ACTOR)
 
         assert not mcp_module._token_cache
-        assert ACTOR not in mcp_module._actor_cache
         assert not [k for k in mcp_module._trust_cache if k[0] == ACTOR]
-        # 1 token + 1 actor wrapper + 2 trust entries
-        assert evicted == 4
+        # 1 token + 2 trust entries
+        assert evicted == 3
 
     def test_other_actors_are_untouched(self) -> None:
         _seed()
@@ -67,23 +66,10 @@ class TestActorWideEviction:
         mcp_module.evict_mcp_caches_for_actor(ACTOR)
 
         assert "aw_other" in mcp_module._token_cache
-        assert OTHER_ACTOR in mcp_module._actor_cache
         assert [k for k in mcp_module._trust_cache if k[0] == OTHER_ACTOR]
 
     def test_evicting_an_uncached_actor_is_a_no_op(self) -> None:
         assert mcp_module.evict_mcp_caches_for_actor("never-seen") == 0
-
-    def test_the_actor_wrapper_goes_too_not_just_the_trust_entry(self) -> None:
-        """The reason narrower eviction does not work.
-
-        ``_actor_cache`` holds a live ``ActorInterface`` — and therefore the
-        core ``Actor`` and every memo on it, including its trust list — shared
-        across requests and across users of the container. Dropping only the
-        ``_trust_cache`` tuple would leave that wrapper serving stale trust.
-        """
-        _seed()
-        mcp_module.evict_mcp_caches_for_actor(ACTOR)
-        assert ACTOR not in mcp_module._actor_cache
 
 
 class TestInvalidationShims:
@@ -96,7 +82,7 @@ class TestInvalidationShims:
 
     def test_actor_eviction_returns_the_count(self) -> None:
         _seed()
-        assert evict_caches_for_actor(ACTOR) == 4
+        assert evict_caches_for_actor(ACTOR) == 3
 
     @pytest.mark.parametrize("value", ["", None])
     def test_empty_identifiers_are_ignored(self, value: str | None) -> None:
@@ -125,8 +111,9 @@ class TestTokenKeyedEviction:
 
     def test_clearing_a_token_also_clears_its_actor_and_trust_entries(self) -> None:
         _seed(token="aw_live")
+        _seed(token="aw_sibling")
         assert mcp_module.MCPHandler.clear_token_from_cache("aw_live") is True
-        assert ACTOR not in mcp_module._actor_cache
+        assert "aw_sibling" not in mcp_module._token_cache
         assert not [k for k in mcp_module._trust_cache if k[0] == ACTOR]
 
     def test_clearing_an_unknown_token_reports_false(self) -> None:

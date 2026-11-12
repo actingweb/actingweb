@@ -48,7 +48,7 @@ class TestDMcpBearer:
                 "actingweb.oauth2_server.oauth2_server.get_actingweb_oauth2_server",
                 return_value=server,
             ),
-            mock.patch.object(handler, "_get_or_create_actor_cached", _raise),
+            mock.patch.object(handler, "_get_or_create_actor", _raise),
             pytest.raises(TokenStoreUnavailable),
         ):
             handler.authenticate_and_get_actor_cached()

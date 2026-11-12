@@ -613,9 +613,26 @@ real actor from `create_core_actor` with a backend-following config
 - [ ] Run the contract's `### Checks` fast tier verbatim
 - [ ] Run the contract's `### Checks` full tier before the phase commit, one
       run at a time; re-run a parallel failure sequentially before trusting it
-- [ ] `grep -rnw "_actor_cache" actingweb tests` returns nothing
+- [x] `grep -rnw "_actor_cache" actingweb tests` returns nothing
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+Notes (2026-11-12):
+
+- **New tests**: `tests/test_mcp_per_request_actor.py` (22). Run against
+  `master`'s `handlers/mcp.py`, 19 fail; the three that pass pin what held
+  already (the bridge create on the full path, a resolver bug answering
+  `None`, another application's unknown token left in place).
+- **One helper, `_set_mcp_runtime_context`**, holds the `RuntimeContext`
+  write both branches made; the cached branch no longer repeats it inline.
+- **`tests/_read_counters.py`** holds the DynamoDB operation counter (the
+  tombstone test imports it) and `count_reads` (actor row, subscription
+  list, PostgreSQL connections). `tests/test_adoption_bounded_reads.py`'s
+  `_counting` is left where it is: it counts `_internal` marker reads, which
+  nothing else needs. Deviation from "both are lifted".
+- **Test edits beyond the list**: none; `tests/test_mcp_revocation_evicts_caches.py`
+  gained a sibling token in the token-keyed eviction test, since the actor
+  entry it asserted on is gone.
 
 ---
 

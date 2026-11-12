@@ -300,9 +300,8 @@ class Trust:
                 # A deleted trust relationship must stop authorizing
                 # immediately, not at the end of the MCP caches' five-minute
                 # TTL, also when the cleanup above raised. Actor-wide because
-                # the cached ActorInterface carries the trust list itself —
-                # see evict_mcp_caches_for_actor(). No-op when MCP is not in
-                # use.
+                # one revocation covers every client of the actor — see
+                # evict_mcp_caches_for_actor(). No-op when MCP is not in use.
                 from .mcp.invalidation import evict_caches_for_actor
 
                 evict_caches_for_actor(self.actor_id)

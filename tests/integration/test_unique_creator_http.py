@@ -224,9 +224,7 @@ class TestFixedIdCreates:
         actor_id = f"mcp{uuid.uuid4().hex}"
         email = _email()
         with _winner_then_taken(enforced_store, email):
-            result = handler._get_or_create_actor_cached(
-                actor_id, {"email": email}, 0.0
-            )
+            result = handler._get_or_create_actor(actor_id, {"email": email})
         assert result is not None and result.id == actor_id
 
     def test_an_mcp_bridge_create_for_a_held_email_fails_closed(
@@ -240,9 +238,7 @@ class TestFixedIdCreates:
         handler = self._mcp(enforced_store)
         actor_id = f"mcp{uuid.uuid4().hex}"
         with caplog.at_level(logging.ERROR):
-            result = handler._get_or_create_actor_cached(
-                actor_id, {"email": email}, 0.0
-            )
+            result = handler._get_or_create_actor(actor_id, {"email": email})
         assert result is None
         assert f"Failed to create ActingWeb actor {actor_id}" in caplog.text
         assert get_actor(enforced_store).get(actor_id=actor_id) is None

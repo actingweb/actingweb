@@ -665,6 +665,42 @@ def test_an_async_step_that_never_settles_times_out(monkeypatch):
         asyncio.run(_wire._run_and_drain(action))
 
 
+def test_failures_the_action_handled_are_not_task_errors():
+    """A failure the step's code handled is not a task error: gathered with
+    ``return_exceptions`` (fanout's deliveries), or awaited and caught."""
+
+    async def boom() -> None:
+        raise ValueError("delivery failed")
+
+    async def action() -> str:
+        outcomes = await asyncio.gather(boom(), return_exceptions=True)
+        task = asyncio.get_running_loop().create_task(boom())
+        try:
+            await task
+        except ValueError:
+            pass
+        return f"handled {len(outcomes)}"
+
+    assert asyncio.run(_wire._run_and_drain(action)) == "handled 1"
+
+
+def test_a_timed_out_drain_cancels_what_is_still_running(monkeypatch):
+    """When the drain gives up, the tasks it was waiting for are cancelled
+    before the error goes up, not left to run into a later step."""
+    monkeypatch.setattr(_wire, "_DRAIN_TIMEOUT", 0.05)
+    started: list[asyncio.Task[Any]] = []
+
+    async def action() -> None:
+        started.append(asyncio.get_running_loop().create_task(asyncio.sleep(10)))
+
+    async def run() -> bool:
+        with pytest.raises(TimeoutError):
+            await _wire._run_and_drain(action)
+        return started[0].cancelled()
+
+    assert asyncio.run(run()) is True
+
+
 def test_store_leftovers_keep_their_order_whatever_their_ids(monkeypatch):
     """Two leftover diffs and two callback-state entries are ordered by
     content and peer name, not by their random subscription ids."""
@@ -672,12 +708,26 @@ def test_store_leftovers_keep_their_order_whatever_their_ids(monkeypatch):
 
     def stores(sub_x: str, sub_y: str) -> dict[str, Any]:
         diffs = [
-            {"subscriptionid": sub_y, "sequence": 1, "diff": '{"y": 1}'},
-            {"subscriptionid": sub_x, "sequence": 1, "diff": '{"x": 1}'},
+            {
+                "subscriptionid": sub_y,
+                "sequence": 1,
+                "diff": '{"timestamp": "2026-01-01", "y": 1}',
+            },
+            {
+                "subscriptionid": sub_x,
+                "sequence": 1,
+                "diff": '{"timestamp": "2026-02-02", "x": 1}',
+            },
         ]
+        # The clock fields run opposite to the content: X was claimed and
+        # its diff stored later than Y's, yet X still sorts first.
         bucket = {
-            f"state:{'p' * 32}:{sub_y}": {"data": {"last": "y"}},
-            f"state:{'p' * 32}:{sub_x}": {"data": {"last": "x"}},
+            f"state:{'p' * 32}:{sub_y}": {
+                "data": {"claimed_at": 1.0, "last": "y", "_received_at": 1.0}
+            },
+            f"state:{'p' * 32}:{sub_x}": {
+                "data": {"claimed_at": 2.0, "last": "x", "_received_at": 2.0}
+            },
         }
 
         class Diffs:

@@ -437,9 +437,29 @@ def _snapshot_suspensions(actor: WireActor) -> list[dict[str, Any]]:
     ]
 
 
+# Wall-clock fields the callback processor and diff store write
+# (``claimed_at``, ``_received_at``, ``timestamp``): left out of a sort key,
+# or two leftovers would sort by when they were claimed or received.
+_CLOCK_FIELDS = frozenset({"claimed_at", "_received_at", "timestamp"})
+
+
+def _without_clock(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            k: _without_clock(v) for k, v in value.items() if k not in _CLOCK_FIELDS
+        }
+    if isinstance(value, list):
+        return [_without_clock(v) for v in value]
+    return value
+
+
 def _content_key(value: Any) -> str:
-    """A value's content as a sortable string (keys sorted)."""
-    return json.dumps(value, sort_keys=True, default=str)
+    """A value's content as a sortable string: keys sorted, clock fields
+    left out (a JSON string, as a diff is stored, is read first)."""
+    if isinstance(value, str):
+        with contextlib.suppress(ValueError):
+            value = json.loads(value)
+    return json.dumps(_without_clock(value), sort_keys=True, default=str)
 
 
 def _snapshot_stores(actor: WireActor, names: dict[str, str]) -> dict[str, Any]:
@@ -690,9 +710,13 @@ async def _run_and_drain(action: Callable[[], Any]) -> Any:
 
     Every task the step creates is captured through the loop's task factory,
     so a task that has already failed when the drain starts (``all_tasks``
-    no longer lists it) is still recorded. The drain waits in the caller's
-    task (``asyncio.timeout``): 3.11's ``wait_for`` would run it in a task of
-    its own, which then waits for itself."""
+    no longer lists it) is still recorded. Only an error nobody retrieved is
+    recorded: a task awaited, or gathered with ``return_exceptions`` (as
+    fanout does with its deliveries), had its error handled by the caller.
+    A cancelled task is not an error. The drain waits in the caller's task
+    (``asyncio.timeout``): 3.11's ``wait_for`` would run it in a task of its
+    own, which then waits for itself. On a timeout, or when the action
+    raises, the tasks still running are cancelled before the error goes up."""
     loop = asyncio.get_running_loop()
     previous = loop.get_task_factory()
     created: list[asyncio.Future[Any]] = []
@@ -714,12 +738,23 @@ async def _run_and_drain(action: Callable[[], Any]) -> Any:
         async with asyncio.timeout(_DRAIN_TIMEOUT):
             while pending := [t for t in created if not t.done()]:
                 await asyncio.wait(pending)
+    except BaseException:
+        leftover = [t for t in created if not t.done()]
+        for task in leftover:
+            task.cancel()
+        if leftover:
+            await asyncio.wait(leftover, timeout=1.0)
+        for task in created:
+            if task.done() and not task.cancelled():
+                task.exception()  # retrieved: no "never retrieved" noise
+        raise
     finally:
         loop.set_task_factory(previous)
     errors = sorted(
-        "CancelledError" if t.cancelled() else type(t.exception()).__name__
+        type(t.exception()).__name__
         for t in created
-        if t.cancelled() or t.exception() is not None
+        # Read before ``exception()``, which clears it.
+        if not t.cancelled() and getattr(t, "_log_traceback", False)
     )
     if errors:
         return {"result": result, "task_errors": errors}

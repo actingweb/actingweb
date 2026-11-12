@@ -1426,3 +1426,82 @@ No recording changed, so the commit needs no trailer.
 **Files affected**: `tests/integration/wire/rows.toml`.
 
 **Rationale**: the second verification's Issue 8.
+
+
+### 2026-11-12, after verification thoughts/verifications/2026-11-12-subscription-wire-baseline-3.md
+
+Scope (owner, 2026-11-12): all five findings of the third verification.
+
+#### 17. The drain records only unhandled task errors, and cleans up when it gives up
+
+**Category**: Verification fix (Issues 1 and 3)
+
+**What changed**:
+- **Unretrieved errors only:** a task's error lands in `task_errors` only
+  when nobody retrieved it. The check reads the task's `_log_traceback`
+  flag before the drain reads the exception. A task that was awaited, or
+  gathered with `return_exceptions` (fanout's deliveries), had its error
+  handled, and is no longer reported.
+- **Cancelled tasks:** they are no longer counted as errors.
+- **When the drain gives up:** on a timeout, or when the action raises,
+  the drain cancels the tasks still running, waits up to 1 s for them,
+  and reads every done task's exception before the error goes up.
+- **The flag:** it behaves the same on 3.11 and 3.14 (the C `_asyncio`
+  task on both).
+- **New tests:** `test_failures_the_action_handled_are_not_task_errors`
+  and `test_a_timed_out_drain_cancels_what_is_still_running`. Both failed
+  on the previous drain, and both pass on 3.14 and 3.11.
+
+**Files affected**:
+- `tests/integration/_wire.py`: `_run_and_drain`.
+- `tests/integration/test_wire_harness.py`: the two tests.
+
+**Rationale**: the third verification's Issues 1 and 3. Iteration 10's
+capture of every task over-reported. A recording would have claimed an
+unhandled failure for a delivery that fanout counts as failed.
+
+#### 18. Store leftovers sort without their clock fields
+
+**Category**: Verification fix (Issue 2)
+
+**What changed**: the sort key now leaves out `claimed_at`,
+`_received_at` and `timestamp` at any depth, and reads a diff stored as a
+JSON string first. The harness test's stub values now carry clock fields
+that run opposite to their content. It failed on the previous key.
+
+**Files affected**:
+- `tests/integration/_wire.py`: `_CLOCK_FIELDS`, `_without_clock`,
+  `_content_key`.
+- `tests/integration/test_wire_harness.py`:
+  `test_store_leftovers_keep_their_order_whatever_their_ids`.
+
+**Rationale**: the third verification's Issue 2. Iteration 15's key began
+with wall-clock fields, so leftovers would have sorted by claim or
+receipt time.
+
+#### 19. `test_004` checks the trust on both sides
+
+**Category**: Verification fix (Issue 4)
+
+**What changed**: after the sync, `test_004` reads A's trust in B and B's
+trust in A, and expects 200 for both.
+
+**Files affected**: `tests/integration/test_subscription_sync_coverage.py`.
+
+**Rationale**: the third verification's Issue 4.
+
+#### 20. The docs build ignores local virtualenvs at the root
+
+**Category**: Verification fix (Issue 5)
+
+**What changed**: `conf.py`'s `exclude_patterns` adds `.venv*` and
+`.venv*/**`. The `.venv311` used for Python 3.11 runs holds Sphinx's own
+`.rst` templates, which failed `sphinx-build -W` locally with 22
+warnings. A fresh build (`-E`) now passes with `.venv311` present. This
+is outside the plan's test-only scope, but it keeps the contract's Full
+tier usable alongside the 3.11 venv, as the `.claude/**` exclusion did
+for worktrees.
+
+**Files affected**: `conf.py`.
+
+**Rationale**: the third verification's Issue 5.

@@ -187,18 +187,19 @@ class TestSyncPeerTrustRevocation:
         ] == [(self.subscription_id, False, 404)], result
         assert _subscriptions_of(self.actor_a, self.actor_b) == []
 
-        # When subscription is gone but trust exists, the sync will fail
-        # but trust should be preserved
-        # Check that trust still exists
-        response = requests.get(
-            f"{self.actor_a['url']}/trust/friend/{self.actor_b['id']}",
-            auth=(self.actor_a["creator"], self.actor_a["passphrase"]),
-            timeout=5,
-        )
-        # Trust should still exist (200) because only the subscription was deleted
-        assert response.status_code == 200, (
-            f"Trust check returned unexpected status: {response.status_code}"
-        )
+        # Only the subscription was dead: the trust stays on both sides.
+        for holder, peer in (
+            (self.actor_a, self.actor_b),
+            (self.actor_b, self.actor_a),
+        ):
+            response = requests.get(
+                f"{holder['url']}/trust/friend/{peer['id']}",
+                auth=(holder["creator"], holder["passphrase"]),
+                timeout=5,
+            )
+            assert response.status_code == 200, (
+                f"{holder['id']}'s trust in {peer['id']}: {response.status_code}"
+            )
 
     def test_005_cleanup(self) -> None:
         """Clean up test actors (handled by fixture cleanup)."""

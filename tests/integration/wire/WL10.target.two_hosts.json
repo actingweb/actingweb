@@ -1764,18 +1764,7 @@
        }
       },
       "replica": {
-       "lists": {
-        "notes": [
-         {
-          "id": "a",
-          "text": "one"
-         },
-         {
-          "id": "b",
-          "text": "two"
-         }
-        ]
-       },
+       "lists": {},
        "scalars": {}
       },
       "subscriptions": [
@@ -2025,18 +2014,7 @@
        }
       },
       "replica": {
-       "lists": {
-        "notes": [
-         {
-          "id": "a",
-          "text": "one"
-         },
-         {
-          "id": "b",
-          "text": "two"
-         }
-        ]
-       },
+       "lists": {},
        "scalars": {}
       },
       "subscriptions": [

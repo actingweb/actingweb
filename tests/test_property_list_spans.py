@@ -923,10 +923,13 @@ class TestReceiver:
             "spanned": True,
             "bytes": 9,
         }
+        # Since 3.16 a reference makes the replica out of step: the
+        # subscription's replica is rebuilt from a baseline.
         with caplog.at_level(logging.WARNING, logger="actingweb.remote_storage"):
-            result = rps._apply_list_operation(NAME, "append", ref)
-        assert result == {"operation": "append", "success": False, "spanned": True}
-        assert "out of sync" in caplog.text
+            result = rps.apply_callback_data({NAME: ref})
+        assert "spanned" in result.out_of_step["why"]
+        assert result.out_of_step["list"] == NAME
+        assert "out of step" in caplog.text
         lst.append.assert_not_called()
 
     def test_a_pre_316_receiver_answers_unknown_operation(self) -> None:

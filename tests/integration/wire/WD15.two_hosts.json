@@ -184,26 +184,13 @@
         "notes": [
          {
           "id": "a"
+         },
+         {
+          "id": "a"
          }
         ]
        },
-       "scalars": {
-        "index": {
-         "value": 0
-        },
-        "item": {
-         "id": "a"
-        },
-        "length": {
-         "value": 1
-        },
-        "list": {
-         "value": "notes"
-        },
-        "operation": {
-         "value": "append"
-        }
-       }
+       "scalars": {}
       },
       "subscriptions": [
        {

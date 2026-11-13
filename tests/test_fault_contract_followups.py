@@ -28,43 +28,47 @@ def config() -> Any:
 
 
 class TestRevocationOrder:
-    @patch("actingweb.remote_storage.RemotePeerStore")
-    def test_a_listing_fault_raises(self, store_cls: Any) -> None:
-        from actingweb.handlers.callbacks import CallbacksHandler
+    @staticmethod
+    def _grant() -> Any:
+        from actingweb.peer_permissions import PeerPermissions
+
+        return PeerPermissions(
+            actor_id="a",
+            peer_id="peer",
+            properties={"patterns": ["keep_*"], "operations": ["read"]},
+        )
+
+    def test_a_listing_fault_raises(self) -> None:
+        from actingweb.replica_revocation import revoked_replica_names
 
         store = Mock()
+        store.list_scalar_names.return_value = []
         store.list_all_lists.side_effect = DbError("listing")
-        store_cls.return_value = store
-        handler = CallbacksHandler(config=Mock())
         with pytest.raises(DbError):
-            handler._delete_revoked_peer_data(Mock(id="a"), "peer", ["memory_*"])
+            revoked_replica_names(store, self._grant())
         store.list_all_lists.assert_called_once_with(strict=True)
 
-    @patch("actingweb.remote_storage.RemotePeerStore")
-    def test_a_delete_fault_raises(self, store_cls: Any) -> None:
-        from actingweb.handlers.callbacks import CallbacksHandler
+    def test_a_delete_fault_raises(self) -> None:
+        from actingweb.replica_revocation import apply_revoked
 
         store = Mock()
+        store.list_scalar_names.return_value = []
         store.list_all_lists.return_value = ["memory_a"]
         store.delete_list.side_effect = DbError("delete")
-        store_cls.return_value = store
-        handler = CallbacksHandler(config=Mock())
         with pytest.raises(DbError):
-            handler._delete_revoked_peer_data(Mock(id="a"), "peer", ["memory_*"])
+            apply_revoked(store, _evaluated(store, self._grant()))
 
-    @patch("actingweb.remote_storage.RemotePeerStore")
-    def test_a_non_db_error_delete_failure_raises(self, store_cls: Any) -> None:
+    def test_a_non_db_error_delete_failure_raises(self) -> None:
         """Verification 2026-11-03, issue 4: the outer fold swallowed it, so
         the permissions were stored and the revocation was lost."""
-        from actingweb.handlers.callbacks import CallbacksHandler
+        from actingweb.replica_revocation import apply_revoked
 
         store = Mock()
+        store.list_scalar_names.return_value = []
         store.list_all_lists.return_value = ["memory_a"]
         store.delete_list.side_effect = ValueError("corrupt list")
-        store_cls.return_value = store
-        handler = CallbacksHandler(config=Mock())
         with pytest.raises(ValueError):
-            handler._delete_revoked_peer_data(Mock(id="a"), "peer", ["memory_*"])
+            apply_revoked(store, _evaluated(store, self._grant()))
 
     def test_the_listing_reads_strictly(self, config: Any) -> None:
         from actingweb.attribute_list_store import AttributeListStore
@@ -324,3 +328,12 @@ class TestLostDiffRaises:
             pytest.raises(DbError),
         ):
             actor.register_diffs(target="properties", subtarget="x", blob='"v"')
+
+
+def _evaluated(store: Any, grant: Any) -> Any:
+    """``revoked_replica_names`` for a grant that is evaluated."""
+    from actingweb.replica_revocation import RevokedNames, revoked_replica_names
+
+    plan = revoked_replica_names(store, grant)
+    assert isinstance(plan, RevokedNames)
+    return plan

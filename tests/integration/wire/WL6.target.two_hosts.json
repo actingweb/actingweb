@@ -388,13 +388,7 @@
        }
       },
       "replica": {
-       "lists": {
-        "notes": [
-         {
-          "id": "a"
-         }
-        ]
-       },
+       "lists": {},
        "scalars": {}
       },
       "subscriptions": [

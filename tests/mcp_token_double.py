@@ -303,6 +303,20 @@ class MemoryDbAttribute:
         rows[name] = {"data": copy.deepcopy(data)}
         return True
 
+    def create_attr_if_absent(
+        self,
+        actor_id: str | None = None,
+        bucket: str | None = None,
+        name: str | None = None,
+        data: Any = None,
+        timestamp: Any = None,
+        ttl_seconds: int | None = None,
+    ) -> bool:
+        assert actor_id and bucket and name
+        if ttl_seconds is not None:
+            self.store.ttls[(actor_id, bucket, name)] = ttl_seconds
+        return self.create_attr_if_not_exists(actor_id, bucket, name, data)
+
     def create_attrs_if_not_exist(
         self, actor_id: str, bucket: str, rows: dict[str, Any]
     ) -> set[str]:

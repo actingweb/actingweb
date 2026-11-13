@@ -11,8 +11,14 @@ from datetime import UTC
 from re import Pattern
 from typing import TYPE_CHECKING, Any
 
-from .db.exceptions import DbError
-from .list_core import ListNameTakenError
+from .db.exceptions import AttributeKeyCollision, DbError
+from .identifiers import first_control_character
+from .list_core import (
+    ListCorruptionError,
+    ListMetadataContentionError,
+    ListNameTakenError,
+    ListRankExhaustedError,
+)
 
 if TYPE_CHECKING:
     from .interface.actor_interface import ActorInterface
@@ -26,6 +32,47 @@ DEFAULT_PEER_ID_PATTERN = re.compile(r"^[a-f0-9]{32}\Z")
 PERMISSIVE_PEER_ID_PATTERN = re.compile(
     r"^[a-f0-9]{32}\Z|^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\Z"
 )
+
+
+class ReplicaOutOfStep(Exception):
+    """A list diff this replica cannot apply: the replica no longer holds
+    what the publisher's list held before the change. The subscription's
+    replica is rebuilt from a baseline (``SubscriptionManager.
+    rebuild_subscription``)."""
+
+    def __init__(self, list_name: str, why: str) -> None:
+        super().__init__(f"list {list_name!r}: {why}")
+        self.list_name = list_name
+        self.why = why
+
+
+# Creating list operations, which validate the list's name; deleting ones
+# accept any stored name.
+_CREATING_OPERATIONS = frozenset({"append", "insert", "extend"})
+
+
+class ReplicaApplyResult(dict[str, Any]):
+    """What ``apply_callback_data``/``apply_resync_data`` did: a result per
+    key, plus two attributes that are never keys (a key is a name the peer
+    chose, so a property named ``out_of_step`` must not read as the mark):
+
+    - ``out_of_step``: the first list diff the replica could not apply
+      (``{"list", "operation", "why"}``), or None.
+    - ``failed``: the names whose entry could not be stored (not refused
+      names: those are the peer's own), for a baseline that must not count
+      as a rebuild.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.out_of_step: dict[str, Any] | None = None
+        self.failed: list[str] = []
+
+
+# The longest DynamoDB sort key is 1,024 bytes: "{bucket}:list:{name}-#"
+# plus a rank of up to 180 characters.
+_SORT_KEY_BYTES = 1024
+_LIST_KEY_OVERHEAD = len(":list:-#") + 180
 
 
 def get_remote_bucket(
@@ -147,10 +194,9 @@ class RemotePeerStore:
         """Get a list by name."""
         from .db.utils import sanitize_json_data
 
-        store = self._get_list_store()
-        list_attr = getattr(store, name)
+        list_attr = self._get_list_store().get(name)
         try:
-            items = list(list_attr)
+            items = list_attr.to_list()
         except ListNameTakenError:
             # The replica holds a scalar of this name: there is no list.
             return []
@@ -164,10 +210,21 @@ class RemotePeerStore:
         items: list[Any],
         metadata: dict[str, Any] | None = None,
     ) -> None:
-        """Set a list from remote peer (sanitizes for security)."""
+        """Replace the list ``name`` with ``items`` (a baseline from the peer,
+        sanitised). The name is validated and every item encoded and
+        size-checked before the first write; then ``clear()`` and
+        ``extend()``. A baseline holding an item that cannot be stored
+        deletes the list (and logs it), so the next diff does not find the
+        stale one; a refused name raises ``ValueError``."""
         from .db.utils import sanitize_json_data
+        from .list_core import ListItemTooLargeError
 
-        # Sanitize untrusted data from remote peer
+        why = self._invalid_list_name(name)
+        if why is not None:
+            logger.warning(
+                "Refused list %r from peer %s: the name %s", name, self._peer_id, why
+            )
+            raise ValueError(f"list name {name!r} {why}")
         sanitized_items = sanitize_json_data(items, log_source=f"peer:{self._peer_id}")
         sanitized_metadata = (
             sanitize_json_data(metadata, log_source=f"peer:{self._peer_id}")
@@ -175,17 +232,28 @@ class RemotePeerStore:
             else None
         )
 
-        store = self._get_list_store()
-        list_attr = getattr(store, name)
-        try:
-            list_attr.clear()
-        except ListNameTakenError:
+        list_attr = self._get_list_store().get(name)
+        if self.get_value(name) is not None:
             # A scalar of this name (a pre-3.16 publisher's REST list edit
             # arrived as one): the list replaces it.
             self.delete_value(name)
-            list_attr = getattr(store, name)
-            list_attr.clear()
-        list_attr.extend(sanitized_items)
+            list_attr = self._get_list_store().get(name)
+        try:
+            for item in sanitized_items:
+                list_attr.check_item_size(item)
+        except (ListItemTooLargeError, ValueError) as e:
+            logger.warning(
+                "Deleting list %r of peer %s: its baseline holds an item that "
+                "cannot be stored (%s)",
+                name,
+                self._peer_id,
+                e,
+            )
+            list_attr.delete()
+            raise
+        list_attr.clear()
+        if sanitized_items:
+            list_attr.extend(sanitized_items)
         if sanitized_metadata:
             # ListAttribute only supports setting description and explanation
             if "description" in sanitized_metadata:
@@ -195,15 +263,28 @@ class RemotePeerStore:
 
     def delete_list(self, name: str) -> None:
         """Delete a list entirely."""
-        store = self._get_list_store()
-        list_attr = getattr(store, name)
-        list_attr.delete()
+        self._get_list_store().get(name).delete()
 
     def list_all_lists(self, *, strict: bool = False) -> list[str]:
         """List all stored lists for this peer (``strict``: a read fault
         raises ``DbError`` instead of answering ``[]``)."""
         store = self._get_list_store()
         return store.list_all(strict=True) if strict else store.list_all()
+
+    def list_scalar_names(self) -> list[str]:
+        """The names of the replica's scalars, read without their values and
+        without the list rows: two keys-only range reads, either side of
+        names starting ``list:``. A fault raises ``DbError``."""
+        from .db import get_attribute
+
+        db = get_attribute(self._actor.config)
+        actor_id = self._actor.id or ""
+        top = "\U0010ffff"
+        below = db.get_attr_range(
+            actor_id, self._bucket, "", "list9" + top, keys_only=True
+        )
+        above = db.get_attr_range(actor_id, self._bucket, "list;", top, keys_only=True)
+        return sorted({*below, *above})
 
     def list_all_scalars(self) -> list[str]:
         """List all scalar property names for this peer.
@@ -337,90 +418,277 @@ class RemotePeerStore:
 
     # Callback data application
 
-    def apply_callback_data(self, data: dict[str, Any]) -> dict[str, Any]:
-        """Apply callback data to storage, handling list operations.
+    def apply_callback_data(
+        self,
+        data: dict[str, Any],
+        *,
+        subtarget: str | None = None,
+        resource: str | None = None,
+    ) -> ReplicaApplyResult:
+        """Apply a subscription callback's data to the replica.
 
-        This is the main method for automatic storage mode. It:
-        - Detects list operations (append, update, delete, etc.)
-        - Applies them to the appropriate list
-        - Stores scalar values directly
+        The shape depends on the subscription's level (``subtarget``,
+        ``resource``):
+
+        - target level: a set of top-level keys. A value is a list operation
+          only when it carries ``list`` and ``operation`` **and its ``list``
+          is the key** (the legacy ``list:<name>`` key: ``list`` equal to
+          ``<name>``); otherwise it is the scalar's value. A list diff is
+          bound to the key it arrived under, never to a name its value
+          carries.
+        - subtarget level: a list diff whose ``list`` is the subtarget is
+          one list operation; an object keyed by the subtarget's own name is
+          its full state, unwrapped; anything else is the one scalar's value.
+        - resource level: the value is merged into the stored property at
+          the resource's path (segments are keys, never interpreted; a parent
+          that is not an object is replaced); an empty value deletes that
+          path.
+
+        A scalar key starting ``list:`` (other than the legacy list-diff
+        form) is refused. A name is a scalar or a list in a replica, never
+        both: a list arriving where a scalar is stored replaces it, ``""``
+        arriving for a list's name deletes the list, and any other scalar
+        arriving for a list's name is out of step.
+
+        A list diff this replica cannot apply (``ReplicaOutOfStep``) does not
+        raise: the remaining keys are applied, a WARNING names the list and
+        the operation, and the first such diff is the result's
+        ``out_of_step`` attribute (a :class:`ReplicaApplyResult`; the
+        callback path rebuilds the replica from a baseline). A ``DbError`` (a fault) raises; a key another bucket owns
+        (``AttributeKeyCollision``) is refused and logged.
 
         SECURITY: Sanitizes untrusted data from remote peer before storage.
-
-        Args:
-            data: Callback data dict from subscription callback
-
-        Returns:
-            Dict of {property_name: operation_result} for each processed property
         """
         from .db.utils import sanitize_json_data
 
-        # Sanitize untrusted callback data from remote peer
         data = sanitize_json_data(data, log_source=f"peer:{self._peer_id}:callback")
+        results = ReplicaApplyResult()
+        out_of_step: dict[str, Any] | None = None
 
-        results: dict[str, Any] = {}
+        def record(key: str, outcome: dict[str, Any]) -> None:
+            nonlocal out_of_step
+            results[key] = outcome
+            if outcome.get("out_of_step") and out_of_step is None:
+                out_of_step = {
+                    "list": outcome.get("list", key),
+                    "operation": outcome.get("operation"),
+                    "why": outcome.get("why"),
+                }
 
-        for key, value in data.items():
-            try:
-                # Detect list operations per ActingWeb spec:
-                # List diff payloads have "list" and "operation" fields in the value
-                if isinstance(value, dict) and "list" in value and "operation" in value:
-                    # List operation (spec-compliant format)
-                    list_name = value.get("list", key)
-                    operation = value.get("operation", "unknown")
-                    results[list_name] = self._apply_list_operation(
-                        list_name, operation, value
-                    )
-                elif key.startswith("list:") and isinstance(value, dict):
-                    # Legacy format: key has "list:" prefix
-                    list_name = value.get("list", key[5:])
-                    operation = value.get("operation", "unknown")
-                    results[list_name] = self._apply_list_operation(
-                        list_name, operation, value
-                    )
-                else:
-                    # Per ActingWeb spec: "an empty attribute is defined as the
-                    # same as a non-existent attribute, thus an attribute can be
-                    # deleted by setting it to ''."
-                    if value == "" or value is None:
-                        self.delete_value(key)
-                        results[key] = {"deleted": True, "type": "scalar"}
-                    elif isinstance(value, dict):
-                        self.set_value(key, value)
-                        results[key] = {"stored": True, "type": "scalar"}
-                    else:
-                        # Wrap non-dict values
-                        self.set_value(key, {"value": value})
-                        results[key] = {
-                            "stored": True,
-                            "type": "scalar",
-                            "wrapped": True,
-                        }
-            except DbError:
-                raise
-            except Exception as e:
-                logger.error(f"Error applying callback data for {key}: {e}")
-                results[key] = {"error": str(e)}
+        if subtarget and resource:
+            record(
+                subtarget,
+                self._guarded(
+                    subtarget, lambda: self._merge_resource(subtarget, resource, data)
+                ),
+            )
+        elif subtarget:
+            value: Any = data
+            if (
+                isinstance(value, dict)
+                and "operation" in value
+                and value.get("list") == subtarget
+            ):
+                record(
+                    subtarget,
+                    self._guarded(
+                        subtarget,
+                        lambda: self._apply_list_operation(
+                            subtarget, str(value.get("operation")), value
+                        ),
+                    ),
+                )
+            else:
+                if isinstance(value, dict) and set(value) == {subtarget}:
+                    value = value[subtarget]
+                record(
+                    subtarget,
+                    self._guarded(
+                        subtarget, lambda: self._apply_entry(subtarget, value)
+                    ),
+                )
+        else:
+            for key, value in data.items():
+                record(
+                    key,
+                    self._guarded(key, lambda k=key, v=value: self._apply_entry(k, v)),
+                )
 
+        if out_of_step is not None:
+            logger.warning(
+                "Replica of peer %s for actor %s is out of step: a %r diff for "
+                "list %r could not be applied (%s); the replica is rebuilt from "
+                "a baseline",
+                self._peer_id,
+                self._actor.id,
+                out_of_step["operation"],
+                out_of_step["list"],
+                out_of_step["why"],
+            )
+            results.out_of_step = out_of_step
         return results
+
+    def _guarded(self, key: str, apply: Any) -> dict[str, Any]:
+        """Run one key's application: out of step and refused keys become
+        results, a fault raises."""
+        try:
+            return apply()
+        except ReplicaOutOfStep as e:
+            return {"out_of_step": True, "list": e.list_name, "why": e.why}
+        except AttributeKeyCollision:
+            logger.warning(
+                "Refused %r in the replica of peer %s: another bucket holds the key",
+                key,
+                self._peer_id,
+            )
+            return {"error": "refused", "reason": "key held by another bucket"}
+        except DbError:
+            raise
+        except Exception as e:
+            logger.error(f"Error applying callback data for {key!r}: {e}")
+            return {"error": str(e)}
+
+    def _list_exists(self, name: str) -> bool:
+        return bool(self._get_list_store().exists(name))
+
+    def _apply_entry(self, key: str, value: Any) -> dict[str, Any]:
+        """One top-level key of a target-level diff (or a subtarget's own
+        value)."""
+        if isinstance(value, dict) and "operation" in value and "list" in value:
+            if value.get("list") == key:
+                return self._apply_list_operation(key, str(value["operation"]), value)
+        if key.startswith("list:"):
+            name = key[5:]
+            if (
+                isinstance(value, dict)
+                and "operation" in value
+                and value.get("list", name) == name
+            ):
+                return self._apply_list_operation(name, str(value["operation"]), value)
+            logger.warning(
+                "Refused the scalar %r from peer %s: a key starting 'list:' is "
+                "reserved for list rows",
+                key,
+                self._peer_id,
+            )
+            return {"error": "refused", "reason": "scalar key starts with list:"}
+        if value == "" or value is None:
+            if self._list_exists(key):
+                # A pre-3.16 publisher's list DELETE.
+                self.delete_list(key)
+                return {"deleted": True, "type": "list"}
+            self.delete_value(key)
+            return {"deleted": True, "type": "scalar"}
+        if self._list_exists(key):
+            raise ReplicaOutOfStep(key, "a scalar arrived for a list's name")
+        if isinstance(value, dict):
+            self.set_value(key, value)
+            return {"stored": True, "type": "scalar"}
+        self.set_value(key, {"value": value})
+        return {"stored": True, "type": "scalar", "wrapped": True}
+
+    def _merge_resource(
+        self, subtarget: str, resource: str, value: Any
+    ) -> dict[str, Any]:
+        """A resource-level write: ``value`` at the resource's path inside
+        the stored property ``subtarget``; an empty value deletes the path.
+        Segments are keys; a parent that is not an object is replaced."""
+        segments = [seg for seg in resource.split("/") if seg]
+        if not segments:
+            return self._apply_entry(subtarget, value)
+        if self._list_exists(subtarget):
+            # A name is a scalar or a list in a replica, never both.
+            logger.warning(
+                "Refused a resource write to %r from peer %s: a list holds the name",
+                subtarget,
+                self._peer_id,
+            )
+            return {"error": "refused", "reason": "a list holds the name"}
+        stored = self.get_value(subtarget)
+        root: dict[str, Any] = dict(stored) if isinstance(stored, dict) else {}
+        node = root
+        for seg in segments[:-1]:
+            child = node.get(seg)
+            if not isinstance(child, dict):
+                child = {}
+            child = dict(child)
+            node[seg] = child
+            node = child
+        if value == "" or value is None:
+            node.pop(segments[-1], None)
+        else:
+            node[segments[-1]] = value
+        if root:
+            self.set_value(subtarget, root)
+        else:
+            self.delete_value(subtarget)
+        return {"stored": True, "type": "resource", "path": "/".join(segments)}
+
+    def _invalid_list_name(self, name: Any) -> str | None:
+        """Why ``name`` cannot name a new list in this replica, or None."""
+        if not isinstance(name, str) or not name:
+            return "not a non-empty string"
+        bad = first_control_character(name)
+        if bad is not None:
+            return f"contains the control character {bad}"
+        for reserved in ("#", "$"):
+            if reserved in name:
+                return f"contains {reserved!r}"
+        if name.startswith("_"):
+            return "starts with '_'"
+        limit = _SORT_KEY_BYTES - _LIST_KEY_OVERHEAD - len(self._bucket.encode())
+        if len(name.encode("utf-8", "surrogatepass")) > limit:
+            return f"longer than {limit} bytes"
+        return None
 
     def _apply_list_operation(
         self, list_name: str, operation: str, data: dict[str, Any]
     ) -> dict[str, Any]:
-        """Apply a single list operation. A list arriving where a scalar of
-        that name is stored (a pre-3.16 publisher's REST list edit arrived
-        as one) deletes the scalar first: a name is a scalar or a list in a
-        replica, never both."""
-        try:
-            return self._apply_list_operation_once(list_name, operation, data)
-        except ListNameTakenError:
-            logger.info(
-                "Replacing the scalar %r with a list in the replica of peer %s",
-                list_name,
+        """Apply one list operation to the list named ``list_name`` (the key
+        the diff arrived under).
+
+        A creating operation validates the name (a refused name answers an
+        error result and a WARNING); a deleting one accepts any stored name.
+        A list arriving where a scalar of that name is stored deletes the
+        scalar first. Raises ``ReplicaOutOfStep`` when the replica no longer
+        holds what the publisher's list held before the change: a damaged or
+        conflicting list, the rank cap, sustained metadata contention, a
+        spanned reference, an index out of range. A value-addressed miss
+        (a ``remove`` whose item is absent, an ``update`` whose ``old_item``
+        is absent) is not out of step: an overlapping subscription's second
+        delivery looks like that."""
+        why = None if operation == "delete_all" else self._invalid_list_name(list_name)
+        if why is not None and (
+            operation in _CREATING_OPERATIONS or not self._list_exists(list_name)
+        ):
+            # Any operation on a list that does not exist yet may create it
+            # (``clear``, ``update``): validated as a creation. A stored name
+            # can always be deleted or changed.
+            logger.warning(
+                "Refused a %r diff from peer %s for list %r: the name %s",
+                operation,
                 self._peer_id,
+                list_name,
+                why,
             )
-            self.delete_value(list_name)
-            return self._apply_list_operation_once(list_name, operation, data)
+            return {"operation": operation, "error": "refused name"}
+        try:
+            try:
+                return self._apply_list_operation_once(list_name, operation, data)
+            except ListNameTakenError:
+                logger.info(
+                    "Replacing the scalar %r with a list in the replica of peer %s",
+                    list_name,
+                    self._peer_id,
+                )
+                self.delete_value(list_name)
+                return self._apply_list_operation_once(list_name, operation, data)
+        except (
+            ListCorruptionError,
+            ListRankExhaustedError,
+            ListMetadataContentionError,
+        ) as e:
+            raise ReplicaOutOfStep(list_name, f"{type(e).__name__}: {e}") from e
 
     def _apply_list_operation_once(
         self, list_name: str, operation: str, data: dict[str, Any]
@@ -428,226 +696,213 @@ class RemotePeerStore:
         if data.get("spanned") is True:
             # A reference (property_list.diff_reference): the publisher's
             # values were over the span threshold and the diff carries none.
-            # There is nothing to apply by value; the subscriber re-reads.
-            logger.warning(
-                "Not applying a %r diff for list '%s': it is a reference to "
-                "values over the span threshold, not the values, and this "
-                "receiver does not fetch them. This replica is now out of sync "
-                "with the source list until the application re-reads the list "
-                "from the publisher (a resync callback does so only for a peer "
-                "that supports resync).",
-                operation,
-                list_name,
+            raise ReplicaOutOfStep(
+                list_name, f"a {operation!r} diff refers to spanned values"
             )
-            return {"operation": operation, "success": False, "spanned": True}
-        store = self._get_list_store()
-        list_attr = getattr(store, list_name)
+        list_attr = self._get_list_store().get(list_name)
 
         if operation == "append" and "item" in data:
             list_attr.append(data["item"])
             return {"operation": "append", "success": True}
 
-        elif operation == "insert" and "item" in data and "index" in data:
-            list_attr.insert(data["index"], data["item"])
-            return {"operation": "insert", "index": data["index"], "success": True}
+        if operation == "insert" and "item" in data and "index" in data:
+            idx = data["index"]
+            if not isinstance(idx, int) or not 0 <= idx <= len(list_attr):
+                raise ReplicaOutOfStep(list_name, f"insert index {idx!r} out of range")
+            list_attr.insert(idx, data["item"])
+            return {"operation": "insert", "index": idx, "success": True}
 
-        elif (
+        if (
             operation == "update"
             and "item" in data
             and ("index" in data or "old_item" in data)
         ):
             idx = data.get("index")
-            old_item = data.get("old_item")
-            matches: list[int] = []
-            # Key presence, not `is not None`: JSON null is a legal
-            # pre-update value, and a diff carrying "old_item": null is
-            # still value-addressed.
             if "old_item" in data:
-                # Locate by value first when the sender told us what the
-                # pre-update value was (update_where()/a value-addressed
-                # single-item update always do). This side's list may have
-                # drifted from the index the sender's snapshot saw -- other
-                # diffs applied since, or a v2 peer whose positions are
-                # advisory -- so a value match is the more reliable
-                # identity than a bare index. Only trust it when it's
-                # unique: if two or more rows currently hold that value,
-                # which one the sender meant is genuinely ambiguous, so
-                # fall through to the index instead of guessing.
-                matches = [
-                    i for i, existing in enumerate(list_attr) if existing == old_item
-                ]
+                # Locate by value first when the sender said what the item
+                # was: the replica's positions may have drifted. Trusted only
+                # when unique; ambiguous falls through to the index.
+                old_item = data["old_item"]
+                values = list_attr.to_list()
+                matches = [i for i, v in enumerate(values) if v == old_item]
                 if len(matches) == 1:
-                    i = matches[0]
-                    list_attr[i] = data["item"]
-                    return {"operation": "update", "index": i, "success": True}
-            # A value-addressed update (no index in the diff at all) that
-            # found no unique match has nothing left to fall back to.
-            # That is a deliberate no-write (better than guessing a row),
-            # but it means this replica just diverged from the source --
-            # callers discard the result dict, so the WARNING is the only
-            # signal an operator gets that a resync is needed.
-            if idx is None:
-                logger.warning(
-                    "Dropping value-addressed update for list '%s': "
-                    "old_item matched %d local rows (need exactly 1) and the "
-                    "diff carries no index to fall back on. This replica is "
-                    "now out of sync with the source list; a resync of the "
-                    "subscription will bring it back in line.",
-                    list_name,
-                    len(matches),
-                )
-                return {"operation": "update", "error": "item not found or ambiguous"}
-            if 0 <= idx < len(list_attr):
-                list_attr[idx] = data["item"]
-                return {"operation": "update", "index": idx, "success": True}
-            return {"operation": "update", "error": "index out of range"}
+                    list_attr[matches[0]] = data["item"]
+                    return {"operation": "update", "index": matches[0], "success": True}
+                if not matches and data["item"] in values:
+                    # Already applied (an overlapping subscription's second
+                    # delivery): the replica is in the state the diff asks for.
+                    return {"operation": "update", "success": True, "noop": True}
+                if idx is None:
+                    if not matches:
+                        return {"operation": "update", "success": True, "noop": True}
+                    logger.warning(
+                        "Dropping value-addressed update for list %r: old_item "
+                        "matched %d rows and the diff carries no index",
+                        list_name,
+                        len(matches),
+                    )
+                    return {"operation": "update", "error": "ambiguous"}
+            if not isinstance(idx, int) or not 0 <= idx < len(list_attr):
+                raise ReplicaOutOfStep(list_name, f"update index {idx!r} out of range")
+            list_attr[idx] = data["item"]
+            return {"operation": "update", "index": idx, "success": True}
 
-        elif operation == "extend" and "items" in data:
-            list_attr.extend(data["items"])
-            return {
-                "operation": "extend",
-                "count": len(data["items"]),
-                "success": True,
-            }
+        if operation == "extend" and "items" in data:
+            items = data["items"]
+            if items:
+                list_attr.extend(items)
+            elif not self._list_exists(list_name):
+                # An empty list's creation.
+                list_attr.clear()
+            return {"operation": "extend", "count": len(items), "success": True}
 
-        elif operation == "delete" and "index" in data:
+        if operation == "delete" and "index" in data:
             idx = data["index"]
-            if 0 <= idx < len(list_attr):
-                del list_attr[idx]
-                return {"operation": "delete", "index": idx, "success": True}
-            return {"operation": "delete", "error": "index out of range"}
+            if not isinstance(idx, int) or not 0 <= idx < len(list_attr):
+                raise ReplicaOutOfStep(list_name, f"delete index {idx!r} out of range")
+            del list_attr[idx]
+            return {"operation": "delete", "index": idx, "success": True}
 
-        elif operation == "pop":
+        if operation == "pop":
             idx = data.get("index", -1)
-            if len(list_attr) > 0:
-                if idx == -1:
-                    idx = len(list_attr) - 1
-                if 0 <= idx < len(list_attr):
-                    list_attr.pop(idx)
-                    return {"operation": "pop", "index": idx, "success": True}
-            return {"operation": "pop", "error": "index out of range or empty list"}
+            length = len(list_attr)
+            if isinstance(idx, int) and idx < 0:
+                idx += length
+            if not isinstance(idx, int) or not 0 <= idx < length:
+                raise ReplicaOutOfStep(
+                    list_name, f"pop index {data.get('index', -1)!r} out of range"
+                )
+            list_attr.pop(idx)
+            return {"operation": "pop", "index": idx, "success": True}
 
-        elif operation == "clear":
+        if operation == "clear":
             list_attr.clear()
             return {"operation": "clear", "success": True}
 
-        elif operation == "delete_all":
+        if operation == "delete_all":
             list_attr.delete()
             return {"operation": "delete_all", "success": True}
 
-        elif operation == "metadata":
-            # Metadata-only change, no storage action needed
+        if operation == "metadata":
             return {"operation": "metadata", "ignored": True}
 
-        elif operation == "remove" and "item" in data:
-            # Remove by value - find and delete first matching item
-            item_to_remove = data["item"]
-            for i, existing in enumerate(list_attr):
-                if existing == item_to_remove:
-                    del list_attr[i]
-                    return {"operation": "remove", "index": i, "success": True}
-            return {"operation": "remove", "error": "item not found"}
+        if operation == "remove" and "item" in data:
+            try:
+                list_attr.remove(data["item"])
+            except ValueError:
+                # Absent: already removed (an overlapping subscription's
+                # second delivery). Not out of step.
+                return {"operation": "remove", "success": True, "noop": True}
+            return {"operation": "remove", "success": True}
 
         return {"operation": operation, "error": "unknown operation"}
 
-    def apply_resync_data(self, data: dict[str, Any]) -> dict[str, Any]:
-        """Apply resync data, replacing only the properties included in the data.
+    def apply_resync_data(
+        self,
+        data: dict[str, Any],
+        *,
+        subtarget: str | None = None,
+        resource: str | None = None,
+    ) -> ReplicaApplyResult:
+        """Apply a baseline, replacing only the properties it carries (other
+        subscriptions' data in the same bucket stays).
 
-        Unlike a full delete-and-replace, this method only replaces the specific
-        properties provided, preserving any other synced data from other
-        subscriptions. This is important when multiple subscriptions exist to
-        the same peer - a resync on one subscription should not destroy data
-        from other subscriptions.
+        A baseline for a subtarget-level subscription is stored under the
+        subtarget's name (its value, or the ``{"_list": true, "items"}`` form
+        keyed by that name), never spread into top-level keys; a
+        resource-level one is merged at the resource's path. A scalar key
+        starting ``list:`` is refused (the legacy ``list:<name>`` key with a
+        list value is a list). A baseline names what each key is: a scalar
+        replaces a same-named list and a list a same-named scalar. A list
+        whose baseline holds an item that cannot be stored is deleted and
+        reported in its result.
 
         SECURITY: Sanitizes untrusted data from remote peer before storage.
-
-        Args:
-            data: Resync data from callback (only these properties are replaced)
-
-        Returns:
-            Dict of {property_name: operation_result}
         """
-        from datetime import datetime
-
         from .db.utils import sanitize_json_data
 
-        # Sanitize untrusted resync data from remote peer
         data = sanitize_json_data(data, log_source=f"peer:{self._peer_id}:resync")
-
-        results: dict[str, Any] = {}
-
-        # NOTE: We do NOT call delete_all() here.
-        # Each property is replaced individually, preserving unrelated properties.
-        # For lists, set_list() already clears before extending.
-        # For scalars, set_value() overwrites the existing value.
-
-        # Apply new data
-        for key, value in data.items():
+        results = ReplicaApplyResult()
+        if subtarget and resource:
+            results[subtarget] = self._guarded(
+                subtarget, lambda: self._merge_resource(subtarget, resource, data)
+            )
+            if "error" in results[subtarget] and results[subtarget].get(
+                "error"
+            ) not in ("refused", "refused name"):
+                results.failed.append(subtarget)
+            return results
+        entries: Any = data
+        if subtarget:
+            own = isinstance(data, dict) and set(data) == {subtarget}
+            entries = data if own else {subtarget: data}
+        for key, value in entries.items():
             try:
-                # Check for flag-based list format (preferred)
-                if isinstance(value, dict) and value.get("_list") is True:
-                    # Only process if items key is present to avoid treating
-                    # metadata-only dicts as empty lists (which causes data loss)
-                    if "items" in value:
-                        items = value.get("items", [])
-
-                        # Create sync metadata
-                        metadata = {
-                            "source_actor": self._peer_id,
-                            "source_property": key,
-                            "synced_at": datetime.now(UTC).isoformat(),
-                            "item_count": len(items),
-                        }
-
-                        self.set_list(key, items, metadata=metadata)
-                        results[key] = {
-                            "operation": "resync",
-                            "items": len(items),
-                            "success": True,
-                        }
-                    else:
-                        # List metadata without items - skip to avoid data loss
-                        logger.warning(
-                            f"Skipping list '{key}' in resync: metadata without items "
-                            f"(transformation may have failed)"
-                        )
-                        results[key] = {
-                            "operation": "skip",
-                            "reason": "metadata_without_items",
-                            "success": False,
-                        }
-                # Keep "list:" prefix detection for backward compatibility
-                elif key.startswith("list:") and isinstance(value, list):
-                    # Full list replacement
-                    list_name = key[5:]
-
-                    # Create sync metadata
-                    metadata = {
-                        "source_actor": self._peer_id,
-                        "source_property": list_name,
-                        "synced_at": datetime.now(UTC).isoformat(),
-                        "item_count": len(value),
-                    }
-
-                    self.set_list(list_name, value, metadata=metadata)
-                    results[list_name] = {
-                        "operation": "resync",
-                        "items": len(value),
-                        "success": True,
-                    }
-                elif isinstance(value, dict):
-                    self.set_value(key, value)
-                    results[key] = {"operation": "resync", "success": True}
-                else:
-                    self.set_value(key, {"value": value})
-                    results[key] = {"operation": "resync", "success": True}
+                outcome = self._resync_entry(key, value)
+            except AttributeKeyCollision:
+                logger.warning(
+                    "Refused %r in the replica of peer %s: another bucket holds "
+                    "the key",
+                    key,
+                    self._peer_id,
+                )
+                outcome = (key, {"error": "refused", "success": False})
             except DbError:
                 raise
             except Exception as e:
-                logger.error(f"Error applying resync data for {key}: {e}")
-                results[key] = {"error": str(e)}
-
+                logger.error(f"Error applying resync data for {key!r}: {e}")
+                outcome = (key, {"error": str(e)})
+            results[outcome[0]] = outcome[1]
+            if "error" in outcome[1] and outcome[1]["error"] not in (
+                "refused",
+                "refused name",
+            ):
+                results.failed.append(outcome[0])
         return results
+
+    def _resync_entry(self, key: str, value: Any) -> tuple[str, dict[str, Any]]:
+        from datetime import datetime
+
+        def as_list(name: str, items: list[Any]) -> tuple[str, dict[str, Any]]:
+            metadata = {
+                "source_actor": self._peer_id,
+                "source_property": name,
+                "synced_at": datetime.now(UTC).isoformat(),
+                "item_count": len(items),
+            }
+            self.set_list(name, items, metadata=metadata)
+            return name, {"operation": "resync", "items": len(items), "success": True}
+
+        if isinstance(value, dict) and value.get("_list") is True:
+            if "items" not in value:
+                # List metadata without items: skipped, not emptied.
+                logger.warning(
+                    f"Skipping list {key!r} in resync: metadata without items "
+                    f"(transformation may have failed)"
+                )
+                return key, {
+                    "operation": "skip",
+                    "reason": "metadata_without_items",
+                    "success": False,
+                }
+            return as_list(key, list(value.get("items") or []))
+        if key.startswith("list:"):
+            if isinstance(value, list):
+                return as_list(key[5:], value)
+            logger.warning(
+                "Refused the scalar %r from peer %s: a key starting 'list:' is "
+                "reserved for list rows",
+                key,
+                self._peer_id,
+            )
+            return key, {"error": "refused", "success": False}
+        if self._list_exists(key):
+            self.delete_list(key)
+        if isinstance(value, dict):
+            self.set_value(key, value)
+        else:
+            self.set_value(key, {"value": value})
+        return key, {"operation": "resync", "success": True}
 
     def apply_permission_data(self, permissions: dict[str, Any]) -> dict[str, Any]:
         """Apply permission update from peer.
@@ -703,7 +958,23 @@ class RemotePeerStore:
                 fetched_at=datetime.now(UTC).isoformat(),
             )
 
+            from .replica_revocation import cleanup_after_store
+
+            cleans = getattr(self._actor.config, "auto_delete_on_revocation", False)
+            old_grant = (
+                store.read_stored_permissions(actor_id, self._peer_id)[1]
+                if cleans is True
+                else None
+            )
             success = store.store_permissions(peer_perms)
+            if success and cleans is True:
+                cleanup_after_store(
+                    self._actor.config,
+                    self._actor,
+                    self._peer_id,
+                    old_grant,
+                    peer_perms,
+                )
             return {"operation": "permission_update", "success": success}
 
         except DbError:

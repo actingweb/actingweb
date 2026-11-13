@@ -238,665 +238,252 @@ def create_mock_list_attr(list_data, list_metadata):
     return MockListAttr
 
 
-class MockListStore:
-    """Mock AttributeListStore that uses MockListAttr."""
+def _replica() -> tuple[RemotePeerStore, Any]:
+    """A RemotePeerStore over the in-memory attribute backend: the list core
+    reaches the backend's list primitives directly (it never goes through
+    ``Attributes``), so the assertions read the replica back through it."""
+    from tests.mcp_token_double import make_config
 
-    def __init__(self, list_data, list_metadata):
-        self._list_data = list_data
-        self._list_metadata = list_metadata
-        self._MockListAttr = create_mock_list_attr(list_data, list_metadata)
-        self._cache: dict = {}
+    actor = MagicMock()
+    actor.id = "actor123"
+    actor.config, store = make_config()
+    return RemotePeerStore(actor, "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6"), store
 
-    def __getattr__(self, name):
-        if name.startswith("_"):
-            raise AttributeError(name)
-        if name not in self._cache:
-            self._cache[name] = self._MockListAttr(name)
-        return self._cache[name]
 
-    def list_all(self):
-        return list(self._list_data.keys())
+def _diff(name: str, operation: str, **fields: Any) -> dict[str, Any]:
+    return {name: {"list": name, "operation": operation, **fields}}
 
 
 class TestRemotePeerStoreList:
-    """Test RemotePeerStore list operations."""
+    """List operations on RemotePeerStore."""
 
-    @pytest.fixture
-    def mock_actor(self):
-        """Create a mock ActorInterface."""
-        actor = MagicMock()
-        actor.id = "actor123"
-        actor.config = MagicMock()
-        return actor
+    def test_get_list(self):
+        remote, _ = _replica()
+        remote.set_list("my_list", [{"id": 1}, {"id": 2}, {"id": 3}])
+        assert remote.get_list("my_list") == [{"id": 1}, {"id": 2}, {"id": 3}]
+        assert remote.get_list("absent") == []
 
-    @pytest.fixture
-    def mock_list_store(self):
-        """Create mock for AttributeListStore class."""
-        list_data: dict[str, list] = {}
-        list_metadata: dict[str, dict] = {}
+    def test_set_list(self):
+        remote, _ = _replica()
+        remote.set_list("my_list", [{"id": 1}])
+        remote.set_list("my_list", [{"id": 1}, {"id": 2}])
+        assert remote.get_list("my_list") == [{"id": 1}, {"id": 2}]
 
-        with patch("actingweb.attribute_list_store.AttributeListStore") as list_mock:
-            list_mock.return_value = MockListStore(list_data, list_metadata)
-
-            # Also mock Attributes for delete_bucket
-            with patch("actingweb.attribute.Attributes") as attr_mock:
-                attr_instance = MagicMock()
-                attr_instance.delete_bucket.return_value = True
-                attr_instance.get_bucket.return_value = {}
-                attr_mock.return_value = attr_instance
-
-                yield list_mock, list_data, list_metadata
-
-    def test_get_list(self, mock_actor, mock_list_store):
-        """Test getting a list."""
-        _, list_data, _ = mock_list_store
-        list_data["items"] = [{"id": 1}, {"id": 2}]
-
-        store = RemotePeerStore(mock_actor, "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6")
-        items = store.get_list("items")
-
-        assert items == [{"id": 1}, {"id": 2}]
-
-    def test_set_list(self, mock_actor, mock_list_store):
-        """Test setting a list."""
-        _, list_data, _ = mock_list_store
-
-        store = RemotePeerStore(mock_actor, "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6")
-        store.set_list("items", [{"id": 1}, {"id": 2}])
-
-        assert list_data["items"] == [{"id": 1}, {"id": 2}]
-
-    def test_set_list_with_metadata(self, mock_actor, mock_list_store):
-        """Test setting a list with metadata (only description and explanation supported)."""
-        _, list_data, list_metadata = mock_list_store
-
-        store = RemotePeerStore(mock_actor, "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6")
-        # ListAttribute only supports description and explanation metadata
-        store.set_list(
-            "items",
+    def test_set_list_with_metadata(self):
+        remote, _ = _replica()
+        remote.set_list(
+            "my_list",
             [{"id": 1}],
-            metadata={"description": "Test list", "explanation": "A list for testing"},
+            metadata={"description": "Test list", "explanation": "For testing"},
         )
+        lst = remote._get_list_store().get("my_list")
+        assert lst.get_description() == "Test list"
+        assert lst.get_explanation() == "For testing"
 
-        assert list_data["items"] == [{"id": 1}]
-        assert list_metadata["items"] == {
-            "description": "Test list",
-            "explanation": "A list for testing",
-        }
-
-    def test_delete_list(self, mock_actor, mock_list_store):
-        """Test deleting a list."""
-        _, list_data, _ = mock_list_store
-        list_data["items"] = [{"id": 1}]
-
-        store = RemotePeerStore(mock_actor, "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6")
-        store.delete_list("items")
-
-        assert "items" not in list_data
+    def test_delete_list(self):
+        remote, _ = _replica()
+        remote.set_list("my_list", [{"id": 1}])
+        remote.delete_list("my_list")
+        assert remote.get_list("my_list") == []
+        assert remote.list_all_lists() == []
 
 
 class TestRemotePeerStoreCallbackData:
-    """Test apply_callback_data method."""
+    """apply_callback_data at target level."""
 
-    @pytest.fixture
-    def mock_actor(self):
-        """Create a mock ActorInterface."""
-        actor = MagicMock()
-        actor.id = "actor123"
-        actor.config = MagicMock()
-        return actor
+    def test_apply_scalar_dict_value(self):
+        remote, _ = _replica()
+        results = remote.apply_callback_data({"status": {"online": True}})
+        assert results["status"] == {"stored": True, "type": "scalar"}
+        assert remote.get_value("status") == {"online": True}
 
-    @pytest.fixture
-    def mock_storage(self):
-        """Create mocks for both Attributes and AttributeListStore."""
-        scalar_storage: dict[str, dict] = {}
-        list_data: dict[str, list] = {}
-        list_metadata: dict[str, dict] = {}
-
-        with patch("actingweb.attribute.Attributes") as attr_mock:
-            attr_instance = MagicMock()
-
-            def get_attr_side_effect(name: str | None = None, **kw: Any) -> dict | None:
-                if name is None:
-                    return None
-                return scalar_storage.get(name)
-
-            def set_attr_side_effect(
-                name: str | None = None, data: dict | None = None, **_kwargs: object
-            ) -> bool:
-                if name is None:
-                    return False
-                scalar_storage[name] = {"data": data, "timestamp": None}
-                return True
-
-            def delete_bucket_side_effect():
-                scalar_storage.clear()
-                list_data.clear()
-                return True
-
-            attr_instance.get_attr.side_effect = get_attr_side_effect
-            attr_instance.set_attr.side_effect = set_attr_side_effect
-            attr_instance.delete_bucket.side_effect = delete_bucket_side_effect
-            attr_instance.get_bucket.return_value = scalar_storage
-            attr_mock.return_value = attr_instance
-
-            with patch(
-                "actingweb.attribute_list_store.AttributeListStore"
-            ) as list_mock:
-                list_mock.return_value = MockListStore(list_data, list_metadata)
-
-                yield scalar_storage, list_data
-
-    def test_apply_scalar_dict_value(self, mock_actor, mock_storage):
-        """Test applying scalar dict value."""
-        scalar_storage, _ = mock_storage
-
-        store = RemotePeerStore(mock_actor, "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6")
-        results = store.apply_callback_data({"status": {"online": True}})
-
-        assert results["status"]["stored"] is True
-        assert results["status"]["type"] == "scalar"
-        assert scalar_storage["status"]["data"] == {"online": True}
-
-    def test_apply_scalar_non_dict_value(self, mock_actor, mock_storage):
-        """Test applying scalar non-dict value gets wrapped."""
-        scalar_storage, _ = mock_storage
-
-        store = RemotePeerStore(mock_actor, "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6")
-        results = store.apply_callback_data({"count": 42})
-
-        assert results["count"]["stored"] is True
+    def test_apply_scalar_non_dict_value(self):
+        remote, _ = _replica()
+        results = remote.apply_callback_data({"count": 42})
         assert results["count"]["wrapped"] is True
-        assert scalar_storage["count"]["data"] == {"value": 42}
+        assert remote.get_value("count") == {"value": 42}
 
-    def test_apply_list_append(self, mock_actor, mock_storage):
-        """Test applying list append operation."""
-        _, list_data = mock_storage
-
-        store = RemotePeerStore(mock_actor, "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6")
-        results = store.apply_callback_data(
-            {"list:items": {"operation": "append", "item": {"id": 1}}}
-        )
-
-        assert results["items"]["operation"] == "append"
+    def test_apply_list_append(self):
+        remote, _ = _replica()
+        remote.set_list("items", [{"id": 1}])
+        results = remote.apply_callback_data(_diff("items", "append", item={"id": 2}))
         assert results["items"]["success"] is True
-        assert list_data["items"] == [{"id": 1}]
+        assert remote.get_list("items") == [{"id": 1}, {"id": 2}]
 
-    def test_apply_list_extend(self, mock_actor, mock_storage):
-        """Test applying list extend operation."""
-        _, list_data = mock_storage
-
-        store = RemotePeerStore(mock_actor, "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6")
-        results = store.apply_callback_data(
-            {"list:items": {"operation": "extend", "items": [{"id": 1}, {"id": 2}]}}
+    def test_apply_list_extend(self):
+        remote, _ = _replica()
+        results = remote.apply_callback_data(
+            _diff("items", "extend", items=[{"id": 1}, {"id": 2}])
         )
-
-        assert results["items"]["operation"] == "extend"
         assert results["items"]["count"] == 2
-        assert list_data["items"] == [{"id": 1}, {"id": 2}]
+        assert remote.get_list("items") == [{"id": 1}, {"id": 2}]
 
-    def test_apply_list_insert(self, mock_actor, mock_storage):
-        """Test applying list insert operation."""
-        _, list_data = mock_storage
-        list_data["items"] = [{"id": 1}, {"id": 3}]
+    def test_apply_list_insert(self):
+        remote, _ = _replica()
+        remote.set_list("items", ["a", "c"])
+        remote.apply_callback_data(_diff("items", "insert", index=1, item="b"))
+        assert remote.get_list("items") == ["a", "b", "c"]
 
-        store = RemotePeerStore(mock_actor, "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6")
-        results = store.apply_callback_data(
-            {"list:items": {"operation": "insert", "index": 1, "item": {"id": 2}}}
+    def test_apply_list_update(self):
+        remote, _ = _replica()
+        remote.set_list("items", ["a", "b"])
+        remote.apply_callback_data(_diff("items", "update", index=1, item="B"))
+        assert remote.get_list("items") == ["a", "B"]
+
+    def test_apply_list_update_without_old_item_is_unchanged(self):
+        """An index-addressed update writes at the index."""
+        remote, _ = _replica()
+        remote.set_list("items", ["a", "b", "c"])
+        result = remote.apply_callback_data(_diff("items", "update", index=0, item="A"))
+        assert result["items"]["index"] == 0
+        assert remote.get_list("items") == ["A", "b", "c"]
+
+    def test_apply_list_update_with_old_item_and_no_index_applies_by_value(self):
+        remote, _ = _replica()
+        remote.set_list("items", [{"id": 1}, {"id": 2}])
+        remote.apply_callback_data(
+            _diff("items", "update", old_item={"id": 2}, item={"id": 2, "x": 1})
         )
+        assert remote.get_list("items") == [{"id": 1}, {"id": 2, "x": 1}]
 
-        assert results["items"]["operation"] == "insert"
-        assert results["items"]["index"] == 1
-        assert list_data["items"] == [{"id": 1}, {"id": 2}, {"id": 3}]
-
-    def test_apply_list_update(self, mock_actor, mock_storage):
-        """Test applying list update operation."""
-        _, list_data = mock_storage
-        list_data["items"] = [{"id": 1}, {"id": 2}]
-
-        store = RemotePeerStore(mock_actor, "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6")
-        results = store.apply_callback_data(
-            {"list:items": {"operation": "update", "index": 1, "item": {"id": 99}}}
+    def test_apply_list_update_with_ambiguous_old_item_falls_back_to_index(self):
+        remote, _ = _replica()
+        remote.set_list("items", ["dup", "dup", "z"])
+        remote.apply_callback_data(
+            _diff("items", "update", old_item="dup", item="new", index=1)
         )
+        assert remote.get_list("items") == ["dup", "new", "z"]
 
-        assert results["items"]["operation"] == "update"
-        assert results["items"]["index"] == 1
-        assert list_data["items"][1] == {"id": 99}
-
-    def test_apply_list_update_without_old_item_is_unchanged(
-        self, mock_actor, mock_storage
-    ):
-        """A pre-3.14 sender (or a diff from __setitem__/insert()) never
-        sends ``old_item`` -- the update must still resolve purely by
-        index, exactly as it always has."""
-        _, list_data = mock_storage
-        list_data["items"] = [{"id": 1}, {"id": 2}]
-
-        store = RemotePeerStore(mock_actor, "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6")
-        results = store.apply_callback_data(
-            {"list:items": {"operation": "update", "index": 0, "item": {"id": 100}}}
+    def test_apply_list_update_with_ambiguous_old_item_and_no_index_errors(self):
+        remote, _ = _replica()
+        remote.set_list("items", ["dup", "dup"])
+        result = remote.apply_callback_data(
+            _diff("items", "update", old_item="dup", item="new")
         )
-
-        assert results["items"]["operation"] == "update"
-        assert results["items"]["index"] == 0
-        assert list_data["items"][0] == {"id": 100}
-
-    def test_apply_list_update_with_old_item_and_no_index_applies_by_value(
-        self, mock_actor, mock_storage
-    ):
-        """update_by_handle() diffs carry ``old_item`` but never an
-        ``index`` -- a handle is not positional. A unique value match must
-        still be enough to apply the update."""
-        _, list_data = mock_storage
-        list_data["items"] = [{"id": 1}, {"id": 2}]
-
-        store = RemotePeerStore(mock_actor, "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6")
-        results = store.apply_callback_data(
-            {
-                "list:items": {
-                    "operation": "update",
-                    "old_item": {"id": 2},
-                    "item": {"id": 99},
-                }
-            }
-        )
-
-        assert results["items"]["operation"] == "update"
-        assert results["items"].get("success") is True
-        assert results["items"]["index"] == 1
-        assert list_data["items"] == [{"id": 1}, {"id": 99}]
-
-    def test_apply_list_update_with_ambiguous_old_item_falls_back_to_index(
-        self, mock_actor, mock_storage
-    ):
-        """Two rows share the same value as ``old_item`` -- which one the
-        sender meant is genuinely ambiguous, so the match-by-value path
-        must not guess. With an index present, fall back to it."""
-        _, list_data = mock_storage
-        list_data["items"] = [{"id": 1}, {"id": 1}, {"id": 1}]
-
-        store = RemotePeerStore(mock_actor, "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6")
-        results = store.apply_callback_data(
-            {
-                "list:items": {
-                    "operation": "update",
-                    "index": 2,
-                    "old_item": {"id": 1},
-                    "item": {"id": 99},
-                }
-            }
-        )
-
-        assert results["items"]["operation"] == "update"
-        assert results["items"]["index"] == 2
-        assert list_data["items"] == [{"id": 1}, {"id": 1}, {"id": 99}]
-
-    def test_apply_list_update_with_ambiguous_old_item_and_no_index_errors(
-        self, mock_actor, mock_storage
-    ):
-        """Same ambiguity as above, but from an update_by_handle() diff --
-        no index to fall back to. Report an explicit error rather than
-        applying to an arbitrary one of the matching rows."""
-        _, list_data = mock_storage
-        list_data["items"] = [{"id": 1}, {"id": 1}]
-
-        store = RemotePeerStore(mock_actor, "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6")
-        results = store.apply_callback_data(
-            {
-                "list:items": {
-                    "operation": "update",
-                    "old_item": {"id": 1},
-                    "item": {"id": 99},
-                }
-            }
-        )
-
-        assert "error" in results["items"]
-        assert list_data["items"] == [{"id": 1}, {"id": 1}]
+        assert result["items"]["error"] == "ambiguous"
+        assert result.out_of_step is None
+        assert remote.get_list("items") == ["dup", "dup"]
 
     def test_apply_list_update_with_ambiguous_old_item_and_no_index_logs_a_warning(
-        self, mock_actor, mock_storage, caplog
+        self, caplog
     ):
-        """The deliberate no-write on an ambiguous value match leaves this
-        replica out of sync, and every caller discards the result dict --
-        so the WARNING is the only operator-visible signal. Pin it."""
-        import logging
-
-        _, list_data = mock_storage
-        list_data["items"] = [{"id": 1}, {"id": 1}]
-
-        store = RemotePeerStore(mock_actor, "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6")
-        with caplog.at_level(logging.WARNING, logger="actingweb.remote_storage"):
-            results = store.apply_callback_data(
-                {
-                    "list:items": {
-                        "operation": "update",
-                        "old_item": {"id": 1},
-                        "item": {"id": 99},
-                    }
-                }
+        remote, _ = _replica()
+        remote.set_list("items", ["dup", "dup"])
+        with caplog.at_level("WARNING"):
+            remote.apply_callback_data(
+                _diff("items", "update", old_item="dup", item="n")
             )
+        assert "matched 2 rows" in caplog.text
 
-        assert "error" in results["items"]
-        dropped = [
-            r for r in caplog.records if "value-addressed update" in r.getMessage()
-        ]
-        assert len(dropped) == 1
-        assert "items" in dropped[0].getMessage()  # names the list
-        assert "resync" in dropped[0].getMessage()  # names the remedy
+    def test_apply_list_update_with_null_old_item_applies_by_value(self):
+        remote, _ = _replica()
+        remote.set_list("items", ["a", None])
+        remote.apply_callback_data(_diff("items", "update", old_item=None, item="b"))
+        assert remote.get_list("items") == ["a", "b"]
 
-    def test_apply_list_update_with_null_old_item_applies_by_value(
-        self, mock_actor, mock_storage
-    ):
-        """JSON null is a legal pre-update value. A diff carrying
-        ``"old_item": null`` with no index must still resolve by value
-        (key presence, not ``is not None``)."""
-        _, list_data = mock_storage
-        list_data["items"] = [{"id": 1}, None, {"id": 3}]
-
-        store = RemotePeerStore(mock_actor, "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6")
-        results = store.apply_callback_data(
-            {
-                "list:items": {
-                    "operation": "update",
-                    "old_item": None,
-                    "item": {"id": 2},
-                }
-            }
-        )
-
-        assert results["items"].get("success") is True
-        assert results["items"]["index"] == 1
-        assert list_data["items"] == [{"id": 1}, {"id": 2}, {"id": 3}]
-
-    def test_apply_list_remove_of_a_none_item_applies(self, mock_actor, mock_storage):
-        """``remove`` diffs for a None-valued item carry ``"item": null``;
-        the receiver's membership gate must accept it and delete the row."""
-        _, list_data = mock_storage
-        list_data["items"] = [{"id": 1}, None, {"id": 3}]
-
-        store = RemotePeerStore(mock_actor, "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6")
-        results = store.apply_callback_data(
-            {"list:items": {"operation": "remove", "item": None}}
-        )
-
-        assert results["items"].get("success") is True
-        assert results["items"]["index"] == 1
-        assert list_data["items"] == [{"id": 1}, {"id": 3}]
+    def test_apply_list_remove_of_a_none_item_applies(self):
+        remote, _ = _replica()
+        remote.set_list("items", ["a", None, "c"])
+        remote.apply_callback_data(_diff("items", "remove", item=None))
+        assert remote.get_list("items") == ["a", "c"]
 
     def test_apply_list_update_with_old_item_prefers_value_match_over_drifted_index(
-        self, mock_actor, mock_storage
+        self,
     ):
-        """Phase 10: update_where()/update_by_handle() diffs carry
-        ``old_item``, the pre-update value from the SENDER's snapshot.
-        This side's list has drifted since (an earlier diff already
-        applied and shifted positions), so the index the sender saw
-        ("1") no longer names the same row here -- the value match
-        must win."""
-        _, list_data = mock_storage
-        # Sender's snapshot was [{"id": 1}, {"id": 2}] with old_item
-        # {"id": 2} at index 1. This side already has an extra row up
-        # front, so {"id": 2} now actually sits at index 2.
-        list_data["items"] = [{"id": 0}, {"id": 1}, {"id": 2}]
-
-        store = RemotePeerStore(mock_actor, "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6")
-        results = store.apply_callback_data(
-            {
-                "list:items": {
-                    "operation": "update",
-                    "index": 1,
-                    "old_item": {"id": 2},
-                    "item": {"id": 99},
-                }
-            }
+        remote, _ = _replica()
+        remote.set_list("items", ["x", "target", "y"])
+        remote.apply_callback_data(
+            _diff("items", "update", old_item="target", item="T", index=0)
         )
-
-        assert results["items"]["operation"] == "update"
-        assert results["items"]["index"] == 2  # matched by value, not the stale index
-        assert list_data["items"] == [{"id": 0}, {"id": 1}, {"id": 99}]
+        assert remote.get_list("items") == ["x", "T", "y"]
 
     def test_apply_list_update_with_old_item_falls_back_to_index_if_value_not_found(
-        self, mock_actor, mock_storage
+        self,
     ):
-        """If no row currently holds ``old_item`` (already updated by
-        another diff, say), fall back to the index rather than doing
-        nothing."""
-        _, list_data = mock_storage
-        list_data["items"] = [{"id": 1}, {"id": 2}]
-
-        store = RemotePeerStore(mock_actor, "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6")
-        results = store.apply_callback_data(
-            {
-                "list:items": {
-                    "operation": "update",
-                    "index": 1,
-                    "old_item": {"id": "not-present-anywhere"},
-                    "item": {"id": 99},
-                }
-            }
+        remote, _ = _replica()
+        remote.set_list("items", ["a", "b"])
+        remote.apply_callback_data(
+            _diff("items", "update", old_item="gone", item="B", index=1)
         )
+        assert remote.get_list("items") == ["a", "B"]
 
-        assert results["items"]["operation"] == "update"
-        assert results["items"]["index"] == 1
-        assert list_data["items"][1] == {"id": 99}
+    def test_apply_list_delete(self):
+        remote, _ = _replica()
+        remote.set_list("items", ["a", "b", "c"])
+        remote.apply_callback_data(_diff("items", "delete", index=1))
+        assert remote.get_list("items") == ["a", "c"]
 
-    def test_apply_list_delete(self, mock_actor, mock_storage):
-        """Test applying list delete operation."""
-        _, list_data = mock_storage
-        list_data["items"] = [{"id": 1}, {"id": 2}, {"id": 3}]
+    def test_apply_list_pop(self):
+        remote, _ = _replica()
+        remote.set_list("items", ["a", "b", "c"])
+        remote.apply_callback_data(_diff("items", "pop"))
+        assert remote.get_list("items") == ["a", "b"]
+        remote.apply_callback_data(_diff("items", "pop", index=-2))
+        assert remote.get_list("items") == ["b"]
 
-        store = RemotePeerStore(mock_actor, "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6")
-        results = store.apply_callback_data(
-            {"list:items": {"operation": "delete", "index": 1}}
-        )
+    def test_apply_list_clear(self):
+        remote, _ = _replica()
+        remote.set_list("items", ["a"])
+        remote.apply_callback_data(_diff("items", "clear"))
+        assert remote.get_list("items") == []
 
-        assert results["items"]["operation"] == "delete"
-        assert results["items"]["index"] == 1
-        assert list_data["items"] == [{"id": 1}, {"id": 3}]
+    def test_apply_list_remove(self):
+        remote, _ = _replica()
+        remote.set_list("items", ["a", "b", "a"])
+        remote.apply_callback_data(_diff("items", "remove", item="a"))
+        assert remote.get_list("items") == ["b", "a"]
 
-    def test_apply_list_pop(self, mock_actor, mock_storage):
-        """Test applying list pop operation."""
-        _, list_data = mock_storage
-        list_data["items"] = [{"id": 1}, {"id": 2}]
-
-        store = RemotePeerStore(mock_actor, "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6")
-        results = store.apply_callback_data({"list:items": {"operation": "pop"}})
-
-        assert results["items"]["operation"] == "pop"
-        assert results["items"]["success"] is True
-        assert list_data["items"] == [{"id": 1}]
-
-    def test_apply_list_clear(self, mock_actor, mock_storage):
-        """Test applying list clear operation."""
-        _, list_data = mock_storage
-        list_data["items"] = [{"id": 1}, {"id": 2}]
-
-        store = RemotePeerStore(mock_actor, "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6")
-        results = store.apply_callback_data({"list:items": {"operation": "clear"}})
-
-        assert results["items"]["operation"] == "clear"
-        assert results["items"]["success"] is True
-        assert list_data["items"] == []
-
-    def test_apply_list_remove(self, mock_actor, mock_storage):
-        """Test applying list remove operation."""
-        _, list_data = mock_storage
-        list_data["items"] = [{"id": 1}, {"id": 2}]
-
-        store = RemotePeerStore(mock_actor, "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6")
-        results = store.apply_callback_data(
-            {"list:items": {"operation": "remove", "item": {"id": 1}}}
-        )
-
-        assert results["items"]["operation"] == "remove"
-        assert results["items"]["success"] is True
-        assert list_data["items"] == [{"id": 2}]
-
-    def test_apply_list_metadata_ignored(self, mock_actor, mock_storage):
-        """Test metadata-only operation is ignored."""
-        store = RemotePeerStore(mock_actor, "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6")
-        results = store.apply_callback_data({"list:items": {"operation": "metadata"}})
-
-        assert results["items"]["operation"] == "metadata"
-        assert results["items"]["ignored"] is True
+    def test_apply_list_metadata_ignored(self):
+        remote, _ = _replica()
+        result = remote.apply_callback_data(_diff("items", "metadata", description="d"))
+        assert result["items"] == {"operation": "metadata", "ignored": True}
 
 
 class TestRemotePeerStoreResync:
-    """Test apply_resync_data method."""
+    """apply_resync_data replaces only the properties it carries."""
 
-    @pytest.fixture
-    def mock_actor(self):
-        """Create a mock ActorInterface."""
-        actor = MagicMock()
-        actor.id = "actor123"
-        actor.config = MagicMock()
-        return actor
+    def test_resync_preserves_other_properties(self):
+        remote, _ = _replica()
+        remote.set_value("keep", {"v": 1})
+        remote.apply_resync_data({"changed": {"v": 2}})
+        assert remote.get_value("keep") == {"v": 1}
+        assert remote.get_value("changed") == {"v": 2}
 
-    @pytest.fixture
-    def mock_storage(self):
-        """Create mocks for both Attributes and AttributeListStore."""
-        scalar_storage: dict[str, dict] = {}
-        list_data: dict[str, list] = {}
-        list_metadata: dict[str, dict] = {}
-
-        with patch("actingweb.attribute.Attributes") as attr_mock:
-            attr_instance = MagicMock()
-
-            def set_attr_side_effect(
-                name: str | None = None, data: dict | None = None, **_kwargs: object
-            ) -> bool:
-                if name is None:
-                    return False
-                scalar_storage[name] = {"data": data, "timestamp": None}
-                return True
-
-            def delete_bucket_side_effect() -> bool:
-                scalar_storage.clear()
-                list_data.clear()
-                return True
-
-            attr_instance.set_attr.side_effect = set_attr_side_effect
-            attr_instance.delete_bucket.side_effect = delete_bucket_side_effect
-            attr_mock.return_value = attr_instance
-
-            with patch(
-                "actingweb.attribute_list_store.AttributeListStore"
-            ) as list_mock:
-                list_mock.return_value = MockListStore(list_data, list_metadata)
-
-                yield scalar_storage, list_data
-
-    def test_resync_preserves_other_properties(self, mock_actor, mock_storage):
-        """Test resync replaces only specified properties, preserving others.
-
-        This is critical for multi-subscription scenarios where different
-        subscriptions sync different properties to the same peer store.
-        A resync on one subscription should NOT delete data from other subscriptions.
-        """
-        scalar_storage, _ = mock_storage
-        scalar_storage["old_key"] = {"data": {"old": True}, "timestamp": None}
-
-        store = RemotePeerStore(mock_actor, "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6")
-        results = store.apply_resync_data({"new_key": {"new": True}})
-
-        # old_key should be PRESERVED (not deleted)
-        assert "old_key" in scalar_storage
-        assert scalar_storage["old_key"]["data"] == {"old": True}
-        # new_key should be added
-        assert scalar_storage["new_key"]["data"] == {"new": True}
-        assert results["new_key"]["operation"] == "resync"
-        assert results["new_key"]["success"] is True
-
-    def test_resync_handles_lists(self, mock_actor, mock_storage):
-        """Test resync handles list data."""
-        _, list_data = mock_storage
-
-        store = RemotePeerStore(mock_actor, "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6")
-        results = store.apply_resync_data({"list:items": [{"id": 1}, {"id": 2}]})
-
-        assert results["items"]["operation"] == "resync"
+    def test_resync_handles_lists(self):
+        remote, _ = _replica()
+        results = remote.apply_resync_data({"list:items": [{"id": 1}, {"id": 2}]})
         assert results["items"]["items"] == 2
-        assert list_data["items"] == [{"id": 1}, {"id": 2}]
+        assert remote.get_list("items") == [{"id": 1}, {"id": 2}]
 
-    def test_resync_wraps_non_dict_values(self, mock_actor, mock_storage):
-        """Test resync wraps non-dict values."""
-        scalar_storage, _ = mock_storage
+    def test_resync_wraps_non_dict_values(self):
+        remote, _ = _replica()
+        remote.apply_resync_data({"count": 5})
+        assert remote.get_value("count") == {"value": 5}
 
-        store = RemotePeerStore(mock_actor, "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6")
-        results = store.apply_resync_data({"count": 42})
+    def test_resync_preserves_other_lists(self):
+        remote, _ = _replica()
+        remote.set_list("other", ["x"])
+        remote.apply_resync_data({"items": {"_list": True, "items": ["a"]}})
+        assert remote.get_list("other") == ["x"]
+        assert remote.get_list("items") == ["a"]
 
-        assert scalar_storage["count"]["data"] == {"value": 42}
-        assert results["count"]["operation"] == "resync"
-        assert results["count"]["success"] is True
+    def test_resync_replaces_same_list(self):
+        remote, _ = _replica()
+        remote.set_list("items", ["old1", "old2"])
+        remote.apply_resync_data({"items": {"_list": True, "items": ["new"]}})
+        assert remote.get_list("items") == ["new"]
 
-    def test_resync_preserves_other_lists(self, mock_actor, mock_storage):
-        """Test resync of one list does not delete other lists.
-
-        This tests the multi-subscription scenario:
-        - Subscription 1: syncs memory_items (100 items)
-        - Subscription 2: syncs status
-        - Resync on Subscription 2 should NOT delete memory_items
-        """
-        scalar_storage, list_data = mock_storage
-        # Pre-populate with existing list (from a different subscription)
-        list_data["memory_items"] = [{"id": 1}, {"id": 2}, {"id": 3}]
-
-        store = RemotePeerStore(mock_actor, "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6")
-        # Resync only "status" property (not memory_items)
-        results = store.apply_resync_data({"status": {"online": True}})
-
-        # memory_items should be preserved
-        assert "memory_items" in list_data
-        assert len(list_data["memory_items"]) == 3
-        assert list_data["memory_items"] == [{"id": 1}, {"id": 2}, {"id": 3}]
-        # status should be added
-        assert scalar_storage["status"]["data"] == {"online": True}
-        assert results["status"]["success"] is True
-
-    def test_resync_replaces_same_list(self, mock_actor, mock_storage):
-        """Test resync replaces the content of the same list."""
-        _, list_data = mock_storage
-        # Pre-populate list
-        list_data["items"] = [{"old": 1}, {"old": 2}]
-
-        store = RemotePeerStore(mock_actor, "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6")
-        # Resync the same list with new content
-        results = store.apply_resync_data({"list:items": [{"new": 1}]})
-
-        # List should be replaced with new content
-        assert list_data["items"] == [{"new": 1}]
-        assert results["items"]["operation"] == "resync"
-        assert results["items"]["items"] == 1
-
-    def test_resync_mixed_preserves_unrelated(self, mock_actor, mock_storage):
-        """Test resync with mixed content preserves unrelated data.
-
-        Comprehensive test of the multi-subscription data preservation behavior.
-        """
-        scalar_storage, list_data = mock_storage
-        # Pre-populate with existing data from "other subscriptions"
-        scalar_storage["other_scalar"] = {"data": {"keep": "me"}, "timestamp": None}
-        list_data["other_list"] = [{"preserve": True}]
-
-        store = RemotePeerStore(mock_actor, "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6")
-        # Resync with completely different properties
-        results = store.apply_resync_data(
-            {
-                "new_scalar": {"value": "new"},
-                "list:new_list": [{"item": 1}, {"item": 2}],
-            }
+    def test_resync_mixed_preserves_unrelated(self):
+        remote, _ = _replica()
+        remote.set_value("unrelated", {"v": 0})
+        remote.set_list("unrelated_list", ["u"])
+        remote.apply_resync_data(
+            {"scalar": {"v": 1}, "items": {"_list": True, "items": [1, 2]}}
         )
-
-        # Original data preserved
-        assert "other_scalar" in scalar_storage
-        assert scalar_storage["other_scalar"]["data"] == {"keep": "me"}
-        assert "other_list" in list_data
-        assert list_data["other_list"] == [{"preserve": True}]
-        # New data added
-        assert scalar_storage["new_scalar"]["data"] == {"value": "new"}
-        assert list_data["new_list"] == [{"item": 1}, {"item": 2}]
-        assert results["new_scalar"]["success"] is True
-        assert results["new_list"]["success"] is True
+        assert remote.get_value("unrelated") == {"v": 0}
+        assert remote.get_list("unrelated_list") == ["u"]
+        assert remote.get_value("scalar") == {"v": 1}
+        assert remote.get_list("items") == [1, 2]
 
 
 class TestRemotePeerStoreStats:
@@ -1002,109 +589,44 @@ class TestRemotePeerStoreListAllScalars:
 
 
 class TestRemotePeerStoreGetAllProperties:
-    """Test get_all_properties method."""
+    """get_all_properties over the in-memory backend."""
 
-    @pytest.fixture
-    def mock_actor(self):
-        """Create a mock ActorInterface."""
-        actor = MagicMock()
-        actor.id = "actor123"
-        actor.config = MagicMock()
-        return actor
-
-    @pytest.fixture
-    def mock_storage(self):
-        """Create mocks for both Attributes and AttributeListStore."""
-        scalar_storage: dict[str, dict] = {}
-        list_data: dict[str, list] = {}
-        list_metadata: dict[str, dict] = {}
-
-        with patch("actingweb.attribute.Attributes") as attr_mock:
-            attr_instance = MagicMock()
-
-            def get_attr_side_effect(name: str | None = None, **kw: Any) -> dict | None:
-                if name is None:
-                    return None
-                return scalar_storage.get(name)
-
-            def get_bucket_side_effect(**kw: Any):
-                return scalar_storage
-
-            attr_instance.get_attr.side_effect = get_attr_side_effect
-            attr_instance.get_bucket.side_effect = get_bucket_side_effect
-            attr_mock.return_value = attr_instance
-
-            with patch(
-                "actingweb.attribute_list_store.AttributeListStore"
-            ) as list_mock:
-                list_mock.return_value = MockListStore(list_data, list_metadata)
-
-                yield scalar_storage, list_data
-
-    def test_get_all_properties_mixed(self, mock_actor, mock_storage):
-        """Test getting all properties with both lists and scalars."""
-        scalar_storage, list_data = mock_storage
-        scalar_storage["status"] = {"data": {"active": True}, "timestamp": None}
-        list_data["items"] = [{"id": 1}, {"id": 2}]
-
-        store = RemotePeerStore(mock_actor, "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6")
-        props = store.get_all_properties()
-
-        assert "items" in props
+    def test_get_all_properties_mixed(self):
+        remote, _ = _replica()
+        remote.set_value("status", {"active": True})
+        remote.set_list("items", [{"id": 1}, {"id": 2}])
+        props = remote.get_all_properties()
         assert props["items"]["type"] == "list"
         assert props["items"]["value"] == [{"id": 1}, {"id": 2}]
         assert props["items"]["item_count"] == 2
-
-        assert "status" in props
         assert props["status"]["type"] == "scalar"
         assert props["status"]["value"] == {"active": True}
 
-    def test_get_all_properties_empty(self, mock_actor, mock_storage):
-        """Test getting all properties when store is empty."""
-        store = RemotePeerStore(mock_actor, "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6")
-        props = store.get_all_properties()
+    def test_get_all_properties_empty(self):
+        remote, _ = _replica()
+        assert remote.get_all_properties() == {}
 
-        assert props == {}
-
-    def test_get_all_properties_only_scalars(self, mock_actor, mock_storage):
-        """Test getting all properties when only scalars exist."""
-        scalar_storage, _ = mock_storage
-        scalar_storage["key1"] = {"data": {"val": 1}, "timestamp": None}
-        scalar_storage["key2"] = {"data": {"val": 2}, "timestamp": None}
-
-        store = RemotePeerStore(mock_actor, "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6")
-        props = store.get_all_properties()
-
+    def test_get_all_properties_only_scalars(self):
+        remote, _ = _replica()
+        remote.set_value("key1", {"val": 1})
+        remote.set_value("key2", {"val": 2})
+        props = remote.get_all_properties()
         assert len(props) == 2
-        assert props["key1"]["type"] == "scalar"
-        assert props["key2"]["type"] == "scalar"
+        assert {p["type"] for p in props.values()} == {"scalar"}
 
-    def test_get_all_properties_only_lists(self, mock_actor, mock_storage):
-        """Test getting all properties when only lists exist."""
-        _, list_data = mock_storage
-        list_data["list_a"] = [{"id": 1}]
-        list_data["list_b"] = [{"id": 2}, {"id": 3}]
-
-        store = RemotePeerStore(mock_actor, "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6")
-        props = store.get_all_properties()
-
+    def test_get_all_properties_only_lists(self):
+        remote, _ = _replica()
+        remote.set_list("list_a", [{"id": 1}])
+        remote.set_list("list_b", [{"id": 2}, {"id": 3}])
+        props = remote.get_all_properties()
         assert len(props) == 2
-        assert props["list_a"]["type"] == "list"
         assert props["list_a"]["item_count"] == 1
-        assert props["list_b"]["type"] == "list"
         assert props["list_b"]["item_count"] == 2
 
-    def test_get_all_properties_skips_none_scalars(self, mock_actor, mock_storage):
-        """Test that scalars with None value are excluded."""
-        scalar_storage, _ = mock_storage
-        # get_attr returns this dict, but get_value extracts .get("data")
-        # If data is None, the property is skipped
-        scalar_storage["empty_key"] = {"data": None, "timestamp": None}
-
-        store = RemotePeerStore(mock_actor, "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6")
-        props = store.get_all_properties()
-
-        assert "empty_key" not in props
+    def test_get_all_properties_skips_none_scalars(self):
+        remote, store = _replica()
+        store.bucket("actor123", remote.bucket)["empty_key"] = {"data": None}
+        assert "empty_key" not in remote.get_all_properties()
 
 
 class TestRemotePeerStoreCleanup:

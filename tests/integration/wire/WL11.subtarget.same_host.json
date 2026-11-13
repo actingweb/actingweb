@@ -147,25 +147,15 @@
        }
       },
       "replica": {
-       "lists": {},
-       "scalars": {
-        "index": {
-         "value": 0
-        },
-        "item": {
-         "id": "a",
-         "text": "one"
-        },
-        "length": {
-         "value": 1
-        },
-        "list": {
-         "value": "notes"
-        },
-        "operation": {
-         "value": "append"
-        }
-       }
+       "lists": {
+        "notes": [
+         {
+          "id": "a",
+          "text": "one"
+         }
+        ]
+       },
+       "scalars": {}
       },
       "subscriptions": [
        {
@@ -398,24 +388,18 @@
        }
       },
       "replica": {
-       "lists": {},
-       "scalars": {
-        "index": {
-         "value": 0
-        },
-        "item": {
-         "id": "b"
-        },
-        "length": {
-         "value": 2
-        },
-        "list": {
-         "value": "notes"
-        },
-        "operation": {
-         "value": "insert"
-        }
-       }
+       "lists": {
+        "notes": [
+         {
+          "id": "b"
+         },
+         {
+          "id": "a",
+          "text": "one"
+         }
+        ]
+       },
+       "scalars": {}
       },
       "subscriptions": [
        {
@@ -651,24 +635,21 @@
        }
       },
       "replica": {
-       "lists": {},
-       "scalars": {
-        "index": {
-         "value": 1
-        },
-        "item": {
-         "id": "c"
-        },
-        "length": {
-         "value": 3
-        },
-        "list": {
-         "value": "notes"
-        },
-        "operation": {
-         "value": "insert"
-        }
-       }
+       "lists": {
+        "notes": [
+         {
+          "id": "b"
+         },
+         {
+          "id": "c"
+         },
+         {
+          "id": "a",
+          "text": "one"
+         }
+        ]
+       },
+       "scalars": {}
       },
       "subscriptions": [
        {
@@ -909,25 +890,22 @@
        }
       },
       "replica": {
-       "lists": {},
-       "scalars": {
-        "index": {
-         "value": 0
-        },
-        "item": {
-         "id": "b",
-         "text": "two, again"
-        },
-        "length": {
-         "value": 3
-        },
-        "list": {
-         "value": "notes"
-        },
-        "operation": {
-         "value": "update"
-        }
-       }
+       "lists": {
+        "notes": [
+         {
+          "id": "b",
+          "text": "two, again"
+         },
+         {
+          "id": "c"
+         },
+         {
+          "id": "a",
+          "text": "one"
+         }
+        ]
+       },
+       "scalars": {}
       },
       "subscriptions": [
        {
@@ -1175,28 +1153,23 @@
        }
       },
       "replica": {
-       "lists": {},
-       "scalars": {
-        "index": {
-         "value": 0
-        },
-        "item": {
-         "id": "c",
-         "v": 2
-        },
-        "length": {
-         "value": 3
-        },
-        "list": {
-         "value": "notes"
-        },
-        "old_item": {
-         "id": "c"
-        },
-        "operation": {
-         "value": "update"
-        }
-       }
+       "lists": {
+        "notes": [
+         {
+          "id": "b",
+          "text": "two, again"
+         },
+         {
+          "id": "c",
+          "v": 2
+         },
+         {
+          "id": "a",
+          "text": "one"
+         }
+        ]
+       },
+       "scalars": {}
       },
       "subscriptions": [
        {
@@ -1453,28 +1426,19 @@
        }
       },
       "replica": {
-       "lists": {},
-       "scalars": {
-        "index": {
-         "value": 1
-        },
-        "item": {
-         "id": "c",
-         "v": 2
-        },
-        "length": {
-         "value": 2
-        },
-        "list": {
-         "value": "notes"
-        },
-        "old_item": {
-         "id": "c"
-        },
-        "operation": {
-         "value": "delete"
-        }
-       }
+       "lists": {
+        "notes": [
+         {
+          "id": "b",
+          "text": "two, again"
+         },
+         {
+          "id": "a",
+          "text": "one"
+         }
+        ]
+       },
+       "scalars": {}
       },
       "subscriptions": [
        {
@@ -1724,41 +1688,28 @@
        }
       },
       "replica": {
-       "lists": {},
-       "scalars": {
-        "index": {
-         "value": 1
-        },
-        "item": {
-         "id": "c",
-         "v": 2
-        },
-        "items": {
-         "value": [
-          {
-           "id": "d"
-          },
-          {
-           "id": "e"
-          },
-          {
-           "id": "f"
-          }
-         ]
-        },
-        "length": {
-         "value": 5
-        },
-        "list": {
-         "value": "notes"
-        },
-        "old_item": {
-         "id": "c"
-        },
-        "operation": {
-         "value": "extend"
-        }
-       }
+       "lists": {
+        "notes": [
+         {
+          "id": "b",
+          "text": "two, again"
+         },
+         {
+          "id": "a",
+          "text": "one"
+         },
+         {
+          "id": "d"
+         },
+         {
+          "id": "e"
+         },
+         {
+          "id": "f"
+         }
+        ]
+       },
+       "scalars": {}
       },
       "subscriptions": [
        {
@@ -2033,41 +1984,25 @@
        }
       },
       "replica": {
-       "lists": {},
-       "scalars": {
-        "index": {
-         "value": -1
-        },
-        "item": {
-         "id": "c",
-         "v": 2
-        },
-        "items": {
-         "value": [
-          {
-           "id": "d"
-          },
-          {
-           "id": "e"
-          },
-          {
-           "id": "f"
-          }
-         ]
-        },
-        "length": {
-         "value": 4
-        },
-        "list": {
-         "value": "notes"
-        },
-        "old_item": {
-         "id": "c"
-        },
-        "operation": {
-         "value": "pop"
-        }
-       }
+       "lists": {
+        "notes": [
+         {
+          "id": "b",
+          "text": "two, again"
+         },
+         {
+          "id": "a",
+          "text": "one"
+         },
+         {
+          "id": "d"
+         },
+         {
+          "id": "e"
+         }
+        ]
+       },
+       "scalars": {}
       },
       "subscriptions": [
        {
@@ -2329,41 +2264,21 @@
        }
       },
       "replica": {
-       "lists": {},
-       "scalars": {
-        "index": {
-         "value": 0
-        },
-        "item": {
-         "id": "c",
-         "v": 2
-        },
-        "items": {
-         "value": [
-          {
-           "id": "d"
-          },
-          {
-           "id": "e"
-          },
-          {
-           "id": "f"
-          }
-         ]
-        },
-        "length": {
-         "value": 3
-        },
-        "list": {
-         "value": "notes"
-        },
-        "old_item": {
-         "id": "c"
-        },
-        "operation": {
-         "value": "pop"
-        }
-       }
+       "lists": {
+        "notes": [
+         {
+          "id": "a",
+          "text": "one"
+         },
+         {
+          "id": "d"
+         },
+         {
+          "id": "e"
+         }
+        ]
+       },
+       "scalars": {}
       },
       "subscriptions": [
        {
@@ -2631,40 +2546,18 @@
        }
       },
       "replica": {
-       "lists": {},
-       "scalars": {
-        "index": {
-         "value": 0
-        },
-        "item": {
-         "id": "d"
-        },
-        "items": {
-         "value": [
-          {
-           "id": "d"
-          },
-          {
-           "id": "e"
-          },
-          {
-           "id": "f"
-          }
-         ]
-        },
-        "length": {
-         "value": 2
-        },
-        "list": {
-         "value": "notes"
-        },
-        "old_item": {
-         "id": "c"
-        },
-        "operation": {
-         "value": "remove"
-        }
-       }
+       "lists": {
+        "notes": [
+         {
+          "id": "a",
+          "text": "one"
+         },
+         {
+          "id": "e"
+         }
+        ]
+       },
+       "scalars": {}
       },
       "subscriptions": [
        {
@@ -2938,40 +2831,18 @@
        }
       },
       "replica": {
-       "lists": {},
-       "scalars": {
-        "index": {
-         "value": 0
-        },
-        "item": {
-         "id": "d"
-        },
-        "items": {
-         "value": [
-          {
-           "id": "d"
-          },
-          {
-           "id": "e"
-          },
-          {
-           "id": "f"
-          }
-         ]
-        },
-        "length": {
-         "value": 2
-        },
-        "list": {
-         "value": "notes"
-        },
-        "old_item": {
-         "id": "c"
-        },
-        "operation": {
-         "value": "metadata"
-        }
-       }
+       "lists": {
+        "notes": [
+         {
+          "id": "a",
+          "text": "one"
+         },
+         {
+          "id": "e"
+         }
+        ]
+       },
+       "scalars": {}
       },
       "subscriptions": [
        {
@@ -3244,40 +3115,10 @@
        }
       },
       "replica": {
-       "lists": {},
-       "scalars": {
-        "index": {
-         "value": 0
-        },
-        "item": {
-         "id": "d"
-        },
-        "items": {
-         "value": [
-          {
-           "id": "d"
-          },
-          {
-           "id": "e"
-          },
-          {
-           "id": "f"
-          }
-         ]
-        },
-        "length": {
-         "value": 0
-        },
-        "list": {
-         "value": "notes"
-        },
-        "old_item": {
-         "id": "c"
-        },
-        "operation": {
-         "value": "clear"
-        }
-       }
+       "lists": {
+        "notes": []
+       },
+       "scalars": {}
       },
       "subscriptions": [
        {
@@ -3556,39 +3397,7 @@
       },
       "replica": {
        "lists": {},
-       "scalars": {
-        "index": {
-         "value": 0
-        },
-        "item": {
-         "id": "d"
-        },
-        "items": {
-         "value": [
-          {
-           "id": "d"
-          },
-          {
-           "id": "e"
-          },
-          {
-           "id": "f"
-          }
-         ]
-        },
-        "length": {
-         "value": 0
-        },
-        "list": {
-         "value": "notes"
-        },
-        "old_item": {
-         "id": "c"
-        },
-        "operation": {
-         "value": "delete_all"
-        }
-       }
+       "scalars": {}
       },
       "subscriptions": [
        {

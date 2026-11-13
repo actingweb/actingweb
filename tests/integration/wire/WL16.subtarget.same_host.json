@@ -149,8 +149,8 @@
       "replica": {
        "lists": {},
        "scalars": {
-        "v": {
-         "value": 1
+        "first": {
+         "v": 1
         }
        }
       },

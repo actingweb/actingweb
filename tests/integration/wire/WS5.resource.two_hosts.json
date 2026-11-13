@@ -149,8 +149,10 @@
       "replica": {
        "lists": {},
        "scalars": {
-        "v": {
-         "value": 2
+        "q": {
+         "k": {
+          "v": 2
+         }
         }
        }
       },
@@ -348,8 +350,10 @@
       "replica": {
        "lists": {},
        "scalars": {
-        "v": {
-         "value": 2
+        "q": {
+         "k": {
+          "v": 2
+         }
         }
        }
       },

@@ -147,24 +147,14 @@
        }
       },
       "replica": {
-       "lists": {},
-       "scalars": {
-        "index": {
-         "value": 0
-        },
-        "item": {
-         "id": "a"
-        },
-        "length": {
-         "value": 1
-        },
-        "list": {
-         "value": "notes"
-        },
-        "operation": {
-         "value": "append"
-        }
-       }
+       "lists": {
+        "notes": [
+         {
+          "id": "a"
+         }
+        ]
+       },
+       "scalars": {}
       },
       "subscriptions": [
        {
@@ -390,24 +380,14 @@
        }
       },
       "replica": {
-       "lists": {},
-       "scalars": {
-        "index": {
-         "value": 0
-        },
-        "item": {
-         "id": "a"
-        },
-        "length": {
-         "value": 1
-        },
-        "list": {
-         "value": "notes"
-        },
-        "operation": {
-         "value": "append"
-        }
-       }
+       "lists": {
+        "notes": [
+         {
+          "id": "a"
+         }
+        ]
+       },
+       "scalars": {}
       },
       "subscriptions": [
        {

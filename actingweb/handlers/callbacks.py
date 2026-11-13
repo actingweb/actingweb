@@ -64,14 +64,18 @@ def _has_wildcard(pattern: str) -> bool:
     return glob_has_wildcard(pattern) or "\\" in pattern
 
 
-def _still_granted(permissions: Any, patterns: list[str]) -> list[str]:
-    """The ``patterns`` that ``permissions`` (a stored copy, or None) still
-    grants, compared as ``detect_permission_changes`` compares them: by the
-    property patterns it lists."""
-    if not patterns or permissions is None:
-        return []
-    granted = set((getattr(permissions, "properties", None) or {}).get("patterns", []))
-    return list(dict.fromkeys(p for p in patterns if p in granted))
+def _still_granted(permissions: Any, names: list[str]) -> list[str]:
+    """The replica ``names`` that ``permissions`` (a stored copy, or None)
+    still lets the subscriber read, by the publisher's matcher and path
+    rules: what a losing callback deleted that is fetched again."""
+    from actingweb.replica_revocation import still_readable
+
+    # Names, not patterns: escaped so a name holding ``*``, ``?`` or ``\``
+    # is fetched as itself, never as a glob over other names.
+    return [
+        name.replace("\\", "\\\\").replace("*", "\\*").replace("?", "\\?")
+        for name in still_readable(permissions, names)
+    ]
 
 
 class CallbacksHandler(base_handler.BaseHandler):
@@ -420,8 +424,9 @@ class CallbacksHandler(base_handler.BaseHandler):
                             f"Ignored a permission callback from {granting_actor_id} "
                             f"older than its last one ({current} < {previous})"
                         )
-                        if detect_permission_changes(old_permissions, peer_perms).get(
-                            "has_revocations"
+                        if (
+                            old_permissions is None
+                            or old_permissions.properties != peer_perms.properties
                         ):
                             # Two sender instances with skewed clocks can make
                             # a revocation look older than the grant before
@@ -450,14 +455,16 @@ class CallbacksHandler(base_handler.BaseHandler):
                     # the new permissions: a fault answers 503 with the old
                     # permissions still stored, so the retried callback sees
                     # the revocation again and finishes the deletion.
-                    if permission_changes.get("has_revocations") and getattr(
-                        myself.config, "auto_delete_on_revocation", False
-                    ):
-                        revoked = permission_changes.get("revoked_patterns", [])
-                        self._delete_revoked_peer_data(
-                            actor_interface, granting_actor_id, revoked
+                    deleted.extend(
+                        self._clean_replica(
+                            myself,
+                            actor_interface,
+                            granting_actor_id,
+                            old_permissions,
+                            peer_perms,
+                            permission_changes,
                         )
-                        deleted.extend(revoked)
+                    )
 
                     # A callback without a timestamp keeps the last one's, so
                     # a later resend of an older callback stays older.
@@ -941,15 +948,38 @@ class CallbacksHandler(base_handler.BaseHandler):
             # Define handler for processed callbacks
             def handler(cb):
                 """Handler invoked by CallbackProcessor after validation."""
-                # Auto-storage: store data in RemotePeerStore
+                # Auto-storage: store data in RemotePeerStore, at the
+                # subscription's level. A list diff the replica cannot apply
+                # is reported to the processor after the hooks (it does not
+                # raise: the hooks below run as for any callback).
+                out_of_step = None
                 if config.auto_storage:
                     store = RemotePeerStore(
                         actor_interface, peer_id, validate_peer_id=False
                     )
+                    level = {
+                        "subtarget": subscription.get("subtarget") or None,
+                        "resource": subscription.get("resource") or None,
+                    }
                     if cb.callback_type == CallbackType.RESYNC:
-                        store.apply_resync_data(cb.data)
+                        applied = store.apply_resync_data(cb.data, **level)
+                        # A baseline settles an owed rebuild only when every
+                        # entry was stored and it carried each list owed
+                        # (one it lacks may be stale); otherwise it stays
+                        # owed and the rebuild deletes what is stale.
+                        owed = processor.rebuild_state(peer_id, subscription_id)[
+                            "lists"
+                        ]
+                        missing = [n for n in owed if n not in applied]
+                        if applied.failed or missing:
+                            out_of_step = {
+                                "list": (applied.failed or missing)[0],
+                                "operation": "resync",
+                                "why": "the baseline did not settle the replica",
+                            }
                     else:
-                        store.apply_callback_data(cb.data)
+                        applied = store.apply_callback_data(cb.data, **level)
+                        out_of_step = applied.out_of_step
 
                 # Invoke subscription_data_hooks (from app.subscription_data_hook decorator)
                 target = subscription.get("target", "properties")
@@ -1032,6 +1062,8 @@ class CallbacksHandler(base_handler.BaseHandler):
                         "subscription", actor_interface, hook_data
                     )
 
+                cb.out_of_step = out_of_step
+
             # Process through CallbackProcessor
             result = processor.process_callback_sync(
                 peer_id=peer_id,
@@ -1051,6 +1083,7 @@ class CallbacksHandler(base_handler.BaseHandler):
                 ProcessResult.DUPLICATE,
                 ProcessResult.PENDING,
                 ProcessResult.RESYNC_TRIGGERED,
+                ProcessResult.REBUILD,
             )
             # Another delivery of this sequence is still running its handler:
             # answer 503, not 204. A publisher that deletes a diff on 204 (as
@@ -1131,6 +1164,28 @@ class CallbacksHandler(base_handler.BaseHandler):
                         exc_info=True,
                     )
 
+            # A list diff the replica could not apply, and a rebuild is due:
+            # replace the replica from a baseline (never sync_subscription(),
+            # which would apply the retained diffs again first).
+            if result == ProcessResult.REBUILD:
+                try:
+                    from ..interface.subscription_manager import SubscriptionManager
+
+                    rebuilt = SubscriptionManager(
+                        actor_interface._core_actor
+                    ).rebuild_subscription(peer_id, subscription_id, config=config)
+                    if not rebuilt.success:
+                        logger.warning(
+                            f"Rebuild of {peer_id}:{subscription_id} failed: "
+                            f"{rebuilt.error or 'unknown error'}; it stays owed"
+                        )
+                except DbError:
+                    raise
+                except Exception as e:
+                    logger.error(
+                        f"Error during the replica rebuild: {e}", exc_info=True
+                    )
+
             # If resync was triggered, actively sync from publisher to resolve gap
             if result == ProcessResult.RESYNC_TRIGGERED:
                 logger.info(
@@ -1209,13 +1264,10 @@ class CallbacksHandler(base_handler.BaseHandler):
             return
         store = get_peer_permission_store(myself.config)
         _, stored = store.read_stored_permissions(actor_id, peer_id)
-        revoked: list[str] = []
         changes = detect_permission_changes(stored, fetched)
-        if changes.get("has_revocations") and getattr(
-            myself.config, "auto_delete_on_revocation", False
-        ):
-            revoked = list(changes.get("revoked_patterns", []))
-            self._delete_revoked_peer_data(actor_interface, peer_id, revoked)
+        revoked = self._clean_replica(
+            myself, actor_interface, peer_id, stored, fetched, changes
+        )
         if store.store_permissions(fetched):
             return
         _, now = store.read_stored_permissions(actor_id, peer_id)
@@ -1402,6 +1454,11 @@ class CallbacksHandler(base_handler.BaseHandler):
                 # Simple property - store value
                 remote_store.set_value(property_name, response)
                 logger.debug(f"Stored property '{property_name}' from {peer_id}")
+            elif isinstance(response, str | int | float | bool):
+                # A value that is not an object: wrapped, as the receiver
+                # stores one (3.16: dropped before, so a deleted string or
+                # number was not restored).
+                remote_store.set_value(property_name, {"value": response})
             else:
                 logger.warning(
                     f"Unexpected response type for property {property_name} "
@@ -1466,70 +1523,44 @@ class CallbacksHandler(base_handler.BaseHandler):
                 exc_info=True,
             )
 
-    def _delete_revoked_peer_data(
+    def _clean_replica(
         self,
+        myself: Any,
         actor_interface: "ActorInterface",
         peer_id: str,
-        revoked_patterns: list[str],
-    ) -> None:
-        """Delete cached peer data for revoked property patterns.
-
-        When a peer revokes access to certain properties (e.g., memory_*),
-        this method deletes the locally cached data that was synced via
-        subscriptions.
-
-        Args:
-            actor_interface: The actor interface for storage access
-            peer_id: The peer who revoked access
-            revoked_patterns: List of property patterns that were revoked
-        """
+        old_grant: Any,
+        new_grant: Any,
+        permission_changes: dict[str, Any],
+    ) -> list[str]:
+        """With ``auto_delete_on_revocation`` on, delete from the peer's
+        replica what ``new_grant`` no longer lets this actor read (see
+        ``actingweb.replica_revocation``), and record it in
+        ``permission_changes``: ``deleted_names`` (the names touched) and
+        ``not_evaluated`` (why a grant could not be evaluated, else None).
+        ``has_revocations`` stays the grant comparison, and is also true when
+        the evaluation deletes a name (an exclusion added, ``read``
+        dropped). A fault raises ``DbError`` (the callback answers 503 and is
+        resent)."""
         from actingweb.remote_storage import RemotePeerStore
+        from actingweb.replica_revocation import (
+            NotEvaluated,
+            apply_revoked,
+            plan_cleanup,
+        )
 
-        if not revoked_patterns:
-            return
-
-        try:
-            store = RemotePeerStore(actor_interface, peer_id)
-
-            # Get all stored lists for this peer (strict: a fault raises)
-            all_lists = store.list_all_lists(strict=True)
-
-            deleted_count = 0
-            for list_name in all_lists:
-                # Check if this list matches any revoked pattern
-                for pattern in revoked_patterns:
-                    if glob_match(list_name, pattern):
-                        try:
-                            store.delete_list(list_name)
-                            deleted_count += 1
-                            logger.info(
-                                f"Deleted revoked peer data: {list_name} "
-                                f"from peer {peer_id}"
-                            )
-                        except Exception as e:
-                            # Before the permissions are stored: any failure
-                            # stops the callback, so the retry still sees the
-                            # revocation and deletes again.
-                            logger.error(
-                                f"Failed to delete revoked data {list_name} "
-                                f"from peer {peer_id}: {e}"
-                            )
-                            raise
-                        break  # Don't double-delete if multiple patterns match
-
-            if deleted_count > 0:
-                logger.info(
-                    f"Deleted {deleted_count} cached items from peer {peer_id} "
-                    f"due to permission revocation"
-                )
-
-        except DbError:
-            # Before the permissions are stored: a 503 here makes the peer
-            # retry, and the retry sees the revocation again.
-            raise
-        except Exception as e:
-            # Any failure stops the callback before the permissions are
-            # stored (the caller answers 500), so the retry still sees the
-            # revocation and deletes again.
-            logger.error(f"Error during revoked peer data deletion: {e}")
-            raise
+        permission_changes.setdefault("deleted_names", [])
+        permission_changes.setdefault("not_evaluated", None)
+        store = RemotePeerStore(actor_interface, peer_id, validate_peer_id=False)
+        plan = plan_cleanup(myself.config, myself.id or "", store, old_grant, new_grant)
+        if plan is None:
+            return []
+        if isinstance(plan, NotEvaluated):
+            logger.warning(f"Revoked data of peer {peer_id} not deleted: {plan.why}")
+            permission_changes["not_evaluated"] = plan.why
+            return []
+        deleted = apply_revoked(store, plan)
+        permission_changes["deleted_names"] = deleted
+        permission_changes["has_revocations"] = bool(
+            permission_changes.get("has_revocations") or deleted
+        )
+        return deleted

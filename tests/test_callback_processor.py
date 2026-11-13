@@ -1399,3 +1399,120 @@ class TestPrecheckAndKeptClaim:
                 )
             )
         assert runs == [1]
+
+
+class TestOutOfStepRebuild:
+    """A list diff the replica cannot apply (the handler sets
+    ``cb.out_of_step``): the sequence advances, the rebuild is owed, and
+    REBUILD is answered at most once per interval
+    (thoughts/plans/2026-11-13-attribute-list-v2-port.md, Phase 3)."""
+
+    @staticmethod
+    def _handler(out_of_step_at: set[int], seen: list[int]) -> Any:
+        def handler(cb: ProcessedCallback) -> None:
+            seen.append(cb.sequence)
+            if cb.sequence in out_of_step_at:
+                cb.out_of_step = {"list": "notes", "operation": "insert", "why": "x"}
+
+        return handler
+
+    def _run(self, processor: CallbackProcessor, seq: int, handler: Any) -> Any:
+        return processor.process_callback_sync(
+            peer_id="peer1",
+            subscription_id="sub1",
+            sequence=seq,
+            data={"n": seq},
+            handler=handler,
+        )
+
+    def test_out_of_step_advances_and_rebuilds(
+        self,
+        mock_actor: MagicMock,
+        mock_subscription: tuple[MagicMock, dict[str, int]],
+        mock_attributes: tuple[MagicMock, dict[str, Any]],  # noqa: ARG002
+    ) -> None:
+        _, sequences = mock_subscription
+        processor = CallbackProcessor(mock_actor)
+        seen: list[int] = []
+        handler = self._handler({1}, seen)
+        assert self._run(processor, 1, handler) == ProcessResult.REBUILD
+        assert sequences["peer1:sub1"] == 1
+        state = processor.rebuild_state("peer1", "sub1")
+        assert state["owed"] and state["lists"] == ["notes"]
+        assert processor.settle_rebuild("peer1", "sub1", rebuilt=True)
+        assert processor.rebuild_state("peer1", "sub1")["owed"] is False
+
+    def test_inside_the_interval_it_is_logged_owed_and_rebuilt_later(
+        self,
+        mock_actor: MagicMock,
+        mock_subscription: tuple[MagicMock, dict[str, int]],  # noqa: ARG002
+        mock_attributes: tuple[MagicMock, dict[str, Any]],  # noqa: ARG002
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        processor = CallbackProcessor(mock_actor)
+        seen: list[int] = []
+        handler = self._handler({1, 2}, seen)
+        assert self._run(processor, 1, handler) == ProcessResult.REBUILD
+        processor.settle_rebuild("peer1", "sub1", rebuilt=True)
+        # A second cause inside 60 seconds: applied, owed, not rebuilt.
+        assert self._run(processor, 2, handler) == ProcessResult.PROCESSED
+        assert processor.rebuild_state("peer1", "sub1")["owed"] is True
+        # The next callback after the interval rebuilds.
+        real_time = time.time
+        monkeypatch.setattr(
+            "actingweb.callback_processor.time.time", lambda: real_time() + 61
+        )
+        assert self._run(processor, 3, handler) == ProcessResult.REBUILD
+
+    def test_a_drained_batch_stops_at_the_out_of_step_callback(
+        self,
+        mock_actor: MagicMock,
+        mock_subscription: tuple[MagicMock, dict[str, int]],
+        mock_attributes: tuple[MagicMock, dict[str, Any]],  # noqa: ARG002
+    ) -> None:
+        _, sequences = mock_subscription
+        processor = CallbackProcessor(mock_actor)
+        seen: list[int] = []
+        handler = self._handler({3}, seen)
+        assert self._run(processor, 1, handler) == ProcessResult.PROCESSED
+        # 3 and 4 wait behind the gap at 2; 2 drains 2, 3 (out of step) and
+        # would drain 4, which the rebuild supersedes.
+        assert self._run(processor, 3, handler) == ProcessResult.PENDING
+        assert self._run(processor, 4, handler) == ProcessResult.PENDING
+        assert self._run(processor, 2, handler) == ProcessResult.REBUILD
+        assert seen == [1, 2, 3]
+        assert sequences["peer1:sub1"] == 3
+        assert processor._get_pending("peer1", "sub1") == []  # noqa: SLF001
+
+    def test_a_resync_keeps_an_owed_rebuild_until_its_handler_returns(
+        self,
+        mock_actor: MagicMock,
+        mock_subscription: tuple[MagicMock, dict[str, int]],  # noqa: ARG002
+        mock_attributes: tuple[MagicMock, dict[str, Any]],  # noqa: ARG002
+    ) -> None:
+        processor = CallbackProcessor(mock_actor)
+        self._run(processor, 1, self._handler({1}, []))
+        assert processor.rebuild_state("peer1", "sub1")["owed"]
+
+        def failing(cb: ProcessedCallback) -> None:
+            raise ValueError("soft failure")
+
+        processor.process_callback_sync(
+            peer_id="peer1",
+            subscription_id="sub1",
+            sequence=5,
+            data={},
+            callback_type="resync",
+            handler=failing,
+        )
+        assert processor.rebuild_state("peer1", "sub1")["owed"] is True
+
+        processor.process_callback_sync(
+            peer_id="peer1",
+            subscription_id="sub1",
+            sequence=6,
+            data={},
+            callback_type="resync",
+            handler=lambda cb: None,
+        )
+        assert processor.rebuild_state("peer1", "sub1")["owed"] is False

@@ -154,14 +154,11 @@
       "replica": {
        "lists": {},
        "scalars": {
-        "i": {
-         "value": 1
-        },
-        "j": {
-         "value": 5
-        },
-        "new": {
-         "value": 6
+        "p": {
+         "k": {
+          "j": 5,
+          "new": 6
+         }
         }
        }
       },
@@ -411,14 +408,12 @@
       "replica": {
        "lists": {},
        "scalars": {
-        "i": {
-         "value": 1
-        },
-        "j": {
-         "value": 7
-        },
-        "new": {
-         "value": 6
+        "p": {
+         "k": {
+          "i": 1,
+          "j": 7,
+          "new": 6
+         }
         }
        }
       },

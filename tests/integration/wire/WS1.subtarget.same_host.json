@@ -149,11 +149,9 @@
       "replica": {
        "lists": {},
        "scalars": {
-        "hex": {
-         "value": "#f00"
-        },
-        "shade": {
-         "value": "red"
+        "color": {
+         "hex": "#f00",
+         "shade": "red"
         }
        }
       },
@@ -397,11 +395,9 @@
       "replica": {
        "lists": {},
        "scalars": {
-        "hex": {
-         "value": "#f00"
-        },
-        "shade": {
-         "value": "red"
+        "color": {
+         "hex": "#f00",
+         "shade": "red"
         }
        }
       },
@@ -633,11 +629,9 @@
       "replica": {
        "lists": {},
        "scalars": {
-        "hex": {
-         "value": "#f00"
-        },
-        "shade": {
-         "value": "red"
+        "color": {
+         "hex": "#f00",
+         "shade": "red"
         }
        }
       },

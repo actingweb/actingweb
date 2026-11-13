@@ -249,9 +249,11 @@
          "event": "permissions",
          "granting_actor_id": "<A>",
          "permission_changes": {
+          "deleted_names": [],
           "granted_patterns": [],
           "has_revocations": false,
           "is_initial": false,
+          "not_evaluated": null,
           "revoked_patterns": []
          }
         }
@@ -602,9 +604,11 @@
          "event": "permissions",
          "granting_actor_id": "<A>",
          "permission_changes": {
+          "deleted_names": [],
           "granted_patterns": [],
           "has_revocations": false,
           "is_initial": false,
+          "not_evaluated": null,
           "revoked_patterns": []
          }
         }
@@ -812,7 +816,7 @@
         ]
        },
        "peer_id": "<A>",
-       "prompts": null,
+       "prompts": {},
        "properties": {
         "excluded_patterns": [
          "private/*",
@@ -887,7 +891,86 @@
    "wire": [
     {
      "auth": "bearer:trust:A-B",
-     "children": [],
+     "children": [
+      {
+       "auth": "bearer:trust:A-B",
+       "children": [],
+       "headers": {
+        "content-type": "application/json"
+       },
+       "host": "wire_app",
+       "method": "GET",
+       "path": "/<A>/permissions/<B>",
+       "query": "",
+       "request": null,
+       "response": {
+        "actor_id": "<A>",
+        "peer_id": "<B>",
+        "permissions": {
+         "actions": {
+          "allowed": [
+           "*"
+          ],
+          "denied": [
+           "delete_*",
+           "admin_*",
+           "system_*"
+          ]
+         },
+         "methods": {
+          "allowed": [
+           "*"
+          ],
+          "denied": [
+           "delete_*",
+           "admin_*",
+           "system_*"
+          ]
+         },
+         "prompts": {},
+         "properties": {
+          "excluded_patterns": [
+           "private/*",
+           "security/*",
+           "_internal/*",
+           "second"
+          ],
+          "operations": [
+           "read"
+          ],
+          "patterns": [
+           "*"
+          ]
+         },
+         "resources": {
+          "excluded_patterns": [
+           "private/*",
+           "security/*"
+          ],
+          "operations": [
+           "read",
+           "write"
+          ],
+          "patterns": [
+           "*"
+          ]
+         },
+         "tools": {
+          "allowed": [
+           "*"
+          ],
+          "denied": [
+           "admin_*",
+           "system_*"
+          ]
+         }
+        },
+        "source": "custom_override",
+        "trust_type": "friend"
+       },
+       "status": 200
+      }
+     ],
      "headers": {},
      "host": "wire_peer_app",
      "method": "POST",

@@ -688,7 +688,7 @@ test = "test_wire_grants.py::test_wg18_grant_delete"
 owners = ["grant-enforcement-per-route:4", "attribute-list-v2-port:3"]
 exposure = false
 expected = "A deletes F's permission override (204) and F receives one permission callback with its default grant; deleting it again answers 404 and sends nothing."
-reason = ["2026-11-10 first recording (grant-enforcement-per-route:0)", "2026-11-10 a deleted grant tells the peer its default, a delete of nothing is 404 (grant-enforcement-per-route:4)"]
+reason = ["2026-11-10 first recording (grant-enforcement-per-route:0)", "2026-11-10 a deleted grant tells the peer its default, a delete of nothing is 404 (grant-enforcement-per-route:4)", "2026-11-13 permission_changes gains deleted_names and not_evaluated (attribute-list-v2-port:3)"]
 
 [rows."WG19"]
 test = "test_wire_grants.py::test_wg19_trust_hooks"
@@ -706,16 +706,16 @@ test = "test_wire_scalar_properties.py::test_ws1_subtarget"
 topologies = ["same_host", "two_hosts"]
 owners = ["attribute-list-v2-port:3", "attribute-list-v2-port:4"]
 exposure = false
-expected = "Subtarget color. The object arrives as the subtarget's data and is stored as one scalar per key (hex, shade); the string is answered 400 by B and stores nothing (last_seq stays 1); the empty value is answered 204 but held as pending sequence 3 behind the refused 2, so it changes nothing. Every diff stays queued at A."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)"]
+expected = "Subtarget color. The object arrives as the subtarget's data and is stored as the one scalar color; the string is answered 400 by B and stores nothing (last_seq stays 1); the empty value is answered 204 but held as pending sequence 3 behind the refused 2, so it changes nothing. Every diff stays queued at A."
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)"]
 
 [rows."WS2.subtarget"]
 test = "test_wire_scalar_properties.py::test_ws2_subtarget"
 topologies = ["same_host", "two_hosts"]
 owners = ["attribute-list-v2-port:3", "attribute-list-v2-port:4"]
 exposure = false
-expected = "WS1.subtarget in a wire_named pair (the trust type reads exactly color): identical to WS1.subtarget. Since the security plans a subtarget diff is judged once by the subtarget's name, so the object's keys are not judged and nothing is withheld or spent. The plan's 'sequence spent, no callback' predates them; no exposure."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)"]
+expected = "WS1.subtarget in a wire_named pair (the trust type reads exactly color): identical to WS1.subtarget, the object stored as the one scalar color. A subtarget diff is judged once by the subtarget's name, so the object's keys are not judged and nothing is withheld or spent; no exposure."
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)"]
 
 [rows."WS3.target"]
 test = "test_wire_scalar_properties.py::test_ws3"
@@ -730,16 +730,16 @@ test = "test_wire_scalar_properties.py::test_ws3"
 topologies = ["same_host", "two_hosts"]
 owners = ["attribute-list-v2-port:3", "attribute-list-v2-port:4", "spec-1-5:3"]
 exposure = false
-expected = "Subtarget p. Each write sends {k: ...} with subtarget p; B stores k as one scalar and keeps the scalar keep from the seed."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)"]
+expected = "Subtarget p. Each write sends {k: ...} with subtarget p; B stores it as the one scalar p (its value replacing the seed's copy)."
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)"]
 
 [rows."WS3.resource"]
 test = "test_wire_scalar_properties.py::test_ws3"
 topologies = ["same_host", "two_hosts"]
 owners = ["attribute-list-v2-port:3", "attribute-list-v2-port:4", "spec-1-5:3"]
 exposure = false
-expected = "Subtarget p, resource k. Each write sends k's object with resource k; B stores one scalar per key of it (i, j, new)."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)"]
+expected = "Subtarget p, resource k. Each write sends k's object with resource k; B merges it into its scalar p at the path k, keeping p's other keys."
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)"]
 
 [rows."WS4.target"]
 test = "test_wire_scalar_properties.py::test_ws4_target"
@@ -762,16 +762,16 @@ test = "test_wire_scalar_properties.py::test_ws5"
 topologies = ["same_host", "two_hosts"]
 owners = ["attribute-list-v2-port:3", "attribute-list-v2-port:4", "spec-1-5:3"]
 exposure = false
-expected = "Subtarget p. Neither delete stores a diff, spends a sequence or sends anything: B keeps the seeded copy of p."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)"]
+expected = "Subtarget p. Neither delete stores a diff, spends a sequence or sends anything: B keeps the seeded copy of p (stored as the one scalar p)."
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)"]
 
 [rows."WS5.resource"]
 test = "test_wire_scalar_properties.py::test_ws5"
 topologies = ["same_host", "two_hosts"]
 owners = ["attribute-list-v2-port:3", "attribute-list-v2-port:4", "spec-1-5:3"]
 exposure = false
-expected = "Subtarget q, resource k. Neither delete (p, then q/k) stores a diff or sends anything: B keeps the seeded copy of q/k."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)"]
+expected = "Subtarget q, resource k. Neither delete (p, then q/k) stores a diff or sends anything: B keeps the seeded copy of q/k (stored inside the scalar q)."
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)"]
 
 [rows."WS6.target"]
 test = "test_wire_scalar_properties.py::test_ws6_target"
@@ -814,104 +814,104 @@ test = "test_wire_list_properties.py::test_wl1"
 topologies = ["same_host", "two_hosts"]
 owners = ["attribute-list-v2-port:3", "attribute-list-v2-port:4"]
 exposure = false
-expected = "POST /properties/notes/items add: 201 {index 2}; the diff {notes: {action: add, index, value}}; B keeps its list unchanged and gains a scalar named notes holding the diff (the REST list vocabulary is not applied)."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)"]
+expected = "POST /properties/notes/items add: 201 {index 2}; the diff {notes: {action: add, index, value}} reaches B, where it is a scalar arriving for a list's name, out of step: B reads the subscription's sequence (GET), fetches the baseline and replaces its list with A's, and clears A's diffs through that sequence (PUT); B ends with A's list and no scalar."
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)"]
 
 [rows."WL1.subtarget"]
 test = "test_wire_list_properties.py::test_wl1"
 topologies = ["same_host", "two_hosts"]
 owners = ["attribute-list-v2-port:3", "attribute-list-v2-port:4"]
 exposure = false
-expected = "Subtarget notes: the diff {action, index, value} is stored as one scalar per key beside the seed's SDK diff scalars (list, operation, item, length); B holds no list."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)"]
+expected = "Subtarget notes: the SDK appends are applied to the list notes; the REST add {action, index, value} is the subtarget's scalar for a list's name, out of step, and B rebuilds its list from the baseline (GET sequence, baseline, PUT) to A's."
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)"]
 
 [rows."WL2.target"]
 test = "test_wire_list_properties.py::test_wl2"
 topologies = ["same_host", "two_hosts"]
 owners = ["attribute-list-v2-port:3", "attribute-list-v2-port:4"]
 exposure = false
-expected = "items update: 204; the diff {notes: {action: update, index, value}}; B's list unchanged, a scalar notes holds the diff."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)"]
+expected = "items update: 204; the diff {notes: {action: update, index, value}} reaches B, where it is a scalar arriving for a list's name, out of step: B reads the subscription's sequence (GET), fetches the baseline and replaces its list with A's, and clears A's diffs through that sequence (PUT); B ends with A's list and no scalar."
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)"]
 
 [rows."WL2.subtarget"]
 test = "test_wire_list_properties.py::test_wl2"
 topologies = ["same_host", "two_hosts"]
 owners = ["attribute-list-v2-port:3", "attribute-list-v2-port:4"]
 exposure = false
-expected = "Subtarget notes: the update diff's keys stored as scalars; no list at B."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)"]
+expected = "Subtarget notes: the REST update is out of step at B, which rebuilds its list from the baseline to A's."
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)"]
 
 [rows."WL3.target"]
 test = "test_wire_list_properties.py::test_wl3"
 topologies = ["same_host", "two_hosts"]
 owners = ["attribute-list-v2-port:3", "attribute-list-v2-port:4"]
 exposure = false
-expected = "items delete: 204; the diff {notes: {action: delete, index}}; B's list unchanged, a scalar notes holds the diff."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)"]
+expected = "items delete: 204; the diff {notes: {action: delete, index}} reaches B, where it is a scalar arriving for a list's name, out of step: B reads the subscription's sequence (GET), fetches the baseline and replaces its list with A's, and clears A's diffs through that sequence (PUT); B ends with A's list and no scalar."
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)"]
 
 [rows."WL3.subtarget"]
 test = "test_wire_list_properties.py::test_wl3"
 topologies = ["same_host", "two_hosts"]
 owners = ["attribute-list-v2-port:3", "attribute-list-v2-port:4"]
 exposure = false
-expected = "Subtarget notes: the delete diff's keys stored as scalars; no list at B."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)"]
+expected = "Subtarget notes: the REST delete is out of step at B, which rebuilds its list from the baseline to A's."
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)"]
 
 [rows."WL4.target"]
 test = "test_wire_list_properties.py::test_wl4"
 topologies = ["same_host", "two_hosts"]
 owners = ["attribute-list-v2-port:3", "attribute-list-v2-port:4"]
 exposure = false
-expected = "PUT ?index=0 (replace) and ?index=2 (append at the length): 204 each; diffs {notes: {index, value}}; B's list unchanged, its scalar notes holds the last diff."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)"]
+expected = "PUT ?index=0 (replace) and ?index=2 (append at the length): 204 each; each diff {notes: {index, value}} reaches B, where it is a scalar arriving for a list's name, out of step: B reads the subscription's sequence (GET), fetches the baseline and replaces its list with A's, and clears A's diffs through that sequence (PUT); B ends with A's list and no scalar (the second inside the rebuild interval is applied after the first rebuild's baseline)."
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)"]
 
 [rows."WL4.subtarget"]
 test = "test_wire_list_properties.py::test_wl4"
 topologies = ["same_host", "two_hosts"]
 owners = ["attribute-list-v2-port:3", "attribute-list-v2-port:4"]
 exposure = false
-expected = "Subtarget notes: each diff's index and value stored as scalars; no list at B."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)"]
+expected = "Subtarget notes: the PUT diffs are out of step at B, which rebuilds its list from the baseline to A's."
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)"]
 
 [rows."WL5.target"]
 test = "test_wire_list_properties.py::test_wl5"
 topologies = ["same_host", "two_hosts"]
 owners = ["attribute-list-v2-port:3", "attribute-list-v2-port:4"]
 exposure = false
-expected = "PUT metadata: 204; the diff {notes: {action: metadata_update, description, explanation}}; B's list unchanged, a scalar notes holds the diff."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)"]
+expected = "PUT metadata: 204; the diff {notes: {action: metadata_update, ...}} reaches B, where it is a scalar arriving for a list's name, out of step: B reads the subscription's sequence (GET), fetches the baseline and replaces its list with A's, and clears A's diffs through that sequence (PUT); B ends with A's list and no scalar; the items are unchanged."
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)"]
 
 [rows."WL5.subtarget"]
 test = "test_wire_list_properties.py::test_wl5"
 topologies = ["same_host", "two_hosts"]
 owners = ["attribute-list-v2-port:3", "attribute-list-v2-port:4"]
 exposure = false
-expected = "Subtarget notes: the metadata diff's keys stored as scalars; no list at B."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)"]
+expected = "Subtarget notes: the metadata diff is out of step at B, which rebuilds its list from the baseline (items unchanged)."
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)"]
 
 [rows."WL6.target"]
 test = "test_wire_list_properties.py::test_wl6"
 topologies = ["same_host", "two_hosts"]
 owners = ["attribute-list-v2-port:3", "attribute-list-v2-port:4"]
 exposure = false
-expected = "An SDK append B applies to a real list; then DELETE /properties/notes sends {notes: \"\"}, and B deletes a scalar notes that does not exist and keeps the list."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)"]
+expected = "An SDK append B applies to a real list; then DELETE /properties/notes sends {notes: \"\"}, which B applies as a pre-3.16 list delete: B's list is gone."
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)"]
 
 [rows."WL6.subtarget"]
 test = "test_wire_list_properties.py::test_wl6"
 topologies = ["same_host", "two_hosts"]
 owners = ["attribute-list-v2-port:3", "attribute-list-v2-port:4"]
 exposure = false
-expected = "Subtarget notes: the append's diff stored as scalars; the list's DELETE stores and sends nothing."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)"]
+expected = "Subtarget notes: the append is applied to B's list notes; the list's DELETE stores and sends nothing, so B keeps the list."
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)"]
 
 [rows."WL7.target"]
 test = "test_wire_list_properties.py::test_wl7_target"
 topologies = ["same_host", "two_hosts"]
 owners = ["attribute-list-v2-port:3", "attribute-list-v2-port:4"]
 exposure = false
-expected = "Bulk items of 2, 25 and 26 changes, and one beside a scalar: each a text summary under the list's key ([Bulk update: n items updated, 0 items deleted]), stored by B as a scalar notes; no difference at 25 or 26; the scalar color arrives beside it. B's list unchanged."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)"]
+expected = "Bulk items of 2, 25 and 26 changes, and one beside a scalar: each a text summary under the list's key, which B takes as a scalar for a list's name, out of step, and rebuilds its list from the baseline to A's; the scalar color is applied beside it."
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)"]
 
 [rows."WL8.target"]
 test = "test_wire_list_properties.py::test_wl8"
@@ -942,16 +942,16 @@ test = "test_wire_list_properties.py::test_wl10_target"
 topologies = ["same_host", "two_hosts"]
 owners = ["attribute-list-v2-port:3", "attribute-list-v2-port:4"]
 exposure = false
-expected = "The web UI's item add, update and delete, list create, metadata edit, property create and update: each 302 and written at A (A's listing in extra), none registers a diff or sends anything. The /www deletes of the list and of the property each send {name: \"\"}; B keeps the list. The form-created empty list fresh never shows in A's listing."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)"]
+expected = "The web UI's item add, update and delete, list create, metadata edit, property create and update: each 302 and written at A (A's listing in extra), none registers a diff or sends anything. The /www deletes of the list and of the property each send {name: \"\"}; B applies the list's as a list delete, so B's list is gone. The form-created empty list fresh never shows in A's listing."
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)"]
 
 [rows."WL11.subtarget"]
 test = "test_wire_list_properties.py::test_wl11_subtarget"
 topologies = ["same_host", "two_hosts"]
 owners = ["attribute-list-v2-port:3", "attribute-list-v2-port:4"]
 exposure = false
-expected = "Subtarget notes, the SDK operations of WL11.target: each diff {list, operation, item, index, length} stored as one scalar per key, overwritten by the next; B holds no list."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)"]
+expected = "Subtarget notes, the SDK operations of WL11.target: each diff {list, operation, ...} for the subtarget is one list operation on B's list notes, which follows A's list and ends empty after the clear."
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)"]
 
 [rows."WL12.target"]
 test = "test_wire_list_properties.py::test_wl12_target"
@@ -966,16 +966,16 @@ test = "test_wire_list_properties.py::test_wl13_target"
 topologies = ["same_host", "two_hosts"]
 owners = ["attribute-list-v2-port:3", "attribute-list-v2-port:4"]
 exposure = false
-expected = "An item over the 390,000-byte span threshold, appended and updated: the diffs are references ({bytes, spanned: true}, no value); B logs a WARNING for each (asserted by the test), applies nothing, and its list stays [small]."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)"]
+expected = "An item over the 390,000-byte span threshold, appended and updated: the diffs are references ({bytes, spanned: true}, no value); B cannot apply either, logs it out of step (asserted by the test) and rebuilds its list from the baseline, which carries the item."
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 a spanned reference is out of step and rebuilds the replica (attribute-list-v2-port:3)"]
 
 [rows."WL14.target"]
 test = "test_wire_list_properties.py::test_wl14_target"
 topologies = ["same_host", "two_hosts"]
 owners = ["attribute-list-v2-port:3", "attribute-list-v2-port:4"]
 exposure = false
-expected = "Three appends B applies; pop(-2) sends {operation: pop, index: -2, length: 2}, which B does not apply: its list keeps three items."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)"]
+expected = "Three appends B applies; pop(-2) sends {operation: pop, index: -2, length: 2}, which B applies (the negative index normalised): its list keeps the first and last items."
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)"]
 
 [rows."WL15.target"]
 test = "test_wire_list_properties.py::test_wl15_target"
@@ -990,8 +990,8 @@ test = "test_wire_list_properties.py::test_wl16_subtarget"
 topologies = ["same_host", "two_hosts"]
 owners = ["attribute-list-v2-port:3", "attribute-list-v2-port:4"]
 exposure = false
-expected = "Subtarget first; POST /properties with first and second: one callback carrying only first's value; B stores its key v; second never reaches B."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)"]
+expected = "Subtarget first; POST /properties with first and second: one callback carrying only first's value; B stores it as the scalar first; second never reaches B."
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)"]
 
 [rows."WL17.target"]
 test = "test_wire_list_properties.py::test_wl17_target"
@@ -1079,8 +1079,8 @@ test = "test_wire_delivery.py::test_wd15_target_and_subtarget"
 topologies = ["same_host", "two_hosts"]
 owners = ["attribute-list-v2-port:3", "attribute-list-v2-port:4", "spec-1-5:3"]
 exposure = false
-expected = "B subscribed to the target and to the subtarget notes, one SDK append: two callbacks, each its own sequence 1; B holds the item once in its list plus the subtarget diff's scalars (list, operation, item, index, length)."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)"]
+expected = "B subscribed to the target and to the subtarget notes, one SDK append: two callbacks, each its own sequence 1; each is applied to B's list notes, which holds the item twice (the overlap the specification plan ends)."
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)"]
 
 [rows."WD16"]
 test = "test_wire_delivery.py::test_wd16_callback_row_removed"
@@ -1219,7 +1219,7 @@ topologies = ["same_host", "two_hosts"]
 owners = ["attribute-list-v2-port:3"]
 exposure = false
 expected = "B holds the list notes; A's grant then excludes notes: the permission callback reaches B and B stores the exclusion, but its replica keeps the list (the consumer's default)."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)"]
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 permission_changes gains deleted_names and not_evaluated (attribute-list-v2-port:3)"]
 
 [rows."WP3"]
 test = "test_wire_permissions.py::test_wp3_grant_deleted"
@@ -1227,15 +1227,15 @@ topologies = ["same_host", "two_hosts"]
 owners = ["spec-1-5:2", "attribute-list-v2-port:3"]
 exposure = false
 expected = "DELETE of A's grant (which excluded hidden): since the security plans A sends a permission callback; B stores the friend default without the exclusion (not stale)."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)"]
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 permission_changes gains deleted_names and not_evaluated (attribute-list-v2-port:3)"]
 
 [rows."WP4"]
 test = "test_wire_permissions.py::test_wp4_older_permission_callback"
 topologies = ["same_host", "two_hosts"]
 owners = ["spec-1-5:2", "attribute-list-v2-port:3"]
 exposure = false
-expected = "Two grant changes (excluding first, then second), each a permission callback B stores; the first callback posted again with A's bearer: 204, not stored (older sender timestamp), and no permissions hook runs."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)"]
+expected = "Two grant changes (excluding first, then second), each a permission callback B stores; the first callback posted again with A's bearer: 204, not stored (older sender timestamp), no permissions hook runs, and since its properties grant differs from the stored copy B reconciles with A (GET /permissions)."
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 permission_changes gains deleted_names and not_evaluated (attribute-list-v2-port:3)", "2026-11-13 an older-stamped callback whose properties grant differs from the stored one reconciles with A (GET /permissions), not only one that revokes a pattern (attribute-list-v2-port:3)"]
 
 [rows."WP6"]
 test = "test_wire_permissions.py::test_wp6_baseline_under_an_exclusion"

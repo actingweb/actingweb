@@ -383,7 +383,26 @@ def _rebuild_copy(config: Any, f: Finding, limiter: RateLimiter) -> bool:
         perms = fetch_peer_permissions(f.actor_id, peer_id, config)
         why = perms.fetch_error
         store = get_peer_permission_store(config)
-        if not why and not store.store_permissions(perms):
+        stored_ok = False if why else store.store_permissions(perms)
+        if stored_ok:
+            from types import SimpleNamespace
+
+            from actingweb.replica_revocation import cleanup_after_store
+
+            try:
+                cleanup_after_store(
+                    config,
+                    SimpleNamespace(id=f.actor_id, config=config),
+                    peer_id,
+                    None,
+                    perms,
+                )
+            except Exception as e:  # folds DbError: the copy is rebuilt; the cleanup is the next callback's
+                print(
+                    f"rebuilt, replica not cleaned\t{f.actor_id}\t{peer_id}\t"
+                    f"{type(e).__name__}"
+                )
+        if not why and not stored_ok:
             # Refused when a newer copy was stored meanwhile (a callback):
             # that copy is the rebuild.
             _, stored = store.read_stored_permissions(f.actor_id, peer_id)

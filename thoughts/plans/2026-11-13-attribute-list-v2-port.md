@@ -1129,16 +1129,114 @@ Notes (2026-11-13):
 
 ### Verification
 
-- [ ] Run the contract's `### Checks` fast tier verbatim
-- [ ] Run the contract's `### Checks` full tier before the phase commit, one
-      run at a time
-- [ ] `git show --stat HEAD -- tests/integration/wire` lists only rows
+- [x] Run the contract's `### Checks` fast tier verbatim
+- [x] Run the contract's `### Checks` full tier before the phase commit, one
+      run at a time (DynamoDB 7,336 passed; PostgreSQL 7,133 passed; docs
+      build clean)
+- [x] `git show --stat HEAD -- tests/integration/wire` lists only rows
       `rows.toml` assigns to `attribute-list-v2-port:3`, with
       the `Wire-Phase` trailer; `WL11.target`, `WD8` and `WD10` unchanged
-- [ ] `grep -n "getattr(.*list_store" actingweb/remote_storage.py` returns
+      (31 rows re-recorded, each with a dated reason)
+- [x] `grep -n "getattr(.*list_store" actingweb/remote_storage.py` returns
       nothing
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+Notes (2026-11-13):
+
+- **What the recordings show**: REST list edits (`WL1`-`WL5`, `WL7`) and
+  spanned references (`WL13`) now reach a subscriber as out-of-step diffs
+  that end in a rebuild (the subscription's sequence read, the baseline,
+  the publisher's diffs cleared), so the replica equals the publisher's
+  list; subtarget- and resource-level values are stored under the
+  subtarget (`WS1`-`WS5`, `WL1`-`WL6`, `WL11`, `WL16` `.subtarget`); a
+  `""` for a list's name deletes it (`WL6.target`, `WL10.target`);
+  `pop(-2)` is applied (`WL14`); `WD15` holds the overlapping append twice,
+  as the plan accepts; `permission_changes` carries `deleted_names` and
+  `not_evaluated` (`WA17`, `WP1`-`WP4`, `WG18`). No new `WD21+`/`WL18+`
+  rows: the re-recorded rows already record each shape the Integration
+  bullet names.
+- **Deviations.**
+  - Positional diffs go through the core's positional methods (one
+    keys-only read and one unconditional write), not handle CAS writes: a
+    lost write cannot happen there, so out of step comes from an index out
+    of range, damage, a layout conflict, the rank cap, metadata contention
+    or a spanned reference. `pop(0)` and `insert(0, ...)` take the
+    keys-only read too: the primitives have no first-row read (the plan's
+    "none for `pop(0)`, `insert(0, …)`" needs one).
+  - A value-addressed `update` uses one values read (`to_list()`), and an
+    already-applied update (`item` present, `old_item` absent) is a no-op.
+  - The out-of-step mark is a `ProcessedCallback.out_of_step` field the
+    handler sets; the processor marks `rebuild_owed`/`rebuild_lists` with a
+    compare-and-swap from the claimed row and answers `REBUILD` when the
+    60-second interval allows, stopping the drained batch there (the rest
+    is pruned); an owed rebuild is also answered on the next callback after
+    the interval. `settle_rebuild()` and `rebuild_state()` are public on
+    the processor.
+  - `rebuild_subscription_async()` runs the sync one in a worker thread.
+  - `set_list` replaces a same-named scalar with one point read up front;
+    `RemotePeerStore.get_list()` answers `[]` for a name held as a scalar.
+  - A8 lives in `actingweb/replica_revocation.py`; scalar names are read
+    without values by two keys-only range reads either side of `list:`
+    (`RemotePeerStore.list_scalar_names()`). An "override-only copy" has no
+    marker in `PeerPermissions`; it is caught as a property rule without
+    `patterns`. The other grant writers read the old grant only with the
+    flag on. `_delete_revoked_peer_data` is removed (its tests now cover the
+    evaluator).
+- **Tests not written as the plan lists them** (recorded so verification
+  can decide): the four manager poll paths ending in one baseline fetch and
+  `rebuild_subscription` are exercised through the re-recorded wire rows,
+  not unit tests; the counting-double cost pins at 500/5,000 items; the
+  revocation teardown of a spanned, old-layout and invalid-named list.
+  (`rebuild_subscription` has unit tests since the outside-voice fixes:
+  `tests/test_replica_rebuild.py`.)
+- **Outside voice (2026-11-13, codex and a fresh-context reviewer, on
+  `fd01275..e7d9313`); fixed in a fixup to this phase:**
+  - A property named `out_of_step` read as the mark (a peer could force a
+    rebuild a minute and drop its batches): the mark and the failed entries
+    are attributes of a `ReplicaApplyResult`, never keys.
+  - A failed rebuild was not throttled and two deliveries could rebuild at
+    once: `CallbackProcessor.begin_rebuild()` reserves each attempt with one
+    compare-and-swap that sets `rebuilt_at`, success or not;
+    `rebuild_subscription(force=True)` skips the interval, not the race.
+  - A rebuild did not delete what the dropped batch deleted: a whole-target
+    rebuild deletes every replica name the baseline does not carry, a
+    subtarget rebuild its subtarget, and each owed list.
+  - The rebuild window could re-apply an index diff to a baseline that
+    already held it: the sequence is read before and after the baseline,
+    again up to three times while it moves; still moving leaves the rebuild
+    owed. The recorded sequence never moves backwards.
+  - A resync settled an owed rebuild with entries it could not store, or
+    without the owed lists: it settles only when every entry was stored and
+    each owed list was carried; `rebuild_subscription` likewise reports
+    `failed` entries and leaves the rebuild owed.
+  - An owed rebuild waited for the next callback: `sync_subscription()` (and
+    its async form, so the poll paths) runs it when due.
+  - A mark that lost its compare-and-swap or faulted left the replica
+    unmarked: retried from a fresh read (`settle_rebuild(lists=)`), and the
+    rebuild runs even if that faults.
+  - `has_revocations` was overwritten with "something was deleted": it stays
+    the grant comparison, or-ed with a deletion.
+  - A wrapped scalar (`{"value": v}`, a non-object the receiver stored) lost
+    its `value` to an exclusion `<name>/value`: kept whole.
+  - The restore after a losing callback dropped non-object values and
+    matched replica names as globs: values are stored wrapped, names are
+    escaped into exact patterns.
+  - The skewed-clock branch reconciled only on revoked patterns: on any
+    change to the `properties` grant.
+  - Validation was bypassed through `clear`/`update` on a new list: any
+    operation but `delete_all` on a list that does not exist validates the
+    name.
+  - A resource-level write could shadow a list of the same name: refused.
+  - The handler's rebuild ignored the app's processing config: passed.
+  - `actingweb-peer-state`: a cleanup fault after a rebuilt copy is reported
+    as `rebuilt, replica not cleaned`, not as `not rebuilt`.
+  - **Accepted, not peer-reachable:** a crash between storing a grant and
+    its cleanup (`cleanup_after_store`) leaves revoked data until the next
+    grant change; the callback path deletes before it stores, so a crash
+    there leaves the old grant with the data its successor revoked already
+    gone (the newer grant is the publisher's, so that is the right data to
+    have deleted).
 
 ---
 

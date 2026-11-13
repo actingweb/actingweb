@@ -1,6 +1,6 @@
 ---
 status: done
-verified: thoughts/verifications/2026-11-13-attribute-list-v2-port-2.md
+verified: thoughts/verifications/2026-11-14-attribute-list-v2-port-3.md
 ---
 
 # Implementation Plan: one list implementation for properties and attributes, and list diffs that reach a replica
